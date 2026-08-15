@@ -81,6 +81,37 @@
 #include "chrome/browser/app_controller_mac.h"  // nogncheck
 #endif
 
+namespace {
+
+maho_settings::mojom::VaultOperationResultPtr
+FinalizeWelcomeVaultLifecycleOperation(
+    maho_settings::mojom::VaultOperationResultPtr operation) {
+  if (!operation || !operation->success) {
+    return operation;
+  }
+
+  auto canonical_status =
+      maho_settings_password_helpers::GetVaultStatusFromCore();
+  if (!canonical_status || !canonical_status->success ||
+      !canonical_status->status) {
+    maho::NotifyVaultLockStateChanged(/*locked=*/true);
+    operation->success = false;
+    operation->status.reset();
+    operation->error_code = "status_unavailable";
+    operation->error_message = "Vault operation failed.";
+    return operation;
+  }
+
+  const bool locked =
+      canonical_status->status->lock_state !=
+      maho_settings::mojom::VaultLockState::kUnlocked;
+  operation->status = canonical_status->status.Clone();
+  maho::NotifyVaultLockStateChanged(locked);
+  return operation;
+}
+
+}  // namespace
+
 MahoWelcomePageHandler::MahoWelcomePageHandler(
     mojo::PendingReceiver<maho_welcome::mojom::PageHandler> receiver,
     mojo::PendingRemote<maho_welcome::mojom::Page> page,
@@ -1006,12 +1037,21 @@ void MahoWelcomePageHandler::GetPasswordProviderStatus(
 void MahoWelcomePageHandler::SetPasswordProvider(
     maho_settings::mojom::PasswordProviderKind provider,
     SetPasswordProviderCallback callback) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(false);
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::SetPasswordProviderInCore(provider));
 }
 
 void MahoWelcomePageHandler::GetVaultStatus(
     GetVaultStatusCallback callback) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultOperationResult());
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::GetVaultStatusFromCore());
 }
@@ -1020,15 +1060,26 @@ void MahoWelcomePageHandler::InitializeVault(
     const std::string& master_passphrase,
     const std::string& recovery_secret,
     InitializeVaultCallback callback) {
-  std::move(callback).Run(maho_settings_password_helpers::InitializeVaultInCore(
-      master_passphrase, recovery_secret));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultOperationResult());
+    return;
+  }
+  std::move(callback).Run(FinalizeWelcomeVaultLifecycleOperation(
+      maho_settings_password_helpers::InitializeVaultInCore(
+          master_passphrase, recovery_secret)));
 }
 
 void MahoWelcomePageHandler::UnlockVault(
     const std::string& master_passphrase,
     UnlockVaultCallback callback) {
-  std::move(callback).Run(
-      maho_settings_password_helpers::UnlockVaultInCore(master_passphrase));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultOperationResult());
+    return;
+  }
+  std::move(callback).Run(FinalizeWelcomeVaultLifecycleOperation(
+      maho_settings_password_helpers::UnlockVaultInCore(master_passphrase)));
 }
 
 void MahoWelcomePageHandler::GenerateSyncKey(

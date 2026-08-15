@@ -1,3 +1,5 @@
+#include "base/test/task_environment.h"
+#include "ui/base/clipboard/test/test_clipboard.h"
 #include <limits>
 #include <memory>
 #include <optional>
@@ -8,7 +10,11 @@
 #include "base/files/file_util.h"
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/time/time.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_routines_scheduler.h"
+#include "maho/browser/passwords/maho_password_authorization_service.h"
 #include "maho/browser/maho_space_profile_hydration.h"
 #include "maho/browser/ui/webui/maho_subscription_checkout.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
@@ -16,19 +22,196 @@
 #include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+
+
 namespace maho_settings_password_helpers {
 namespace {
 
 constexpr char kSentinel[] = "S3NTINEL-maho-vault-9F4C";
+constexpr char kSettingsAuthorizationProfile[] = "settings-test-profile";
+
+void GrantSettingsAuthorization(
+    maho::passwords::PasswordAuthorizationAction action) {
+  auto* service =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  service->SetVaultLockedForTesting(false);
+  service->GrantForTesting(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      action,
+      base::TimeTicks::Now() +
+          maho::passwords::MahoPasswordAuthorizationService::
+              kAuthorizationLifetime);
+}
+
+maho_settings::mojom::VaultOperationResultPtr AddVaultLoginInCore(
+    const std::string& title,
+    const std::vector<std::string>& origins,
+    const std::string& username,
+    const std::string& password) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kAdd);
+  return maho_settings_password_helpers::AddVaultLoginInCore(
+      kSettingsAuthorizationProfile, title, origins, username, password);
+}
+
+maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
+    const std::string& item_id,
+    uint64_t expected_revision,
+    const std::string& title,
+    const std::vector<std::string>& origins,
+    const std::string& username,
+    const std::optional<std::string>& password) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  return maho_settings_password_helpers::UpdateVaultLoginInCore(
+      kSettingsAuthorizationProfile, item_id, expected_revision, title,
+      origins, username, password);
+}
+
+maho_settings::mojom::VaultOperationResultPtr DeleteVaultItemInCore(
+    const std::string& item_id,
+    uint64_t expected_revision) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  return maho_settings_password_helpers::DeleteVaultItemInCore(
+      kSettingsAuthorizationProfile, item_id, expected_revision);
+}
+
+maho_settings::mojom::VaultOperationResultPtr UseVaultSecretInCore(
+    const std::string& item_id,
+    uint64_t expected_revision,
+    maho_settings::mojom::SecretAction action) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kCopy);
+  return maho_settings_password_helpers::UseVaultSecretInCore(
+      kSettingsAuthorizationProfile, item_id, expected_revision, action);
+}
+
+maho_settings::mojom::PasswordImportOperationResultPtr
+CommitPasswordImportInCore(MahoPasswordImportJob* job,
+                           const std::string& preview_token) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kImportCommit);
+  return maho_settings_password_helpers::CommitPasswordImportInCore(
+      kSettingsAuthorizationProfile, job, preview_token);
+}
+
+maho_settings::mojom::VaultOperationResultPtr
+AddSavedPasswordLibraryLoginInCore(
+    const std::string& title,
+    const std::vector<std::string>& origins,
+    const std::string& username,
+    const std::string& password) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kAdd);
+  return maho_settings_password_helpers::AddSavedPasswordLibraryLoginInCore(
+      kSettingsAuthorizationProfile, title, origins, username, password);
+}
+
+maho_settings::mojom::VaultOperationResultPtr
+UpdateSavedPasswordLibraryLoginInCore(
+    const std::string& item_id,
+    uint64_t expected_revision,
+    const std::string& title,
+    const std::vector<std::string>& origins,
+    const std::string& username,
+    const std::optional<std::string>& password) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  return maho_settings_password_helpers::UpdateSavedPasswordLibraryLoginInCore(
+      kSettingsAuthorizationProfile, item_id, expected_revision, title,
+      origins, username, password);
+}
+
+maho_settings::mojom::VaultOperationResultPtr
+DeleteSavedPasswordLibraryItemInCore(const std::string& item_id,
+                                     uint64_t expected_revision) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  return maho_settings_password_helpers::DeleteSavedPasswordLibraryItemInCore(
+      kSettingsAuthorizationProfile, item_id, expected_revision);
+}
+
+maho_settings::mojom::VaultOperationResultPtr
+UseSavedPasswordLibrarySecretInCore(
+    const std::string& item_id,
+    uint64_t expected_revision,
+    maho_settings::mojom::SecretAction action) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kCopy);
+  return maho_settings_password_helpers::UseSavedPasswordLibrarySecretInCore(
+      kSettingsAuthorizationProfile, item_id, expected_revision, action);
+}
+
+bool AddSavedPasswordCompatibilityShimInCore(const std::string& domain,
+                                             const std::string& username,
+                                             const std::string& password) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kAdd);
+  return maho_settings_password_helpers::
+      AddSavedPasswordCompatibilityShimInCore(
+          kSettingsAuthorizationProfile, domain, username, password);
+}
+
+bool UpdateSavedPasswordUsernameCompatibilityShimInCore(
+    const std::string& password_id,
+    const std::string& username) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kUpdate);
+  return maho_settings_password_helpers::
+      UpdateSavedPasswordUsernameCompatibilityShimInCore(
+          kSettingsAuthorizationProfile, password_id, username);
+}
+
+bool DeleteSavedPasswordCompatibilityShimInCore(
+    const std::string& password_id) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kDelete);
+  return maho_settings_password_helpers::
+      DeleteSavedPasswordCompatibilityShimInCore(
+          kSettingsAuthorizationProfile, password_id);
+}
+
+maho_settings::mojom::VaultPolicyStatusPtr SetVaultPolicyInCore(
+    maho_settings::mojom::VaultAgentPolicy policy,
+    const std::optional<std::string>& item_id,
+    const std::optional<std::string>& origin,
+    const std::optional<std::string>& expires_at) {
+  GrantSettingsAuthorization(
+      maho::passwords::PasswordAuthorizationAction::kPolicyUpdate);
+  return maho_settings_password_helpers::SetVaultPolicyInCore(
+      kSettingsAuthorizationProfile, policy, item_id, origin, expires_at);
+}
+
+// Installs a core and restores BOTH the previous core and its previous owner
+// profile. maho::SetCore() clears the owner as a side effect, so saving only the
+// core would silently drop an owner binding established by an enclosing scope.
+//
+// NOTE (profile authorization): the Vault mutation helpers exercised below do
+// NOT perform their own caller-profile check. The authoritative
+// maho::IsPasswordManagerAllowedForProfile() enforcement lives at the handler
+// layer (MahoSettingsPageHandler / MahoWelcomePageHandler), which knows the
+// profile that actually issued the request; this layer could only re-derive the
+// core's owner and would wrongly admit requests from other profiles. Owner /
+// non-owner denial coverage therefore lives in
+// maho_vault_runtime_bridge_unittest.cc (MahoPasswordProfileOwnershipTest),
+// whose GN target links //chrome/test:test_support and can build real
+// TestingProfiles.
 class ScopedCoreOverride {
  public:
-  explicit ScopedCoreOverride(MahoCore* core) : saved_(maho::GetCore()) {
-    maho::SetCore(core);
+  explicit ScopedCoreOverride(MahoCore* core)
+      : saved_core_(maho::GetCore()),
+        saved_owner_(maho::GetCoreOwnerProfile()) {
+    maho::SetCoreForProfile(core, saved_owner_);
   }
-  ~ScopedCoreOverride() { maho::SetCore(saved_); }
+  ~ScopedCoreOverride() {
+    maho::SetCoreForProfile(saved_core_, saved_owner_);
+  }
 
  private:
-  MahoCore* saved_;
+  MahoCore* saved_core_;
+  Profile* saved_owner_;
 };
 
 class ScopedPasswordImportJob {
@@ -69,6 +252,7 @@ std::string PreviewSurface(
 
 class MahoSettingsVaultHandlerTest : public testing::Test {
  protected:
+  base::test::TaskEnvironment task_environment_;
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     ASSERT_TRUE(maho_storage_set_sqlcipher_key(
@@ -78,15 +262,18 @@ class MahoSettingsVaultHandlerTest : public testing::Test {
     core_ = maho_core_new_with_storage(database_path.AsUTF8Unsafe().c_str());
     ASSERT_NE(core_, nullptr);
     core_override_ = std::make_unique<ScopedCoreOverride>(core_);
+    ui::TestClipboard::CreateForCurrentThread();
   }
 
   void TearDown() override {
+    ui::Clipboard::DestroyClipboardForCurrentThread();
     core_override_.reset();
     maho_core_free(core_);
     core_ = nullptr;
   }
 
   const base::FilePath& temp_path() const { return temp_dir_.GetPath(); }
+  MahoCore* core() const { return core_; }
 
  private:
   base::ScopedTempDir temp_dir_;
@@ -297,6 +484,118 @@ TEST_F(MahoSettingsVaultHandlerTest, RecoveryUnlockUsesDistinctLifecyclePath) {
             result->status->lock_state);
 }
 
+TEST_F(MahoSettingsVaultHandlerTest,
+       SuccessfulUnlockPublishesCanonicalUnlockedStateSynchronously) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+  ASSERT_TRUE(LockVaultInCore()->success);
+
+  auto* authorization =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  authorization->ResetForTesting();
+  maho::NotifyVaultLockStateChanged(/*locked=*/true);
+  ASSERT_TRUE(maho::IsVaultLockedForUi());
+
+  int notifications = 0;
+  bool published_locked = true;
+  base::CallbackListSubscription subscription =
+      maho::AddVaultLockStateChangeCallback(base::BindRepeating(
+          [](int* count, bool* last_locked, bool locked) {
+            ++*count;
+            *last_locked = locked;
+          },
+          &notifications, &published_locked));
+
+  auto operation = UnlockVaultInCore("correct passphrase");
+  ASSERT_TRUE(operation->success);
+  auto result = MahoSettingsPageHandler::FinalizeVaultLifecycleOperation(
+      std::move(operation), GetVaultStatusFromCore(),
+      [](bool locked) { maho::NotifyVaultLockStateChanged(locked); });
+
+  ASSERT_TRUE(result->success);
+  ASSERT_TRUE(result->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kUnlocked,
+            result->status->lock_state);
+  EXPECT_EQ(1, notifications);
+  EXPECT_FALSE(published_locked);
+  EXPECT_FALSE(maho::IsVaultLockedForUi());
+
+  maho::NotifyVaultLockStateChanged(/*locked=*/true);
+  authorization->ResetForTesting();
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       ExplicitLockPublishesAndRevokesAuthorizationSynchronously) {
+  ASSERT_TRUE(
+      InitializeVaultInCore("correct passphrase", "recovery key")->success);
+
+  auto* authorization =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  authorization->ResetForTesting();
+  maho::NotifyVaultLockStateChanged(/*locked=*/false);
+  authorization->GrantForTesting(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kCopy,
+      base::TimeTicks::Now() +
+          maho::passwords::MahoPasswordAuthorizationService::
+              kAuthorizationLifetime);
+  ASSERT_EQ(1u, authorization->grant_count_for_testing());
+
+  int notifications = 0;
+  bool published_locked = false;
+  base::CallbackListSubscription subscription =
+      maho::AddVaultLockStateChangeCallback(base::BindRepeating(
+          [](int* count, bool* last_locked, bool locked) {
+            ++*count;
+            *last_locked = locked;
+          },
+          &notifications, &published_locked));
+
+  auto operation = LockVaultInCore();
+  ASSERT_TRUE(operation->success);
+  auto result = MahoSettingsPageHandler::FinalizeVaultLifecycleOperation(
+      std::move(operation), GetVaultStatusFromCore(),
+      [](bool locked) { maho::NotifyVaultLockStateChanged(locked); });
+
+  ASSERT_TRUE(result->success);
+  ASSERT_TRUE(result->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kLocked,
+            result->status->lock_state);
+  EXPECT_EQ(1, notifications);
+  EXPECT_TRUE(published_locked);
+  EXPECT_TRUE(maho::IsVaultLockedForUi());
+  EXPECT_EQ(0u, authorization->grant_count_for_testing());
+  EXPECT_FALSE(authorization->ConsumeAuthorization(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kCopy));
+
+  authorization->ResetForTesting();
+}
+
+TEST(MahoSettingsVaultLifecyclePublicationTest,
+     MissingCanonicalStatusFailsClosedAndPublishesLocked) {
+  auto operation = maho_settings::mojom::VaultOperationResult::New();
+  operation->success = true;
+  bool published = false;
+  bool published_locked = false;
+
+  auto result = MahoSettingsPageHandler::FinalizeVaultLifecycleOperation(
+      std::move(operation), nullptr,
+      [&published, &published_locked](bool locked) {
+        published = true;
+        published_locked = locked;
+      });
+
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->success);
+  EXPECT_FALSE(result->status);
+  EXPECT_EQ("status_unavailable", result->error_code);
+  EXPECT_TRUE(published);
+  EXPECT_TRUE(published_locked);
+}
+
 TEST_F(MahoSettingsVaultHandlerTest, LockedCrudReturnsDenial) {
   ASSERT_TRUE(
       InitializeVaultInCore("correct passphrase", "recovery key")->success);
@@ -388,6 +687,66 @@ TEST_F(MahoSettingsVaultHandlerTest, UpdateAndDeleteReturnOnlyMetadata) {
   EXPECT_TRUE(listed->items.empty());
 }
 
+TEST(MahoSettingsClipboardContractTest,
+     ClearsOnlyClipboardTextStillOwnedByMaho) {
+  using Service = maho::passwords::MahoPasswordAuthorizationService;
+
+  EXPECT_TRUE(Service::ShouldClearMahoOwnedClipboardForTesting(
+      u"copied secret", u"copied secret"));
+  EXPECT_FALSE(Service::ShouldClearMahoOwnedClipboardForTesting(
+      u"copied secret", u"replacement text"));
+  EXPECT_FALSE(Service::ShouldClearMahoOwnedClipboardForTesting(
+      u"copied secret", std::u16string()));
+}
+
+TEST(MahoSettingsClipboardContractTest, ClipboardExpiryMatchesSixtySecondGrant) {
+  EXPECT_EQ(base::Seconds(60),
+            maho::passwords::MahoPasswordAuthorizationService::
+                kAuthorizationLifetime);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       RawSensitiveHelpersRejectMissingExpiredAndLockedAuthorization) {
+  using Action = maho::passwords::PasswordAuthorizationAction;
+  auto* service =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  service->ResetForTesting();
+  service->SetVaultLockedForTesting(false);
+
+  auto missing = maho_settings_password_helpers::AddVaultLoginInCore(
+      kSettingsAuthorizationProfile, "Denied", {"https://denied.example"},
+      "person@example.test", kSentinel);
+  EXPECT_FALSE(missing->success);
+  EXPECT_EQ("reauth_required", missing->error_code);
+
+  service->GrantForTesting(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      Action::kDelete, base::TimeTicks::Now());
+  auto expired = maho_settings_password_helpers::DeleteVaultItemInCore(
+      kSettingsAuthorizationProfile, "item-1", 1);
+  EXPECT_FALSE(expired->success);
+  EXPECT_EQ("reauth_required", expired->error_code);
+
+  service->SetVaultLockedForTesting(false);
+  service->GrantForTesting(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      Action::kPolicyUpdate,
+      base::TimeTicks::Now() +
+          maho::passwords::MahoPasswordAuthorizationService::
+              kAuthorizationLifetime);
+  service->SetVaultLockedForTesting(true);
+  auto locked_policy = maho_settings_password_helpers::SetVaultPolicyInCore(
+      kSettingsAuthorizationProfile,
+      maho_settings::mojom::VaultAgentPolicy::kAskEveryUse, std::nullopt,
+      std::nullopt, std::nullopt);
+  EXPECT_FALSE(locked_policy->is_available);
+  EXPECT_EQ("reauth_required", locked_policy->unavailable_reason);
+
+  service->ResetForTesting();
+}
+
 TEST_F(MahoSettingsVaultHandlerTest, UseVaultSecretReturnsOnlyStatus) {
   ASSERT_TRUE(
       InitializeVaultInCore("correct passphrase", "recovery key")->success);
@@ -397,7 +756,7 @@ TEST_F(MahoSettingsVaultHandlerTest, UseVaultSecretReturnsOnlyStatus) {
   ASSERT_TRUE(added->item);
 
   auto used = UseVaultSecretInCore(added->item->id, added->item->revision,
-                                   maho_settings::mojom::SecretAction::kFill);
+                                   maho_settings::mojom::SecretAction::kCopy);
 
   ASSERT_TRUE(used->success);
   EXPECT_FALSE(used->status);
@@ -484,7 +843,7 @@ TEST_F(MahoSettingsVaultHandlerTest,
 
   auto used = UseSavedPasswordLibrarySecretInCore(
       added->item->id, added->item->revision,
-      maho_settings::mojom::SecretAction::kFill);
+      maho_settings::mojom::SecretAction::kCopy);
 
   ASSERT_TRUE(used->success);
   EXPECT_FALSE(used->status);
@@ -536,18 +895,18 @@ TEST_F(MahoSettingsVaultHandlerTest, ProviderSelectionAvailabilityMatrix) {
   constexpr ProviderCase kCases[] = {
       {"maho_native", false, false, Provider::kMahoNative,
        Provider::kMahoNative, true},
-      {"bitwarden", false, false, Provider::kBitwarden, Provider::kMahoNative,
+      {"bitwarden", false, false, Provider::kBitwarden, Provider::kDisabled,
        false},
-      {"bitwarden", false, true, Provider::kBitwarden, Provider::kMahoNative,
+      {"bitwarden", false, true, Provider::kBitwarden, Provider::kDisabled,
        false},
       {"bitwarden", true, false, Provider::kBitwarden, Provider::kBitwarden,
        true},
       {"bitwarden", true, true, Provider::kBitwarden, Provider::kBitwarden,
        true},
       {"onepassword", false, false, Provider::kOnePassword,
-       Provider::kMahoNative, false},
+       Provider::kDisabled, false},
       {"onepassword", true, false, Provider::kOnePassword,
-       Provider::kMahoNative, false},
+       Provider::kDisabled, false},
       {"onepassword", false, true, Provider::kOnePassword,
        Provider::kOnePassword, true},
       {"onepassword", true, true, Provider::kOnePassword,
@@ -780,6 +1139,360 @@ TEST_F(MahoSettingsVaultHandlerTest,
   EXPECT_TRUE(audit->entries.empty());
   EXPECT_EQ("core_unavailable", audit->error_code);
   EXPECT_EQ("core_unavailable", audit->unavailable_reason);
+}
+
+// ── C5: atc.open_external_links_in_maho_mini single source of truth ──
+//
+// maho-core is canonical for this setting because it is the only value
+// ATCManager::decide_link_destination consults. The Chromium profile pref
+// (sidebar_prefs::kOpenExternalLinksInMahoMini) is legacy: it is seeded into
+// core exactly once, guarded by a marker pref, and never read again.
+
+// Drives MahoSettingsPageHandler::RunAtcExternalMiniMigration — the actual
+// production migration sequence — against a real MahoCore. Only the two pref
+// stores are faked, and deliberately with the SHAPE the production code must
+// have: exactly one process-global marker cell (local state) shared by every
+// profile, plus a per-profile legacy pref. A profile-scoped marker cannot be
+// expressed here, which is the point.
+class AtcExternalMiniMigrationHarness {
+ public:
+  explicit AtcExternalMiniMigrationHarness(MahoCore* core) : core_(core) {}
+
+  // Simulates one profile opening Settings. Returns true iff core was seeded.
+  bool RunForProfile(bool legacy_profile_pref_value) {
+    return MahoSettingsPageHandler::RunAtcExternalMiniMigration(
+        core_, [this] { return process_global_marker_; },
+        [legacy_profile_pref_value] { return legacy_profile_pref_value; },
+        [this] {
+          process_global_marker_ = true;
+          ++marker_write_count_;
+        });
+  }
+
+  bool marker() const { return process_global_marker_; }
+  int marker_write_count() const { return marker_write_count_; }
+  bool core_value() const {
+    return maho_core_get_open_external_links_in_maho_mini(core_);
+  }
+
+ private:
+  MahoCore* const core_;
+  // One cell for the whole process == local state, matching production.
+  bool process_global_marker_ = false;
+  int marker_write_count_ = 0;
+};
+
+TEST_F(MahoSettingsVaultHandlerTest, AtcExternalMiniSeedsFromPrefExactlyOnce) {
+  ASSERT_NE(core(), nullptr);
+  AtcExternalMiniMigrationHarness harness(core());
+
+  // Fresh core defaults to disabled and nothing has migrated yet.
+  ASSERT_FALSE(harness.core_value());
+  ASSERT_FALSE(harness.marker());
+
+  // Seed-once: marker unset, so the legacy pref value reaches core and the
+  // marker is persisted by the migration itself.
+  EXPECT_TRUE(harness.RunForProfile(/*legacy_profile_pref_value=*/true));
+  EXPECT_TRUE(harness.core_value());
+  EXPECT_TRUE(harness.marker());
+  EXPECT_EQ(1, harness.marker_write_count());
+
+  // Marker-respected: a second pass with the same stale pref does not re-seed
+  // and does not rewrite the marker.
+  EXPECT_FALSE(harness.RunForProfile(/*legacy_profile_pref_value=*/true));
+  EXPECT_EQ(1, harness.marker_write_count());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, AtcExternalMiniCoreWinsAfterMigration) {
+  ASSERT_NE(core(), nullptr);
+  AtcExternalMiniMigrationHarness harness(core());
+
+  ASSERT_TRUE(harness.RunForProfile(/*legacy_profile_pref_value=*/true));
+  ASSERT_TRUE(harness.core_value());
+
+  // The user turns the setting OFF through the settings surface, which writes
+  // core directly (the canonical store).
+  maho_core_set_open_external_links_in_maho_mini(core(), false);
+  ASSERT_FALSE(harness.core_value());
+
+  // Core-wins: a later migration pass must not resurrect the stale legacy pref.
+  EXPECT_FALSE(harness.RunForProfile(/*legacy_profile_pref_value=*/true));
+  EXPECT_FALSE(harness.core_value());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       AtcExternalMiniMigrationIsProcessGlobalAcrossProfiles) {
+  ASSERT_NE(core(), nullptr);
+  AtcExternalMiniMigrationHarness harness(core());
+
+  // Profile A migrates first and turns the feature on.
+  ASSERT_TRUE(harness.RunForProfile(/*legacy_profile_pref_value=*/true));
+  ASSERT_TRUE(harness.core_value());
+
+  // Profile B opens Settings later. Its own legacy pref is still the default
+  // false. maho-core is process-global, so if the migration marker were stored
+  // per-profile, B's marker would read false, B would seed false, and profile
+  // A's (and the user's) setting would be silently destroyed. The marker is
+  // process-global precisely to prevent this.
+  EXPECT_FALSE(harness.RunForProfile(/*legacy_profile_pref_value=*/false));
+  EXPECT_TRUE(harness.core_value());
+
+  // A third profile changes nothing either — exactly one seed per process.
+  EXPECT_FALSE(harness.RunForProfile(/*legacy_profile_pref_value=*/false));
+  EXPECT_TRUE(harness.core_value());
+  EXPECT_EQ(1, harness.marker_write_count());
+}
+
+TEST_F(MahoSettingsVaultHandlerTest, AtcExternalMiniMigrationSkipsAbsentCore) {
+  // No core yet: nothing is seeded and, critically, the marker is NOT set, so
+  // the seed is retried once core exists instead of being lost.
+  bool marker = false;
+  int marker_writes = 0;
+  EXPECT_FALSE(MahoSettingsPageHandler::RunAtcExternalMiniMigration(
+      nullptr, [&marker] { return marker; }, [] { return true; },
+      [&marker, &marker_writes] {
+        marker = true;
+        ++marker_writes;
+      }));
+  EXPECT_FALSE(marker);
+  EXPECT_EQ(0, marker_writes);
+}
+
+TEST_F(MahoSettingsVaultHandlerTest,
+       ConversationAutoArchivePolicyRoundTripsAllowedValues) {
+  ASSERT_NE(core(), nullptr);
+  EXPECT_EQ(-1, maho_core_get_conversation_auto_archive_policy(core()));
+
+  for (int days : {-1, 3, 7, 30}) {
+    SCOPED_TRACE(days);
+    EXPECT_TRUE(
+        maho_core_set_conversation_auto_archive_policy(core(), days));
+    EXPECT_EQ(days, maho_core_get_conversation_auto_archive_policy(core()));
+  }
+
+  EXPECT_FALSE(maho_core_set_conversation_auto_archive_policy(core(), 0));
+  EXPECT_FALSE(maho_core_set_conversation_auto_archive_policy(core(), -2));
+  EXPECT_EQ(30, maho_core_get_conversation_auto_archive_policy(core()));
+}
+
+class MahoRoutinesSchedulerTest : public MahoSettingsVaultHandlerTest {};
+
+TEST(MahoVaultLockStatusJsonParseTest, FailsClosedUnlessExplicitUnlocked) {
+  using maho::MahoRoutinesScheduler;
+  EXPECT_FALSE(MahoRoutinesScheduler::IsLockedVaultStatusJson(
+      R"({"ok":true,"data":{"lockState":"unlocked"}})"));
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson(
+      R"({"ok":true,"data":{"lockState":"locked"}})"));
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson(
+      R"({"ok":true,"data":{"lockState":"auto_locked"}})"));
+  // Malformed or incomplete evidence must never report unlocked (fail closed).
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson(""));
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson("not-json"));
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson("[]"));
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson(
+      R"({"ok":false,"data":{"lockState":"unlocked"}})"));
+  EXPECT_TRUE(MahoRoutinesScheduler::IsLockedVaultStatusJson(R"({"ok":true})"));
+  EXPECT_TRUE(
+      MahoRoutinesScheduler::IsLockedVaultStatusJson(R"({"ok":true,"data":{}})"));
+}
+
+TEST_F(MahoRoutinesSchedulerTest,
+       DisabledConversationArchiveStillTicksAndPublishesAutoLock) {
+  ASSERT_NE(core(), nullptr);
+  EXPECT_EQ(-1, maho_core_get_conversation_auto_archive_policy(core()));
+
+  auto initialized =
+      InitializeVaultInCore("correct horse battery staple",
+                            "test-only independent recovery material");
+  ASSERT_TRUE(initialized->success);
+  ASSERT_TRUE(initialized->status);
+  ASSERT_EQ(maho_settings::mojom::VaultLockState::kUnlocked,
+            initialized->status->lock_state);
+
+  const int64_t activity_time = base::Time::Now().InSecondsFSinceUnixEpoch();
+  const int64_t auto_lock_seconds =
+      static_cast<int64_t>(initialized->status->auto_lock_minutes) * 60;
+  ASSERT_EQ(-2, maho_core_auto_archive_conversations(
+                    core(), activity_time + auto_lock_seconds + 60));
+
+  maho::NotifyVaultLockStateChanged(/*locked=*/false);
+  ASSERT_FALSE(maho::IsVaultLockedForUi());
+  int lock_broadcasts = 0;
+  base::CallbackListSubscription subscription =
+      maho::AddVaultLockStateChangeCallback(base::BindRepeating(
+          [](int* count, bool locked) {
+            if (locked) {
+              ++*count;
+            }
+          },
+          &lock_broadcasts));
+
+  maho::MahoRoutinesScheduler scheduler(core());
+  scheduler.RunTickForTesting(activity_time + auto_lock_seconds + 60);
+
+  auto after_tick = GetVaultStatusFromCore();
+  ASSERT_TRUE(after_tick->success);
+  ASSERT_TRUE(after_tick->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kAutoLocked,
+            after_tick->status->lock_state);
+  EXPECT_EQ(1, lock_broadcasts);
+  EXPECT_TRUE(maho::IsVaultLockedForUi());
+}
+
+TEST_F(MahoRoutinesSchedulerTest,
+       OrdinaryTicksDoNotPostponeVaultAutoLock) {
+  ASSERT_NE(core(), nullptr);
+  auto initialized = InitializeVaultInCore(
+      "correct horse battery staple",
+      "test-only independent recovery material");
+  ASSERT_TRUE(initialized->success);
+  ASSERT_TRUE(initialized->status);
+  ASSERT_EQ(maho_settings::mojom::VaultLockState::kUnlocked,
+            initialized->status->lock_state);
+  ASSERT_GT(initialized->status->auto_lock_minutes, 2u);
+
+  const int64_t activity_time =
+      base::Time::Now().InSecondsFSinceUnixEpoch();
+  const int64_t auto_lock_seconds =
+      static_cast<int64_t>(initialized->status->auto_lock_minutes) * 60;
+  maho::MahoRoutinesScheduler scheduler(core());
+
+  scheduler.RunTickForTesting(activity_time + auto_lock_seconds - 60);
+  auto after_ordinary_tick = GetVaultStatusFromCore();
+  ASSERT_TRUE(after_ordinary_tick->success);
+  ASSERT_TRUE(after_ordinary_tick->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kUnlocked,
+            after_ordinary_tick->status->lock_state);
+
+  // Only two injected minutes separate these ticks. If the ordinary tick above
+  // counted as user activity, this tick would still leave the Vault unlocked.
+  scheduler.RunTickForTesting(activity_time + auto_lock_seconds + 60);
+  auto after_auto_lock_tick = GetVaultStatusFromCore();
+  ASSERT_TRUE(after_auto_lock_tick->success);
+  ASSERT_TRUE(after_auto_lock_tick->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kAutoLocked,
+            after_auto_lock_tick->status->lock_state);
+}
+
+TEST_F(MahoRoutinesSchedulerTest,
+       AutoLockBroadcastRevokesSensitiveAccess) {
+  ASSERT_NE(core(), nullptr);
+  auto initialized = InitializeVaultInCore(
+      "correct horse battery staple",
+      "test-only independent recovery material");
+  ASSERT_TRUE(initialized->success);
+  ASSERT_TRUE(initialized->status);
+  ASSERT_GT(initialized->status->auto_lock_minutes, 1u);
+
+  auto added = AddVaultLoginInCore(
+      "Auto-lock account", {"https://auto-lock.example"},
+      "person@example.test", kSentinel);
+  ASSERT_TRUE(added->success);
+  ASSERT_TRUE(added->item);
+
+  auto* authorization =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  authorization->ResetForTesting();
+
+  const int64_t activity_time =
+      base::Time::Now().InSecondsFSinceUnixEpoch();
+  const int64_t auto_lock_seconds =
+      static_cast<int64_t>(initialized->status->auto_lock_minutes) * 60;
+  maho::MahoRoutinesScheduler scheduler(core());
+
+  // Establish the process-global broadcast cache as unlocked before subscribing
+  // so the auto-lock below is exactly one observable false-to-true transition.
+  scheduler.RunTickForTesting(activity_time + 60);
+  auto before_auto_lock = GetVaultStatusFromCore();
+  ASSERT_TRUE(before_auto_lock->success);
+  ASSERT_TRUE(before_auto_lock->status);
+  ASSERT_EQ(maho_settings::mojom::VaultLockState::kUnlocked,
+            before_auto_lock->status->lock_state);
+  ASSERT_FALSE(maho::IsVaultLockedForUi());
+
+  authorization->GrantForTesting(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kCopy,
+      base::TimeTicks::Now() +
+          maho::passwords::MahoPasswordAuthorizationService::
+              kAuthorizationLifetime);
+  ASSERT_TRUE(authorization->ConsumeAuthorization(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kCopy));
+
+  int lock_broadcasts = 0;
+  bool callback_locked = false;
+  base::CallbackListSubscription subscription =
+      maho::AddVaultLockStateChangeCallback(base::BindRepeating(
+          [](int* count, bool* last_locked, bool locked) {
+            if (locked) {
+              ++*count;
+            }
+            *last_locked = locked;
+          },
+          &lock_broadcasts, &callback_locked));
+
+  scheduler.RunTickForTesting(activity_time + auto_lock_seconds + 60);
+
+  auto after_auto_lock = GetVaultStatusFromCore();
+  ASSERT_TRUE(after_auto_lock->success);
+  ASSERT_TRUE(after_auto_lock->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kAutoLocked,
+            after_auto_lock->status->lock_state);
+  EXPECT_EQ(1, lock_broadcasts);
+  EXPECT_TRUE(callback_locked);
+  EXPECT_EQ(0u, authorization->grant_count_for_testing());
+  EXPECT_FALSE(authorization->ConsumeAuthorization(
+      kSettingsAuthorizationProfile,
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kCopy));
+
+  auto denied = maho_settings_password_helpers::UseVaultSecretInCore(
+      kSettingsAuthorizationProfile, added->item->id, added->item->revision,
+      maho_settings::mojom::SecretAction::kCopy);
+  EXPECT_FALSE(denied->success);
+  EXPECT_EQ("locked", denied->error_code);
+
+  authorization->ResetForTesting();
+}
+
+TEST_F(MahoRoutinesSchedulerTest, ArchivesInactiveConversationsWhenEnabled) {
+  ASSERT_NE(core(), nullptr);
+  ASSERT_TRUE(maho_core_create_conversation(core(), "old-conversation",
+                                            "Old conversation", nullptr,
+                                            nullptr));
+  ASSERT_TRUE(maho_core_set_conversation_auto_archive_policy(core(), 3));
+
+  maho::MahoRoutinesScheduler scheduler(core());
+  scheduler.RunTickForTesting(/*now_sec=*/2'000'000'000);
+
+  char* archived_json = maho_core_list_conversations_v2(
+      core(), R"({"state":"archived","limit":100})");
+  ASSERT_NE(archived_json, nullptr);
+  std::string archived(archived_json);
+  maho_string_free(archived_json);
+  EXPECT_NE(std::string::npos, archived.find("old-conversation"));
+}
+
+TEST_F(MahoRoutinesSchedulerTest,
+       LeavesInactiveConversationsActiveWhenDisabled) {
+  ASSERT_NE(core(), nullptr);
+  ASSERT_TRUE(maho_core_create_conversation(core(), "kept-conversation",
+                                            "Kept conversation", nullptr,
+                                            nullptr));
+  ASSERT_TRUE(maho_core_set_conversation_auto_archive_policy(core(), -1));
+
+  maho::MahoRoutinesScheduler scheduler(core());
+  scheduler.RunTickForTesting(/*now_sec=*/2'000'000'000);
+
+  char* active_json = maho_core_list_conversations_v2(
+      core(), R"({"state":"active","limit":100})");
+  ASSERT_NE(active_json, nullptr);
+  std::string active(active_json);
+  maho_string_free(active_json);
+  EXPECT_NE(std::string::npos, active.find("kept-conversation"));
 }
 
 TEST(MahoSettingsCurrentBrowserSpaceSnapshotTest,

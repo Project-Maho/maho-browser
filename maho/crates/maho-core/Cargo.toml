@@ -55,6 +55,7 @@ windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Wi
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 serde_json = { workspace = true }
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
 
 [[bench]]
 name = "core_bench"

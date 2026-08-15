@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/views/command/maho_mail_command_catalog.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/browser/profiles/profile.h"
@@ -75,6 +77,47 @@ TEST_F(MahoCommandActionHandlerTest, CopyUrlCommandCreatesLinkCopiedToast) {
   EXPECT_NE(nullptr, MahoNotificationOverlay::FromBrowser(browser()))
       << "Cmd+Shift+C must route its copy_url action through the link-copied "
          "toast surface";
+}
+
+TEST_F(MahoCommandActionHandlerTest, MailAvailabilityRequiresEveryGate) {
+  EXPECT_TRUE(CanExecuteMailCommandForTesting(
+      /*feature_enabled=*/true, /*helper_available=*/true,
+      /*platform_supported=*/true));
+  EXPECT_FALSE(CanExecuteMailCommandForTesting(
+      /*feature_enabled=*/false, /*helper_available=*/true,
+      /*platform_supported=*/true));
+  EXPECT_FALSE(CanExecuteMailCommandForTesting(
+      /*feature_enabled=*/true, /*helper_available=*/false,
+      /*platform_supported=*/true));
+  EXPECT_FALSE(CanExecuteMailCommandForTesting(
+      /*feature_enabled=*/true, /*helper_available=*/true,
+      /*platform_supported=*/false));
+}
+
+TEST_F(MahoCommandActionHandlerTest, MailCommandCatalogHasRequiredDeepLinks) {
+  constexpr std::array expected = {
+      MahoMailCommand{"open_mail", ""},
+      MahoMailCommand{"compose_mail", "?view=compose"},
+      MahoMailCommand{"search_mail", "?view=search"},
+      MahoMailCommand{"mail_inbox", "?folder=inbox"},
+      MahoMailCommand{"mail_sent", "?folder=sent"},
+      MahoMailCommand{"mail_drafts", "?folder=drafts"},
+      MahoMailCommand{"mail_starred", "?folder=starred"},
+  };
+  static_assert(expected.size() == kMahoMailCommands.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(kMahoMailCommands[i].action_id, expected[i].action_id);
+    EXPECT_EQ(kMahoMailCommands[i].path, expected[i].path);
+  }
+}
+
+TEST_F(MahoCommandActionHandlerTest,
+       UnavailableMailCommandDoesNotOpenATab) {
+  const int initial_tab_count = browser()->tab_strip_model()->count();
+
+  ExecuteCommandAction(browser(), "open_mail");
+
+  EXPECT_EQ(initial_tab_count, browser()->tab_strip_model()->count());
 }
 
 // A single dispatch from a regular window carries the full command-palette

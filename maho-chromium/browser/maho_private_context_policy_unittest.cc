@@ -26,9 +26,9 @@ class TestBrowserWindowInterface : public MockBrowserWindowInterface {
   explicit TestBrowserWindowInterface(Profile* profile)
       : profile_(profile), weak_factory_(this) {
     ON_CALL(*this, GetProfile()).WillByDefault(testing::Return(profile_));
-    ON_CALL(*this, GetWeakPtr).WillByDefault(testing::Invoke([this]() {
+    ON_CALL(*this, GetWeakPtr).WillByDefault([this]() {
       return weak_factory_.GetWeakPtr();
-    }));
+    });
     browser_actions_ = new BrowserActions(this);
     ON_CALL(*this, GetActions()).WillByDefault(testing::Return(browser_actions_));
     ON_CALL(*this, GetUnownedUserDataHost()).WillByDefault(testing::ReturnRef(user_data_host_));

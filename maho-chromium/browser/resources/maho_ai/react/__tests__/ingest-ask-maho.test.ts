@@ -71,7 +71,7 @@ async function createFixture(): Promise<{
   const oldSession = createSession('existing-session', 'Existing session');
   const newSession = createSession('new-session', 'Ask Maho session');
   vi.spyOn(handler, 'startSession').mockResolvedValue({session: newSession});
-  vi.spyOn(handler, 'submitPrompt').mockResolvedValue();
+  vi.spyOn(handler, 'submitPrompt').mockResolvedValue({accepted: true});
   vi.spyOn(handler, 'resumeSession').mockResolvedValue({
     session: oldSession,
     replayEvents: [],

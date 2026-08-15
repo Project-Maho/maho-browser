@@ -1,6 +1,7 @@
 package dev.maho.browser.bridge
 
 import dev.maho.browser.MahoBridge
+import dev.maho.browser.models.ArchivedTabViewModel
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.FolderId
 import dev.maho.browser.models.ShellEvent
@@ -21,11 +22,11 @@ object BridgeTabs {
         }
     }
 
-    fun getArchivedTabs(spaceId: SpaceId): List<TabViewModel> {
+    fun getArchivedTabs(spaceId: SpaceId): List<ArchivedTabViewModel> {
         val json = MahoBridge.getArchivedTabs(MahoJson.instance.encodeToString(String.serializer(), spaceId))
             ?: return emptyList()
         return try {
-            MahoJson.instance.decodeFromString<List<TabViewModel>>(json)
+            MahoJson.instance.decodeFromString<List<ArchivedTabViewModel>>(json)
         } catch (_: Exception) {
             emptyList()
         }
@@ -51,6 +52,9 @@ object BridgeTabs {
 
     fun closeTab(id: TabId): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.CloseTab(tabId = id))
+
+    fun archiveTab(id: TabId): List<CoreUpdate> =
+        MahoBridge.sendEvent(ShellEvent.ArchiveTabById(tabId = id))
 
     fun activateTab(id: TabId): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.ActivateTab(tabId = id))

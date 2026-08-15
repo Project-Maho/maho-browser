@@ -2,6 +2,8 @@
 
 module maho_ai.mojom;
 
+import "maho/browser/ui/webui/maho_routines/maho_routines.mojom";
+
 // ==========================================================================
 // Context attachment types — Phase B: context picker backend.
 // These are intentionally minimal and additive; future sources (history,
@@ -132,6 +134,19 @@ struct AskMahoDispatch {
 enum ViewMode {
   kSidebar,
   kFloating,
+};
+
+// The compact panel body selected independently from the active AI profile.
+enum CompactSurface {
+  kChat,
+  kRoutines,
+};
+
+// One-shot profile-scoped request. Generations increase monotonically so the
+// renderer can reject delayed notifications after a newer request is applied.
+struct SurfaceRequest {
+  CompactSurface surface;
+  uint64 generation;
 };
 
 // ==========================================================================
@@ -496,6 +511,23 @@ interface PageHandlerFactory {
 interface PageHandler {
   // --- Session-oriented methods (new contract) ---
 
+  // Atomically consume the profile-scoped request used during cold panel init.
+  // Returns kChat when no new request is pending or the generation is stale.
+  ConsumePendingSurface(uint64 last_seen_generation)
+      => (SurfaceRequest request);
+  ListAllRoutines()
+      => (array<maho_routines.mojom.RoutineInfo> routines);
+  CreateRoutine(string name, string prompt, string? schedule, string? trigger)
+      => (bool ok);
+  StartRoutine(string id) => (string? run_id, string? error);
+  GetRoutineRunStatuses()
+      => (array<maho_routines.mojom.RoutineRunStatus> statuses);
+  GetRoutineUserTier() => (int32 tier);
+  RespondToRoutineApproval(string run_id, string approval_id, bool approved)
+      => (bool ok);
+  ListRunHistory(string? routine_id, uint32 limit)
+      => (array<maho_routines.mojom.RoutineRunRecord> records);
+
   // Get the current runtime connection state.
   GetConnectionState() => (RuntimeConnectionState state,
                            string active_adapter_name);
@@ -567,7 +599,12 @@ interface PageHandler {
   // |attachments| (possibly empty, meaning no context attached).
   SubmitPrompt(string session_id, string prompt, bool attach_browser_context,
                InteractionMode mode, array<ContextAttachment>? attachments,
-               ChatIntent chat_intent);
+               ChatIntent chat_intent) => (bool accepted);
+
+  // Device/profile-local composer drafts backed by maho-core settings.
+  ComposerDraftGet(string scope_json) => (string? draft_json);
+  ComposerDraftSet(string scope_json, string text) => (bool ok);
+  ComposerDraftDelete(string scope_json) => (bool ok);
 
   // Cancel the current turn in a session.
   CancelTurn(string session_id);
@@ -682,6 +719,15 @@ interface PageHandler {
 // WebUI-side interface for browser-to-page push updates.
 interface Page {
   // --- Session event push (new contract) ---
+
+  // A warm-panel surface request. The browser clears the pending state before
+  // emitting this notification; the renderer rejects stale generations.
+  OnSurfaceRequested(SurfaceRequest request);
+
+  // A Routine run changed. The AI panel forwards the established Routine DTO
+  // through its existing callback router so one panel owns one backend status
+  // subscription.
+  OnRoutineRunStatusChanged(maho_routines.mojom.RoutineRunStatus status);
 
   // A runtime event occurred in the active session.
   OnRuntimeEvent(RuntimeEvent event);

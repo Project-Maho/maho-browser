@@ -42,10 +42,9 @@ fn get_mcp_runtime() -> &'static Runtime {
 /// *effective* permission (post peer verification) must use
 /// [`McpClient::resolved_permission`], not this function alone.
 ///
-/// SECURITY (FIX-9a): even when the effective permission is `AutoApprove`, only
-/// READ-ONLY dogfood tools may auto-run without a permission prompt. Sensitive
-/// browser *actions* (clicks, typing, navigation, tab creation, etc.) must still
-/// be gated by the permission callback — see [`is_readonly_dogfood_tool`].
+/// SECURITY (FIX-9a): even when the effective permission is `AutoApprove`, a
+/// tool may auto-run only when browser-authoritative discovery metadata proves
+/// it read-only. Missing or malformed policy metadata remains sensitive.
 pub fn resolve_uds_permission(
     transport: McpTransport,
     socket_path: Option<&str>,
@@ -62,52 +61,23 @@ pub fn resolve_uds_permission(
     }
 }
 
-/// Read-only classification for dogfood (`AutoApprove`) browser MCP tools.
-///
-/// FIX-9a (#3): granting `AutoApprove` to the browser's dogfood socket must NOT
-/// blanket-clear the `sensitive` flag for genuinely sensitive *actions*. The CLI
-/// ships a `deny-sensitive` default gate (README: "denying sensitive browser
-/// actions like clicks and keyboard input unless bypassed"), and the browser-side
-/// `allowed_domains` firewall does NOT cover click/type — so the permission
-/// callback is the only gate for those. Only tools on this READ-ONLY allowlist
-/// auto-run under dogfood `AutoApprove`; everything else (mutation / navigation /
-/// input, and — fail-closed — any unknown or newly-added tool) keeps
-/// `sensitive == true` so the callback still gates it.
-///
-/// The set is derived from `maho-browser-mcp/src/server.rs` tool names. `raw_name`
-/// is the tool name with any `mcp:<server>/` prefix stripped (e.g. `browser_click`).
-/// The browser MCP protocol exposes no per-tool sensitivity annotation, so we
-/// classify by a maintained name allowlist; a read-only *allowlist* (rather than a
-/// sensitive *denylist*) is the safer posture because unknown/future tools default
-/// to gated rather than silently auto-running.
-pub fn is_readonly_dogfood_tool(raw_name: &str) -> bool {
-    matches!(
-        raw_name,
-        // Pure reads / inspection — safe to auto-run.
-        "browser_ping"
-            | "browser_tab_list"
-            | "browser_tab_get"
-            | "browser_history_search"
-            | "browser_bookmarks_search"
-            | "browser_page_content"
-            | "browser_page_text"
-            | "browser_search_in_page"
-            | "browser_page_context"
-            | "browser_screenshot_full"
-            | "browser_screenshot_element"
-            | "browser_accessibility_snapshot"
-            | "browser_console_messages"
-            | "browser_network_get_har"
-            | "browser_get_blocked_domains"
-            | "browser_routines_list"
-            | "mail_list_accounts"
-            | "mail_list_folders"
-            | "mail_list_emails"
-            | "mail_get_email"
-            | "mail_search_emails"
-            | "mail_list_thread"
-            | "mail_extract_otp"
-    )
+/// Return whether browser-authoritative discovery metadata proves a dogfood
+/// MCP tool read-only. Every required field must be present with a safe value;
+/// unknown, missing, or malformed policy remains sensitive (fail closed).
+fn discovered_tool_is_readonly(tool: &Value) -> bool {
+    let annotations_read_only = tool
+        .pointer("/annotations/readOnlyHint")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let policy = tool.pointer("/_meta/policy").and_then(Value::as_object);
+
+    annotations_read_only
+        && policy.is_some_and(|policy| {
+            policy.get("mutability").and_then(Value::as_str) == Some("read_only")
+                && policy.get("changesAuthority").and_then(Value::as_bool) == Some(false)
+                && policy.get("requiresApproval").and_then(Value::as_bool) == Some(false)
+                && policy.get("permission").and_then(Value::as_str) == Some("auto_approve")
+        })
 }
 
 /// Best-effort check that a peer-process executable path belongs to the Maho
@@ -524,13 +494,15 @@ impl McpClient {
                         let parameters_schema = tool.get("inputSchema").cloned().unwrap_or_else(
                             || serde_json::json!({ "type": "object", "properties": {} }),
                         );
+                        let sensitive = permission != ToolPermission::AutoApprove
+                            || !discovered_tool_is_readonly(tool);
 
                         Ok(ToolDescriptor {
                             name: format!("mcp:{}/{}", server_name, raw_name),
                             description,
                             parameters_schema,
                             provenance: ToolProvenance::External(server_name.clone()),
-                            sensitive: true,
+                            sensitive,
                             permission,
                         })
                     })
@@ -580,13 +552,17 @@ impl McpClient {
                         .map(|d| d.to_string())
                         .unwrap_or_default();
                     let parameters_schema = t.schema_as_json_value();
+                    let sensitive = permission != ToolPermission::AutoApprove
+                        || serde_json::to_value(&t)
+                            .ok()
+                            .is_none_or(|tool| !discovered_tool_is_readonly(&tool));
 
                     ToolDescriptor {
                         name: namespaced_name,
                         description,
                         parameters_schema,
                         provenance: ToolProvenance::External(server_name.clone()),
-                        sensitive: true,
+                        sensitive,
                         permission,
                     }
                 })
@@ -691,74 +667,49 @@ impl McpClient {
 mod tests {
     use super::*;
 
-    #[test]
-    fn readonly_dogfood_allowlist_matches_read_tools() {
-        for name in [
-            "browser_ping",
-            "browser_tab_list",
-            "browser_tab_get",
-            "browser_history_search",
-            "browser_bookmarks_search",
-            "browser_page_content",
-            "browser_page_text",
-            "browser_search_in_page",
-            "browser_page_context",
-            "browser_screenshot_full",
-            "browser_screenshot_element",
-            "browser_accessibility_snapshot",
-            "browser_console_messages",
-            "browser_network_get_har",
-            "browser_get_blocked_domains",
-            "browser_routines_list",
-            "mail_list_accounts",
-            "mail_list_folders",
-            "mail_list_emails",
-            "mail_get_email",
-            "mail_search_emails",
-            "mail_list_thread",
-            "mail_extract_otp",
-        ] {
-            assert!(is_readonly_dogfood_tool(name), "{name} must be read-only");
-        }
+    fn discovered_tool(policy: Value) -> Value {
+        serde_json::json!({
+            "name": "future_tool_not_known_to_agent",
+            "annotations": {"readOnlyHint": true},
+            "_meta": {"policy": policy}
+        })
     }
 
     #[test]
-    fn sensitive_action_tools_are_not_readonly() {
-        for name in [
-            "browser_navigate",
-            "browser_tab_new",
-            "browser_tab_close",
-            "browser_tab_switch",
-            "browser_bookmark_create",
-            "browser_click",
-            "browser_type",
-            "browser_select",
-            "browser_hover",
-            "browser_scroll",
-            "browser_key_press",
-            "browser_set_viewport_size",
-            "browser_wait_for_navigation",
-            "browser_network_start_capture",
-            "browser_network_stop_capture",
-            "browser_set_blocked_domains",
-            "browser_acquire_lease",
-            "browser_heartbeat_lease",
-            "browser_release_lease",
-            "browser_routines_run",
-            "mail_send",
-        ] {
-            assert!(
-                !is_readonly_dogfood_tool(name),
-                "{name} is a sensitive action and must NOT be auto-run"
-            );
-        }
+    fn discovery_policy_proves_read_only_without_a_name_inventory() {
+        let tool = discovered_tool(serde_json::json!({
+            "mutability": "read_only",
+            "changesAuthority": false,
+            "requiresApproval": false,
+            "permission": "auto_approve"
+        }));
+        assert!(discovered_tool_is_readonly(&tool));
     }
 
     #[test]
-    fn unknown_tools_default_to_sensitive_fail_closed() {
-        assert!(!is_readonly_dogfood_tool("browser_future_mutation"));
-        assert!(!is_readonly_dogfood_tool("arbitrary_tool"));
-        assert!(!is_readonly_dogfood_tool(""));
+    fn missing_or_malformed_discovery_policy_fails_closed() {
+        let safe = serde_json::json!({
+            "mutability": "read_only",
+            "changesAuthority": false,
+            "requiresApproval": false,
+            "permission": "auto_approve"
+        });
+        for pointer in [
+            "/annotations/readOnlyHint",
+            "/_meta/policy/mutability",
+            "/_meta/policy/changesAuthority",
+            "/_meta/policy/requiresApproval",
+            "/_meta/policy/permission",
+        ] {
+            let mut tool = discovered_tool(safe.clone());
+            tool.pointer_mut(pointer).expect("test field exists").take();
+            assert!(!discovered_tool_is_readonly(&tool), "missing {pointer}");
+        }
+
+        let mut mutable = discovered_tool(safe);
+        mutable["_meta"]["policy"]["requiresApproval"] = serde_json::json!(true);
+        assert!(!discovered_tool_is_readonly(&mutable));
+        assert!(!discovered_tool_is_readonly(&serde_json::json!({})));
     }
 
     #[cfg(unix)]

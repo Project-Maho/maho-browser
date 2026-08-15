@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "base_image": "ghcr.io/cirruslabs/macos-tahoe-base:latest",
+  "golden_image": "maho-e2e-golden",
+  "guest_workspace": "/Users/Shared/maho-workspace",
+  "output_dir": "out/Default",
+  "cdp_address": "127.0.0.1",
+  "suites": [
+    {
+      "name": "interactive-smoke",
+      "kind": "gtest",
+      "gtest_filter": [
+        "MahoAiSidePanelLifecycleTest.ShowPanel_EntryIsShowing",
+        "MahoCommandOverlayInteractiveUiTest.FocusPath_UserInitiatedFocusOpensOverlay",
+        "MahoSidebarSpacesInteractiveTest.FooterActionOpensSpacesSurface"
+      ]
+    },
+    {
+      "name": "ai-mock",
+      "kind": "ai_mock",
+      "scenarios": [
+        "ai_panel_renders",
+        "ai_real_turn",
+        "ai_mock_general_turn",
+        "ai_mock_quick_action_context",
+        "ai_mock_server_error",
+        "ai_mock_key_cleared_no_request"
+      ]
+    },
+    {
+      "name": "all",
+      "kind": "aggregate",
+      "members": [
+        "interactive-smoke",
+        "ai-mock"
+      ]
+    }
+  ]
+}

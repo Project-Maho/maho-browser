@@ -22,6 +22,7 @@
 
 class Browser;
 class MahoSpaceContextMenu;
+struct MahoCore;
 
 namespace ui {
 class Event;
@@ -60,6 +61,10 @@ class MahoSidebarFooterView : public views::View,
   views::Widget* action_popover_widget_for_testing() const {
     return action_popover_widget_;
   }
+  static void ReorderSpaceForTesting(::MahoCore* core,
+                                     const std::string& space_id,
+                                     int from_index,
+                                     int to_index);
   views::View* GetSpaceDotForTesting(int index);
   bool command_overlay_controller_visible_for_testing() const {
     return action_popover_widget_ != nullptr;

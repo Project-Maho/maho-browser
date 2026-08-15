@@ -1,5 +1,6 @@
 package dev.maho.browser
 
+import dev.maho.browser.models.ArchivedTabViewModel
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.ShellEvent
 import dev.maho.browser.models.TabViewModel
@@ -26,6 +27,14 @@ class BridgeTabsTest {
         val event = ShellEvent.CloseTab(tabId = "tab-1")
         val encoded = json.encodeToString(ShellEvent.serializer(), event)
         assertTrue(encoded.contains("\"kind\":\"close_tab\""))
+        assertTrue(encoded.contains("\"tab_id\":\"tab-1\""))
+    }
+
+    @Test
+    fun `archiveTab ShellEvent serializes correctly`() {
+        val event = ShellEvent.ArchiveTabById(tabId = "tab-1")
+        val encoded = json.encodeToString(ShellEvent.serializer(), event)
+        assertTrue(encoded.contains("\"kind\":\"archive_tab_by_id\""))
         assertTrue(encoded.contains("\"tab_id\":\"tab-1\""))
     }
 
@@ -87,6 +96,18 @@ class BridgeTabsTest {
         val decoded = json.decodeFromString(CoreUpdate.serializer(), jsonStr)
         assertTrue(decoded is CoreUpdate.TabClosed)
         assertEquals("tab-2", (decoded as CoreUpdate.TabClosed).tabId)
+    }
+
+    @Test
+    fun `ArchivedTabViewModel deserializes core archive payload`() {
+        val archived = json.decodeFromString(
+            ArchivedTabViewModel.serializer(),
+            """{"id":"tab-1","spaceId":"space-1","title":"Known article","url":"https://example.com/article","favicon":null,"archivedAt":"2026-08-09T12:00:00Z"}""",
+        )
+
+        assertEquals("tab-1", archived.id)
+        assertEquals("Known article", archived.title)
+        assertEquals("2026-08-09T12:00:00Z", archived.archivedAt)
     }
 
     @Test

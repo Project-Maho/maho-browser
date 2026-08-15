@@ -7,7 +7,10 @@ import UIKit
 struct PinchSummaryView: View {
     let title: String
     let sentences: [String]
+    var isIncognito: Bool = false
     let onDismiss: () -> Void
+
+    @Environment(\.colorScheme) private var systemColorScheme
 
     var body: some View {
         ZStack {
@@ -56,7 +59,10 @@ struct PinchSummaryView: View {
                             Image(lucide: Lucide.circleX)
                                 .font(.title2)
                                 .foregroundStyle(.tertiary)
+                                .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                                .contentShape(Rectangle())
                         }
+                        .accessibilityLabel("Close summary")
                     }
 
                     VStack(alignment: .leading, spacing: ShellTheme.Spacing.medium) {
@@ -149,10 +155,11 @@ struct PinchSummaryView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(\.colorScheme, isIncognito ? .dark : systemColorScheme)
     }
 
     private var cardBackground: Color {
-        ShellTheme.Palette.tabGridFloatingSurface
+        isIncognito ? ShellTheme.Palette.incognitoBackground : ShellTheme.Palette.tabGridFloatingSurface
     }
 
     private var summaryIcon: some View {

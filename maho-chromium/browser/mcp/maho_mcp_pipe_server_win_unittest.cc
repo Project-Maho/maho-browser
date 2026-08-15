@@ -102,11 +102,13 @@ class FakePipeDelegate : public MahoMcpBrowserDelegate {
 
   void StartNetworkCapture(const std::string& capture_id,
                            int tab_id,
+                           const ResolvedMahoMcpTarget& target,
                            StartNetworkCaptureCallback callback) override {
     pending_starts_.push_back(
         PendingStart{capture_id, tab_id, std::move(callback)});
   }
   void StopNetworkCapture(const std::string& capture_id,
+                          const ResolvedMahoMcpTarget& target,
                           StopNetworkCaptureCallback callback) override {
     pending_stop_callbacks_.push_back(std::move(callback));
   }

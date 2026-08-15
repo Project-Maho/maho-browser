@@ -1321,7 +1321,8 @@ class MahoUnifiedAgentAdapterTestHelper {
       const char* tool_name,
       const char* arguments) {
     std::optional<PromptDecision> decided = adapter->EvaluatePermissionSync(
-        tool_name ? tool_name : "", adapter->permission_extension_id_);
+        tool_name ? tool_name : "", adapter->permission_extension_id_,
+        arguments ? arguments : "{}");
     if (!decided) {
       return MahoAgentPermissionDecision_Deny;
     }
@@ -1351,7 +1352,7 @@ class MahoUnifiedAgentAdapterTestHelper {
   static MahoAgentPermissionDecision EvaluateWithExt(MahoUnifiedAgentAdapter* adapter,
                                                      const std::string& tool,
                                                      const std::string& ext) {
-    std::optional<PromptDecision> decided = adapter->EvaluatePermissionSync(tool, ext);
+    std::optional<PromptDecision> decided = adapter->EvaluatePermissionSync(tool, ext, "{}");
     if (!decided) {
       return MahoAgentPermissionDecision_Deny;
     }

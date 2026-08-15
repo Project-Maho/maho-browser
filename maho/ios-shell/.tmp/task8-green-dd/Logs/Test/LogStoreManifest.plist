@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>logFormatVersion</key>
+	<integer>12</integer>
+	<key>logs</key>
+	<dict>
+		<key>8EAF7660-DDF8-4A55-9C62-757CCFCF2BA0</key>
+		<dict>
+			<key>auxiliaryLogUniqueIdentifier</key>
+			<string>85010951-33FF-49E8-9E29-1A100491AF56</string>
+			<key>auxiliaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>E</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>8</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>23</integer>
+			</dict>
+			<key>className</key>
+			<string>IDESchemeActionsInvocationRecord</string>
+			<key>documentTypeString</key>
+			<string>&lt;nil&gt;</string>
+			<key>domainType</key>
+			<string>com.apple.dt.unit.cocoaUnitTest</string>
+			<key>fileName</key>
+			<string>Test-Maho-2026.08.11_23-09-13-+0900.xcresult</string>
+			<key>hasAuxiliaryLog</key>
+			<true/>
+			<key>hasCoverageData</key>
+			<true/>
+			<key>hasPrimaryLog</key>
+			<true/>
+			<key>primaryObservable</key>
+			<dict>
+				<key>highLevelStatus</key>
+				<string>E</string>
+				<key>totalNumberOfAnalyzerIssues</key>
+				<integer>0</integer>
+				<key>totalNumberOfErrors</key>
+				<integer>9</integer>
+				<key>totalNumberOfTestFailures</key>
+				<integer>0</integer>
+				<key>totalNumberOfWarnings</key>
+				<integer>21</integer>
+			</dict>
+			<key>schemeIdentifier-containerName</key>
+			<string>Maho project</string>
+			<key>schemeIdentifier-schemeName</key>
+			<string>Maho</string>
+			<key>schemeIdentifier-sharedScheme</key>
+			<integer>1</integer>
+			<key>signature</key>
+			<string>Test Maho</string>
+			<key>timeStartedRecording</key>
+			<real>808150153.56063294</real>
+			<key>timeStoppedRecording</key>
+			<real>808150226.35805094</real>
+			<key>title</key>
+			<string>Test Maho</string>
+			<key>uniqueIdentifier</key>
+			<string>8EAF7660-DDF8-4A55-9C62-757CCFCF2BA0</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

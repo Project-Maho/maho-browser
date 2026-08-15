@@ -64,9 +64,11 @@ MAHO_FROM_EMAIL = "Maho <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://mahobrowser.com/verify"
 MAHO_ENV = "production"
 # Google Sign-In client IDs allowed as id_token `aud` (public, not secrets).
-GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
+GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-j0d85qpgcs3olou6nfbkjb3je35fdpse.apps.googleusercontent.com,650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
 # Desktop OAuth client id for the server-side loopback code exchange (public, not a secret).
 GOOGLE_OAUTH_CLIENT_ID = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com"
+# `MAHO_SYNC_BOOTSTRAP_SECRET` is provisioned as a Wrangler secret; it must
+# never appear in this configuration or in a client artifact.
 # LemonSqueezy variant IDs (public, not secrets). Real noveling.lemonsqueezy.com
 # store subscription variants: Pro ($5) = 1985817, Max ($20) = 1985825.
 # LS_VARIANT_PAYG is the single "Maho AI Pay-as-you-go credits" pay-what-you-want
@@ -131,7 +133,7 @@ RETENTION_DAYS = "7"
 MAHO_FROM_EMAIL = "Maho Staging <noreply@mahobrowser.com>"
 MAHO_VERIFY_URL = "https://relay-staging.mahobrowser.com/verify"
 MAHO_ENV = "staging"
-GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
+GOOGLE_OAUTH_ALLOWED_AUDS = "650357306759-j0d85qpgcs3olou6nfbkjb3je35fdpse.apps.googleusercontent.com,650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com,650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
 # Desktop OAuth client id for the server-side loopback code exchange (public, not a secret).
 GOOGLE_OAUTH_CLIENT_ID = "650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com"
 LS_VARIANT_PRO = "1970139"

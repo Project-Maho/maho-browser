@@ -9,6 +9,26 @@ use support::{backend_with_profile_tools, has_tool, install_bridge, tool_names, 
 use swiftide_core::chat_completion::ChatCompletion;
 
 #[tokio::test]
+async fn static_browser_shim_discovery_is_separate_from_rust_owned_platform_tools() {
+    let harness = backend_with_profile_tools(&[]);
+    let local_before_bridge = tool_names(&harness.backend).await;
+
+    assert!(has_tool(&local_before_bridge, "fs_read"));
+    assert!(has_tool(&local_before_bridge, "fs_write"));
+    assert!(has_tool(&local_before_bridge, "shell_exec"));
+    assert!(!has_tool(&local_before_bridge, "list_browser_tabs"));
+
+    let _bridge = install_bridge(&harness.backend);
+    let with_bridge = tool_names(&harness.backend).await;
+
+    assert!(has_tool(&with_bridge, "list_browser_tabs"));
+    assert!(has_tool(&with_bridge, "read_current_page"));
+    assert!(has_tool(&with_bridge, "fs_read"));
+    assert!(has_tool(&with_bridge, "fs_write"));
+    assert!(has_tool(&with_bridge, "shell_exec"));
+}
+
+#[tokio::test]
 async fn browser_action_shims_list_tools_requires_bridge_and_flag() {
     let harness = backend_with_profile_tools(&[]);
     harness.backend.set_browser_action_tools_enabled(true);
@@ -116,18 +136,30 @@ async fn browser_action_shims_allow_invokes_bridge_exactly_once() {
     );
     let action_calls: Vec<_> = calls
         .iter()
-        .filter(|(tool_name, _)| tool_name != "browser_tab_list")
+        .filter(|(tool_name, _)| tool_name == "browser_scroll")
         .collect();
     assert_eq!(action_calls.len(), 1);
     assert_eq!(action_calls[0].0, "browser_scroll");
-    assert_eq!(action_calls[0].1, r#"{"direction":"down","pixels":200}"#);
-    // Parity: browser actions are auto-approved at the agent layer, so no
-    // permission request is raised even under a Prompt-capable callback; the
-    // browser capability sandbox (grant + lease) is the enforcement boundary.
+    let action_args: serde_json::Value =
+        serde_json::from_str(&action_calls[0].1).expect("browser action args are JSON");
+    assert_eq!(action_args["direction"], "down");
+    assert_eq!(action_args["pixels"], 200);
+    assert_eq!(action_args["tab_id"], 1);
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(tool_name, _)| tool_name == "browser_acquire_lease")
+            .count(),
+        1,
+        "the mutation must acquire exactly one non-stealing lease"
+    );
+    // Ordinary scrolling is classified from the canonical action descriptor
+    // plus arguments and proceeds without a modal. Browser tab/lease checks are
+    // still exercised above and remain the enforcement boundary.
     let requests = support::clone_locked(&permission_requests);
     assert!(
         requests.is_empty(),
-        "auto-approved browser actions must not raise a permission prompt; requests={requests:?}"
+        "ordinary scroll should not prompt: {requests:?}"
     );
 }
 
@@ -170,7 +202,7 @@ async fn tool_using_turn_streams_only_the_authoritative_final_answer() {
 }
 
 #[tokio::test]
-async fn browser_action_auto_approved_bypasses_permission_callback() {
+async fn consequential_browser_action_requires_permission_callback() {
     let harness = backend_with_profile_tools(&[]);
     let bridge = install_bridge(&harness.backend);
     harness.backend.set_browser_action_tools_enabled(true);
@@ -203,21 +235,20 @@ async fn browser_action_auto_approved_bypasses_permission_callback() {
         )
         .await;
 
-    assert!(result.is_ok(), "browser action turn completes: {result:?}");
-    // Parity: browser actions are auto-approved at the agent layer, so the
-    // permission callback is never consulted (even one that would deny), and
-    // the action reaches the browser bridge. Enforcement lives in the browser
-    // capability sandbox (origin grant + lease), not in an agent-side prompt.
+    assert!(
+        result.is_ok(),
+        "denied action is returned as a tool observation: {result:?}"
+    );
     assert_eq!(
         *support::lock(&permission_calls),
-        0,
-        "auto-approved browser actions must not consult the permission callback"
+        1,
+        "new-origin navigation must consult the approval callback exactly once"
     );
     let calls = bridge.calls();
     assert!(
-        calls
+        !calls
             .iter()
             .any(|(tool_name, _)| tool_name == "browser_navigate"),
-        "an auto-approved browser action must reach the bridge: {calls:?}"
+        "denied navigation must not reach the browser bridge: {calls:?}"
     );
 }

@@ -4,8 +4,10 @@
 #define MAHO_BROWSER_MAHO_CORE_HOLDER_H_
 
 #include <string>
+#include <string_view>
 #include <utility>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
@@ -17,18 +19,68 @@
 #include "maho/third_party/maho/maho_bridge.h"
 
 struct MahoCore;
+class PrefService;
+class Profile;
+
+namespace base {
+class FilePath;
+}  // namespace base
 
 namespace maho {
 
 ::MahoCore* GetCore();
 
 void SetCore(::MahoCore* core);
+void SetCoreForProfile(::MahoCore* core, Profile* owner_profile);
+Profile* GetCoreOwnerProfile();
+
+// The single browser-process password profile-ownership check. Access is
+// allowed only for the original regular Chromium profile that created the
+// browser-global MahoCore; secondary and off-the-record profiles fail closed.
+bool IsPasswordManagerAllowedForProfile(Profile* profile);
+
+// Stable profile identity captured by factories that do not receive Profile*.
+// The path distinguishes regular profiles; the PrefService pointer additionally
+// distinguishes an OTR profile, whose GetPath() intentionally aliases its
+// original profile. The pointer is used only as an opaque address string and is
+// never dereferenced after construction.
+std::string GetProfileIdentityKey(const base::FilePath& profile_path,
+                                  const PrefService* profile_prefs);
+
 scoped_refptr<base::SequencedTaskRunner> GetCoreTaskRunner();
 base::Lock& GetCoreTaskAdmissionLock();
 bool IsCoreTaskWorkQuiesced();
 void QuiesceCoreTasksAndWait();
 
+// Browser-process Vault lock-state broadcast. The periodic core tick is the
+// only thing that can turn an unlocked Vault into an auto-locked one without a
+// user-visible action, so the tick driver publishes every observed transition
+// here and UI surfaces (settings panes, pending secret actions) subscribe
+// instead of polling. `locked` is false only for the fully unlocked Vault;
+// uninitialized/locked/auto-locked all report true so subscribers fail closed.
+using VaultLockStateCallbackList = base::RepeatingCallbackList<void(bool)>;
+
+// Subscribes to Vault lock-state transitions. Callbacks run on the sequence
+// that published the change (the UI thread for the tick driver). The returned
+// subscription must be destroyed before the subscriber.
+[[nodiscard]] base::CallbackListSubscription AddVaultLockStateChangeCallback(
+    base::RepeatingCallback<void(bool locked)> callback);
+
+// Publishes `locked` iff it differs from the last published value, so ordinary
+// ticks that change nothing do not spam subscribers. Returns true when a change
+// was actually broadcast.
+bool NotifyVaultLockStateChanged(bool locked);
+
+// Last published lock state (true == not usable for secret access). Defaults to
+// true before any publication so a subscriber that queries before the first
+// tick fails closed.
+bool IsVaultLockedForUi();
+
 maho::core::VaultBackendSession CreateVaultBackendSession();
+maho::core::VaultBackendSession CreateVaultBackendSessionForProfile(
+    Profile* profile);
+maho::core::VaultBackendSession CreateVaultBackendSessionForProfileKey(
+    std::string_view profile_key);
 void QuiesceVaultBackendSessions();
 bool IsVaultBackendSessionWorkQuiesced();
 

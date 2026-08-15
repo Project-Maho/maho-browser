@@ -564,6 +564,14 @@ void MahoSidebarView::BuildUi() {
 
   auto tab_list = std::make_unique<MahoSidebarTabListView>(browser_);
   tab_list_view_ = scroll->SetContents(std::move(tab_list));
+  top_bar_view_->SetControlledTabChangedCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarTabListView> tab_list,
+         std::string stable_tab_id) {
+        if (tab_list) {
+          tab_list->SetControlledTabId(std::move(stable_tab_id));
+        }
+      },
+      tab_list_view_->GetWeakPtr()));
   SetSidebarSpaceHeaderRowTabListView(space_header_view_,
                                      tab_list_view_->GetWeakPtr());
   tab_scroll_view_ = tabs_surface_->AddChildView(std::move(scroll));
@@ -1341,7 +1349,7 @@ void MahoSidebarView::RefreshFavoritesSynchronouslyAfterDrop() {
     }
   }
   state_adapter_.SetFavoritesModel(
-      MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+      MahoSidebarStateAdapter::RefreshFavoritesModelForSpaceIdJson(
           active_space_id_json));
   UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
   ScheduleRefreshAll();

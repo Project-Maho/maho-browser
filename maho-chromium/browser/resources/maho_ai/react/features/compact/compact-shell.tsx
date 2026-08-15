@@ -18,6 +18,7 @@ export function CompactShell(
       onConnect,
       onGetViewMode,
       onOpenSettings,
+      onOpenRoutines = () => {},
       onRegenerate,
       onRespondToApproval,
       onSetViewMode,
@@ -35,6 +36,7 @@ export function CompactShell(
       onConnect?: () => void;
       onGetViewMode: () => Promise<ViewMode>;
       onOpenSettings: (paneKey?: string) => void;
+      onOpenRoutines?: () => void;
       onRegenerate?: () => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
       onSetViewMode: (mode: ViewMode) => void;
@@ -68,6 +70,7 @@ export function CompactShell(
             onClosePanel={onClosePanel}
             onGetViewMode={onGetViewMode}
             onOpenSettings={onOpenSettings}
+            onOpenRoutines={onOpenRoutines}
             onSetViewMode={onSetViewMode}
             onStartSession={onStartSession}
           />
@@ -99,6 +102,7 @@ export function CompactShell(
         onClosePanel={onClosePanel}
         onGetViewMode={onGetViewMode}
         onOpenSettings={onOpenSettings}
+        onOpenRoutines={onOpenRoutines}
         onSetViewMode={onSetViewMode}
         onStartSession={onStartSession}
       />

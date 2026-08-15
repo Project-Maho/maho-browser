@@ -16,7 +16,10 @@
 #ifndef MAHO_CHROMIUM_SRC_BROWSER_VIEW_LAYOUT_H_OVERLAY_
 #define MAHO_CHROMIUM_SRC_BROWSER_VIEW_LAYOUT_H_OVERLAY_
 
-// This file documents the upstream patch. The actual struct modification
-// is applied directly to the upstream header.
+// The chromium_src directory precedes the upstream source root on the include
+// path, so a documentation-only file here would hide the real declaration.
+// Forward to the next matching header; the tracked override script applies the
+// Maho fields to that upstream file before compilation.
+#include_next "chrome/browser/ui/views/frame/layout/browser_view_layout.h"
 
 #endif  // MAHO_CHROMIUM_SRC_BROWSER_VIEW_LAYOUT_H_OVERLAY_

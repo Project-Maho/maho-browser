@@ -1,5 +1,6 @@
 #![allow(async_fn_in_trait, clippy::uninlined_format_args)]
 
+#[cfg(feature = "legacy-ffi")]
 pub mod credential_store;
 pub mod db;
 pub mod db_path;

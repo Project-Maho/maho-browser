@@ -17,9 +17,12 @@
     <color name="shell_text_primary">#FFF5F7FC</color>
     <color name="shell_text_secondary">#FFB3BDCD</color>
     <color name="shell_divider">#FF273140</color>
-    <color name="shell_incognito_background">#FF15111A</color>
-    <color name="shell_incognito_surface">#FF20182A</color>
-    <color name="shell_incognito_accent">#FFC9B1F3</color>
+    <color name="shell_incognito_background">#FF1A2352</color>
+    <color name="shell_incognito_surface">#FF2C3560</color>
+    <color name="shell_incognito_accent">#FFFFFFFF</color>
+    <color name="shell_status_success">#FF30D158</color>
+    <color name="shell_status_warning">#FFFF9F0A</color>
+    <color name="shell_status_error">#FFFF453A</color>
     <color name="widget_background">#FF1C1C1E</color>
     <color name="widget_text">#FFFFFFFF</color>
     <color name="ic_launcher_background">#FF1E1B4B</color>

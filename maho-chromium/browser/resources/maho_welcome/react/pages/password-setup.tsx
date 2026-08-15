@@ -14,7 +14,10 @@ import {
   NoPasswordManagerConfirmCard,
   ProviderChoice,
   ProviderSelectionGrid,
+  validateVaultSetup,
+  validateVaultUnlock,
   VaultCard,
+  VaultSetupFieldId,
 } from './password-setup-fields.js';
 
 interface PasswordSetupProps {
@@ -22,12 +25,7 @@ interface PasswordSetupProps {
   readonly store: MahoWelcomeStore;
 }
 
-interface SecretRefs {
-  readonly masterPassphrase: React.MutableRefObject<string>;
-  readonly recoverySecret: React.MutableRefObject<string>;
-  readonly masterInput: React.RefObject<HTMLInputElement | null>;
-  readonly recoveryInput: React.RefObject<HTMLInputElement | null>;
-}
+
 
 export function PasswordSetupSidebar({store}: {store: MahoWelcomeStore}) {
   return (
@@ -59,13 +57,22 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
   );
 
   const [masterPassphrase, setMasterPassphrase] = useState('');
+  const [confirmPassphrase, setConfirmPassphrase] = useState('');
   const [recoverySecret, setRecoverySecret] = useState('');
+  const [confirmRecovery, setConfirmRecovery] = useState('');
+  const [recoveryKitAcknowledged, setRecoveryKitAcknowledged] = useState(false);
   const [localError, setLocalError] = useState('');
 
   const masterPassphraseRef = useRef('');
   const recoverySecretRef = useRef('');
   const masterInputRef = useRef<HTMLInputElement>(null);
   const recoveryInputRef = useRef<HTMLInputElement>(null);
+  const confirmPassphraseInputRef = useRef<HTMLInputElement>(null);
+  const confirmRecoveryInputRef = useRef<HTMLInputElement>(null);
+  const acknowledgeInputRef = useRef<HTMLInputElement>(null);
+  // React detaches refs before passive-effect cleanup runs, so unmount
+  // scrubbing needs its own registry of the secret inputs that were mounted.
+  const secretNodesRef = useRef(new Set<HTMLInputElement>());
 
   useEffect(() => {
     void store.refreshPasswordSetup();
@@ -79,24 +86,52 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
     }
   }, [passwordSetup.providerStatus, passwordSetup.passwordManagerSkipped]);
 
-  useEffect(() => () => {
-    scrubSecretRefs({
-      masterPassphrase: masterPassphraseRef,
-      recoverySecret: recoverySecretRef,
-      masterInput: masterInputRef,
-      recoveryInput: recoveryInputRef,
-    });
+  const bindSecretInput = useCallback(
+      (ref: React.MutableRefObject<HTMLInputElement | null>) =>
+          (node: HTMLInputElement | null) => {
+            ref.current = node;
+            if (node) {
+              secretNodesRef.current.add(node);
+            }
+          },
+      []);
+  const bindMasterInput = useMemo(
+      () => bindSecretInput(masterInputRef), [bindSecretInput]);
+  const bindConfirmPassphraseInput = useMemo(
+      () => bindSecretInput(confirmPassphraseInputRef), [bindSecretInput]);
+  const bindRecoveryInput = useMemo(
+      () => bindSecretInput(recoveryInputRef), [bindSecretInput]);
+  const bindConfirmRecoveryInput = useMemo(
+      () => bindSecretInput(confirmRecoveryInputRef), [bindSecretInput]);
+  const bindAcknowledgeInput = useMemo(
+      () => bindSecretInput(acknowledgeInputRef), [bindSecretInput]);
+
+  useEffect(() => {
+    const secretNodes = secretNodesRef.current;
+    const stringRefs = [masterPassphraseRef, recoverySecretRef];
+    return () => {
+      scrubSecrets(stringRefs, secretNodes);
+      secretNodes.clear();
+    };
   }, []);
 
   const clearSecrets = useCallback(() => {
-    scrubSecretRefs({
-      masterPassphrase: masterPassphraseRef,
-      recoverySecret: recoverySecretRef,
-      masterInput: masterInputRef,
-      recoveryInput: recoveryInputRef,
-    });
+    scrubSecrets(
+        [masterPassphraseRef, recoverySecretRef], secretNodesRef.current);
     setMasterPassphrase('');
+    setConfirmPassphrase('');
     setRecoverySecret('');
+    setConfirmRecovery('');
+    setRecoveryKitAcknowledged(false);
+  }, []);
+
+  const focusVaultField = useCallback((field: VaultSetupFieldId) => {
+    const target = field === 'masterPassphrase' ? masterInputRef.current :
+        field === 'confirmPassphrase' ? confirmPassphraseInputRef.current :
+        field === 'recoverySecret' ? recoveryInputRef.current :
+        field === 'confirmRecovery' ? confirmRecoveryInputRef.current :
+        acknowledgeInputRef.current;
+    target?.focus();
   }, []);
 
   const lockState = passwordSetup.vaultStatus?.lockState ??
@@ -113,14 +148,7 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
 
   const canAdvanceStepA = selectedChoice !== null && !isBusy;
 
-  const canSubmitStepB = !isBusy && (
-    isNoManager ||
-    !isNativeVault ||
-    isUnlocked ||
-    (needsInitialize && masterPassphrase.trim().length > 0 &&
-      recoverySecret.trim().length > 0) ||
-    (needsUnlock && masterPassphrase.trim().length > 0)
-  );
+  const canSubmitStepB = !isBusy;
 
   const errorMessage = localError || passwordSetup.errorMessage;
 
@@ -130,10 +158,6 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
     if (step === 'select') {
       if (!canAdvanceStepA) return;
       setLocalError('');
-      if (selectedChoice === 'none') {
-        store.skipPasswordSetup();
-        return;
-      }
       setStep('configure');
       return;
     }
@@ -145,41 +169,46 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
     setLocalError('');
 
     if (isNoManager) {
-      store.skipPasswordSetup();
+      // "No password manager" persists its own choice and never depends on the
+      // local Vault.
+      await store.skipPasswordSetup();
       return;
     }
 
     const providerKind = selectedChoice as PasswordProviderKind;
 
-    if (isNativeVault) {
-      if (needsInitialize &&
-          (masterPassphrase.trim().length === 0 ||
-            recoverySecret.trim().length === 0)) {
-        setLocalError('Master passphrase and recovery secret are required.');
-        return;
-      }
-      if (needsUnlock && masterPassphrase.trim().length === 0) {
-        setLocalError('Master passphrase is required.');
+    if (isNativeVault && !isUnlocked) {
+      const failure = needsInitialize ?
+          validateVaultSetup({
+            masterPassphrase,
+            confirmPassphrase,
+            recoverySecret,
+            confirmRecovery,
+            recoveryKitAcknowledged,
+          }) :
+          validateVaultUnlock(masterPassphrase);
+      if (failure) {
+        setLocalError(failure.message);
+        focusVaultField(failure.field);
         return;
       }
 
       try {
-        let vaultReady = isUnlocked;
-        if (needsInitialize) {
-          vaultReady = await store.initializeVault(masterPassphrase, recoverySecret);
-        } else if (needsUnlock) {
-          vaultReady = await store.unlockVault(masterPassphrase);
-        }
+        const vaultReady = needsInitialize ?
+            await store.initializeVault(masterPassphrase, recoverySecret) :
+            await store.unlockVault(masterPassphrase);
         if (vaultReady) {
           await store.advanceFromPasswordSetup(providerKind);
         }
       } finally {
+        // Secrets never survive a submit attempt, successful or not.
         clearSecrets();
       }
-    } else {
-      // 1Password or Bitwarden
-      await store.advanceFromPasswordSetup(providerKind);
+      return;
     }
+
+    // Unlocked native Vault, 1Password, or Bitwarden: no secret is involved.
+    await store.advanceFromPasswordSetup(providerKind);
   }
 
   if (passwordSetup.status === 'loading' && providerOptions.length === 0) {
@@ -228,17 +257,35 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
             {isNativeVault ? (
               <VaultCard
                 store={store}
+                acknowledgeInputRef={bindAcknowledgeInput}
+                confirmPassphrase={confirmPassphrase}
+                confirmPassphraseInputRef={bindConfirmPassphraseInput}
+                confirmRecovery={confirmRecovery}
+                confirmRecoveryInputRef={bindConfirmRecoveryInput}
                 disabled={isBusy}
                 isUnlocked={isUnlocked}
-                masterInputRef={masterInputRef}
+                masterInputRef={bindMasterInput}
                 masterPassphrase={masterPassphrase}
                 needsInitialize={needsInitialize}
                 needsUnlock={needsUnlock}
-                recoveryInputRef={recoveryInputRef}
+                recoveryInputRef={bindRecoveryInput}
+                recoveryKitAcknowledged={recoveryKitAcknowledged}
                 recoverySecret={recoverySecret}
+                onConfirmPassphraseChange={value => {
+                  setConfirmPassphrase(value);
+                  setLocalError('');
+                }}
+                onConfirmRecoveryChange={value => {
+                  setConfirmRecovery(value);
+                  setLocalError('');
+                }}
                 onMasterPassphraseChange={value => {
                   masterPassphraseRef.current = value;
                   setMasterPassphrase(value);
+                  setLocalError('');
+                }}
+                onRecoveryKitAcknowledgedChange={value => {
+                  setRecoveryKitAcknowledged(value);
                   setLocalError('');
                 }}
                 onRecoverySecretChange={value => {
@@ -259,12 +306,20 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
           </>
         )}
 
-        {errorMessage ? (
-          <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive shrink-0" aria-live="assertive">
-            <AlertTitle className="font-semibold text-sm mb-1">Password setup notice</AlertTitle>
-            <AlertDescription className="text-pretty">{errorMessage}</AlertDescription>
-          </div>
-        ) : null}
+        <div
+          aria-live="assertive"
+          className={errorMessage
+            ? 'rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-xs text-destructive shrink-0'
+            : 'sr-only'}
+          data-testid="password-setup-error"
+          role="alert">
+          {errorMessage ? (
+            <>
+              <AlertTitle className="font-semibold text-sm mb-1">Password setup notice</AlertTitle>
+              <AlertDescription className="text-pretty">{errorMessage}</AlertDescription>
+            </>
+          ) : null}
+        </div>
       </div>
 
       <div className="shrink-0 border-t border-border pt-4">
@@ -301,18 +356,17 @@ export function PasswordSetupContent({snapshot, store}: PasswordSetupProps) {
   );
 }
 
-function scrubSecretRefs({
-  masterPassphrase,
-  recoverySecret,
-  masterInput,
-  recoveryInput,
-}: SecretRefs): void {
-  masterPassphrase.current = '';
-  recoverySecret.current = '';
-  if (masterInput.current) {
-    masterInput.current.value = '';
+function scrubSecrets(
+    stringRefs: ReadonlyArray<React.MutableRefObject<string>>,
+    inputs: ReadonlySet<HTMLInputElement>): void {
+  for (const ref of stringRefs) {
+    ref.current = '';
   }
-  if (recoveryInput.current) {
-    recoveryInput.current.value = '';
+  for (const input of inputs) {
+    if (input.type === 'checkbox') {
+      input.checked = false;
+    } else {
+      input.value = '';
+    }
   }
 }

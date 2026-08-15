@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_SYNC_MAHO_SYNC_RELAY_CLIENT_H_
 
 #include <memory>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,9 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
   void SendAuthMessage();
   void SendOutgoingMessages();
   void WriteData(const std::string& data);
+  void FlushWriteQueue();
+  void OnWritable(MojoResult result, const mojo::HandleSignalsState& state);
+  void HandleRelayFrame(const std::string& frame);
 
   void ReadFromDataPipe(MojoResult result,
                         const mojo::HandleSignalsState& state);
@@ -96,6 +100,10 @@ class MahoSyncRelayClient : public network::mojom::WebSocketHandshakeClient,
   mojo::ScopedDataPipeConsumerHandle readable_;
   mojo::SimpleWatcher readable_watcher_;
   mojo::ScopedDataPipeProducerHandle writable_;
+  mojo::SimpleWatcher writable_watcher_;
+  std::deque<std::string> pending_writes_;
+  size_t pending_write_offset_ = 0;
+  bool write_in_flight_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<MahoSyncRelayClient> weak_ptr_factory_{this};

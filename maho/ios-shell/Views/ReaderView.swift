@@ -32,6 +32,7 @@ struct ReaderView: View {
                         Image(systemName: "xmark")
                             .foregroundStyle(textColor)
                     }
+                    .accessibilityLabel("Close reader")
                 }
                 
                 SwiftUI.ToolbarItem(placement: .topBarTrailing) {
@@ -39,6 +40,7 @@ struct ReaderView: View {
                         Image(systemName: "textformat.size")
                             .foregroundStyle(textColor)
                     }
+                    .accessibilityLabel("Reader settings")
                 }
             }
             .sheet(isPresented: $showSettings) {
@@ -48,19 +50,11 @@ struct ReaderView: View {
     }
     
     private var backgroundColor: Color {
-        switch readerTheme {
-        case .light: return .white
-        case .sepia: return Color(red: 0.98, green: 0.95, blue: 0.87)
-        case .dark: return Color(red: 0.12, green: 0.12, blue: 0.12)
-        }
+        ShellTheme.ReaderPalette.background(for: readerTheme)
     }
-    
+
     private var textColor: Color {
-        switch readerTheme {
-        case .light: return .black
-        case .sepia: return Color(red: 0.35, green: 0.25, blue: 0.15)
-        case .dark: return .white
-        }
+        ShellTheme.ReaderPalette.foreground(for: readerTheme)
     }
 }
 
@@ -113,21 +107,12 @@ struct ReaderWebView: UIViewRepresentable {
     class Coordinator: NSObject, WKNavigationDelegate {}
     
     private func generateCSS() -> String {
-        let bgHex: String
-        let fgHex: String
-        
-        switch theme {
-        case .light:
-            bgHex = "#ffffff"
-            fgHex = "#000000"
-        case .sepia:
-            bgHex = "#faf2df"
-            fgHex = "#5a402a"
-        case .dark:
-            bgHex = "#1e1e1e"
-            fgHex = "#dcdcdc"
-        }
-        
+        let scheme = ShellTheme.ReaderPalette.scheme(for: theme)
+        let bgHex = scheme.backgroundHex
+        let fgHex = scheme.foregroundHex
+        let mutedHex = scheme.mutedForegroundHex
+        let linkHex = scheme.linkHex
+
         let fontStack: String
         switch fontFamily {
         case "Georgia":
@@ -159,7 +144,7 @@ struct ReaderWebView: UIViewRepresentable {
         }
         .byline {
             font-size: 0.9em;
-            color: \(theme == .dark ? "#888" : "#666");
+            color: \(mutedHex);
             margin-bottom: 24px;
             font-style: italic;
         }
@@ -173,7 +158,7 @@ struct ReaderWebView: UIViewRepresentable {
             margin-bottom: 1.2em;
         }
         a {
-            color: \(theme == .dark ? "#88c0d0" : "#0066cc");
+            color: \(linkHex);
             text-decoration: none;
         }
         """

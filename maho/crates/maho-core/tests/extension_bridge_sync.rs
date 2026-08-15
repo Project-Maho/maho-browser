@@ -131,13 +131,23 @@ fn test_extension_sync_push_and_callback() {
         *cb_called_clone.lock().unwrap() = Some((id.to_string(), enabled, deleted));
     })));
 
-    // Step 1: Initial set of installed extensions (will push sync entity since it is a new detection)
     let extensions = vec![InstalledExtension {
         id: "ext-sync-test".to_string(),
         name: "Sync Test".to_string(),
         version: "1.0.0".to_string(),
         description: String::new(),
         enabled: true,
+        permissions: vec![],
+        manifest_version: 0,
+    }];
+    core.set_installed_extensions(extensions);
+
+    let extensions = vec![InstalledExtension {
+        id: "ext-sync-test".to_string(),
+        name: "Sync Test".to_string(),
+        version: "1.0.0".to_string(),
+        description: String::new(),
+        enabled: false,
         permissions: vec![],
         manifest_version: 0,
     }];
@@ -203,7 +213,7 @@ fn test_extension_sync_push_and_callback() {
 #[test]
 fn extension_can_register_side_panel() {
     use maho_core::extension_bridge::{ExtensionBridge, SidePanelLayout, SidePanelOptions};
-    let mut bridge = ExtensionBridge::new(Box::new(|| vec![]), Box::new(|| None));
+    let mut bridge = ExtensionBridge::new();
     let ext_id = "ext1";
     bridge.register_side_panel(
         ext_id,

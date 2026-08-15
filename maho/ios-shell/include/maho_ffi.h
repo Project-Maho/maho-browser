@@ -60,6 +60,24 @@ typedef struct OpaqueCompiledEngine OpaqueCompiledEngine;
 
 typedef struct VaultSchemaVersion VaultSchemaVersion;
 
+/**
+ * Outcome of a content-blocking check, returned by value.
+ *
+ * `redirect` and `rewritten_url` are null when absent or empty. When non-null
+ * the caller owns them and must release each with `maho_string_free`.
+ *
+ * Deliberately a POD struct rather than JSON: this check runs on the browser
+ * UI thread for EVERY subresource request, and a JSON round trip there cost a
+ * serialize in Rust, a heap `CString`, a `base::JSONReader` parse in C++ and a
+ * free — per request. The overwhelmingly common outcome (allowed, no rewrite)
+ * now allocates nothing at all.
+ */
+typedef struct MahoBlockResult {
+  bool blocked;
+  char *redirect;
+  char *rewritten_url;
+} MahoBlockResult;
+
 typedef struct CompileInputSnapshot OpaqueCompileSnapshotHandle;
 
 typedef struct OpaqueCompiledEngine OpaqueCompiledEngineHandle;
@@ -84,7 +102,13 @@ typedef struct MahoAgentToolResult {
   char *json_ptr;
   char *error_ptr;
   void (*free_fn)(char*);
+  char *error_code_ptr;
+  bool error_retryable;
 } MahoAgentToolResult;
+
+typedef void (*MahoAgentReleaseCallback)(void *user_data);
+
+typedef void (*RoutineStatusCb)(void*, const char*);
 
 /**
  * Progress callback type invoked from the import background thread.
@@ -112,6 +136,36 @@ typedef void (*MahoImportProgressCallback)(uint32_t kind,
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+void *maho_ffi_serialization_scope_enter(void);
+
+/**
+ * # Safety
+ * `scope` must be null or returned by `maho_ffi_serialization_scope_enter`
+ * on the same thread.
+ */
+void maho_ffi_serialization_scope_exit(void *scope);
+
+/**
+ * Performs a read-only Vault database preflight.
+ *
+ * Stable return values are defined by `MahoVaultPreflightState`; `-1` means
+ * invalid input, an active import, or a caught panic. When `out_state_json` is
+ * non-null, successful calls also return `{"state": ..., "value": ...}` and
+ * the caller must free that string with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `database_path` must be valid null-terminated UTF-8. When
+ * `key_store_key_available` is true, `database_key` must also be valid
+ * null-terminated UTF-8. `out_state_json` may be null or point to writable
+ * storage for one C string pointer.
+ */
+int32_t maho_core_vault_preflight_state(struct MahoCore *ptr,
+                                        const char *database_path,
+                                        const char *database_key,
+                                        bool key_store_key_available,
+                                        char **out_state_json);
 
 struct MahoCore *maho_core_new(void);
 
@@ -219,6 +273,18 @@ char *maho_core_dispatch_shell_event(struct MahoCore *ptr, const char *event_jso
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_tick(struct MahoCore *ptr);
+
+/**
+ * Deterministic sibling of `maho_core_tick`: drives `MahoCore::tick_at` with
+ * a caller-supplied timestamp instead of the wall clock. This is the test
+ * seam the native scheduler hook (`MahoRoutinesScheduler::RunTickForTesting`)
+ * uses to exercise Vault inactivity auto-lock without real time.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_tick_at(struct MahoCore *ptr, int64_t now_sec);
 
 /**
  * # Safety
@@ -529,7 +595,7 @@ bool maho_core_boost_delete(struct MahoCore *ptr, const char *boost_id);
  * `ptr` must be from `maho_core_new`. `domain` must be a valid null-terminated C string.
  * `boost_id` may be null to clear.
  */
-void maho_core_boost_set_active(struct MahoCore *ptr, const char *domain, const char *boost_id);
+bool maho_core_boost_set_active(struct MahoCore *ptr, const char *domain, const char *boost_id);
 
 /**
  * Returns the active Boost for a domain as JSON, or null if none is set.
@@ -697,17 +763,14 @@ bool maho_core_should_block_request(struct MahoCore *ptr,
                                     const char *request_type);
 
 /**
- * Returns a JSON string with the block check result:
- * `{"blocked":bool,"redirect":string|null,"rewrittenUrl":string|null}`
- *
  * # Safety
  * All pointers must be valid C strings. `ptr` must be from `maho_core_new`.
- * Caller must free the returned string with `maho_string_free`.
+ * See `MahoBlockResult` for ownership of the returned strings.
  */
-char *maho_core_check_request(struct MahoCore *ptr,
-                              const char *url,
-                              const char *source_url,
-                              const char *request_type);
+struct MahoBlockResult maho_core_check_request(struct MahoCore *ptr,
+                                               const char *url,
+                                               const char *source_url,
+                                               const char *request_type);
 
 /**
  * # Safety
@@ -1917,6 +1980,44 @@ char *maho_core_list_profiles(struct MahoCore *ptr);
 bool maho_core_switch_profile(struct MahoCore *ptr, const char *profile_id);
 
 /**
+ * Updates the profile identified by `profile_id` without switching the active profile.
+ * The returned JSON is `{ok, profile, error}` and preserves validation and lookup errors.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new*`.
+ * `profile_id`, `name`, and `avatar_color` must be valid null-terminated C strings.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_update_profile(struct MahoCore *ptr,
+                               const char *profile_id,
+                               const char *name,
+                               const char *avatar_color);
+
+/**
+ * Returns the profile archive timeout as `{ok, timeout_hours, error}`.
+ * `timeout_hours` is `0` when per-profile auto-archive is disabled.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new*`.
+ * `profile_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_profile_archive_timeout(struct MahoCore *ptr, const char *profile_id);
+
+/**
+ * Sets the profile archive timeout without switching the active profile.
+ * `timeout_hours == 0` disables per-profile auto-archive.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new*`.
+ * `profile_id` must be a valid null-terminated C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_set_profile_archive_timeout(struct MahoCore *ptr,
+                                            const char *profile_id,
+                                            int32_t timeout_hours);
+
+/**
  * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `profile_id` must be a valid null-terminated C string.
@@ -1970,6 +2071,13 @@ char *maho_core_get_sync_key(struct MahoCore *ptr);
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
+char *maho_core_get_sync_room_id(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_sync_auth_token(struct MahoCore *ptr);
 
 /**
@@ -1978,6 +2086,13 @@ char *maho_core_get_sync_auth_token(struct MahoCore *ptr);
  * `message_json` must be a valid C string.
  */
 int32_t maho_core_handle_incoming_websocket_message(struct MahoCore *ptr, const char *message_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `envelope_json` must be a valid C string containing a V2 sync envelope.
+ */
+int32_t maho_core_handle_incoming_sync_envelope(struct MahoCore *ptr, const char *envelope_json);
 
 /**
  * # Safety
@@ -2086,6 +2201,27 @@ void maho_core_ack_sync_entity(struct MahoCore *ptr,
                                uint64_t version);
 
 /**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `delivery_id` must be a valid C string.
+ */
+bool maho_core_ack_sync_delivery(struct MahoCore *ptr, const char *delivery_id, uint64_t relay_seq);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `ack_json` must be a valid C string containing a relay V2 ACK.
+ */
+int32_t maho_core_accept_sync_ack(struct MahoCore *ptr, const char *ack_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `room_id` must be a valid C string.
+ */
+uint64_t maho_core_get_sync_receive_cursor(struct MahoCore *ptr, const char *room_id);
+
+/**
  * Apply incoming entity batch from server.
  * `entities_json` is a JSON array of SyncEntity objects.
  * Returns JSON array of actually-applied entities.
@@ -2105,6 +2241,13 @@ char *maho_core_apply_remote_entities(struct MahoCore *ptr, const char *entities
  * Caller must free returned string with `maho_string_free`.
  */
 char *maho_core_drain_outgoing(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be valid.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_drain_outgoing_envelopes(struct MahoCore *ptr);
 
 /**
  * Get and drain received tabs as a JSON array.
@@ -2339,6 +2482,7 @@ bool maho_core_chat_register_tool(struct ChatSession *ptr,
  */
 void maho_core_chat_set_event_sink(struct ChatSession *ptr,
                                    void (*on_token)(void *user_data, const char *token),
+                                   void (*on_thinking)(void *user_data, const char *thinking),
                                    void (*on_complete)(void *user_data,
                                                        const char *full_text,
                                                        const char *tool_calls_json),
@@ -2448,6 +2592,67 @@ bool maho_core_delete_conversation(struct MahoCore *core, const char *id);
  */
 bool maho_core_rename_conversation(struct MahoCore *core, const char *id, const char *new_title);
 
+char *maho_core_list_conversations_v2(struct MahoCore *core, const char *query_json);
+
+bool maho_core_archive_conversation(struct MahoCore *core, const char *id);
+
+bool maho_core_unarchive_conversation(struct MahoCore *core, const char *id);
+
+char *maho_core_active_conversation_ids(struct MahoCore *core);
+
+char *maho_core_apply_conversation_bulk_operation(struct MahoCore *core, const char *request_json);
+
+int32_t maho_core_get_conversation_auto_archive_policy(struct MahoCore *core);
+
+bool maho_core_set_conversation_auto_archive_policy(struct MahoCore *core, int32_t days);
+
+int32_t maho_core_auto_archive_conversations(struct MahoCore *core, int64_t now_sec);
+
+char *maho_core_list_conversation_projects(struct MahoCore *core);
+
+char *maho_core_create_conversation_project(struct MahoCore *core, const char *name);
+
+bool maho_core_rename_conversation_project(struct MahoCore *core, const char *id, const char *name);
+
+bool maho_core_delete_conversation_project(struct MahoCore *core, const char *id);
+
+char *maho_core_move_conversations_to_project(struct MahoCore *core, const char *request_json);
+
+/**
+ * Read the composer draft for `scope_json`.
+ *
+ * Returns a JSON string `{"version":1,"text":...,"updatedAt":<RFC3339>}` on success, or
+ * null when the scope is malformed, no draft exists, the stored value is corrupt, or the
+ * scope names a conversation that no longer exists (the orphan row is purged in that case).
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`, or null (returns null);
+ * `scope_json` must be a valid NUL-terminated C string or null (returns null).
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_composer_draft(struct MahoCore *core, const char *scope_json);
+
+/**
+ * Write the composer draft for `scope_json`. Empty `text` deletes the draft.
+ * Text is stored verbatim; the timestamp is assigned natively. Returns true on success,
+ * false on malformed scope, null input, missing storage, or storage error.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `scope_json` and `text`
+ * must be valid NUL-terminated C strings (null returns false).
+ */
+bool maho_core_set_composer_draft(struct MahoCore *core, const char *scope_json, const char *text);
+
+/**
+ * Delete the composer draft for `scope_json`. Deleting an absent draft succeeds.
+ * Returns false on malformed scope, null input, missing storage, or storage error.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `scope_json` must be a
+ * valid NUL-terminated C string (null returns false).
+ */
+bool maho_core_delete_composer_draft(struct MahoCore *core, const char *scope_json);
+
 /**
  * Set a BYOK API key for the given provider.
  *
@@ -2545,6 +2750,32 @@ struct MahoAgentSession *maho_agent_create_session(struct MahoCore *core,
 
 /**
  * # Safety
+ * Same pointer requirements as `maho_agent_create_session`. When this function returns a
+ * non-null session, `on_session_release` receives `session_release_user_data` exactly once after
+ * the session and every runtime-held callback closure release their ownership. The callback must
+ * not unwind.
+ */
+struct MahoAgentSession *maho_agent_create_session_leased(struct MahoCore *core,
+                                                          const char *session_id,
+                                                          const char *workspace_root,
+                                                          bool allow_insecure_key_storage,
+                                                          enum MahoAgentPermissionDecision (*permission_cb)(void *user_data,
+                                                                                                            const char *tool_name,
+                                                                                                            const char *arguments_json),
+                                                          void *permission_user_data,
+                                                          struct MahoAgentSecureKey (*secure_storage_cb)(void *user_data,
+                                                                                                         const char *provider),
+                                                          void *secure_storage_user_data,
+                                                          struct MahoAgentToolResult (*browser_tool_cb)(void *user_data,
+                                                                                                        const char *tool_name,
+                                                                                                        const char *args_json),
+                                                          void *browser_tool_user_data,
+                                                          const char *space_id,
+                                                          MahoAgentReleaseCallback on_session_release,
+                                                          void *session_release_user_data);
+
+/**
+ * # Safety
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 void maho_agent_session_free(struct MahoAgentSession *session);
@@ -2565,12 +2796,40 @@ bool maho_agent_send_message(struct MahoAgentSession *session,
                              void (*on_tool_result)(void *user_data,
                                                     const char *id,
                                                     const char *name,
-                                                    const char *result),
+                                                    const char *result,
+                                                    bool success),
                              void (*on_complete)(void *user_data,
                                                  const char *full_text,
                                                  const char *tool_calls_json),
                              void (*on_error)(void *user_data, const char *error),
                              void *user_data);
+
+/**
+ * # Safety
+ * Same pointer requirements as `maho_agent_send_message`. When this function returns `true`,
+ * `on_release` receives `release_user_data` exactly once after the terminal callback and every
+ * turn callback closure are dropped. The callback must not unwind.
+ */
+bool maho_agent_send_message_leased(struct MahoAgentSession *session,
+                                    const char *message,
+                                    void (*on_token)(void *user_data, const char *token),
+                                    void (*on_thinking)(void *user_data, const char *thinking),
+                                    void (*on_tool_call)(void *user_data,
+                                                         const char *id,
+                                                         const char *name,
+                                                         const char *args),
+                                    void (*on_tool_result)(void *user_data,
+                                                           const char *id,
+                                                           const char *name,
+                                                           const char *result,
+                                                           bool success),
+                                    void (*on_complete)(void *user_data,
+                                                        const char *full_text,
+                                                        const char *tool_calls_json),
+                                    void (*on_error)(void *user_data, const char *error),
+                                    void *callback_user_data,
+                                    MahoAgentReleaseCallback on_release,
+                                    void *release_user_data);
 
 /**
  * # Safety
@@ -2603,9 +2862,57 @@ void maho_agent_set_approval_policy(struct MahoAgentSession *session, const char
 
 /**
  * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `cb` (nullable) receives a JSON-serialized `ArtifactInfo` string
+ * for each artifact created during a turn; `user_data` is passed back verbatim.
+ * ABI-stable: callers that never install this still stream token/tool/complete
+ * events unchanged (the artifact arm is only added when a callback is set).
+ */
+void maho_agent_set_artifact_created_callback(struct MahoAgentSession *session,
+                                              void (*cb)(void *user_data, const char *artifact_json),
+                                              void *user_data);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ * `provider` may be null to clear the explicit provider selection; otherwise it
+ * must be a null-terminated UTF-8 string naming an allowlisted provider.
+ */
+bool maho_agent_session_set_preferred_provider(struct MahoAgentSession *session,
+                                               const char *provider);
+
+/**
+ * # Safety
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 char *maho_agent_list_tools(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `path` must be a null-terminated UTF-8 string, or null to clear.
+ * Sets the session's artifact storage root; the fs_write tool and artifact
+ * index resolve relative paths against it.
+ */
+void maho_agent_set_artifact_root(struct MahoAgentSession *session, const char *path);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. Returns a newly allocated JSON array of ArtifactInfo for the
+ * session (caller frees via `maho_free_string`), or null on error.
+ */
+char *maho_agent_list_artifacts(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `artifact_id` must be a null-terminated UTF-8 string. Returns a
+ * newly allocated root-relative path string (caller frees via
+ * `maho_free_string`), or null for an unknown id or error. Opaque ids cross
+ * the boundary; the resolved path is only produced here.
+ */
+char *maho_agent_artifact_path(struct MahoAgentSession *session, const char *artifact_id);
 
 /**
  * # Safety
@@ -2814,6 +3121,32 @@ int32_t maho_routines_run(struct MahoCore *core,
                           void *user_data);
 
 /**
+ * Start a manual routine and return its queued status JSON immediately.
+ * Caller owns the returned string and must free it with `maho_string_free`.
+ */
+char *maho_routines_start(struct MahoCore *core,
+                          const char *id,
+                          int32_t user_tier,
+                          const char *source);
+
+/**
+ * Return every routine run known to this browser process, including terminal
+ * runs. This is the initial snapshot paired with status callbacks.
+ */
+bool maho_routines_respond_to_approval(struct MahoCore *core,
+                                       const char *run_id,
+                                       const char *approval_id,
+                                       bool approved);
+
+char *maho_routines_active_runs(struct MahoCore *core);
+
+uint64_t maho_routines_register_status_callback(struct MahoCore *core,
+                                                void *user_data,
+                                                RoutineStatusCb callback);
+
+void maho_routines_unregister_status_callback(struct MahoCore *core, uint64_t token);
+
+/**
  * Returns JSON array of ALL routines (built-in + user-defined custom), each an
  * object with `id`, `name`, `cron`, `trigger`, `description`, `enabled`, and
  * `source` ("builtin"|"custom"). Caller must free with `maho_string_free`.
@@ -2916,7 +3249,7 @@ uint64_t maho_core_register_split_change_callback(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_unregister_split_change_callback(struct MahoCore *core, uint64_t token);
+void maho_core_unregister_split_change_callback(struct MahoCore *_core, uint64_t token);
 
 /**
  * # Safety
@@ -2932,7 +3265,7 @@ uint64_t maho_core_register_tool_availability_callback(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_unregister_tool_availability_callback(struct MahoCore *core, uint64_t token);
+void maho_core_unregister_tool_availability_callback(struct MahoCore *_core, uint64_t token);
 
 /**
  * # Safety
@@ -2949,7 +3282,37 @@ uint64_t maho_core_register_settings_change_callback(struct MahoCore *core,
  * # Safety
  * `core` must be a valid pointer returned by `maho_core_new`.
  */
-void maho_core_unregister_settings_change_callback(struct MahoCore *core, uint64_t token);
+void maho_core_unregister_settings_change_callback(struct MahoCore *_core, uint64_t token);
+
+/**
+ * Starts Google Sign-In and returns `{"state","authUrl"}` JSON, or null on
+ * failure. The redirect is caught on a background thread; `on_complete` then
+ * fires with the `id_token` + `nonce` the caller must POST to the relay.
+ *
+ * # Safety
+ * `client_id` must be a null-terminated C string (may be empty to use the
+ * build-time client id). `user_data` must remain valid until `on_complete`
+ * fires. Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_google_sign_in_start(const char *client_id,
+                                void (*on_complete)(void *user_data,
+                                                    const char *id_token,
+                                                    const char *nonce,
+                                                    const char *error),
+                                void *user_data);
+
+/**
+ * Cancels an in-flight Google Sign-In identified by `state` (the value from the
+ * JSON returned by `maho_google_sign_in_start`). Lets the C++ layer end a flow
+ * deterministically when the OAuth popup is closed before the redirect, or when
+ * a new sign-in supersedes a stale one, freeing the listener thread + bound
+ * loopback port instead of leaking them until the backstop timeout. Returns
+ * true when a matching pending flow was found; idempotent.
+ *
+ * # Safety
+ * `state` must be a null-terminated C string.
+ */
+bool maho_google_sign_in_cancel(const char *state);
 
 /**
  * Returns the secret-free Vault status owned by `core`.
@@ -2959,10 +3322,28 @@ void maho_core_unregister_settings_change_callback(struct MahoCore *core, uint64
  */
 char *maho_vault_status_json(struct MahoCore *core);
 
+/**
+ * Returns the effective default agent Vault policy from durable storage.
+ *
+ * # Safety
+ * `core` must be a valid MahoCore pointer. The returned string is freed with `maho_string_free`.
+ */
 char *maho_vault_get_policy_json(struct MahoCore *core);
 
+/**
+ * Persists an agent Vault policy override and records a policy-change audit row.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
 char *maho_vault_set_policy_json(struct MahoCore *core, const char *request_json);
 
+/**
+ * Returns a paged, public, secret-free Vault audit view.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` must be a valid NUL-terminated UTF-8 JSON string.
+ */
 char *maho_vault_audit_page_json(struct MahoCore *core, const char *request_json);
 
 /**

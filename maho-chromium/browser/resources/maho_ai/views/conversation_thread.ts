@@ -22,6 +22,7 @@ import {
   getCredentialErrorPresentation,
   type CredentialErrorPresentation,
 } from './credential_error.js';
+import {receiptFromToolOutput, receiptSummary} from '../receipt-projection.js';
 
 type ConversationTone = 'neutral'|'accent'|'success'|'warning'|'danger';
 
@@ -500,7 +501,8 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         const requestText = toolCall ? humanizeToolRequest(toolCall) : undefined;
         const failureText = humanizeToolResult(toolCall, event.toolResult);
         const resultTone = success ? 'success' : 'danger';
-        const resultNote = !success ?
+        const receipt = receiptFromToolOutput(event.toolResult?.output);
+        const resultNote = receipt ? receiptSummary(receipt) : !success ?
             summarizeInlineText(event.toolResult?.errorMessage || event.toolResult?.output || '', 72) :
             undefined;
         if (existingToolIndex !== undefined && items[existingToolIndex]) {

@@ -106,6 +106,7 @@ config("maho_core_prebuilt_config") {
   }
 
   if (is_win) {
+    ldflags = [ "/ignore:4099" ]
     libs = [
       "maho_ffi.lib",
       "ws2_32.lib",
@@ -142,6 +143,9 @@ config("maho_core_prebuilt_config") {
 
 source_set("maho_core_prebuilt") {
   public_configs = [ ":maho_core_prebuilt_config" ]
+  if (is_linux) {
+    deps = [ ":maho_glibc_compat" ]
+  }
 }
 
 # C ABI header for the standalone maho-mail-ffi mail backend static lib.
@@ -175,6 +179,7 @@ config("maho_mail_ffi_prebuilt_config") {
   if (is_win) {
     libs = [
       "maho_mail_ffi.lib",
+      "libcrypto.lib",
       "ws2_32.lib",
       "userenv.lib",
       "ntdll.lib",
@@ -183,6 +188,7 @@ config("maho_mail_ffi_prebuilt_config") {
       "crypt32.lib",
       "secur32.lib",
     ]
+    lib_dirs += [ "C:/Program Files/OpenSSL-Win64/lib/VC/x64/MD" ]
   } else {
     libs = [ "maho_mail_ffi" ]
     if (is_mac) {
@@ -201,6 +207,7 @@ config("maho_mail_ffi_prebuilt_config") {
         "rt",
         "pthread",
         "m",
+
       ]
     }
   }
@@ -211,5 +218,17 @@ config("maho_mail_ffi_prebuilt_config") {
 source_set("maho_mail_ffi") {
   public_configs = [ ":maho_mail_ffi_prebuilt_config" ]
   public_deps = [ ":maho_mail_ffi_headers" ]
+  if (is_linux) {
+    deps = [ ":maho_glibc_compat" ]
+  }
+}
+
+# Linux-only glibc symbol-version compatibility shim for the prebuilt FFI libs.
+# See maho_glibc_compat.c for why this is required (host glibc 2.38 vs Bullseye
+# sysroot glibc 2.31).
+if (is_linux) {
+  source_set("maho_glibc_compat") {
+    sources = [ "maho_glibc_compat.c" ]
+  }
 }
 

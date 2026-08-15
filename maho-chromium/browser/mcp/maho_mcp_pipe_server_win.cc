@@ -2,6 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// Win32 API interop uses raw buffers / pointer arithmetic (memset, .data(),
+// pointer offsets) that cannot be expressed with bounds-checked spans.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "maho/browser/mcp/maho_mcp_pipe_server_win.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -21,6 +27,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/win/scoped_handle.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
@@ -35,6 +42,26 @@ constexpr size_t kPipeBufferSize = 64 * 1024;  // 64 KiB
 constexpr DWORD kPipeTimeout = 5000;           // 5 seconds
 constexpr size_t kReadBufferSize = 4096;
 constexpr wchar_t kPipePrefix[] = L"\\\\.\\pipe\\maho-browser-";
+
+std::string GetPipeClientExecutable(HANDLE pipe) {
+  ULONG client_pid = 0;
+  if (!::GetNamedPipeClientProcessId(pipe, &client_pid)) {
+    return std::string();
+  }
+  base::win::ScopedHandle process(
+      ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, client_pid));
+  if (!process.is_valid()) {
+    return std::string();
+  }
+  std::wstring path(32768, L'\0');
+  DWORD path_length = static_cast<DWORD>(path.size());
+  if (!::QueryFullProcessImageNameW(process.get(), 0, path.data(),
+                                    &path_length)) {
+    return std::string();
+  }
+  path.resize(path_length);
+  return base::WideToUTF8(path);
+}
 
 }  // namespace
 
@@ -280,8 +307,10 @@ void MahoMcpPipeServer::OnClientConnected() {
   auto conn = std::make_unique<PipeConnection>();
   conn->connection_id = next_connection_id_++;
   conn->pipe_handle = std::move(listen_handle_);
-  conn->session =
-      std::make_unique<MahoMcpSession>(session_token_, lease_registry_.get());
+  const std::string peer_executable =
+      GetPipeClientExecutable(conn->pipe_handle.get());
+  conn->session = std::make_unique<MahoMcpSession>(
+      session_token_, lease_registry_.get(), peer_executable, true);
   conn->read_buffer.resize(kReadBufferSize);
 
   conn->read_event.Set(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -559,6 +588,9 @@ void MahoMcpPipeServer::RemoveConnection(uint64_t connection_id) {
       ::CancelIoEx((*it)->pipe_handle.get(), nullptr);
       ::DisconnectNamedPipe((*it)->pipe_handle.get());
     }
+    if (lease_registry_ && (*it)->session) {
+      lease_registry_->OnSessionDropped((*it)->session->session_id());
+    }
     connections_.erase(it);
     return;
   }
@@ -566,6 +598,9 @@ void MahoMcpPipeServer::RemoveConnection(uint64_t connection_id) {
 
 void MahoMcpPipeServer::CloseAllConnections() {
   for (auto& conn : connections_) {
+    if (lease_registry_ && conn->session) {
+      lease_registry_->OnSessionDropped(conn->session->session_id());
+    }
     conn->read_watcher.StopWatching();
     conn->write_watcher.StopWatching();
     if (conn->pipe_handle.is_valid()) {

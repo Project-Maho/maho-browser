@@ -10,19 +10,31 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn kotlin_native_names() -> BTreeSet<String> {
+fn kotlin_native_declarations() -> Vec<(String, String)> {
     let path =
         repo_root().join("maho/android-shell/app/src/main/java/dev/maho/browser/MahoBridge.kt");
     let src = fs::read_to_string(path).expect("read MahoBridge.kt");
 
     src.lines()
         .filter_map(|line| {
-            let marker = "private external fun ";
-            let start = line.find(marker)? + marker.len();
-            let rest = &line[start..];
-            let name = rest.split('(').next()?.trim();
-            name.starts_with("native").then(|| name.to_string())
+            let tokens: Vec<_> = line.split_whitespace().collect();
+            let external = tokens.iter().position(|token| *token == "external")?;
+            if tokens.get(external + 1) != Some(&"fun") {
+                return None;
+            }
+            let name = tokens.get(external + 2)?.split('(').next()?;
+            name.starts_with("native").then(|| {
+                let visibility = tokens[..external].join(" ");
+                (name.to_string(), visibility)
+            })
         })
+        .collect()
+}
+
+fn kotlin_native_names() -> BTreeSet<String> {
+    kotlin_native_declarations()
+        .into_iter()
+        .map(|(name, _)| name)
         .collect()
 }
 
@@ -42,7 +54,18 @@ fn rust_export_names() -> BTreeSet<String> {
 }
 
 #[test]
-fn maho_bridge_native_declarations_have_matching_rust_exports() {
+fn maho_bridge_native_declarations_are_private_and_have_matching_rust_exports() {
+    let declarations = kotlin_native_declarations();
+    let non_private: Vec<_> = declarations
+        .iter()
+        .filter(|(_, visibility)| visibility != "private")
+        .cloned()
+        .collect();
+    assert!(
+        non_private.is_empty(),
+        "Kotlin native declarations must be private to preserve unsuffixed JNI names: {non_private:?}",
+    );
+
     let kotlin = kotlin_native_names();
     let rust = rust_export_names();
     let missing: Vec<_> = kotlin.difference(&rust).cloned().collect();
@@ -65,16 +88,22 @@ fn content_blocker_jni_exports_do_not_bypass_candidate_promotion() {
 
 #[test]
 fn active_agent_create_descriptor_and_call_include_trusted_artifact_root() {
-    let path =
-        repo_root().join("maho/android-shell/app/src/main/java/dev/maho/browser/MahoBridge.kt");
-    let source = fs::read_to_string(path).expect("read MahoBridge.kt");
+    let root = repo_root();
+    let bridge = fs::read_to_string(
+        root.join("maho/android-shell/app/src/main/java/dev/maho/browser/MahoBridge.kt"),
+    )
+    .expect("read MahoBridge.kt");
+    let agent = fs::read_to_string(
+        root.join("maho/android-shell/app/src/main/java/dev/maho/browser/bridge/BridgeAgent.kt"),
+    )
+    .expect("read BridgeAgent.kt");
 
-    assert!(source.contains(
+    assert!(bridge.contains(
         "private external fun nativeAgentCreateSession(corePtr: Long, sessionId: String, artifactRoot: String): Long"
     ));
-    assert!(source.contains("nativeAgentCreateSession(ptr, sessionId, artifactRoot)"));
-    assert!(source.contains("File(context.filesDir, \"agent-artifacts\")"));
-    assert!(!source.contains("fun agentCreateSession(sessionId: String, artifactRoot:"));
+    assert!(bridge.contains("nativeAgentCreateSession(corePtr, sessionId, artifactRoot)"));
+    assert!(agent.contains("File(context.filesDir, \"agent-artifacts\")"));
+    assert!(!agent.contains("fun agentCreateSession(sessionId: String, artifactRoot:"));
 }
 
 #[test]
@@ -95,23 +124,22 @@ fn active_agent_artifact_api_uses_opaque_ids_and_bytes_not_paths() {
 #[test]
 fn active_android_artifact_share_uses_restricted_file_provider() {
     let root = repo_root();
-    let bridge = fs::read_to_string(
-        root.join("maho/android-shell/app/src/main/java/dev/maho/browser/MahoBridge.kt"),
+    let agent = fs::read_to_string(
+        root.join("maho/android-shell/app/src/main/java/dev/maho/browser/bridge/BridgeAgent.kt"),
     )
-    .expect("read MahoBridge.kt");
-    let manifest = fs::read_to_string(
-        root.join("maho/android-shell/app/src/main/AndroidManifest.xml"),
-    )
-    .expect("read AndroidManifest.xml");
+    .expect("read BridgeAgent.kt");
+    let manifest =
+        fs::read_to_string(root.join("maho/android-shell/app/src/main/AndroidManifest.xml"))
+            .expect("read AndroidManifest.xml");
     let paths = fs::read_to_string(
         root.join("maho/android-shell/app/src/main/res/xml/artifact_file_paths.xml"),
     )
     .expect("read FileProvider paths");
 
-    assert!(bridge.contains("File(context.filesDir, \"agent-artifacts\")"));
-    assert!(bridge.contains("File(context.cacheDir, \"artifact_exports\")"));
-    assert!(bridge.contains("Intent.ACTION_SEND"));
-    assert!(bridge.contains("Intent.FLAG_GRANT_READ_URI_PERMISSION"));
+    assert!(agent.contains("File(context.filesDir, \"agent-artifacts\")"));
+    assert!(agent.contains("File(context.cacheDir, \"artifact_exports\")"));
+    assert!(agent.contains("Intent.ACTION_SEND"));
+    assert!(agent.contains("Intent.FLAG_GRANT_READ_URI_PERMISSION"));
     assert!(manifest.contains("android:exported=\"false\""));
     assert!(manifest.contains("@xml/artifact_file_paths"));
     assert!(paths.contains("<cache-path"));

@@ -69,6 +69,7 @@ action("bundle_react") {
     "../maho_common/react/store_utils.ts",
     "../maho_common/react/use_mojo.ts",
     "maho_ai.mojom-webui.js.d.ts",
+    "maho_routines.mojom-webui.js.d.ts",
     "react/app.tsx",
     "react/boot-guard.ts",
     "react/components/artifact-card.tsx",
@@ -161,9 +162,14 @@ build_webui("build") {
 
   webui_context_type = "trusted"
 
-  mojo_files_deps =
-      [ "//maho/browser/ui/webui/maho_ai:mojo_bindings_ts__generator" ]
-  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_ai/maho_ai.mojom-webui.ts" ]
+  mojo_files_deps = [
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings_ts__generator",
+    "//maho/browser/ui/webui/maho_routines:mojo_bindings_ts__generator",
+  ]
+  mojo_files = [
+    "$root_gen_dir/maho/browser/ui/webui/maho_ai/maho_ai.mojom-webui.ts",
+    "$root_gen_dir/maho/browser/ui/webui/maho_routines/maho_routines.mojom-webui.ts",
+  ]
 
   extra_grdp_deps = [ ":bundle_grdp" ]
   extra_grdp_files = [ "$target_gen_dir/maho_ai_bundle.grdp" ]

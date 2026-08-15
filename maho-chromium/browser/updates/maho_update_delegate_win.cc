@@ -1,5 +1,11 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// Win32 API interop uses raw buffers / pointer arithmetic (memset, .data(),
+// pointer offsets) that cannot be expressed with bounds-checked spans.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "maho/browser/updates/platform_updater_delegate.h"
 #include "maho/browser/updates/maho_update_manager.h"
 

@@ -13,12 +13,14 @@
 #include "base/no_destructor.h"
 #include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
+#include "base/values.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 
 class Browser;
 class BrowserWindowInterface;
 class GlobalBrowserCollection;
 class Profile;
+struct MahoCore;
 class TabStripModel;
 
 namespace maho {
@@ -93,6 +95,9 @@ class MahoTabRegistry : public BrowserCollectionObserver {
 
 class ShellEventObserver;
 void SetTabRegistryShellEventObserverForTesting(ShellEventObserver* observer);
+void DispatchTabRegistryShellEventForTesting(MahoCore* core,
+                                             const std::string& kind,
+                                             base::DictValue event);
 
 bool IsCorePinnedTab(const std::string& tab_id);
 bool IsCoreCloseProtectedTab(const std::string& tab_id);

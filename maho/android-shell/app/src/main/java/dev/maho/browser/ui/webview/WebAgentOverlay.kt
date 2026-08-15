@@ -1,6 +1,7 @@
 package dev.maho.browser.ui.webview
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
@@ -28,14 +29,13 @@ fun WebAgentOverlay(initialGoal: String?, onExit: () -> Unit) {
     val hostState = remember { mutableStateOf<AiWebViewHost?>(null) }
 
     BackHandler(enabled = true) {
-        hostState.value?.onBack()
         onExit()
     }
 
     AndroidView(
-        modifier = Modifier,
+        modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
-            AiWebViewFactory.createHost(ctx, "agent", params)
+            AiWebViewFactory.createHost(ctx, "agent", params, onNavBack = onExit)
                 .also { hostState.value = it }
                 .webView
         },

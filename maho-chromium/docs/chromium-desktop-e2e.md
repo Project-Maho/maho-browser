@@ -1,115 +1,95 @@
 # Chromium desktop macOS E2E
 
-This harness exercises the Chromium desktop overlay on macOS through Accessibility APIs. It launches the built app bundle, waits for the window to become ready, then runs either the Phase 1 smoke scenarios or the Phase 2 seeded and support contract scenarios.
+The approved desktop direction is an isolated macOS VM run. The checked-in CLI
+exposes `doctor`, `prepare`, `list`, and `run` around a strict manifest. The
+historical Accessibility sidebar runner is unavailable, so its commands are not
+supported entrypoints. `doctor`, `prepare`, and `list` have live receipts in
+the workspace runbook; the clean-guest `run all` proof is still pending.
 
-For the canonical sidebar drag-and-drop capability matrix, current product gaps, and testing strategy, see `docs/chromium-sidebar-dnd-reference.md`.
+For the canonical sidebar drag-and-drop capability matrix, current product
+gaps, and testing strategy, see `docs/chromium-sidebar-dnd-reference.md`.
 
-## Harness entrypoint
+The workspace-level `docs/operations/macos-vm-e2e.md` is the normative runbook
+for VM lifecycle, privacy, artifacts, and failure handling.
 
-Run the harness from `chromium/src` with:
+## Approved CLI today
+
+Run from the workspace root:
 
 ```bash
-python3 maho/build/scripts/e2e_chromium_sidebar.py
+TART_HOME=/Volumes/maho-build/maho-tart \
+  python3 maho-chromium/build/scripts/macos_vm_e2e.py doctor \
+  --state-dir /Volumes/maho-build/maho-vm-state \
+  --identity ~/.cache/maho-macos-vm/id_ed25519
+TART_HOME=/Volumes/maho-build/maho-tart \
+  python3 maho-chromium/build/scripts/macos_vm_e2e.py prepare \
+  --state-dir /Volumes/maho-build/maho-vm-state \
+  --identity ~/.cache/maho-macos-vm/id_ed25519
+python3 maho-chromium/build/scripts/macos_vm_e2e.py list --json
+TART_HOME=/Volumes/maho-build/maho-tart \
+  python3 maho-chromium/build/scripts/macos_vm_e2e.py run \
+  --suite all \
+  --golden maho-e2e-golden \
+  --identity ~/.cache/maho-macos-vm/id_ed25519 \
+  --state-dir /Volumes/maho-build/maho-vm-state
 ```
 
-Useful command line flags:
+This workstation keeps Tart's images and the CLI's ownership state on the
+external `/Volumes/maho-build` volume. Tart inherits `TART_HOME` from the
+environment, while `--state-dir` (or `MAHO_MACOS_VM_STATE`) governs Maho's own
+ownership state. `list` reads only the checked-in manifest, so it takes
+neither. The SSH identity stays at `~/.cache/maho-macos-vm/id_ed25519`.
 
-```bash
-python3 maho/build/scripts/e2e_chromium_sidebar.py --list
-python3 maho/build/scripts/e2e_chromium_sidebar.py --scenario launch_clean_profile
-python3 maho/build/scripts/e2e_chromium_sidebar.py --scenario phase2_seeded_favorites_snapshot_assert --scenario phase2_sidebar_tree_json_contract_assert
-```
+`doctor` reports host readiness, `prepare` creates or reuses the owned golden
+image, `list` validates `build/scripts/macos_vm_e2e_manifest.json` and lists:
 
-`--list` prints every available scenario name and exits. `--scenario` may be repeated. If no scenario is passed, the harness runs every scenario in the order defined by the script.
+- suites: `interactive-smoke`, `ai-mock`, and `all`;
+- AI scenarios: `ai_panel_renders`, `ai_real_turn`,
+  `ai_mock_general_turn`, `ai_mock_quick_action_context`,
+  `ai_mock_server_error`, and `ai_mock_key_cleared_no_request`.
 
-## Prerequisites
+`run` accepts `interactive-smoke`, `ai-mock`, or `all`. A successful `doctor`,
+`prepare`, or `list` invocation is not E2E proof, and the accepted live `run
+all` receipt remains pending in the workspace-level runbook.
 
-- macOS with Accessibility permission granted to the Terminal or Python process that launches the harness.
-- Build the Chromium app bundle in `out/Default` by default, not `out/Release`.
-- A built app bundle at `/Users/indo/code/project/maho-workspace/chromium/src/out/Default/Maho.app` by default.
-- The maho-core prebuilt static library from the maho-chromium build flow, since Chromium is launched from the overlay build output.
+Two argument-level behaviors are confirmed here: `--help` exits `0`, and `run
+--suite <unknown>` is rejected against the manifest choices with exit `2`
+before any VM is created.
 
-If you need a different app bundle location, set `MAHO_APP_PATH`.
+## Run contract
 
-## Environment variables
+The shipped `run` command clones a disposable VM from `maho-e2e-golden`, builds
+on the host only in the dedicated host output `chromium/src/out/VM-E2E`, shares
+the workspace read-only so the guest sees it at `/Volumes/My Shared
+Files/maho-workspace` and remounts it read-only at `/Users/Shared/maho-workspace`,
+falls back only to a declared runtime-deps mirror at that same guest path when
+necessary, uses a fresh browser profile per suite, binds CDP and the mock LLM
+to loopback, exports proof, and deletes the run VM. The `all` suite expands to
+`interactive-smoke` followed by `ai-mock`.
 
-The harness reads these environment variables:
+The AI suite must run the existing AI panel harness in mock mode. Even
+`ai_real_turn` uses the in-guest mock endpoint under this contract. Real
+provider credentials and a host Maho profile are forbidden in the VM.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `MAHO_APP_PATH` | `/Users/indo/code/project/maho-workspace/chromium/src/out/Default/Maho.app` | Path to the app bundle the harness launches. |
-| `MAHO_E2E_ARTIFACT_DIR` | `/tmp/maho-chromium-e2e-spaces` | Root directory for per-scenario artifacts. |
-| `MAHO_E2E_KEEP_PROFILE=1` | unset | Keeps the temporary browser profile directory after each scenario. When unset, the profile is removed at the end of the run. |
-| `MAHO_E2E_APP_READY_TIMEOUT_MS` | `30000` | Wait time for app readiness and the seeded page polling. |
-| `MAHO_E2E_SCENARIO_TIMEOUT_MS` | `60000` | Maximum time allowed for one scenario, including readiness and execution. |
-| `MAHO_E2E_SUITE_TIMEOUT_MS` | `600000` | Maximum time allowed for the full suite when multiple scenarios are selected. |
+## Privacy, artifacts, and failures
 
-## What the harness does
+- Never copy host profiles, cookies, keychains, `.env` files, SSH material, API
+  keys, or provider tokens into the golden image or disposable guest.
+- Never export a browser profile, VM disk, keychain, raw environment dump, or
+  source-profile preferences as an artifact.
+- Required proof is the validated manifest, a machine-readable run summary,
+  provisioning/build/suite logs, gtest results, per-scenario AI results,
+  bounded failure diagnostics, and teardown status.
+- `passed` means every expanded suite passed, required proof reached the host,
+  and teardown completed. Assertion failures are `failed`; build, launch,
+  timeout, export, and cleanup failures are `infra_error`; an unstarted suite is
+  `not_run` and never a pass.
+- Preserve the first causal failure, collect diagnostics on a best-effort
+  bounded basis, and do not retry automatically.
 
-The harness launches the `Maho` binary inside the app bundle with a temporary `--user-data-dir`, disables first run flows, and opens the default initial URLs from the script. It then waits for macOS Accessibility to expose the main window and known sidebar content before running a scenario.
+Live proof remains pending until one fresh VM runs `all` once without retries,
+exports a privacy-reviewed proof package, tears down successfully, and has its
+receipt attached to the workspace-level runbook.
 
-Artifacts are written under one directory per scenario:
-
-```text
-${MAHO_E2E_ARTIFACT_DIR:-/tmp/maho-chromium-e2e-spaces}/<scenario-name>/
-```
-
-Each run writes at least:
-
-- `profile_path.txt`
-- `launch.log`
-- `before.png`
-- `after.png`
-
-On failures, the harness also writes the relevant diagnostics, which can include:
-
-- `timeout_reason.txt`
-- `ax_tree.txt`
-- `buttons.txt`
-- `window_list.txt`
-- `failure.png`
-- `blocked_reason.txt` for scenarios that intentionally assert a blocked or unsupported state
-
-`launch.log` records the exact binary and arguments that were used. `profile_path.txt` records the temporary browser profile path. `before.png` and `after.png` capture the screen around each scenario. Failure artifacts are meant to make it obvious whether the app never became ready, the Accessibility tree changed, or a scenario assertion failed after launch.
-
-## Scenario names
-
-Use `python3 maho/build/scripts/e2e_chromium_sidebar.py --list` to confirm the live list. The current scenarios are grouped below by phase.
-
-### Phase 1 smoke coverage
-
-These scenarios cover the basic desktop harness flow and sidebar behavior:
-
-- `launch_clean_profile`
-- `sidebar_populates_real_tabs`
-- `open_spaces_surface_via_url_dispatch`
-- `switch_tab_from_sidebar`
-- `open_spaces_surface_via_footer_action`
-- `create_space_entry_opens_surface`
-
-### Phase 2 seeded and support contract coverage
-
-These scenarios assert the seeded test page and the current support contract surface:
-
-- `phase2_seeded_favorites_snapshot_assert`
-- `phase2_seeded_folder_snapshot_assert`
-- `phase2_pinned_section_support_contract_assert`
-- `phase2_folder_support_contract_assert`
-- `phase2_tab_reorder_support_contract_assert`
-- `phase2_sidebar_tree_json_contract_assert`
-
-This list reflects the live registry in `build/scripts/e2e_selectors.py`. It keeps the harness coverage focused on seeded snapshots and the sidebar tree JSON contract, instead of the stale folder sibling blocked assertion that used to appear here.
-
-## Common failure outputs
-
-A failed run usually falls into one of these buckets:
-
-- `Build artifact not found: .../Contents/MacOS/Maho`, which means the app bundle was not built at the expected path.
-- `Accessibility permission is required. Grant Terminal/Python accessibility access and rerun.`, which means macOS Accessibility permission is missing.
-- `App path not found: ...`, which means `MAHO_APP_PATH` points at a bundle that does not exist.
-- `Unknown scenarios: ...`, which means one or more scenario names do not match the current script.
-- `Suite exceeded timeout of ... ms`, which means the full run hit the suite timeout.
-- `Scenario ... exceeded timeout of ... ms`, which means the readiness or scenario work took too long.
-- `Maho exited early with code ...`, which means the app process crashed or quit before the scenario could finish.
-
-If you need to keep the temporary profile for inspection, set `MAHO_E2E_KEEP_PROFILE=1` before running the harness.
+Mobile Appium remains a separate iOS/Android simulator, emulator, or device
+layer. It is not part of this desktop VM suite.

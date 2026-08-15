@@ -47,6 +47,7 @@ fun VoiceSearchButton(
     idleTint: Color? = null,
     listeningTint: Color? = null,
     errorTint: Color? = null,
+    isIncognito: Boolean = false,
 ) {
     val context = LocalContext.current
     var showAssistantOverlay by rememberSaveable { mutableStateOf(false) }
@@ -177,6 +178,7 @@ fun VoiceSearchButton(
             onRetry = {
                 requestVoiceCapture()
             },
+            isIncognito = isIncognito,
         )
     }
 }

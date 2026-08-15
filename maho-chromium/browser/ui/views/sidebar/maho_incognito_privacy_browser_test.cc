@@ -14,6 +14,7 @@
 #include "base/path_service.h"
 #include "base/test/run_until.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/chrome_test_extension_loader.h"
@@ -53,6 +54,7 @@
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/net/maho_atc_state.h"
 #include "maho/browser/net/maho_content_blocker_update_service.h"
+#include "maho/browser/passwords/maho_password_authorization_service.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
@@ -106,6 +108,31 @@ std::string TakeMahoString(char* raw) {
   maho_string_free(raw);
   return value;
 }
+
+// maho-core's open_external_links_in_maho_mini is PROCESS-GLOBAL and persisted
+// to the core settings table, unlike the per-profile Chromium pref it replaced.
+// A test that flips it must restore the previous value, or the mutation leaks
+// into every later test sharing this browser_tests process (and into the
+// on-disk core state), making unrelated ATC routing tests order-dependent.
+class ScopedOpenExternalLinksInMahoMini {
+ public:
+  ScopedOpenExternalLinksInMahoMini(MahoCore* core, bool enabled)
+      : core_(core),
+        previous_(maho_core_get_open_external_links_in_maho_mini(core)) {
+    maho_core_set_open_external_links_in_maho_mini(core_, enabled);
+  }
+  ScopedOpenExternalLinksInMahoMini(
+      const ScopedOpenExternalLinksInMahoMini&) = delete;
+  ScopedOpenExternalLinksInMahoMini& operator=(
+      const ScopedOpenExternalLinksInMahoMini&) = delete;
+  ~ScopedOpenExternalLinksInMahoMini() {
+    maho_core_set_open_external_links_in_maho_mini(core_, previous_);
+  }
+
+ private:
+  MahoCore* const core_;
+  const bool previous_;
+};
 
 class ScopedCoreOverride {
  public:
@@ -380,17 +407,108 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   MahoCore* locked_core = nullptr;
   maho::core::SetVaultLockCallbackForTesting(base::BindRepeating(
       &RecordVaultLockForTesting, &lock_calls, &locked_core));
-  base::ScopedClosureRunner reset_callback(base::BindOnce([] {
-    maho::core::SetVaultLockCallbackForTesting(
-        maho::core::VaultLockCallbackForTesting());
-  }));
+  auto* authorization_service =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  base::ScopedClosureRunner reset_callback(base::BindOnce(
+      [](maho::passwords::MahoPasswordAuthorizationService* service) {
+        maho::core::SetVaultLockCallbackForTesting(
+            maho::core::VaultLockCallbackForTesting());
+        service->ResetForTesting();
+      },
+      authorization_service));
+
+  const std::string profile_key = maho::GetProfileIdentityKey(
+      browser()->profile()->GetPath(), browser()->profile()->GetPrefs());
+  authorization_service->GrantForTesting(
+      profile_key, "https://suspend-auth.example",
+      maho::passwords::PasswordAuthorizationAction::kAgentCredentialUse,
+      base::TimeTicks::Now() +
+          maho::passwords::MahoPasswordAuthorizationService::
+              kAuthorizationLifetime);
+  ASSERT_EQ(1u, authorization_service->grant_count_for_testing());
+  parts->AddMcpVaultCredentialLeaseForTesting(
+      base::TimeTicks::Now() + base::Minutes(1), /*promoted=*/false);
+  ASSERT_EQ(1u, parts->McpVaultCredentialLeaseCountForTesting());
 
   parts->OnSuspendForTesting();
 
   EXPECT_EQ(1, lock_calls);
   EXPECT_EQ(core, locked_core);
+  EXPECT_EQ(0u, authorization_service->grant_count_for_testing());
+  EXPECT_EQ(0u, parts->McpVaultCredentialLeaseCountForTesting());
   EXPECT_FALSE(maho::core::LockVault(nullptr));
   EXPECT_EQ(1, lock_calls);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
+                       VaultLockBroadcastRevokesMcpCredentialLeases) {
+  auto* parts = MahoBrowserMainExtraParts::GetInstance();
+  ASSERT_TRUE(parts);
+
+  parts->AddMcpVaultCredentialLeaseForTesting(
+      base::TimeTicks::Now() + base::Minutes(1), /*promoted=*/false);
+  ASSERT_EQ(1u, parts->McpVaultCredentialLeaseCountForTesting());
+
+  maho::NotifyVaultLockStateChanged(/*locked=*/false);
+  maho::NotifyVaultLockStateChanged(/*locked=*/true);
+
+  EXPECT_EQ(0u, parts->McpVaultCredentialLeaseCountForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
+                       ExpiredMcpCredentialHandlesAndGrantsAreSwept) {
+  auto* parts = MahoBrowserMainExtraParts::GetInstance();
+  ASSERT_TRUE(parts);
+
+  const base::TimeTicks now = base::TimeTicks::Now();
+  parts->AddMcpVaultCredentialLeaseForTesting(now + base::Seconds(1),
+                                              /*promoted=*/false);
+  parts->AddMcpVaultCredentialLeaseForTesting(now + base::Seconds(1),
+                                              /*promoted=*/true);
+  ASSERT_EQ(2u, parts->McpVaultCredentialLeaseCountForTesting());
+
+  parts->SweepMcpVaultCredentialLeasesForTesting(now + base::Seconds(1));
+
+  EXPECT_EQ(0u, parts->McpVaultCredentialLeaseCountForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
+                       ExpiredMcpCredentialHandleCannotBePromoted) {
+  auto* parts = MahoBrowserMainExtraParts::GetInstance();
+  ASSERT_TRUE(parts);
+
+  const base::TimeTicks expiry = base::TimeTicks::Now() + base::Seconds(1);
+  parts->AddMcpVaultCredentialLeaseForTesting(expiry, /*promoted=*/false);
+  ASSERT_EQ(1u, parts->McpVaultCredentialLeaseCountForTesting());
+
+  EXPECT_FALSE(parts->PromoteMcpVaultCredentialLeaseForTesting(
+      browser()->profile(), expiry));
+  EXPECT_EQ(0u, parts->McpVaultCredentialLeaseCountForTesting());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
+                       CrossProfileMcpCredentialHandleCannotBePromoted) {
+  auto* parts = MahoBrowserMainExtraParts::GetInstance();
+  ASSERT_TRUE(parts);
+  Profile* owner_profile = browser()->profile();
+  ASSERT_TRUE(owner_profile);
+
+  ProfileManager* profile_manager = g_browser_process->profile_manager();
+  ASSERT_TRUE(profile_manager);
+  Profile& second_profile = profiles::testing::CreateProfileSync(
+      profile_manager, profile_manager->GenerateNextProfileDirectoryPath());
+
+  const base::TimeTicks now = base::TimeTicks::Now();
+  parts->AddMcpVaultCredentialLeaseForTesting(
+      now + base::Minutes(1), /*promoted=*/false, owner_profile);
+  ASSERT_EQ(1u, parts->McpVaultCredentialLeaseCountForTesting());
+
+  EXPECT_FALSE(parts->PromoteMcpVaultCredentialLeaseForTesting(&second_profile,
+                                                               now));
+  EXPECT_EQ(1u, parts->McpVaultCredentialLeaseCountForTesting());
+
+  parts->SweepMcpVaultCredentialLeasesForTesting(now + base::Minutes(1));
+  EXPECT_EQ(0u, parts->McpVaultCredentialLeaseCountForTesting());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
@@ -1308,10 +1426,15 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Profile* profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(profile);
 
-  // Test with pref OFF
-  profile->GetPrefs()->SetBoolean(
-      maho::sidebar_prefs::kOpenExternalLinksInMahoMini, false);
+  // maho-core is canonical: ATCManager::decide_link_destination reads only the
+  // core value, so the Chromium pref alone would not exercise this path. The
+  // guard restores the previous process-global value on scope exit.
+  MahoCore* core = maho::GetCore();
+  ASSERT_NE(core, nullptr);
+  ScopedOpenExternalLinksInMahoMini external_links_off(core, false);
 
+  // ATC only applies to a single-URL open (see the app_controller_mac override:
+  // `if (urls.size() == 1)`); multi-URL opens fall through to the normal path.
   ::OpenUrlsInBrowserWithProfile({GURL("https://example.com")}, profile);
   base::RunLoop().RunUntilIdle();
 
@@ -1327,10 +1450,15 @@ IN_PROC_BROWSER_TEST_F(MahoIncognitoPrivacyBrowserTest,
   Profile* profile = ProfileManager::GetLastUsedProfile();
   ASSERT_TRUE(profile);
 
-  // Test with pref ON
-  profile->GetPrefs()->SetBoolean(
-      maho::sidebar_prefs::kOpenExternalLinksInMahoMini, true);
+  // maho-core is canonical: ATCManager::decide_link_destination reads only the
+  // core value, so the Chromium pref alone would not exercise this path. The
+  // guard restores the previous process-global value on scope exit.
+  MahoCore* core = maho::GetCore();
+  ASSERT_NE(core, nullptr);
+  ScopedOpenExternalLinksInMahoMini external_links_on(core, true);
 
+  // ATC only applies to a single-URL open (see the app_controller_mac override:
+  // `if (urls.size() == 1)`); multi-URL opens fall through to the normal path.
   size_t initial_count = GetAllBrowserWindowInterfaces().size();
 
   ::OpenUrlsInBrowserWithProfile({GURL("https://example.com")}, profile);

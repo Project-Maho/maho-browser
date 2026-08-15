@@ -43,7 +43,12 @@ Maho Mail requires installation and IMAP account configuration. It does not inte
 
 Apple Mail is a closed system. You can set up mail rules within the app, and macOS offers some AppleScript/Shortcuts integration, but there is no CLI, no structured API, and no way for external tools to interact with your inbox programmatically.
 
-Maho Mail treats your inbox as a programmable resource. The CLI lets you search, read, and compose email from the terminal with JSON output. The MCP server exposes your inbox to AI agents. You can build automations like `maho search --unread --json | jq '.[] | .subject'` or let Claude handle your email triage. This is the fundamental difference between the two clients.
+Maho Mail treats your inbox as a programmable resource. The CLI lets you search,
+read, and compose email from the terminal with JSON output. The MCP server
+exposes your inbox to AI agents. You can build automations like
+`maho mail search "is:unread" --json | jq '.[] | .subject'` or let an AI agent
+handle your email triage. This is the fundamental difference between the two
+clients.
 
 ### AI capabilities
 
@@ -85,7 +90,10 @@ Maho Mail works with any IMAP account, including iCloud Mail. You can use your i
 
 ### Is Maho Mail available on iPhone and iPad?
 
-No. Maho Mail is currently a desktop application for macOS. Apple Mail's deep integration with iOS and iPadOS is a significant advantage if you need seamless mobile email. Maho focuses on the desktop and terminal experience.
+No. Maho Mail is integrated into Maho Browser on Windows, macOS, and Linux; it
+does not currently provide an iPhone or iPad Mail UI. Apple Mail's deep
+integration with iOS and iPadOS is a significant advantage if you need seamless
+mobile email. Maho focuses on the desktop Browser and terminal experience.
 
 ### Is Maho Mail free like Apple Mail?
 

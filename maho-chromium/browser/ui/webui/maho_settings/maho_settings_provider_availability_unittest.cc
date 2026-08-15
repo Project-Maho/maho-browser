@@ -1,11 +1,15 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -13,8 +17,12 @@
 namespace maho_settings_password_helpers {
 namespace {
 
+using maho::passwords::EffectivePasswordProvider;
+
+constexpr char kOwnerProfileKey[] = "owner-profile";
 constexpr char kBitwardenExtensionId[] = "nngceckbapebfimnlniiiahkandclblb";
-constexpr char kOnePasswordExtensionId[] = "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
+constexpr char kOnePasswordExtensionId[] =
+    "aeblfdkhhhdcdjpifhhbdiojplfjncoa";
 
 std::string PasswordProviderExtensionJson(bool bitwarden_enabled,
                                           bool one_password_enabled) {
@@ -41,23 +49,14 @@ std::string PasswordProviderExtensionJson(bool bitwarden_enabled,
   return json;
 }
 
-void SetPasswordProviderExtensions(bool bitwarden_enabled,
-                                   bool one_password_enabled) {
+void SetPasswordProviderExtensionsForProfile(std::string_view profile_key,
+                                             bool bitwarden_enabled,
+                                             bool one_password_enabled) {
   const std::string json =
       PasswordProviderExtensionJson(bitwarden_enabled, one_password_enabled);
-  maho_core_set_installed_extensions(maho::GetCore(), json.c_str());
-}
-
-std::string_view ProviderToken(
-    maho_settings::mojom::PasswordProviderKind provider) {
-  switch (provider) {
-    case maho_settings::mojom::PasswordProviderKind::kMahoNative:
-      return "maho_native";
-    case maho_settings::mojom::PasswordProviderKind::kBitwarden:
-      return "bitwarden";
-    case maho_settings::mojom::PasswordProviderKind::kOnePassword:
-      return "onepassword";
-  }
+  const std::string key(profile_key);
+  maho_core_set_installed_extensions_for_profile(maho::GetCore(), key.c_str(),
+                                                 json.c_str());
 }
 
 class ScopedCoreOverride {
@@ -66,6 +65,9 @@ class ScopedCoreOverride {
     maho::SetCore(core);
   }
   ~ScopedCoreOverride() { maho::SetCore(saved_); }
+
+  ScopedCoreOverride(const ScopedCoreOverride&) = delete;
+  ScopedCoreOverride& operator=(const ScopedCoreOverride&) = delete;
 
  private:
   MahoCore* saved_;
@@ -97,77 +99,104 @@ class MahoSettingsProviderAvailabilityTest : public testing::Test {
 };
 
 TEST_F(MahoSettingsProviderAvailabilityTest,
-       CoreBackedProviderAvailabilityMatrixUsesEveryApprovedExtension) {
-  using Provider = maho_settings::mojom::PasswordProviderKind;
-  struct ProviderInstallCase {
-    std::string_view name;
+       EffectiveProviderUsesProfileScopedExtensionState) {
+  struct TestCase {
+    std::string_view selected_provider;
     bool bitwarden_installed;
     bool one_password_installed;
+    EffectivePasswordProvider expected;
   };
-  struct ProviderSelectionCase {
-    std::string_view selected;
-    Provider expected_selected;
-    Provider expected_effective_when_installed;
-  };
-
-  constexpr ProviderInstallCase kInstallCases[] = {
-      {"neither", false, false},
-      {"onepassword_only", false, true},
-      {"bitwarden_only", true, false},
-      {"both", true, true},
-  };
-  constexpr ProviderSelectionCase kSelectionCases[] = {
-      {"maho_native", Provider::kMahoNative, Provider::kMahoNative},
-      {"bitwarden", Provider::kBitwarden, Provider::kBitwarden},
-      {"onepassword", Provider::kOnePassword, Provider::kOnePassword},
+  constexpr TestCase kCases[] = {
+      {"maho_native", false, false,
+       EffectivePasswordProvider::kMahoNative},
+      {"bitwarden", true, false, EffectivePasswordProvider::kBitwarden},
+      {"onepassword", false, true, EffectivePasswordProvider::kOnePassword},
+      {"bitwarden", false, true, EffectivePasswordProvider::kDisabled},
+      {"onepassword", true, false, EffectivePasswordProvider::kDisabled},
   };
 
-  for (const ProviderInstallCase& install_case : kInstallCases) {
-    SCOPED_TRACE(install_case.name);
-    SetPasswordProviderExtensions(install_case.bitwarden_installed,
-                                  install_case.one_password_installed);
+  // Populate the legacy unprofiled/default bucket with both providers. A
+  // missing provider in the owner bucket must still be unavailable.
+  const std::string unprofiled_extensions =
+      PasswordProviderExtensionJson(true, true);
+  maho_core_set_installed_extensions(maho::GetCore(),
+                                     unprofiled_extensions.c_str());
 
-    for (const ProviderSelectionCase& selection_case : kSelectionCases) {
-      SCOPED_TRACE(selection_case.selected);
-      ASSERT_TRUE(UpdateAutofillSettingsInCore(
-          true, std::string(selection_case.selected)));
+  for (const TestCase& test_case : kCases) {
+    SCOPED_TRACE(test_case.selected_provider);
+    SetPasswordProviderExtensionsForProfile(
+        kOwnerProfileKey, test_case.bitwarden_installed,
+        test_case.one_password_installed);
+    ASSERT_TRUE(UpdateAutofillSettingsInCore(
+        true, std::string(test_case.selected_provider)));
 
-      auto status = BuildVaultProviderStatus();
-      auto password_status = BuildPasswordProviderStatus();
-
-      const bool selected_is_installed =
-          selection_case.expected_selected == Provider::kMahoNative ||
-          (selection_case.expected_selected == Provider::kBitwarden &&
-           install_case.bitwarden_installed) ||
-          (selection_case.expected_selected == Provider::kOnePassword &&
-           install_case.one_password_installed);
-      EXPECT_EQ(selection_case.expected_selected, status->selected_provider);
-      EXPECT_EQ(selected_is_installed
-                    ? selection_case.expected_effective_when_installed
-                    : Provider::kMahoNative,
-                status->effective_provider);
-      EXPECT_EQ(selected_is_installed, status->selected_provider_is_available);
-      const maho_settings::mojom::PasswordProviderKind expected_effective =
-          selected_is_installed
-              ? selection_case.expected_effective_when_installed
-              : Provider::kMahoNative;
-      EXPECT_EQ(std::string(ProviderToken(expected_effective)),
-                ReadPasswordProviderModeFromCore());
-      EXPECT_EQ(selection_case.expected_selected, password_status->provider);
-      EXPECT_EQ(selected_is_installed, password_status->is_available);
-      if (!selected_is_installed) {
-        EXPECT_NE(std::string::npos,
-                  password_status->description.find(
-                      "extension is not installed or enabled."));
-      }
-      ASSERT_EQ(3u, status->providers.size());
-      EXPECT_TRUE(status->providers[0]->is_available);
-      EXPECT_EQ(install_case.bitwarden_installed,
-                status->providers[1]->is_available);
-      EXPECT_EQ(install_case.one_password_installed,
-                status->providers[2]->is_available);
-    }
+    EXPECT_EQ(test_case.expected,
+              maho::passwords::GetEffectivePasswordProviderForProfileKey(
+                  kOwnerProfileKey));
   }
+}
+
+TEST_F(MahoSettingsProviderAvailabilityTest,
+       UnavailableExternalProviderIsDisabledNotNative) {
+  SetPasswordProviderExtensionsForProfile(kOwnerProfileKey, false, false);
+  ASSERT_TRUE(UpdateAutofillSettingsInCore(true, "bitwarden"));
+
+  EXPECT_EQ(EffectivePasswordProvider::kDisabled,
+            maho::passwords::GetEffectivePasswordProviderForProfileKey(
+                kOwnerProfileKey));
+  EXPECT_EQ("disabled",
+            maho::passwords::GetActivePasswordProviderModeForProfileKey(
+                kOwnerProfileKey));
+}
+
+TEST_F(MahoSettingsProviderAvailabilityTest,
+       PasswordsDisabledDisablesNativeProvider) {
+  SetPasswordProviderExtensionsForProfile(kOwnerProfileKey, true, true);
+  ASSERT_TRUE(UpdateAutofillSettingsInCore(false, "maho_native"));
+
+  EXPECT_EQ(EffectivePasswordProvider::kDisabled,
+            maho::passwords::GetEffectivePasswordProviderForProfileKey(
+                kOwnerProfileKey));
+}
+
+TEST_F(MahoSettingsProviderAvailabilityTest,
+       MissingCoreDisablesEffectiveProvider) {
+  ScopedCoreOverride missing_core(nullptr);
+  EXPECT_EQ(EffectivePasswordProvider::kDisabled,
+            maho::passwords::GetEffectivePasswordProviderForProfileKey(
+                kOwnerProfileKey));
+}
+
+TEST_F(MahoSettingsProviderAvailabilityTest,
+       MalformedOrUnknownProviderStateDisablesEffectiveProvider) {
+  constexpr std::string_view kValidSettings =
+      R"({"autofill":{"passwordsEnabled":true,"passwordProvider":"maho_native"}})";
+  constexpr std::string_view kValidRegistry =
+      R"([{"providerId":"maho_native","extensionIds":[]}])";
+  constexpr std::string_view kValidExtensions = "[]";
+
+  for (const auto& test_case : {
+           std::tuple<std::string_view, std::string_view, std::string_view>{
+               "{", kValidRegistry, kValidExtensions},
+           {R"({"autofill":{"passwordsEnabled":"true","passwordProvider":"maho_native"}})",
+            kValidRegistry, kValidExtensions},
+           {R"({"autofill":{"passwordsEnabled":true,"passwordProvider":"unknown_external"}})",
+            kValidRegistry, kValidExtensions},
+           {kValidSettings, "{", kValidExtensions},
+           {kValidSettings,
+            R"([{"providerId":"maho_native","extensionIds":"not-a-list"}])",
+            kValidExtensions},
+       }) {
+    EXPECT_EQ(
+        EffectivePasswordProvider::kDisabled,
+        maho::passwords::ComputeEffectivePasswordProviderForTesting(
+            std::get<0>(test_case), std::get<1>(test_case),
+            std::get<2>(test_case)));
+  }
+
+  EXPECT_EQ(EffectivePasswordProvider::kMahoNative,
+            maho::passwords::ComputeEffectivePasswordProviderForTesting(
+                kValidSettings, kValidRegistry, "{"));
 }
 
 }  // namespace

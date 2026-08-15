@@ -80,6 +80,13 @@
 
 namespace maho {
 
+MahoTranslateOptionsForTesting::MahoTranslateOptionsForTesting() = default;
+MahoTranslateOptionsForTesting::MahoTranslateOptionsForTesting(
+    MahoTranslateOptionsForTesting&&) = default;
+MahoTranslateOptionsForTesting& MahoTranslateOptionsForTesting::operator=(
+    MahoTranslateOptionsForTesting&&) = default;
+MahoTranslateOptionsForTesting::~MahoTranslateOptionsForTesting() = default;
+
 namespace {
 
 // --- Search pill spacing constants ---

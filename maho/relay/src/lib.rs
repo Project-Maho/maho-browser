@@ -204,6 +204,30 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(e) => e.to_response(),
             }
         })
+        .post_async("/sync/push", |req, ctx| async move {
+            match sync::routes::push(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .get_async("/sync/pull", |req, ctx| async move {
+            match sync::routes::pull(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .get_async("/sync/bootstrap", |req, ctx| async move {
+            match sync::routes::get_bootstrap(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .put_async("/sync/bootstrap", |req, ctx| async move {
+            match sync::routes::put_bootstrap(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
         .post_async("/sync/snapshot/upload", |req, ctx| async move {
             match sync::routes::upload_snapshot(req, ctx.env).await {
                 Ok(res) => Ok(res),

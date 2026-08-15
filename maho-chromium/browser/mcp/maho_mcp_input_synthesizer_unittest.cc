@@ -100,4 +100,10 @@ TEST(MahoMcpInputSynthesizerTest, ModifierList_UnknownIgnored) {
             static_cast<int>(blink::WebInputEvent::kShiftKey));
 }
 
+TEST(MahoMcpInputSynthesizerTest, NullWebContentsNeverDispatchesOrMarks) {
+  EXPECT_FALSE(MahoMcpInputSynthesizer::HoverAt(nullptr, 10, 20));
+  EXPECT_FALSE(MahoMcpInputSynthesizer::ClickAt(
+      nullptr, 10, 20, {}, /*sensitive=*/false));
+}
+
 }  // namespace maho

@@ -1,5 +1,8 @@
 use maho_storage::sqlite::SqliteStorage;
-use maho_types::chat::{Conversation, ConversationTurn};
+use maho_types::chat::{
+    Conversation, ConversationBulkOperation, ConversationBulkResult, ConversationListState,
+    ConversationProject, ConversationTurn,
+};
 
 pub struct ConversationManager;
 
@@ -17,7 +20,38 @@ impl ConversationManager {
     }
 
     pub fn list(storage: &SqliteStorage, limit: usize) -> Vec<Conversation> {
-        storage.list_conversations(limit).unwrap_or_default()
+        storage
+            .list_conversations(maho_types::chat::ConversationListState::Active, limit)
+            .unwrap_or_default()
+    }
+
+    pub fn list_v2(
+        storage: &SqliteStorage,
+        state: ConversationListState,
+        limit: usize,
+    ) -> Vec<Conversation> {
+        storage.list_conversations(state, limit).unwrap_or_default()
+    }
+
+    pub fn archive(storage: &SqliteStorage, id: &str, now: &str) -> bool {
+        storage.archive_conversation(id, now).unwrap_or(false)
+    }
+
+    pub fn unarchive(storage: &SqliteStorage, id: &str, now: &str) -> bool {
+        storage.unarchive_conversation(id, now).unwrap_or(false)
+    }
+
+    pub fn bulk(
+        storage: &SqliteStorage,
+        operation: ConversationBulkOperation,
+        ids: &[String],
+        now: &str,
+    ) -> Result<ConversationBulkResult, maho_storage::StorageError> {
+        storage.apply_conversation_bulk_operation(operation, ids, now)
+    }
+
+    pub fn list_projects(storage: &SqliteStorage) -> Vec<ConversationProject> {
+        storage.list_conversation_projects().unwrap_or_default()
     }
 
     pub fn get_messages(storage: &SqliteStorage, session_id: &str) -> Vec<ConversationTurn> {

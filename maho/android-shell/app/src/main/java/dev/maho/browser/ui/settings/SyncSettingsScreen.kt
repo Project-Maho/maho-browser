@@ -1,27 +1,37 @@
 package dev.maho.browser.ui.settings
 
-import androidx.compose.foundation.clickable
+import android.app.Activity
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,39 +42,82 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.maho.browser.BuildConfig
 import dev.maho.browser.bridge.BridgeSync
-import dev.maho.browser.bridge.BridgeTabs
-import dev.maho.browser.models.AccountSyncState
 import dev.maho.browser.models.ConnectedDevice
+import dev.maho.browser.sync.CredentialManagerGoogleSource
+import dev.maho.browser.sync.GoogleSignInOutcome
 import dev.maho.browser.sync.RelaySessionStore
 import dev.maho.browser.sync.SyncManager
+import dev.maho.browser.ui.components.ConfirmDialog
+import dev.maho.browser.ui.components.MahoGroupedRow
+import dev.maho.browser.ui.components.MahoGroupedSection
+import dev.maho.browser.ui.components.MahoGroupedToggle
+import dev.maho.browser.ui.components.MahoRowDivider
+import dev.maho.browser.ui.components.MahoTextField
+import dev.maho.browser.ui.icons.MahoIcon
+import dev.maho.browser.ui.theme.BrowserShellTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.DateFormat
-import java.util.Date
-import dev.maho.browser.ui.icons.MahoIcon
-import androidx.compose.ui.res.painterResource
+
+private enum class SyncUiStatus {
+    Synced,
+    Syncing,
+    Idle,
+    Error,
+    Offline
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SyncSettingsScreen(
     onBack: () -> Unit = {},
 ) {
+    val shellColors = BrowserShellTheme.colors
+    val shellMetrics = BrowserShellTheme.metrics
+    val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
+    val activity = LocalContext.current as Activity
+    val googleCredentialSource = remember(activity) { CredentialManagerGoogleSource(activity) }
     var relaySessionEmail by remember { mutableStateOf(RelaySessionStore.load()?.email) }
     var serverUrlInput by remember { mutableStateOf(SyncManager.getServerUrl()) }
     var emailInput by remember { mutableStateOf(relaySessionEmail ?: "") }
     var passwordInput by remember { mutableStateOf("") }
     var syncEnabled by remember { mutableStateOf(SyncManager.isSyncing) }
-    var syncState by remember { mutableStateOf<AccountSyncState>(if (relaySessionEmail == null) AccountSyncState.Offline else AccountSyncState.Idle) }
+    var syncStatus by remember { mutableStateOf(if (relaySessionEmail == null) SyncUiStatus.Offline else SyncUiStatus.Idle) }
     val devices = remember { mutableStateListOf<ConnectedDevice>() }
     var recoveryPhraseInput by remember { mutableStateOf("") }
     var generatedSyncKey by remember { mutableStateOf<String?>(null) }
     var joinResult by remember { mutableStateOf<String?>(null) }
     var syncError by remember { mutableStateOf<String?>(null) }
+    var isSubmittingAuth by remember { mutableStateOf(false) }
+    var deviceToRemove by remember { mutableStateOf<ConnectedDevice?>(null) }
+
+    deviceToRemove?.let { device ->
+        ConfirmDialog(
+            title = "Remove Device?",
+            message = "This will disconnect \"${device.name}\" from sync on this account.",
+            confirmLabel = "Remove",
+            onConfirm = {
+                BridgeSync.removeSyncDevice(device.id)
+                devices.remove(device)
+                deviceToRemove = null
+            },
+            onDismiss = { deviceToRemove = null },
+        )
+    }
 
     fun refresh() {
         val session = RelaySessionStore.load()
@@ -73,16 +126,14 @@ fun SyncSettingsScreen(
             serverUrlInput = session.serverUrl ?: serverUrlInput
         }
         syncEnabled = SyncManager.isSyncing
-        syncState = when {
-            syncError != null -> AccountSyncState.Error(syncError!!)
-            syncEnabled -> SyncManager.lastSyncTimestamp?.let {
-                AccountSyncState.Synced(DateFormat.getDateTimeInstance().format(Date(it)))
-            } ?: AccountSyncState.Syncing(0.0)
-            session != null -> AccountSyncState.Idle
-            else -> AccountSyncState.Offline
+        syncStatus = when {
+            relaySessionEmail == null -> SyncUiStatus.Offline
+            !syncEnabled -> SyncUiStatus.Idle
+            else -> SyncUiStatus.Synced
         }
+        val currentDevices = BridgeSync.getConnectedDevices()
         devices.clear()
-        devices.addAll(BridgeSync.getConnectedDevices())
+        devices.addAll(currentDevices)
     }
 
     LaunchedEffect(Unit) {
@@ -97,12 +148,29 @@ fun SyncSettingsScreen(
     }
 
     Scaffold(
+        containerColor = shellColors.overlayBackground,
         topBar = {
             TopAppBar(
-                title = { Text("Sync") },
+                title = {
+                    Text(
+                        text = "Sync",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = shellColors.overlayBackground,
+                    titleContentColor = shellColors.textPrimary,
+                    navigationIconContentColor = shellColors.textPrimary,
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Back")
+                        Icon(
+                            painter = painterResource(id = MahoIcon.NavBack.drawableRes),
+                            contentDescription = "Back",
+                        )
                     }
                 },
             )
@@ -110,288 +178,328 @@ fun SyncSettingsScreen(
     ) { padding ->
         Column(
             modifier = Modifier
+                .fillMaxSize()
                 .padding(padding)
+                .background(shellColors.overlayBackground)
                 .verticalScroll(rememberScrollState()),
         ) {
-            var showRelayServerUrl by remember { mutableStateOf(false) }
-
-            androidx.compose.foundation.layout.Box(
-                modifier = Modifier.clickable { showRelayServerUrl = !showRelayServerUrl }
-            ) {
-                SectionHeader("Account")
-            }
-            ListItem(
-                headlineContent = { Text("Relay account") },
-                supportingContent = {
-                    Text("Use your relay email and password to enable authenticated background polling.")
-                },
-            )
-            if (showRelayServerUrl) {
-                OutlinedTextField(
-                    value = serverUrlInput,
-                    onValueChange = {
-                        serverUrlInput = it
-                        SyncManager.updateServerUrl(it)
-                    },
-                    label = { Text("Relay Server URL") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                )
-            }
-            OutlinedTextField(
-                value = emailInput,
-                onValueChange = { emailInput = it },
-                label = { Text("Email") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            OutlinedTextField(
-                value = passwordInput,
-                onValueChange = { passwordInput = it },
-                label = { Text("Password") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-            )
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Button(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                withContext(Dispatchers.IO) {
-                                    SyncManager.signUp(serverUrlInput, emailInput, passwordInput)
-                                }
-                                relaySessionEmail = emailInput
-                                syncError = null
-                                passwordInput = ""
-                                refresh()
-                            } catch (e: Exception) {
-                                syncError = e.message ?: "Unable to sign up"
-                                refresh()
-                            }
-                        }
-                    },
-                    enabled = emailInput.isNotBlank() && passwordInput.isNotBlank() && serverUrlInput.isNotBlank(),
-                ) {
-                    Text("Sign Up")
-                }
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                withContext(Dispatchers.IO) {
-                                    SyncManager.logIn(serverUrlInput, emailInput, passwordInput)
-                                }
-                                relaySessionEmail = emailInput
-                                syncError = null
-                                passwordInput = ""
-                                refresh()
-                            } catch (e: Exception) {
-                                syncError = e.message ?: "Unable to log in"
-                                refresh()
-                            }
-                        }
-                    },
-                    enabled = emailInput.isNotBlank() && passwordInput.isNotBlank() && serverUrlInput.isNotBlank(),
-                ) {
-                    Text("Log In")
-                }
-                if (relaySessionEmail != null) {
-                    OutlinedButton(
+            if (relaySessionEmail != null) {
+                MahoGroupedSection(title = "Account") {
+                    MahoGroupedRow(
+                        title = relaySessionEmail ?: "",
+                        subtitle = "Relay account connected",
+                        icon = painterResource(id = MahoIcon.Profiles.drawableRes),
+                        iconTint = Color(0xFF0A84FF),
+                    )
+                    MahoRowDivider()
+                    MahoGroupedRow(
+                        title = "Sign Out",
+                        icon = painterResource(id = MahoIcon.Close.drawableRes),
+                        iconTint = shellColors.error,
                         onClick = {
                             scope.launch {
                                 withContext(Dispatchers.IO) {
                                     SyncManager.logout()
                                 }
                                 relaySessionEmail = null
-                                syncEnabled = false
+                                emailInput = ""
+                                passwordInput = ""
                                 syncError = null
                                 refresh()
                             }
                         },
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error,
-                        ),
-                    ) {
-                        Text("Sign Out")
-                    }
+                    )
                 }
-            }
-            if (relaySessionEmail != null) {
-                ListItem(
-                    headlineContent = { Text(relaySessionEmail!!) },
-                    supportingContent = { Text("Relay session saved locally for authenticated polling.") },
-                )
-            }
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-            if (syncError != null) {
-                ListItem(
-                    leadingContent = {
-                        Icon(painter = painterResource(id = MahoIcon.CircleAlert.drawableRes), contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                    },
-                    headlineContent = { Text("Sync Error") },
-                    supportingContent = { Text(syncError!!) },
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            }
-
-            if (relaySessionEmail != null) {
-                ListItem(
-                    headlineContent = { Text("Background Polling") },
-                    supportingContent = { Text("Periodically pushes local changes and pulls relay updates over HTTP.") },
-                    trailingContent = {
-                        Switch(
-                            checked = syncEnabled,
-                            onCheckedChange = {
-                                syncEnabled = it
-                                if (it) {
-                                    SyncManager.startSync()
-                                } else {
-                                    SyncManager.stopSync()
+                MahoGroupedSection(title = "Synchronization") {
+                    MahoGroupedToggle(
+                        title = "Sync Data",
+                        subtitle = "Automatically sync tabs, spaces, and bookmarks",
+                        icon = painterResource(id = MahoIcon.SyncIcon.drawableRes),
+                        iconTint = Color(0xFF30D158),
+                        checked = syncEnabled,
+                        onCheckedChange = { checked ->
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    if (checked) {
+                                        SyncManager.startSync()
+                                    } else {
+                                        SyncManager.stopSync()
+                                    }
                                 }
                                 refresh()
-                            },
-                        )
-                    },
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            }
-
-            SectionHeader("Status")
-            ListItem(
-                leadingContent = {
-                    val (icon, tint) = when (val state = syncState) {
-                        is AccountSyncState.Idle -> MahoIcon.Cloud to MaterialTheme.colorScheme.onSurfaceVariant
-                        is AccountSyncState.Syncing -> MahoIcon.SyncIcon to MaterialTheme.colorScheme.primary
-                        is AccountSyncState.Synced -> MahoIcon.CheckCircle to MaterialTheme.colorScheme.primary
-                        is AccountSyncState.Error -> MahoIcon.CircleAlert to MaterialTheme.colorScheme.error
-                        is AccountSyncState.Offline -> MahoIcon.CloudOff to MaterialTheme.colorScheme.onSurfaceVariant
-                    }
-                    Icon(painter = painterResource(id = icon.drawableRes), contentDescription = null, tint = tint)
-                },
-                headlineContent = {
-                    Text(
-                        when (val state = syncState) {
-                            is AccountSyncState.Idle -> "Idle"
-                            is AccountSyncState.Syncing -> "Polling relay"
-                            is AccountSyncState.Synced -> "Synced"
-                            is AccountSyncState.Error -> "Error"
-                            is AccountSyncState.Offline -> "Offline"
+                            }
                         },
                     )
-                },
-                supportingContent = {
-                    val detail = when (val s = syncState) {
-                        is AccountSyncState.Syncing -> "Waiting for the next background poll"
-                        is AccountSyncState.Synced -> "Last sync: ${s.lastSyncAt}"
-                        is AccountSyncState.Error -> s.message
-                        is AccountSyncState.Idle, is AccountSyncState.Offline -> null
-                    }
-                    if (detail != null) Text(detail)
-                },
-            )
-            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-            if (devices.isNotEmpty()) {
-                SectionHeader("Connected Devices")
-                devices.forEach { device ->
-                    ListItem(
-                        leadingContent = {
-                            val icon = when (device.deviceType.lowercase()) {
-                                "desktop", "mac", "pc" -> MahoIcon.Monitor
-                                "phone", "iphone", "android" -> MahoIcon.Smartphone
-                                "tablet", "ipad" -> MahoIcon.TabletSmartphone
-                                else -> MahoIcon.Monitor
-                            }
-                            Icon(painter = painterResource(id = icon.drawableRes), contentDescription = null)
-                        },
-                        headlineContent = { Text(device.name) },
-                        supportingContent = {
-                            if (device.lastSeen != null) Text("Last seen: ${device.lastSeen}")
-                        },
+                    MahoRowDivider()
+                    MahoGroupedRow(
+                        title = "Status",
                         trailingContent = {
-                            Row {
-                                IconButton(onClick = {
-                                    val activeTabId = BridgeTabs.getActiveTabId()
-                                    val activeTab = BridgeTabs.getTabViewModels().firstOrNull { tab -> tab.id == activeTabId }
-                                    if (activeTab != null) {
-                                        BridgeSync.sendTabToDevice(url = activeTab.url, title = activeTab.title, deviceId = device.id)
-                                    } else {
-                                        BridgeSync.sendTabToDevice(url = "", title = "", deviceId = device.id)
-                                    }
-                                }) {
-                                    Icon(painter = painterResource(id = MahoIcon.Send.drawableRes), contentDescription = "Send Tab")
-                                }
-                                IconButton(onClick = {
-                                    BridgeSync.removeSyncDevice(device.id)
-                                    devices.remove(device)
-                                }) {
-                                    Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
-                                        contentDescription = "Remove Device",
-                                        tint = MaterialTheme.colorScheme.error,
-                                    )
-                                }
+                            val (statusText, statusColor) = when (syncStatus) {
+                                SyncUiStatus.Synced -> "Synced" to shellColors.success
+                                SyncUiStatus.Syncing -> "Syncing…" to Color(0xFF0A84FF)
+                                SyncUiStatus.Idle -> "Idle" to shellColors.textSecondary
+                                SyncUiStatus.Error -> "Error" to shellColors.error
+                                SyncUiStatus.Offline -> "Offline" to shellColors.textTertiary
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = statusColor.copy(alpha = 0.14f),
+                                modifier = Modifier.padding(vertical = 2.dp),
+                            ) {
+                                Text(
+                                    text = statusText,
+                                    color = statusColor,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
                             }
                         },
                     )
                 }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-            }
 
-            SectionHeader("Recovery")
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Button(onClick = {
-                    generatedSyncKey = BridgeSync.generateSyncKey()
-                }) {
-                    Text("Generate Recovery Phrase")
+                if (devices.isNotEmpty()) {
+                    MahoGroupedSection(
+                        title = "Connected Devices",
+                        footer = "Devices sharing data through this Relay account.",
+                    ) {
+                        devices.forEachIndexed { index, device ->
+                            if (index > 0) MahoRowDivider()
+                            MahoGroupedRow(
+                                title = device.name,
+                                subtitle = if (device.isOnline == true) "Active now" else "Offline",
+                                icon = painterResource(id = MahoIcon.Globe.drawableRes),
+                                iconTint = if (device.isOnline == true) Color(0xFF30D158) else Color(0xFF8E8E93),
+                                trailingContent = {
+                                    IconButton(
+                                        onClick = { deviceToRemove = device },
+                                        modifier = Modifier.size(28.dp),
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(id = MahoIcon.Delete.drawableRes),
+                                            contentDescription = "Remove Device",
+                                            tint = shellColors.error.copy(alpha = 0.7f),
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+            } else {
+                MahoGroupedSection(
+                    title = "Sign In",
+                    footer = "Sign in to automatically sync your tabs, spaces, and bookmarks across all your devices without needing a Recovery Phrase.",
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        MahoTextField(
+                            value = serverUrlInput,
+                            onValueChange = {
+                                serverUrlInput = it
+                                SyncManager.updateServerUrl(it)
+                            },
+                            label = "Relay Server",
+                            placeholder = "http://192.168.0.39:8787",
+                        )
+
+                        MahoTextField(
+                            value = emailInput,
+                            onValueChange = { emailInput = it },
+                            label = "Email Address",
+                            placeholder = "name@example.com",
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                        )
+
+                        MahoTextField(
+                            value = passwordInput,
+                            onValueChange = { passwordInput = it },
+                            label = "Password",
+                            placeholder = "••••••••",
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        )
+
+                        Spacer(modifier = Modifier.height(4.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isSubmittingAuth = true
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                SyncManager.logIn(serverUrlInput, emailInput, passwordInput)
+                                            }
+                                            relaySessionEmail = emailInput
+                                            syncError = null
+                                            passwordInput = ""
+                                            refresh()
+                                        } catch (e: Exception) {
+                                            syncError = e.message ?: "Unable to log in"
+                                            refresh()
+                                        } finally {
+                                            isSubmittingAuth = false
+                                        }
+                                    }
+                                },
+                                enabled = !isSubmittingAuth && emailInput.isNotBlank() && passwordInput.isNotBlank(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF0A84FF),
+                                    contentColor = Color.White,
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp),
+                            ) {
+                                if (isSubmittingAuth) {
+                                    CircularProgressIndicator(
+                                        color = Color.White,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                } else {
+                                    Text("Log In", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        isSubmittingAuth = true
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                SyncManager.signUp(serverUrlInput, emailInput, passwordInput)
+                                            }
+                                            relaySessionEmail = emailInput
+                                            syncError = null
+                                            passwordInput = ""
+                                            refresh()
+                                        } catch (e: Exception) {
+                                            syncError = e.message ?: "Unable to sign up"
+                                            refresh()
+                                        } finally {
+                                            isSubmittingAuth = false
+                                        }
+                                    }
+                                },
+                                enabled = !isSubmittingAuth && emailInput.isNotBlank() && passwordInput.isNotBlank(),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF0A84FF).copy(alpha = 0.5f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFF0A84FF),
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(46.dp),
+                            ) {
+                                Text("Sign Up", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                            }
+                        }
+                    }
                 }
             }
-            if (generatedSyncKey != null) {
-                ListItem(
-                    headlineContent = { Text("Recovery Phrase") },
-                    supportingContent = { Text(generatedSyncKey!!) },
-                )
-            }
-            OutlinedTextField(
-                value = recoveryPhraseInput,
-                onValueChange = { recoveryPhraseInput = it },
-                label = { Text("Recovery Phrase") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-            )
-            Button(
-                onClick = {
-                    if (recoveryPhraseInput.isNotBlank()) {
-                        joinResult = BridgeSync.joinSync(recoveryPhraseInput)
-                        recoveryPhraseInput = ""
-                        refresh()
+
+            if (syncError != null) {
+                MahoGroupedSection {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(id = MahoIcon.Close.drawableRes),
+                            contentDescription = null,
+                            tint = shellColors.error,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = syncError?.replace("\"", "") ?: "",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
+                            color = shellColors.error,
+                        )
                     }
-                },
-                enabled = recoveryPhraseInput.isNotBlank(),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                }
+            }
+
+            MahoGroupedSection(
+                title = "Advanced Recovery",
+                footer = "Recovery phrases are preserved for emergency manual backup and key export.",
             ) {
-                Text("Join with Recovery Phrase")
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            generatedSyncKey = BridgeSync.generateSyncKey()
+                            if (generatedSyncKey != null) {
+                                clipboardManager.setText(AnnotatedString(generatedSyncKey ?: ""))
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(0.5.dp, shellColors.cardBorder),
+                        modifier = Modifier.fillMaxWidth().height(42.dp),
+                    ) {
+                        Text("Generate Recovery Phrase", color = shellColors.textPrimary, fontSize = 14.sp)
+                    }
+
+                    if (generatedSyncKey != null) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = shellColors.fieldBackground,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = generatedSyncKey ?: "",
+                                color = shellColors.accent,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(12.dp),
+                            )
+                        }
+                    }
+
+                    MahoTextField(
+                        value = recoveryPhraseInput,
+                        onValueChange = { recoveryPhraseInput = it },
+                        placeholder = "Enter phrase to restore…",
+                        label = "Manual Recovery Phrase",
+                    )
+
+                    Button(
+                        onClick = {
+                            val res = BridgeSync.joinSync(recoveryPhraseInput)
+                            joinResult = if (res != null) "Joined successfully" else "Failed to join"
+                            refresh()
+                        },
+                        enabled = recoveryPhraseInput.isNotBlank(),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = shellColors.fieldBackground,
+                            contentColor = shellColors.textPrimary,
+                        ),
+                        modifier = Modifier.fillMaxWidth().height(42.dp),
+                    ) {
+                        Text("Join with Phrase", fontSize = 14.sp)
+                    }
+                }
             }
-            if (joinResult != null) {
-                ListItem(
-                    headlineContent = { Text("Joined successfully") },
-                    supportingContent = { Text(joinResult!!) },
-                )
-            }
+
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 }

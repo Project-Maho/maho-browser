@@ -76,12 +76,20 @@ impl VaultRuntime {
                     _ => return Err(VaultCrudError::ItemKindMismatch),
                 },
             };
+            // `None` preserves the stored form detail (an update that carries no
+            // browser-form context, e.g. a settings-originated rename, must not
+            // silently drop the fields the store round-trip depends on).
+            let form_details = match update.form_details {
+                Some(form_details) => Some(form_details),
+                Option::None => record.form_details.clone(),
+            };
             let updated = VaultRecordPayload {
                 schema_version: VaultSchemaVersion::CURRENT,
                 metadata,
                 username: Some(username),
                 secret,
                 last_used_at: record.last_used_at,
+                form_details,
             };
             let updated_row = encrypt_updated_row(manager, &row, &id, &updated)?;
             persist_update(manager, repository, &updated_row, row.revision, &id)?;
@@ -112,6 +120,7 @@ impl VaultRuntime {
                 username: None,
                 secret: RecordSecret::Tombstone,
                 last_used_at: None,
+                form_details: None,
             };
             let envelope = manager
                 .encrypt_and_wrap(&serialize_record(&tombstone)?, &id)

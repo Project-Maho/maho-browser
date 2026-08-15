@@ -135,7 +135,6 @@ async fn synthesis_fires_on_unfinished_intent_narration() {
     );
 }
 
-
 // The in-browser AI panel (FFI leased bridge) and deep research reach the
 // no-tools loop `run_turn_internal_simple` via `run_turn_simple`. This proves
 // that path shares the same `finalize_turn_answer` synthesis as `run_turn`, so
@@ -161,9 +160,7 @@ impl ChatCompletion for SimpleScriptedLlm {
             .build()
             .expect("response builds");
         if n == 1 {
-            r.append_message_delta(Some(
-                "I will navigate to example.com to continue the task",
-            ));
+            r.append_message_delta(Some("I will navigate to example.com to continue the task"));
         } else {
             r.append_message_delta(Some(SYNTH));
         }
@@ -175,9 +172,11 @@ impl ChatCompletion for SimpleScriptedLlm {
 async fn synthesis_fires_on_simple_no_tools_panel_path() {
     let harness = backend_with_profile_tools(&[]);
     let _bridge = install_bridge(&harness.backend);
-    harness.backend.set_llm_override(Box::new(SimpleScriptedLlm {
-        calls: Arc::new(Mutex::new(0)),
-    }) as Box<dyn ChatCompletion>);
+    harness
+        .backend
+        .set_llm_override(Box::new(SimpleScriptedLlm {
+            calls: Arc::new(Mutex::new(0)),
+        }) as Box<dyn ChatCompletion>);
 
     let msg = harness
         .backend

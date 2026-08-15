@@ -51,6 +51,13 @@ Project membership is generated from `project.yml` with XcodeGen.
 
 ## VERIFICATION
 
+### Physical-device QA
+
+Run all user-surface, integration, smoke, and cross-platform convergence QA on
+a physical iPhone or iPad connected through USB or Xcode network pairing. Do
+not use an iOS Simulator for those checks. Simulators remain acceptable only
+for automated unit tests that do not claim device-level validation.
+
 The focused plan evidence used a signed simulator invocation. Signing and a
 currently available simulator destination are environment-specific; unsigned
 startup has previously failed during keychain-backed initialization.

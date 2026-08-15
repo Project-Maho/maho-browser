@@ -6,7 +6,10 @@ struct NotificationBannerView: View {
     let message: String
     let icon: UIImage
     var actions: [BannerAction] = []
+    var isIncognito: Bool = false
     var onDismiss: () -> Void
+
+    @Environment(\.colorScheme) private var systemColorScheme
 
     struct BannerAction: Identifiable {
         let id: String
@@ -41,7 +44,10 @@ struct NotificationBannerView: View {
                     Image(lucide: Lucide.x)
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
+                        .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                        .contentShape(Rectangle())
                 }
+                .accessibilityLabel("Dismiss notification")
             } else {
                 ForEach(actions) { action in
                     Button(action.label) {
@@ -49,13 +55,25 @@ struct NotificationBannerView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .frame(minHeight: ShellTheme.Size.touchTarget)
+                    .contentShape(Rectangle())
                 }
             }
         }
         .padding(12)
-        .background(.ultraThinMaterial)
+        .background(bannerBackground)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
         .padding(.horizontal, 16)
+        .environment(\.colorScheme, isIncognito ? .dark : systemColorScheme)
+    }
+
+    @ViewBuilder
+    private var bannerBackground: some View {
+        if isIncognito {
+            ShellTheme.Palette.incognitoBackground
+        } else {
+            Rectangle().fill(.ultraThinMaterial)
+        }
     }
 }

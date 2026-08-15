@@ -24,6 +24,8 @@ const char kMahoMiniClickOverrideEnabled[] =
     "maho.maho_mini.click_override_enabled";
 const char kOpenExternalLinksInMahoMini[] =
     "maho.maho_mini.open_external_links_in_maho_mini";
+const char kOpenExternalLinksInMahoMiniMigrated[] =
+    "maho.maho_mini.open_external_links_in_maho_mini_migrated";
 const char kPeekEnabled[] = "maho.peek.enabled";
 const char kPeekLinkRoutingEnabled[] = "maho.peek.link_routing_enabled";
 const char kPeekPopupRoutingEnabled[] = "maho.peek.popup_routing_enabled";
@@ -83,7 +85,14 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kPeekPopupRoutingEnabled, true);
   registry->RegisterIntegerPref(kMahoMiniWindowWidth, 0);
   registry->RegisterIntegerPref(kMahoMiniWindowHeight, 0);
-  registry->RegisterBooleanPref(kMahoMailEnabled, true);
+  registry->RegisterBooleanPref(kMahoMailEnabled, false);
+}
+
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
+  // Process-global on purpose: see the header comment on this pref. The
+  // maho-core value it guards is shared by every profile, so the record that
+  // the one-time seed already ran must be shared too.
+  registry->RegisterBooleanPref(kOpenExternalLinksInMahoMiniMigrated, false);
 }
 
 void MigrateFromLegacyVisiblePref(PrefService* prefs) {

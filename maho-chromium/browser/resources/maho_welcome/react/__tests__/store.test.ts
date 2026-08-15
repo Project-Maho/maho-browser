@@ -487,7 +487,7 @@ describe('MahoWelcomeStore', () => {
     expect(store.getSnapshot().auth.errorMessage).toBe('Invalid password');
   });
 
-  it('records explicit password manager skip and advances to SyncKeyBackup', () => {
+  it('records explicit password manager skip and advances to SyncKeyBackup', async () => {
     const store = new MahoWelcomeStore();
 
     (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
@@ -496,7 +496,7 @@ describe('MahoWelcomeStore', () => {
 
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
 
-    store.skipPasswordSetup();
+    await store.skipPasswordSetup();
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
     expect(store.getSnapshot().passwordSetup.passwordManagerSkipped).toBe(true);
   });

@@ -3,8 +3,10 @@ import SwiftUI
 struct SettingsRootView: View {
     @Environment(\.dismiss) private var dismiss
 
+    @State private var showResetConfirmation = false
+
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section(header: Text("Content")) {
                     NavigationLink(destination: GeneralSettingsView()) {
@@ -80,7 +82,7 @@ struct SettingsRootView: View {
 
                 Section(header: Text("Danger"), footer: versionFooter) {
                     Button(role: .destructive) {
-                        MahoBridge.shared.resetSettings()
+                        showResetConfirmation = true
                     } label: {
                         HStack(spacing: 12) {
                             Image(lucide: MahoIcon.imageForSFSymbol("arrow.counterclockwise"))
@@ -89,12 +91,24 @@ struct SettingsRootView: View {
                                 .foregroundColor(.red)
                         }
                     }
+                    .confirmationDialog(
+                        "Reset All Settings?",
+                        isPresented: $showResetConfirmation,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Reset All Settings", role: .destructive) {
+                            MahoBridge.shared.resetSettings()
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This restores every setting to its default. This can't be undone.")
+                    }
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
             .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
                 }
             }

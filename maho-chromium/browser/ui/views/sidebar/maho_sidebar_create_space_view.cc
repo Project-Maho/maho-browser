@@ -27,6 +27,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/gfx/canvas.h"
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
@@ -153,7 +154,9 @@ void ApplySpaceIconOnPool(const std::string& space_id, const std::string& icon) 
   base::JSONWriter::Write(event, &event_json);
   char* result = maho_core_handle_event(core, event_json.c_str());
   if (result) {
+    std::string updates(result);
     maho_string_free(result);
+    InvalidateSidebarCoreCacheForUpdatesJson(updates);
   }
 }
 
@@ -388,6 +391,10 @@ CreateResult CreateSpaceOnPool(const std::string& name,
         << " for profile_id='" << profile_id << "'";
     return result;
   }
+
+  SidebarCacheInvalidation invalidation;
+  invalidation.fragments = SidebarCoreFragment::kFooter;
+  InvalidateSidebarCoreCache(invalidation);
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(ffi_result, base::JSON_PARSE_RFC);

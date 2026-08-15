@@ -19,7 +19,7 @@ class MahoAIPageHandler;
 namespace content {
 class WebUI;
 class BrowserContext;
-}
+}  // namespace content
 
 class MahoAIUI;
 
@@ -41,9 +41,7 @@ class MahoAIUI : public TopChromeWebUIController,
   void BindInterface(
       mojo::PendingReceiver<maho_ai::mojom::PageHandlerFactory> receiver);
 
-  static constexpr std::string_view GetWebUIName() {
-    return "MahoAi";
-  }
+  static constexpr std::string_view GetWebUIName() { return "MahoAi"; }
 
  private:
   WEB_UI_CONTROLLER_TYPE_DECL();
@@ -56,8 +54,8 @@ class MahoAIUI : public TopChromeWebUIController,
       mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver) override;
 
   std::unique_ptr<MahoAIPageHandler> page_handler_;
-  mojo::Receiver<maho_ai::mojom::PageHandlerFactory>
-      page_factory_receiver_{this};
+  mojo::Receiver<maho_ai::mojom::PageHandlerFactory> page_factory_receiver_{
+      this};
   base::WeakPtrFactory<MahoAIUI> weak_factory_{this};
 };
 

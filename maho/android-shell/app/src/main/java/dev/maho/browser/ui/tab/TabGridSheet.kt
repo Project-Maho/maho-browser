@@ -116,6 +116,12 @@ fun TabGridSheet(
                 onTabSelected(tabId)
                 onDismiss()
             },
+            onTabArchived = { tabId ->
+                BridgeTabs.archiveTab(tabId)
+                tabs = BridgeTabs.getTabViewModels()
+                spaces = BridgeSpaces.getSpaceViewModels()
+                activeTabId = BridgeTabs.getActiveTabId()
+            },
             onTabClosed = { tabId ->
                 BridgeTabs.closeTab(tabId)
                 tabs = BridgeTabs.getTabViewModels()

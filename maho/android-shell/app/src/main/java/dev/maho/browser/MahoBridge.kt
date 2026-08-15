@@ -58,6 +58,12 @@ object MahoBridge {
         return nativeSaveState(ptr)
     }
 
+    fun autoArchiveConversations(nowSeconds: Long = System.currentTimeMillis() / 1000): Int {
+        val ptr = corePtr
+        if (ptr == 0L) return -1
+        return nativeAutoArchiveConversations(ptr, nowSeconds)
+    }
+
     fun loadState(): Boolean {
         val ptr = corePtr
         if (ptr == 0L) return false
@@ -636,10 +642,22 @@ object MahoBridge {
         return nativeGenerateSyncKey(ptr)
     }
 
+    fun generateSyncBootstrap(): String? {
+        val ptr = corePtr
+        if (ptr == 0L) return null
+        return nativeGenerateSyncBootstrap(ptr)
+    }
+
     fun joinSync(recoveryPhrase: String): String? {
         val ptr = corePtr
         if (ptr == 0L) return null
         return nativeJoinSync(ptr, recoveryPhrase)
+    }
+
+    fun configureSyncBootstrap(serverUrl: String, bootstrapSeed: String): String? {
+        val ptr = corePtr
+        if (ptr == 0L) return null
+        return nativeConfigureSyncBootstrap(ptr, serverUrl, bootstrapSeed)
     }
 
     fun removeSyncDevice(deviceId: String) {
@@ -658,6 +676,38 @@ object MahoBridge {
         val ptr = corePtr
         if (ptr == 0L) return null
         return nativeDrainOutgoing(ptr)
+    }
+
+    fun getSyncRoomId(): String? {
+        val ptr = corePtr
+        if (ptr == 0L) return null
+        return nativeGetSyncRoomId(ptr)
+    }
+
+    fun leaseSyncOutgoingEnvelopes(limit: Int): String? {
+        val ptr = corePtr
+        if (ptr == 0L || limit <= 0) return null
+        return nativeLeaseSyncOutgoingEnvelopes(ptr)
+    }
+
+    fun acknowledgeSyncEnvelope(ackJson: String): Boolean {
+        val ptr = corePtr
+        return ptr != 0L && nativeAcknowledgeSyncEnvelope(ptr, ackJson)
+    }
+
+    fun getSyncReceiveCursor(roomId: String): Long {
+        val ptr = corePtr
+        return if (ptr == 0L) 0L else nativeGetSyncReceiveCursor(ptr, roomId)
+    }
+
+    fun applySyncEnvelopeAndAdvanceCursor(roomId: String, envelopeJson: String): Boolean {
+        val ptr = corePtr
+        return ptr != 0L && nativeApplySyncEnvelopeAndAdvanceCursor(ptr, roomId, envelopeJson)
+    }
+
+    fun reportSyncTransportState(reportJson: String) {
+        val ptr = corePtr
+        if (ptr != 0L) nativeReportSyncTransportState(ptr, reportJson)
     }
 
     fun queryFilterDecision(url: String, sourceUrl: String, requestType: String): Boolean {
@@ -872,18 +922,6 @@ object MahoBridge {
         return nativeImportFirefoxBookmarks(ptr, profilePath)
     }
 
-    // --- AI settings ---
-    fun byokGetProviders(): String? = BridgeAi.byokGetProviders()
-    fun byokGetKey(provider: String): String? = BridgeAi.byokGetKey(provider)
-    fun byokSetKey(provider: String, key: String): Boolean = BridgeAi.byokSetKey(provider, key)
-    fun byokDeleteKey(provider: String): Boolean = BridgeAi.byokDeleteKey(provider)
-    fun byokValidateKey(provider: String, key: String): Boolean = BridgeAi.byokValidateKey(provider, key)
-    fun getAiSettings(): String = BridgeAi.getAiSettings()
-    fun setAiProvider(provider: String): Boolean = BridgeAi.setAiProvider(provider)
-    fun setAiBaseUrl(url: String): Boolean = BridgeAi.setAiBaseUrl(url)
-    fun setAiApiKey(key: String): Boolean = BridgeAi.setAiApiKey(key)
-    fun setAiModel(model: String): Boolean = BridgeAi.setAiModel(model)
-
     fun provisionSqlcipherKey(): Boolean {
         val hex = BridgeAi.getOrCreateSqlcipherKeyHex() ?: return false
         return nativeSetSqlcipherKey(hex)
@@ -935,47 +973,6 @@ object MahoBridge {
     )
     fun artifactShare(sessionHandle: Long, artifactId: String): Boolean =
         BridgeAgent.artifactShare(sessionHandle, artifactId)
-
-    // --- Conversations ---
-    fun createConversation(id: String, title: String?, spaceId: String?, model: String?): Boolean =
-        BridgeConversations.createConversation(id, title, spaceId, model)
-    fun listConversations(limit: Long = 100L): List<ConversationSession> =
-        BridgeConversations.listConversations(limit)
-    fun getConversationMessages(sessionId: String): List<ConversationTurn> =
-        BridgeConversations.getConversationMessages(sessionId)
-    fun saveConversationMessage(
-        sessionId: String,
-        role: String,
-        content: String,
-        urlContext: String? = null,
-    ): Boolean = BridgeConversations.saveConversationMessage(sessionId, role, content, urlContext)
-    fun deleteConversation(id: String): Boolean = BridgeConversations.deleteConversation(id)
-    fun renameConversation(id: String, title: String): Boolean = BridgeConversations.renameConversation(id, title)
-
-    // --- Chat ---
-    fun chatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long =
-        BridgeChat.chatSessionNew(apiKey, endpoint, model, systemInstruction)
-    fun chatSessionFree(sessionPtr: Long) = BridgeChat.chatSessionFree(sessionPtr)
-    fun chatSendUserTurn(sessionPtr: Long, message: String): Boolean = BridgeChat.chatSendUserTurn(sessionPtr, message)
-    fun chatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean =
-        BridgeChat.chatSendTextWithImage(sessionPtr, text, mime, data)
-    fun chatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean =
-        BridgeChat.chatSendImage(sessionPtr, mime, data)
-    fun chatCancel(sessionPtr: Long): Boolean = BridgeChat.chatCancel(sessionPtr)
-    fun chatSessionPollEvent(sessionPtr: Long): String? = BridgeChat.chatSessionPollEvent(sessionPtr)
-    fun chatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean =
-        BridgeChat.chatRegisterTool(sessionPtr, name, description, parametersJson)
-    fun chatSendToolResult(
-        sessionPtr: Long,
-        toolCallId: String,
-        name: String,
-        output: String,
-        isSuccess: Boolean,
-    ): Boolean = BridgeChat.chatSendToolResult(sessionPtr, toolCallId, name, output, isSuccess)
-    fun chatAppendUserMessage(sessionPtr: Long, content: String): Boolean =
-        BridgeChat.chatAppendUserMessage(sessionPtr, content)
-    fun chatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean =
-        BridgeChat.chatAppendAssistantMessage(sessionPtr, content, toolCallsJson)
 
     // --- Space AI Config ---
     fun getSpaceAIConfig(spaceId: String): SpaceAIConfig? = null
@@ -1090,10 +1087,26 @@ object MahoBridge {
     private external fun nativeGetConnectedDevices(ptr: Long): String?
     private external fun nativeSendTab(ptr: Long, url: String, title: String, targetDeviceId: String)
     private external fun nativeGenerateSyncKey(ptr: Long): String?
+    private external fun nativeGenerateSyncBootstrap(ptr: Long): String?
     private external fun nativeJoinSync(ptr: Long, recoveryPhrase: String): String?
+    private external fun nativeConfigureSyncBootstrap(
+        ptr: Long,
+        serverUrl: String,
+        bootstrapSeed: String,
+    ): String?
     private external fun nativeRemoveSyncDevice(ptr: Long, deviceId: String)
     private external fun nativeApplyRemoteEntities(ptr: Long, entitiesJson: String): String?
     private external fun nativeDrainOutgoing(ptr: Long): String?
+    private external fun nativeGetSyncRoomId(ptr: Long): String?
+    private external fun nativeLeaseSyncOutgoingEnvelopes(ptr: Long): String?
+    private external fun nativeAcknowledgeSyncEnvelope(ptr: Long, ackJson: String): Boolean
+    private external fun nativeGetSyncReceiveCursor(ptr: Long, roomId: String): Long
+    private external fun nativeApplySyncEnvelopeAndAdvanceCursor(
+        ptr: Long,
+        roomId: String,
+        envelopeJson: String,
+    ): Boolean
+    private external fun nativeReportSyncTransportState(ptr: Long, reportJson: String)
     private external fun nativeQueryFilterDecision(ptr: Long, url: String, sourceUrl: String, requestType: String): Boolean
     private external fun nativeGetActiveProfileId(ptr: Long): String?
     private external fun nativeListProfiles(ptr: Long): String?
@@ -1127,41 +1140,161 @@ object MahoBridge {
     private external fun nativeDetectBrowserProfiles(): String?
     private external fun nativeImportChromeBookmarks(ptr: Long, profilePath: String): String?
     private external fun nativeImportFirefoxBookmarks(ptr: Long, profilePath: String): String?
-    internal external fun nativeAgentCreateSession(corePtr: Long, sessionId: String, artifactRoot: String): Long
-    internal external fun nativeAgentFreeSession(sessionPtr: Long)
-    internal external fun nativeAgentSendMessage(sessionPtr: Long, message: String): Boolean
-    internal external fun nativeAgentCancel(sessionPtr: Long): Boolean
-    internal external fun nativeAgentListTools(sessionPtr: Long): String?
-    internal external fun nativeAgentListArtifacts(sessionHandle: Long): String?
-    internal external fun nativeAgentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray?
-    internal external fun nativeAgentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean
-    internal external fun nativeAgentTestCompletionGeneration(sessionHandle: Long): Long
-    internal external fun nativeAgentTestAwaitCompletion(sessionHandle: Long, generation: Long, timeoutMs: Long): Boolean
-    internal external fun nativeAgentTestEnqueueArtifactCreatedTwice(sessionHandle: Long, artifactId: String): Boolean
-    internal external fun nativeAgentTestSeedArtifact(
+    internal fun invokeAgentCreateSession(corePtr: Long, sessionId: String, artifactRoot: String): Long =
+        nativeAgentCreateSession(corePtr, sessionId, artifactRoot)
+    internal fun invokeAgentFreeSession(sessionPtr: Long) = nativeAgentFreeSession(sessionPtr)
+    internal fun invokeAgentSendMessage(sessionPtr: Long, message: String): Boolean =
+        nativeAgentSendMessage(sessionPtr, message)
+    internal fun invokeAgentCancel(sessionPtr: Long): Boolean = nativeAgentCancel(sessionPtr)
+    internal fun invokeAgentListTools(sessionPtr: Long): String? = nativeAgentListTools(sessionPtr)
+    internal fun invokeAgentListArtifacts(sessionHandle: Long): String? = nativeAgentListArtifacts(sessionHandle)
+    internal fun invokeAgentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray? =
+        nativeAgentReadArtifact(sessionHandle, artifactId)
+    internal fun invokeAgentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean =
+        nativeAgentInstallDeterministicFsWriteModel(sessionHandle)
+    internal fun invokeAgentTestCompletionGeneration(sessionHandle: Long): Long =
+        nativeAgentTestCompletionGeneration(sessionHandle)
+    internal fun invokeAgentTestAwaitCompletion(sessionHandle: Long, generation: Long, timeoutMs: Long): Boolean =
+        nativeAgentTestAwaitCompletion(sessionHandle, generation, timeoutMs)
+    internal fun invokeAgentTestEnqueueArtifactCreatedTwice(sessionHandle: Long, artifactId: String): Boolean =
+        nativeAgentTestEnqueueArtifactCreatedTwice(sessionHandle, artifactId)
+    internal fun invokeAgentTestSeedArtifact(
+        sessionHandle: Long,
+        artifactId: String,
+        storageRelPath: String,
+        displayName: String,
+        mimeType: String,
+    ): Boolean = nativeAgentTestSeedArtifact(sessionHandle, artifactId, storageRelPath, displayName, mimeType)
+    internal fun invokeAgentPollEvent(sessionPtr: Long): String? = nativeAgentPollEvent(sessionPtr)
+
+    internal fun invokeCreateConversation(
+        ptr: Long,
+        id: String,
+        title: String,
+        spaceId: String,
+        model: String,
+    ): Boolean = nativeCreateConversation(ptr, id, title, spaceId, model)
+    internal fun invokeListConversations(ptr: Long, limit: Long): String? = nativeListConversations(ptr, limit)
+    internal fun invokeListConversationsV2(ptr: Long, queryJson: String): String? =
+        nativeListConversationsV2(ptr, queryJson)
+    internal fun invokeArchiveConversation(ptr: Long, id: String): Boolean = nativeArchiveConversation(ptr, id)
+    internal fun invokeUnarchiveConversation(ptr: Long, id: String): Boolean = nativeUnarchiveConversation(ptr, id)
+    internal fun invokeApplyConversationBulkOperation(ptr: Long, requestJson: String): String? =
+        nativeApplyConversationBulkOperation(ptr, requestJson)
+    internal fun invokeGetConversationAutoArchivePolicy(ptr: Long): Int =
+        nativeGetConversationAutoArchivePolicy(ptr)
+    internal fun invokeSetConversationAutoArchivePolicy(ptr: Long, days: Int): Boolean =
+        nativeSetConversationAutoArchivePolicy(ptr, days)
+    internal fun invokeGetConversationMessages(ptr: Long, sessionId: String): String? =
+        nativeGetConversationMessages(ptr, sessionId)
+    internal fun invokeSaveConversationMessage(
+        ptr: Long,
+        sessionId: String,
+        role: String,
+        content: String,
+        urlContext: String,
+    ): Boolean = nativeSaveConversationMessage(ptr, sessionId, role, content, urlContext)
+    internal fun invokeDeleteConversation(ptr: Long, id: String): Boolean = nativeDeleteConversation(ptr, id)
+    internal fun invokeRenameConversation(ptr: Long, id: String, title: String): Boolean =
+        nativeRenameConversation(ptr, id, title)
+    internal fun invokeListConversationProjects(ptr: Long): String? = nativeListConversationProjects(ptr)
+    internal fun invokeCreateConversationProject(ptr: Long, name: String): String? = nativeCreateConversationProject(ptr, name)
+    internal fun invokeRenameConversationProject(ptr: Long, id: String, name: String): Boolean =
+        nativeRenameConversationProject(ptr, id, name)
+    internal fun invokeDeleteConversationProject(ptr: Long, id: String): Boolean = nativeDeleteConversationProject(ptr, id)
+    internal fun invokeMoveConversationsToProject(ptr: Long, requestJson: String): String? =
+        nativeMoveConversationsToProject(ptr, requestJson)
+
+    internal fun invokeGetComposerDraft(ptr: Long, scopeJson: String): String? =
+        nativeGetComposerDraft(ptr, scopeJson)
+    internal fun invokeSetComposerDraft(ptr: Long, scopeJson: String, text: String): Boolean =
+        nativeSetComposerDraft(ptr, scopeJson, text)
+    internal fun invokeDeleteComposerDraft(ptr: Long, scopeJson: String): Boolean =
+        nativeDeleteComposerDraft(ptr, scopeJson)
+
+    internal fun invokeChatSessionNew(
+        apiKey: String,
+        endpoint: String,
+        model: String,
+        systemInstruction: String,
+    ): Long = nativeChatSessionNew(apiKey, endpoint, model, systemInstruction)
+    internal fun invokeChatSessionFree(sessionPtr: Long) = nativeChatSessionFree(sessionPtr)
+    internal fun invokeChatSendUserTurn(sessionPtr: Long, message: String): Boolean =
+        nativeChatSendUserTurn(sessionPtr, message)
+    internal fun invokeChatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean =
+        nativeChatSendImage(sessionPtr, mime, data)
+    internal fun invokeChatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean =
+        nativeChatSendTextWithImage(sessionPtr, text, mime, data)
+    internal fun invokeChatCancel(sessionPtr: Long): Boolean = nativeChatCancel(sessionPtr)
+    internal fun invokeChatSessionPollEvent(sessionPtr: Long): String? = nativeChatSessionPollEvent(sessionPtr)
+    internal fun invokeChatRegisterTool(
+        sessionPtr: Long,
+        name: String,
+        description: String,
+        parametersJson: String,
+    ): Boolean = nativeChatRegisterTool(sessionPtr, name, description, parametersJson)
+    internal fun invokeChatSendToolResult(
+        sessionPtr: Long,
+        toolCallId: String,
+        name: String,
+        output: String,
+        trigger: Boolean,
+    ): Boolean = nativeChatSendToolResult(sessionPtr, toolCallId, name, output, trigger)
+    internal fun invokeChatAppendUserMessage(sessionPtr: Long, content: String): Boolean =
+        nativeChatAppendUserMessage(sessionPtr, content)
+    internal fun invokeChatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean =
+        nativeChatAppendAssistantMessage(sessionPtr, content, toolCallsJson)
+
+    private external fun nativeAgentCreateSession(corePtr: Long, sessionId: String, artifactRoot: String): Long
+    private external fun nativeAgentFreeSession(sessionPtr: Long)
+    private external fun nativeAgentSendMessage(sessionPtr: Long, message: String): Boolean
+    private external fun nativeAgentCancel(sessionPtr: Long): Boolean
+    private external fun nativeAgentListTools(sessionPtr: Long): String?
+    private external fun nativeAgentListArtifacts(sessionHandle: Long): String?
+    private external fun nativeAgentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray?
+    private external fun nativeAgentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean
+    private external fun nativeAgentTestCompletionGeneration(sessionHandle: Long): Long
+    private external fun nativeAgentTestAwaitCompletion(sessionHandle: Long, generation: Long, timeoutMs: Long): Boolean
+    private external fun nativeAgentTestEnqueueArtifactCreatedTwice(sessionHandle: Long, artifactId: String): Boolean
+    private external fun nativeAgentTestSeedArtifact(
         sessionHandle: Long,
         artifactId: String,
         storageRelPath: String,
         displayName: String,
         mimeType: String,
     ): Boolean
-    internal external fun nativeAgentPollEvent(sessionPtr: Long): String?
+    private external fun nativeAgentPollEvent(sessionPtr: Long): String?
     private external fun nativeSetSqlcipherKey(keyHex: String): Boolean
-    internal external fun nativeCreateConversation(ptr: Long, id: String, title: String, spaceId: String, model: String): Boolean
-    internal external fun nativeListConversations(ptr: Long, limit: Long): String?
-    internal external fun nativeGetConversationMessages(ptr: Long, sessionId: String): String?
-    internal external fun nativeSaveConversationMessage(ptr: Long, sessionId: String, role: String, content: String, urlContext: String): Boolean
-    internal external fun nativeDeleteConversation(ptr: Long, id: String): Boolean
-    internal external fun nativeRenameConversation(ptr: Long, id: String, title: String): Boolean
-    internal external fun nativeChatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long
-    internal external fun nativeChatSessionFree(sessionPtr: Long)
-    internal external fun nativeChatSendUserTurn(sessionPtr: Long, message: String): Boolean
-    internal external fun nativeChatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean
-    internal external fun nativeChatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean
-    internal external fun nativeChatCancel(sessionPtr: Long): Boolean
-    internal external fun nativeChatSessionPollEvent(sessionPtr: Long): String?
-    internal external fun nativeChatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean
-    internal external fun nativeChatSendToolResult(sessionPtr: Long, toolCallId: String, name: String, output: String, isSuccess: Boolean): Boolean
-    internal external fun nativeChatAppendUserMessage(sessionPtr: Long, content: String): Boolean
-    internal external fun nativeChatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean
+    private external fun nativeCreateConversation(ptr: Long, id: String, title: String, spaceId: String, model: String): Boolean
+    private external fun nativeListConversations(ptr: Long, limit: Long): String?
+    private external fun nativeListConversationsV2(ptr: Long, queryJson: String): String?
+    private external fun nativeArchiveConversation(ptr: Long, id: String): Boolean
+    private external fun nativeUnarchiveConversation(ptr: Long, id: String): Boolean
+    private external fun nativeApplyConversationBulkOperation(ptr: Long, requestJson: String): String?
+    private external fun nativeGetConversationAutoArchivePolicy(ptr: Long): Int
+    private external fun nativeSetConversationAutoArchivePolicy(ptr: Long, days: Int): Boolean
+    private external fun nativeAutoArchiveConversations(ptr: Long, nowSeconds: Long): Int
+    private external fun nativeGetConversationMessages(ptr: Long, sessionId: String): String?
+    private external fun nativeSaveConversationMessage(ptr: Long, sessionId: String, role: String, content: String, urlContext: String): Boolean
+    private external fun nativeDeleteConversation(ptr: Long, id: String): Boolean
+    private external fun nativeRenameConversation(ptr: Long, id: String, title: String): Boolean
+    private external fun nativeListConversationProjects(ptr: Long): String?
+    private external fun nativeCreateConversationProject(ptr: Long, name: String): String?
+    private external fun nativeRenameConversationProject(ptr: Long, id: String, name: String): Boolean
+    private external fun nativeDeleteConversationProject(ptr: Long, id: String): Boolean
+    private external fun nativeMoveConversationsToProject(ptr: Long, requestJson: String): String?
+    private external fun nativeGetComposerDraft(ptr: Long, scopeJson: String): String?
+    private external fun nativeSetComposerDraft(ptr: Long, scopeJson: String, text: String): Boolean
+    private external fun nativeDeleteComposerDraft(ptr: Long, scopeJson: String): Boolean
+    private external fun nativeChatSessionNew(apiKey: String, endpoint: String, model: String, systemInstruction: String): Long
+    private external fun nativeChatSessionFree(sessionPtr: Long)
+    private external fun nativeChatSendUserTurn(sessionPtr: Long, message: String): Boolean
+    private external fun nativeChatSendImage(sessionPtr: Long, mime: String, data: ByteArray): Boolean
+    private external fun nativeChatSendTextWithImage(sessionPtr: Long, text: String, mime: String, data: ByteArray): Boolean
+    private external fun nativeChatCancel(sessionPtr: Long): Boolean
+    private external fun nativeChatSessionPollEvent(sessionPtr: Long): String?
+    private external fun nativeChatRegisterTool(sessionPtr: Long, name: String, description: String, parametersJson: String): Boolean
+    private external fun nativeChatSendToolResult(sessionPtr: Long, toolCallId: String, name: String, output: String, trigger: Boolean): Boolean
+    private external fun nativeChatAppendUserMessage(sessionPtr: Long, content: String): Boolean
+    private external fun nativeChatAppendAssistantMessage(sessionPtr: Long, content: String, toolCallsJson: String): Boolean
 }

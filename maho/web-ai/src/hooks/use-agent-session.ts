@@ -15,6 +15,7 @@
  */
 import { useCallback, useEffect, useRef } from 'preact/hooks';
 import type { AgentEvent, AgentHandle, ArtifactInfo, MahoBridge } from '../bridge/types';
+import { parseCredentialErrorCode } from '../screens/credential-error';
 
 const POLL_INTERVAL_MS = 50;
 
@@ -121,9 +122,13 @@ export function normalizeAgentEvent(raw: string): AgentEvent | null {
       return { kind: 'complete', fullText };
     }
     case 'error': {
-      // data is a plain string — the AgentError display string
+      // data is a plain string — the AgentError display string, or the typed
+      // credential envelope for credential failures.
       const message = typeof envelope.data === 'string' ? envelope.data : 'Unknown agent error';
-      return { kind: 'error', message };
+      const code = parseCredentialErrorCode(message);
+      return code
+        ? { kind: 'error', message, credentialErrorCode: code }
+        : { kind: 'error', message };
     }
     default:
       return null;

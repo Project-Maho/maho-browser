@@ -8,6 +8,8 @@ struct BookmarksView: View {
     @State private var searchText = ""
     @State private var folderPath: [BookmarkFolder] = []
     @State private var isLoading = false
+    @State private var pendingDeleteBookmark: BookmarkEntry?
+    @State private var showDeleteConfirmation = false
 
     private var currentFolderId: String? {
         folderPath.last?.id
@@ -42,7 +44,7 @@ struct BookmarksView: View {
             .searchable(text: $searchText, prompt: "Search bookmarks")
             .toolbar {
                 if !folderPath.isEmpty {
-                    ToolbarItemGroup(placement: .navigationBarLeading) {
+                    ToolbarItemGroup(placement: .topBarLeading) {
                         Button {
                             folderPath.removeLast()
                         } label: {
@@ -70,7 +72,8 @@ struct BookmarksView: View {
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
-                            deleteBookmark(bookmark)
+                            pendingDeleteBookmark = bookmark
+                            showDeleteConfirmation = true
                         } label: {
                             Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
@@ -86,6 +89,22 @@ struct BookmarksView: View {
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            "Delete Bookmark?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible,
+            presenting: pendingDeleteBookmark
+        ) { bookmark in
+            Button("Delete", role: .destructive) {
+                deleteBookmark(bookmark)
+                pendingDeleteBookmark = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteBookmark = nil
+            }
+        } message: { bookmark in
+            Text("\"\(bookmark.title)\" will be removed from bookmarks.")
+        }
     }
 
     private var emptyState: some View {

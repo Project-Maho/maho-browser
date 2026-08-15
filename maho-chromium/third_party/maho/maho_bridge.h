@@ -32,6 +32,32 @@ void Destroy(MahoCore* core);
 bool SetStorageKey(const std::string& hex_key);
 bool DeriveAndSetStorageKey(const std::string& key_file_path);
 
+enum class VaultPreflightState : int32_t {
+  kUnavailable = -1,
+  kHealthy = 0,
+  kLocked = 1,
+  kUnrecoverableKey = 2,
+  kStructuralCorruption = 3,
+  kPlaintextResidue = 4,
+};
+
+struct StorageKeySetupResult {
+  bool storage_key_ready = false;
+  VaultPreflightState vault_preflight_state =
+      VaultPreflightState::kUnavailable;
+  std::string vault_preflight_json;
+};
+
+// Derives and installs the storage key, then performs a read-only Vault
+// preflight against `database_path`. The Rust preflight receives the explicit
+// key-store availability verdict, so an unavailable key is not conflated with
+// a valid locked Vault or SQLCipher corruption.
+StorageKeySetupResult DeriveAndSetStorageKey(
+    const std::string& key_file_path,
+    const std::string& database_path);
+VaultPreflightState GetVaultPreflightState();
+const char* VaultPreflightStateName(VaultPreflightState state);
+
 // Durable state persistence (tab/space state via LMDB + SQLite).
 // Returns true on success.  Silently succeeds on in-memory cores.
 bool SaveState(MahoCore* core);

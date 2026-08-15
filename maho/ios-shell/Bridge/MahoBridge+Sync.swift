@@ -1,11 +1,184 @@
+import Darwin
 import Foundation
 
-extension MahoBridge {
+enum SyncCoreError: LocalizedError, Equatable {
+    case unavailable(String)
+    case malformedStatus(String)
+    case operationFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable(let operation):
+            return "The installed Maho core does not support \(operation)."
+        case .malformedStatus(let detail):
+            return "Core returned malformed sync status: \(detail)"
+        case .operationFailed(let operation):
+            return "Core sync operation failed: \(operation)."
+        }
+    }
+}
+
+enum SyncStateKind: String, Codable, Equatable {
+    case idle
+    case connecting
+    case syncing
+    case synced
+    case error
+    case offline
+}
+
+struct SyncStateResponse: Codable, Equatable {
+    let kind: SyncStateKind
+    let lastSuccessAt: Int64?
+    let pendingOutboxCount: Int
+    let lastError: String?
+
+    var displayStatus: SyncStatus {
+        switch kind {
+        case .idle, .connecting:
+            return .idle
+        case .syncing:
+            return .syncing(progress: 0)
+        case .synced:
+            let value = lastSuccessAt.map(String.init) ?? ""
+            return .synced(lastSyncAt: value)
+        case .error:
+            return .error(message: lastError ?? "Sync failed.")
+        case .offline:
+            return .offline
+        }
+    }
+}
+
+struct SyncEnvelopeV2: Codable, Equatable {
+    let protocolVersion: Int
+    let deliveryId: String
+    let payload: String
+    let relaySeq: Int?
+}
+
+struct RelayAckV2: Codable, Equatable {
+    let deliveryId: String
+    let seq: Int
+}
+
+protocol SyncCoreClient: AnyObject {
+    func signIn(
+        email: String,
+        displayName: String?,
+        accessToken: String?,
+        userId: String?,
+        deviceId: String?
+    )
+    func signOut()
+    func syncState() throws -> SyncStateResponse
+    func syncRoomID() throws -> String
+    func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2]
+    func acknowledge(_ ack: RelayAckV2) throws
+    func receiveCursor(roomID: String) throws -> Int
+    func apply(_ envelope: SyncEnvelopeV2, roomID: String) throws
+}
+
+private enum DynamicSyncFFI {
+    typealias GetString = @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<CChar>?
+    typealias ConfigureBootstrap = @convention(c) (
+        OpaquePointer?,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?
+    ) -> UnsafeMutablePointer<CChar>?
+    typealias HandleJSON = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?) -> Int32
+    typealias GetCursor = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?) -> UInt64
+
+    static func symbol<T>(_ name: String, as type: T.Type) -> T? {
+        guard let pointer = dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) else { return nil }
+        return unsafeBitCast(pointer, to: type)
+    }
+}
+
+extension MahoBridge: SyncCoreClient {
+    func signIn(
+        email: String,
+        displayName: String?,
+        accessToken: String?,
+        userId: String?,
+        deviceId: String?
+    ) {
+        signIn(
+            email: email,
+            displayName: displayName,
+            password: nil,
+            accessToken: accessToken,
+            userId: userId,
+            deviceId: deviceId
+        )
+    }
+
+    func syncState() throws -> SyncStateResponse {
+        guard let json = withCore({ ptr in FFIString.consume(maho_core_get_sync_status(ptr)) }) ?? nil else {
+            throw SyncCoreError.operationFailed("read status")
+        }
+        do {
+            return try RelayCoding.decoder.decode(SyncStateResponse.self, from: Data(json.utf8))
+        } catch {
+            throw SyncCoreError.malformedStatus(error.localizedDescription)
+        }
+    }
 
     func getSyncStatus() -> SyncStatus? {
-        withCore { ptr in
-            FFIString.consumeJSON(maho_core_get_sync_status(ptr))
-        } ?? nil
+        switch Result(catching: syncState) {
+        case .success(let state):
+            return state.displayStatus
+        case .failure(let error):
+            return .error(message: error.localizedDescription)
+        }
+    }
+
+    func syncRoomID() throws -> String {
+        guard let function = DynamicSyncFFI.symbol("maho_core_get_sync_room_id", as: DynamicSyncFFI.GetString.self) else {
+            throw SyncCoreError.unavailable("recovery-derived room IDs")
+        }
+        guard let value = withCore({ ptr in FFIString.consume(function(ptr)) }) ?? nil,
+              value.range(of: #"^[0-9a-f]{32}$"#, options: .regularExpression) != nil else {
+            throw SyncCoreError.operationFailed("read recovery-derived room ID")
+        }
+        return value
+    }
+
+    func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2] {
+        guard let function = DynamicSyncFFI.symbol("maho_core_drain_outgoing_envelopes", as: DynamicSyncFFI.GetString.self) else {
+            throw SyncCoreError.unavailable("V2 outbox leasing")
+        }
+        guard let json = withCore({ ptr in FFIString.consume(function(ptr)) }) ?? nil else {
+            throw SyncCoreError.operationFailed("lease V2 outbox")
+        }
+        return try RelayCoding.decoder.decode([SyncEnvelopeV2].self, from: Data(json.utf8))
+    }
+
+    func acknowledge(_ ack: RelayAckV2) throws {
+        guard let function = DynamicSyncFFI.symbol("maho_core_accept_sync_ack", as: DynamicSyncFFI.HandleJSON.self) else {
+            throw SyncCoreError.unavailable("delivery ACK persistence")
+        }
+        let json = String(decoding: try RelayCoding.encoder.encode(ack), as: UTF8.self)
+        let result = withCore { ptr in json.withCString { function(ptr, $0) } } ?? -1
+        guard result == 0 else { throw SyncCoreError.operationFailed("persist delivery ACK") }
+    }
+
+    func receiveCursor(roomID: String) throws -> Int {
+        guard let function = DynamicSyncFFI.symbol("maho_core_get_sync_receive_cursor", as: DynamicSyncFFI.GetCursor.self) else {
+            throw SyncCoreError.unavailable("durable receive cursors")
+        }
+        let cursor = withCore { ptr in roomID.withCString { function(ptr, $0) } } ?? 0
+        guard cursor <= UInt64(Int.max) else { throw SyncCoreError.operationFailed("read receive cursor") }
+        return Int(cursor)
+    }
+
+    func apply(_ envelope: SyncEnvelopeV2, roomID: String) throws {
+        guard let function = DynamicSyncFFI.symbol("maho_core_handle_incoming_sync_envelope", as: DynamicSyncFFI.HandleJSON.self) else {
+            throw SyncCoreError.unavailable("V2 envelope application")
+        }
+        let json = String(decoding: try RelayCoding.encoder.encode(envelope), as: UTF8.self)
+        let result = withCore { ptr in json.withCString { function(ptr, $0) } } ?? -1
+        guard result == 0 else { throw SyncCoreError.operationFailed("apply V2 envelope and cursor") }
     }
 
     func getConnectedDevices() -> [ConnectedDevice] {
@@ -17,6 +190,34 @@ extension MahoBridge {
     func generateSyncKey() -> String? {
         withCore { ptr in
             FFIString.consume(maho_core_generate_sync_key(ptr))
+        } ?? nil
+    }
+
+    func generateSyncBootstrap() -> String? {
+        withCore { ptr in
+            guard let function = DynamicSyncFFI.symbol(
+                "maho_core_generate_sync_bootstrap",
+                as: DynamicSyncFFI.GetString.self
+            ) else {
+                return nil
+            }
+            return FFIString.consume(function(ptr))
+        } ?? nil
+    }
+
+    func configureSyncBootstrap(serverURL: String, seed: String) -> String? {
+        withCore { ptr in
+            guard let function = DynamicSyncFFI.symbol(
+                "maho_core_configure_sync_bootstrap",
+                as: DynamicSyncFFI.ConfigureBootstrap.self
+            ) else {
+                return nil
+            }
+            return serverURL.withCString { url in
+                seed.withCString { bootstrapSeed in
+                    FFIString.consume(function(ptr, url, bootstrapSeed))
+                }
+            }
         } ?? nil
     }
 
@@ -61,20 +262,6 @@ extension MahoBridge {
                 maho_core_remove_sync_device(ptr, cDeviceId)
             }
         }
-    }
-
-    func applyRemoteEntities(entitiesJson: String) -> String? {
-        withCore { ptr in
-            entitiesJson.withCString { cStr in
-                FFIString.consume(maho_core_apply_remote_entities(ptr, cStr))
-            }
-        } ?? nil
-    }
-
-    func drainOutgoing() -> String? {
-        withCore { ptr in
-            FFIString.consume(maho_core_drain_outgoing(ptr))
-        } ?? nil
     }
 
     func handleSyncUpdate(_ update: CoreUpdate) {

@@ -19,6 +19,7 @@ pub enum PasswordProviderKind {
     MahoNative,
     #[serde(rename = "onepassword")]
     #[serde(alias = "1password")]
+    #[serde(alias = "one_password")]
     OnePassword,
     Bitwarden,
 }

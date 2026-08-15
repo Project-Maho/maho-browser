@@ -103,12 +103,23 @@ Every format bundles the browser **and** the `maho` CLI next to it. The packager
 different out dir (e.g. `out/Release`), populate `out/Default` with those runtime
 files first, or build without `--out-dir`.
 
+The executable names intentionally have separate contracts:
+
+- `maho` is the bundled developer CLI. `.deb` and `.rpm` install it as
+  `/usr/bin/maho`, resolving to `/usr/lib/maho/maho`.
+- `maho-browser` launches the browser. Desktop integration uses this command so
+  a URL does not get passed to the CLI parser. The tarball contains a
+  self-contained `./maho-browser` launcher beside `chrome`.
+
 ### Tarball (.tar.gz)
 
 - Simplest format — just `tar -czf` the built binary
-- No system integration (no desktop file, no icons)
+- Includes a Maho desktop entry, icon, and optional `maho-browser` launcher
+  for per-user integration after extraction
 - Update mechanism: `maho_update_delegate_linux_noop.cc` — returns `kUpToDate` (user manages updates manually)
 - File naming: `maho-<version>-x86_64.tar.gz`
+- Release builds create and verify a detached armored signature:
+  `maho-<version>-x86_64.tar.gz.sig`.
 
 ### Deb (.deb)
 
@@ -117,6 +128,7 @@ files first, or build without `--out-dir`.
 - Depends: `libgtk-3-0, libdbus-1-3, libnss3, libatk1.0-0` (verify on target distro)
 - Update mechanism: `maho_update_delegate_linux_pkg.cc` — displays signed-envelope banner prompting user to `apt upgrade`
 - File naming: `maho_<version>_amd64.deb`
+- Release builds create and verify `maho_<version>_amd64.deb.sig`.
 
 ### RPM (.rpm)
 
@@ -125,6 +137,7 @@ files first, or build without `--out-dir`.
 - Requires: `gtk3, dbus-libs, nss` (verify on target distro)
 - Update mechanism: `maho_update_delegate_linux_pkg.cc` — same signed-envelope banner as deb
 - File naming: `maho-<version>-1.x86_64.rpm`
+- Release builds create and verify `maho-<version>-1.x86_64.rpm.sig`.
 
 ### Flatpak — STUB
 
@@ -154,8 +167,9 @@ sudo apt install -y dpkg-dev fakeroot rpm
 # Install the .deb package
 sudo apt install ./maho_1.0.0_amd64.deb
 
-# Verify
+# Verify the CLI and browser launchers
 maho --version
+maho-browser --version
 # Launch and test: tabs, AI Chat, sync, ad blocking
 
 # Remove
@@ -171,8 +185,9 @@ sudo dnf install -y rpm-build
 # Install the .rpm package
 sudo dnf install ./maho-1.0.0-1.x86_64.rpm
 
-# Verify
+# Verify the CLI and browser launchers
 maho --version
+maho-browser --version
 # Launch and test: tabs, AI Chat, sync, ad blocking
 
 # Remove
@@ -185,6 +200,7 @@ sudo dnf remove maho
 # Use the tarball (AUR package is a future item)
 tar -xzf maho-1.0.0-x86_64.tar.gz
 ./maho --version
+./maho-browser --version
 # Launch and test: tabs, AI Chat, sync, ad blocking
 ```
 
@@ -211,7 +227,16 @@ To submit Maho for Phoronix review:
    - `maho-chromium/browser/updates/maho_update_delegate_linux_flatpak.cc`
    - `maho-chromium/browser/updates/maho_update_delegate_linux_appimage.cc`
 
-2. **Packaging script is build-only** — it does not handle signing, repository setup, or distribution. Those are separate concerns for the release pipeline.
+2. **Release signing is mandatory** — `--release` fails if GPG is unavailable,
+   signing fails, or the detached signature does not verify against the
+   committed Maho public key. Independently check an artifact with:
+   ```bash
+   gpg --import maho-chromium/build/keys/maho-release-pubkey.asc
+   gpg --verify maho-1.0.0-x86_64.tar.gz.sig maho-1.0.0-x86_64.tar.gz
+   ```
+
+   The release script also refuses to publish or finalize Linux artifacts when
+   any expected detached signature is absent.
 
 3. **Generated control/spec files are bootstraps** — they contain placeholder metadata. A human must review and fill in correct values before publishing packages to any repository.
 

@@ -6,9 +6,13 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class MahoMailUiSourceTest(unittest.TestCase):
-    def test_mail_webui_allows_https_images(self) -> None:
+    def test_mail_webui_routes_remote_images_through_sanitized_proxy(self) -> None:
         source = (ROOT / "maho-chromium/browser/ui/webui/maho_mail/maho_mail_ui.cc").read_text()
-        self.assertIn("img-src 'self' chrome-res: https: data: blob:;", source)
+        self.assertIn("std::make_unique<SanitizedImageSource>(profile)", source)
+        self.assertIn(
+            "default trusted img-src already allowlists chrome://image", source
+        )
+        self.assertNotIn("img-src 'self' chrome-res: https:", source)
 
     def test_active_mail_oauth_paths_use_bound_loopback_flow(self) -> None:
         mail = (ROOT / "maho-chromium/browser/ui/webui/maho_mail/maho_mail_page_handler.cc").read_text()

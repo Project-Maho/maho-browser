@@ -19,6 +19,7 @@ use maho_types::vault::{
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+use super::credential_form::VaultCredentialFormDetails;
 use super::item_error::VaultCrudError;
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -51,6 +52,12 @@ pub(crate) struct VaultRecordPayload {
     pub secret: RecordSecret,
     #[zeroize(skip)]
     pub last_used_at: Option<DateTime<Utc>>,
+    /// Task 4: browser-form detail for login records. `#[serde(default)]` is
+    /// what makes legacy records (written before this field existed) decode:
+    /// they yield `None`, i.e. "no stored form detail", and the consumer falls
+    /// back to Chromium's own defaults instead of failing the read.
+    #[serde(default)]
+    pub form_details: Option<VaultCredentialFormDetails>,
 }
 
 /// Short-lived owned decrypted secret handed to a privileged caller. Every

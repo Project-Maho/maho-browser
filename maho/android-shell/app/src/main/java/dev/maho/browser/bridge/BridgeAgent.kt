@@ -16,44 +16,44 @@ object BridgeAgent {
     fun agentCreateSession(sessionId: String): Long {
         val artifactRoot = artifactRoot()
         if (!MahoBridge.isInitialized || sessionId.isBlank() || artifactRoot == null) return 0L
-        return MahoBridge.nativeAgentCreateSession(MahoBridge.corePtr, sessionId, artifactRoot)
+        return MahoBridge.invokeAgentCreateSession(MahoBridge.corePtr, sessionId, artifactRoot)
     }
 
     fun agentFreeSession(sessionPtr: Long) {
-        if (sessionPtr != 0L) MahoBridge.nativeAgentFreeSession(sessionPtr)
+        if (sessionPtr != 0L) MahoBridge.invokeAgentFreeSession(sessionPtr)
     }
 
     fun agentSendMessage(sessionPtr: Long, message: String): Boolean =
-        sessionPtr != 0L && MahoBridge.nativeAgentSendMessage(sessionPtr, message)
+        sessionPtr != 0L && MahoBridge.invokeAgentSendMessage(sessionPtr, message)
 
     fun agentCancel(sessionPtr: Long): Boolean =
-        sessionPtr != 0L && MahoBridge.nativeAgentCancel(sessionPtr)
+        sessionPtr != 0L && MahoBridge.invokeAgentCancel(sessionPtr)
 
     fun agentListTools(sessionPtr: Long): String? =
-        if (sessionPtr == 0L) null else MahoBridge.nativeAgentListTools(sessionPtr)
+        if (sessionPtr == 0L) null else MahoBridge.invokeAgentListTools(sessionPtr)
 
     fun agentPollEvent(sessionPtr: Long): String? =
-        if (sessionPtr == 0L) null else MahoBridge.nativeAgentPollEvent(sessionPtr)
+        if (sessionPtr == 0L) null else MahoBridge.invokeAgentPollEvent(sessionPtr)
 
     fun agentListArtifacts(sessionHandle: Long): String? =
-        if (sessionHandle == 0L) null else MahoBridge.nativeAgentListArtifacts(sessionHandle)
+        if (sessionHandle == 0L) null else MahoBridge.invokeAgentListArtifacts(sessionHandle)
 
     fun agentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray? {
         if (sessionHandle == 0L || !isOpaqueArtifactId(artifactId)) return null
-        return MahoBridge.nativeAgentReadArtifact(sessionHandle, artifactId)
+        return MahoBridge.invokeAgentReadArtifact(sessionHandle, artifactId)
     }
 
     internal fun agentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean =
-        sessionHandle != 0L && MahoBridge.nativeAgentInstallDeterministicFsWriteModel(sessionHandle)
+        sessionHandle != 0L && MahoBridge.invokeAgentInstallDeterministicFsWriteModel(sessionHandle)
 
     internal fun agentTestCompletionGeneration(sessionHandle: Long): Long =
-        if (sessionHandle == 0L) -1L else MahoBridge.nativeAgentTestCompletionGeneration(sessionHandle)
+        if (sessionHandle == 0L) -1L else MahoBridge.invokeAgentTestCompletionGeneration(sessionHandle)
 
     internal fun agentTestAwaitCompletion(sessionHandle: Long, generation: Long, timeoutMs: Long): Boolean =
-        sessionHandle != 0L && MahoBridge.nativeAgentTestAwaitCompletion(sessionHandle, generation, timeoutMs)
+        sessionHandle != 0L && MahoBridge.invokeAgentTestAwaitCompletion(sessionHandle, generation, timeoutMs)
 
     internal fun agentTestEnqueueArtifactCreatedTwice(sessionHandle: Long, artifactId: String): Boolean =
-        sessionHandle != 0L && MahoBridge.nativeAgentTestEnqueueArtifactCreatedTwice(sessionHandle, artifactId)
+        sessionHandle != 0L && MahoBridge.invokeAgentTestEnqueueArtifactCreatedTwice(sessionHandle, artifactId)
 
     internal fun agentTestSeedArtifact(
         sessionHandle: Long,
@@ -61,7 +61,7 @@ object BridgeAgent {
         storageRelPath: String,
         displayName: String,
         mimeType: String,
-    ): Boolean = sessionHandle != 0L && MahoBridge.nativeAgentTestSeedArtifact(
+    ): Boolean = sessionHandle != 0L && MahoBridge.invokeAgentTestSeedArtifact(
         sessionHandle,
         artifactId,
         storageRelPath,

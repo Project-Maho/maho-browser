@@ -17,6 +17,8 @@
 
 use std::io::Write;
 use std::net::{Shutdown, TcpListener, TcpStream};
+#[cfg(target_os = "linux")]
+use std::os::fd::{BorrowedFd, FromRawFd, IntoRawFd};
 use std::time::Duration;
 
 use crate::error::{MailFfiError, Result};
@@ -26,6 +28,8 @@ use crate::oauth::{
 use crate::state;
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+#[cfg(target_os = "linux")]
+const LOOPBACK_LISTENER_FD_ENV: &str = "MAHO_MAIL_OAUTH_LOOPBACK_FD";
 
 const SUCCESS_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><head><meta charset=\"utf-8\"></head><body><h2>Signed in</h2><p>Returning to Maho\u{2026}</p><script>window.close()</script></body></html>";
 
@@ -63,8 +67,7 @@ fn prepare_loopback_oauth(
     client_id: &str,
     options: StartOAuthOptions,
 ) -> Result<(TcpListener, StartOAuthResponse)> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| MailFfiError::OAuth(format!("loopback bind failed: {e}")))?;
+    let listener = oauth_loopback_listener()?;
     let port = listener
         .local_addr()
         .map_err(|e| MailFfiError::OAuth(format!("loopback local_addr failed: {e}")))?
@@ -73,6 +76,31 @@ fn prepare_loopback_oauth(
     let redirect_uri = format!("http://127.0.0.1:{port}");
     let started = start_oauth_with_options(provider, client_id, &redirect_uri, options)?;
     Ok((listener, started))
+}
+
+#[cfg(target_os = "linux")]
+fn oauth_loopback_listener() -> Result<TcpListener> {
+    let raw_fd = std::env::var(LOOPBACK_LISTENER_FD_ENV)
+        .map_err(|_| MailFfiError::OAuth("sandboxed loopback listener is unavailable".to_string()))?
+        .parse::<i32>()
+        .map_err(|_| {
+            MailFfiError::OAuth("sandboxed loopback listener fd is invalid".to_string())
+        })?;
+    // SAFETY: the browser helper creates and retains this descriptor for the
+    // process lifetime before entering seccomp. Duplicate it so each OAuth
+    // attempt owns only its independent listener handle.
+    let owned = unsafe { BorrowedFd::borrow_raw(raw_fd) }
+        .try_clone_to_owned()
+        .map_err(|e| MailFfiError::OAuth(format!("loopback listener clone failed: {e}")))?;
+    // SAFETY: `owned` is a duplicated listening TCP socket and ownership is
+    // transferred exactly once into TcpListener.
+    Ok(unsafe { TcpListener::from_raw_fd(owned.into_raw_fd()) })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn oauth_loopback_listener() -> Result<TcpListener> {
+    TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| MailFfiError::OAuth(format!("loopback bind failed: {e}")))
 }
 
 fn run_callback_listener(listener: TcpListener, provider: String, expected_state: String) {

@@ -64,8 +64,11 @@ struct SummaryOverlayView: View {
                 Image(lucide: Lucide.circleX)
                     .font(.title3)
                     .foregroundStyle(.secondary)
+                    .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close summary")
             .accessibilityIdentifier("browseForMeDismissButton")
         }
         .accessibilityIdentifier("browseForMeHeroPanel")
@@ -113,7 +116,7 @@ struct SummaryOverlayView: View {
             ) {
                 HStack(alignment: .top, spacing: ShellTheme.Spacing.medium) {
                     Image(lucide: Lucide.triangleAlert)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(ShellTheme.Palette.warning)
 
                     Text(message)
                         .font(.subheadline)

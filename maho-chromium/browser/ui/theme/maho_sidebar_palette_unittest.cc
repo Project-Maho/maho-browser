@@ -236,7 +236,7 @@ TEST(MahoSidebarPaletteTest, PreservesSolidOneTwoThreeStopAndZenShapes) {
                 {SkColorSetRGB(0x45, 0x67, 0x89),
                  SkColorSetRGB(0x98, 0x76, 0x54)}),
   };
-  const size_t expected_stop_counts[] = {1, 1, 2, 3, 2};
+  const std::array<size_t, 5> expected_stop_counts = {1, 1, 2, 3, 2};
 
   for (size_t i = 0; i < themes.size(); ++i) {
     const MahoSidebarPalette palette =

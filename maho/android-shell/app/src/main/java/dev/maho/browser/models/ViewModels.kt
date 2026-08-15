@@ -42,6 +42,16 @@ data class TabViewModel(
 }
 
 @Serializable
+data class ArchivedTabViewModel(
+    val id: TabId,
+    @SerialName("spaceId") val spaceId: SpaceId,
+    val title: String,
+    val url: String,
+    val favicon: ImageData? = null,
+    @SerialName("archivedAt") val archivedAt: String,
+)
+
+@Serializable
 data class SpaceViewModel(
     val id: SpaceId,
     val name: String,

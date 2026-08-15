@@ -4,6 +4,7 @@ source_set("maho_command_overlay") {
   sources = [
     "maho_command_action_handler.cc",
     "maho_command_action_handler.h",
+    "maho_mail_command_catalog.h",
     "maho_command_model.cc",
     "maho_command_model.h",
     "maho_remote_search_suggestions.cc",

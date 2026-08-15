@@ -36,6 +36,9 @@ export const PASSWORD_PROVIDER_KIND = {
   MahoNative: 0,
   Bitwarden: 1,
   OnePassword: 2,
+  // Persisted choice for "no password manager"; keeps the onboarding decision
+  // durable instead of leaving the provider at its default.
+  Disabled: 3,
 } as const satisfies Record<string, PasswordProviderKind>;
 export const VAULT_LOCK_STATE = {
   Uninitialized: 0,

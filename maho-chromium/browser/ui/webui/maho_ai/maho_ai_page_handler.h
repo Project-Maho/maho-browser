@@ -22,6 +22,7 @@
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/maho_ai_ingress_coordinator.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
+#include "maho/browser/ui/webui/maho_routines/maho_routines.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 
@@ -30,6 +31,11 @@ class PrefRegistrySimple;
 class PrefService;
 class MahoAiVoiceSession;
 class MahoAIPageHandlerTestPeer;
+class MahoRoutinesPageHandler;
+
+namespace maho::ai {
+class MahoAiPendingSurface;
+}
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -39,7 +45,8 @@ namespace content {
 class WebContents;
 }  // namespace content
 
-class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
+class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
+                          public maho_routines::mojom::Page {
  public:
   MahoAIPageHandler(
       mojo::PendingReceiver<maho_ai::mojom::PageHandler> receiver,
@@ -56,8 +63,38 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   ~MahoAIPageHandler() override;
 
   static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+  static bool CancelActiveControllerSession(std::string_view session_id);
 
   // maho_ai::mojom::PageHandler — session-oriented methods:
+  void ConsumePendingSurface(uint64_t last_seen_generation,
+                             ConsumePendingSurfaceCallback callback) override;
+  void ListAllRoutines(ListAllRoutinesCallback callback) override;
+  void CreateRoutine(const std::string& name,
+                     const std::string& prompt,
+                     const std::optional<std::string>& schedule,
+                     const std::optional<std::string>& trigger,
+                     CreateRoutineCallback callback) override;
+  void StartRoutine(const std::string& id,
+                    StartRoutineCallback callback) override;
+  void GetRoutineRunStatuses(GetRoutineRunStatusesCallback callback) override;
+  void GetRoutineUserTier(GetRoutineUserTierCallback callback) override;
+  void RespondToRoutineApproval(
+      const std::string& run_id,
+      const std::string& approval_id,
+      bool approved,
+      RespondToRoutineApprovalCallback callback) override;
+  void ListRunHistory(const std::optional<std::string>& routine_id,
+                      uint32_t limit,
+                      ListRunHistoryCallback callback) override;
+
+  // maho_routines::mojom::Page:
+  void OnRoutineComplete(
+      maho_routines::mojom::RoutineRunResultPtr result) override;
+  void OnRoutineError(const std::string& id,
+                      const std::string& error) override;
+  void OnRoutineRunStatusChanged(
+      maho_routines::mojom::RoutineRunStatusPtr status) override;
+
   void GetConnectionState(GetConnectionStateCallback callback) override;
   void GetSessionList(GetSessionListCallback callback) override;
   void StartSession(const std::optional<std::string>& initial_prompt,
@@ -95,7 +132,15 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
       maho_ai::mojom::InteractionMode mode,
       std::optional<std::vector<maho_ai::mojom::ContextAttachmentPtr>>
           attachments,
-      maho_ai::mojom::ChatIntent chat_intent) override;
+      maho_ai::mojom::ChatIntent chat_intent,
+      SubmitPromptCallback callback) override;
+  void ComposerDraftGet(const std::string& scope_json,
+                        ComposerDraftGetCallback callback) override;
+  void ComposerDraftSet(const std::string& scope_json,
+                        const std::string& text,
+                        ComposerDraftSetCallback callback) override;
+  void ComposerDraftDelete(const std::string& scope_json,
+                           ComposerDraftDeleteCallback callback) override;
   void CancelTurn(const std::string& session_id) override;
   void RespondToApproval(const std::string& session_id,
                          const std::string& approval_id,
@@ -113,7 +158,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   // Tab Tidy — default-ON, no pref gate.
   void RequestTabTidy(std::vector<maho_ai::mojom::TabInfoPtr> tabs,
-      RequestTabTidyCallback callback) override;
+                      RequestTabTidyCallback callback) override;
   void ApplyTabTidyFolders(
       std::vector<maho_ai::mojom::TidyFolderPtr> folders) override;
 
@@ -183,8 +228,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
 
   struct Correlation {
     Correlation();
-    Correlation(std::string session_id,
-                std::optional<std::string> request_id);
+    Correlation(std::string session_id, std::optional<std::string> request_id);
     Correlation(const Correlation&);
     Correlation(Correlation&&);
     Correlation& operator=(const Correlation&);
@@ -212,7 +256,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
           attachments,
       maho_ai::mojom::ChatIntent chat_intent,
       Correlation correlation,
-      base::OnceClosure before_runtime_submit);
+      base::OnceCallback<bool(bool)> dispatch_gate);
 
   // Translates internal runtime events into Mojo and pushes them to the Page
   // remote. Also maintains chat history for the simple chat UI.
@@ -226,7 +270,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   // falls back to the original) and forwards to the active adapter.
   void OnContextExtractedThenSubmit(
       Correlation correlation,
-      base::OnceClosure before_runtime_submit,
+      base::OnceCallback<bool(bool)> dispatch_gate,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
       maho_ai::mojom::ChatIntent chat_intent,
@@ -237,7 +281,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   // readable label for the injected context event.
   void OnTabContextExtractedThenSubmit(
       Correlation correlation,
-      base::OnceClosure before_runtime_submit,
+      base::OnceCallback<bool(bool)> dispatch_gate,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
       maho_ai::mojom::ChatIntent chat_intent,
@@ -265,7 +309,7 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
     maho_ai::mojom::InteractionMode mode;
     maho_ai::mojom::ChatIntent chat_intent;
     Correlation correlation;
-    base::OnceClosure before_runtime_submit;
+    base::OnceCallback<bool(bool)> dispatch_gate;
     std::vector<AttachmentSlot> slots;
     size_t completed_count = 0;
   };
@@ -326,7 +370,12 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler {
   raw_ptr<Browser> browser_;
   raw_ptr<PrefService> prefs_;
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+  std::unique_ptr<maho::ai::MahoAiPendingSurface> pending_surface_;
+  mojo::Receiver<maho_routines::mojom::Page> routine_page_receiver_{this};
+  mojo::Remote<maho_routines::mojom::PageHandler> routine_handler_remote_;
+  std::unique_ptr<MahoRoutinesPageHandler> routine_handler_;
   std::unique_ptr<MahoAiRuntimeRouter> runtime_router_;
+  raw_ptr<MahoAiRuntimeAdapter> runtime_adapter_for_testing_ = nullptr;
   std::unique_ptr<MahoAiPageContextExtractor> page_context_extractor_;
 
   // R-9: revalidates kAI for this handler's bound context. Every Mojo method

@@ -23,6 +23,7 @@ pub(super) fn add_password(core: &mut MahoCore, entry: maho_import::PasswordEntr
         },
         username: entry.username,
         password: zeroize::Zeroizing::new(entry.password),
+        form_details: None,
     };
     core.vault_add_login(input).is_ok()
 }

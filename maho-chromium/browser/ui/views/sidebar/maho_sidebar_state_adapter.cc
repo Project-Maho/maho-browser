@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <set>
 #include <string>
@@ -15,19 +16,21 @@
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
-#include "base/timer/elapsed_timer.h"
+#include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/lock.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/timer/elapsed_timer.h"
 #include "base/values.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/split_tabs/split_tab_id.h"
-#include "components/tabs/public/split_tab_data.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_prefs.h"
@@ -50,7 +53,249 @@ namespace {
 
 ShellEventObserver* g_shell_event_observer_for_testing = nullptr;
 
+constexpr bool HasFragment(SidebarCoreFragment fragments,
+                           SidebarCoreFragment fragment) {
+  return (static_cast<uint8_t>(fragments) & static_cast<uint8_t>(fragment)) !=
+         0;
+}
+
+std::string ParseSpaceIdJson(const std::string& space_id_json) {
+  auto parsed = base::JSONReader::Read(space_id_json, base::JSON_PARSE_RFC);
+  return parsed && parsed->is_string() ? parsed->GetString() : std::string();
+}
+
+FooterSpaceState FetchFooterState(::MahoCore* core);
+SidebarStateBackgroundResult FetchTreeBundle(::MahoCore* core,
+                                             const std::string& space_id_json);
+MahoSidebarFavoritesModel FetchFavorites(::MahoCore* core,
+                                         const std::string& space_id_json);
+
+class SidebarCoreStateCache {
+ public:
+  SidebarStateBackgroundResult GetOrFetch(::MahoCore* core,
+                                          const std::string& space_id_json,
+                                          bool bypass_cache,
+                                          bool require_current_core = true) {
+    SidebarStateBackgroundResult result;
+    if (!core || bypass_cache) {
+      return result;
+    }
+
+    const std::string space_id = ParseSpaceIdJson(space_id_json);
+
+    bool fetch_footer = false;
+    bool fetch_tree = false;
+    bool fetch_favorites = false;
+    uint64_t footer_generation = 0;
+    uint64_t tree_generation = 0;
+    uint64_t favorites_generation = 0;
+    SidebarCoreCacheFetchersForTesting fetchers;
+    {
+      base::AutoLock lock(lock_);
+      EnsureCoreLocked(core);
+      SpaceEntry* entry = space_id.empty() ? nullptr : &spaces_[space_id];
+      footer_generation = footer_.generation;
+      if (footer_.value) {
+        result.footer_state = *footer_.value;
+        ++counters_.footer_hits;
+      } else {
+        fetch_footer = true;
+        ++counters_.footer_misses;
+      }
+      if (entry) {
+        tree_generation = entry->tree_generation;
+        favorites_generation = entry->favorites_generation;
+      }
+      if (entry && entry->tree_valid) {
+        if (entry->tree) {
+          result.parsed_tree = entry->tree->Clone();
+        }
+        result.favicon_map = entry->favicon_map;
+        ++counters_.tree_bundle_hits;
+      } else if (entry) {
+        fetch_tree = true;
+        ++counters_.tree_bundle_misses;
+      }
+      if (entry && entry->favorites) {
+        result.favorites_model = *entry->favorites;
+        ++counters_.favorites_hits;
+      } else if (entry) {
+        fetch_favorites = true;
+        ++counters_.favorites_misses;
+      }
+      fetchers = fetchers_for_testing_;
+    }
+
+    FooterSpaceState fetched_footer;
+    SidebarStateBackgroundResult fetched_tree;
+    MahoSidebarFavoritesModel fetched_favorites;
+    if (fetch_footer) {
+      fetched_footer =
+          fetchers.footer ? fetchers.footer.Run(core) : FetchFooterState(core);
+      result.footer_state = fetched_footer;
+    }
+    if (fetch_tree) {
+      fetched_tree = fetchers.tree_bundle
+                         ? fetchers.tree_bundle.Run(core, space_id_json)
+                         : FetchTreeBundle(core, space_id_json);
+      if (fetched_tree.parsed_tree) {
+        result.parsed_tree = fetched_tree.parsed_tree->Clone();
+      }
+      result.favicon_map = fetched_tree.favicon_map;
+    }
+    if (fetch_favorites) {
+      fetched_favorites = fetchers.favorites
+                              ? fetchers.favorites.Run(core, space_id_json)
+                              : FetchFavorites(core, space_id_json);
+      result.favorites_model = fetched_favorites;
+    }
+
+    {
+      base::AutoLock lock(lock_);
+      if (core_ != core || (require_current_core && maho::GetCore() != core)) {
+        counters_.stale_publications_discarded +=
+            fetch_footer + fetch_tree + fetch_favorites;
+        return result;
+      }
+      SpaceEntry* entry = space_id.empty() ? nullptr : &spaces_[space_id];
+      if (fetch_footer) {
+        if (footer_.generation == footer_generation) {
+          footer_.value = std::move(fetched_footer);
+        } else {
+          ++counters_.stale_publications_discarded;
+        }
+      }
+      if (fetch_tree) {
+        if (entry && entry->tree_generation == tree_generation) {
+          entry->tree = fetched_tree.parsed_tree
+                            ? std::optional<base::Value>(
+                                  fetched_tree.parsed_tree->Clone())
+                            : std::nullopt;
+          entry->favicon_map = std::move(fetched_tree.favicon_map);
+          entry->tree_valid = true;
+        } else {
+          ++counters_.stale_publications_discarded;
+        }
+      }
+      if (fetch_favorites) {
+        if (entry && entry->favorites_generation == favorites_generation) {
+          entry->favorites = std::move(fetched_favorites);
+        } else {
+          ++counters_.stale_publications_discarded;
+        }
+      }
+    }
+    return result;
+  }
+
+  void Invalidate(const SidebarCacheInvalidation& invalidation) {
+    base::AutoLock lock(lock_);
+    if (HasFragment(invalidation.fragments, SidebarCoreFragment::kFooter)) {
+      ++footer_.generation;
+      footer_.value.reset();
+    }
+    const bool all_spaces = invalidation.space_ids.empty();
+    for (auto& [space_id, entry] : spaces_) {
+      if (!all_spaces && std::find(invalidation.space_ids.begin(),
+                                   invalidation.space_ids.end(),
+                                   space_id) == invalidation.space_ids.end()) {
+        continue;
+      }
+      if (HasFragment(invalidation.fragments,
+                      SidebarCoreFragment::kTreeBundle)) {
+        ++entry.tree_generation;
+        entry.tree.reset();
+        entry.favicon_map.clear();
+        entry.tree_valid = false;
+      }
+      if (HasFragment(invalidation.fragments,
+                      SidebarCoreFragment::kFavorites)) {
+        ++entry.favorites_generation;
+        entry.favorites.reset();
+      }
+    }
+  }
+
+  SidebarCoreCacheCounters counters() const {
+    base::AutoLock lock(lock_);
+    return counters_;
+  }
+
+  void ResetForTesting() {
+    base::AutoLock lock(lock_);
+    core_ = nullptr;
+    footer_ = FooterEntry();
+    spaces_.clear();
+    counters_ = SidebarCoreCacheCounters();
+    fetchers_for_testing_ = SidebarCoreCacheFetchersForTesting();
+  }
+
+  void SetFetchersForTesting(SidebarCoreCacheFetchersForTesting fetchers) {
+    base::AutoLock lock(lock_);
+    fetchers_for_testing_ = std::move(fetchers);
+  }
+
+ private:
+  struct FooterEntry {
+    uint64_t generation = 0;
+    std::optional<FooterSpaceState> value;
+  };
+  struct SpaceEntry {
+    uint64_t tree_generation = 0;
+    uint64_t favorites_generation = 0;
+    bool tree_valid = false;
+    std::optional<base::Value> tree;
+    base::flat_map<std::string, std::vector<uint8_t>> favicon_map;
+    std::optional<MahoSidebarFavoritesModel> favorites;
+  };
+
+  void EnsureCoreLocked(::MahoCore* core) {
+    if (core_ == core) {
+      return;
+    }
+    if (core_) {
+      ++footer_.generation;
+      for (auto& [space_id, entry] : spaces_) {
+        ++entry.tree_generation;
+        ++entry.favorites_generation;
+      }
+    }
+    core_ = core;
+    footer_.value.reset();
+    for (auto& [space_id, entry] : spaces_) {
+      entry.tree.reset();
+      entry.favicon_map.clear();
+      entry.tree_valid = false;
+      entry.favorites.reset();
+    }
+  }
+
+  mutable base::Lock lock_;
+  ::MahoCore* core_ = nullptr;
+  FooterEntry footer_ GUARDED_BY(lock_);
+  std::map<std::string, SpaceEntry> spaces_ GUARDED_BY(lock_);
+  SidebarCoreCacheCounters counters_ GUARDED_BY(lock_);
+  SidebarCoreCacheFetchersForTesting fetchers_for_testing_ GUARDED_BY(lock_);
+};
+
+SidebarCoreStateCache& GetSidebarCoreStateCache() {
+  static base::NoDestructor<SidebarCoreStateCache> cache;
+  return *cache;
+}
+
 }  // namespace
+
+SidebarCoreFragment operator|(SidebarCoreFragment lhs,
+                              SidebarCoreFragment rhs) {
+  return static_cast<SidebarCoreFragment>(static_cast<uint8_t>(lhs) |
+                                          static_cast<uint8_t>(rhs));
+}
+
+SidebarCoreFragment operator&(SidebarCoreFragment lhs,
+                              SidebarCoreFragment rhs) {
+  return static_cast<SidebarCoreFragment>(static_cast<uint8_t>(lhs) &
+                                          static_cast<uint8_t>(rhs));
+}
 
 bool IsSidebarSafeMode() {
   const base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
@@ -210,7 +455,8 @@ std::string GetRawActiveSpaceIdForBrowser(Browser* browser) {
   return bridge->GetActiveSpaceId(browser);
 }
 
-// Build a stable-tab-ID-to-strip-index map using MahoTabIdHelper (primary path).
+// Build a stable-tab-ID-to-strip-index map using MahoTabIdHelper (primary
+// path).
 std::map<std::string, int> BuildStableIdToIndexMap(TabStripModel* model) {
   std::map<std::string, int> result;
   if (!model) {
@@ -249,13 +495,13 @@ std::optional<SidebarTreeNode> ParseTreeNode(
   SidebarTreeNode node;
   if (*kind == "tab") {
     const std::string* id = dict->FindString("id");
-    const bool is_active = (id && !active_stable_id.empty() && *id == active_stable_id);
+    const bool is_active =
+        (id && !active_stable_id.empty() && *id == active_stable_id);
     const std::string* raw_url = dict->FindString("url");
     const std::string* raw_title = dict->FindString("title");
     const std::string url_str = raw_url ? *raw_url : std::string();
-    const std::u16string title_str = raw_title
-        ? base::UTF8ToUTF16(*raw_title)
-        : std::u16string();
+    const std::u16string title_str =
+        raw_title ? base::UTF8ToUTF16(*raw_title) : std::u16string();
     if (MahoDisplayPolicy::IsGhostTab(url_str, title_str) && !is_active) {
       return std::nullopt;
     }
@@ -280,7 +526,8 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     std::optional<bool> pinned = dict->FindBool("isPinned");
     node.is_pinned = pinned.value_or(false);
 
-    std::optional<bool> favorite = dict->FindBool("isFavorite");  // L3-EXEMPT: legacy compat
+    std::optional<bool> favorite =
+        dict->FindBool("isFavorite");             // L3-EXEMPT: legacy compat
     node.is_favorite = favorite.value_or(false);  // L3-EXEMPT: legacy compat
 
     const std::string* lifecycle = dict->FindString("lifecycleState");
@@ -391,7 +638,9 @@ std::optional<SidebarTreeNode> ParseTreeNode(
     if (children_list) {
       int child_idx = 0;
       for (const auto& child_val : *children_list) {
-        auto parsed_child = ParseTreeNode(child_val, model, stable_id_map, active_stable_id, depth + 1, favicon_map);
+        auto parsed_child =
+            ParseTreeNode(child_val, model, stable_id_map, active_stable_id,
+                          depth + 1, favicon_map);
         if (parsed_child.has_value()) {
           SidebarTreeNode child_node = std::move(parsed_child.value());
           if (child_node.kind == SidebarNodeKind::kTab) {
@@ -434,9 +683,9 @@ std::optional<SidebarTreeNode> ParseTreeNode(
 // Preserves any legitimate user-set custom_title; stale NTP sentinel values
 // are handled narrowly in ResolveTabDisplayText on the display-policy side.
 void OverlayActiveTabFields(SidebarTreeNode& node,
-                             TabStripModel* model,
-                             int active_index,
-                             content::WebContents* active_contents) {
+                            TabStripModel* model,
+                            int active_index,
+                            content::WebContents* active_contents) {
   node.tab_strip_index = active_index;
   node.is_active = true;
   // is_pinned is intentionally NOT overlaid from the native strip: it is
@@ -464,10 +713,10 @@ void OverlayActiveTabFields(SidebarTreeNode& node,
 // Both criteria are checked because stable IDs can race during startup (the ID
 // may not be assigned yet) and because tab_strip_index may shift under reorder.
 bool FindAndOverlayActiveTabInTree(std::vector<SidebarTreeNode>& nodes,
-                                    int active_index,
-                                    const std::string& active_stable_id,
-                                    TabStripModel* model,
-                                    content::WebContents* active_contents) {
+                                   int active_index,
+                                   const std::string& active_stable_id,
+                                   TabStripModel* model,
+                                   content::WebContents* active_contents) {
   for (auto& node : nodes) {
     if (node.kind == SidebarNodeKind::kTab) {
       const bool index_match =
@@ -536,7 +785,8 @@ FooterSpaceState GetCoreFooterSpaceStateRaw() {
     const std::string* color = dict->FindString("color");
     const std::string* icon = dict->FindString("icon");
     const std::string* name = dict->FindString("name");
-    const MahoSpaceDisplayThemeModel theme = BuildMahoSpaceDisplayThemeModel(*dict);
+    const MahoSpaceDisplayThemeModel theme =
+        BuildMahoSpaceDisplayThemeModel(*dict);
     const std::string display_color =
         GetMahoSpaceDisplayPrimaryColor(theme, color ? *color : std::string());
     state.space_icons.push_back(icon ? *icon : std::string());
@@ -556,8 +806,143 @@ FooterSpaceState GetCoreFooterSpaceStateRaw() {
   return state;
 }
 
-void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
-                    TabStripModel* model) {
+namespace {
+
+FooterSpaceState FetchFooterState(::MahoCore* core) {
+  if (!core || core != maho::GetCore()) {
+    return FooterSpaceState();
+  }
+  return GetCoreFooterSpaceStateRaw();
+}
+
+SidebarStateBackgroundResult FetchTreeBundle(::MahoCore* core,
+                                             const std::string& space_id_json) {
+  SidebarStateBackgroundResult result;
+  char* raw = maho_core_get_sidebar_state_v2(core, space_id_json.c_str());
+  if (!raw) {
+    return result;
+  }
+  std::string v2_json(raw);
+  maho_string_free(raw);
+
+  auto parsed = base::JSONReader::Read(v2_json, base::JSON_PARSE_RFC);
+  const auto* dict = parsed ? parsed->GetIfDict() : nullptr;
+  if (!dict) {
+    return result;
+  }
+  if (const auto* favicons = dict->FindDict("favicons")) {
+    for (const auto [tab_id, favicon] : *favicons) {
+      if (!favicon.is_string() || favicon.GetString().empty()) {
+        continue;
+      }
+      std::string decoded;
+      if (base::Base64Decode(favicon.GetString(), &decoded)) {
+        result.favicon_map[std::string(tab_id)] =
+            std::vector<uint8_t>(decoded.begin(), decoded.end());
+      }
+    }
+  }
+  if (const base::Value* tree = dict->Find("tree"); tree && tree->is_list()) {
+    result.parsed_tree = tree->Clone();
+  }
+  return result;
+}
+
+MahoSidebarFavoritesModel FetchFavorites(::MahoCore* core,
+                                         const std::string& space_id_json) {
+  if (!core || core != maho::GetCore()) {
+    return MahoSidebarFavoritesModel();
+  }
+  return MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
+      space_id_json);
+}
+
+std::string FindSpaceId(const base::DictValue& update) {
+  if (const std::string* space_id = update.FindString("space_id")) {
+    return *space_id;
+  }
+  if (const std::string* space_id = update.FindString("spaceId")) {
+    return *space_id;
+  }
+  if (const base::DictValue* tab = update.FindDict("tab")) {
+    if (const std::string* space_id = tab->FindString("space_id")) {
+      return *space_id;
+    }
+    if (const std::string* space_id = tab->FindString("spaceId")) {
+      return *space_id;
+    }
+  }
+  return std::string();
+}
+
+SidebarCacheInvalidation InvalidationForUpdate(const base::DictValue& update) {
+  SidebarCacheInvalidation invalidation;
+  const std::string* kind = update.FindString("kind");
+  if (!kind) {
+    return invalidation;
+  }
+  const std::string space_id = FindSpaceId(update);
+  auto set_space = [&]() {
+    if (!space_id.empty()) {
+      invalidation.space_ids.push_back(space_id);
+    }
+  };
+
+  if (*kind == "full_state") {
+    invalidation.fragments = SidebarCoreFragment::kAll;
+  } else if (*kind == "tab_created" || *kind == "tab_updated" ||
+             *kind == "tab_order_changed" ||
+             *kind == "navigation_state_changed" ||
+             *kind == "tab_favicon_changed" || *kind == "tab_role_changed") {
+    invalidation.fragments =
+        SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites;
+    set_space();
+  } else if (*kind == "tab_closed") {
+    invalidation.fragments =
+        SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites;
+  } else if (*kind == "tab_lifecycle_changed") {
+    invalidation.fragments = SidebarCoreFragment::kTreeBundle;
+    set_space();
+  } else if (*kind == "tabs_migrated") {
+    invalidation.fragments =
+        SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites;
+    if (const std::string* from = update.FindString("from_space_id")) {
+      invalidation.space_ids.push_back(*from);
+    }
+    if (const std::string* to = update.FindString("to_space_id")) {
+      invalidation.space_ids.push_back(*to);
+    }
+  } else if (*kind == "folder_created" || *kind == "folder_updated" ||
+             *kind == "folder_deleted") {
+    invalidation.fragments = SidebarCoreFragment::kTreeBundle;
+  } else if (*kind == "folder_order_changed") {
+    invalidation.fragments = SidebarCoreFragment::kTreeBundle;
+    set_space();
+  } else if (*kind == "space_created" || *kind == "space_updated" ||
+             *kind == "space_order_changed" ||
+             *kind == "active_space_changed" || *kind == "profile_created" ||
+             *kind == "profile_updated" || *kind == "profile_deleted" ||
+             *kind == "active_profile_changed" || *kind == "settings_changed") {
+    invalidation.fragments = SidebarCoreFragment::kFooter;
+  } else if (*kind == "space_deleted") {
+    invalidation.fragments = SidebarCoreFragment::kAll;
+    set_space();
+  } else if (*kind == "space_config_updated") {
+    invalidation.fragments = SidebarCoreFragment::kAll;
+    set_space();
+  } else if (*kind == "split_view_changed") {
+    // Split grouping and ratios are overlaid from the live TabStripModel after
+    // the cached core tree is parsed; no cached fragment contains split state.
+  } else if (*kind == "favorite_limit_reached") {
+    // The attempted role transition was rejected, so cached tree/favorites
+    // state did not change.
+  }
+  return invalidation;
+}
+
+}  // namespace
+
+void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes, TabStripModel* model) {
   for (auto& node : nodes) {
     if (!node.children.empty()) {
       GroupSplitTabs(node.children, model);
@@ -628,20 +1013,20 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
             return split_tab_interfaces.size();
           };
 
-          std::stable_sort(
-              ordered_indices.begin(), ordered_indices.end(),
-              [&](size_t lhs, size_t rhs) {
-                const size_t lhs_order = split_order_for_node(lhs);
-                const size_t rhs_order = split_order_for_node(rhs);
-                if (lhs_order != rhs_order) {
-                  return lhs_order < rhs_order;
-                }
-                return nodes[lhs].tab_strip_index < nodes[rhs].tab_strip_index;
-              });
+          std::stable_sort(ordered_indices.begin(), ordered_indices.end(),
+                           [&](size_t lhs, size_t rhs) {
+                             const size_t lhs_order = split_order_for_node(lhs);
+                             const size_t rhs_order = split_order_for_node(rhs);
+                             if (lhs_order != rhs_order) {
+                               return lhs_order < rhs_order;
+                             }
+                             return nodes[lhs].tab_strip_index <
+                                    nodes[rhs].tab_strip_index;
+                           });
 
           DVLOG(1) << "[MAHO_SPLIT_SIDE_DBG] GroupSplitTabs split_id="
-                   << group.split_id << " encountered0_id="
-                   << nodes[it->second[0]].tab_id
+                   << group.split_id
+                   << " encountered0_id=" << nodes[it->second[0]].tab_id
                    << " encountered0_index="
                    << nodes[it->second[0]].tab_strip_index
                    << " encountered1_id=" << nodes[it->second[1]].tab_id
@@ -684,7 +1069,8 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes,
 
 FooterSpaceState::FooterSpaceState() = default;
 FooterSpaceState::FooterSpaceState(const FooterSpaceState&) = default;
-FooterSpaceState& FooterSpaceState::operator=(const FooterSpaceState&) = default;
+FooterSpaceState& FooterSpaceState::operator=(const FooterSpaceState&) =
+    default;
 FooterSpaceState::FooterSpaceState(FooterSpaceState&&) = default;
 FooterSpaceState& FooterSpaceState::operator=(FooterSpaceState&&) = default;
 FooterSpaceState::~FooterSpaceState() = default;
@@ -696,18 +1082,105 @@ SidebarStateBackgroundResult& SidebarStateBackgroundResult::operator=(
     SidebarStateBackgroundResult&&) = default;
 SidebarStateBackgroundResult::~SidebarStateBackgroundResult() = default;
 
+SidebarCacheInvalidation::SidebarCacheInvalidation() = default;
+SidebarCacheInvalidation::SidebarCacheInvalidation(
+    const SidebarCacheInvalidation&) = default;
+SidebarCacheInvalidation& SidebarCacheInvalidation::operator=(
+    const SidebarCacheInvalidation&) = default;
+SidebarCacheInvalidation::SidebarCacheInvalidation(
+    SidebarCacheInvalidation&&) = default;
+SidebarCacheInvalidation& SidebarCacheInvalidation::operator=(
+    SidebarCacheInvalidation&&) = default;
+SidebarCacheInvalidation::~SidebarCacheInvalidation() = default;
+
+SidebarCoreCacheFetchersForTesting::SidebarCoreCacheFetchersForTesting() =
+    default;
+SidebarCoreCacheFetchersForTesting::SidebarCoreCacheFetchersForTesting(
+    const SidebarCoreCacheFetchersForTesting&) = default;
+SidebarCoreCacheFetchersForTesting&
+SidebarCoreCacheFetchersForTesting::operator=(
+    const SidebarCoreCacheFetchersForTesting&) = default;
+SidebarCoreCacheFetchersForTesting::SidebarCoreCacheFetchersForTesting(
+    SidebarCoreCacheFetchersForTesting&&) = default;
+SidebarCoreCacheFetchersForTesting&
+SidebarCoreCacheFetchersForTesting::operator=(
+    SidebarCoreCacheFetchersForTesting&&) = default;
+SidebarCoreCacheFetchersForTesting::~SidebarCoreCacheFetchersForTesting() =
+    default;
+
 void SetShellEventObserverForTesting(ShellEventObserver* observer) {
   g_shell_event_observer_for_testing = observer;
 }
 
+SidebarCacheInvalidation GetSidebarCacheInvalidationForUpdateJsonForTesting(
+    std::string_view update_json) {
+  auto parsed = base::JSONReader::Read(update_json, base::JSON_PARSE_RFC);
+  const auto* dict = parsed ? parsed->GetIfDict() : nullptr;
+  return dict ? InvalidationForUpdate(*dict) : SidebarCacheInvalidation();
+}
+
+void InvalidateSidebarCoreCache(
+    const SidebarCacheInvalidation& invalidation) {
+  GetSidebarCoreStateCache().Invalidate(invalidation);
+}
+
+void InvalidateSidebarCoreCacheForUpdatesJson(std::string_view updates_json) {
+  auto parsed = base::JSONReader::Read(updates_json, base::JSON_PARSE_RFC);
+  const auto* updates = parsed ? parsed->GetIfList() : nullptr;
+  if (!updates) {
+    return;
+  }
+  for (const auto& update : *updates) {
+    if (const auto* dict = update.GetIfDict()) {
+      GetSidebarCoreStateCache().Invalidate(InvalidationForUpdate(*dict));
+    }
+  }
+}
+
+SidebarCoreCacheCounters GetSidebarCoreCacheCountersForTesting() {
+  return GetSidebarCoreStateCache().counters();
+}
+
+void ResetSidebarCoreCacheForTesting() {
+  GetSidebarCoreStateCache().ResetForTesting();
+}
+
+void SetSidebarCoreCacheFetchersForTesting(
+    SidebarCoreCacheFetchersForTesting fetchers) {
+  GetSidebarCoreStateCache().SetFetchersForTesting(std::move(fetchers));
+}
+
+SidebarStateBackgroundResult BuildSidebarStateOnBackgroundForTesting(
+    ::MahoCore* core,
+    std::string space_id_json,
+    bool bypass_cache) {
+  return GetSidebarCoreStateCache().GetOrFetch(
+      core, space_id_json, bypass_cache, /*require_current_core=*/false);
+}
+
+MahoSidebarFavoritesModel RefreshSidebarFavoritesForTesting(
+    ::MahoCore* core,
+    std::string space_id_json) {
+  const std::string space_id = ParseSpaceIdJson(space_id_json);
+  if (!core || space_id.empty()) {
+    return MahoSidebarFavoritesModel();
+  }
+  SidebarCacheInvalidation invalidation;
+  invalidation.fragments = SidebarCoreFragment::kFavorites;
+  invalidation.space_ids.push_back(space_id);
+  GetSidebarCoreStateCache().Invalidate(invalidation);
+  return GetSidebarCoreStateCache()
+      .GetOrFetch(core, space_id_json, /*bypass_cache=*/false,
+                  /*require_current_core=*/false)
+      .favorites_model;
+}
+
 void NotifyChangedHelper(const std::string& kind) {
   if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const bool is_structural = !(kind == "tab_title_updated" ||
-                                 kind == "tab_url_updated" ||
-                                 kind == "tab_favicon_updated" ||
-                                 kind == "tab_loading_state_changed" ||
-                                 kind == "update_tab_scroll_position" ||
-                                 kind == "update_tab_preview");
+    const bool is_structural = !(
+        kind == "tab_title_updated" || kind == "tab_url_updated" ||
+        kind == "tab_favicon_updated" || kind == "tab_loading_state_changed" ||
+        kind == "update_tab_scroll_position" || kind == "update_tab_preview");
     if (is_structural) {
       bridge->NotifyChanged(true);
     } else {
@@ -715,7 +1188,8 @@ void NotifyChangedHelper(const std::string& kind) {
           FROM_HERE,
           base::BindOnce(
               [](bool is_structural) {
-                if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
+                if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+                    bridge) {
                   bridge->NotifyChanged(is_structural);
                 }
               },
@@ -743,6 +1217,7 @@ void DispatchShellEvent(
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
+  InvalidateSidebarCoreCacheForUpdatesJson(updates);
   NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
@@ -767,6 +1242,7 @@ std::string DispatchCreateFolder(const std::string& space_id,
     return std::string();
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
+  InvalidateSidebarCoreCacheForUpdatesJson(updates);
   NotifyChangedHelper("create_folder");
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 
@@ -795,9 +1271,8 @@ std::string DispatchCreateFolder(const std::string& space_id,
   return std::string();
 }
 
-void DispatchShellEventEx(
-    const std::string& kind,
-    const std::vector<ShellEventField>& fields) {
+void DispatchShellEventEx(const std::string& kind,
+                          const std::vector<ShellEventField>& fields) {
   base::DictValue event;
   event.Set("kind", kind);
   for (const auto& field : fields) {
@@ -823,12 +1298,12 @@ void DispatchShellEventEx(
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
+  InvalidateSidebarCoreCacheForUpdatesJson(updates);
   NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
 
-void DispatchShellEventDict(const std::string& kind,
-                             base::DictValue dict) {
+void DispatchShellEventDict(const std::string& kind, base::DictValue dict) {
   dict.Set("kind", kind);
   std::string json;
   base::JSONWriter::Write(dict, &json);
@@ -840,6 +1315,7 @@ void DispatchShellEventDict(const std::string& kind,
     return;
   }
   std::string updates = maho::core::HandleEvent(core, json.c_str());
+  InvalidateSidebarCoreCacheForUpdatesJson(updates);
   NotifyChangedHelper(kind);
   MahoBoostInjectionHandler::OnCoreUpdatesJson(updates);
 }
@@ -880,14 +1356,14 @@ MahoSidebarSearchModel MahoSidebarStateAdapter::BuildSearchModel(
                             ? u"Search or Enter URL..."
                             : base::UTF8ToUTF16(model.current_url);
     }
-    model.display_mode =
-        ShouldShowSearchPlaceholderAddress(url)
-            ? MahoSidebarAddressDisplayMode::kSearchPlaceholder
-            : MahoSidebarAddressDisplayMode::kAddressCard;
+    model.display_mode = ShouldShowSearchPlaceholderAddress(url)
+                             ? MahoSidebarAddressDisplayMode::kSearchPlaceholder
+                             : MahoSidebarAddressDisplayMode::kAddressCard;
 
-    // Offer on-device translate only when Chromium's language detector flags the
-    // page as foreign relative to the target (translate_enabled), matching Arc;
-    // keep it visible while translated so the label can offer "Show original".
+    // Offer on-device translate only when Chromium's language detector flags
+    // the page as foreign relative to the target (translate_enabled), matching
+    // Arc; keep it visible while translated so the label can offer "Show
+    // original".
     model.is_page_translated = maho::IsMahoPageTranslated(contents);
     const std::string site_host(url.host());
     Profile* profile =
@@ -896,8 +1372,8 @@ MahoSidebarSearchModel MahoSidebarStateAdapter::BuildSearchModel(
         profile && !site_host.empty() &&
         translate::TranslatePrefs(profile->GetPrefs())
             .IsSiteOnNeverPromptList(site_host);
-    model.translation_available = maho::CanOnDeviceTranslate(contents) &&
-                                  !is_never_translate_site;
+    model.translation_available =
+        maho::CanOnDeviceTranslate(contents) && !is_never_translate_site;
   } else {
     // WebContents not yet initialized (startup-state race), but the tab strip
     // already has an active entry — the utility icon should still be available.
@@ -926,7 +1402,8 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
     return model;
   }
 
-  char* json_str = maho_core_get_favorite_tabs(core, active_space_id_json.c_str());
+  char* json_str =
+      maho_core_get_favorite_tabs(core, active_space_id_json.c_str());
   if (!json_str) {
     return model;
   }
@@ -978,14 +1455,14 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
     if (favicon_b64 && !favicon_b64->empty()) {
       std::string decoded_bytes;
       if (base::Base64Decode(*favicon_b64, &decoded_bytes)) {
-        favorite_item.favicon_png_data = std::vector<uint8_t>(
-            decoded_bytes.begin(), decoded_bytes.end());
+        favorite_item.favicon_png_data =
+            std::vector<uint8_t>(decoded_bytes.begin(), decoded_bytes.end());
       }
     }
     if (!MahoDisplayPolicy::IsNtpOrBlankUrl(favorite_url)) {
       favorite_item.subtitle = favorite_url.host().empty()
-                                    ? base::UTF8ToUTF16(favorite_url.spec())
-                                    : base::UTF8ToUTF16(favorite_url.host());
+                                   ? base::UTF8ToUTF16(favorite_url.spec())
+                                   : base::UTF8ToUTF16(favorite_url.host());
     }
     favorite_item.url = favorite_url;
     model.items.push_back(std::move(favorite_item));
@@ -1002,13 +1479,27 @@ void MahoSidebarStateAdapter::SetFavoritesModel(
   favorites_model_ = std::move(favorites_model);
 }
 
+// static
+MahoSidebarFavoritesModel
+MahoSidebarStateAdapter::RefreshFavoritesModelForSpaceIdJson(
+    std::string active_space_id_json) {
+  ::MahoCore* core = maho::GetCore();
+  const std::string space_id = ParseSpaceIdJson(active_space_id_json);
+  if (!core || space_id.empty() || IsSidebarSafeMode()) {
+    return MahoSidebarFavoritesModel();
+  }
+  return RefreshSidebarFavoritesForTesting(core,
+                                           std::move(active_space_id_json));
+}
+
 MahoSidebarFavoritesModel MahoSidebarStateAdapter::BuildFavoritesModel(
     Browser* browser) const {
   MahoSidebarFavoritesModel model = favorites_model_;
   if (!browser || !browser->tab_strip_model()) {
     return model;
   }
-  content::WebContents* active = browser->tab_strip_model()->GetActiveWebContents();
+  content::WebContents* active =
+      browser->tab_strip_model()->GetActiveWebContents();
   std::string active_id;
   if (active) {
     if (auto* helper = MahoTabIdHelper::FromWebContents(active)) {
@@ -1029,7 +1520,8 @@ MahoSidebarFavoritesModel MahoSidebarStateAdapter::BuildFavoritesModel(
 MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     Browser* browser) const {
   MahoSidebarTabListModel model;
-  TabStripModel* tab_strip_model = browser ? browser->tab_strip_model() : nullptr;
+  TabStripModel* tab_strip_model =
+      browser ? browser->tab_strip_model() : nullptr;
 
   model.active_space_id = GetRawActiveSpaceIdForBrowser(browser);
   std::string space_id_json = GetActiveSpaceIdJsonForBrowser(browser);
@@ -1100,20 +1592,29 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
 
   if (tree_requested) {
     auto parsed_tree = std::move(v2_tree_);
-    DVLOG(1) << "BuildTabListModel: tree_requested=true, parsed_tree exists=" << (parsed_tree.has_value())
+    DVLOG(1) << "BuildTabListModel: tree_requested=true, parsed_tree exists="
+             << (parsed_tree.has_value())
              << " is_list=" << (parsed_tree ? parsed_tree->is_list() : false)
-             << " size=" << (parsed_tree && parsed_tree->is_list() ? parsed_tree->GetList().size() : 0);
+             << " size="
+             << (parsed_tree && parsed_tree->is_list()
+                     ? parsed_tree->GetList().size()
+                     : 0);
     if (parsed_tree && parsed_tree->is_list()) {
       for (const auto& root_val : parsed_tree->GetList()) {
-        auto parsed_node = ParseTreeNode(root_val, tab_strip_model, stable_id_map, active_stable_id, 0, v2_favicon_map_);
-        DVLOG(1) << "BuildTabListModel: parsed_node has_value=" << parsed_node.has_value();
+        auto parsed_node =
+            ParseTreeNode(root_val, tab_strip_model, stable_id_map,
+                          active_stable_id, 0, v2_favicon_map_);
+        DVLOG(1) << "BuildTabListModel: parsed_node has_value="
+                 << parsed_node.has_value();
         if (parsed_node.has_value()) {
           SidebarTreeNode node = std::move(parsed_node.value());
           DVLOG(1) << "BuildTabListModel: parsed node kind=" << (int)node.kind
-                   << " tab_id=" << node.tab_id << " is_pinned=" << node.is_pinned
+                   << " tab_id=" << node.tab_id
+                   << " is_pinned=" << node.is_pinned
                    << " folder_is_pinned=" << node.folder_is_pinned;
           if ((node.kind == SidebarNodeKind::kTab && node.is_pinned) ||
-              (node.kind == SidebarNodeKind::kFolder && node.folder_is_pinned)) {
+              (node.kind == SidebarNodeKind::kFolder &&
+               node.folder_is_pinned)) {
             model.pinned_tree.push_back(std::move(node));
           } else {
             model.normal_tree.push_back(std::move(node));
@@ -1139,9 +1640,9 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
   // guaranteed to exist in the tree because BuildTreeSection exempts the
   // active entry from URL/ghost filters via active_stable_id.
   if (tab_strip_model && active_index != TabStripModel::kNoTab) {
-    if (!FindAndOverlayActiveTabInTree(
-            model.pinned_tree, active_index, active_stable_id,
-            tab_strip_model, active_contents)) {
+    if (!FindAndOverlayActiveTabInTree(model.pinned_tree, active_index,
+                                       active_stable_id, tab_strip_model,
+                                       active_contents)) {
       FindAndOverlayActiveTabInTree(model.normal_tree, active_index,
                                     active_stable_id, tab_strip_model,
                                     active_contents);
@@ -1155,8 +1656,7 @@ MahoSidebarTabListModel MahoSidebarStateAdapter::BuildTabListModel(
     space_state = GetFooterSpaceState();
   }
   const int idx = space_state.active_space_index;
-  if (idx >= 0 &&
-      idx < static_cast<int>(space_state.space_names.size()) &&
+  if (idx >= 0 && idx < static_cast<int>(space_state.space_names.size()) &&
       idx < static_cast<int>(space_state.space_icons.size())) {
     model.active_space_icon = space_state.space_icons[idx];
     model.active_space_name = base::UTF8ToUTF16(space_state.space_names[idx]);
@@ -1178,17 +1678,16 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
   const size_t bridge_space_count =
       bridge ? bridge->GetRegisteredSpaceCount() : 0u;
 
-  const size_t space_count = core_state.has_core_state ? core_state.space_count
-                                                       : bridge_space_count;
+  const size_t space_count =
+      core_state.has_core_state ? core_state.space_count : bridge_space_count;
   model.status_text = space_count > 0 ? u"Spaces" : u"No spaces";
   model.space_count = static_cast<int>(space_count);
-  int active_space_index = core_state.has_core_state
-                               ? core_state.active_space_index
-                               : (bridge ? bridge->GetActiveSpaceIndex(browser)
-                                         : -1);
-  std::string active_space_color = core_state.has_core_state
-                                       ? core_state.active_space_color
-                                       : std::string();
+  int active_space_index =
+      core_state.has_core_state
+          ? core_state.active_space_index
+          : (bridge ? bridge->GetActiveSpaceIndex(browser) : -1);
+  std::string active_space_color =
+      core_state.has_core_state ? core_state.active_space_color : std::string();
   MahoSpaceDisplayThemeModel active_space_theme = core_state.active_space_theme;
   if (bridge && !core_state.space_ids.empty()) {
     const std::string bridge_active_space_id =
@@ -1228,7 +1727,8 @@ MahoSidebarFooterModel MahoSidebarStateAdapter::BuildFooterModel(
 // --- V2 FFI: single-call sidebar state ---
 
 std::string MahoSidebarStateAdapter::FetchSidebarStateV2(
-    ::MahoCore* core, const std::string& space_id_json) const {
+    ::MahoCore* core,
+    const std::string& space_id_json) const {
   char* raw = maho_core_get_sidebar_state_v2(core, space_id_json.c_str());
   if (!raw) {
     return {};
@@ -1257,8 +1757,8 @@ MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModel(
     base::ElapsedTimer v2_t;
     std::string v2_json = FetchSidebarStateV2(core, space_id_json);
     DVLOG(1) << "[MAHO_PERF]     FetchSidebarStateV2="
-             << v2_t.Elapsed().InMillisecondsF() << "ms bytes=" << v2_json.size()
-             << " json=" << v2_json;
+             << v2_t.Elapsed().InMillisecondsF()
+             << "ms bytes=" << v2_json.size() << " json=" << v2_json;
     if (!v2_json.empty()) {
       std::optional<base::Value> v2_parsed =
           base::JSONReader::Read(v2_json, base::JSON_PARSE_RFC);
@@ -1315,58 +1815,23 @@ SidebarStateBackgroundResult MahoSidebarStateAdapter::BuildStateOnBackground(
     std::string space_id_json,
     bool safe_mode) {
   DVLOG(1) << "BuildStateOnBackground start";
-  SidebarStateBackgroundResult result;
-
-  // Phase 0: footer space state (FFI, 1.5-7ms).
-  if (!safe_mode) {
-    result.footer_state = GetCoreFooterSpaceStateRaw();
-  }
-
-  // Phase 2: V2 tree + favicons (FFI + JSON parse + base64 decode, 3-21ms).
   ::MahoCore* core = maho::GetCore();
-  if (core && !space_id_json.empty() && !safe_mode) {
-    char* raw = maho_core_get_sidebar_state_v2(core, space_id_json.c_str());
-    if (raw) {
-      std::string v2_json(raw);
-      maho_string_free(raw);
-
-      std::optional<base::Value> v2_parsed =
-          base::JSONReader::Read(v2_json, base::JSON_PARSE_RFC);
-      if (const auto* v2_dict =
-              v2_parsed ? v2_parsed->GetIfDict() : nullptr) {
-        if (const auto* favicons_dict = v2_dict->FindDict("favicons")) {
-          for (const auto [tab_id, favicon_val] : *favicons_dict) {
-            if (!favicon_val.is_string()) {
-              continue;
-            }
-            const std::string& base64_str = favicon_val.GetString();
-            if (base64_str.empty()) {
-              continue;
-            }
-            std::string decoded_bytes;
-            if (!base::Base64Decode(base64_str, &decoded_bytes)) {
-              continue;
-            }
-            result.favicon_map[std::string(tab_id)] =
-                std::vector<uint8_t>(decoded_bytes.begin(), decoded_bytes.end());
-          }
-        }
-        if (const base::Value* tree_val = v2_dict->Find("tree");
-            tree_val && tree_val->is_list()) {
-          result.parsed_tree = tree_val->Clone();
-        }
-      }
-    }
-  }
-
-  result.favorites_model =
-      MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(space_id_json);
-
+  SidebarStateBackgroundResult result =
+      GetSidebarCoreStateCache().GetOrFetch(core, space_id_json, safe_mode);
+  const SidebarCoreCacheCounters counters =
+      GetSidebarCoreStateCache().counters();
+  DVLOG(1) << "[MAHO_SIDEBAR_CACHE] footer=" << counters.footer_hits << "/"
+           << counters.footer_misses << " tree=" << counters.tree_bundle_hits
+           << "/" << counters.tree_bundle_misses
+           << " favorites=" << counters.favorites_hits << "/"
+           << counters.favorites_misses
+           << " stale=" << counters.stale_publications_discarded;
   DVLOG(1) << "BuildStateOnBackground end";
   return result;
 }
 
-MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModelFromResult(
+MahoSidebarViewStateModel
+MahoSidebarStateAdapter::BuildViewStateModelFromResult(
     Browser* browser,
     SidebarStateBackgroundResult result) const {
   if (result.footer_state.has_core_state) {
@@ -1389,9 +1854,12 @@ MahoSidebarViewStateModel MahoSidebarStateAdapter::BuildViewStateModelFromResult
   return model;
 }
 
-std::u16string MahoSidebarStateAdapter::GetActiveHostText(Browser* browser) const {
-  TabStripModel* tab_strip_model = browser ? browser->tab_strip_model() : nullptr;
-  if (!tab_strip_model || tab_strip_model->active_index() == TabStripModel::kNoTab) {
+std::u16string MahoSidebarStateAdapter::GetActiveHostText(
+    Browser* browser) const {
+  TabStripModel* tab_strip_model =
+      browser ? browser->tab_strip_model() : nullptr;
+  if (!tab_strip_model ||
+      tab_strip_model->active_index() == TabStripModel::kNoTab) {
     return u"Search or Enter URL...";
   }
 

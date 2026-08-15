@@ -4,7 +4,10 @@
 
 #include "base/test/run_until.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/split_tabs/split_tab_visual_data.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "content/public/test/browser_test.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
@@ -303,6 +306,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   ASSERT_TRUE(tab_strip_model->ContainsIndex(target_index));
   ASSERT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
   ASSERT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
+  content::WebContents* source_contents =
+      tab_strip_model->GetWebContentsAt(source_index);
+  content::WebContents* target_contents =
+      tab_strip_model->GetWebContentsAt(target_index);
+  ASSERT_TRUE(source_contents);
+  ASSERT_TRUE(target_contents);
 
   SidebarDragPayload payload;
   payload.node_kind = SidebarNodeKind::kTab;
@@ -317,18 +326,367 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
       data, gfx::PointF(5, 20), gfx::PointF(5, 20),
       static_cast<int>(ui::mojom::DragOperation::kMove));
   target_row->OnDragUpdated(event);
+  EXPECT_TRUE(target_row->is_split_preview_visible_for_testing());
+  EXPECT_EQ(target_row->split_preview_side_for_testing(),
+            MahoSplitDropSide::kLeft);
+  EXPECT_TRUE(target_row->background());
+  EXPECT_TRUE(target_row->GetBorder());
+  EXPECT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  EXPECT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
+
   auto callback = target_row->GetDropCallback(event);
   ASSERT_TRUE(callback);
   ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
   std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
   target_row->OnDragExited();
 
-  EXPECT_TRUE(tab_strip_model->GetSplitForTab(source_index).has_value());
-  EXPECT_TRUE(tab_strip_model->GetSplitForTab(target_index).has_value());
-  EXPECT_EQ(*tab_strip_model->GetSplitForTab(source_index),
-            *tab_strip_model->GetSplitForTab(target_index));
+  const int final_source_index =
+      tab_strip_model->GetIndexOfWebContents(source_contents);
+  const int final_target_index =
+      tab_strip_model->GetIndexOfWebContents(target_contents);
+  ASSERT_GE(final_source_index, 0);
+  ASSERT_GE(final_target_index, 0);
+  ASSERT_TRUE(tab_strip_model->GetSplitForTab(final_source_index).has_value());
+  ASSERT_TRUE(tab_strip_model->GetSplitForTab(final_target_index).has_value());
+  EXPECT_EQ(*tab_strip_model->GetSplitForTab(final_source_index),
+            *tab_strip_model->GetSplitForTab(final_target_index));
+  auto* split_data = tab_strip_model->GetSplitData(
+      *tab_strip_model->GetSplitForTab(final_source_index));
+  ASSERT_TRUE(split_data);
+  const auto panes = split_data->ListTabs();
+  ASSERT_EQ(panes.size(), 2u);
+  EXPECT_EQ(panes[0]->GetContents(), source_contents)
+      << "The left-side preview must match the committed pane order";
+  EXPECT_EQ(panes[1]->GetContents(), target_contents);
   EXPECT_TRUE(observer_.events().empty())
       << "Tab-on-tab body split should not dispatch a shell move event";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       MultiTabDragOnTabBodyDoesNotPreviewOrSplit) {
+  SeedProfile(2);
+  AddTestTabs(1);
+  RunAllPendingTasks();
+  ResolveViews();
+
+  const auto state = GetViewState();
+  std::vector<const SidebarTreeNode*> tabs;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      tabs.push_back(&node);
+      if (tabs.size() == 3u) {
+        break;
+      }
+    }
+  }
+  ASSERT_EQ(tabs.size(), 3u);
+
+  auto* target_row = tab_list_->FindTabRowByIdForTesting(tabs[1]->tab_id);
+  ASSERT_TRUE(target_row);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  content::WebContents* source_contents =
+      model->GetWebContentsAt(tabs[0]->tab_strip_index);
+  content::WebContents* target_contents =
+      model->GetWebContentsAt(tabs[1]->tab_strip_index);
+  ASSERT_TRUE(source_contents);
+  ASSERT_TRUE(target_contents);
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tabs[0]->tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tabs[0]->tab_strip_index;
+  payload.selected_tab_ids = {tabs[0]->tab_id, tabs[2]->tab_id};
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(
+      data, gfx::PointF(5, 20), gfx::PointF(5, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(target_row->OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kNone));
+  EXPECT_FALSE(target_row->is_split_preview_visible_for_testing());
+
+  auto callback = target_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  EXPECT_EQ(output, ui::mojom::DragOperation::kNone);
+  EXPECT_FALSE(model->GetSplitForTab(
+      model->GetIndexOfWebContents(source_contents)).has_value());
+  EXPECT_FALSE(model->GetSplitForTab(
+      model->GetIndexOfWebContents(target_contents)).has_value());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       AlreadySplitSourceDoesNotPreviewOrSplit) {
+  SeedProfile(2);
+  AddTestTabs(1);
+  RunAllPendingTasks();
+  ResolveViews();
+
+  const auto state = GetViewState();
+  std::vector<const SidebarTreeNode*> tabs;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      tabs.push_back(&node);
+      if (tabs.size() == 3u) {
+        break;
+      }
+    }
+  }
+  ASSERT_EQ(tabs.size(), 3u);
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  content::WebContents* source_contents =
+      model->GetWebContentsAt(tabs[0]->tab_strip_index);
+  content::WebContents* target_contents =
+      model->GetWebContentsAt(tabs[1]->tab_strip_index);
+  content::WebContents* partner_contents =
+      model->GetWebContentsAt(tabs[2]->tab_strip_index);
+  ASSERT_TRUE(source_contents);
+  ASSERT_TRUE(target_contents);
+  ASSERT_TRUE(partner_contents);
+
+  model->ActivateTabAt(tabs[2]->tab_strip_index);
+  split_tabs::SplitTabVisualData visual_data(
+      split_tabs::SplitTabLayout::kVertical, 0.5);
+  model->AddToNewSplit({model->GetIndexOfWebContents(source_contents)},
+                       visual_data,
+                       split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+  const auto source_split =
+      model->GetSplitForTab(model->GetIndexOfWebContents(source_contents));
+  ASSERT_TRUE(source_split.has_value());
+
+  RunAllPendingTasks();
+  ResolveViews();
+  auto* target_row =
+      tab_list_->FindTabRowByIdForTesting(tabs[1]->tab_id);
+  ASSERT_TRUE(target_row);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tabs[0]->tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = model->GetIndexOfWebContents(source_contents);
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(
+      data, gfx::PointF(5, 20), gfx::PointF(5, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(target_row->OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kNone));
+  EXPECT_FALSE(target_row->is_split_preview_visible_for_testing());
+
+  auto callback = target_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  EXPECT_EQ(output, ui::mojom::DragOperation::kNone);
+  EXPECT_EQ(model->GetSplitForTab(
+                model->GetIndexOfWebContents(source_contents)),
+            source_split);
+  EXPECT_FALSE(model->GetSplitForTab(
+      model->GetIndexOfWebContents(target_contents)).has_value());
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       AlreadySplitTargetDoesNotPreviewOrSplit) {
+  SeedProfile(2);
+  AddTestTabs(1);
+  RunAllPendingTasks();
+  ResolveViews();
+
+  const auto state = GetViewState();
+  std::vector<const SidebarTreeNode*> tabs;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      tabs.push_back(&node);
+      if (tabs.size() == 3u) {
+        break;
+      }
+    }
+  }
+  ASSERT_EQ(tabs.size(), 3u);
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  content::WebContents* source_contents =
+      model->GetWebContentsAt(tabs[0]->tab_strip_index);
+  content::WebContents* target_contents =
+      model->GetWebContentsAt(tabs[1]->tab_strip_index);
+  content::WebContents* partner_contents =
+      model->GetWebContentsAt(tabs[2]->tab_strip_index);
+  ASSERT_TRUE(source_contents);
+  ASSERT_TRUE(target_contents);
+  ASSERT_TRUE(partner_contents);
+
+  model->ActivateTabAt(tabs[1]->tab_strip_index);
+  split_tabs::SplitTabVisualData visual_data(
+      split_tabs::SplitTabLayout::kVertical, 0.5);
+  model->AddToNewSplit({model->GetIndexOfWebContents(partner_contents)},
+                       visual_data,
+                       split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+  const auto target_split =
+      model->GetSplitForTab(model->GetIndexOfWebContents(target_contents));
+  ASSERT_TRUE(target_split.has_value());
+
+  RunAllPendingTasks();
+  ResolveViews();
+  auto* target_row =
+      tab_list_->FindTabRowByIdForTesting(tabs[1]->tab_id);
+  ASSERT_TRUE(target_row);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tabs[0]->tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = model->GetIndexOfWebContents(source_contents);
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(
+      data, gfx::PointF(215, 20), gfx::PointF(215, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  EXPECT_EQ(target_row->OnDragUpdated(event),
+            static_cast<int>(ui::mojom::DragOperation::kNone));
+  EXPECT_FALSE(target_row->is_split_preview_visible_for_testing());
+
+  auto callback = target_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kMove;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  EXPECT_EQ(output, ui::mojom::DragOperation::kNone);
+  EXPECT_FALSE(model->GetSplitForTab(
+      model->GetIndexOfWebContents(source_contents)).has_value());
+  EXPECT_EQ(model->GetSplitForTab(
+                model->GetIndexOfWebContents(target_contents)),
+            target_split);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       RightPreviewCommitsSourceOnRight) {
+  SeedProfile(2);
+
+  const auto state = GetViewState();
+  std::vector<const SidebarTreeNode*> tabs;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      tabs.push_back(&node);
+      if (tabs.size() == 2u) {
+        break;
+      }
+    }
+  }
+  ASSERT_EQ(tabs.size(), 2u);
+
+  auto* target_row = tab_list_->FindTabRowByIdForTesting(tabs[1]->tab_id);
+  ASSERT_TRUE(target_row);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  content::WebContents* source_contents =
+      model->GetWebContentsAt(tabs[0]->tab_strip_index);
+  content::WebContents* target_contents =
+      model->GetWebContentsAt(tabs[1]->tab_strip_index);
+  ASSERT_TRUE(source_contents);
+  ASSERT_TRUE(target_contents);
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tabs[0]->tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tabs[0]->tab_strip_index;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(
+      data, gfx::PointF(215, 20), gfx::PointF(215, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(event);
+  EXPECT_EQ(target_row->split_preview_side_for_testing(),
+            MahoSplitDropSide::kRight);
+
+  auto callback = target_row->GetDropCallback(event);
+  ASSERT_TRUE(callback);
+  ui::mojom::DragOperation output = ui::mojom::DragOperation::kNone;
+  std::move(callback).Run(event, output, std::unique_ptr<ui::LayerTreeOwner>());
+
+  const auto split_id =
+      model->GetSplitForTab(model->GetIndexOfWebContents(source_contents));
+  ASSERT_TRUE(split_id.has_value());
+  auto* split_data = model->GetSplitData(*split_id);
+  ASSERT_TRUE(split_data);
+  const auto panes = split_data->ListTabs();
+  ASSERT_EQ(panes.size(), 2u);
+  EXPECT_EQ(panes[0]->GetContents(), target_contents);
+  EXPECT_EQ(panes[1]->GetContents(), source_contents)
+      << "The right-side preview must match the committed pane order";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
+                       OnDragDoneClearsSplitPreview) {
+  SeedProfile(2);
+
+  const auto state = GetViewState();
+  std::vector<const SidebarTreeNode*> tabs;
+  for (const auto& node : state.tab_list.normal_tree) {
+    if (node.kind == SidebarNodeKind::kTab &&
+        node.parent_folder_id.empty() && node.tab_strip_index >= 0) {
+      tabs.push_back(&node);
+      if (tabs.size() == 2u) {
+        break;
+      }
+    }
+  }
+  ASSERT_EQ(tabs.size(), 2u);
+
+  auto* target_row = tab_list_->FindTabRowByIdForTesting(tabs[1]->tab_id);
+  ASSERT_TRUE(target_row);
+  target_row->SetBoundsRect(gfx::Rect(0, 0, 220, 40));
+
+  SidebarDragPayload payload;
+  payload.node_kind = SidebarNodeKind::kTab;
+  payload.node_id = tabs[0]->tab_id;
+  payload.origin = SidebarDragOrigin::kNormalSection;
+  payload.space_id = state.tab_list.active_space_id;
+  payload.tab_strip_index = tabs[0]->tab_strip_index;
+
+  ui::OSExchangeData data;
+  WriteMahoDragData(payload, &data);
+  ui::DropTargetEvent event(
+      data, gfx::PointF(5, 20), gfx::PointF(5, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(event);
+  ASSERT_TRUE(target_row->is_split_preview_visible_for_testing());
+
+  target_row->OnDragDone();
+
+  EXPECT_FALSE(target_row->is_drop_indicator_visible_for_testing());
+  EXPECT_FALSE(target_row->is_split_preview_visible_for_testing());
+  EXPECT_EQ(target_row->drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kNone);
+  EXPECT_FALSE(target_row->background());
+  EXPECT_FALSE(target_row->GetBorder());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
@@ -528,15 +886,38 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   payload.space_id = state.tab_list.active_space_id;
   payload.tab_strip_index = source_index;
 
+  Browser* browser = this->browser();
+  ASSERT_TRUE(browser);
+  TabStripModel* tab_strip_model = browser->tab_strip_model();
+  ASSERT_TRUE(tab_strip_model);
+  const int target_index = target_row->live_tab_index_for_testing();
+  ASSERT_GE(target_index, 0);
+  ASSERT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  ASSERT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
+
   ui::OSExchangeData data;
   WriteMahoDragData(payload, &data);
-  ui::DropTargetEvent event =
-      ui::DropTargetEvent(data, gfx::PointF(5, 2), gfx::PointF(5, 2),
-                          static_cast<int>(ui::mojom::DragOperation::kMove));
-  target_row->OnDragUpdated(event);
+  ui::DropTargetEvent left_event = ui::DropTargetEvent(
+      data, gfx::PointF(5, 20), gfx::PointF(5, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(left_event);
   EXPECT_TRUE(target_row->is_drop_indicator_visible_for_testing());
-  EXPECT_NE(target_row->drop_zone_for_testing(),
-            SidebarTabRowView::SidebarTabDropZone::kNone);
+  EXPECT_TRUE(target_row->is_split_preview_visible_for_testing());
+  EXPECT_EQ(target_row->drop_zone_for_testing(),
+            SidebarTabRowView::SidebarTabDropZone::kSplit);
+  EXPECT_EQ(target_row->split_preview_side_for_testing(),
+            MahoSplitDropSide::kLeft);
+  EXPECT_TRUE(target_row->background());
+  EXPECT_TRUE(target_row->GetBorder());
+
+  ui::DropTargetEvent right_event = ui::DropTargetEvent(
+      data, gfx::PointF(215, 20), gfx::PointF(215, 20),
+      static_cast<int>(ui::mojom::DragOperation::kMove));
+  target_row->OnDragUpdated(right_event);
+  EXPECT_EQ(target_row->split_preview_side_for_testing(),
+            MahoSplitDropSide::kRight);
+  EXPECT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  EXPECT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
 
   target_row->OnDragExited();
 
@@ -544,8 +925,13 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,
   EXPECT_FALSE(observer_.HasEvent("pin_tab"));
   EXPECT_FALSE(observer_.HasEvent("move_tab_to_root"));
   EXPECT_FALSE(target_row->is_drop_indicator_visible_for_testing());
+  EXPECT_FALSE(target_row->is_split_preview_visible_for_testing());
   EXPECT_EQ(target_row->drop_zone_for_testing(),
             SidebarTabRowView::SidebarTabDropZone::kNone);
+  EXPECT_FALSE(target_row->background());
+  EXPECT_FALSE(target_row->GetBorder());
+  EXPECT_FALSE(tab_strip_model->GetSplitForTab(source_index).has_value());
+  EXPECT_FALSE(tab_strip_model->GetSplitForTab(target_index).has_value());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarDndInteractiveTest,

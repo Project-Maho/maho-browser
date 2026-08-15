@@ -38,14 +38,20 @@ pub use fallback_ladder::{
 pub use fallback_ladder_browser::browser_tool_fallback_request;
 pub use maho_reasoning_openai::MahoReasoningOpenAI;
 pub use permission::{
-    sanitize_tool_arguments, sanitize_tool_result, PermissionCallback, PermissionDecision,
-    PermissionRequest,
+    authorize_action_consequence, authorize_mail_tool, classify_action_consequence,
+    classify_mail_tool, sanitize_tool_arguments, sanitize_tool_result, ActionConsequence,
+    ConsequenceApprovalAction, MailAuthorizationAction, MailAuthorizationState, MailToolClass,
+    PermissionCallback, PermissionDecision, PermissionRequest, MAIL_READ_TOOLS,
+    MAIL_WRITE_ACCOUNT_TOOLS,
 };
 pub use runtime_isolation::SessionRuntime;
 pub use swiftide_backend::{BrowserActionToolsState, SwiftideBackend};
 pub use vault_tools::register_vault_agent_tools;
 
-pub use maho_types::tool::ToolDescriptor as ToolDefinition;
+pub use maho_types::tool::{
+    BrowserToolBridgeError, BrowserToolDescriptor, BrowserToolExecution,
+    BrowserToolExecutionReceipt, BrowserToolPolicy, ToolDescriptor as ToolDefinition,
+};
 
 pub const DEFAULT_MANAGED_MODEL: &str = "google/gemini-3-flash-lite:free";
 
@@ -132,8 +138,33 @@ impl SecureKeyBundle {
     }
 }
 
+#[async_trait]
 pub trait BrowserToolBridge: Send + Sync {
-    fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String>;
+    /// Discover browser-owned capabilities. The default is deliberately
+    /// unavailable so embedders that have not implemented discovery expose no
+    /// browser tools rather than falling back to guessed static capabilities.
+    async fn list_tool_descriptors(
+        &self,
+    ) -> Result<Vec<BrowserToolDescriptor>, BrowserToolBridgeError> {
+        Err(BrowserToolBridgeError::new(
+            "discovery_unavailable",
+            "browser tool discovery is not implemented by this embedder",
+            false,
+        ))
+    }
+
+    /// Execute a canonical browser capability and return its typed receipt.
+    async fn execute_tool(
+        &self,
+        _capability_id: &str,
+        _args_json: &str,
+    ) -> Result<BrowserToolExecution, BrowserToolBridgeError> {
+        Err(BrowserToolBridgeError::new(
+            "execution_unavailable",
+            "browser tool execution is not implemented by this embedder",
+            false,
+        ))
+    }
 }
 
 impl ZeroizedString {
@@ -590,6 +621,8 @@ pub trait AgentRuntime: Send + Sync {
     }
 
     fn set_browser_action_tools_state(&self, _state: BrowserActionToolsState) {}
+
+    fn set_mail_authorization_state(&self, _state: MailAuthorizationState) {}
 
     fn set_browser_action_tools_enabled(&self, enabled: bool) {
         self.set_browser_action_tools_state(BrowserActionToolsState::from_enabled(enabled));

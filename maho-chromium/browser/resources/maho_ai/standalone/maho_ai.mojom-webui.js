@@ -93,17 +93,57 @@ function eventSessionId(payload, fallbackSessionId) {
       fallbackSessionId || '');
 }
 
+function createStandaloneRoutineState() {
+  return {
+    routines: [{
+      id: 'routine-briefing',
+      name: 'Morning briefing',
+      cron: '0 9 * * 1-5',
+      description: 'Summarize today’s priorities and open tabs.',
+      isCustom: true,
+      schedule: '0 9 * * 1-5',
+      trigger: null,
+      enabled: true,
+    }],
+    statuses: [{
+      runId: 'run-approval',
+      routineId: 'routine-briefing',
+      source: 'manual',
+      state: 2,
+      revision: 3n,
+      result: null,
+      error: null,
+      approval: {approvalId: 'approval-1'},
+    }],
+    history: [{
+      resultId: 1n,
+      routineId: 'routine-briefing',
+      ranAt: 1n,
+      success: true,
+      content: 'Briefing prepared with three priorities.',
+      source: 'manual',
+    }],
+  };
+}
+
 class ListenerList {
   constructor() {
-    this.listeners = new Set();
+    this.listeners = new Map();
+    this.nextId = 1;
   }
 
   addListener(listener) {
-    this.listeners.add(listener);
+    const id = this.nextId++;
+    this.listeners.set(id, listener);
+    return id;
+  }
+
+  removeListener(id) {
+    return this.listeners.delete(id);
   }
 
   emit(value) {
-    for (const listener of this.listeners) {
+    for (const listener of this.listeners.values()) {
       listener(value);
     }
   }
@@ -120,6 +160,17 @@ export const ContextSourceKind = {
   kHistory: 2,
   kBookmark: 3,
   kFile: 4,
+};
+
+export const ChatIntent = {
+  kFreeform: 0,
+  kSummarizeCurrentPage: 1,
+  kQuizCurrentPage: 2,
+};
+
+export const CompactSurface = {
+  kChat: 0,
+  kRoutines: 1,
 };
 
 export const ViewMode = {
@@ -252,6 +303,18 @@ export class PageCallbackRouter {
     this.onSessionUpdated = new ListenerList();
     this.onAISettingsChanged = new ListenerList();
     this.onAskMahoSessionAccepted = new ListenerList();
+    this.onSurfaceRequested = new ListenerList();
+    this.onRoutineRunStatusChanged = new ListenerList();
+  }
+
+  removeListener(id) {
+    return this.onRuntimeEvent.removeListener(id) ||
+        this.onConnectionStateChanged.removeListener(id) ||
+        this.onSessionUpdated.removeListener(id) ||
+        this.onAISettingsChanged.removeListener(id) ||
+        this.onAskMahoSessionAccepted.removeListener(id) ||
+        this.onSurfaceRequested.removeListener(id) ||
+        this.onRoutineRunStatusChanged.removeListener(id);
   }
 }
 
@@ -273,6 +336,7 @@ export class PageHandlerRemote {
       bindNewPipeAndPassReceiver: () => this,
     };
     this.callbackRouter = null;
+    this.routineState = createStandaloneRoutineState();
     this.connectionState = RuntimeConnectionState.kConnecting;
     this.sessionsById = new Map();
     this.sessionOrder = [];
@@ -292,6 +356,85 @@ export class PageHandlerRemote {
     return {
       state: connected ? RuntimeConnectionState.kConnected : RuntimeConnectionState.kDisconnected,
       activeAdapterName: 'OpenCode',
+    };
+  }
+
+  async consumePendingSurface(lastSeenGeneration) {
+    return {
+      request: {
+        surface: CompactSurface.kChat,
+        generation: lastSeenGeneration,
+      },
+    };
+  }
+
+  async listAllRoutines() {
+    return {routines: structuredClone(this.routineState.routines)};
+  }
+
+  async createRoutine(name, prompt, schedule, trigger) {
+    this.routineState.routines.push({
+      id: `routine-${this.routineState.routines.length + 1}`,
+      name,
+      cron: schedule ?? '',
+      description: prompt,
+      isCustom: true,
+      schedule,
+      trigger,
+      enabled: true,
+    });
+    return {ok: true};
+  }
+
+  async startRoutine(id) {
+    const status = {
+      runId: `run-${this.routineState.statuses.length + 1}`,
+      routineId: id,
+      source: 'manual',
+      state: 1,
+      revision: 1n,
+      result: null,
+      error: null,
+      approval: null,
+    };
+    this.routineState.statuses.push(status);
+    this.callbackRouter?.onRoutineRunStatusChanged.emit(structuredClone(status));
+    return {runId: status.runId, error: null};
+  }
+
+  async getRoutineRunStatuses() {
+    return {statuses: structuredClone(this.routineState.statuses)};
+  }
+
+  async getRoutineUserTier() {
+    return {tier: 2};
+  }
+
+  async getUserTier() {
+    return this.getRoutineUserTier();
+  }
+
+  async respondToRoutineApproval(runId, approvalId, approved) {
+    const status = this.routineState.statuses.find(candidate =>
+      candidate.runId === runId &&
+      candidate.approval?.approvalId === approvalId);
+    if (!status) {
+      return {ok: false};
+    }
+    status.state = approved ? 3 : 4;
+    status.revision += 1n;
+    status.result = approved ? 'Routine approved and completed.' : null;
+    status.error = approved ? null : 'Routine approval denied.';
+    status.approval = null;
+    this.callbackRouter?.onRoutineRunStatusChanged.emit(structuredClone(status));
+    return {ok: true};
+  }
+
+  async listRunHistory(routineId, limit) {
+    return {
+      records: structuredClone(this.routineState.history
+          .filter(record => routineId === null || record.routineId === routineId)
+          .slice(0, limit || this.routineState.history.length)),
     };
   }
 
@@ -382,6 +525,18 @@ export class PageHandlerRemote {
   }
 
 
+  async composerDraftGet(_scopeJson) {
+    return {draftJson: null};
+  }
+
+  async composerDraftSet(_scopeJson, _text) {
+    return {ok: true};
+  }
+
+  async composerDraftDelete(_scopeJson) {
+    return {ok: true};
+  }
+
   async submitPrompt(sessionId, prompt, attachBrowserContext, mode) {
     const trimmedPrompt = prompt.trim();
     if (!trimmedPrompt) {
@@ -434,6 +589,7 @@ export class PageHandlerRemote {
       });
       throw new Error(errorMessage);
     }
+    return {accepted: true};
   }
 
   async cancelTurn(sessionId) {

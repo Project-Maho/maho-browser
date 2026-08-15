@@ -9,40 +9,64 @@
 
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/location.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
-#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+#include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mail_helper/maho_mail_badge.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/sessions/content/session_tab_helper.h"
+#include "maho/browser/maho_tab_id_helper.h"
+#include "chrome/browser/ui/toolbar/app_menu_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar/app_menu.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/browser/ui/side_panel/side_panel_ui.h"
-#include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
-#include "chrome/browser/ui/side_panel/side_panel_entry_key.h"
-#include "components/vector_icons/vector_icons.h"
 #include "components/prefs/pref_service.h"
-#include "ui/views/controls/dot_indicator.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "components/vector_icons/vector_icons.h"
+#include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/page_navigator.h"
+#include "content/public/browser/storage_partition.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/referrer.h"
+#include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_extract_prompt_messages.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_traffic_light_geometry.h"
 #include "maho/components/constants/webui_url_constants.h"
-#include "content/public/browser/page_navigator.h"
-#include "content/public/common/referrer.h"
-#include "ui/base/models/image_model.h"
+#include "maho/third_party/maho/maho_bridge.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/base/models/image_model.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_id.h"
+#include "ui/gfx/font.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/background.h"
@@ -51,31 +75,14 @@
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/image_button_factory.h"
 #include "ui/views/controls/highlight_path_generator.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/view_class_properties.h"
-#include "ui/views/controls/label.h"
-#include "ui/views/window/dialog_delegate.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
+#include "ui/views/window/dialog_delegate.h"
 #include "url/gurl.h"
-#include "base/json/json_reader.h"
-#include "base/json/json_writer.h"
-#include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "content/public/browser/navigation_controller.h"
-#include "content/public/browser/navigation_entry.h"
-#include "content/public/browser/storage_partition.h"
-#include "content/public/browser/web_contents.h"
-#include "maho/browser/maho_core_holder.h"
-#include "maho/browser/maho_space_profile_bridge.h"
-#include "maho/browser/ai/maho_ai_llm_client.h"
-#include "maho/browser/ai/maho_extract_prompt_messages.h"
-#include "maho/third_party/maho/maho_bridge.h"
-#include "maho/third_party/maho/maho_ffi.h"
-#include "ui/base/mojom/dialog_button.mojom.h"
-#include "ui/base/mojom/window_show_state.mojom.h"
 
 namespace maho {
 
@@ -90,11 +97,13 @@ constexpr int kTopBarClusterVerticalInsetDp = 0;
 // Left margin on the sidebar-toggle button, shifting it inward from the
 // traffic-light spacer edge for optical alignment with macOS window controls.
 constexpr int kSidebarToggleLeftMarginDp = 6;
+constexpr int kMailBadgeHeightDp = 16;
+constexpr int kMailBadgeSingleDigitWidthDp = 16;
+constexpr int kMailBadgeWideWidthDp = 24;
 
-ui::ImageModel CreateTopBarButtonImage(
-    const gfx::VectorIcon& icon,
-    int icon_size,
-    ui::ColorId color_id) {
+ui::ImageModel CreateTopBarButtonImage(const gfx::VectorIcon& icon,
+                                       int icon_size,
+                                       ui::ColorId color_id) {
   return ui::ImageModel::FromVectorIcon(icon, color_id, icon_size);
 }
 
@@ -118,10 +127,10 @@ gfx::Rect GetButtonIconHitRect(const views::ImageButton* button) {
       std::min(icon_hit_rect.width(), sidebar_layout::kTopBarIconSizeDp);
   const int icon_hit_height =
       std::min(icon_hit_rect.height(), sidebar_layout::kTopBarIconSizeDp);
-  const int icon_hit_x = icon_hit_rect.x() +
-                         (icon_hit_rect.width() - icon_hit_width) / 2;
-  const int icon_hit_y = icon_hit_rect.y() +
-                         (icon_hit_rect.height() - icon_hit_height) / 2;
+  const int icon_hit_x =
+      icon_hit_rect.x() + (icon_hit_rect.width() - icon_hit_width) / 2;
+  const int icon_hit_y =
+      icon_hit_rect.y() + (icon_hit_rect.height() - icon_hit_height) / 2;
   return gfx::Rect(icon_hit_x, icon_hit_y, icon_hit_width, icon_hit_height);
 }
 
@@ -137,8 +146,7 @@ views::ImageButton* AddControlButton(views::View* parent,
   auto button = views::CreateVectorImageButton(std::move(callback));
   button->SetImageModel(
       views::Button::STATE_NORMAL,
-      CreateTopBarButtonImage(icon,
-                              sidebar_layout::kTopBarIconSizeDp,
+      CreateTopBarButtonImage(icon, sidebar_layout::kTopBarIconSizeDp,
                               GetTopBarButtonColor(enabled)));
   button->SetTooltipText(tooltip);
   button->SetAccessibleName(tooltip);
@@ -157,7 +165,8 @@ END_METADATA
 
 MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
     : browser_(browser) {
-  // Horizontal BoxLayout: [traffic-light spacer | leading cluster | flex | nav cluster]
+  // Horizontal BoxLayout: [traffic-light spacer | leading cluster | flex | nav
+  // cluster]
   auto* layout = SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal,
       gfx::Insets::TLBR(sidebar_layout::kTopBarInsets.top(),
@@ -173,9 +182,9 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
 
   // Fixed-width spacer reserving room for macOS traffic-light buttons.
   traffic_light_spacer_ = AddChildView(std::make_unique<views::View>());
-  traffic_light_spacer_->SetPreferredSize(gfx::Size(
-      sidebar_layout::kTrafficLightAlignmentWidthDp,
-      sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
+  traffic_light_spacer_->SetPreferredSize(
+      gfx::Size(sidebar_layout::kTrafficLightAlignmentWidthDp,
+                sidebar_layout::kTopBarTrafficLightAlignmentHeightDp));
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   auto* menu_layout = traffic_light_spacer_->SetLayoutManager(
       std::make_unique<views::BoxLayout>(
@@ -208,6 +217,43 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
   sidebar_toggle_button_->SetProperty(
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSidebarToggleLeftMarginDp, 0, 0));
+
+  // Control-activity chip sits between the leading actions and the trailing
+  // nav cluster. It starts idle (and therefore hidden); a live activity
+  // source pushes state in through SetControlActivity().
+  control_activity_indicator_ =
+      AddChildView(std::make_unique<MahoControlActivityIndicatorView>());
+  control_activity_indicator_->SetDetailsCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarTopBarView> view) {
+        if (!view || !view->browser_) {
+          return;
+        }
+        view->browser_->GetFeatures().side_panel_ui()->Show(
+            SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
+            SidePanelOpenTrigger::kToolbarButton);
+      },
+      weak_factory_.GetWeakPtr()));
+  control_activity_indicator_->SetStopCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoSidebarTopBarView> view) {
+        if (!view || !view->control_activity_service_ ||
+            view->control_activity_id_.empty()) {
+          return;
+        }
+        const auto activity = view->control_activity_service_->GetActivity(
+            view->control_activity_id_);
+        if (activity) {
+          if (activity->control_plane == maho::ai::ControlPlane::kMcp) {
+            maho::MahoMcpSession::RevokeControllerSession(
+                activity->controller_session_id);
+          }
+          MahoAIPageHandler::CancelActiveControllerSession(
+              activity->controller_session_id);
+          view->control_activity_service_->Disconnect(
+              view->control_activity_id_, activity->event_revision + 1);
+        }
+      },
+      weak_factory_.GetWeakPtr()));
+
   // Flexible spacer pushes the nav cluster to the trailing edge.
   flex_spacer_ = AddChildView(std::make_unique<views::View>());
   layout->SetFlexForView(flex_spacer_, 1);
@@ -244,21 +290,23 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       maho_lucide_icons::kInboxIcon, u"Mail");
   // Mail entry point follows the maho.mail.enabled pref (default false), the
   // same gate used by chrome://maho-mail and the helper subprocess.
-  mail_button_->SetVisible(
-      browser_ && sidebar_prefs::IsMahoMailEnabled(
-                      browser_->profile()->GetPrefs()));
-  // Unread indicator dot overlaid on the Mail button, driven by the
-  // `maho.mail.unread_count` pref that MahoMailService keeps up to date.
-  mail_unread_dot_ = views::DotIndicator::Install(mail_button_);
-  mail_unread_dot_->SetColor(gfx::kGoogleRed600, SK_ColorTRANSPARENT);
-  {
-    constexpr int kDotSizeDp = 8;
-    const int side = sidebar_layout::kTopBarButtonSizeDp;
-    mail_unread_dot_->SetBoundsRect(
-        gfx::Rect(side - kDotSizeDp - 2, 2, kDotSizeDp, kDotSizeDp));
-  }
+  auto unread_badge = std::make_unique<views::Label>();
+  unread_badge->SetBackground(views::CreateRoundedRectBackground(
+      gfx::kGoogleRed600, kMailBadgeHeightDp / 2));
+  unread_badge->SetEnabledColor(SK_ColorWHITE);
+  unread_badge->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+  unread_badge->SetFontList(
+      unread_badge->font_list().DeriveWithSizeDelta(-3).DeriveWithWeight(
+          gfx::Font::Weight::BOLD));
+  unread_badge->SetVisible(false);
+  unread_badge->SetCanProcessEventsWithinSubtree(false);
+  mail_unread_badge_ = mail_button_->AddChildView(std::move(unread_badge));
   if (browser_) {
     mail_pref_registrar_.Init(browser_->profile()->GetPrefs());
+    mail_pref_registrar_.Add(
+        sidebar_prefs::kMahoMailEnabled,
+        base::BindRepeating(&MahoSidebarTopBarView::UpdateMailButtonVisibility,
+                            weak_factory_.GetWeakPtr()));
     mail_pref_registrar_.Add(
         "maho.mail.unread_count",
         base::BindRepeating(&MahoSidebarTopBarView::UpdateMailUnreadBadge,
@@ -268,21 +316,103 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
         base::BindRepeating(&MahoSidebarTopBarView::UpdateMailUnreadBadge,
                             weak_factory_.GetWeakPtr()));
   }
-  UpdateMailUnreadBadge();
-  ai_button_ = AddControlButton(
-      nav_cluster_,
-      base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
-                          weak_factory_.GetWeakPtr()),
-      maho_lucide_icons::kMessageSquareIcon, u"AI Panel");
+  UpdateMailButtonVisibility();
+  ai_button_ =
+      AddControlButton(nav_cluster_,
+                       base::BindRepeating(&MahoSidebarTopBarView::OnAiPressed,
+                                           weak_factory_.GetWeakPtr()),
+                       maho_lucide_icons::kMessageSquareIcon, u"AI Panel");
 
   StyleClusterView(leading_cluster_);
   StyleClusterView(nav_cluster_);
 
   ApplyChromeSpacing();
   UpdateButtonImages();
+  control_activity_service_ =
+      maho::ai::MahoControlActivityService::GetForProfile(browser_->profile());
+  if (control_activity_service_) {
+    control_activity_service_->AddObserver(this);
+  }
 }
 
-MahoSidebarTopBarView::~MahoSidebarTopBarView() = default;
+MahoSidebarTopBarView::~MahoSidebarTopBarView() {
+  if (control_activity_service_) {
+    control_activity_service_->RemoveObserver(this);
+  }
+}
+
+void MahoSidebarTopBarView::OnControlActivityChanged(
+    const maho::ai::ControlActivity& activity) {
+  if (activity.observer_revision <= control_activity_revision_) {
+    return;
+  }
+  control_activity_revision_ = activity.observer_revision;
+  control_activity_id_ = activity.session_id;
+  MahoControlActivityIndicatorModel model;
+  model.controller_name = base::UTF8ToUTF16(activity.controller_display_name);
+  model.plane = activity.control_plane == maho::ai::ControlPlane::kMcp
+                    ? MahoControlPlane::kExternalMcp
+                    : MahoControlPlane::kEmbedded;
+  switch (activity.state) {
+    case maho::ai::ControlActivityState::kReading:
+      model.state = MahoControlActivityState::kReading;
+      break;
+    case maho::ai::ControlActivityState::kActing:
+      model.state = MahoControlActivityState::kActing;
+      break;
+    case maho::ai::ControlActivityState::kWaitingApproval:
+      model.state = MahoControlActivityState::kWaitingApproval;
+      break;
+    case maho::ai::ControlActivityState::kPaused:
+      model.state = MahoControlActivityState::kPaused;
+      break;
+    case maho::ai::ControlActivityState::kDisconnected:
+      model.state = MahoControlActivityState::kDisconnected;
+      break;
+    case maho::ai::ControlActivityState::kFailed:
+      model.state = MahoControlActivityState::kError;
+      break;
+    case maho::ai::ControlActivityState::kCompleted:
+      model.state = MahoControlActivityState::kIdle;
+      break;
+  }
+  std::string stable_target_tab_id;
+  if (activity.target) {
+    model.target_is_other_window =
+        activity.target->window_id != browser_->session_id().id();
+    model.target_title = activity.target->title;
+    if (!model.target_is_other_window) {
+      TabStripModel* tab_strip = browser_->tab_strip_model();
+      for (int index = 0; tab_strip && index < tab_strip->count(); ++index) {
+        content::WebContents* contents = tab_strip->GetWebContentsAt(index);
+        auto* helper = contents
+                           ? sessions::SessionTabHelper::FromWebContents(
+                                 contents)
+                           : nullptr;
+        if (helper &&
+            helper->session_id().id() == activity.target->tab_id) {
+          model.target_is_background_tab =
+              index != tab_strip->active_index();
+          if (auto* tab_id_helper =
+                  MahoTabIdHelper::FromWebContents(contents)) {
+            stable_target_tab_id = tab_id_helper->stable_tab_id();
+          }
+          break;
+        }
+      }
+    }
+  }
+  const bool controls_target =
+      activity.target.has_value() && !model.target_is_other_window &&
+      activity.state != maho::ai::ControlActivityState::kDisconnected &&
+      activity.state != maho::ai::ControlActivityState::kCompleted &&
+      activity.state != maho::ai::ControlActivityState::kFailed;
+  if (controlled_tab_changed_callback_) {
+    controlled_tab_changed_callback_.Run(
+        controls_target ? std::move(stable_target_tab_id) : std::string());
+  }
+  SetControlActivity(model);
+}
 
 void MahoSidebarTopBarView::SetNavClusterVisible(bool visible) {
   if (nav_cluster_ && nav_cluster_->GetVisible() != visible) {
@@ -301,6 +431,19 @@ void MahoSidebarTopBarView::OnSidebarPaletteChanged(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
   UpdateButtonImages();
+  if (control_activity_indicator_) {
+    control_activity_indicator_->OnSidebarPaletteChanged(palette);
+  }
+}
+
+void MahoSidebarTopBarView::SetControlActivity(
+    const MahoControlActivityIndicatorModel& model) {
+  if (!control_activity_indicator_) {
+    return;
+  }
+  control_activity_indicator_->SetModel(model);
+  MaybeUpdateControlActivityCompact();
+  PreferredSizeChanged();
 }
 
 void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
@@ -309,11 +452,22 @@ void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
   UpdateButtonImages();
 }
 
-void MahoSidebarTopBarView::OnBoundsChanged(
-    const gfx::Rect& previous_bounds) {
+void MahoSidebarTopBarView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
   views::View::OnBoundsChanged(previous_bounds);
   MaybeUpdateDynamicTopInset();
+  MaybeUpdateControlActivityCompact();
   ApplyChromeSpacing();
+}
+
+void MahoSidebarTopBarView::MaybeUpdateControlActivityCompact() {
+  if (!control_activity_indicator_) {
+    return;
+  }
+  // Reuse the shared compact-navigation threshold rather than inventing a
+  // second narrow-width constant for the same physical condition.
+  const bool compact =
+      width() > 0 && width() < sidebar_layout::kCompactNavigationThresholdDp;
+  control_activity_indicator_->SetCompact(compact);
 }
 
 void MahoSidebarTopBarView::AddedToWidget() {
@@ -347,17 +501,15 @@ bool MahoSidebarTopBarView::IsPositionInWindowCaption(
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   if (ellipsis_button_ && ellipsis_button_->GetVisible()) {
     gfx::Point point_in_button = point;
-    views::View::ConvertPointToTarget(this, ellipsis_button_,
-                                      &point_in_button);
+    views::View::ConvertPointToTarget(this, ellipsis_button_, &point_in_button);
     if (GetButtonIconHitRect(ellipsis_button_).Contains(point_in_button)) {
       return false;
     }
   }
 #endif
   for (const views::ImageButton* button :
-       {sidebar_toggle_button_.get(), back_button_.get(),
-         forward_button_.get(), reload_button_.get(), ai_button_.get(),
-         mail_button_.get()}) {
+       {sidebar_toggle_button_.get(), back_button_.get(), forward_button_.get(),
+        reload_button_.get(), ai_button_.get(), mail_button_.get()}) {
     if (button && button->GetVisible()) {
       gfx::Point point_in_button = point;
       views::View::ConvertPointToTarget(this, button, &point_in_button);
@@ -389,10 +541,9 @@ void MahoSidebarTopBarView::ApplyChromeSpacing() {
   leading_cluster_->SetVisible(leading_actions_visible_);
   leading_cluster_->SetProperty(
       views::kMarginsKey,
-      gfx::Insets::TLBR(0, 0, 0,
-                        navigation_active
-                            ? sidebar_layout::kTopBarCompactLeadingGapDp
-                            : 0));
+      gfx::Insets::TLBR(
+          0, 0, 0,
+          navigation_active ? sidebar_layout::kTopBarCompactLeadingGapDp : 0));
   flex_spacer_->SetVisible(true);
   nav_cluster_->SetVisible(true);
 
@@ -408,7 +559,8 @@ void MahoSidebarTopBarView::UpdateButtonImages() {
 #endif
   UpdateButtonState(sidebar_toggle_button_, true,
                     maho_lucide_icons::kPanelLeftIcon, u"Toggle Sidebar");
-  UpdateButtonState(back_button_, model_.navigation_enabled && model_.can_go_back,
+  UpdateButtonState(back_button_,
+                    model_.navigation_enabled && model_.can_go_back,
                     maho_lucide_icons::kChevronLeftIcon, u"Back");
   UpdateButtonState(forward_button_,
                     model_.navigation_enabled && model_.can_go_forward,
@@ -416,19 +568,17 @@ void MahoSidebarTopBarView::UpdateButtonImages() {
   UpdateButtonState(reload_button_,
                     model_.navigation_enabled && model_.can_reload,
                     model_.is_loading ? maho_lucide_icons::kXIcon
-                                     : maho_lucide_icons::kRotateCwIcon,
+                                      : maho_lucide_icons::kRotateCwIcon,
                     model_.is_loading ? u"Stop" : u"Reload");
-  UpdateButtonState(ai_button_, true,
-                    maho_lucide_icons::kMessageSquareIcon, u"AI Panel");
-  UpdateButtonState(mail_button_, true, maho_lucide_icons::kInboxIcon,
-                    u"Mail");
+  UpdateButtonState(ai_button_, true, maho_lucide_icons::kMessageSquareIcon,
+                    u"AI Panel");
+  UpdateButtonState(mail_button_, true, maho_lucide_icons::kInboxIcon, u"Mail");
 }
 
-void MahoSidebarTopBarView::UpdateButtonState(
-    views::ImageButton* button,
-    bool enabled,
-    const gfx::VectorIcon& icon,
-    const std::u16string& tooltip) {
+void MahoSidebarTopBarView::UpdateButtonState(views::ImageButton* button,
+                                              bool enabled,
+                                              const gfx::VectorIcon& icon,
+                                              const std::u16string& tooltip) {
   if (!button) {
     return;
   }
@@ -438,13 +588,13 @@ void MahoSidebarTopBarView::UpdateButtonState(
   button->SetAccessibleName(tooltip);
   ui::ImageModel image_model;
   if (palette_.primary_text != SK_ColorTRANSPARENT) {
-    SkColor icon_color = enabled ? palette_.primary_text : palette_.disabled_text;
+    SkColor icon_color =
+        enabled ? palette_.primary_text : palette_.disabled_text;
     image_model = ui::ImageModel::FromVectorIcon(
         icon, icon_color, sidebar_layout::kTopBarIconSizeDp);
   } else {
-    image_model = CreateTopBarButtonImage(icon,
-                                          sidebar_layout::kTopBarIconSizeDp,
-                                          GetTopBarButtonColor(enabled));
+    image_model = CreateTopBarButtonImage(
+        icon, sidebar_layout::kTopBarIconSizeDp, GetTopBarButtonColor(enabled));
   }
   button->SetImageModel(views::Button::STATE_NORMAL, image_model);
 }
@@ -592,13 +742,26 @@ void MahoSidebarTopBarView::ResetAppMenu(int generation) {
 #endif
 
 void MahoSidebarTopBarView::SetPrivateAppearance() {
-  if (mail_button_) {
-    mail_button_->SetVisible(false);
+  UpdateMailButtonVisibility();
+}
+
+void MahoSidebarTopBarView::UpdateMailButtonVisibility() {
+  if (!mail_button_) {
+    return;
   }
+
+  const bool visible =
+      browser_ && !browser_->profile()->IsOffTheRecord() &&
+      sidebar_prefs::IsMahoMailEnabled(browser_->profile()->GetPrefs());
+  if (mail_button_->GetVisible() != visible) {
+    mail_button_->SetVisible(visible);
+    PreferredSizeChanged();
+  }
+  UpdateMailUnreadBadge();
 }
 
 void MahoSidebarTopBarView::UpdateMailUnreadBadge() {
-  if (!mail_unread_dot_ || !browser_) {
+  if (!mail_unread_badge_ || !browser_) {
     return;
   }
   const bool mail_enabled =
@@ -607,12 +770,22 @@ void MahoSidebarTopBarView::UpdateMailUnreadBadge() {
       browser_->profile()->GetPrefs()->GetBoolean("maho.mail.badge_enabled");
   const int unread =
       browser_->profile()->GetPrefs()->GetInteger("maho.mail.unread_count");
-  if (mail_enabled && badge_enabled && mail_button_ &&
-      mail_button_->GetVisible() && unread > 0) {
-    mail_unread_dot_->Show();
-  } else {
-    mail_unread_dot_->Hide();
+  const MailBadgePresentation presentation = ResolveMailBadgePresentation(
+      mail_enabled && mail_button_ && mail_button_->GetVisible(), badge_enabled,
+      unread);
+  mail_unread_badge_->SetVisible(presentation.visible);
+  mail_button_->SetAccessibleName(presentation.accessible_name);
+  if (!presentation.visible) {
+    return;
   }
+
+  mail_unread_badge_->SetText(presentation.text);
+  const int badge_width = presentation.text.size() == 1
+                              ? kMailBadgeSingleDigitWidthDp
+                              : kMailBadgeWideWidthDp;
+  const int side = sidebar_layout::kTopBarButtonSizeDp;
+  mail_unread_badge_->SetBounds(side - badge_width, 0, badge_width,
+                                kMailBadgeHeightDp);
 }
 
 }  // namespace maho

@@ -443,10 +443,7 @@ pub fn create_account(
     Ok(AccountResponse::from_account(&account))
 }
 
-pub fn oauth_reauthorization_email(
-    conn: &Connection,
-    account_id: &str,
-) -> Result<String> {
+pub fn oauth_reauthorization_email(conn: &Connection, account_id: &str) -> Result<String> {
     let account = load_account(conn, account_id)?;
     if account.auth_type != "oauth2_gmail" {
         return Err(MailFfiError::InvalidRequest(format!(
@@ -463,14 +460,16 @@ pub fn replace_oauth_credentials(
     request: CreateAccountRequest,
 ) -> Result<AccountResponse> {
     let account = load_account(conn, account_id)?;
-    if account.auth_type != "oauth2_gmail"
-        || request.auth_type.as_deref() != Some("oauth2_gmail")
-    {
+    if account.auth_type != "oauth2_gmail" || request.auth_type.as_deref() != Some("oauth2_gmail") {
         return Err(MailFfiError::InvalidRequest(format!(
             "account {account_id} is not a Gmail OAuth account"
         )));
     }
-    if !account.email.trim().eq_ignore_ascii_case(request.email.trim()) {
+    if !account
+        .email
+        .trim()
+        .eq_ignore_ascii_case(request.email.trim())
+    {
         return Err(MailFfiError::InvalidRequest(format!(
             "Google account mismatch: expected {}, got {}",
             account.email, request.email
@@ -541,12 +540,14 @@ pub fn replace_oauth_credentials(
     crate::state::spawn_account_workers_if_ready(account_id);
     crate::ffi::emit_refresh_succeeded_event(account_id);
     crate::ffi::emit_accounts_changed_event(account_id);
-    Ok(AccountResponse::from_account(&load_account(conn, account_id)?))
+    Ok(AccountResponse::from_account(&load_account(
+        conn, account_id,
+    )?))
 }
 
-/// Stop any running sync/backfill workers for `account_id`, then cascade-delete
-/// its attachments, emails, folders, encrypted credentials, and the account row
-/// itself in a single transaction.
+/// Stop any running sync/backfill workers for `account_id`, delete every
+/// persisted S/MIME key while its database references are still available,
+/// then remove all database state in a single transaction.
 pub fn delete_account(ctx: &AppCtx, account_id: &str) -> Result<()> {
     crate::state::registry().stop_account(account_id);
 
@@ -555,12 +556,20 @@ pub fn delete_account(ctx: &AppCtx, account_id: &str) -> Result<()> {
         .get()
         .map_err(|e| MailFfiError::Pool(e.to_string()))?;
     let tx = conn.transaction()?;
+    let smime_identity_ids =
+        crate::ffi::crypto_api::cleanup_smime_keys_for_account(ctx, &tx, account_id)?;
     tx.execute(
         "DELETE FROM attachments WHERE email_id IN (SELECT id FROM emails WHERE account_id = ?1)",
         [account_id],
     )?;
     tx.execute("DELETE FROM emails WHERE account_id = ?1", [account_id])?;
     tx.execute("DELETE FROM folders WHERE account_id = ?1", [account_id])?;
+    for identity_id in &smime_identity_ids {
+        tx.execute(
+            "DELETE FROM encrypted_credentials WHERE account_id = ?1 AND credential_type = 'smime_private_key'",
+            [identity_id],
+        )?;
+    }
     tx.execute(
         "DELETE FROM encrypted_credentials WHERE account_id = ?1",
         [account_id],
@@ -713,15 +722,13 @@ mod tests {
         );
         assert_eq!(
             classify_reauth_reason(&MailFfiError::OAuth2Refresh(
-                "token endpoint returned 400 Bad Request: {\"error\":\"invalid_grant\"}"
-                    .into()
+                "token endpoint returned 400 Bad Request: {\"error\":\"invalid_grant\"}".into()
             )),
             "invalid_grant"
         );
         assert_eq!(
             classify_reauth_reason(&MailFfiError::OAuth2Refresh(
-                "token endpoint returned 401 Unauthorized: {\"error\":\"invalid_client\"}"
-                    .into()
+                "token endpoint returned 401 Unauthorized: {\"error\":\"invalid_client\"}".into()
             )),
             "invalid_client"
         );
@@ -915,7 +922,10 @@ mod tests {
         let loaded = load_account(&conn, &response.id).unwrap();
         assert!(loaded.oauth2_access_token.is_none());
         assert!(loaded.oauth2_refresh_token.is_none());
-        assert_eq!(loaded.oauth2_expires_at.as_deref(), Some("2026-02-01T00:00:00Z"));
+        assert_eq!(
+            loaded.oauth2_expires_at.as_deref(),
+            Some("2026-02-01T00:00:00Z")
+        );
         assert_eq!(
             get_encrypted_credential(&conn, &key, &response.id, "oauth2_access_token")
                 .unwrap()
@@ -964,11 +974,30 @@ mod tests {
     #[test]
     fn delete_account_removes_row_and_all_children() {
         let pool = crate::test_support::pool_with_seeded_data();
-        let ctx = crate::test_support::ctx(pool);
+        let mut ctx = crate::test_support::ctx(pool);
+        ctx.db_path = std::env::temp_dir()
+            .join("profile")
+            .join("MahoMail")
+            .join("maho_mail.db");
         {
             let conn = ctx.pool.get().unwrap();
             store_encrypted_credential(&conn, &ctx.credential_key, "acc1", "password", "pw")
                 .unwrap();
+            conn.execute(
+                "INSERT INTO smime_identities
+                 (id, account_id, email, subject, issuer, serial_number, fingerprint, not_before, not_after, cert_pem, is_default)
+                 VALUES ('smime-1', 'acc1', 'a@example.com', 'subject', 'issuer', '01', 'fingerprint', 'before', 'after', 'certificate', 0)",
+                [],
+            )
+            .unwrap();
+            store_encrypted_credential(
+                &conn,
+                &ctx.credential_key,
+                "smime-1",
+                "smime_private_key",
+                "private-key",
+            )
+            .unwrap();
         }
 
         delete_account(&ctx, "acc1").unwrap();
@@ -989,6 +1018,17 @@ mod tests {
         assert_eq!(counts("encrypted_credentials"), 0);
         assert_eq!(counts("emails"), 0);
         assert_eq!(counts("folders"), 0);
+        assert_eq!(counts("smime_identities"), 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM encrypted_credentials WHERE account_id = 'smime-1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0,
+            "identity-scoped S/MIME credential must be removed before its identity reference"
+        );
     }
 
     fn probe_params(encryption: Encryption, host: &str, password: Option<&str>) -> ProbeParams {

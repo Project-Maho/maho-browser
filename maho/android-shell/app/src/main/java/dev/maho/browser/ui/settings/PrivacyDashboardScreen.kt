@@ -37,7 +37,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import dev.maho.browser.ConversationSession
-import dev.maho.browser.MahoBridge
+import dev.maho.browser.bridge.BridgeConversations
 import dev.maho.browser.ui.icons.MahoIcon
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import kotlinx.coroutines.Dispatchers
@@ -154,11 +154,11 @@ fun PrivacyDashboardScreen(
                                 isClearingConversations = true
                                 statusMessage = null
                                 val conversations = withContext(Dispatchers.IO) {
-                                    MahoBridge.listConversations(limit = 1_000L)
+                                    BridgeConversations.listConversations(limit = 1_000L)
                                 }
                                 val cleared = withContext(Dispatchers.IO) {
                                     conversations.all { session: ConversationSession ->
-                                        MahoBridge.deleteConversation(session.id)
+                                        BridgeConversations.deleteConversation(session.id)
                                     }
                                 }
                                 statusMessage = when {

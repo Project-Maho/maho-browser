@@ -5,8 +5,11 @@ package dev.maho.browser.models
 import dev.maho.browser.support.Patchable
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
 @Serializable
 enum class Theme {
@@ -127,11 +130,107 @@ data class GeneralSettings(
     @SerialName("pinnedCloseBehavior") val pinnedCloseBehavior: PinnedCloseBehavior = PinnedCloseBehavior.Switch,
 )
 
-@Serializable
+@Serializable(with = ContentBlockingModeSerializer::class)
+enum class ContentBlockingMode {
+    @SerialName("native") NATIVE,
+    @SerialName("extension") EXTENSION,
+    @SerialName("disabled") DISABLED,
+    UNKNOWN;
+
+    val isNative: Boolean get() = this == NATIVE
+}
+
+object ContentBlockingModeSerializer : KSerializer<ContentBlockingMode> {
+    override val descriptor = kotlinx.serialization.descriptors.PrimitiveSerialDescriptor(
+        "ContentBlockingMode",
+        kotlinx.serialization.descriptors.PrimitiveKind.STRING,
+    )
+
+    override fun serialize(encoder: Encoder, value: ContentBlockingMode) {
+        encoder.encodeString(
+            when (value) {
+                ContentBlockingMode.NATIVE -> "native"
+                ContentBlockingMode.EXTENSION -> "extension"
+                ContentBlockingMode.DISABLED -> "disabled"
+                ContentBlockingMode.UNKNOWN -> "unknown"
+            },
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): ContentBlockingMode = when (decoder.decodeString()) {
+        "native" -> ContentBlockingMode.NATIVE
+        "extension" -> ContentBlockingMode.EXTENSION
+        "disabled" -> ContentBlockingMode.DISABLED
+        else -> ContentBlockingMode.UNKNOWN
+    }
+}
+
+@Serializable(with = PrivacySettingsSerializer::class)
 data class PrivacySettings(
     @SerialName("doNotTrack") val doNotTrack: Boolean,
     @SerialName("blockThirdPartyCookies") val blockThirdPartyCookies: Boolean,
-    @SerialName("contentBlockerEnabled") val contentBlockerEnabled: Boolean,
+    @SerialName("contentBlockingMode") val contentBlockingMode: ContentBlockingMode = ContentBlockingMode.NATIVE,
+    @SerialName("contentBlockerEnabled") val contentBlockerEnabled: Boolean = true,
+    @SerialName("popupBlockerEnabled") val popupBlockerEnabled: Boolean,
+    @SerialName("searchSuggestionsEnabled") val searchSuggestionsEnabled: Boolean = false,
+    @SerialName("secureDnsEnabled") val secureDnsEnabled: Boolean = false,
+    @SerialName("secureDnsProvider") val secureDnsProvider: String = "",
+    @SerialName("secureDnsCustomUrl") val secureDnsCustomUrl: String? = null,
+    @SerialName("clearDataOnExit") val clearDataOnExit: Boolean = false,
+    @SerialName("safeBrowsingEnabled") val safeBrowsingEnabled: Boolean = true,
+) {
+    val isNativeBlockingEnabled: Boolean get() = contentBlockingMode.isNative
+}
+
+private object PrivacySettingsSerializer : KSerializer<PrivacySettings> {
+    private val delegate = PrivacySettingsWire.serializer()
+
+    override val descriptor = delegate.descriptor
+
+    override fun serialize(encoder: Encoder, value: PrivacySettings) {
+        delegate.serialize(
+            encoder,
+            PrivacySettingsWire(
+                doNotTrack = value.doNotTrack,
+                blockThirdPartyCookies = value.blockThirdPartyCookies,
+                contentBlockingMode = value.contentBlockingMode,
+                contentBlockerEnabled = value.contentBlockerEnabled,
+                popupBlockerEnabled = value.popupBlockerEnabled,
+                searchSuggestionsEnabled = value.searchSuggestionsEnabled,
+                secureDnsEnabled = value.secureDnsEnabled,
+                secureDnsProvider = value.secureDnsProvider,
+                secureDnsCustomUrl = value.secureDnsCustomUrl,
+                clearDataOnExit = value.clearDataOnExit,
+                safeBrowsingEnabled = value.safeBrowsingEnabled,
+            ),
+        )
+    }
+
+    override fun deserialize(decoder: Decoder): PrivacySettings {
+        val wire = delegate.deserialize(decoder)
+        return PrivacySettings(
+            doNotTrack = wire.doNotTrack,
+            blockThirdPartyCookies = wire.blockThirdPartyCookies,
+            contentBlockingMode = wire.contentBlockingMode
+                ?: if (wire.contentBlockerEnabled) ContentBlockingMode.NATIVE else ContentBlockingMode.DISABLED,
+            contentBlockerEnabled = wire.contentBlockerEnabled,
+            popupBlockerEnabled = wire.popupBlockerEnabled,
+            searchSuggestionsEnabled = wire.searchSuggestionsEnabled,
+            secureDnsEnabled = wire.secureDnsEnabled,
+            secureDnsProvider = wire.secureDnsProvider,
+            secureDnsCustomUrl = wire.secureDnsCustomUrl,
+            clearDataOnExit = wire.clearDataOnExit,
+            safeBrowsingEnabled = wire.safeBrowsingEnabled,
+        )
+    }
+}
+
+@Serializable
+private data class PrivacySettingsWire(
+    @SerialName("doNotTrack") val doNotTrack: Boolean,
+    @SerialName("blockThirdPartyCookies") val blockThirdPartyCookies: Boolean,
+    @SerialName("contentBlockingMode") val contentBlockingMode: ContentBlockingMode? = null,
+    @SerialName("contentBlockerEnabled") val contentBlockerEnabled: Boolean = true,
     @SerialName("popupBlockerEnabled") val popupBlockerEnabled: Boolean,
     @SerialName("searchSuggestionsEnabled") val searchSuggestionsEnabled: Boolean = false,
     @SerialName("secureDnsEnabled") val secureDnsEnabled: Boolean = false,
@@ -255,6 +354,7 @@ data class PrivacySettingsUpdate(
     @SerialName("doNotTrack") val doNotTrack: Boolean? = null,
     @SerialName("blockThirdPartyCookies") val blockThirdPartyCookies: Boolean? = null,
     @SerialName("contentBlockerEnabled") val contentBlockerEnabled: Boolean? = null,
+    @SerialName("contentBlockingMode") val contentBlockingMode: ContentBlockingMode? = null,
     @SerialName("popupBlockerEnabled") val popupBlockerEnabled: Boolean? = null,
     @SerialName("searchSuggestionsEnabled") val searchSuggestionsEnabled: Boolean? = null,
     @SerialName("secureDnsEnabled") val secureDnsEnabled: Boolean? = null,

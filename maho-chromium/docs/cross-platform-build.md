@@ -79,11 +79,15 @@ The build scripts in this overlay assume that `maho/` and `maho-chromium/` live 
 
 ### Chromium source overrides
 
-The `chromium_src/` directory holds 19 override files. Platform-neutral files apply on all platforms. Mac-only files are gated by the `FILE_PLATFORMS` map in `build/scripts/apply_chromium_src_overrides.py`:
+The `chromium_src/` directory holds tracked source overrides. Platform-neutral
+files apply on all platforms; platform-specific files are gated by the
+`FILE_PLATFORMS` map in `build/scripts/apply_chromium_src_overrides.py`:
 
 - `chrome/app/app-Info.plist` — mac only
 - `chrome/browser/app_controller_mac.mm` — mac only
 - `components/os_crypt/common/keychain_password_mac.mm` — mac only
+- `chrome/installer/mini_installer/chrome.release` — Windows only; adds
+  `maho.exe` to the installer payload so a fresh checkout bundles the CLI.
 
 All other overrides apply cross-platform.
 
@@ -92,8 +96,8 @@ All other overrides apply cross-platform.
 | Platform | Status |
 |---|---|
 | macOS | ✅ `branding/mac/` has full `.icns` + xcassets |
-| Windows | ❌ `.ico` file not generated (see `branding/README_PLATFORM.md`) |
-| Linux | ❌ `.desktop` file not present (XDG spec documented) |
+| Windows | ✅ `build_maho.py` generates Maho icons for `chrome.exe`, `mini_installer.exe`, extracted `setup.exe`, and Start Menu tiles from Maho `product_logo_*` assets before GN generation |
+| Linux | ✅ `branding/linux/maho.desktop` and `product_logo_256.png` are packaged into tarball, Debian, and RPM artifacts; release packaging rejects missing required runtime files |
 
 ---
 
@@ -129,6 +133,22 @@ Common values across all templates:
 - `is_debug = false`
 - `symbol_level = 0`
 - `maho_root = "//maho"`
+
+Official release templates (`args_{mac,win,linux}_release.gn`) instead use
+the shared reduced-symbol policy:
+
+```gn
+is_official_build = true
+is_debug = false
+symbol_level = 1
+blink_symbol_level = 0
+strip_debug_info = true
+dcheck_always_on = false
+```
+
+This keeps function-level crash symbols while dropping Blink debug information
+and stripping shipped binaries. Regenerate the output directory with
+`--force-args-template --force-gn-gen` after changing a release template.
 
 ---
 
@@ -178,7 +198,6 @@ The script:
 - **Known gaps** (see completion plan):
   - MCP client Rust transport in `maho-browser-mcp` uses `tokio::net::UnixStream`; a named pipe transport must be wired for Windows to function.
   - Maho Mini feature is an empty stub block in `browser/BUILD.gn`.
-  - `.ico` branding asset is not generated.
   - `installer/README.md` (referenced by `maho_update_delegate_win.cc:119`) does not exist.
 - `.build.lock` mechanism uses `fcntl.flock` which is Unix-only; Windows compatibility has not been verified. If Windows build entrypoints fail at lock acquisition, the lock helper needs a Windows abstraction (msvcrt `_locking` or `LockFileEx`).
 
@@ -195,8 +214,6 @@ The script:
 - The GN config template enables `use_sysroot = true` for Chromium-compatible builds.
 - **Update delegates**: `pkg` (apt/dnf banner) is functional; `appimage`, `flatpak`, and `noop` are stubs. The pkg delegate is sufficient for a Debian/Ubuntu/Fedora release.
 - **Known gaps** (see completion plan):
-  - `build_maho_linux_packages.py` is documented in `docs/operations/linux-packaging-pipeline.md` but the script itself is absent from the repo.
-  - `.desktop` file for XDG integration is not present.
   - Chromium cookie decryption (v10) requires libsecret/kwallet integration; currently returns `None` on non-mac.
 
 ---

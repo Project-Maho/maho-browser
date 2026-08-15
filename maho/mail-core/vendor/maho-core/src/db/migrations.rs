@@ -1608,13 +1608,19 @@ mod tests {
             .prepare("SELECT 1 FROM pragma_table_info('attachments') WHERE name = 'part_id'")
             .and_then(|mut s| s.exists([]))
             .unwrap_or(false);
-        assert!(has_part_id, "attachments.part_id column must exist after v52");
+        assert!(
+            has_part_id,
+            "attachments.part_id column must exist after v52"
+        );
 
         let has_folder_uid_index: bool = conn
             .prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_emails_folder_uid'")
             .and_then(|mut s| s.exists([]))
             .unwrap_or(false);
-        assert!(has_folder_uid_index, "emails(folder_id, uid) unique index must exist after v52");
+        assert!(
+            has_folder_uid_index,
+            "emails(folder_id, uid) unique index must exist after v52"
+        );
     }
 
     #[test]
@@ -2106,10 +2112,7 @@ pub(crate) fn migrate_v52(conn: &Connection) -> Result<(), AppError> {
         )?;
     }
 
-    conn.execute(
-        "UPDATE attachments SET part_id = id WHERE part_id = ''",
-        [],
-    )?;
+    conn.execute("UPDATE attachments SET part_id = id WHERE part_id = ''", [])?;
 
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_folder_uid ON emails(folder_id, uid)",

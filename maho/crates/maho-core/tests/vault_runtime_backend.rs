@@ -51,6 +51,7 @@ fn login(title: &str, origin: &str, username: &str) -> VaultLoginInput {
         },
         username: username.to_string(),
         password: Zeroizing::new(SENTINEL.to_string()),
+        form_details: None,
     }
 }
 

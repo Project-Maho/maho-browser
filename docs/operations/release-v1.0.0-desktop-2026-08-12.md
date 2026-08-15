@@ -8,18 +8,23 @@
 
 ## Build mode — RELEASE / OFFICIAL (confirmed, not debug)
 
-Both Windows and Linux `out/Release/args.gn` were verified:
+All release templates use the macOS-aligned reduced-symbol policy:
 
 | arg | Windows | Linux |
 |-----|---------|-------|
 | `is_official_build` | `true` | `true` |
 | `is_debug` | `false` | `false` |
-| `symbol_level` | `2` | `2` |
+| `symbol_level` | `1` | `1` |
+| `blink_symbol_level` | `0` | `0` |
+| `strip_debug_info` | `true` | `true` |
 | `dcheck_always_on` | `false` | `false` |
 
-`is_debug=false` + `is_official_build=true` = official release. `symbol_level=2`
-only means full symbols are emitted for the `.pdb` / `-debuginfo` package; it does
-**not** make these debug builds.
+`is_debug=false` + `is_official_build=true` = official release. The reduced
+symbol policy retains function-level backtraces while omitting Blink debug
+information and stripping shipped binaries; it does **not** make these debug
+builds. The Windows and Linux artifacts listed below are being replaced from
+the earlier full-symbol (`symbol_level=2`) build with fresh branded artifacts
+using this policy.
 
 ---
 
@@ -31,10 +36,9 @@ only means full symbols are emitted for the `.pdb` / `-debuginfo` package; it do
 | macOS | `appcast.xml` | — | Sparkle Ed |
 | Windows | `MahoSetup-1.0.0.exe` | 130 MB | **dev self-signed** (see caveat) |
 | Windows | `update-win.json` | — | — |
-| Linux | `maho-1.0.0-x86_64.tar.gz` | 483 MB | unsigned |
-| Linux | `maho_1.0.0_amd64.deb` | 338 MB | GPG `.deb.sig` (`D54583EF865DEC35`) |
-| Linux | `maho-1.0.0-1.x86_64.rpm` | 132 MB | GPG `.rpm.sig` |
-| Linux | `maho-debuginfo-1.0.0-1.x86_64.rpm` | 205 MB | GPG `.sig` |
+| Linux | `maho-1.0.0-x86_64.tar.gz` | pending branded rebuild | GPG `.tar.gz.sig` (`51C8C6C55603AFF0`) |
+| Linux | `maho_1.0.0_amd64.deb` | pending branded rebuild | GPG `.deb.sig` (`51C8C6C55603AFF0`) |
+| Linux | `maho-1.0.0-1.x86_64.rpm` | pending branded rebuild | GPG `.rpm.sig` |
 
 Chrome binaries: Windows `chrome.exe` PE ProductVersion `149.0.7812.0`
 (`chrome.dll` ~315 MB); Linux `chrome` ~1.73 GB. Bundled `maho` CLI: Windows
@@ -43,6 +47,20 @@ Chrome binaries: Windows `chrome.exe` PE ProductVersion `149.0.7812.0`
 Publishing tool: `maho-chromium/build/scripts/release_local.py` run per-host
 (`--skip-build` on Windows and Linux to reuse the verified build output),
 uploading to the single `v1.0.0` release with `gh release upload --clobber`.
+It writes each update manifest into the selected `--out-dir`. Keep the release
+draft while all three hosts upload their platform artifacts; invoke the last
+host with `--finalize` only after every expected asset is present to mark it
+public and latest:
+
+```bash
+python3 maho-chromium/build/scripts/release_local.py --skip-build --finalize
+```
+
+Before this command, verify the draft release contains the Windows installer
+and manifest, macOS DMG and appcast, and all Linux packages and signatures.
+The Windows installer manifest is reapplied by the tracked Chromium override
+before every Windows build, so `maho.exe` remains an installer payload on a
+fresh checkout.
 
 ---
 
@@ -69,8 +87,13 @@ packages (see packaging note below).
   Authenticode certificate via the same env
   (`MAHO_WIN_CERT_PFX`/`MAHO_WIN_CERT_PASSWORD` or `MAHO_WIN_CERT_SHA1`) and
   re-run `release_local.py`.
-- **Linux `.deb`/`.rpm` are GPG-signed** with key `D54583EF865DEC35`. The
-  `.tar.gz` is not signed (the packager signs only deb/rpm).
+- **Linux tarball, `.deb`, and `.rpm` are GPG-signed** with key
+  `51C8C6C55603AFF0`. Release packaging fails unless each detached signature
+  verifies against the committed public key. The reduced-symbol RPM spec
+  disables debuginfo output, so `maho-debuginfo` is not a release asset.
+- On Linux, `maho` remains the bundled CLI and `maho-browser` is the browser
+  launcher used by the desktop entry. This preserves CLI subcommands while URL
+  activation opens the browser.
 - Both builds were produced from the **uncommitted working tree** (multi-session
   WIP). Commit for reproducibility before treating v1.0.0 as final.
 
@@ -111,3 +134,7 @@ macOS working tree. Resolved, in order:
 - GPG signing key imported into WSL keyring; passphrase preset via gpg-agent.
 - Release/API secrets and `GH_TOKEN` copied to the Windows and WSL checkouts.
 - `out/Default` populated with the runtime for Linux packaging.
+- Windows Defender real-time scanning excludes only
+  `C:\Users\sook\chromium\src\out\Release`. This recovers from concurrent
+  `clang-cl` temporary-object rename failures without excluding the source
+  checkout, secret directories, installation paths, or user files.

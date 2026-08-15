@@ -5,11 +5,19 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use super::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use super::{c_string, non_empty};
 use crate::account::{resolve_account_auth, ImapAuth};
 use crate::error::{MailFfiError, Result};
+
+fn attachment_cache_dir(ctx: &crate::state::AppCtx) -> Result<PathBuf> {
+    let mail_root = ctx.db_path.parent().ok_or_else(|| {
+        MailFfiError::Internal("mail database has no profile-local parent".to_string())
+    })?;
+    Ok(mail_root.join("AttachmentCache"))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComposeEmailRequest {
@@ -1043,7 +1051,7 @@ pub extern "C" fn MahoMailDownloadAttachment(
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
-                let temp_dir = std::env::temp_dir().join("maho_mail_attachments");
+                let temp_dir = attachment_cache_dir(&ctx)?;
                 std::fs::create_dir_all(&temp_dir)
                     .map_err(|e| MailFfiError::Internal(e.to_string()))?;
 

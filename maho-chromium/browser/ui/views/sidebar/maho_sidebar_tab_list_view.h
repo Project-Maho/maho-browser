@@ -22,6 +22,7 @@
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
+#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "ui/views/view_tracker.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
 #include "ui/base/dragdrop/drop_target_event.h"
@@ -64,6 +65,10 @@ class Widget;
 
 namespace content {
 class WebContents;
+}
+
+namespace gfx {
+class Canvas;
 }
 
 namespace maho {
@@ -186,6 +191,7 @@ class MahoSidebarTabListView : public views::View,
 
   void Update(MahoSidebarTabListModel model, Browser* browser);
   void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
+  void SetControlledTabId(std::string stable_tab_id);
   const MahoSidebarPalette& sidebar_palette_for_testing() const {
     return palette_;
   }
@@ -456,6 +462,8 @@ class MahoSidebarTabListView : public views::View,
   friend class SidebarSectionDropTarget;
 
   void RebuildRows(const MahoSidebarTabListModel& model, Browser* browser);
+  bool IsControlledTabRow(const SidebarTabRowView& row) const;
+  void ApplyControlledTabState();
   static std::string ComputeModelFingerprint(
       const MahoSidebarTabListModel& model);
   void RevealEmptyPinnedDropLane();
@@ -637,6 +645,7 @@ class MahoSidebarTabListView : public views::View,
 
   std::string last_model_fingerprint_;
   std::string last_active_tab_id_;
+  std::string controlled_tab_id_;
   std::string waking_tab_id_;
   base::RepeatingClosure favorites_sync_callback_;
 
@@ -770,6 +779,7 @@ class SidebarTabRowView : public views::View,
   ~SidebarTabRowView() override;
 
   void OnThemeChanged() override;
+  void OnPaint(gfx::Canvas* canvas) override;
   void OnFocus() override;
   void Layout(PassKey) override;
   gfx::Size CalculatePreferredSize(
@@ -852,8 +862,18 @@ class SidebarTabRowView : public views::View,
   SidebarTabDropZone drop_zone_for_testing() const {
     return active_drop_zone_;
   }
+  bool is_split_preview_visible_for_testing() const {
+    return split_preview_target_visible_;
+  }
+  MahoSplitDropSide split_preview_side_for_testing() const {
+    return split_preview_side_;
+  }
 
   bool is_active_for_testing() const { return active_; }
+  bool is_controlled_for_testing() const { return controlled_; }
+  bool control_pulse_animating_for_testing() const {
+    return control_pulse_animation_.is_animating();
+  }
   const std::string& tab_id_for_testing() const { return tab_id_; }
   int tab_index_for_testing() const { return tab_index_; }
   int live_tab_index_for_testing() const;
@@ -869,6 +889,7 @@ class SidebarTabRowView : public views::View,
   // Toggles active-highlight without rebuilding. Enables the fast path in
   // MahoSidebarTabListView that skips ~2s RebuildRows() on tab activation.
   void SetActive(bool active);
+  void SetControlled(bool controlled);
 
   void SetSelected(bool selected);
   bool is_selected() const { return is_selected_; }
@@ -897,16 +918,20 @@ class SidebarTabRowView : public views::View,
   void OnAudioButtonPressed(const ui::Event& event);
   SidebarTabDropZone ResolveDropZone(const ui::DropTargetEvent& event,
                                      const SidebarDragPayload& payload) const;
+  bool IsSplitDropEligible(const SidebarDragPayload& payload) const;
   void BeginTitleEditing();
   void EndTitleEditing(bool commit);
   double GetSplitPreviewProgress() const;
   bool IsSplitPreviewLeft() const;
   void ApplySplitPreviewContentLayout(double progress);
   void RefreshSplitPreviewLayout();
+  void ShowSplitPreview(MahoSplitDropSide side);
+  void ClearSplitPreview();
   void UpdateSplitPreviewAnimation(bool visible);
   void UpdateAppearance();
 
   bool active_;
+  bool controlled_ = false;
   const bool pinned_;
   bool audible_;
   bool muted_;
@@ -938,10 +963,11 @@ class SidebarTabRowView : public views::View,
   bool drag_over_drop_target_ = false;
   SidebarTabDropZone active_drop_zone_ = SidebarTabDropZone::kNone;
   gfx::SlideAnimation split_preview_animation_{this};
+  gfx::SlideAnimation control_pulse_animation_{this};
   bool split_preview_target_visible_ = false;
   bool split_preview_paint_installed_ = false;
-  bool split_preview_left_ = false;
-  bool split_preview_visual_left_ = false;
+  MahoSplitDropSide split_preview_side_ = MahoSplitDropSide::kRight;
+  MahoSplitDropSide split_preview_visual_side_ = MahoSplitDropSide::kRight;
   bool activate_pending_ = false;
   bool activation_handled_for_current_press_ = false;
   bool is_suspended_ = false;

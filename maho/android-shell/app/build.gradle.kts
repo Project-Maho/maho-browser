@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val defaultGoogleOauthServerClientId =
+    "650357306759-j0d85qpgcs3olou6nfbkjb3je35fdpse.apps.googleusercontent.com"
+val googleOauthServerClientId = providers.gradleProperty("MAHO_GOOGLE_OAUTH_SERVER_CLIENT_ID")
+    .orElse(defaultGoogleOauthServerClientId)
+
 android {
     namespace = "dev.maho.browser"
     compileSdk = 34
@@ -12,8 +17,13 @@ android {
         applicationId = "dev.maho.browser"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
         versionName = "0.1.0"
+        buildConfigField(
+            "String",
+            "GOOGLE_OAUTH_SERVER_CLIENT_ID",
+            "\"${googleOauthServerClientId.get()}\"",
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,6 +49,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -59,6 +70,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     // Compose BOM
     val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(composeBom)
@@ -78,6 +90,12 @@ dependencies {
 
     // Browser
     implementation("androidx.browser:browser:1.7.0")
+    implementation("androidx.webkit:webkit:1.11.0")
+
+    // Google identity (Credential Manager)
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     // Play Core in-app updates
     implementation("com.google.android.play:app-update:2.1.0")

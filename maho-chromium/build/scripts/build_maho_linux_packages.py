@@ -6,32 +6,69 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
 _CHROMIUM_SRC = os.path.join(_WORKSPACE_ROOT, 'chromium', 'src')
 _MAHO_CHROMIUM = os.path.join(_WORKSPACE_ROOT, 'maho-chromium')
 _BUILD_MAHO_PY = os.path.join(_SCRIPT_DIR, 'build_maho.py')
+_RELEASE_PUBLIC_KEY = os.path.join(
+    _MAHO_CHROMIUM,
+    'build',
+    'keys',
+    'maho-release-pubkey.asc',
+)
 
-def sign_file(file_path):
-    key_id = '51C8C6C55603AFF0'
+
+def sign_file(file_path, *, required=False):
+    key_id = os.environ.get('MAHO_GPG_KEY_ID', '51C8C6C55603AFF0')
     print(f"Signing {file_path} with GPG key {key_id}...")
+    if not shutil.which('gpg'):
+        message = "'gpg' command not found; cannot sign release artifact"
+        if required:
+            raise RuntimeError(message)
+        print(f'warning: {message}', file=sys.stderr)
+        return False
+
+    sig_file = file_path + '.sig'
     try:
-        if not shutil.which('gpg'):
-            print("warning: 'gpg' command not found, skipping signature generation", file=sys.stderr)
-            return False
-            
-        sig_file = file_path + '.sig'
         if os.path.exists(sig_file):
             os.remove(sig_file)
-            
-        cmd = ['gpg', '--detach-sign', '--armor', '-u', key_id, '--output', sig_file, file_path]
+        cmd = [
+            'gpg',
+            '--detach-sign',
+            '--armor',
+            '-u',
+            key_id,
+            '--output',
+            sig_file,
+            file_path,
+        ]
         subprocess.run(cmd, check=True)
-        print(f"Signature created: {sig_file}")
-        return True
-    except Exception as e:
-        print(f"warning: GPG signing failed: {e}", file=sys.stderr)
+        verify_signature(file_path, sig_file)
+    except (OSError, subprocess.CalledProcessError) as error:
+        message = f'GPG signing or verification failed for {file_path}: {error}'
+        if required:
+            raise RuntimeError(message) from error
+        print(f'warning: {message}', file=sys.stderr)
         return False
+    print(f"Signature created and verified: {sig_file}")
+    return True
+
+
+def verify_signature(file_path, sig_file):
+    if not os.path.isfile(_RELEASE_PUBLIC_KEY):
+        raise RuntimeError(f'committed release public key is missing: {_RELEASE_PUBLIC_KEY}')
+    with tempfile.TemporaryDirectory(prefix='maho-gpg-verify-') as gpg_home:
+        subprocess.run(
+            ['gpg', '--batch', '--homedir', gpg_home, '--import', _RELEASE_PUBLIC_KEY],
+            check=True,
+        )
+        subprocess.run(
+            ['gpg', '--batch', '--homedir', gpg_home, '--verify', sig_file, file_path],
+            check=True,
+        )
 
 def host_platform() -> str:
     if sys.platform == 'darwin':
@@ -57,48 +94,113 @@ def check_prerequisites(fmt):
         print("error: 'rpmbuild' is required to build rpm packages.", file=sys.stderr)
         sys.exit(1)
 
-def run_build(skip_rust, skip_chromium, release):
-    cmd = [sys.executable, _BUILD_MAHO_PY, '--platform', 'linux']
+def run_build(skip_rust, skip_chromium, release, out_dir):
+    cmd = [
+        sys.executable,
+        _BUILD_MAHO_PY,
+        '--platform',
+        'linux',
+        '--out-dir',
+        out_dir,
+    ]
     if skip_rust:
         cmd.append('--skip-rust')
     if skip_chromium:
         cmd.append('--skip-chromium')
     if release:
-        cmd.append('--release')
+        cmd.extend(['--release', '--force-args-template'])
     
     print(f"Running build wrapper: {' '.join(cmd)}")
     subprocess.run(cmd, check=True)
 
 def copy_browser_files(dest_dir, src_dir):
     os.makedirs(dest_dir, exist_ok=True)
-    
-    # Files to copy from build output
-    files_to_copy = [
-        'chrome', 'maho', 'resources.pak', 'chrome_100_percent.pak', 'chrome_200_percent.pak',
-        'icudtl.dat', 'v8_context_snapshot.bin', 'chrome_crashpad_handler'
-    ]
-    
-    for filename in files_to_copy:
-        src = os.path.join(src_dir, filename)
-        if os.path.exists(src):
-            shutil.copy2(src, os.path.join(dest_dir, filename))
-            
-    # Copy and rename chrome_sandbox to chrome-sandbox
-    sandbox_src = os.path.join(src_dir, 'chrome_sandbox')
-    if os.path.exists(sandbox_src):
-        shutil.copy2(sandbox_src, os.path.join(dest_dir, 'chrome-sandbox'))
-            
-    # Copy directories if present
-    for dirname in ['locales', 'swiftshader', 'MEIPreload']:
-        src = os.path.join(src_dir, dirname)
-        if os.path.isdir(src):
-            dest_sub = os.path.join(dest_dir, dirname)
-            if os.path.exists(dest_sub):
-                shutil.rmtree(dest_sub)
-            shutil.copytree(src, dest_sub)
 
-def package_tarball(version, dry_run):
-    src_dir = os.path.join(_CHROMIUM_SRC, 'out', 'Default')
+    required_files = [
+        'chrome',
+        'maho_mail_helper',
+        'maho',
+        'resources.pak',
+        'chrome_100_percent.pak',
+        'chrome_200_percent.pak',
+        'icudtl.dat',
+        'v8_context_snapshot.bin',
+        'chrome_crashpad_handler',
+        'chrome_management_service',
+        'chrome_sandbox',
+    ]
+    optional_files = [
+        'libEGL.so',
+        'libGLESv2.so',
+        'libvulkan.so.1',
+        'libvk_swiftshader.so',
+        'vk_swiftshader_icd.json',
+    ]
+    for filename in required_files:
+        src = os.path.join(src_dir, filename)
+        if not os.path.isfile(src):
+            raise RuntimeError(f'required browser runtime file is missing: {src}')
+        destination = 'chrome-sandbox' if filename == 'chrome_sandbox' else filename
+        destination_path = os.path.join(dest_dir, destination)
+        shutil.copy2(src, destination_path)
+        if filename == 'maho_mail_helper':
+            os.chmod(destination_path, os.stat(destination_path).st_mode | 0o111)
+    for filename in optional_files:
+        src = os.path.join(src_dir, filename)
+        if os.path.isfile(src):
+            shutil.copy2(src, os.path.join(dest_dir, filename))
+    for dirname in [
+        'locales',
+        'MEIPreload',
+        'PrivacySandboxAttestationsPreloaded',
+    ]:
+        src = os.path.join(src_dir, dirname)
+        if not os.path.isdir(src):
+            raise RuntimeError(f'required browser runtime directory is missing: {src}')
+        dest_sub = os.path.join(dest_dir, dirname)
+        if os.path.exists(dest_sub):
+            shutil.rmtree(dest_sub)
+        shutil.copytree(src, dest_sub)
+    swiftshader_dir = os.path.join(src_dir, 'swiftshader')
+    if os.path.isdir(swiftshader_dir):
+        shutil.copytree(swiftshader_dir, os.path.join(dest_dir, 'swiftshader'))
+
+
+def write_package_launchers(bin_dir, runtime_dir):
+    os.makedirs(bin_dir, exist_ok=True)
+    cli_launcher = os.path.join(bin_dir, 'maho')
+    if os.path.lexists(cli_launcher):
+        os.remove(cli_launcher)
+    os.symlink(os.path.relpath(os.path.join(runtime_dir, 'maho'), bin_dir), cli_launcher)
+
+    browser_launcher = os.path.join(bin_dir, 'maho-browser')
+    with open(browser_launcher, 'w', encoding='utf-8') as file:
+        file.write('#!/bin/sh\nexec /usr/lib/maho/chrome "$@"\n')
+    os.chmod(browser_launcher, 0o755)
+
+
+def write_tarball_browser_launcher(runtime_dir):
+    launcher_path = os.path.join(runtime_dir, 'maho-browser')
+    with open(launcher_path, 'w', encoding='utf-8') as file:
+        file.write('#!/bin/sh\nexec "$(dirname "$0")/chrome" "$@"\n')
+    os.chmod(launcher_path, 0o755)
+
+
+def verify_package_contents(command, package_path, expected_paths):
+    result = subprocess.run(
+        [*command, package_path],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    missing_paths = [path for path in expected_paths if path not in result.stdout]
+    if missing_paths:
+        raise RuntimeError(
+            f'package {package_path} is missing required paths: {", ".join(missing_paths)}'
+        )
+
+
+def package_tarball(version, dry_run, src_dir, release):
     tarball_out = os.path.join(_CHROMIUM_SRC, 'out', 'Linux-tarball')
     
     print(f"Packaging tarball to {tarball_out}...")
@@ -111,6 +213,7 @@ def package_tarball(version, dry_run):
         shutil.rmtree(temp_dir)
         
     copy_browser_files(temp_dir, src_dir)
+    write_tarball_browser_launcher(temp_dir)
     
     # Copy desktop and icon if available
     branding_dir = os.path.join(_MAHO_CHROMIUM, 'branding')
@@ -123,12 +226,22 @@ def package_tarball(version, dry_run):
         shutil.copy2(logo_src, os.path.join(temp_dir, 'maho.png'))
         
     tar_name = f"maho-{version}-x86_64.tar.gz"
-    subprocess.run(['tar', '-czf', os.path.join(tarball_out, tar_name), '-C', tarball_out, f"maho-{version}"], check=True)
+    tarball_path = os.path.join(tarball_out, tar_name)
+    subprocess.run(['tar', '-czf', tarball_path, '-C', tarball_out, f"maho-{version}"], check=True)
+    verify_package_contents(
+        ['tar', '-tzf'],
+        tarball_path,
+        [
+            f'maho-{version}/chrome',
+            f'maho-{version}/maho',
+            f'maho-{version}/maho-browser',
+        ],
+    )
+    sign_file(tarball_path, required=release)
     shutil.rmtree(temp_dir)
-    print(f"Tarball created successfully: {os.path.join(tarball_out, tar_name)}")
+    print(f"Tarball created successfully: {tarball_path}")
 
-def package_deb(version, dry_run):
-    src_dir = os.path.join(_CHROMIUM_SRC, 'out', 'Default')
+def package_deb(version, dry_run, src_dir, release):
     deb_out = os.path.join(_CHROMIUM_SRC, 'out', 'Linux-deb')
     
     print(f"Packaging deb to {deb_out}...")
@@ -151,11 +264,10 @@ def package_deb(version, dry_run):
     # Copy browser binaries
     copy_browser_files(os.path.join(build_dir, 'usr', 'lib', 'maho'), src_dir)
     
-    # Create CLI launcher script
-    launcher_path = os.path.join(build_dir, 'usr', 'bin', 'maho')
-    with open(launcher_path, 'w') as f:
-        f.write('#!/bin/sh\nexec /usr/lib/maho/chrome "$@"\n')
-    os.chmod(launcher_path, 0o755)
+    write_package_launchers(
+        os.path.join(build_dir, 'usr', 'bin'),
+        os.path.join(build_dir, 'usr', 'lib', 'maho'),
+    )
     
     # Copy desktop file and logo
     branding_dir = os.path.join(_MAHO_CHROMIUM, 'branding')
@@ -213,12 +325,16 @@ Description: Maho Browser — AI-native web browser
     # Build package
     deb_file = os.path.join(deb_out, f"maho_{version}_amd64.deb")
     subprocess.run(['dpkg-deb', '--build', build_dir, deb_file], check=True)
+    verify_package_contents(
+        ['dpkg-deb', '--contents'],
+        deb_file,
+        ['usr/bin/maho', 'usr/bin/maho-browser', 'usr/lib/maho/maho', 'usr/lib/maho/chrome'],
+    )
     shutil.rmtree(build_dir)
     print(f"Deb package created successfully: {deb_file}")
-    sign_file(deb_file)
+    sign_file(deb_file, required=release)
 
-def package_rpm(version, dry_run):
-    src_dir = os.path.join(_CHROMIUM_SRC, 'out', 'Default')
+def package_rpm(version, dry_run, src_dir, release):
     rpm_out = os.path.join(_CHROMIUM_SRC, 'out', 'Linux-rpm')
     
     print(f"Packaging rpm to {rpm_out}...")
@@ -238,7 +354,7 @@ def package_rpm(version, dry_run):
     copy_browser_files(src_tar_dir, src_dir)
     
     # Create launcher
-    launcher_path = os.path.join(src_tar_dir, 'maho.sh')
+    launcher_path = os.path.join(src_tar_dir, 'maho-browser.sh')
     with open(launcher_path, 'w') as f:
         f.write('#!/bin/sh\nexec /usr/lib/maho/chrome "$@"\n')
     os.chmod(launcher_path, 0o755)
@@ -248,26 +364,14 @@ def package_rpm(version, dry_run):
     shutil.copy2(os.path.join(branding_dir, 'linux', 'maho.desktop'), os.path.join(src_tar_dir, 'maho.desktop'))
     shutil.copy2(os.path.join(branding_dir, 'product_logo_256.png'), os.path.join(src_tar_dir, 'maho.png'))
     
-    # Create AppArmor profile package source
-    apparmor_content = """abi <abi/4.0>,
-include <tunables/global>
-
-profile maho /usr/lib/maho/chrome flags=(unconfined) {
-  userns,
-  # Site-specific additions and overrides.
-  include if exists <local/maho>
-}
-"""
-    with open(os.path.join(src_tar_dir, 'maho-apparmor'), 'w') as f:
-        f.write(apparmor_content)
-
     # Create tarball in SOURCES
     subprocess.run(['tar', '-czf', os.path.join(rpmbuild_dir, 'SOURCES', f"maho-{version}.tar.gz"),
                     '-C', os.path.join(rpmbuild_dir, 'SOURCES'), f"maho-{version}"], check=True)
     shutil.rmtree(src_tar_dir)
     
     # Write spec file
-    spec_content = f"""Name:           maho
+    spec_content = f"""%global debug_package %{{nil}}
+Name:           maho
 Version:        {version}
 Release:        1
 Summary:        Maho Browser — AI-native web browser
@@ -291,29 +395,24 @@ mkdir -p %{{buildroot}}/usr/lib/maho
 mkdir -p %{{buildroot}}/usr/bin
 mkdir -p %{{buildroot}}/usr/share/applications
 mkdir -p %{{buildroot}}/usr/share/pixmaps
-mkdir -p %{{buildroot}}/etc/apparmor.d
-
 cp -r * %{{buildroot}}/usr/lib/maho/
-mv %{{buildroot}}/usr/lib/maho/maho.sh %{{buildroot}}/usr/bin/maho
+ln -s ../lib/maho/maho %{{buildroot}}/usr/bin/maho
+mv %{{buildroot}}/usr/lib/maho/maho-browser.sh %{{buildroot}}/usr/bin/maho-browser
 mv %{{buildroot}}/usr/lib/maho/maho.desktop %{{buildroot}}/usr/share/applications/maho.desktop
 mv %{{buildroot}}/usr/lib/maho/maho.png %{{buildroot}}/usr/share/pixmaps/maho.png
-mv %{{buildroot}}/usr/lib/maho/maho-apparmor %{{buildroot}}/etc/apparmor.d/maho
 
 %post
 if [ -f "/usr/lib/maho/chrome-sandbox" ]; then
   chown root:root "/usr/lib/maho/chrome-sandbox"
   chmod 4755 "/usr/lib/maho/chrome-sandbox"
 fi
-if [ -f "/etc/apparmor.d/maho" ] && command -v apparmor_parser >/dev/null 2>&1; then
-  apparmor_parser -r /etc/apparmor.d/maho || true
-fi
 
 %files
 /usr/lib/maho/
 /usr/bin/maho
+/usr/bin/maho-browser
 /usr/share/applications/maho.desktop
 /usr/share/pixmaps/maho.png
-/etc/apparmor.d/maho
 """
     spec_file = os.path.join(rpmbuild_dir, 'SPECS', 'maho.spec')
     with open(spec_file, 'w') as f:
@@ -330,7 +429,12 @@ fi
             for file in files:
                 if file.endswith('.rpm'):
                     rpm_path = os.path.join(root, file)
-                    sign_file(rpm_path)
+                    verify_package_contents(
+                        ['rpm', '--query', '--list', '--package'],
+                        rpm_path,
+                        ['/usr/bin/maho', '/usr/bin/maho-browser', '/usr/lib/maho/maho', '/usr/lib/maho/chrome'],
+                    )
+                    sign_file(rpm_path, required=release)
 
 def main():
     parser = argparse.ArgumentParser(description="Package Maho Browser for Linux.")
@@ -341,6 +445,11 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help="Dry run: print steps without executing packaging.")
     parser.add_argument('--check', action='store_true', help="Check packaging prerequisites and exit.")
     parser.add_argument('--release', action='store_true', help="Build in production release mode.")
+    parser.add_argument(
+        '--out-dir',
+        default='out/Default',
+        help='Chromium output directory relative to chromium/src.',
+    )
     args = parser.parse_args()
     
     if args.check:
@@ -352,7 +461,7 @@ def main():
     
     # 1. Run Chromium build if requested
     if not (args.skip_rust and args.skip_chromium):
-        run_build(args.skip_rust, args.skip_chromium, args.release)
+        run_build(args.skip_rust, args.skip_chromium, args.release, args.out_dir)
         
     # Read version
     version = "1.0.0"
@@ -363,14 +472,15 @@ def main():
             
     # 2. Package
     formats = ['tarball', 'deb', 'rpm'] if args.format == 'all' else [args.format]
+    src_dir = os.path.join(_CHROMIUM_SRC, args.out_dir)
     
     for fmt in formats:
         if fmt == 'tarball':
-            package_tarball(version, args.dry_run)
+            package_tarball(version, args.dry_run, src_dir, args.release)
         elif fmt == 'deb':
-            package_deb(version, args.dry_run)
+            package_deb(version, args.dry_run, src_dir, args.release)
         elif fmt == 'rpm':
-            package_rpm(version, args.dry_run)
+            package_rpm(version, args.dry_run, src_dir, args.release)
             
     return 0
 

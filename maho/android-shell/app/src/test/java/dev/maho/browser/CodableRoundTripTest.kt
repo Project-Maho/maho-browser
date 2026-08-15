@@ -398,4 +398,76 @@ class CodableRoundTripTest {
         assertEquals("foo", query.text)
         assertEquals(true, query.isIncognito)
     }
+
+    @Test
+    fun `PrivacySettings decodes all content blocking mode strings`() {
+        val baseProps = """"doNotTrack":true,"blockThirdPartyCookies":true,"popupBlockerEnabled":true"""
+
+        val nativeJson = """{$baseProps,"contentBlockingMode":"native","contentBlockerEnabled":true}"""
+        val nativeDecoded = json.decodeFromString<PrivacySettings>(nativeJson)
+        assertEquals(ContentBlockingMode.NATIVE, nativeDecoded.contentBlockingMode)
+        assertTrue(nativeDecoded.isNativeBlockingEnabled)
+
+        val extensionJson = """{$baseProps,"contentBlockingMode":"extension","contentBlockerEnabled":false}"""
+        val extensionDecoded = json.decodeFromString<PrivacySettings>(extensionJson)
+        assertEquals(ContentBlockingMode.EXTENSION, extensionDecoded.contentBlockingMode)
+        assertTrue(!extensionDecoded.isNativeBlockingEnabled)
+
+        val disabledJson = """{$baseProps,"contentBlockingMode":"disabled","contentBlockerEnabled":false}"""
+        val disabledDecoded = json.decodeFromString<PrivacySettings>(disabledJson)
+        assertEquals(ContentBlockingMode.DISABLED, disabledDecoded.contentBlockingMode)
+        assertTrue(!disabledDecoded.isNativeBlockingEnabled)
+
+        val legacyJson = """{$baseProps,"contentBlockerEnabled":true}"""
+        val legacyDecoded = json.decodeFromString<PrivacySettings>(legacyJson)
+        assertEquals(ContentBlockingMode.NATIVE, legacyDecoded.contentBlockingMode)
+        assertTrue(legacyDecoded.isNativeBlockingEnabled)
+
+        val legacyDisabledJson = """{$baseProps,"contentBlockerEnabled":false}"""
+        val legacyDisabledDecoded = json.decodeFromString<PrivacySettings>(legacyDisabledJson)
+        assertEquals(ContentBlockingMode.DISABLED, legacyDisabledDecoded.contentBlockingMode)
+        assertTrue(!legacyDisabledDecoded.isNativeBlockingEnabled)
+
+        val unknownJson = """{$baseProps,"contentBlockingMode":"future_mode","contentBlockerEnabled":true}"""
+        val unknownDecoded = json.decodeFromString<PrivacySettings>(unknownJson)
+        assertEquals(ContentBlockingMode.UNKNOWN, unknownDecoded.contentBlockingMode)
+        assertTrue(!unknownDecoded.isNativeBlockingEnabled)
+    }
+
+    @Test
+    fun `contradictory transitional mode is authoritative over legacy content blocker bool`() {
+        val baseProps = """"doNotTrack":true,"blockThirdPartyCookies":true,"popupBlockerEnabled":true"""
+
+        val extensionTrueJson = """{$baseProps,"contentBlockingMode":"extension","contentBlockerEnabled":true}"""
+        val extensionTrue = json.decodeFromString<PrivacySettings>(extensionTrueJson)
+        assertEquals(ContentBlockingMode.EXTENSION, extensionTrue.contentBlockingMode)
+        assertTrue(
+            "extension mode must never enable native blocking even when legacy bool is true",
+            !extensionTrue.isNativeBlockingEnabled,
+        )
+
+        val disabledTrueJson = """{$baseProps,"contentBlockingMode":"disabled","contentBlockerEnabled":true}"""
+        val disabledTrue = json.decodeFromString<PrivacySettings>(disabledTrueJson)
+        assertEquals(ContentBlockingMode.DISABLED, disabledTrue.contentBlockingMode)
+        assertTrue(
+            "disabled mode must never enable native blocking even when legacy bool is true",
+            !disabledTrue.isNativeBlockingEnabled,
+        )
+
+        val legacyTrueJson = """{$baseProps,"contentBlockerEnabled":true}"""
+        val legacyTrue = json.decodeFromString<PrivacySettings>(legacyTrueJson)
+        assertEquals(ContentBlockingMode.NATIVE, legacyTrue.contentBlockingMode)
+        assertTrue(
+            "legacy bool-only true must map to native-on",
+            legacyTrue.isNativeBlockingEnabled,
+        )
+
+        val nativeFalseJson = """{$baseProps,"contentBlockingMode":"native","contentBlockerEnabled":false}"""
+        val nativeFalse = json.decodeFromString<PrivacySettings>(nativeFalseJson)
+        assertEquals(ContentBlockingMode.NATIVE, nativeFalse.contentBlockingMode)
+        assertTrue(
+            "explicit native mode must win over contradictory legacy false",
+            nativeFalse.isNativeBlockingEnabled,
+        )
+    }
 }

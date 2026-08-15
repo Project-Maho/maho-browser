@@ -176,6 +176,7 @@ impl PasswordImportCommitDestination for VaultPasswordImportDestination<'_> {
             },
             username,
             password: credential.password,
+            form_details: None,
         };
         self.core
             .vault_add_login(input)

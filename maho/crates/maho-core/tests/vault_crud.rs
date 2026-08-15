@@ -57,6 +57,7 @@ fn login_input(
         metadata: login_meta(title, origin_values),
         username: username.to_string(),
         password: Zeroizing::new(password.to_string()),
+        form_details: None,
     }
 }
 
@@ -432,6 +433,7 @@ fn vault_crud_update_password_domain_username_bumps_revision() {
                 metadata,
                 username: "bob".to_string(),
                 password: Some(Zeroizing::new(SENTINEL.to_string())),
+                form_details: None,
             },
         )
         .expect("update login");
@@ -475,6 +477,7 @@ fn vault_crud_stale_revision_update_conflicts_and_preserves_row() {
             metadata,
             username: "alice".to_string(),
             password: Some(Zeroizing::new("newpw".to_string())),
+            form_details: None,
         },
     );
     assert!(matches!(

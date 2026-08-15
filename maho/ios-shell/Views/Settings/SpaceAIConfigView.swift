@@ -156,7 +156,7 @@ struct SpaceAIConfigView: View {
                     Spacer()
                     Text("\(systemPrompt.count)/\(Self.maximumSystemPromptLength)")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(systemPrompt.count >= Self.maximumSystemPromptLength ? .orange : .secondary)
+                        .foregroundStyle(systemPrompt.count >= Self.maximumSystemPromptLength ? ShellTheme.Palette.warning : .secondary)
                 }
             }
         } header: {
@@ -223,8 +223,11 @@ struct SpaceAIConfigView: View {
                     addFocusArea()
                 } label: {
                     Image(uiImage: Lucide.plus.withRenderingMode(.alwaysTemplate))
+                        .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                        .contentShape(Rectangle())
                 }
                 .disabled(trimmedNewFocusArea.isEmpty)
+                .accessibilityLabel("Add focus area")
             }
         } header: {
             Label {

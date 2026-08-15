@@ -9,6 +9,10 @@ class MahoApplication : Application() {
         super.onCreate()
         val storagePath = File(filesDir, "MahoData").also { it.mkdirs() }.absolutePath
         MahoBridge.appContext = this
+        // Inject the SQLCipher key into the process-wide storage key slot BEFORE any
+        // SqliteStorage::open (both MahoBridge.initialize -> with_storage and, later,
+        // nativeAgentCreateSession). Without this the agent fails with native_error.
+        MahoBridge.provisionSqlcipherKey()
         MahoBridge.initialize(storagePath)
         MahoBridge.loadState()
         SyncManager.initialize(this)

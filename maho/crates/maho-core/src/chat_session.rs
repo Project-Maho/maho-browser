@@ -19,6 +19,7 @@ pub use maho_types::tool::ToolDescriptor;
 #[derive(Clone)]
 pub struct MahoChatEventSink {
     pub on_token: Option<unsafe extern "C" fn(user_data: *mut c_void, token: *const c_char)>,
+    pub on_thinking: Option<unsafe extern "C" fn(user_data: *mut c_void, thinking: *const c_char)>,
     pub on_complete: Option<
         unsafe extern "C" fn(
             user_data: *mut c_void,
@@ -39,6 +40,16 @@ impl MahoChatEventSink {
             if let Ok(c_token) = CString::new(token) {
                 unsafe {
                     cb(self.user_data, c_token.as_ptr());
+                }
+            }
+        }
+    }
+
+    pub fn on_thinking(&self, thinking: &str) {
+        if let Some(cb) = self.on_thinking {
+            if let Ok(c_thinking) = CString::new(thinking) {
+                unsafe {
+                    cb(self.user_data, c_thinking.as_ptr());
                 }
             }
         }
@@ -304,9 +315,9 @@ async fn run_completion(
 
         sse_buffer.push_str(chunk_str);
 
-        while let Some(pos) = sse_buffer.find("\n\n") {
+        while let Some((pos, separator_len)) = find_sse_separator(&sse_buffer) {
             let event_block = sse_buffer[..pos].to_string();
-            sse_buffer.drain(..pos + 2);
+            sse_buffer.drain(..pos + separator_len);
 
             for line in event_block.lines() {
                 if !line.starts_with("data:") {
@@ -325,6 +336,18 @@ async fn run_completion(
                 if let Some(choices) = json.pointer("/choices").and_then(|v| v.as_array()) {
                     if let Some(choice) = choices.first() {
                         if let Some(delta) = choice.get("delta") {
+                            // Reasoning/thinking deltas (OpenAI o-series & compatible:
+                            // `reasoning_content`, Anthropic-style: `reasoning`).
+                            let thinking_text = delta
+                                .get("reasoning_content")
+                                .or_else(|| delta.get("reasoning"))
+                                .and_then(|r| r.as_str());
+                            if let Some(reasoning) = thinking_text {
+                                if !reasoning.is_empty() {
+                                    sink.on_thinking(reasoning);
+                                }
+                            }
+
                             if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
                                 if !content.is_empty() {
                                     full_text.push_str(content);
@@ -407,4 +430,512 @@ async fn run_completion(
     };
 
     sink.on_complete(&full_text, &tool_calls_json);
+}
+
+fn find_sse_separator(buffer: &str) -> Option<(usize, usize)> {
+    match (buffer.find("\n\n"), buffer.find("\r\n\r\n")) {
+        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
+        (_, Some(crlf)) => Some((crlf, 4)),
+        (Some(lf), None) => Some((lf, 2)),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::sync::{mpsc, Mutex};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
+    const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum CallbackEvent {
+        Token(String),
+        Thinking(String),
+        Complete {
+            full_text: String,
+            tool_calls_json: String,
+        },
+        Error(String),
+    }
+
+    struct CallbackState {
+        events: Mutex<Vec<CallbackEvent>>,
+        event_tx: mpsc::Sender<CallbackEvent>,
+    }
+
+    impl CallbackState {
+        fn record(&self, event: CallbackEvent) {
+            if let Ok(mut events) = self.events.lock() {
+                events.push(event.clone());
+            }
+            let _ = self.event_tx.send(event);
+        }
+    }
+
+    unsafe extern "C" fn on_token(user_data: *mut c_void, token: *const c_char) {
+        let state = &*(user_data.cast::<CallbackState>());
+        let token = CStr::from_ptr(token).to_string_lossy().into_owned();
+        state.record(CallbackEvent::Token(token));
+    }
+
+    unsafe extern "C" fn on_thinking(user_data: *mut c_void, thinking: *const c_char) {
+        let state = &*(user_data.cast::<CallbackState>());
+        let thinking = CStr::from_ptr(thinking).to_string_lossy().into_owned();
+        state.record(CallbackEvent::Thinking(thinking));
+    }
+
+    unsafe extern "C" fn on_complete(
+        user_data: *mut c_void,
+        full_text: *const c_char,
+        tool_calls_json: *const c_char,
+    ) {
+        let state = &*(user_data.cast::<CallbackState>());
+        state.record(CallbackEvent::Complete {
+            full_text: CStr::from_ptr(full_text).to_string_lossy().into_owned(),
+            tool_calls_json: CStr::from_ptr(tool_calls_json)
+                .to_string_lossy()
+                .into_owned(),
+        });
+    }
+
+    unsafe extern "C" fn on_error(user_data: *mut c_void, error: *const c_char) {
+        let state = &*(user_data.cast::<CallbackState>());
+        let error = CStr::from_ptr(error).to_string_lossy().into_owned();
+        state.record(CallbackEvent::Error(error));
+    }
+
+    #[derive(Debug)]
+    struct CapturedRequest {
+        request_target: String,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    impl CapturedRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+        }
+    }
+
+    struct TestServer {
+        addr: SocketAddr,
+        frame_permit_tx: mpsc::Sender<()>,
+        request_rx: mpsc::Receiver<CapturedRequest>,
+        thread: Option<JoinHandle<Result<(), String>>>,
+    }
+
+    impl TestServer {
+        fn spawn() -> Self {
+            Self::spawn_with_separator("\n\n")
+        }
+
+        fn spawn_with_separator(separator: &'static str) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback server");
+            let addr = listener.local_addr().expect("read loopback address");
+            let (frame_permit_tx, frame_permit_rx) = mpsc::channel();
+            let (request_tx, request_rx) = mpsc::channel();
+            let thread = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
+                stream
+                    .set_read_timeout(Some(TEST_TIMEOUT))
+                    .map_err(|error| error.to_string())?;
+                stream
+                    .set_write_timeout(Some(TEST_TIMEOUT))
+                    .map_err(|error| error.to_string())?;
+
+                let request = read_request(&mut stream)?;
+                request_tx
+                    .send(request)
+                    .map_err(|error| error.to_string())?;
+
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+                    )
+                    .map_err(|error| error.to_string())?;
+                write_sse_frame(
+                    &mut stream,
+                    &format!(
+                        "data: {{\"choices\":[{{\"delta\":{{\"content\":\"Hello\"}}}}]}}{separator}"
+                    ),
+                )?;
+                frame_permit_rx
+                    .recv_timeout(TEST_TIMEOUT)
+                    .map_err(|error| error.to_string())?;
+                write_sse_frame(
+                    &mut stream,
+                    &format!(
+                        "data: {{\"choices\":[{{\"delta\":{{\"content\":\" world\"}}}}]}}{separator}"
+                    ),
+                )?;
+                frame_permit_rx
+                    .recv_timeout(TEST_TIMEOUT)
+                    .map_err(|error| error.to_string())?;
+                write_sse_frame(&mut stream, &format!("data: [DONE]{separator}"))?;
+                Ok(())
+            });
+
+            Self {
+                addr,
+                frame_permit_tx,
+                request_rx,
+                thread: Some(thread),
+            }
+        }
+
+        fn endpoint(&self) -> String {
+            format!("http://{}/v1/chat/completions", self.addr)
+        }
+
+        /// Spawn a server that streams the caller-supplied SSE data payloads
+        /// (`data: <payload>` per frame), waiting for a permit between frames.
+        fn spawn_with_frames(frames: Vec<String>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback server");
+            let addr = listener.local_addr().expect("read loopback address");
+            let (frame_permit_tx, frame_permit_rx) = mpsc::channel();
+            let (request_tx, request_rx) = mpsc::channel();
+            let thread = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().map_err(|error| error.to_string())?;
+                stream
+                    .set_read_timeout(Some(TEST_TIMEOUT))
+                    .map_err(|error| error.to_string())?;
+                stream
+                    .set_write_timeout(Some(TEST_TIMEOUT))
+                    .map_err(|error| error.to_string())?;
+
+                let request = read_request(&mut stream)?;
+                request_tx
+                    .send(request)
+                    .map_err(|error| error.to_string())?;
+
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+                    )
+                    .map_err(|error| error.to_string())?;
+
+                for frame in frames {
+                    write_sse_frame(&mut stream, &format!("data: {frame}\n\n"))?;
+                    frame_permit_rx
+                        .recv_timeout(TEST_TIMEOUT)
+                        .map_err(|error| error.to_string())?;
+                }
+                write_sse_frame(&mut stream, "data: [DONE]\n\n")?;
+                Ok(())
+            });
+
+            Self {
+                addr,
+                frame_permit_tx,
+                request_rx,
+                thread: Some(thread),
+            }
+        }
+
+        fn captured_request(&self) -> CapturedRequest {
+            self.request_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("receive captured request")
+        }
+
+        fn release_next_frame(&self) {
+            self.frame_permit_tx
+                .send(())
+                .expect("release next SSE frame");
+        }
+
+        fn join(&mut self) {
+            let result = self
+                .thread
+                .take()
+                .expect("server thread is present")
+                .join()
+                .expect("server thread did not panic");
+            result.expect("loopback server completed successfully");
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            if let Some(thread) = self.thread.take() {
+                let _ = self.frame_permit_tx.send(());
+                let _ = self.frame_permit_tx.send(());
+                let _ = TcpStream::connect_timeout(&self.addr, TEST_TIMEOUT);
+                let _ = thread.join();
+            }
+        }
+    }
+
+    fn write_sse_frame(stream: &mut TcpStream, frame: &str) -> Result<(), String> {
+        stream
+            .write_all(frame.as_bytes())
+            .map_err(|error| error.to_string())?;
+        stream.flush().map_err(|error| error.to_string())
+    }
+
+    fn read_request(stream: &mut TcpStream) -> Result<CapturedRequest, String> {
+        let mut bytes = Vec::new();
+        let header_end = loop {
+            if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break position + 4;
+            }
+            let mut buffer = [0_u8; 1024];
+            let read = stream
+                .read(&mut buffer)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                return Err("connection closed before request headers completed".to_string());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        };
+
+        let head = std::str::from_utf8(&bytes[..header_end]).map_err(|error| error.to_string())?;
+        let mut lines = head[..head.len() - 4].split("\r\n");
+        let request_line = lines
+            .next()
+            .ok_or_else(|| "request line is missing".to_string())?;
+        let mut request_line_parts = request_line.split_whitespace();
+        let method = request_line_parts
+            .next()
+            .ok_or_else(|| "request method is missing".to_string())?;
+        let request_target = request_line_parts
+            .next()
+            .ok_or_else(|| "request target is missing".to_string())?
+            .to_string();
+        if method != "POST" {
+            return Err(format!("expected POST request, got {method}"));
+        }
+
+        let headers: Vec<(String, String)> = lines
+            .map(|line| {
+                line.split_once(':')
+                    .map(|(name, value)| (name.to_string(), value.trim().to_string()))
+                    .ok_or_else(|| format!("malformed request header: {line}"))
+            })
+            .collect::<Result<_, _>>()?;
+        let content_length = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .ok_or_else(|| "content-length header is missing".to_string())?
+            .1
+            .parse::<usize>()
+            .map_err(|error| error.to_string())?;
+
+        while bytes.len() < header_end + content_length {
+            let mut buffer = [0_u8; 1024];
+            let read = stream
+                .read(&mut buffer)
+                .map_err(|error| error.to_string())?;
+            if read == 0 {
+                return Err("connection closed before request body completed".to_string());
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+
+        Ok(CapturedRequest {
+            request_target,
+            headers,
+            body: bytes[header_end..header_end + content_length].to_vec(),
+        })
+    }
+
+    #[test]
+    fn openai_compatible_sse_crlf_frames_stream_tokens_in_order() {
+        let mut server = TestServer::spawn_with_separator("\r\n\r\n");
+        let (event_tx, event_rx) = mpsc::channel();
+        let callback_state = Box::new(CallbackState {
+            events: Mutex::new(Vec::new()),
+            event_tx,
+        });
+        let user_data = (&*callback_state as *const CallbackState).cast_mut().cast();
+
+        let mut session = ChatSession::new(ChatConfig {
+            api_key: String::new(),
+            endpoint: server.endpoint(),
+            model: "test-model".to_string(),
+            system_instruction: String::new(),
+        });
+        session.set_event_sink(MahoChatEventSink {
+            on_token: Some(on_token),
+            on_thinking: None,
+            on_complete: Some(on_complete),
+            on_error: Some(on_error),
+            user_data,
+        });
+
+        assert!(session.send_user_turn("Say hello"));
+        let _request = server.captured_request();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Token("Hello".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Token(" world".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Complete {
+                full_text: "Hello world".to_string(),
+                tool_calls_json: String::new(),
+            })
+        );
+        server.join();
+
+        assert_eq!(
+            *callback_state.events.lock().expect("lock callback events"),
+            vec![
+                CallbackEvent::Token("Hello".to_string()),
+                CallbackEvent::Token(" world".to_string()),
+                CallbackEvent::Complete {
+                    full_text: "Hello world".to_string(),
+                    tool_calls_json: String::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn openai_compatible_sse_uses_configured_endpoint_and_streams_tokens_in_order() {
+        let mut server = TestServer::spawn();
+        let endpoint = server.endpoint();
+        let (event_tx, event_rx) = mpsc::channel();
+        let callback_state = Box::new(CallbackState {
+            events: Mutex::new(Vec::new()),
+            event_tx,
+        });
+        let user_data = (&*callback_state as *const CallbackState).cast_mut().cast();
+
+        let mut session = ChatSession::new(ChatConfig {
+            api_key: "test-api-key".to_string(),
+            endpoint: endpoint.clone(),
+            model: "test-model".to_string(),
+            system_instruction: "Follow the test instructions.".to_string(),
+        });
+        session.set_event_sink(MahoChatEventSink {
+            on_token: Some(on_token),
+            on_thinking: None,
+            on_complete: Some(on_complete),
+            on_error: Some(on_error),
+            user_data,
+        });
+
+        assert!(session.send_user_turn("Say hello"));
+        let request = server.captured_request();
+
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Token("Hello".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Token(" world".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Complete {
+                full_text: "Hello world".to_string(),
+                tool_calls_json: String::new(),
+            })
+        );
+        server.join();
+
+        assert_eq!(request.request_target, "/v1/chat/completions");
+        assert_eq!(request.header("authorization"), Some("Bearer test-api-key"));
+        assert_eq!(request.header("content-type"), Some("application/json"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&request.body).expect("parse request body"),
+            serde_json::json!({
+                "model": "test-model",
+                "messages": [
+                    {"role": "system", "content": "Follow the test instructions."},
+                    {"role": "user", "content": "Say hello"}
+                ],
+                "stream": true
+            })
+        );
+        assert_eq!(
+            *callback_state.events.lock().expect("lock callback events"),
+            vec![
+                CallbackEvent::Token("Hello".to_string()),
+                CallbackEvent::Token(" world".to_string()),
+                CallbackEvent::Complete {
+                    full_text: "Hello world".to_string(),
+                    tool_calls_json: String::new(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn openai_compatible_sse_streams_reasoning_content_as_thinking() {
+        let frames = vec![
+            serde_json::json!({"choices":[{"delta":{"reasoning_content":"Let me think"}}]})
+                .to_string(),
+            serde_json::json!({"choices":[{"delta":{"reasoning_content":" about it."}}]})
+                .to_string(),
+            serde_json::json!({"choices":[{"delta":{"content":"The answer"}}]}).to_string(),
+        ];
+        let mut server = TestServer::spawn_with_frames(frames);
+        let (event_tx, event_rx) = mpsc::channel();
+        let callback_state = Box::new(CallbackState {
+            events: Mutex::new(Vec::new()),
+            event_tx,
+        });
+        let user_data = (&*callback_state as *const CallbackState).cast_mut().cast();
+
+        let mut session = ChatSession::new(ChatConfig {
+            api_key: String::new(),
+            endpoint: server.endpoint(),
+            model: "test-model".to_string(),
+            system_instruction: String::new(),
+        });
+        session.set_event_sink(MahoChatEventSink {
+            on_token: Some(on_token),
+            on_thinking: Some(on_thinking),
+            on_complete: Some(on_complete),
+            on_error: Some(on_error),
+            user_data,
+        });
+
+        assert!(session.send_user_turn("Think"));
+        let _request = server.captured_request();
+
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Thinking("Let me think".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Thinking(" about it.".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Token("The answer".to_string()))
+        );
+        server.release_next_frame();
+        assert_eq!(
+            event_rx.recv_timeout(TEST_TIMEOUT),
+            Ok(CallbackEvent::Complete {
+                full_text: "The answer".to_string(),
+                tool_calls_json: String::new(),
+            })
+        );
+        server.join();
+    }
 }

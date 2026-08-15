@@ -8,6 +8,8 @@ struct HistoryView: View {
     @State private var searchText = ""
     @State private var isLoading = false
     @State private var showClearConfirmation = false
+    @State private var pendingDeleteEntry: HistoryEntry?
+    @State private var showDeleteEntryConfirmation = false
 
     private var groupedEntries: [(String, [HistoryEntry])] {
         let source = searchText.isEmpty ? entries : entries.filter {
@@ -39,7 +41,7 @@ struct HistoryView: View {
             .navigationTitle("History")
             .searchable(text: $searchText, prompt: "Search history")
             .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button(role: .destructive) {
                         showClearConfirmation = true
                     } label: {
@@ -78,7 +80,8 @@ struct HistoryView: View {
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
-                                    deleteEntry(entry)
+                                    pendingDeleteEntry = entry
+                                    showDeleteEntryConfirmation = true
                                 } label: {
                                     Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                                 }
@@ -88,6 +91,22 @@ struct HistoryView: View {
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            "Delete History Entry?",
+            isPresented: $showDeleteEntryConfirmation,
+            titleVisibility: .visible,
+            presenting: pendingDeleteEntry
+        ) { entry in
+            Button("Delete", role: .destructive) {
+                deleteEntry(entry)
+                pendingDeleteEntry = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteEntry = nil
+            }
+        } message: { entry in
+            Text("This removes \"\(entry.title.isEmpty ? entry.url : entry.title)\" from history.")
+        }
     }
 
     private var emptyState: some View {

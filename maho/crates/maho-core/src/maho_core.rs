@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const LMDB_DIRTY_TABS: u8 = 0b000001;
@@ -87,12 +87,14 @@ use crate::sharing_manager::SharingManager;
 use crate::shortcut_manager::ShortcutManager;
 use crate::skills_manager::SkillsManager;
 use crate::space_manager::SpaceManager;
-use crate::sync_models::{SyncEntity, SyncEntityType};
+use crate::sync_models::{
+    RelayAckV2, SyncEntity, SyncEntityType, SyncEnvelopeV2, SyncStateResponse,
+};
 use crate::tab_lifecycle::{timestamp_millis_to_iso8601, TabLifecycleManager};
 use crate::tool_registry::ToolRegistry;
 use crate::vault_manager::{
-    VaultHydrationSlots, VaultManagerError, SLOT_KDF_PARAMS, SLOT_WRAPPED_RECOVERY_KEY,
-    SLOT_WRAPPED_USER_KEY,
+    preflight_vault_database, VaultHydrationSlots, VaultManagerError, VaultPreflightState,
+    SLOT_KDF_PARAMS, SLOT_WRAPPED_RECOVERY_KEY, SLOT_WRAPPED_USER_KEY,
 };
 use crate::vault_runtime::VaultRuntime;
 
@@ -508,6 +510,7 @@ mod tests {
                 },
                 username: username.to_string(),
                 password: zeroize::Zeroizing::new("password".to_string()),
+                form_details: None,
             }
         }
 
@@ -2233,6 +2236,7 @@ pub struct MahoCore {
     profile_sqlite_persist_fault: bool,
     #[cfg(test)]
     profile_lmdb_persist_fault: bool,
+    active_chat_sessions: Arc<Mutex<HashMap<String, usize>>>,
 }
 
 impl Default for MahoCore {
@@ -2507,6 +2511,7 @@ impl MahoCore {
             "Scroll to Top".into(),
             "View".into(),
         );
+        command_bar.add_global_mail_commands();
         command_bar.add_action(
             "scroll_to_bottom".into(),
             "Scroll to Bottom".into(),
@@ -2572,6 +2577,7 @@ impl MahoCore {
             profile_sqlite_persist_fault: false,
             #[cfg(test)]
             profile_lmdb_persist_fault: false,
+            active_chat_sessions: Arc::new(Mutex::new(HashMap::new())),
         };
 
         core
@@ -2633,6 +2639,17 @@ impl MahoCore {
 
     pub fn sqlite_db_path(&self) -> Option<&str> {
         self.storage.as_ref().map(|s| s.path())
+    }
+
+    /// Public typed accessor for the later FFI/C++ provider-gate slice. The
+    /// caller supplies the key-store verdict so a missing/replaced key cannot be
+    /// confused with SQLCipher page corruption.
+    pub fn vault_preflight_state(
+        &self,
+        database_path: &std::path::Path,
+        key: maho_storage::sqlite::VaultDatabaseKey<'_>,
+    ) -> VaultPreflightState {
+        preflight_vault_database(database_path, key)
     }
 
     pub fn with_storage(mut self, path: &str) -> Self {
@@ -10265,8 +10282,6 @@ impl MahoCore {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert(SyncEntityType::AutofillAddress);
         disabled.insert(SyncEntityType::AutofillPayment);
-        disabled.insert(SyncEntityType::Conversation);
-        disabled.insert(SyncEntityType::ConversationTurn);
         disabled.insert(SyncEntityType::Settings);
 
         let config = SyncConfig {
@@ -10295,6 +10310,7 @@ impl MahoCore {
                 crate::sync_models::SyncEntityType::CssMod,
                 crate::sync_models::SyncEntityType::Easel,
                 crate::sync_models::SyncEntityType::Conversation,
+                crate::sync_models::SyncEntityType::ConversationProject,
                 crate::sync_models::SyncEntityType::ConversationTurn,
                 crate::sync_models::SyncEntityType::AutofillAddress,
                 crate::sync_models::SyncEntityType::AutofillPayment,
@@ -10412,12 +10428,21 @@ impl MahoCore {
     }
 
     pub fn get_sync_status(&self) -> String {
-        match &self.sync_manager {
-            Some(sm) => {
-                serde_json::to_string(sm.status()).unwrap_or_else(|_| "\"idle\"".to_string())
-            }
-            None => "\"idle\"".to_string(),
-        }
+        serde_json::to_string(&self.get_sync_state()).unwrap_or_else(|_| {
+            "{\"kind\":\"idle\",\"last_success_at\":null,\"pending_outbox_count\":0,\"last_error\":null}"
+                .to_string()
+        })
+    }
+
+    pub fn get_sync_state(&self) -> SyncStateResponse {
+        self.sync_manager
+            .as_ref()
+            .map_or_else(SyncStateResponse::default, |sm| SyncStateResponse {
+                kind: sm.status().clone(),
+                last_success_at: sm.last_success_at(),
+                pending_outbox_count: sm.pending_outbox_count(),
+                last_error: sm.last_error().map(str::to_owned),
+            })
     }
 
     pub fn get_sync_server_url(&self) -> Option<String> {
@@ -10430,6 +10455,10 @@ impl MahoCore {
         self.sync_manager
             .as_ref()
             .and_then(|sm| sm.config().sync_key.clone())
+    }
+
+    pub fn get_sync_room_id(&self) -> Option<String> {
+        self.get_sync_key()
     }
 
     pub fn handle_incoming_websocket_message(&mut self, message_json: &str) -> Result<(), String> {
@@ -10512,6 +10541,36 @@ impl MahoCore {
         }
     }
 
+    pub fn handle_incoming_sync_envelope(&mut self, envelope_json: &str) -> Result<(), String> {
+        let room_id = self
+            .get_sync_room_id()
+            .ok_or_else(|| "sync room is not configured".to_string())?;
+        self.apply_sync_envelope_and_advance_cursor(&room_id, envelope_json)
+    }
+
+    pub fn apply_sync_envelope_and_advance_cursor(
+        &mut self,
+        room_id: &str,
+        envelope_json: &str,
+    ) -> Result<(), String> {
+        let envelope: SyncEnvelopeV2 =
+            serde_json::from_str(envelope_json).map_err(|error| error.to_string())?;
+        if let Some(relay_seq) = envelope.relay_seq {
+            if relay_seq <= self.get_sync_receive_cursor(room_id)? {
+                return Ok(());
+            }
+        }
+        let payload = envelope
+            .payload_bytes()
+            .map_err(|error| error.to_string())?;
+        let message = String::from_utf8(payload).map_err(|error| error.to_string())?;
+        self.handle_incoming_websocket_message(&message)?;
+        if let Some(relay_seq) = envelope.relay_seq {
+            self.set_sync_receive_cursor(room_id, relay_seq)?;
+        }
+        Ok(())
+    }
+
     /// Typed, matchable view of the most recent sync transport error, if any.
     /// Callers should branch on this (or its `code()`) instead of parsing the
     /// `Err(String)` returned by [`handle_incoming_websocket_message`].
@@ -10565,6 +10624,21 @@ impl MahoCore {
             "syncKey": hex_key,
             "roomId": room_id,
             "recoveryPhrase": recovery_phrase
+        })
+        .to_string()
+    }
+
+    pub fn generate_sync_bootstrap(&self) -> String {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use crate::sync_crypto;
+
+        let seed = sync_crypto::generate_sync_seed();
+        let room_id = sync_crypto::derive_room_id(&seed)
+            .unwrap_or_else(|_| "error deriving room id".to_string());
+        serde_json::json!({
+            "version": 1,
+            "seed": STANDARD.encode(seed),
+            "roomId": room_id
         })
         .to_string()
     }
@@ -10632,6 +10706,31 @@ impl MahoCore {
             sm.set_encryption_key(encryption_key);
         }
         Ok(())
+    }
+
+    pub fn configure_sync_encryption_from_bootstrap(
+        &mut self,
+        server_url: &str,
+        bootstrap_seed: &str,
+    ) -> Result<String, String> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use crate::sync_crypto;
+
+        let decoded = STANDARD
+            .decode(bootstrap_seed)
+            .map_err(|_| "Invalid sync bootstrap".to_string())?;
+        let seed: [u8; 32] = decoded
+            .try_into()
+            .map_err(|_| "Invalid sync bootstrap".to_string())?;
+        let encryption_key = sync_crypto::derive_encryption_key(&seed)
+            .map_err(|e| format!("Key derivation failed: {}", e))?;
+        let room_id = sync_crypto::derive_room_id(&seed)
+            .map_err(|e| format!("Room ID derivation failed: {}", e))?;
+        self.start_sync(server_url, &room_id);
+        if let Some(ref mut sm) = self.sync_manager {
+            sm.set_encryption_key(encryption_key);
+        }
+        Ok(room_id)
     }
 
     pub fn remove_sync_device(&mut self, device_id: &str) {
@@ -11006,7 +11105,9 @@ impl MahoCore {
         let mut conversation_turns = Vec::new();
         if !is_disabled(SyncEntityType::Conversation) {
             if let Some(ref storage) = self.storage {
-                if let Ok(convs) = storage.list_conversations(999999) {
+                if let Ok(convs) =
+                    storage.list_conversations(maho_types::chat::ConversationListState::All, 999999)
+                {
                     for conv in convs {
                         let payload = serde_json::to_string(&conv).map_err(|e| e.to_string())?;
                         let sync_ent = self.create_sync_entity(
@@ -11038,6 +11139,26 @@ impl MahoCore {
         }
         entities.insert("Conversation".to_string(), conversations);
         entities.insert("ConversationTurn".to_string(), conversation_turns);
+
+        let mut conversation_projects = Vec::new();
+        if !is_disabled(SyncEntityType::ConversationProject) {
+            if let Some(ref storage) = self.storage {
+                if let Ok(projects) = storage.list_conversation_projects() {
+                    for project in projects {
+                        let payload = serde_json::to_string(&project).map_err(|e| e.to_string())?;
+                        let sync_ent = self.create_sync_entity(
+                            SyncEntityType::ConversationProject,
+                            project.id.clone(),
+                            payload,
+                            parse_dt(&project.updated_at),
+                        );
+                        hlc_ts_ceiling = hlc_ts_ceiling.max(sync_ent.version);
+                        conversation_projects.push(sync_ent);
+                    }
+                }
+            }
+        }
+        entities.insert("ConversationProject".to_string(), conversation_projects);
 
         // AutofillAddress
         let mut autofill_addresses = Vec::new();
@@ -11198,6 +11319,7 @@ impl MahoCore {
             "CssMod",
             "Easel",
             "Conversation",
+            "ConversationProject",
             "ConversationTurn",
             "AutofillAddress",
             "AutofillPayment",
@@ -11231,6 +11353,7 @@ impl MahoCore {
                 SyncEntityType::CssMod,
                 SyncEntityType::Easel,
                 SyncEntityType::Conversation,
+                SyncEntityType::ConversationProject,
                 SyncEntityType::ConversationTurn,
                 SyncEntityType::AutofillAddress,
                 SyncEntityType::AutofillPayment,
@@ -11556,12 +11679,19 @@ impl MahoCore {
             }
             valid_entities.push(entity);
         }
+        valid_entities.sort_by_key(|entity| match entity.entity_type {
+            SyncEntityType::ConversationProject => 0,
+            SyncEntityType::Conversation => 1,
+            SyncEntityType::ConversationTurn => 2,
+            _ => 0,
+        });
         let applied = match &mut self.sync_manager {
             Some(sm) => sm.apply_remote_batch(valid_entities, &self.storage),
             None => return Vec::new(),
         };
 
         let mut updates = Vec::new();
+        let mut failed_persistence = HashSet::new();
 
         for entity in &applied {
             match entity.entity_type {
@@ -11914,41 +12044,86 @@ impl MahoCore {
                     }
                 }
                 SyncEntityType::Conversation => {
-                    if entity.deleted {
-                        if let Some(ref storage) = self.storage {
-                            let _ = storage.delete_conversation(&entity.entity_id);
-                        }
-                    } else if let Ok(conv) =
+                    let result = if entity.deleted {
+                        self.storage.as_ref().map_or(Ok(()), |storage| {
+                            storage.delete_conversation(&entity.entity_id).map(|_| ())
+                        })
+                    } else {
                         serde_json::from_str::<maho_types::chat::Conversation>(&entity.payload_json)
-                    {
-                        if let Some(ref storage) = self.storage {
-                            let _ = storage.create_conversation(
-                                &conv.id,
-                                conv.title.as_deref(),
-                                conv.space_id.as_deref(),
-                                conv.model.as_deref(),
-                            );
-                        }
+                            .map_err(maho_storage::StorageError::from)
+                            .and_then(|conversation| {
+                                self.storage.as_ref().map_or(Ok(()), |storage| {
+                                    storage.upsert_conversation(&conversation)
+                                })
+                            })
+                    };
+                    if let Err(error) = result {
+                        eprintln!(
+                            "[sync] Failed to persist conversation {}: {}",
+                            entity.entity_id, error
+                        );
+                        failed_persistence
+                            .insert((entity.entity_type.clone(), entity.entity_id.clone()));
+                    }
+                }
+                SyncEntityType::ConversationProject => {
+                    let result = if entity.deleted {
+                        self.storage.as_ref().map_or(Ok(()), |storage| {
+                            storage
+                                .delete_conversation_project(&entity.entity_id)
+                                .map(|_| ())
+                        })
+                    } else {
+                        serde_json::from_str::<maho_types::chat::ConversationProject>(
+                            &entity.payload_json,
+                        )
+                        .map_err(maho_storage::StorageError::from)
+                        .and_then(|project| {
+                            self.storage.as_ref().map_or(Ok(()), |storage| {
+                                storage.upsert_conversation_project(&project)
+                            })
+                        })
+                    };
+                    if let Err(error) = result {
+                        eprintln!(
+                            "[sync] Failed to persist conversation project {}: {}",
+                            entity.entity_id, error
+                        );
+                        failed_persistence
+                            .insert((entity.entity_type.clone(), entity.entity_id.clone()));
                     }
                 }
                 SyncEntityType::ConversationTurn => {
-                    if entity.deleted {
-                        if let Some(ref storage) = self.storage {
-                            let _ = storage.delete_conversation_turn(&entity.entity_id);
-                        }
-                    } else if let Ok(turn) = serde_json::from_str::<
-                        maho_types::chat::ConversationTurn,
-                    >(&entity.payload_json)
-                    {
-                        if let Some(ref storage) = self.storage {
-                            let _ = storage.insert_conversation_turn(
-                                &turn.id,
-                                &turn.session_id,
-                                &turn.role,
-                                &turn.content,
-                                turn.url_context.as_deref(),
-                            );
-                        }
+                    let result = if entity.deleted {
+                        self.storage.as_ref().map_or(Ok(()), |storage| {
+                            storage
+                                .delete_conversation_turn(&entity.entity_id)
+                                .map(|_| ())
+                        })
+                    } else {
+                        serde_json::from_str::<maho_types::chat::ConversationTurn>(
+                            &entity.payload_json,
+                        )
+                        .map_err(maho_storage::StorageError::from)
+                        .and_then(|turn| {
+                            self.storage.as_ref().map_or(Ok(()), |storage| {
+                                storage.insert_conversation_turn(
+                                    &turn.id,
+                                    &turn.session_id,
+                                    &turn.role,
+                                    &turn.content,
+                                    turn.url_context.as_deref(),
+                                )
+                            })
+                        })
+                    };
+                    if let Err(error) = result {
+                        eprintln!(
+                            "[sync] Failed to persist conversation turn {}: {}",
+                            entity.entity_id, error
+                        );
+                        failed_persistence
+                            .insert((entity.entity_type.clone(), entity.entity_id.clone()));
                     }
                 }
                 SyncEntityType::AutofillAddress => {
@@ -12028,27 +12203,124 @@ impl MahoCore {
             }
         }
 
-        self.emit_updates(updates);
-        applied
-    }
-
-    /// Get and drain pending outgoing sync messages.
-    pub fn drain_sync_outgoing(&mut self) -> Vec<crate::sync_models::SyncMessage> {
-        let msgs = match &mut self.sync_manager {
-            Some(sm) => sm.drain_outgoing_messages(),
-            None => Vec::new(),
-        };
-        if let Some(ref mut sm) = self.sync_manager {
-            let sent_ids = sm.drain_sent_entities();
-            if !sent_ids.is_empty() {
-                if let Some(ref storage) = self.storage {
-                    if let Err(e) = storage.mark_sync_entities_sent(&sent_ids) {
-                        eprintln!("Failed to mark sync entities sent in DB: {}", e);
+        if !failed_persistence.is_empty() {
+            if let Some(sync_manager) = self.sync_manager.as_mut() {
+                for (entity_type, entity_id) in &failed_persistence {
+                    let key = format!("{}:{}", entity_type.as_str(), entity_id);
+                    sync_manager.remove_entity_version_from_cache(&key);
+                    if let Some(storage) = self.storage.as_ref() {
+                        let _ = storage.delete_entity_version(entity_type.as_str(), entity_id);
                     }
                 }
             }
         }
-        msgs
+        self.emit_updates(updates);
+        applied
+            .into_iter()
+            .filter(|entity| {
+                !failed_persistence
+                    .contains(&(entity.entity_type.clone(), entity.entity_id.clone()))
+            })
+            .collect()
+    }
+
+    /// Get and drain pending outgoing sync messages.
+    pub fn drain_sync_outgoing(&mut self) -> Vec<crate::sync_models::SyncMessage> {
+        self.drain_sync_outgoing_envelopes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|envelope| {
+                envelope
+                    .payload_bytes()
+                    .ok()
+                    .and_then(|payload| serde_json::from_slice(&payload).ok())
+            })
+            .collect()
+    }
+
+    pub fn drain_sync_outgoing_envelopes(&mut self) -> Result<Vec<SyncEnvelopeV2>, String> {
+        let queued = self
+            .sync_manager
+            .as_mut()
+            .map(|manager| manager.drain_outgoing_messages_with_queue_rows())
+            .unwrap_or_default();
+        let leased_rows = queued
+            .iter()
+            .filter_map(|queued| queued.queue_row_id)
+            .collect::<Vec<_>>();
+        let leases = match (self.storage.as_ref(), leased_rows.is_empty()) {
+            (Some(storage), false) => storage
+                .lease_sync_entities(&leased_rows)
+                .map_err(|error| error.to_string())?,
+            _ => Vec::new(),
+        };
+        let delivery_ids = leases
+            .into_iter()
+            .map(|lease| (lease.id, lease.delivery_id))
+            .collect::<HashMap<_, _>>();
+
+        queued
+            .into_iter()
+            .map(|queued| {
+                let payload =
+                    serde_json::to_vec(&queued.message).map_err(|error| error.to_string())?;
+                let mut envelope =
+                    SyncEnvelopeV2::new(payload).map_err(|error| error.to_string())?;
+                if let Some(row_id) = queued.queue_row_id {
+                    envelope.delivery_id = delivery_ids
+                        .get(&row_id)
+                        .cloned()
+                        .ok_or_else(|| format!("sync queue row {row_id} was not leased"))?;
+                }
+                Ok(envelope)
+            })
+            .collect()
+    }
+
+    pub fn ack_sync_delivery(&self, delivery_id: &str, relay_seq: u64) -> Result<bool, String> {
+        self.storage
+            .as_ref()
+            .ok_or_else(|| "sync storage unavailable".to_string())?
+            .ack_sync_delivery(delivery_id, relay_seq)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn accept_sync_ack(&self, ack_json: &str) -> Result<bool, String> {
+        let ack: RelayAckV2 = serde_json::from_str(ack_json).map_err(|error| error.to_string())?;
+        self.ack_sync_delivery(&ack.delivery_id, ack.seq)
+    }
+
+    pub fn get_sync_receive_cursor(&self, room_id: &str) -> Result<u64, String> {
+        self.storage
+            .as_ref()
+            .ok_or_else(|| "sync storage unavailable".to_string())?
+            .get_sync_receive_cursor(room_id)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn set_sync_receive_cursor(&self, room_id: &str, relay_seq: u64) -> Result<(), String> {
+        self.storage
+            .as_ref()
+            .ok_or_else(|| "sync storage unavailable".to_string())?
+            .set_sync_receive_cursor(room_id, relay_seq)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn report_sync_transport_state(&mut self, report_json: &str) -> Result<(), String> {
+        #[derive(serde::Deserialize)]
+        struct TransportStateReport {
+            kind: crate::sync_models::SyncStatus,
+            last_error: Option<String>,
+        }
+
+        let report: TransportStateReport =
+            serde_json::from_str(report_json).map_err(|error| error.to_string())?;
+        let sync_manager = self
+            .sync_manager
+            .as_mut()
+            .ok_or_else(|| "sync manager unavailable".to_string())?;
+        sync_manager.report_transport_state(report.kind, report.last_error);
+        Ok(())
     }
 
     /// Push an entity through sync, persisting to queue if storage available
@@ -12326,7 +12598,9 @@ impl MahoCore {
                 .create_conversation(id, title, space_id, model)
                 .is_ok();
             if ok {
-                if let Ok(convs) = storage.list_conversations(999999) {
+                if let Ok(convs) =
+                    storage.list_conversations(maho_types::chat::ConversationListState::All, 999999)
+                {
                     if let Some(conv) = convs.iter().find(|c| c.id == id) {
                         payload_opt = serde_json::to_string(conv).ok();
                     }
@@ -12337,6 +12611,263 @@ impl MahoCore {
             self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), payload, false);
         }
         ok
+    }
+
+    pub fn list_conversations(
+        &self,
+        state: maho_types::chat::ConversationListState,
+        limit: usize,
+    ) -> Result<Vec<maho_types::chat::Conversation>, maho_storage::StorageError> {
+        self.storage
+            .as_ref()
+            .ok_or_else(|| maho_storage::StorageError::Other("storage unavailable".into()))?
+            .list_conversations(state, limit)
+    }
+
+    fn push_conversation_sync(&mut self, id: &str) {
+        let payload = self
+            .storage
+            .as_ref()
+            .and_then(|storage| {
+                storage
+                    .list_conversations(maho_types::chat::ConversationListState::All, 999999)
+                    .ok()
+            })
+            .and_then(|rows| rows.into_iter().find(|row| row.id == id))
+            .and_then(|row| serde_json::to_string(&row).ok());
+        if let Some(payload) = payload {
+            self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), payload, false);
+        }
+    }
+
+    pub fn archive_conversation_persisted(&mut self, id: &str) -> bool {
+        let now = chrono::Utc::now().to_rfc3339();
+        let ok = self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.archive_conversation(id, &now).unwrap_or(false));
+        if ok {
+            self.push_conversation_sync(id);
+        }
+        ok
+    }
+
+    pub fn unarchive_conversation_persisted(&mut self, id: &str) -> bool {
+        let now = chrono::Utc::now().to_rfc3339();
+        let ok = self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.unarchive_conversation(id, &now).unwrap_or(false));
+        if ok {
+            self.push_conversation_sync(id);
+        }
+        ok
+    }
+
+    pub fn mark_conversation_session_active(&self, id: &str) {
+        let mut sessions = self
+            .active_chat_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *sessions.entry(id.to_string()).or_insert(0) += 1;
+    }
+    pub fn mark_conversation_session_inactive(&self, id: &str) {
+        let mut sessions = self
+            .active_chat_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = sessions.get_mut(id) {
+            *count -= 1;
+            if *count == 0 {
+                sessions.remove(id);
+            }
+        }
+    }
+    pub fn active_conversation_ids(&self) -> Vec<String> {
+        let mut ids: Vec<_> = self
+            .active_chat_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    fn is_conversation_session_active(&self, id: &str) -> bool {
+        self.active_chat_sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(id)
+    }
+    pub fn active_conversation_registry(&self) -> Arc<Mutex<HashMap<String, usize>>> {
+        Arc::clone(&self.active_chat_sessions)
+    }
+
+    pub fn apply_conversation_bulk_operation(
+        &mut self,
+        operation: maho_types::chat::ConversationBulkOperation,
+        ids: Vec<String>,
+        now: &str,
+    ) -> Result<maho_types::chat::ConversationBulkResult, serde_json::Value> {
+        if operation == maho_types::chat::ConversationBulkOperation::Delete {
+            let active = self
+                .active_chat_sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut blocked = vec![];
+            let mut seen = HashSet::new();
+            for id in &ids {
+                if active.contains_key(id) && seen.insert(id.clone()) {
+                    blocked.push(id.clone());
+                }
+            }
+            if !blocked.is_empty() {
+                return Err(serde_json::json!({"error":"active_sessions","ids":blocked}));
+            }
+        }
+        let result = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| serde_json::json!({"error":"storage"}))?
+            .apply_conversation_bulk_operation(operation, &ids, now)
+            .map_err(|_| serde_json::json!({"error":"storage"}))?;
+        for id in &result.affected_ids {
+            if operation == maho_types::chat::ConversationBulkOperation::Delete {
+                self.push_sync_entity(SyncEntityType::Conversation, id.clone(), "{}".into(), true);
+            } else {
+                self.push_conversation_sync(id);
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn get_conversation_auto_archive_policy(&self) -> Result<i32, maho_storage::StorageError> {
+        let raw = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| maho_storage::StorageError::Other("storage unavailable".into()))?
+            .get_setting("conversation.auto_archive_after_days.v1")?;
+        raw.map(|v| {
+            v.parse::<i32>().map_err(|_| {
+                maho_storage::StorageError::Other("invalid auto archive policy".into())
+            })
+        })
+        .transpose()
+        .map(|v| v.unwrap_or(-1))
+    }
+    pub fn set_conversation_auto_archive_policy(&self, days: i32) -> bool {
+        if days == 0 || days < -1 {
+            return false;
+        }
+        self.storage.as_ref().is_some_and(|s| {
+            s.set_setting("conversation.auto_archive_after_days.v1", &days.to_string())
+                .is_ok()
+        })
+    }
+    pub fn auto_archive_conversations(
+        &mut self,
+        now_sec: i64,
+    ) -> Result<Option<usize>, maho_storage::StorageError> {
+        let days = self.get_conversation_auto_archive_policy()?;
+        if days == -1 {
+            return Ok(None);
+        }
+        let ids = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| maho_storage::StorageError::Other("storage unavailable".into()))?
+            .auto_archive_conversations(now_sec, days)?;
+        for id in &ids {
+            self.push_conversation_sync(id);
+        }
+        Ok(Some(ids.len()))
+    }
+
+    pub fn create_conversation_project_persisted(
+        &mut self,
+        name: &str,
+    ) -> Option<maho_types::chat::ConversationProject> {
+        if name.is_empty() {
+            return None;
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.storage
+            .as_ref()?
+            .create_conversation_project(&id, name, &now)
+            .ok()?;
+        let project = maho_types::chat::ConversationProject {
+            id: id.clone(),
+            name: name.into(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        let payload = serde_json::to_string(&project).ok()?;
+        self.push_sync_entity(SyncEntityType::ConversationProject, id, payload, false);
+        Some(project)
+    }
+    pub fn list_conversation_projects(&self) -> Vec<maho_types::chat::ConversationProject> {
+        self.storage
+            .as_ref()
+            .and_then(|s| s.list_conversation_projects().ok())
+            .unwrap_or_default()
+    }
+    pub fn rename_conversation_project_persisted(&mut self, id: &str, name: &str) -> bool {
+        let now = chrono::Utc::now().to_rfc3339();
+        let ok = self.storage.as_ref().is_some_and(|s| {
+            s.rename_conversation_project(id, name, &now)
+                .unwrap_or(false)
+        });
+        if ok {
+            if let Some(p) = self
+                .list_conversation_projects()
+                .into_iter()
+                .find(|p| p.id == id)
+            {
+                if let Ok(payload) = serde_json::to_string(&p) {
+                    self.push_sync_entity(
+                        SyncEntityType::ConversationProject,
+                        id.into(),
+                        payload,
+                        false,
+                    );
+                }
+            }
+        }
+        ok
+    }
+    pub fn delete_conversation_project_persisted(&mut self, id: &str) -> bool {
+        let ok = self
+            .storage
+            .as_ref()
+            .is_some_and(|s| s.delete_conversation_project(id).unwrap_or(false));
+        if ok {
+            self.push_sync_entity(
+                SyncEntityType::ConversationProject,
+                id.into(),
+                "{}".into(),
+                true,
+            );
+        }
+        ok
+    }
+    pub fn move_conversations_to_project_persisted(
+        &mut self,
+        ids: Vec<String>,
+        project_id: Option<&str>,
+    ) -> Result<maho_types::chat::ConversationBulkResult, maho_storage::StorageError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let result = self
+            .storage
+            .as_ref()
+            .ok_or_else(|| maho_storage::StorageError::Other("storage unavailable".into()))?
+            .move_conversations_to_project(&ids, project_id, &now)?;
+        for id in &result.affected_ids {
+            self.push_conversation_sync(id);
+        }
+        Ok(result)
     }
 
     pub fn save_conversation_message_persisted(
@@ -12370,38 +12901,38 @@ impl MahoCore {
     }
 
     pub fn delete_conversation_persisted(&mut self, id: &str) -> bool {
-        let mut turn_ids = Vec::new();
-        if let Some(ref storage) = self.storage {
-            if let Ok(turns) = storage.get_conversation_messages(id) {
-                for turn in turns {
-                    turn_ids.push(turn.id.clone());
-                }
-            }
+        if self.is_conversation_session_active(id) {
+            return false;
         }
-        for turn_id in &turn_ids {
+        let turn_ids = match self.storage.as_ref() {
+            Some(storage) => match storage.get_conversation_messages(id) {
+                Ok(turns) => turns.into_iter().map(|turn| turn.id).collect::<Vec<_>>(),
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        let ok = self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.delete_conversation(id).unwrap_or(false));
+        if !ok {
+            return false;
+        }
+        for turn_id in turn_ids {
             self.push_sync_entity(
                 SyncEntityType::ConversationTurn,
-                turn_id.clone(),
+                turn_id,
                 "{}".to_string(),
                 true,
             );
         }
-        let mut ok = false;
-        if let Some(ref storage) = self.storage {
-            for turn_id in &turn_ids {
-                let _ = storage.delete_conversation_turn(turn_id);
-            }
-            ok = storage.delete_conversation(id).unwrap_or(false);
-        }
-        if ok {
-            self.push_sync_entity(
-                SyncEntityType::Conversation,
-                id.to_string(),
-                "{}".to_string(),
-                true,
-            );
-        }
-        ok
+        self.push_sync_entity(
+            SyncEntityType::Conversation,
+            id.to_string(),
+            "{}".to_string(),
+            true,
+        );
+        true
     }
 
     pub fn rename_conversation_persisted(&mut self, id: &str, title: &str) -> bool {
@@ -12410,7 +12941,9 @@ impl MahoCore {
         if let Some(ref storage) = self.storage {
             ok = storage.rename_conversation(id, title).unwrap_or(false);
             if ok {
-                if let Ok(convs) = storage.list_conversations(999999) {
+                if let Ok(convs) =
+                    storage.list_conversations(maho_types::chat::ConversationListState::All, 999999)
+                {
                     if let Some(conv) = convs.iter().find(|c| c.id == id) {
                         payload_opt = serde_json::to_string(conv).ok();
                     }
@@ -12421,6 +12954,68 @@ impl MahoCore {
             self.push_sync_entity(SyncEntityType::Conversation, id.to_string(), payload, false);
         }
         ok
+    }
+
+    // === Composer drafts (settings-table backed, device/profile local, never synced) ===
+
+    /// Read the composer draft for `scope_json`.
+    ///
+    /// Returns `None` for a malformed scope, an absent draft, a corrupt stored value, or a
+    /// conversation scope naming a conversation that does not exist — in the last case the
+    /// orphaned settings row is best-effort deleted.
+    pub fn get_composer_draft(&self, scope_json: &str) -> Option<String> {
+        let scope = crate::composer_draft::ComposerDraftScope::parse(scope_json)?;
+        let storage = self.storage.as_ref()?;
+        let key = scope.storage_key();
+        let raw = storage.get_setting(&key).ok().flatten()?;
+        if let Some(conversation_id) = scope.conversation_id() {
+            if !storage
+                .conversation_exists(conversation_id)
+                .unwrap_or(false)
+            {
+                // Orphan: the conversation is gone, so the draft can never be restored.
+                let _ = storage.delete_setting(&key);
+                return None;
+            }
+        }
+        let draft: crate::composer_draft::ComposerDraft = serde_json::from_str(&raw).ok()?;
+        serde_json::to_string(&draft).ok()
+    }
+
+    /// Write the composer draft for `scope_json`. An empty `text` deletes the row.
+    /// Text is stored verbatim; the timestamp is assigned natively (RFC3339).
+    /// Returns false for a malformed scope, missing storage, or a storage error.
+    pub fn set_composer_draft(&self, scope_json: &str, text: &str) -> bool {
+        let Some(scope) = crate::composer_draft::ComposerDraftScope::parse(scope_json) else {
+            return false;
+        };
+        let Some(storage) = self.storage.as_ref() else {
+            return false;
+        };
+        let key = scope.storage_key();
+        if text.is_empty() {
+            return storage.delete_setting(&key).is_ok();
+        }
+        let draft = crate::composer_draft::ComposerDraft::new(
+            text.to_string(),
+            chrono::Utc::now().to_rfc3339(),
+        );
+        let Ok(payload) = serde_json::to_string(&draft) else {
+            return false;
+        };
+        storage.set_setting(&key, &payload).is_ok()
+    }
+
+    /// Delete the composer draft for `scope_json`. Deleting an absent draft succeeds.
+    /// Returns false for a malformed scope, missing storage, or a storage error.
+    pub fn delete_composer_draft(&self, scope_json: &str) -> bool {
+        let Some(scope) = crate::composer_draft::ComposerDraftScope::parse(scope_json) else {
+            return false;
+        };
+        let Some(storage) = self.storage.as_ref() else {
+            return false;
+        };
+        storage.delete_setting(&scope.storage_key()).is_ok()
     }
 
     /// Toggle Memory entity sync per opt-out UX
@@ -12549,6 +13144,7 @@ fn parse_sync_entity_type(s: &str) -> Option<SyncEntityType> {
         "cssmod" => Some(SyncEntityType::CssMod),
         "easel" => Some(SyncEntityType::Easel),
         "conversation" => Some(SyncEntityType::Conversation),
+        "conversationproject" => Some(SyncEntityType::ConversationProject),
         "conversationturn" => Some(SyncEntityType::ConversationTurn),
         "autofilladdress" => Some(SyncEntityType::AutofillAddress),
         "autofillpayment" => Some(SyncEntityType::AutofillPayment),

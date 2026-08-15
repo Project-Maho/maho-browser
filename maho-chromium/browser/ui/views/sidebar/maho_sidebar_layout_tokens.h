@@ -44,6 +44,20 @@ inline constexpr int kTopBarButtonSpacingDp = 0;
 inline constexpr int kTopBarCompactLeadingGapDp = 2;
 inline constexpr int kTopBarCompactNavSpacingDp = 4;
 inline constexpr int kTopBarCompactTrailingInsetDp = 3;
+// Control activity indicator chip. Sized against the existing top-bar and
+// search-pill scale so the chip reads as part of the same sidebar system
+// rather than a bolted-on surface.
+inline constexpr int kControlIndicatorHeightDp = 32;
+inline constexpr int kControlIndicatorCompactWidthDp = 76;
+inline constexpr int kControlIndicatorCornerRadiusDp = 10;
+inline constexpr int kControlIndicatorIconSizeDp = 16;
+inline constexpr int kControlIndicatorHorizontalInsetDp = 8;
+inline constexpr int kControlIndicatorVerticalInsetDp = 4;
+inline constexpr int kControlIndicatorItemSpacingDp = 6;
+// Floor for the elided status/target text column before the chip falls back to
+// its compact form. Keeps controller identity readable at narrow widths.
+inline constexpr int kControlIndicatorMinTextColumnDp = 64;
+
 inline constexpr int kLibraryRailWidthDp = 92;
 // Fixed content width of the floating Downloads/Archive library overlay. The
 // overlay widget is pinned to this width regardless of the sidebar's persisted

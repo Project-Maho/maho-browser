@@ -75,9 +75,9 @@ fun NotificationSettingsScreen(
                 SectionHeader("Categories")
                 SwitchPreference("Calendar Reminders", calendarNotifications) {
                     calendarNotifications = it
-                BridgeSettings.updateNotificationSettings(
-                    NotificationSettingsUpdate(soundEnabled = it)
-                )
+                    BridgeSettings.updateNotificationSettings(
+                        NotificationSettingsUpdate(calendarNotifications = it)
+                    )
                 }
                 SwitchPreference("Update Notifications", updateNotifications) {
                     updateNotifications = it

@@ -58,6 +58,8 @@ use maho_core::models::account::{CreateAccountRequest, Encryption};
 use std::sync::{Mutex, OnceLock};
 
 static EVENT_LOG: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+static NEW_MAIL_LOG: OnceLock<Mutex<Vec<(String, String, String, String, String, u64, u64)>>> =
+    OnceLock::new();
 
 unsafe extern "C" fn test_event_cb(
     event_type: *const std::os::raw::c_char,
@@ -75,6 +77,35 @@ unsafe extern "C" fn test_event_cb(
     log.lock().unwrap().push((ev, acc));
 }
 
+unsafe extern "C" fn test_new_mail_cb(
+    account_id: *const std::os::raw::c_char,
+    email_id: *const std::os::raw::c_char,
+    message_id: *const std::os::raw::c_char,
+    sender: *const std::os::raw::c_char,
+    subject: *const std::os::raw::c_char,
+    cursor: u64,
+    epoch: u64,
+) {
+    let read = |value| {
+        std::ffi::CStr::from_ptr(value)
+            .to_string_lossy()
+            .into_owned()
+    };
+    NEW_MAIL_LOG
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .push((
+            read(account_id),
+            read(email_id),
+            read(message_id),
+            read(sender),
+            read(subject),
+            cursor,
+            epoch,
+        ));
+}
+
 static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[test]
@@ -85,19 +116,34 @@ fn accounts_changed_event_emission_and_reconnect() {
     let ctx = crate::test_support::ctx_arc(pool);
 
     assert!(MahoMailRegisterEventCallback(test_event_cb));
+    assert!(MahoMailRegisterNewMailCallback(test_new_mail_cb));
 
     let log = EVENT_LOG.get_or_init(|| Mutex::new(Vec::new()));
     log.lock().unwrap().clear();
 
-    emit_new_mail_event("arrival-account");
-    let events = log.lock().unwrap().clone();
+    let new_mail = NEW_MAIL_LOG.get_or_init(|| Mutex::new(Vec::new()));
+    new_mail.lock().unwrap().clear();
+    emit_new_mail_event(
+        "arrival-account",
+        "email-7",
+        "thread-7",
+        "Sender",
+        "Subject",
+        7,
+        1234,
+    );
     assert_eq!(
-        events
-            .iter()
-            .filter(|(ev, acc)| ev == "new-mail" && acc == "arrival-account")
-            .count(),
-        1,
-        "new mailbox arrivals emit exactly one event"
+        new_mail.lock().unwrap().as_slice(),
+        &[(
+            "arrival-account".to_string(),
+            "email-7".to_string(),
+            "thread-7".to_string(),
+            "Sender".to_string(),
+            "Subject".to_string(),
+            7,
+            1234,
+        )],
+        "new mailbox arrivals preserve their typed identity"
     );
 
     log.lock().unwrap().clear();

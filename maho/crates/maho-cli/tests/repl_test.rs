@@ -239,11 +239,9 @@ async fn repl_click_by_name_resolves() {
     // `click @<name>` resolves the current @ref from a fresh snapshot (so it
     // never goes stale) then clicks it. Mock: snapshot first, then click.
     let clicked = json!({ "clicked": true });
-    let (_dir, sock_path, server) =
-        make_mock_server(vec![asc_like_tree(), clicked]).await;
+    let (_dir, sock_path, server) = make_mock_server(vec![asc_like_tree(), clicked]).await;
 
-    let output =
-        run_cli_with_stdin(&["browser", "repl"], &sock_path, "click @New App\n.quit\n");
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "click @New App\n.quit\n");
     server.abort();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -257,8 +255,7 @@ async fn repl_click_by_name_resolves() {
 async fn repl_type_by_name_resolves() {
     // `type @<name>=<text>` resolves the ref from a fresh snapshot then types.
     let typed = json!({ "ok": true });
-    let (_dir, sock_path, server) =
-        make_mock_server(vec![asc_like_tree(), typed]).await;
+    let (_dir, sock_path, server) = make_mock_server(vec![asc_like_tree(), typed]).await;
 
     let output = run_cli_with_stdin(
         &["browser", "repl"],

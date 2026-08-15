@@ -12,13 +12,15 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
-#include "base/uuid.h"
-#include "base/logging.h"
-#include "base/time/time.h"
 #include "base/strings/string_util.h"
+#include "base/time/time.h"
+#include "base/uuid.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "components/prefs/pref_service.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "net/base/net_errors.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
@@ -27,20 +29,17 @@
 #include "services/network/public/mojom/url_response_head.mojom.h"
 #include "url/gurl.h"
 #include <functional>
-#include "build/build_config.h"
-#include "maho/browser/maho_core_holder.h"
-#include "maho/third_party/maho/maho_ffi.h"
 
 namespace maho::auth {
 
 StoreTokensParams::StoreTokensParams() = default;
 StoreTokensParams::~StoreTokensParams() = default;
-StoreTokensParams::StoreTokensParams(const StoreTokensParams&) = default;
-StoreTokensParams& StoreTokensParams::operator=(const StoreTokensParams&) =
-    default;
-StoreTokensParams::StoreTokensParams(StoreTokensParams&&) noexcept = default;
-StoreTokensParams& StoreTokensParams::operator=(StoreTokensParams&&) noexcept =
-    default;
+StoreTokensParams::StoreTokensParams(const StoreTokensParams &) = default;
+StoreTokensParams &
+StoreTokensParams::operator=(const StoreTokensParams &) = default;
+StoreTokensParams::StoreTokensParams(StoreTokensParams &&) noexcept = default;
+StoreTokensParams &
+StoreTokensParams::operator=(StoreTokensParams &&) noexcept = default;
 
 namespace {
 
@@ -69,8 +68,8 @@ const net::NetworkTrafficAnnotationTag kRefreshTrafficAnnotation =
       }
     )");
 
-std::string DecryptB64(const std::string& b64,
-                       const os_crypt_async::Encryptor& encryptor) {
+std::string DecryptB64(const std::string &b64,
+                       const os_crypt_async::Encryptor &encryptor) {
   if (b64.empty()) {
     return {};
   }
@@ -85,8 +84,8 @@ std::string DecryptB64(const std::string& b64,
   return plaintext;
 }
 
-std::string EncryptB64(const std::string& plaintext,
-                       const os_crypt_async::Encryptor& encryptor) {
+std::string EncryptB64(const std::string &plaintext,
+                       const os_crypt_async::Encryptor &encryptor) {
   if (plaintext.empty()) {
     return {};
   }
@@ -115,6 +114,26 @@ const net::NetworkTrafficAnnotationTag kAuthLoginTrafficAnnotation =
           "Not controlled by enterprise policy. The user explicitly submits "
           "credentials in the Account settings pane or welcome wizard to authenticate with the "
           "Maho relay service. No ambient or background network activity."
+      }
+    )");
+
+const net::NetworkTrafficAnnotationTag kSyncBootstrapTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_sync_account_bootstrap", R"(
+      semantics {
+        sender: "Maho Sync Account Bootstrap"
+        description:
+          "Retrieves or creates the signed-in account's encrypted Sync "
+          "bootstrap material so all devices derive the same Sync room key."
+        trigger: "A relay account login succeeds."
+        data: "Bearer access token and versioned Sync room bootstrap material."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Active while the user is signed in to Maho."
+        policy_exception_justification:
+          "Required to configure account-based end-to-end encrypted Sync "
+          "immediately after the user signs in."
       }
     )");
 
@@ -148,7 +167,7 @@ const net::NetworkTrafficAnnotationTag kAuthGoogleLoginTrafficAnnotation =
 // Fills the shared device identity fields every relay auth request carries.
 // The device id is generated once and persisted so a later sign-in reuses this
 // device's relay row and sync room instead of orphaning its snapshot.
-void SetDeviceFields(PrefService* prefs, base::DictValue& body) {
+void SetDeviceFields(PrefService *prefs, base::DictValue &body) {
   std::string device_id = prefs->GetString(maho::account_prefs::kRelayDeviceId);
   if (device_id.empty()) {
     device_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
@@ -176,53 +195,338 @@ void SetDeviceFields(PrefService* prefs, base::DictValue& body) {
 #endif
 }
 
+struct SyncBootstrapMaterial {
+  int version = 0;
+  std::string room_id;
+  std::string seed;
+};
+
+std::optional<SyncBootstrapMaterial>
+ParseSyncBootstrap(const std::string &json) {
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return std::nullopt;
+  }
+  const base::DictValue &dict = parsed->GetDict();
+  const std::optional<int> version = dict.FindInt("version");
+  const std::string *room_id = dict.FindString("room_id");
+  if (!room_id) {
+    room_id = dict.FindString("roomId");
+  }
+  const std::string *seed = dict.FindString("seed");
+  if (!version || *version != 1 || !room_id || room_id->empty() || !seed ||
+      seed->empty()) {
+    return std::nullopt;
+  }
+  return SyncBootstrapMaterial{*version, *room_id, *seed};
+}
+
+std::string GetSyncRoomIdOnCoreSequence() {
+  MahoCore *core = maho::GetCore();
+  if (!core) {
+    return {};
+  }
+  char *value = maho_core_get_sync_room_id(core);
+  if (!value) {
+    return {};
+  }
+  std::string room_id(value);
+  maho_string_free(value);
+  return room_id;
+}
+
+std::optional<SyncBootstrapMaterial> GenerateSyncBootstrapOnCoreSequence() {
+  MahoCore *core = maho::GetCore();
+  if (!core) {
+    return std::nullopt;
+  }
+  char *value = maho_core_generate_sync_bootstrap(core);
+  if (!value) {
+    return std::nullopt;
+  }
+  std::string json(value);
+  maho_string_free(value);
+  return ParseSyncBootstrap(json);
+}
+
+bool ConfigureSyncBootstrapOnCoreSequence(std::string seed) {
+  MahoCore *core = maho::GetCore();
+  if (!core) {
+    return false;
+  }
+  const std::string relay_url = GetSyncRelayUrl();
+  char *value =
+      maho_core_configure_sync_bootstrap(core, relay_url.c_str(), seed.c_str());
+  if (!value) {
+    return false;
+  }
+  std::string json(value);
+  maho_string_free(value);
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  return parsed && parsed->is_dict() &&
+         parsed->GetDict().FindBool("success").value_or(false);
+}
+
+void ConfigureFetchedSyncBootstrap(SyncBootstrapMaterial bootstrap,
+                                   LoginResultCallback callback) {
+  maho::PostCoreTask<bool>(
+      FROM_HERE,
+      base::BindOnce(&ConfigureSyncBootstrapOnCoreSequence,
+                     std::move(bootstrap.seed)),
+      base::BindOnce(
+          [](LoginResultCallback cb, bool configured) {
+            std::move(cb).Run(configured,
+                              configured ? std::string()
+                                         : "Unable to configure account Sync.");
+          },
+          std::move(callback)));
+}
+
+void FetchAccountSyncBootstrap(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, bool allow_create, LoginResultCallback callback);
+
+void PutGeneratedSyncBootstrap(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, SyncBootstrapMaterial generated,
+    LoginResultCallback callback) {
+  base::DictValue body;
+  body.Set("version", generated.version);
+  body.Set("room_id", generated.room_id);
+  body.Set("seed", generated.seed);
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = GURL(GetSyncRelayUrl() + "/sync/bootstrap");
+  request->method = "PUT";
+  request->headers.SetHeader("Authorization", "Bearer " + access_token);
+  request->headers.SetHeader("Content-Type", "application/json");
+  request->headers.SetHeader("Accept", "application/json");
+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), kSyncBootstrapTrafficAnnotation);
+  loader->AttachStringForUpload(body_json, "application/json");
+  loader->SetTimeoutDuration(base::Seconds(30));
+  loader->SetAllowHttpErrorResults(true);
+  auto *raw_loader = loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(
+          [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+             std::string token, SyncBootstrapMaterial local_generated,
+             LoginResultCallback cb,
+             std::unique_ptr<network::SimpleURLLoader> completed_loader,
+             std::optional<std::string> response_body) {
+            const auto *info = completed_loader->ResponseInfo();
+            const int status =
+                info && info->headers ? info->headers->response_code() : 0;
+            if (completed_loader->NetError() != net::OK) {
+              std::move(cb).Run(false,
+                                "Unable to create account Sync bootstrap.");
+              return;
+            }
+            if (status == 409) {
+              FetchAccountSyncBootstrap(std::move(factory), std::move(token),
+                                        false, std::move(cb));
+              return;
+            }
+            if ((status != 200 && status != 201) || !response_body) {
+              std::move(cb).Run(false,
+                                "Unable to create account Sync bootstrap.");
+              return;
+            }
+            std::optional<SyncBootstrapMaterial> stored =
+                ParseSyncBootstrap(*response_body);
+            if (!stored || stored->room_id != local_generated.room_id ||
+                stored->seed != local_generated.seed) {
+              std::move(cb).Run(false,
+                                "Invalid account Sync bootstrap response.");
+              return;
+            }
+            ConfigureFetchedSyncBootstrap(std::move(*stored), std::move(cb));
+          },
+          std::move(url_loader_factory), access_token, std::move(generated),
+          std::move(callback), std::move(loader)),
+      64 * 1024);
+}
+
+void FetchAccountSyncBootstrap(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, bool allow_create, LoginResultCallback callback) {
+  GURL request_url(GetSyncRelayUrl() + "/sync/bootstrap");
+  if (!request_url.is_valid()) {
+    std::move(callback).Run(false, "Invalid Sync relay URL.");
+    return;
+  }
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = request_url;
+  request->method = "GET";
+  request->headers.SetHeader("Authorization", "Bearer " + access_token);
+  request->headers.SetHeader("Accept", "application/json");
+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), kSyncBootstrapTrafficAnnotation);
+  loader->SetTimeoutDuration(base::Seconds(30));
+  loader->SetAllowHttpErrorResults(true);
+  auto *raw_loader = loader.get();
+  raw_loader->DownloadToString(
+      url_loader_factory.get(),
+      base::BindOnce(
+          [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+             std::string token, bool can_create, LoginResultCallback cb,
+             std::unique_ptr<network::SimpleURLLoader> completed_loader,
+             std::optional<std::string> response_body) {
+            const auto *info = completed_loader->ResponseInfo();
+            const int status =
+                info && info->headers ? info->headers->response_code() : 0;
+            if (completed_loader->NetError() != net::OK) {
+              std::move(cb).Run(false,
+                                "Unable to retrieve account Sync bootstrap.");
+              return;
+            }
+            if (status == 200 && response_body) {
+              std::optional<SyncBootstrapMaterial> bootstrap =
+                  ParseSyncBootstrap(*response_body);
+              if (!bootstrap) {
+                std::move(cb).Run(false,
+                                  "Invalid account Sync bootstrap response.");
+                return;
+              }
+              ConfigureFetchedSyncBootstrap(std::move(*bootstrap),
+                                            std::move(cb));
+              return;
+            }
+            if (status != 404 || !can_create) {
+              std::move(cb).Run(
+                  false, status == 404
+                             ? "Existing Recovery Phrase Sync requires "
+                               "explicit migration."
+                             : "Unable to retrieve account Sync bootstrap.");
+              return;
+            }
+            maho::PostCoreTask<std::optional<SyncBootstrapMaterial>>(
+                FROM_HERE, base::BindOnce(&GenerateSyncBootstrapOnCoreSequence),
+                base::BindOnce(
+                    [](scoped_refptr<network::SharedURLLoaderFactory>
+                           inner_factory,
+                       std::string inner_token, LoginResultCallback inner_cb,
+                       std::optional<SyncBootstrapMaterial> generated) {
+                      if (!generated) {
+                        std::move(inner_cb).Run(
+                            false,
+                            "Unable to generate account Sync bootstrap.");
+                        return;
+                      }
+                      PutGeneratedSyncBootstrap(
+                          std::move(inner_factory), std::move(inner_token),
+                          std::move(*generated), std::move(inner_cb));
+                    },
+                    std::move(factory), std::move(token), std::move(cb)));
+          },
+          std::move(url_loader_factory), access_token, allow_create,
+          std::move(callback), std::move(loader)),
+      64 * 1024);
+}
+
+void ConfigureAccountSyncAfterLogin(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    std::string access_token, LoginResultCallback callback) {
+  maho::PostCoreTask<std::string>(
+      FROM_HERE, base::BindOnce(&GetSyncRoomIdOnCoreSequence),
+      base::BindOnce(
+          [](scoped_refptr<network::SharedURLLoaderFactory> factory,
+             std::string token, LoginResultCallback cb,
+             std::string legacy_room_id) {
+            FetchAccountSyncBootstrap(std::move(factory), std::move(token),
+                                      legacy_room_id.empty(), std::move(cb));
+          },
+          std::move(url_loader_factory), std::move(access_token),
+          std::move(callback)));
+}
+
+void CompleteLogin(PrefService *prefs, StoreTokensParams params,
+                   LoginResultCallback callback, bool bootstrap_ok,
+                   const std::string &bootstrap_error) {
+  if (!bootstrap_ok) {
+    ClearRelayTokens(prefs);
+    std::move(callback).Run(false, bootstrap_error);
+    return;
+  }
+
+  base::DictValue sign_in_event;
+  base::DictValue sign_in_data;
+  sign_in_data.Set("email", params.user_email);
+  sign_in_data.Set("password", "");
+  sign_in_data.Set("display_name", params.user_display_name);
+  sign_in_data.Set("access_token", params.access_token);
+  sign_in_data.Set("user_id", params.user_id);
+  sign_in_event.Set("SignIn", std::move(sign_in_data));
+  std::string event_json;
+  base::JSONWriter::Write(sign_in_event, &event_json);
+  maho::PostCoreClosure(FROM_HERE, base::BindOnce(
+                                       [](std::string json) {
+                                         MahoCore *core = maho::GetCore();
+                                         if (!core) {
+                                           return;
+                                         }
+                                         char *result = maho_core_sign_in(
+                                             core, json.c_str());
+                                         if (result) {
+                                           maho_string_free(result);
+                                         }
+                                       },
+                                       std::move(event_json)));
+  std::move(callback).Run(true, "");
+}
+
 void OnLoginResponse(
-    PrefService* prefs,
-    const os_crypt_async::Encryptor& encryptor,
-    LoginResultCallback callback,
+    PrefService *prefs,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor &encryptor, LoginResultCallback callback,
     std::unique_ptr<network::SimpleURLLoader> loader,
     std::optional<std::string> response_body) {
   int net_error = loader->NetError();
-  const auto* response_info = loader->ResponseInfo();
-  int http_status =
-      response_info ? response_info->headers->response_code() : 0;
+  const auto *response_info = loader->ResponseInfo();
+  int http_status = response_info ? response_info->headers->response_code() : 0;
 
   if (net_error != net::OK || !response_body.has_value()) {
     std::move(callback).Run(false, "Network error");
     return;
   }
 
-  auto parsed =
-      base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
+  auto parsed = base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_dict()) {
     std::move(callback).Run(false, "Invalid server response.");
     return;
   }
 
-  const base::DictValue& dict = parsed->GetDict();
+  const base::DictValue &dict = parsed->GetDict();
 
   if (http_status != 200) {
-    const std::string* error_msg = dict.FindString("error");
+    const std::string *error_msg = dict.FindString("error");
     std::move(callback).Run(
-        false,
-        error_msg ? *error_msg : "Authentication failed (HTTP " +
-                                      base::NumberToString(http_status) + ")");
+        false, error_msg ? *error_msg
+                         : "Authentication failed (HTTP " +
+                               base::NumberToString(http_status) + ")");
     return;
   }
 
-  const std::string* access_token = dict.FindString("access_token");
-  const std::string* refresh_token = dict.FindString("refresh_token");
+  const std::string *access_token = dict.FindString("access_token");
+  const std::string *refresh_token = dict.FindString("refresh_token");
   if (!access_token || !refresh_token) {
     std::move(callback).Run(false, "Missing tokens in response.");
     return;
   }
 
-  int64_t expires_at = static_cast<int64_t>(
-      dict.FindDouble("expires_at").value_or(0));
-  int64_t refresh_expires_at = static_cast<int64_t>(
-      dict.FindDouble("refresh_expires_at").value_or(0));
+  int64_t expires_at =
+      static_cast<int64_t>(dict.FindDouble("expires_at").value_or(0));
+  int64_t refresh_expires_at =
+      static_cast<int64_t>(dict.FindDouble("refresh_expires_at").value_or(0));
 
-  const base::DictValue* account = dict.FindDict("account");
+  const base::DictValue *account = dict.FindDict("account");
   std::string user_email;
   std::string user_id;
   std::string user_display_name;
@@ -230,19 +534,19 @@ void OnLoginResponse(
   std::string oauth_provider;
   std::string oauth_provider_sub;
   if (account) {
-    if (const std::string* v = account->FindString("email"))
+    if (const std::string *v = account->FindString("email"))
       user_email = *v;
     if (std::optional<int> v_int = account->FindInt("id"))
       user_id = base::NumberToString(*v_int);
-    else if (const std::string* v_str = account->FindString("id"))
+    else if (const std::string *v_str = account->FindString("id"))
       user_id = *v_str;
-    if (const std::string* v = account->FindString("display_name"))
+    if (const std::string *v = account->FindString("display_name"))
       user_display_name = *v;
-    if (const std::string* v = account->FindString("tier"))
+    if (const std::string *v = account->FindString("tier"))
       user_tier = *v;
-    if (const std::string* v = account->FindString("oauth_provider"))
+    if (const std::string *v = account->FindString("oauth_provider"))
       oauth_provider = *v;
-    if (const std::string* v = account->FindString("oauth_provider_sub"))
+    if (const std::string *v = account->FindString("oauth_provider_sub"))
       oauth_provider_sub = *v;
   }
 
@@ -263,70 +567,47 @@ void OnLoginResponse(
     return;
   }
 
-  // Fire ShellEvent::SignIn to maho-core on the thread pool.
-  {
-    base::DictValue sign_in_event;
-    base::DictValue sign_in_data;
-    sign_in_data.Set("email", user_email);
-    sign_in_data.Set("password", "");  // Don't pass password to core.
-    sign_in_data.Set("display_name", user_display_name);
-    sign_in_data.Set("access_token", *access_token);
-    sign_in_data.Set("user_id", user_id);
-    sign_in_event.Set("SignIn", std::move(sign_in_data));
-
-    std::string event_json;
-    base::JSONWriter::Write(sign_in_event, &event_json);
-
-    maho::PostCoreClosure(
-        FROM_HERE,
-        base::BindOnce(
-            [](std::string json) {
-              MahoCore* core = maho::GetCore();
-              if (!core) return;
-              char* result = maho_core_sign_in(core, json.c_str());
-              if (result) maho_string_free(result);
-            },
-            std::move(event_json)));
-  }
-
-  std::move(callback).Run(true, "");
+  ConfigureAccountSyncAfterLogin(
+      std::move(url_loader_factory), params.access_token,
+      base::BindOnce(&CompleteLogin, prefs, std::move(params),
+                     std::move(callback)));
 }
 
 void OnGoogleLoginResponse(
-    base::RepeatingCallback<PrefService*()> prefs_provider,
-    const os_crypt_async::Encryptor& encryptor,
-    LoginResultCallback callback,
+    base::RepeatingCallback<PrefService *()> prefs_provider,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const os_crypt_async::Encryptor &encryptor, LoginResultCallback callback,
     std::unique_ptr<network::SimpleURLLoader> loader,
     std::optional<std::string> response_body) {
-  PrefService* prefs = prefs_provider.Run();
+  PrefService *prefs = prefs_provider.Run();
   if (!prefs) {
     std::move(callback).Run(false, "Profile closed before sign-in completed.");
     return;
   }
-  OnLoginResponse(prefs, encryptor, std::move(callback), std::move(loader),
+  OnLoginResponse(prefs, std::move(url_loader_factory), encryptor,
+                  std::move(callback), std::move(loader),
                   std::move(response_body));
 }
 
-}  // namespace
+} // namespace
 
-
-std::string GetRelayAccessToken(PrefService* prefs,
-                                const os_crypt_async::Encryptor& encryptor) {
+std::string GetRelayAccessToken(PrefService *prefs,
+                                const os_crypt_async::Encryptor &encryptor) {
   return DecryptB64(
       prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64),
       encryptor);
 }
 
-std::string GetRelayRefreshToken(PrefService* prefs,
-                                 const os_crypt_async::Encryptor& encryptor) {
+std::string GetRelayRefreshToken(PrefService *prefs,
+                                 const os_crypt_async::Encryptor &encryptor) {
   return DecryptB64(
       prefs->GetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64),
       encryptor);
 }
 
-bool StoreRelayTokens(PrefService* prefs,
-                      const os_crypt_async::Encryptor& encryptor,
-                      const StoreTokensParams& params) {
+bool StoreRelayTokens(PrefService *prefs,
+                      const os_crypt_async::Encryptor &encryptor,
+                      const StoreTokensParams &params) {
   const std::string access_b64 = EncryptB64(params.access_token, encryptor);
   const std::string refresh_b64 = EncryptB64(params.refresh_token, encryptor);
   if (access_b64.empty() || refresh_b64.empty()) {
@@ -354,8 +635,7 @@ bool StoreRelayTokens(PrefService* prefs,
   base::TrimWhitespaceASCII(params.oauth_provider_sub, base::TRIM_ALL,
                             &oauth_provider_sub);
   if (!oauth_provider.empty() && !oauth_provider_sub.empty()) {
-    prefs->SetString(maho::account_prefs::kRelayOAuthProvider,
-                     oauth_provider);
+    prefs->SetString(maho::account_prefs::kRelayOAuthProvider, oauth_provider);
     prefs->SetString(maho::account_prefs::kRelayOAuthProviderSub,
                      oauth_provider_sub);
   } else {
@@ -365,15 +645,15 @@ bool StoreRelayTokens(PrefService* prefs,
   return true;
 }
 
-void PreserveRelayIdentityMetadata(PrefService* prefs,
-                                   StoreTokensParams* params) {
+void PreserveRelayIdentityMetadata(PrefService *prefs,
+                                   StoreTokensParams *params) {
   params->oauth_provider =
       prefs->GetString(maho::account_prefs::kRelayOAuthProvider);
   params->oauth_provider_sub =
       prefs->GetString(maho::account_prefs::kRelayOAuthProviderSub);
 }
 
-void ClearRelayTokens(PrefService* prefs) {
+void ClearRelayTokens(PrefService *prefs) {
   prefs->ClearPref(maho::account_prefs::kRelayAccessTokenEncryptedB64);
   prefs->ClearPref(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
   prefs->ClearPref(maho::account_prefs::kRelayAccessTokenExpiresAt);
@@ -388,7 +668,7 @@ void ClearRelayTokens(PrefService* prefs) {
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionExpiresAt);
 }
 
-std::string BuildMailOAuthStartOptionsJson(PrefService* prefs) {
+std::string BuildMailOAuthStartOptionsJson(PrefService *prefs) {
   std::string provider;
   std::string provider_sub;
   std::string email;
@@ -413,29 +693,33 @@ std::string BuildMailOAuthStartOptionsJson(PrefService* prefs) {
   return options_json;
 }
 
-bool HasValidRelaySession(PrefService* prefs) {
-  const std::string access_token_enc = prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64);
+bool HasValidRelaySession(PrefService *prefs) {
+  const std::string access_token_enc =
+      prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64);
   if (access_token_enc.empty()) {
     return false;
   }
 
-  const int64_t access_expires_at = prefs->GetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt);
+  const int64_t access_expires_at =
+      prefs->GetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt);
   const int64_t now = base::Time::Now().ToTimeT();
   if (access_expires_at > now) {
     return true;
   }
 
-  const std::string refresh_token_enc = prefs->GetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
+  const std::string refresh_token_enc =
+      prefs->GetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
   if (refresh_token_enc.empty()) {
     return false;
   }
 
-  const int64_t refresh_expires_at = prefs->GetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt);
+  const int64_t refresh_expires_at =
+      prefs->GetInt64(maho::account_prefs::kRelayRefreshTokenExpiresAt);
   return refresh_expires_at > now;
 }
 
 std::string GetRelayBaseUrl() {
-  const char* env = std::getenv("MAHO_RELAY_URL");
+  const char *env = std::getenv("MAHO_RELAY_URL");
   if (env && *env) {
     return env;
   }
@@ -443,7 +727,7 @@ std::string GetRelayBaseUrl() {
 }
 
 std::string GetSyncRelayUrl() {
-  const char* env = std::getenv("MAHO_SYNC_RELAY_URL");
+  const char *env = std::getenv("MAHO_SYNC_RELAY_URL");
   if (env && *env) {
     return env;
   }
@@ -451,7 +735,7 @@ std::string GetSyncRelayUrl() {
 }
 
 void RefreshAccessToken(
-    const std::string& current_refresh_token,
+    const std::string &current_refresh_token,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     RefreshCallback callback) {
   if (current_refresh_token.empty()) {
@@ -476,13 +760,12 @@ void RefreshAccessToken(
       std::move(resource_request), kRefreshTrafficAnnotation);
   url_loader->AttachStringForUpload(body_json, "application/json");
 
-  auto* raw_loader = url_loader.get();
+  auto *raw_loader = url_loader.get();
   raw_loader->DownloadToString(
       url_loader_factory.get(),
       base::BindOnce(
           [](std::unique_ptr<network::SimpleURLLoader> loader,
-             RefreshCallback cb,
-             std::optional<std::string> response_body) {
+             RefreshCallback cb, std::optional<std::string> response_body) {
             const int net_error = loader->NetError();
             const int http_status =
                 (loader->ResponseInfo() && loader->ResponseInfo()->headers)
@@ -494,16 +777,16 @@ void RefreshAccessToken(
               return;
             }
 
-            auto parsed = base::JSONReader::Read(
-                *response_body, base::JSON_PARSE_RFC);
+            auto parsed =
+                base::JSONReader::Read(*response_body, base::JSON_PARSE_RFC);
             if (!parsed || !parsed->is_dict()) {
               std::move(cb).Run(false, http_status, std::nullopt);
               return;
             }
 
-            const auto& dict = parsed->GetDict();
-            const std::string* new_access = dict.FindString("access_token");
-            const std::string* new_refresh = dict.FindString("refresh_token");
+            const auto &dict = parsed->GetDict();
+            const std::string *new_access = dict.FindString("access_token");
+            const std::string *new_refresh = dict.FindString("refresh_token");
             if (!new_access || !new_refresh) {
               std::move(cb).Run(false, http_status, std::nullopt);
               return;
@@ -513,8 +796,8 @@ void RefreshAccessToken(
             tokens.access_token = *new_access;
             tokens.refresh_token = *new_refresh;
             // FindDouble + cast keeps full int64 range for unix timestamps.
-            tokens.access_expires_at = static_cast<int64_t>(
-                dict.FindDouble("expires_at").value_or(0));
+            tokens.access_expires_at =
+                static_cast<int64_t>(dict.FindDouble("expires_at").value_or(0));
             tokens.refresh_expires_at = static_cast<int64_t>(
                 dict.FindDouble("refresh_expires_at").value_or(0));
 
@@ -525,12 +808,10 @@ void RefreshAccessToken(
 }
 
 void MahoRelayLogin(
-    PrefService* prefs,
+    PrefService *prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    const os_crypt_async::Encryptor& encryptor,
-    const std::string& email,
-    const std::string& password,
-    LoginResultCallback callback) {
+    const os_crypt_async::Encryptor &encryptor, const std::string &email,
+    const std::string &password, LoginResultCallback callback) {
   if (email.empty() || password.empty()) {
     std::move(callback).Run(false, "Email and password are required.");
     return;
@@ -542,8 +823,7 @@ void MahoRelayLogin(
 
   // Stable per-profile device id: generate once and persist, so re-login reuses
   // this device's relay row and sync room instead of orphaning the snapshot.
-  std::string device_id =
-      prefs->GetString(maho::account_prefs::kRelayDeviceId);
+  std::string device_id = prefs->GetString(maho::account_prefs::kRelayDeviceId);
   if (device_id.empty()) {
     device_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
     prefs->SetString(maho::account_prefs::kRelayDeviceId, device_id);
@@ -583,8 +863,7 @@ void MahoRelayLogin(
   resource_request->method = "POST";
   resource_request->headers.SetHeader("Content-Type", "application/json");
   resource_request->headers.SetHeader("Accept", "application/json");
-  resource_request->credentials_mode =
-      network::mojom::CredentialsMode::kOmit;
+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
   auto url_loader = network::SimpleURLLoader::Create(
       std::move(resource_request), kAuthLoginTrafficAnnotation);
@@ -594,21 +873,20 @@ void MahoRelayLogin(
   // can surface the relay's real error instead of a bare "Network error".
   url_loader->SetAllowHttpErrorResults(true);
 
-  auto* raw_loader = url_loader.get();
+  auto *raw_loader = url_loader.get();
   raw_loader->DownloadToString(
       url_loader_factory.get(),
-      base::BindOnce(&OnLoginResponse, prefs, std::cref(encryptor),
-                     std::move(callback), std::move(url_loader)),
+      base::BindOnce(&OnLoginResponse, prefs, url_loader_factory,
+                     std::cref(encryptor), std::move(callback),
+                     std::move(url_loader)),
       /*max_body_size=*/64 * 1024);
 }
 
 void MahoRelaySignup(
-    PrefService* prefs,
+    PrefService *prefs,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    const os_crypt_async::Encryptor& encryptor,
-    const std::string& email,
-    const std::string& password,
-    const std::string& display_name,
+    const os_crypt_async::Encryptor &encryptor, const std::string &email,
+    const std::string &password, const std::string &display_name,
     SignupResultCallback callback) {
   if (email.empty() || password.empty()) {
     std::move(callback).Run(false, "Email and password are required.");
@@ -622,8 +900,7 @@ void MahoRelaySignup(
 
   // Stable per-profile device id (see MahoRelayLogin): generate once, persist,
   // so the account's first device reuses this row on later logins.
-  std::string device_id =
-      prefs->GetString(maho::account_prefs::kRelayDeviceId);
+  std::string device_id = prefs->GetString(maho::account_prefs::kRelayDeviceId);
   if (device_id.empty()) {
     device_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
     prefs->SetString(maho::account_prefs::kRelayDeviceId, device_id);
@@ -663,8 +940,7 @@ void MahoRelaySignup(
   resource_request->method = "POST";
   resource_request->headers.SetHeader("Content-Type", "application/json");
   resource_request->headers.SetHeader("Accept", "application/json");
-  resource_request->credentials_mode =
-      network::mojom::CredentialsMode::kOmit;
+  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 
   auto url_loader = network::SimpleURLLoader::Create(
       std::move(resource_request), kAuthLoginTrafficAnnotation);
@@ -674,28 +950,26 @@ void MahoRelaySignup(
   // can surface the relay's real error instead of a bare "Network error".
   url_loader->SetAllowHttpErrorResults(true);
 
-  auto* raw_loader = url_loader.get();
+  auto *raw_loader = url_loader.get();
   raw_loader->DownloadToString(
       url_loader_factory.get(),
-      base::BindOnce(&OnLoginResponse, prefs, std::cref(encryptor),
-                     std::move(callback), std::move(url_loader)),
+      base::BindOnce(&OnLoginResponse, prefs, url_loader_factory,
+                     std::cref(encryptor), std::move(callback),
+                     std::move(url_loader)),
       /*max_body_size=*/64 * 1024);
 }
 
-
 void MahoRelayGoogleLogin(
-    base::RepeatingCallback<PrefService*()> prefs_provider,
+    base::RepeatingCallback<PrefService *()> prefs_provider,
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    const os_crypt_async::Encryptor& encryptor,
-    const std::string& id_token,
-    const std::string& nonce,
-    LoginResultCallback callback) {
+    const os_crypt_async::Encryptor &encryptor, const std::string &id_token,
+    const std::string &nonce, LoginResultCallback callback) {
   if (id_token.empty() || nonce.empty()) {
     std::move(callback).Run(false, "Google sign-in did not complete.");
     return;
   }
 
-  PrefService* prefs = prefs_provider.Run();
+  PrefService *prefs = prefs_provider.Run();
   if (!prefs) {
     std::move(callback).Run(false, "Profile closed before sign-in completed.");
     return;
@@ -730,13 +1004,13 @@ void MahoRelayGoogleLogin(
   // can surface the relay's real error instead of a bare "Network error".
   url_loader->SetAllowHttpErrorResults(true);
 
-  auto* raw_loader = url_loader.get();
+  auto *raw_loader = url_loader.get();
   raw_loader->DownloadToString(
       url_loader_factory.get(),
       base::BindOnce(&OnGoogleLoginResponse, std::move(prefs_provider),
-                     std::cref(encryptor),
+                     url_loader_factory, std::cref(encryptor),
                      std::move(callback), std::move(url_loader)),
       /*max_body_size=*/64 * 1024);
 }
 
-}  // namespace maho::auth
+} // namespace maho::auth

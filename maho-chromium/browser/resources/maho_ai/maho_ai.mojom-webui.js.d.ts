@@ -25,6 +25,47 @@ export enum ChatIntent {
   kQuizCurrentPage,
 }
 
+export enum CompactSurface {
+  kChat,
+  kRoutines,
+}
+
+export interface SurfaceRequest {
+  surface: CompactSurface;
+  generation: bigint;
+}
+
+export interface RoutineInfo {
+  id: string;
+  name: string;
+  cron: string;
+  description: string;
+  isCustom: boolean;
+  schedule: string|null;
+  trigger: string|null;
+  enabled: boolean;
+}
+
+export interface RoutineRunStatus {
+  runId: string;
+  routineId: string;
+  source: string;
+  state: number;
+  revision: bigint;
+  result: string|null;
+  error: string|null;
+  approval: {approvalId: string}|null;
+}
+
+export interface RoutineRunRecord {
+  resultId: bigint;
+  routineId: string;
+  ranAt: bigint;
+  success: boolean;
+  content: string;
+  source: string;
+}
+
 export enum ContextSourceKind {
   kCurrentPage,
   kOpenTab,
@@ -279,6 +320,12 @@ export class PageCallbackRouter {
   onAskMahoSessionAccepted: {
     addListener(listener: (requestId: string, sessionInfo: SessionInfo) => void): void;
   };
+  onSurfaceRequested: {
+    addListener(listener: (request: SurfaceRequest) => void): number;
+  };
+  onRoutineRunStatusChanged: {
+    addListener(listener: (status: RoutineRunStatus) => void): number;
+  };
   onVoicePartial: {
     addListener(listener: (transcript: string) => void): number;
   };
@@ -299,6 +346,21 @@ export class PageHandlerRemote {
     state: RuntimeConnectionState;
     activeAdapterName: string;
   }>;
+  consumePendingSurface(lastSeenGeneration: bigint):
+      Promise<{request: SurfaceRequest}>;
+  listAllRoutines(): Promise<{routines: RoutineInfo[]}>;
+  createRoutine(
+      name: string, prompt: string, schedule: string|null,
+      trigger: string|null): Promise<{ok: boolean}>;
+  startRoutine(id: string):
+      Promise<{runId: string|null; error: string|null}>;
+  getRoutineRunStatuses(): Promise<{statuses: RoutineRunStatus[]}>;
+  getRoutineUserTier(): Promise<{tier: number}>;
+  respondToRoutineApproval(
+      runId: string, approvalId: string,
+      approved: boolean): Promise<{ok: boolean}>;
+  listRunHistory(routineId: string|null, limit: number):
+      Promise<{records: RoutineRunRecord[]}>;
   getSessionList(): Promise<{sessions: SessionInfo[]}>;
   startSession(initialPrompt: string | null, mode: InteractionMode): Promise<{
     session: SessionInfo;
@@ -326,7 +388,10 @@ export class PageHandlerRemote {
       attachBrowserContext: boolean,
       mode: InteractionMode,
       attachments: ContextAttachment[] | null,
-      chatIntent: ChatIntent): Promise<void>;
+      chatIntent: ChatIntent): Promise<{accepted: boolean}>;
+  composerDraftGet(scopeJson: string): Promise<{draftJson: string | null}>;
+  composerDraftSet(scopeJson: string, text: string): Promise<{ok: boolean}>;
+  composerDraftDelete(scopeJson: string): Promise<{ok: boolean}>;
   cancelTurn(sessionId: string): Promise<void>;
   respondToApproval(
       sessionId: string,

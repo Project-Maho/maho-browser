@@ -255,6 +255,66 @@
   line-height: 18px;
 }
 
+.chat-credential-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  align-self: stretch;
+  flex: 0 0 auto;
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-lg);
+  background: var(--color-error-subtle);
+  padding: var(--space-3) var(--space-3);
+}
+
+.chat-credential-card-icon {
+  display: inline-flex;
+  color: var(--color-error);
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.chat-credential-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.chat-credential-card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.chat-credential-card-description {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--color-secondary);
+}
+
+.chat-credential-card-action {
+  margin-top: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: flex-start;
+  background: var(--color-accent-primary, #0a84ff);
+  color: #ffffff;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.chat-credential-card-action:active {
+  opacity: 0.8;
+}
+
 .agent-thinking {
   width: 100%;
   margin-top: var(--space-1);

@@ -22,9 +22,11 @@ struct MahoApp: App {
             .appendingPathComponent("dev.maho.browser", isDirectory: true)
             .path
 
+        MahoBridge.shared.provisionSqlcipherKey(storagePath: storagePath)
         MahoBridge.shared.initialize(storagePath: storagePath)
         MahoBridge.shared.loadState()
         E2ETestHooks.runOnBoot()
+        SyncManager.registerBackgroundRefresh()
         SyncManager.shared.configureForCurrentSession()
     }
 
@@ -58,7 +60,9 @@ struct MahoApp: App {
             case .background:
                 AutoArchiveBridge.send()
                 MahoBridge.shared.saveState()
+                SyncManager.shared.appDidEnterBackground()
             case .active:
+                ConversationArchiveForegroundBridge.sweep()
                 SyncManager.shared.configureForCurrentSession()
                 themeStore.refresh()
             case .inactive:

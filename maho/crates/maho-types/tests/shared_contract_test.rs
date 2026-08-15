@@ -167,6 +167,7 @@ fn profile_contains_all_entity_arrays() {
                 site_search_entries: vec![],
                 pinned_close_behavior: PinnedCloseBehavior::Switch,
                 auto_delete_empty_folders_on_tidy: true,
+                new_tab_position: NewTabPosition::Top,
             },
             privacy: PrivacySettings {
                 do_not_track: true,
@@ -600,6 +601,7 @@ fn pinned_close_behavior_round_trips_reset_unload_switch() {
         site_search_entries: vec![],
         pinned_close_behavior: PinnedCloseBehavior::ResetUnloadSwitch,
         auto_delete_empty_folders_on_tidy: true,
+        new_tab_position: NewTabPosition::Top,
     };
     let serialized = serde_json::to_string(&original).unwrap();
     assert!(serialized.contains("reset-unload-switch"));
@@ -608,6 +610,69 @@ fn pinned_close_behavior_round_trips_reset_unload_switch() {
         deserialized.pinned_close_behavior,
         PinnedCloseBehavior::ResetUnloadSwitch
     ));
+}
+
+// === NewTabPosition serde tests ===
+
+#[test]
+fn new_tab_position_defaults_to_top_when_missing() {
+    let json = r#"{
+        "defaultSearchEngine": {"name":"G","urlTemplate":"https://g.com/search?q=%s","isDefault":true},
+        "todayTabTimeoutHours": 12.0,
+        "restoreOnLaunch": "restore_all",
+        "downloadPath": "/tmp",
+        "autoplayPolicy": "block_audio",
+        "archiveTimeoutHours": 24.0,
+        "siteSearchEntries": []
+    }"#;
+    let settings: GeneralSettings = serde_json::from_str(json).unwrap();
+    assert!(matches!(settings.new_tab_position, NewTabPosition::Top));
+}
+
+#[test]
+fn new_tab_position_round_trips_bottom() {
+    let original = GeneralSettings {
+        default_search_engine: SearchEngine {
+            name: "G".to_string(),
+            url_template: "https://g.com/search?q=%s".to_string(),
+            is_default: true,
+        },
+        today_tab_timeout_hours: 12.0,
+        restore_on_launch: RestorePolicy::RestoreAll,
+        download_path: "/tmp".to_string(),
+        autoplay_policy: AutoplayPolicy::BlockAudio,
+        archive_timeout_hours: 24.0,
+        site_search_entries: vec![],
+        pinned_close_behavior: PinnedCloseBehavior::Switch,
+        auto_delete_empty_folders_on_tidy: true,
+        new_tab_position: NewTabPosition::Bottom,
+    };
+    let serialized = serde_json::to_string(&original).unwrap();
+    assert!(serialized.contains("\"newTabPosition\":\"bottom\""));
+    let deserialized: GeneralSettings = serde_json::from_str(&serialized).unwrap();
+    assert!(matches!(
+        deserialized.new_tab_position,
+        NewTabPosition::Bottom
+    ));
+}
+
+// An unknown wire value must not fail the whole settings decode: older/newer
+// shells may send a value this build does not know, and settings JSON is
+// decoded as one blob. Unknown falls back to the default (top).
+#[test]
+fn new_tab_position_unknown_value_falls_back_to_top() {
+    let json = r#"{
+        "defaultSearchEngine": {"name":"G","urlTemplate":"https://g.com/search?q=%s","isDefault":true},
+        "todayTabTimeoutHours": 12.0,
+        "restoreOnLaunch": "restore_all",
+        "downloadPath": "/tmp",
+        "autoplayPolicy": "block_audio",
+        "archiveTimeoutHours": 24.0,
+        "siteSearchEntries": [],
+        "newTabPosition": "sideways"
+    }"#;
+    let settings: GeneralSettings = serde_json::from_str(json).unwrap();
+    assert!(matches!(settings.new_tab_position, NewTabPosition::Top));
 }
 
 // === SuggestionType wire-format contract (Rust <-> Swift) ===

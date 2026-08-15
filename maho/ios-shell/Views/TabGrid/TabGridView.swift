@@ -15,6 +15,14 @@ struct TabGridView: View {
 
     private let bridge = MahoBridge.shared
 
+    private var sectionHeaderColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoMutedForeground : .secondary
+    }
+
+    private var primaryTextColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoForeground : .primary
+    }
+
     private var gridColumns: [GridItem] {
         [GridItem(.flexible(), spacing: ShellTheme.Spacing.medium),
          GridItem(.flexible(), spacing: ShellTheme.Spacing.medium)]
@@ -42,7 +50,7 @@ struct TabGridView: View {
                     VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
                         Text("Favorites")
                             .font(.headline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(sectionHeaderColor)
                             .padding(.horizontal, ShellTheme.Spacing.large)
                         
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -60,7 +68,7 @@ struct TabGridView: View {
                     VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
                         Text("Pinned")
                             .font(.headline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(sectionHeaderColor)
                             .padding(.horizontal, ShellTheme.Spacing.large)
                         
                         LazyVGrid(columns: gridColumns, spacing: ShellTheme.Spacing.medium) {
@@ -76,7 +84,7 @@ struct TabGridView: View {
                     VStack(alignment: .leading, spacing: ShellTheme.Spacing.small) {
                         Text("Today")
                             .font(.headline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(sectionHeaderColor)
                             .padding(.horizontal, ShellTheme.Spacing.large)
 
                         LazyVGrid(columns: gridColumns, spacing: ShellTheme.Spacing.medium) {
@@ -103,21 +111,21 @@ struct TabGridView: View {
                 .overlay {
                     Image(lucide: Lucide.sparkles)
                         .font(.system(size: 30, weight: .semibold))
-                        .foregroundStyle(ShellTheme.Palette.accent)
+                        .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoMutedForeground : ShellTheme.Palette.accent)
                 }
                 .overlay(
                     RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
-                        .strokeBorder(ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline)
+                        .strokeBorder(isIncognito ? ShellTheme.Palette.incognitoBorder : ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline)
                 )
 
             VStack(spacing: ShellTheme.Spacing.small) {
                 Text("No tabs in this space")
                     .font(.headline)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(primaryTextColor)
 
                 Text("Open a tab and it will appear here.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(sectionHeaderColor)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -128,23 +136,38 @@ struct TabGridView: View {
         .accessibilityIdentifier("tabGridEmptyState")
     }
 
+    @ViewBuilder
     private var tabGridBackdrop: some View {
-        LinearGradient(
-            colors: [
-                ShellTheme.Palette.tabGridBackdropTop,
-                ShellTheme.Palette.browsingBackground,
-                ShellTheme.Palette.tabGridBackdropBottom
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        if isIncognito {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.incognitoBackground,
+                    ShellTheme.Palette.incognitoTint,
+                    ShellTheme.Palette.incognitoBackground
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        } else {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.tabGridBackdropTop,
+                    ShellTheme.Palette.browsingBackground,
+                    ShellTheme.Palette.tabGridBackdropBottom
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private func gridCard(for tab: TabViewModel) -> some View {
         TabCardView(
             tab: tab,
             isActive: tab.id == activeTabId,
+            isIncognito: isIncognito,
             previewImage: bridge.getTabPreview(tabId: tab.id),
             deckIndex: 0,
             onTap: { onSelectTab(tab.id) },
@@ -184,10 +207,10 @@ struct TabGridView: View {
                 }
             }
             .frame(width: 36, height: 36)
-            .background(ShellTheme.Palette.tabCardSurface.opacity(0.85), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background((isIncognito ? ShellTheme.Palette.incognitoSurface : ShellTheme.Palette.tabCardSurface.opacity(0.85)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(tab.id == activeTabId ? ShellTheme.Palette.accent : ShellTheme.Palette.overlayBorder, lineWidth: tab.id == activeTabId ? 2 : ShellTheme.Stroke.hairline)
+                    .strokeBorder(tab.id == activeTabId ? ShellTheme.Palette.accent : (isIncognito ? ShellTheme.Palette.incognitoBorder : ShellTheme.Palette.overlayBorder), lineWidth: tab.id == activeTabId ? 2 : ShellTheme.Stroke.hairline)
             )
         }
         .buttonStyle(.plain)

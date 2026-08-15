@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.models.ReadingListItem
 import dev.maho.browser.bridge.BridgeReadingList
+import dev.maho.browser.ui.components.ConfirmDialog
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
 
@@ -185,11 +186,12 @@ private fun ReadingListItemRow(
     onToggleRead: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    var showConfirm by remember { mutableStateOf(false) }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
-                true
+                showConfirm = true
+                false
             } else if (value == SwipeToDismissBoxValue.StartToEnd) {
                 onToggleRead()
                 true
@@ -199,16 +201,35 @@ private fun ReadingListItemRow(
         },
     )
 
+    if (showConfirm) {
+        ConfirmDialog(
+            title = "Remove from Reading List?",
+            message = "This will remove \"${item.title.ifBlank { item.url }}\" from your reading list.",
+            confirmLabel = "Remove",
+            onConfirm = {
+                showConfirm = false
+                onDelete()
+            },
+            onDismiss = { showConfirm = false },
+        )
+    }
+
     SwipeToDismissBox(
         state = dismissState,
         backgroundContent = {
+            val isDeleting = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(
+                        if (isDeleting) MaterialTheme.colorScheme.error else Color.Transparent,
+                    )
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
-                Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = "Delete", tint = Color.White)
+                if (isDeleting) {
+                    Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes), contentDescription = "Delete", tint = MaterialTheme.colorScheme.onError)
+                }
             }
         },
     ) {

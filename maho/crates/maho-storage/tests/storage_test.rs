@@ -637,7 +637,9 @@ fn sqlite_conversation_crud() {
         .unwrap();
 
     // List conversations
-    let list = db.list_conversations(10).unwrap();
+    let list = db
+        .list_conversations(maho_types::chat::ConversationListState::Active, 10)
+        .unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, "c1");
     assert_eq!(list[0].title.as_deref(), Some("Title 1"));
@@ -646,12 +648,16 @@ fn sqlite_conversation_crud() {
 
     // Rename conversation
     assert!(db.rename_conversation("c1", "New Title").unwrap());
-    let list = db.list_conversations(10).unwrap();
+    let list = db
+        .list_conversations(maho_types::chat::ConversationListState::Active, 10)
+        .unwrap();
     assert_eq!(list[0].title.as_deref(), Some("New Title"));
 
     // Delete conversation
     assert!(db.delete_conversation("c1").unwrap());
-    let list = db.list_conversations(10).unwrap();
+    let list = db
+        .list_conversations(maho_types::chat::ConversationListState::Active, 10)
+        .unwrap();
     assert!(list.is_empty());
 }
 

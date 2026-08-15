@@ -15,6 +15,14 @@ typedef void (*MahoMailEventCallback)(const char *event_type,
                                       const char *provider,
                                       const char *reason);
 
+typedef void (*MahoMailNewMailCallback)(const char *account_id,
+                                        const char *email_id,
+                                        const char *message_id,
+                                        const char *sender,
+                                        const char *subject,
+                                        uint64_t cursor,
+                                        uint64_t epoch);
+
 /**
  * FFI-safe, nullable read-result callback. Invoked exactly once per accepted
  * read call: `ok=true` with a NUL-terminated JSON C string, or `ok=false`
@@ -40,7 +48,11 @@ bool MahoMailStartBackfill(const char *account_id);
 
 bool MahoMailStartAllAccountSync(void);
 
+bool MahoMailSetSyncIntervalMinutes(uint64_t minutes);
+
 bool MahoMailRegisterEventCallback(MahoMailEventCallback callback);
+
+bool MahoMailRegisterNewMailCallback(MahoMailNewMailCallback callback);
 
 bool MahoMailGetEmailSummary(const char *account_id,
                              const char *request_json,
@@ -453,6 +465,12 @@ bool MahoMailSetAppSetting(const char *key,
                            const char *value,
                            MahoMailReadCallback callback,
                            void *user_data);
+
+bool MahoMailUpdateBehaviorSetting(uint64_t expected_revision,
+                                   const char *key,
+                                   const char *value_json,
+                                   MahoMailReadCallback callback,
+                                   void *user_data);
 
 bool MahoMailMd5Hash(const char *input, MahoMailReadCallback callback, void *user_data);
 

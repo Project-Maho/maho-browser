@@ -3,6 +3,8 @@ import SwiftUI
 struct DownloadsView: View {
     @State private var downloads: [DownloadViewModel] = []
     @State private var isLoading = false
+    @State private var pendingDeleteDownload: DownloadViewModel?
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -33,7 +35,8 @@ struct DownloadsView: View {
                 DownloadRow(download: download)
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
-                            removeDownload(download)
+                            pendingDeleteDownload = download
+                            showDeleteConfirmation = true
                         } label: {
                             Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
@@ -66,6 +69,22 @@ struct DownloadsView: View {
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            "Delete Download?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible,
+            presenting: pendingDeleteDownload
+        ) { download in
+            Button("Delete", role: .destructive) {
+                removeDownload(download)
+                pendingDeleteDownload = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDownload = nil
+            }
+        } message: { download in
+            Text("\"\(download.filename)\" will be removed from the downloads list.")
+        }
     }
 
     // MARK: - Actions
@@ -182,9 +201,9 @@ private struct DownloadRow: View {
     private var stateColor: Color {
         switch download.state {
         case .downloading: return .blue
-        case .paused: return .orange
-        case .completed: return .green
-        case .failed: return .red
+        case .paused: return ShellTheme.Palette.warning
+        case .completed: return ShellTheme.Palette.success
+        case .failed: return ShellTheme.Palette.error
         case .cancelled: return .gray
         }
     }

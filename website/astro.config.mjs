@@ -42,12 +42,12 @@ export default defineConfig({
               label: 'API Reference',
               items: [
                 { label: 'Overview', link: '/api/' },
-                { label: 'list_accounts', link: '/api/list-accounts/' },
-                { label: 'list_folders', link: '/api/list-folders/' },
-                { label: 'list_emails', link: '/api/list-emails/' },
-                { label: 'get_email', link: '/api/get-email/' },
-                { label: 'search_emails', link: '/api/search-emails/' },
-                { label: 'list_thread', link: '/api/list-thread/' },
+                { label: 'mail_list_accounts', link: '/api/list-accounts/' },
+                { label: 'mail_list_folders', link: '/api/list-folders/' },
+                { label: 'mail_list_emails', link: '/api/list-emails/' },
+                { label: 'mail_get_email', link: '/api/get-email/' },
+                { label: 'mail_search_emails', link: '/api/search-emails/' },
+                { label: 'mail_list_thread', link: '/api/list-thread/' },
               ],
             },
           ]

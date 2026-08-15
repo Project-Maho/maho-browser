@@ -324,7 +324,7 @@ fn encrypted_inbound_send_tab_is_recorded() {
 fn startup_keyless_session_cannot_ingest_plaintext_entity() {
     let mut core = keyless_core();
     assert!(
-        !core.get_sync_status().contains("error"),
+        core.get_sync_state().kind != SyncStatus::Error,
         "precondition: fresh keyless session is not already errored"
     );
 

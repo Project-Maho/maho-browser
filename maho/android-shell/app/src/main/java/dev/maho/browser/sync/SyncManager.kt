@@ -7,9 +7,20 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.maho.browser.bridge.BridgeSync
 
+internal fun completeLocalLogout(
+    clearSession: () -> Boolean,
+    stopSync: () -> Unit,
+    signOutCore: () -> Unit,
+): Boolean {
+    if (!clearSession()) return false
+    stopSync()
+    signOutCore()
+    return true
+}
+
 object SyncManager : DefaultLifecycleObserver {
     private const val TAG = "SyncManager"
-    private const val DEFAULT_SERVER_URL = "https://sync.mahobrowser.com"
+    private const val DEFAULT_SERVER_URL = "http://192.168.0.39:8787"
 
     var isSyncing = false
         private set
@@ -23,7 +34,6 @@ object SyncManager : DefaultLifecycleObserver {
     fun initialize(context: Context) {
         appContext = context.applicationContext
         RelaySessionStore.init(context)
-        SyncTransport.shared.initContext(context)
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
@@ -40,23 +50,36 @@ object SyncManager : DefaultLifecycleObserver {
     fun signUp(serverUrl: String, email: String, password: String): RelaySession {
         val normalized = normalizeRelayBaseUrl(serverUrl)
         val session = authClient.signUp(normalized, email, password).copy(serverUrl = normalized)
-        RelaySessionStore.save(session)
-        updateServerUrl(normalized)
-        BridgeSync.signIn(
-            email = session.account?.email ?: session.email,
-            displayName = session.account?.displayName,
-            accessToken = session.accessToken,
-            userId = session.account?.id,
-            deviceId = session.device?.id,
-        )
+        activateSession(session)
         return session
     }
 
     fun logIn(serverUrl: String, email: String, password: String): RelaySession {
         val normalized = normalizeRelayBaseUrl(serverUrl)
         val session = authClient.logIn(normalized, email, password).copy(serverUrl = normalized)
-        RelaySessionStore.save(session)
-        updateServerUrl(normalized)
+        activateSession(session)
+        return session
+    }
+
+    suspend fun signInWithGoogle(
+        serverUrl: String,
+        serverClientId: String,
+        credentials: GoogleCredentialSource,
+    ): GoogleSignInOutcome {
+        val normalized = normalizeRelayBaseUrl(serverUrl)
+        return GoogleSignInCoordinator(
+            credentials = credentials,
+            exchange = GoogleRelayExchange { _, idToken, nonce, fallbackEmail ->
+                authClient.signInWithGoogle(normalized, idToken, nonce, fallbackEmail)
+                    .copy(serverUrl = normalized)
+            },
+            commit = GoogleSessionCommit(::activateSession),
+        ).signIn(normalized, serverClientId)
+    }
+
+    private fun activateSession(session: RelaySession) {
+        check(RelaySessionStore.save(session)) { "Unable to securely save relay session" }
+        updateServerUrl(session.serverUrl ?: getServerUrl())
         BridgeSync.signIn(
             email = session.account?.email ?: session.email,
             displayName = session.account?.displayName,
@@ -64,7 +87,6 @@ object SyncManager : DefaultLifecycleObserver {
             userId = session.account?.id,
             deviceId = session.device?.id,
         )
-        return session
     }
 
     fun logout() {
@@ -77,11 +99,11 @@ object SyncManager : DefaultLifecycleObserver {
                 Log.w(TAG, "Relay logout failed: ${e.message}")
             }
         }
-        if (isSyncing) {
-            stopSync()
-        }
-        BridgeSync.signOut()
-        RelaySessionStore.clear()
+        check(completeLocalLogout(
+            clearSession = RelaySessionStore::clear,
+            stopSync = ::stopSync,
+            signOutCore = { BridgeSync.signOut() },
+        )) { "Unable to clear saved relay session" }
         lastSyncTimestamp = null
     }
 
@@ -92,24 +114,71 @@ object SyncManager : DefaultLifecycleObserver {
             return
         }
         if (isSyncing) return
+        if (!configureAccountBootstrap(session)) {
+            syncErrorListener?.invoke("Unable to configure account Sync")
+            return
+        }
         BridgeSync.toggleSync()
         isSyncing = true
-        SyncTransport.shared.onError = syncErrorListener
-        SyncTransport.shared.start(session.serverUrl ?: getServerUrl(), session)
+        SyncTransport.shared.runBoundedCycle()
+        appContext?.let(ReliableSyncWorker::enqueue)
         Log.i(TAG, "Background sync started")
+    }
+
+    private fun configureAccountBootstrap(session: RelaySession): Boolean {
+        val serverUrl = session.serverUrl ?: getServerUrl()
+        val legacyRoomId = BridgeSync.getSyncRoomId()?.takeIf(String::isNotBlank)
+        val bootstrap = try {
+            authClient.getSyncBootstrap(serverUrl, session.accessToken)
+        } catch (error: RelayApiException) {
+            if (error.code != 404) {
+                Log.w(TAG, "Relay Sync bootstrap retrieval failed: ${error.message}")
+                return false
+            }
+            if (legacyRoomId != null) {
+                Log.w(TAG, "Existing Recovery Phrase Sync needs explicit migration")
+                return false
+            }
+            val generated = BridgeSync.parseGeneratedSyncBootstrap(BridgeSync.generateSyncBootstrap())
+                ?: return false
+            try {
+                authClient.putSyncBootstrap(serverUrl, session.accessToken, generated)
+            } catch (createError: RelayApiException) {
+                if (createError.code == 409) {
+                    try {
+                        authClient.getSyncBootstrap(serverUrl, session.accessToken)
+                    } catch (reloadError: Exception) {
+                        Log.w(TAG, "Relay Sync bootstrap reload failed: ${reloadError.message}")
+                        return false
+                    }
+                } else {
+                    Log.w(TAG, "Relay Sync bootstrap creation failed: ${createError.message}")
+                    return false
+                }
+            } catch (createError: Exception) {
+                Log.w(TAG, "Relay Sync bootstrap creation failed: ${createError.message}")
+                return false
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "Relay Sync bootstrap retrieval failed: ${error.message}")
+            return false
+        }
+        return BridgeSync.bootstrapConfigured(
+            BridgeSync.configureSyncBootstrap(serverUrl, bootstrap.seed)
+        )
     }
 
     fun stopSync() {
         if (!isSyncing) return
         BridgeSync.toggleSync()
         isSyncing = false
-        SyncTransport.shared.disconnect()
-        SyncTransport.shared.onError = null
+        SyncTransport.shared.cancel()
         Log.i(TAG, "Background sync stopped")
     }
 
     fun syncNow() {
-        SyncTransport.shared.triggerSync()
+        SyncTransport.shared.runBoundedCycle()
+        appContext?.let(ReliableSyncWorker::enqueue)
     }
 
     internal fun recordSyncSuccess() {
@@ -118,13 +187,14 @@ object SyncManager : DefaultLifecycleObserver {
 
     override fun onStart(owner: LifecycleOwner) {
         if (isSyncing) {
-            SyncTransport.shared.triggerSync()
+            SyncTransport.shared.runBoundedCycle()
         }
     }
 
     override fun onStop(owner: LifecycleOwner) {
         if (isSyncing) {
-            SyncTransport.shared.disconnect()
+            SyncTransport.shared.cancel()
+            appContext?.let(ReliableSyncWorker::enqueue)
         }
     }
 }

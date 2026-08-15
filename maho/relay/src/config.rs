@@ -17,6 +17,7 @@ pub struct RelayConfig {
     /// type requires it at the token endpoint even with PKCE, so the exchange
     /// runs server-side here and the secret never ships in any client binary.
     pub google_oauth_client_secret: Option<String>,
+    pub sync_bootstrap_secret: Option<String>,
 }
 
 impl RelayConfig {
@@ -77,6 +78,11 @@ impl RelayConfig {
             .ok()
             .map(|v| v.to_string())
             .filter(|v| !v.trim().is_empty());
+        let sync_bootstrap_secret = env
+            .secret("MAHO_SYNC_BOOTSTRAP_SECRET")
+            .ok()
+            .map(|v| v.to_string())
+            .filter(|v| v.trim().len() >= 32);
 
         Self {
             require_auth,
@@ -89,6 +95,7 @@ impl RelayConfig {
             google_oauth_allowed_auds,
             google_oauth_client_id,
             google_oauth_client_secret,
+            sync_bootstrap_secret,
         }
     }
 }

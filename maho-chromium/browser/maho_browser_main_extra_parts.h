@@ -1,12 +1,14 @@
 #ifndef MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_
 #define MAHO_BROWSER_MAHO_BROWSER_MAIN_EXTRA_PARTS_H_
 
+#include <cstddef>
 #include <memory>
 
 #include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
 #include "base/power_monitor/power_observer.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "base/memory/raw_ptr_exclusion.h"
@@ -20,6 +22,8 @@ namespace maho {
 class MahoMcpSocketServer;
 class MahoMcpPipeServer;
 class MahoMcpSessionToken;
+class MahoMailNotificationCoordinator;
+class MahoMailNotificationCoordinatorRegistry;
 class MahoSyncRelayClient;
 }  // namespace maho
 
@@ -36,6 +40,18 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
 
     MahoCore* GetCore() const { return core_; }
     void OnSuspendForTesting() { OnSuspend(); }
+    void AddMcpVaultCredentialLeaseForTesting(
+        base::TimeTicks expires_at,
+        bool promoted,
+        Profile* lease_profile = nullptr);
+    void SweepMcpVaultCredentialLeasesForTesting(base::TimeTicks now);
+    bool PromoteMcpVaultCredentialLeaseForTesting(Profile* resolved_profile,
+                                                  base::TimeTicks now);
+    size_t McpVaultCredentialLeaseCountForTesting() const;
+    size_t MailNotificationCoordinatorCountForTesting() const;
+    void EnsureMailNotificationCoordinatorForTesting(Profile* profile) {
+      EnsureMailNotificationCoordinator(profile);
+    }
 
    private:
     void PostEarlyInitialization() override;
@@ -43,6 +59,7 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     void PostMainMessageLoopRun() override;
     void OnSuspend() override;
     void InitializeRegularServicesOnce(Profile* profile);
+    void EnsureMailNotificationCoordinator(Profile* profile);
     void OnRegularStorageDirectoryReady(Profile* profile,
                                         bool storage_directory_ready);
     void MaybeLaunchMailHelper(Profile* profile);
@@ -63,6 +80,8 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
      bool regular_services_initializing_ = false;
 
     std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
+    std::unique_ptr<maho::MahoMailNotificationCoordinatorRegistry>
+        mail_notification_coordinators_;
     std::unique_ptr<maho::MahoSyncRelayClient> sync_relay_client_;
 
   #if BUILDFLAG(IS_WIN)

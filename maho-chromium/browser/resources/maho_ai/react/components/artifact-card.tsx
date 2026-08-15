@@ -49,6 +49,7 @@ export function ArtifactCard(
   const [deletePending, setDeletePending] = useState(false);
   const [iconFailed, setIconFailed] = useState(false);
   const renameSubmitting = useRef(false);
+  const renameMenuClosing = useRef(false);
   const triggerRef = useRef<HTMLElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const closeFocusTarget = useRef<'rename'|'trigger'>('trigger');
@@ -109,6 +110,7 @@ export function ArtifactCard(
       return;
     }
     closeFocusTarget.current = 'rename';
+    renameMenuClosing.current = true;
     setDraftName(artifact.displayName);
     setError(null);
     setRenaming(true);
@@ -116,6 +118,7 @@ export function ArtifactCard(
 
   const cancelRename = () => {
     renameSubmitting.current = false;
+    renameMenuClosing.current = false;
     setRenaming(false);
     setError(null);
     setDraftName(artifact.displayName);
@@ -253,7 +256,7 @@ export function ArtifactCard(
                     }
                   }}
                   onBlur={() => {
-                    if (renaming && !renameSubmitting.current) {
+                    if (renaming && !renameSubmitting.current && !renameMenuClosing.current) {
                       void submitRename();
                     }
                   }}
@@ -325,13 +328,15 @@ export function ArtifactCard(
           className="w-44"
           onCloseAutoFocus={event => {
             event.preventDefault();
+            const focusTarget = closeFocusTarget.current;
+            closeFocusTarget.current = 'trigger';
             queueMicrotask(() => {
-              if (closeFocusTarget.current === 'rename') {
+              if (focusTarget === 'rename') {
+                renameMenuClosing.current = false;
                 renameInputRef.current?.focus();
               } else {
                 triggerRef.current?.focus();
               }
-              closeFocusTarget.current = 'trigger';
             });
           }}>
           {hasPreviewAction ? (

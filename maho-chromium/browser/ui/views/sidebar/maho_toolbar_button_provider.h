@@ -18,6 +18,7 @@ class ToolbarView;
 
 namespace maho {
 
+class MahoControlActivityIndicatorView;
 class MahoSidebarSearchView;
 
 // Maho-owned implementation of `ToolbarButtonProvider` registered on
@@ -62,6 +63,26 @@ class MahoToolbarButtonProvider : public ToolbarButtonProvider {
   ToolbarButton* GetDownloadButton() override;
   WebUIToolbarWebView* GetWebUIToolbarViewForTesting() override;
 
+  // Control-activity chip host resolution. The sidebar top bar owns the
+  // primary chip; when the sidebar is collapsed that chip stops being drawn,
+  // so a toolbar-hosted chip takes over as the fallback surface. The provider
+  // stores unowned pointers only and never holds controller/session state.
+  void SetSidebarControlActivityIndicator(
+      MahoControlActivityIndicatorView* indicator);
+  void SetToolbarControlActivityIndicator(
+      MahoControlActivityIndicatorView* indicator);
+
+  // Returns the chip that should currently render controller attribution, or
+  // nullptr when neither host can display it.
+  MahoControlActivityIndicatorView* GetControlActivityIndicator() const;
+
+  // Pure host-selection rule, split out so the collapsed-sidebar fallback can
+  // be asserted without constructing a BrowserView or a toolbar.
+  static MahoControlActivityIndicatorView* ResolveControlActivityHost(
+      MahoControlActivityIndicatorView* sidebar_indicator,
+      bool sidebar_indicator_drawn,
+      MahoControlActivityIndicatorView* toolbar_indicator);
+
  private:
   views::View* ResolveTranslateAnchor() const;
   views::View* ResolvePillAnchor() const;
@@ -71,6 +92,8 @@ class MahoToolbarButtonProvider : public ToolbarButtonProvider {
   raw_ptr<BrowserView> browser_view_;
   raw_ptr<MahoSidebarSearchView> search_view_;
   raw_ptr<ToolbarView> upstream_toolbar_;
+  raw_ptr<MahoControlActivityIndicatorView> sidebar_control_activity_ = nullptr;
+  raw_ptr<MahoControlActivityIndicatorView> toolbar_control_activity_ = nullptr;
   std::optional<ui::ScopedUnownedUserData<ToolbarButtonProvider>>
       scoped_unowned_user_data_;
   SEQUENCE_CHECKER(sequence_checker_);

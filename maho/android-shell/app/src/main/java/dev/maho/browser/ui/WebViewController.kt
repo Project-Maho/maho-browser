@@ -13,15 +13,69 @@ import dev.maho.browser.bridge.BridgeNavigation
 import dev.maho.browser.models.TabId
 import java.io.ByteArrayInputStream
 
+internal class MainDocumentUrlState {
+    @Volatile
+    private var currentUrl: String = ""
+
+    fun onPageStarted(url: String) {
+        currentUrl = url
+    }
+
+    fun onPageFinished(url: String) {
+        currentUrl = url
+    }
+
+    fun sourceFor(
+        requestUrl: String,
+        isForMainFrame: Boolean,
+        requestHeaders: Map<String, String>,
+    ): String {
+        if (isForMainFrame) {
+            return requestUrl
+        }
+        return currentUrl.ifBlank {
+            requestHeaders.entries
+                .firstOrNull { (name, _) -> name.equals("Referer", ignoreCase = true) }
+                ?.value
+                .orEmpty()
+        }
+    }
+}
+
+internal fun shouldBlockWebRequest(
+    requestUrl: String,
+    isForMainFrame: Boolean,
+    requestHeaders: Map<String, String>,
+    sourceState: MainDocumentUrlState,
+    isSourceWhitelisted: (String) -> Boolean,
+    queryFilterDecision: (url: String, sourceUrl: String, requestType: String) -> Boolean,
+): Boolean {
+    val sourceUrl = sourceState.sourceFor(requestUrl, isForMainFrame, requestHeaders)
+    val sourceHost = try {
+        java.net.URI(sourceUrl).host.orEmpty()
+    } catch (_: Exception) {
+        ""
+    }
+    if (sourceHost.isNotEmpty() && isSourceWhitelisted(sourceHost)) {
+        return false
+    }
+
+    val requestType = if (isForMainFrame) "document" else "other"
+    return queryFilterDecision(requestUrl, sourceUrl, requestType)
+}
+
 class MahoWebViewClient(
     private val tabIdProvider: () -> TabId,
     private val onUrlChanged: (String) -> Unit,
     private val onLoadingChanged: (Boolean) -> Unit,
     private val onNavigationStateChanged: (canGoBack: Boolean, canGoForward: Boolean) -> Unit,
     private val onError: (errorCode: Int, description: String, failingUrl: String) -> Unit,
+    private val isSourceWhitelisted: (String) -> Boolean,
 ) : WebViewClient() {
+    private val mainDocumentUrlState = MainDocumentUrlState()
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+        mainDocumentUrlState.onPageStarted(url)
         onUrlChanged(url)
         onLoadingChanged(true)
         val tabId = tabIdProvider()
@@ -30,6 +84,7 @@ class MahoWebViewClient(
     }
 
     override fun onPageFinished(view: WebView, url: String) {
+        mainDocumentUrlState.onPageFinished(url)
         onLoadingChanged(false)
         onNavigationStateChanged(view.canGoBack(), view.canGoForward())
         val tabId = tabIdProvider()
@@ -47,26 +102,21 @@ class MahoWebViewClient(
 
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         val settings = dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()
-        val contentBlockerEnabled = settings?.privacy?.contentBlockerEnabled ?: false
+        val contentBlockerEnabled = settings?.privacy?.isNativeBlockingEnabled ?: false
         if (!contentBlockerEnabled) {
-            return super.shouldInterceptRequest(view, request)
-        }
-
-        val sourceUrl = view.url ?: ""
-        val sourceHost = try {
-            android.net.Uri.parse(sourceUrl).host ?: ""
-        } catch (_: Exception) {
-            ""
-        }
-        if (sourceHost.isNotEmpty() && dev.maho.browser.ui.settings.WhitelistManager.getWhitelist(view.context).contains(sourceHost)) {
             return super.shouldInterceptRequest(view, request)
         }
 
         val url = request.url.toString()
         val isMainFrame = request.isForMainFrame
-        val requestType = if (isMainFrame) "document" else "other"
-        
-        val isBlocked = dev.maho.browser.MahoBridge.queryFilterDecision(url, sourceUrl, requestType)
+        val isBlocked = shouldBlockWebRequest(
+            requestUrl = url,
+            isForMainFrame = isMainFrame,
+            requestHeaders = request.requestHeaders,
+            sourceState = mainDocumentUrlState,
+            isSourceWhitelisted = isSourceWhitelisted,
+            queryFilterDecision = dev.maho.browser.MahoBridge::queryFilterDecision,
+        )
         if (isBlocked) {
             return WebResourceResponse(
                 "text/plain",

@@ -1,6 +1,7 @@
 use maho_cli::workspace::resolve_workspace_id;
-use maho_storage::sqlite::SqliteStorage;
 use maho_types::ai::AiWorkspace;
+
+static DB_KEY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn make_ws(id: &str, name: &str, root: Option<&str>, created_at: &str) -> AiWorkspace {
     AiWorkspace {
@@ -25,6 +26,7 @@ fn make_ws(id: &str, name: &str, root: Option<&str>, created_at: &str) -> AiWork
 /// cwd, because the cwd heuristic has been removed from the default path.
 #[tokio::test]
 async fn cli_default_matches_webui_rule() {
+    let _guard = DB_KEY_TEST_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("maho.db");
     let storage = maho_cli::workspace::open_storage(&db_path).unwrap();
@@ -57,6 +59,7 @@ async fn cli_default_matches_webui_rule() {
 /// across repeated calls regardless of insertion order.
 #[tokio::test]
 async fn list_workspaces_deterministic_order() {
+    let _guard = DB_KEY_TEST_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("maho.db");
     let storage = maho_cli::workspace::open_storage(&db_path).unwrap();

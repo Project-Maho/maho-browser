@@ -42,66 +42,42 @@ struct RelaySignupRequest: Codable, Equatable {
     let deviceType: String?
 }
 
+struct RelayGoogleOAuthRequest: Codable, Equatable {
+    let idToken: String
+    let nonce: String
+    let deviceName: String?
+    let deviceType: String?
+}
+
 struct RelayRefreshRequest: Codable, Equatable {
     let refreshToken: String
 }
 
 struct RelayPushRequest: Codable, Equatable {
-    let blobs: [String]
-}
-
-struct RelayPushAck: Codable, Equatable {
-    let seq: Int
+    let roomId: String
+    let messages: [SyncEnvelopeV2]
 }
 
 struct RelayPushResponse: Codable, Equatable {
-    let seqs: [Int]
-
-    private enum CodingKeys: String, CodingKey {
-        case seq
-        case ack
-        case acks
-    }
-
-    init(seqs: [Int]) {
-        self.seqs = seqs
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-
-        if let seq = try container.decodeIfPresent(Int.self, forKey: .seq) {
-            seqs = [seq]
-            return
-        }
-
-        if let ack = try container.decodeIfPresent(RelayPushAck.self, forKey: .ack) {
-            seqs = [ack.seq]
-            return
-        }
-
-        if let acks = try container.decodeIfPresent([RelayPushAck].self, forKey: .acks) {
-            seqs = acks.map(\.seq)
-            return
-        }
-
-        seqs = []
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(seqs.map(RelayPushAck.init), forKey: .acks)
-    }
-}
-
-struct RelayPulledMessage: Codable, Equatable {
-    let seq: Int
-    let blob: String
+    let acks: [RelayAckV2]
 }
 
 struct RelayPullResponse: Codable, Equatable {
-    let messages: [RelayPulledMessage]
+    let messages: [SyncEnvelopeV2]
     let hasMore: Bool
+}
+
+struct RelaySyncBootstrap: Codable, Equatable {
+    let version: Int
+    let roomId: String
+    let seed: String
+    let createdAt: Int?
+}
+
+struct RelaySyncBootstrapRequest: Codable, Equatable {
+    let version: Int
+    let roomId: String
+    let seed: String
 }
 
 struct RelayLogoutResponse: Codable, Equatable {
@@ -141,23 +117,28 @@ enum RelayAPIError: LocalizedError {
 
 protocol RelayAPIClientProtocol: AnyObject {
     func authenticate(mode: RelayAuthMode, email: String, password: String, displayName: String?) async throws -> RelayAuthSession
+    func authenticateWithGoogle(idToken: String, nonce: String) async throws -> RelayAuthSession
     func refresh(using refreshToken: String) async throws -> RelayAuthSession
     func logout(session: RelayAuthSession) async throws
-    func push(blobs: [String], session: RelayAuthSession) async throws -> RelayPushResponse
-    func pull(sinceSeq: Int, limit: Int, session: RelayAuthSession) async throws -> RelayPullResponse
+    func push(roomID: String, envelopes: [SyncEnvelopeV2], session: RelayAuthSession) async throws -> RelayPushResponse
+    func pull(roomID: String, afterSeq: Int, limit: Int, session: RelayAuthSession) async throws -> RelayPullResponse
+    func getSyncBootstrap(session: RelayAuthSession) async throws -> RelaySyncBootstrap
+    func putSyncBootstrap(_ bootstrap: RelaySyncBootstrap, session: RelayAuthSession) async throws -> RelaySyncBootstrap
 }
 
 final class RelayAPIClient: RelayAPIClientProtocol {
     static let serverURLDefaultsKey = "maho_sync_server_url"
-    static let defaultBaseURLString = "https://sync.mahobrowser.com"
+    static let defaultBaseURLString = "http://192.168.0.39:8787"
 
     private enum Endpoint: String {
         case signup = "/auth/signup"
         case login = "/auth/login"
+        case googleOAuth = "/auth/oauth/google"
         case refresh = "/auth/refresh"
         case logout = "/auth/logout"
         case push = "/sync/push"
         case pull = "/sync/pull"
+        case bootstrap = "/sync/bootstrap"
     }
 
     private let baseURLProvider: () -> String
@@ -225,6 +206,22 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         }
     }
 
+    func authenticateWithGoogle(idToken: String, nonce: String) async throws -> RelayAuthSession {
+        let payload = RelayGoogleOAuthRequest(
+            idToken: idToken,
+            nonce: nonce,
+            deviceName: deviceNameProvider(),
+            deviceType: deviceTypeProvider()
+        )
+        let response: RelayAuthResponse = try await sendJSONRequest(
+            endpoint: .googleOAuth,
+            method: "POST",
+            body: payload,
+            authorizedSession: nil
+        )
+        return response.asSession()
+    }
+
     func refresh(using refreshToken: String) async throws -> RelayAuthSession {
         guard !refreshToken.isEmpty else {
             throw RelayAPIError.missingRefreshToken
@@ -248,19 +245,20 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         ) as RelayLogoutResponse
     }
 
-    func push(blobs: [String], session: RelayAuthSession) async throws -> RelayPushResponse {
+    func push(roomID: String, envelopes: [SyncEnvelopeV2], session: RelayAuthSession) async throws -> RelayPushResponse {
         try await sendJSONRequest(
             endpoint: .push,
             method: "POST",
-            body: RelayPushRequest(blobs: blobs),
+            body: RelayPushRequest(roomId: roomID, messages: envelopes),
             authorizedSession: session
         )
     }
 
-    func pull(sinceSeq: Int, limit: Int, session: RelayAuthSession) async throws -> RelayPullResponse {
+    func pull(roomID: String, afterSeq: Int, limit: Int, session: RelayAuthSession) async throws -> RelayPullResponse {
         var components = URLComponents(url: try makeURL(for: .pull), resolvingAgainstBaseURL: false)
         components?.queryItems = [
-            URLQueryItem(name: "since_seq", value: String(sinceSeq)),
+            URLQueryItem(name: "room_id", value: roomID),
+            URLQueryItem(name: "after_seq", value: String(afterSeq)),
             URLQueryItem(name: "limit", value: String(max(1, min(limit, 100))))
         ]
 
@@ -272,6 +270,31 @@ final class RelayAPIClient: RelayAPIClientProtocol {
             url: url,
             method: "GET",
             body: Optional<String>.none,
+            authorizedSession: session
+        )
+    }
+
+    func getSyncBootstrap(session: RelayAuthSession) async throws -> RelaySyncBootstrap {
+        try await sendJSONRequest(
+            endpoint: .bootstrap,
+            method: "GET",
+            body: Optional<String>.none,
+            authorizedSession: session
+        )
+    }
+
+    func putSyncBootstrap(
+        _ bootstrap: RelaySyncBootstrap,
+        session: RelayAuthSession
+    ) async throws -> RelaySyncBootstrap {
+        try await sendJSONRequest(
+            endpoint: .bootstrap,
+            method: "PUT",
+            body: RelaySyncBootstrapRequest(
+                version: bootstrap.version,
+                roomId: bootstrap.roomId,
+                seed: bootstrap.seed
+            ),
             authorizedSession: session
         )
     }
@@ -309,7 +332,7 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         }
 
         if let body {
-            request.httpBody = try body.mahoEncoded()
+            request.httpBody = try RelayCoding.encoder.encode(body)
         }
 
         let (data, response) = try await session.data(for: request)
@@ -319,7 +342,7 @@ final class RelayAPIClient: RelayAPIClientProtocol {
 
         switch httpResponse.statusCode {
         case 200 ..< 300:
-            return try MahoJSON.decoder.decode(Response.self, from: data)
+            return try RelayCoding.decoder.decode(Response.self, from: data)
         case 401:
             throw RelayAPIError.unauthorized
         default:

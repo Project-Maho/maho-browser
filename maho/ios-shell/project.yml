@@ -61,6 +61,8 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.maho.browser.sync.refresh
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSSpeechRecognitionUsageDescription: "Maho uses speech recognition to let you search by voice."
@@ -73,7 +75,7 @@ targets:
               - "com.googleusercontent.apps.650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.maho.browser
+        PRODUCT_BUNDLE_IDENTIFIER: com.maho.browser
         INFOPLIST_FILE: Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:

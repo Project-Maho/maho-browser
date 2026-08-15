@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/views/command/maho_mail_command_catalog.h"
 #include "maho/browser/ui/views/command/maho_remote_search_suggestions.h"
 
 #include <algorithm>
@@ -298,6 +299,33 @@ TEST_F(CapResultsTest, NonEmptyQueriesDoNotEngageTabModeBucketing) {
 }
 
 class ParseTypeTest : public ::testing::Test {};
+
+TEST(MailCommandAvailabilityTest, RemovesAllMailActionsWhenUnavailable) {
+  std::vector<CommandSuggestion> results;
+  for (const MahoMailCommand& command : kMahoMailCommands) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kAction,
+                                     "action:" + std::string(command.action_id)));
+  }
+  results.push_back(
+      MakeSuggestion(CommandSuggestionType::kAction, "action:settings"));
+
+  MahoCommandModel::ApplyMailAvailabilityGate(results, false);
+
+  ASSERT_EQ(1u, results.size());
+  EXPECT_EQ("action:settings", results[0].key);
+}
+
+TEST(MailCommandAvailabilityTest, PreservesMailActionsWhenAvailable) {
+  std::vector<CommandSuggestion> results;
+  for (const MahoMailCommand& command : kMahoMailCommands) {
+    results.push_back(MakeSuggestion(CommandSuggestionType::kAction,
+                                     "action:" + std::string(command.action_id)));
+  }
+
+  MahoCommandModel::ApplyMailAvailabilityGate(results, true);
+
+  ASSERT_EQ(kMahoMailCommands.size(), results.size());
+}
 
 TEST_F(ParseTypeTest, KnownKindsMapToCorrectTypes) {
   EXPECT_EQ(CommandSuggestionType::kTab,

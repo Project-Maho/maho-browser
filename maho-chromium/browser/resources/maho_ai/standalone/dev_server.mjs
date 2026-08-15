@@ -15,6 +15,9 @@ const websiteNodeModules = path.resolve(__dirname, '../../../../../website/node_
 const outputFile = path.join(__dirname, 'app_bundle.js');
 const previewOutputDir = path.join(os.tmpdir(), 'maho-ai-standalone-preview');
 const guidancePreviewOutputFile = path.join(previewOutputDir, 'mcp_agent_guidance_preview.js');
+const generatedStylesheet = path.resolve(
+    __dirname,
+    '../../../../../chromium/src/out/Default/gen/maho/browser/resources/maho_ai/app.generated.css');
 const hostname = process.env.MAHO_AI_STANDALONE_HOST || '127.0.0.1';
 const port = Number(process.env.MAHO_AI_STANDALONE_PORT || '4071');
 const opencodeBaseUrl = new URL(process.env.OPENCODE_BASE_URL || 'http://127.0.0.1:4096/');
@@ -58,6 +61,10 @@ function contentTypeFor(filePath) {
 
 async function serveStatic(requestPath, response) {
   const pathname = new URL(requestPath, `http://${hostname}:${port}`).pathname;
+  if (pathname === '/maho_ai.css') {
+    await serveFile(generatedStylesheet, response);
+    return;
+  }
   if (pathname === '/standalone/mcp_agent_guidance_preview.js') {
     await serveFile(guidancePreviewOutputFile, response);
     return;

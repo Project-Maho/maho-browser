@@ -32,7 +32,7 @@
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "url/gurl.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "base/base64.h"
 #include "components/favicon/content/content_favicon_driver.h"
 #include "components/favicon/core/favicon_driver.h"
@@ -105,19 +105,21 @@ void CleanUpManyTabsEventState(TabStripModel* model) {
   GetArmedMap().erase(model);
 }
 
-void DispatchShellEventLocal(const std::string& kind, base::DictValue event) {
+void DispatchShellEventLocalWithCore(MahoCore* core,
+                                     const std::string& kind,
+                                     base::DictValue event) {
   event.Set("kind", kind);
   std::string json;
   base::JSONWriter::Write(event, &json);
   if (g_tab_registry_shell_event_observer_for_testing) {
     g_tab_registry_shell_event_observer_for_testing->OnShellEventDispatched(kind, json);
   }
-  MahoCore* core = maho::GetCore();
   if (!core) {
     return;
   }
   base::ElapsedTimer maho_perf_t;
-  maho::core::HandleEvent(core, json.c_str());
+  std::string updates = maho::core::HandleEvent(core, json.c_str());
+  InvalidateSidebarCoreCacheForUpdatesJson(updates);
   const double he_ms = maho_perf_t.Elapsed().InMillisecondsF();
   base::ElapsedTimer notify_t;
   const bool is_structural = !(kind == "tab_title_updated" ||
@@ -132,6 +134,10 @@ void DispatchShellEventLocal(const std::string& kind, base::DictValue event) {
   DVLOG(1) << "[MAHO_PERF] DispatchShellEventLocal kind=" << kind
            << " HandleEvent=" << he_ms
            << "ms NotifyChanged=" << notify_t.Elapsed().InMillisecondsF() << "ms";
+}
+
+void DispatchShellEventLocal(const std::string& kind, base::DictValue event) {
+  DispatchShellEventLocalWithCore(maho::GetCore(), kind, std::move(event));
 }
 
 void DispatchShellEventLocal(
@@ -763,6 +769,12 @@ void MahoTabRegistry::EraseArchiveRemovalSuppression(const std::string& tab_id) 
 
 void SetTabRegistryShellEventObserverForTesting(ShellEventObserver* observer) {
   g_tab_registry_shell_event_observer_for_testing = observer;
+}
+
+void DispatchTabRegistryShellEventForTesting(MahoCore* core,
+                                             const std::string& kind,
+                                             base::DictValue event) {
+  DispatchShellEventLocalWithCore(core, kind, std::move(event));
 }
 
 }  // namespace maho

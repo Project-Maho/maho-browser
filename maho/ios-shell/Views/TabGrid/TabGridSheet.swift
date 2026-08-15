@@ -49,6 +49,7 @@ struct TabGridSheet: View {
             TabGridToolbar(
                 tabCount: filteredTabs.count,
                 activeSpaceName: activeSpaceName,
+                isIncognito: isIncognito,
                 onCloseAll: {
                     for tab in filteredTabs {
                         bridge.closeTab(id: tab.id)
@@ -76,11 +77,11 @@ struct TabGridSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(activeSpaceTitle)
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoForeground : .primary)
 
                 Text("\(filteredTabs.count) \(filteredTabs.count == 1 ? "tab" : "tabs")")
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isIncognito ? ShellTheme.Palette.incognitoMutedForeground : .secondary)
             }
 
             Spacer(minLength: 0)
@@ -92,17 +93,31 @@ struct TabGridSheet: View {
         .accessibilityIdentifier("tabGridHeader")
     }
 
+    @ViewBuilder
     private var tabGridBackground: some View {
-        LinearGradient(
-            colors: [
-                ShellTheme.Palette.tabGridBackdropTop,
-                ShellTheme.Palette.browsingBackground,
-                ShellTheme.Palette.tabGridBackdropBottom
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .ignoresSafeArea()
+        if isIncognito {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.incognitoBackground,
+                    ShellTheme.Palette.incognitoTint,
+                    ShellTheme.Palette.incognitoBackground
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        } else {
+            LinearGradient(
+                colors: [
+                    ShellTheme.Palette.tabGridBackdropTop,
+                    ShellTheme.Palette.browsingBackground,
+                    ShellTheme.Palette.tabGridBackdropBottom
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        }
     }
 
     private var activeSpaceTitle: String {

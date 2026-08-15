@@ -77,10 +77,12 @@
 #include "maho/browser/net/maho_atc_state.h"
 #include "maho/browser/net/maho_content_blocker_update_service.h"
 #include "maho/browser/net/maho_content_blocker_update_service_factory.h"
+#include "maho/browser/passwords/maho_password_authorization_service.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
 #include "maho/browser/ui/views/peek/maho_peek_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
@@ -252,9 +254,21 @@ const net::NetworkTrafficAnnotationTag kBillingPortalTrafficAnnotation =
       }
     )");
 
+// `atc.open_external_links_in_maho_mini` is deliberately NOT in kSettingsMap.
+// maho-core owns it: ATCManager::decide_link_destination is the only consumer
+// and it reads core, never the Chromium pref, so mapping this key to a pref
+// produced a settings toggle that changed nothing. Reads and writes are
+// special-cased onto the core FFI below, with a one-time seed from the legacy
+// pref so existing users keep their choice.
+constexpr char kOpenExternalLinksInMahoMiniMahoKey[] =
+    "atc.open_external_links_in_maho_mini";
+
 constexpr char kPasswordProviderModeMahoKey[] = "autofill.password_provider";
 constexpr char kPasswordsEnabledMahoKey[] = "autofill.passwords_enabled";
 constexpr char kMahoMailEnabledMahoKey[] = "mail.enabled";
+constexpr char kConversationAutoArchiveAfterDaysMahoKey[] =
+    "conversation.auto_archive_after_days";
+constexpr char kAIMailReadAllowedMahoKey[] = "ai.mail_read_allowed";
 
 // ── Pref-based settings mapping ──
 constexpr char kHardwareAccelerationMahoKey[] =
@@ -292,6 +306,10 @@ int NormalizeNetworkPredictionOptions(int value) {
 }
 
 constexpr SettingMapping kSettingsMap[] = {
+    {kMahoMailEnabledMahoKey, maho::sidebar_prefs::kMahoMailEnabled,
+     SettingMapping::Type::kBool},
+    {kAIMailReadAllowedMahoKey, ai::kMailReadAllowed,
+     SettingMapping::Type::kBool},
     {"general.homepage", prefs::kHomePage, SettingMapping::Type::kString},
     {"general.restore_on_startup", prefs::kRestoreOnStartup,
      SettingMapping::Type::kInt},
@@ -318,9 +336,6 @@ constexpr SettingMapping kSettingsMap[] = {
      SettingMapping::Type::kBool},
     {"atc.maho_mini_click_override_enabled",
      maho::sidebar_prefs::kMahoMiniClickOverrideEnabled,
-     SettingMapping::Type::kBool},
-    {"atc.open_external_links_in_maho_mini",
-     maho::sidebar_prefs::kOpenExternalLinksInMahoMini,
      SettingMapping::Type::kBool},
     {"atc.peek_enabled", maho::sidebar_prefs::kPeekEnabled,
      SettingMapping::Type::kBool},
@@ -349,6 +364,8 @@ struct SettingScopeMapping {
 // browser/resources/maho_settings/schema/setting_schema.ts, the ownership
 // source of truth for renderer-visible settings.
 constexpr SettingScopeMapping kSettingScopes[] = {
+    {kAIMailReadAllowedMahoKey,
+     maho_settings::mojom::SettingScope::kProfile},
     {"advanced.hardware_acceleration",
      maho_settings::mojom::SettingScope::kDevice},
     {"advanced.preload_pages", maho_settings::mojom::SettingScope::kProfile},
@@ -387,6 +404,10 @@ constexpr SettingScopeMapping kSettingScopes[] = {
     {"tabs.archive_timeout", maho_settings::mojom::SettingScope::kProfile},
     {"tabs.auto_delete_empty_folders_on_tidy",
      maho_settings::mojom::SettingScope::kCoreGlobal},
+    {kConversationAutoArchiveAfterDaysMahoKey,
+     maho_settings::mojom::SettingScope::kCoreGlobal},
+    {"sidebar.new_tab_position",
+     maho_settings::mojom::SettingScope::kCoreGlobal},
     {"tabs.pinned_close_behavior",
      maho_settings::mojom::SettingScope::kCoreGlobal},
     {"tabs.today_tab_timeout",
@@ -411,9 +432,19 @@ const SettingScopeMapping* FindScopeMapping(const std::string& maho_key) {
   return nullptr;
 }
 
-bool ShouldBypassPasswordReauthForAutomation() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableAutomation);
+std::string PasswordAuthorizationProfileKey(Profile* profile) {
+  return profile ? maho::GetProfileIdentityKey(profile->GetPath(),
+                                                profile->GetPrefs())
+                 : std::string();
+}
+
+std::unique_ptr<device_reauth::DeviceAuthenticator>
+CreatePasswordAuthenticator(Profile* profile) {
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
+      "PasswordManager.ReauthToAccessPasswordInSettings");
+  return ChromeDeviceAuthenticatorFactory::GetForProfile(
+      profile, GetSettingsNativeWindow(profile), params);
 }
 
 maho_settings::mojom::VaultOperationResultPtr MakeVaultUseFailure(
@@ -482,6 +513,9 @@ maho_settings::mojom::ProfileInfoPtr CreateProfileOnCoreSequence(
   }
   std::string result(result_str);
   maho_string_free(result_str);
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kFooter;
+  maho::InvalidateSidebarCoreCache(invalidation);
 
   std::optional<base::Value> parsed =
       base::JSONReader::Read(result, base::JSON_PARSE_RFC);
@@ -514,6 +548,9 @@ std::string DeleteProfileOnCoreSequence(const std::string& profile_id) {
   }
   std::string result(json_str);
   maho_string_free(json_str);
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kAll;
+  maho::InvalidateSidebarCoreCache(invalidation);
   return result;
 }
 
@@ -719,7 +756,13 @@ bool SwitchProfileOnCoreSequence(const std::string& profile_id) {
   if (!core) {
     return false;
   }
-  return maho_core_switch_profile(core, profile_id.c_str());
+  const bool switched = maho_core_switch_profile(core, profile_id.c_str());
+  if (switched) {
+    maho::SidebarCacheInvalidation invalidation;
+    invalidation.fragments = maho::SidebarCoreFragment::kAll;
+    maho::InvalidateSidebarCoreCache(invalidation);
+  }
+  return switched;
 }
 
 std::string UpdateProfileMetadataOnCoreSequence(const std::string& profile_id,
@@ -736,6 +779,9 @@ std::string UpdateProfileMetadataOnCoreSequence(const std::string& profile_id,
   }
   std::string result(json);
   maho_string_free(json);
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kFooter;
+  maho::InvalidateSidebarCoreCache(invalidation);
   return result;
 }
 
@@ -1950,6 +1996,8 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
       base::BindRepeating(&MahoSettingsPageHandler::OnPrefChanged,
                           weak_factory_.GetWeakPtr()));
 
+  MigrateAtcExternalMiniSettingToCore();
+
   if (g_browser_process && g_browser_process->os_crypt_async()) {
     g_browser_process->os_crypt_async()->GetInstance(
         base::BindOnce(&MahoSettingsPageHandler::OnOsCryptReady,
@@ -1991,10 +2039,23 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
     service->AddObserver(this);
   }
   maho::MahoUpdateManager::GetInstance()->AddObserver(this);
+
+  // The periodic core tick is the only thing that can auto-lock the Vault
+  // without a page-initiated action, so the page cannot learn about it from a
+  // reply. Subscribe to the browser-process broadcast and push it instead.
+  vault_lock_state_subscription_ = maho::AddVaultLockStateChangeCallback(
+      base::BindRepeating(&MahoSettingsPageHandler::OnVaultLockStateChanged,
+                          weak_factory_.GetWeakPtr()));
 }
 
 MahoSettingsPageHandler::~MahoSettingsPageHandler() {
   weak_factory_.InvalidateWeakPtrs();
+  auto* password_authorization =
+      maho::passwords::MahoPasswordAuthorizationService::Get();
+  password_authorization->RevokeProfile(
+      PasswordAuthorizationProfileKey(profile_));
+  password_authorization->ClearMahoOwnedClipboard();
+  vault_lock_state_subscription_ = {};
   selected_profile_observation_.Reset();
   profile_bridge_observation_.Reset();
   if (observing_profile_manager_) {
@@ -2094,6 +2155,49 @@ void MahoSettingsPageHandler::OnUpdateStateChanged(maho::UpdateState state) {
 
 void MahoSettingsPageHandler::OnUpdateProgress(double percent) {}
 
+void MahoSettingsPageHandler::OnVaultLockStateChanged(bool locked) {
+  if (locked) {
+    maho::passwords::MahoPasswordAuthorizationService::Get()->RevokeProfile(
+        PasswordAuthorizationProfileKey(profile_));
+  }
+  if (!page_.is_bound()) {
+    return;
+  }
+  page_->OnVaultLockStateChanged(locked);
+}
+
+void MahoSettingsPageHandler::MigrateAtcExternalMiniSettingToCore() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!prefs_ || !local_state_) {
+    return;
+  }
+  // The marker lives in LOCAL STATE because the maho-core value it guards is
+  // process-global. Reading it from profile prefs would let a second profile
+  // re-seed from its own legacy pref and overwrite the first profile's value.
+  if (!local_state_->FindPreference(
+          maho::sidebar_prefs::kOpenExternalLinksInMahoMiniMigrated)) {
+    // Marker not registered in this local state, so a seed could not be
+    // recorded and would therefore re-run on every startup, clobbering the
+    // user's core value each time. Skipping is the safe failure: core simply
+    // keeps whatever it already holds.
+    return;
+  }
+  RunAtcExternalMiniMigration(
+      maho::GetCore(),
+      [this] {
+        return local_state_->GetBoolean(
+            maho::sidebar_prefs::kOpenExternalLinksInMahoMiniMigrated);
+      },
+      [this] {
+        return prefs_->GetBoolean(
+            maho::sidebar_prefs::kOpenExternalLinksInMahoMini);
+      },
+      [this] {
+        local_state_->SetBoolean(
+            maho::sidebar_prefs::kOpenExternalLinksInMahoMiniMigrated, true);
+      });
+}
+
 // ── Key-value pref settings ──
 
 // static
@@ -2103,6 +2207,14 @@ const char* MahoSettingsPageHandler::GetPrefPath(const std::string& maho_key) {
 }
 
 std::string MahoSettingsPageHandler::ReadSetting(const std::string& maho_key) {
+  if (maho_key == kOpenExternalLinksInMahoMiniMahoKey) {
+    MahoCore* core = maho::GetCore();
+    if (!core) {
+      return std::string();
+    }
+    return maho_core_get_open_external_links_in_maho_mini(core) ? "true"
+                                                               : "false";
+  }
   if (maho_key == kPasswordProviderModeMahoKey) {
     return maho_settings_password_helpers::ReadPasswordProviderModeFromCore();
   }
@@ -2177,6 +2289,10 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
   }
 
   if (key == kPasswordProviderModeMahoKey) {
+    if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+      std::move(callback).Run(false);
+      return;
+    }
     bool passwords_enabled =
         maho_settings_password_helpers::ReadPasswordsEnabledFromCore();
     std::string mode = "maho_native";
@@ -2193,7 +2309,23 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
     return;
   }
 
+  if (key == kOpenExternalLinksInMahoMiniMahoKey) {
+    MahoCore* core = maho::GetCore();
+    if (!core) {
+      std::move(callback).Run(false);
+      return;
+    }
+    maho_core_set_open_external_links_in_maho_mini(core, value == "true");
+    std::move(callback).Run(true);
+    ScheduleNotify();
+    return;
+  }
+
   if (key == kPasswordsEnabledMahoKey) {
+    if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+      std::move(callback).Run(false);
+      return;
+    }
     bool passwords_enabled = value == "true";
     std::move(callback).Run(
         maho_settings_password_helpers::UpdateAutofillSettingsInCore(
@@ -3063,6 +3195,9 @@ void MahoSettingsPageHandler::OnSelectedProfileDownloadDirectoryChosen(
 }
 
 void MahoSettingsPageHandler::OnPrefChanged(const std::string& pref_name) {
+  if (pref_name == ai::kMailReadAllowed) {
+    MahoUnifiedAgentAdapter::NotifyMailReadConsentChanged(prefs_);
+  }
   ScheduleNotify();
 }
 
@@ -3078,19 +3213,9 @@ MahoSettingsPageHandler::BuildSettingsSnapshot() {
   for (const auto& m : kSettingsMap) {
     add(m.maho_key);
   }
+  add(kOpenExternalLinksInMahoMiniMahoKey);
   add(kPasswordProviderModeMahoKey);
   add(kPasswordsEnabledMahoKey);
-  // Mail feature flag. The nav schema needs this at runtime to decide whether
-  // the "Maho Mail" section exists, and it is the same gate the sidebar button,
-  // chrome://maho-mail, and the helper subprocess read.
-  {
-    auto mail = maho_settings::mojom::SettingValue::New();
-    mail->key = kMahoMailEnabledMahoKey;
-    mail->value = maho::sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())
-                      ? "true"
-                      : "false";
-    settings.push_back(std::move(mail));
-  }
   AppendFfiSettings(settings);
   return settings;
 }
@@ -3181,6 +3306,29 @@ MahoSettingsPageHandler::FfiResult MahoSettingsPageHandler::HandleFfiSetting(
     std::string json;
     base::JSONWriter::Write(base::Value(std::move(settings)), &json);
     maho_core_update_settings(core, json.c_str());
+  } else if (key == "sidebar.new_tab_position") {
+    // maho-core decides where a new tab lands (event_dispatcher CreateTab), so
+    // this is core-global like the other tab-lifecycle settings. Reject values
+    // outside the contract instead of letting core silently fall back to top.
+    if (value != "top" && value != "bottom") {
+      return FfiResult::kInvalid;
+    }
+    base::DictValue settings;
+    base::DictValue general;
+    general.Set("newTabPosition", value);
+    settings.Set("general", std::move(general));
+    std::string json;
+    base::JSONWriter::Write(base::Value(std::move(settings)), &json);
+    maho_core_update_settings(core, json.c_str());
+  } else if (key == kConversationAutoArchiveAfterDaysMahoKey) {
+    int days = 0;
+    if (!base::StringToInt(value, &days) ||
+        (days != -1 && days != 3 && days != 7 && days != 30)) {
+      return FfiResult::kInvalid;
+    }
+    if (!maho_core_set_conversation_auto_archive_policy(core, days)) {
+      return FfiResult::kInvalid;
+    }
   } else if (key == "tabs.auto_delete_empty_folders_on_tidy") {
     base::DictValue settings;
     base::DictValue general;
@@ -3193,6 +3341,9 @@ MahoSettingsPageHandler::FfiResult MahoSettingsPageHandler::HandleFfiSetting(
     return FfiResult::kNotHandled;
   }
 
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kFooter;
+  maho::InvalidateSidebarCoreCache(invalidation);
   return FfiResult::kOk;
 }
 
@@ -3224,6 +3375,11 @@ void MahoSettingsPageHandler::AppendFfiSettings(
     s->value = val;
     settings.push_back(std::move(s));
   };
+
+  const int32_t policy =
+      maho_core_get_conversation_auto_archive_policy(core);
+  add("conversation.auto_archive_after_days",
+      base::NumberToString(policy < 0 ? -1 : policy));
 
   const base::DictValue* appearance = root.FindDict("appearance");
   if (appearance) {
@@ -3263,6 +3419,10 @@ void MahoSettingsPageHandler::AppendFfiSettings(
       add("tabs.auto_delete_empty_folders_on_tidy",
           *auto_delete ? "true" : "false");
     }
+    if (const std::string* new_tab_position =
+            general->FindString("newTabPosition")) {
+      add("sidebar.new_tab_position", *new_tab_position);
+    }
   }
 }
 
@@ -3295,6 +3455,30 @@ void MahoSettingsPageHandler::GetProfileObservablesSnapshot(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   StartProfileObservablesSnapshotRead(std::move(callback), 0);
 }
+
+namespace maho_settings::testing {
+
+ProfileObservablesDecision::ProfileObservablesDecision(
+    ProfileObservablesDecisionKind kind,
+    maho_settings::mojom::ProfileObservablesSnapshotPtr snapshot)
+    : kind(kind), snapshot(std::move(snapshot)) {}
+ProfileObservablesDecision::ProfileObservablesDecision(
+    ProfileObservablesDecision&&) = default;
+ProfileObservablesDecision& ProfileObservablesDecision::operator=(
+    ProfileObservablesDecision&&) = default;
+ProfileObservablesDecision::~ProfileObservablesDecision() = default;
+
+}  // namespace maho_settings::testing
+
+MahoSettingsPageHandler::SelectedProfileRequestState::
+    SelectedProfileRequestState() = default;
+MahoSettingsPageHandler::SelectedProfileRequestState::
+    SelectedProfileRequestState(SelectedProfileRequestState&&) = default;
+MahoSettingsPageHandler::SelectedProfileRequestState&
+MahoSettingsPageHandler::SelectedProfileRequestState::operator=(
+    SelectedProfileRequestState&&) = default;
+MahoSettingsPageHandler::SelectedProfileRequestState::
+    ~SelectedProfileRequestState() = default;
 
 namespace maho_settings::testing {
 
@@ -3646,6 +3830,7 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   settings->approval_policy = prefs_->GetString(ai::kApprovalPolicy);
   settings->session_persistence_enabled =
       prefs_->GetBoolean(ai::kSessionPersistenceEnabled);
+  settings->mail_read_allowed = prefs_->GetBoolean(ai::kMailReadAllowed);
   settings->has_byok_openai =
       !prefs_->GetString(ai::kByokOpenAIEncryptedB64).empty();
   settings->has_byok_anthropic =
@@ -3716,6 +3901,19 @@ void MahoSettingsPageHandler::SetAIApprovalPolicy(const std::string& policy) {
 
 void MahoSettingsPageHandler::SetAISessionPersistence(bool enabled) {
   prefs_->SetBoolean(ai::kSessionPersistenceEnabled, enabled);
+}
+
+void MahoSettingsPageHandler::SetAIMailReadAllowed(
+    bool allowed,
+    SetAIMailReadAllowedCallback callback) {
+  if (!prefs_ || !prefs_->FindPreference(ai::kMailReadAllowed)) {
+    std::move(callback).Run(false);
+    return;
+  }
+  prefs_->SetBoolean(ai::kMailReadAllowed, allowed);
+  prefs_->CommitPendingWrite();
+  std::move(callback).Run(
+      prefs_->GetBoolean(ai::kMailReadAllowed) == allowed);
 }
 
 void MahoSettingsPageHandler::FetchProviderModels(
@@ -4052,6 +4250,10 @@ void MahoSettingsPageHandler::GetPasswordProviderOptions(
 
 void MahoSettingsPageHandler::GetSavedPasswords(
     GetSavedPasswordsCallback callback) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run({});
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::GetSavedPasswordsFromCore());
 }
@@ -4059,6 +4261,10 @@ void MahoSettingsPageHandler::GetSavedPasswords(
 void MahoSettingsPageHandler::SearchPasswords(
     const std::string& query,
     SearchPasswordsCallback callback) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run({});
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::SearchSavedPasswordsFromCore(query));
 }
@@ -4067,32 +4273,19 @@ void MahoSettingsPageHandler::AddPassword(const std::string& domain,
                                           const std::string& username,
                                           const std::string& password,
                                           AddPasswordCallback callback) {
-  if (ShouldBypassPasswordReauthForAutomation()) {
-    OnReauthAddComplete(domain, username, password, nullptr,
-                        std::move(callback), true);
-    return;
-  }
-  Browser* browser = chrome::FindBrowserWithProfile(profile_);
-  gfx::NativeWindow window =
-      browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
-
-  device_reauth::DeviceAuthParams params(
-      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
-      "PasswordManager.ReauthToAccessPasswordInSettings");
-
-  auto authenticator =
-      ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
-  if (!authenticator) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
     std::move(callback).Run(false);
     return;
   }
-
-  auto* authenticator_ptr = authenticator.get();
-  authenticator_ptr->AuthenticateWithMessage(
-      u"비밀번호 추가",
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kAdd,
+      CreatePasswordAuthenticator(profile_), u"Add password",
       base::BindOnce(&MahoSettingsPageHandler::OnReauthAddComplete,
                      weak_factory_.GetWeakPtr(), domain, username, password,
-                     std::move(authenticator), std::move(callback)));
+                     std::unique_ptr<device_reauth::DeviceAuthenticator>(),
+                     std::move(callback)));
 }
 
 void MahoSettingsPageHandler::OnReauthAddComplete(
@@ -4102,13 +4295,15 @@ void MahoSettingsPageHandler::OnReauthAddComplete(
     std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
     AddPasswordCallback callback,
     bool success) {
-  if (!success) {
+  if (!success || !maho::IsPasswordManagerAllowedForProfile(profile_)) {
     std::move(callback).Run(false);
     return;
   }
 
   const bool ok = maho_settings_password_helpers::
-      AddSavedPasswordCompatibilityShimInCore(domain, username, password);
+      AddSavedPasswordCompatibilityShimInCore(
+          PasswordAuthorizationProfileKey(profile_), domain, username,
+          password);
   if (ok) {
     ScheduleNotify();
   }
@@ -4119,32 +4314,19 @@ void MahoSettingsPageHandler::UpdatePasswordUsername(
     const std::string& password_id,
     const std::string& username,
     UpdatePasswordUsernameCallback callback) {
-  if (ShouldBypassPasswordReauthForAutomation()) {
-    OnReauthUpdateComplete(password_id, username, nullptr, std::move(callback),
-                           true);
-    return;
-  }
-  Browser* browser = chrome::FindBrowserWithProfile(profile_);
-  gfx::NativeWindow window =
-      browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
-
-  device_reauth::DeviceAuthParams params(
-      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
-      "PasswordManager.ReauthToAccessPasswordInSettings");
-
-  auto authenticator =
-      ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
-  if (!authenticator) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
     std::move(callback).Run(false);
     return;
   }
-
-  auto* authenticator_ptr = authenticator.get();
-  authenticator_ptr->AuthenticateWithMessage(
-      u"비밀번호 수정",
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kUpdate,
+      CreatePasswordAuthenticator(profile_), u"Edit password",
       base::BindOnce(&MahoSettingsPageHandler::OnReauthUpdateComplete,
                      weak_factory_.GetWeakPtr(), password_id, username,
-                     std::move(authenticator), std::move(callback)));
+                     std::unique_ptr<device_reauth::DeviceAuthenticator>(),
+                     std::move(callback)));
 }
 
 void MahoSettingsPageHandler::OnReauthUpdateComplete(
@@ -4153,13 +4335,14 @@ void MahoSettingsPageHandler::OnReauthUpdateComplete(
     std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
     UpdatePasswordUsernameCallback callback,
     bool success) {
-  if (!success) {
+  if (!success || !maho::IsPasswordManagerAllowedForProfile(profile_)) {
     std::move(callback).Run(false);
     return;
   }
 
   const bool ok = maho_settings_password_helpers::
-      UpdateSavedPasswordUsernameCompatibilityShimInCore(password_id, username);
+      UpdateSavedPasswordUsernameCompatibilityShimInCore(
+          PasswordAuthorizationProfileKey(profile_), password_id, username);
   if (ok) {
     ScheduleNotify();
   }
@@ -4168,31 +4351,19 @@ void MahoSettingsPageHandler::OnReauthUpdateComplete(
 
 void MahoSettingsPageHandler::DeletePassword(const std::string& password_id,
                                              DeletePasswordCallback callback) {
-  if (ShouldBypassPasswordReauthForAutomation()) {
-    OnReauthDeleteComplete(password_id, nullptr, std::move(callback), true);
-    return;
-  }
-  Browser* browser = chrome::FindBrowserWithProfile(profile_);
-  gfx::NativeWindow window =
-      browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
-
-  device_reauth::DeviceAuthParams params(
-      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
-      "PasswordManager.ReauthToAccessPasswordInSettings");
-
-  auto authenticator =
-      ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
-  if (!authenticator) {
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
     std::move(callback).Run(false);
     return;
   }
-
-  auto* authenticator_ptr = authenticator.get();
-  authenticator_ptr->AuthenticateWithMessage(
-      u"비밀번호 삭제",
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kDelete,
+      CreatePasswordAuthenticator(profile_), u"Delete password",
       base::BindOnce(&MahoSettingsPageHandler::OnReauthDeleteComplete,
                      weak_factory_.GetWeakPtr(), password_id,
-                     std::move(authenticator), std::move(callback)));
+                     std::unique_ptr<device_reauth::DeviceAuthenticator>(),
+                     std::move(callback)));
 }
 
 void MahoSettingsPageHandler::OnReauthDeleteComplete(
@@ -4200,13 +4371,14 @@ void MahoSettingsPageHandler::OnReauthDeleteComplete(
     std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
     DeletePasswordCallback callback,
     bool success) {
-  if (!success) {
+  if (!success || !maho::IsPasswordManagerAllowedForProfile(profile_)) {
     std::move(callback).Run(false);
     return;
   }
 
   const bool ok = maho_settings_password_helpers::
-      DeleteSavedPasswordCompatibilityShimInCore(password_id);
+      DeleteSavedPasswordCompatibilityShimInCore(
+          PasswordAuthorizationProfileKey(profile_), password_id);
   if (ok) {
     ScheduleNotify();
   }
@@ -4215,13 +4387,63 @@ void MahoSettingsPageHandler::OnReauthDeleteComplete(
 
 void MahoSettingsPageHandler::GetVaultStatus(GetVaultStatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::GetVaultStatusFromCore());
+}
+
+void MahoSettingsPageHandler::GetVaultPreflightState(
+    GetVaultPreflightStateCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Key loss can prevent MahoCore from being created, so the ordinary
+  // core-owner predicate cannot be the sole gate here. The preflight is
+  // process-wide diagnosis only (no Vault metadata or secrets): admit a
+  // regular non-OTR profile while no core owner exists, then restore the
+  // single-owner check as soon as one does.
+  if (!profile_ || !profile_->IsRegularProfile() || profile_->IsOffTheRecord() ||
+      (maho::GetCoreOwnerProfile() &&
+       !maho::IsPasswordManagerAllowedForProfile(profile_))) {
+    std::move(callback).Run(
+        maho_settings::mojom::VaultPreflightState::kUnavailable);
+    return;
+  }
+
+  maho_settings::mojom::VaultPreflightState state =
+      maho_settings::mojom::VaultPreflightState::kUnavailable;
+  switch (maho::core::GetVaultPreflightState()) {
+    case maho::core::VaultPreflightState::kHealthy:
+      state = maho_settings::mojom::VaultPreflightState::kHealthy;
+      break;
+    case maho::core::VaultPreflightState::kLocked:
+      state = maho_settings::mojom::VaultPreflightState::kLocked;
+      break;
+    case maho::core::VaultPreflightState::kUnrecoverableKey:
+      state = maho_settings::mojom::VaultPreflightState::kUnrecoverableKey;
+      break;
+    case maho::core::VaultPreflightState::kStructuralCorruption:
+      state =
+          maho_settings::mojom::VaultPreflightState::kStructuralCorruption;
+      break;
+    case maho::core::VaultPreflightState::kPlaintextResidue:
+      state = maho_settings::mojom::VaultPreflightState::kPlaintextResidue;
+      break;
+    case maho::core::VaultPreflightState::kUnavailable:
+      break;
+  }
+  std::move(callback).Run(state);
 }
 
 void MahoSettingsPageHandler::GetVaultProviderStatus(
     GetVaultProviderStatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultProviderStatus());
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::BuildVaultProviderStatus());
 }
@@ -4231,29 +4453,73 @@ void MahoSettingsPageHandler::InitializeVault(
     const std::string& recovery_secret,
     InitializeVaultCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(maho_settings_password_helpers::InitializeVaultInCore(
-      master_passphrase, recovery_secret));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  auto result = maho_settings_password_helpers::InitializeVaultInCore(
+      master_passphrase, recovery_secret);
+  if (result->success) {
+    result = FinalizeVaultLifecycleOperation(
+        std::move(result),
+        maho_settings_password_helpers::GetVaultStatusFromCore(),
+        [](bool locked) { maho::NotifyVaultLockStateChanged(locked); });
+  }
+  std::move(callback).Run(std::move(result));
 }
 
 void MahoSettingsPageHandler::UnlockVault(const std::string& master_passphrase,
                                           UnlockVaultCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(
-      maho_settings_password_helpers::UnlockVaultInCore(master_passphrase));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  auto result =
+      maho_settings_password_helpers::UnlockVaultInCore(master_passphrase);
+  if (result->success) {
+    result = FinalizeVaultLifecycleOperation(
+        std::move(result),
+        maho_settings_password_helpers::GetVaultStatusFromCore(),
+        [](bool locked) { maho::NotifyVaultLockStateChanged(locked); });
+  }
+  std::move(callback).Run(std::move(result));
 }
 
 void MahoSettingsPageHandler::UnlockVaultWithRecovery(
     const std::string& recovery_secret,
     UnlockVaultWithRecoveryCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  auto result =
       maho_settings_password_helpers::UnlockVaultWithRecoveryInCore(
-          recovery_secret));
+          recovery_secret);
+  if (result->success) {
+    result = FinalizeVaultLifecycleOperation(
+        std::move(result),
+        maho_settings_password_helpers::GetVaultStatusFromCore(),
+        [](bool locked) { maho::NotifyVaultLockStateChanged(locked); });
+  }
+  std::move(callback).Run(std::move(result));
 }
 
 void MahoSettingsPageHandler::LockVault(LockVaultCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(maho_settings_password_helpers::LockVaultInCore());
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  auto result = maho_settings_password_helpers::LockVaultInCore();
+  if (result->success) {
+    result = FinalizeVaultLifecycleOperation(
+        std::move(result),
+        maho_settings_password_helpers::GetVaultStatusFromCore(),
+        [](bool locked) { maho::NotifyVaultLockStateChanged(locked); });
+  }
+  std::move(callback).Run(std::move(result));
 }
 
 void MahoSettingsPageHandler::ListVaultItems(
@@ -4263,6 +4529,11 @@ void MahoSettingsPageHandler::ListVaultItems(
     uint32_t limit,
     ListVaultItemsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultItemListResult());
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::ListVaultItemsFromCore(provider, kinds,
                                                              cursor, limit));
@@ -4274,6 +4545,11 @@ void MahoSettingsPageHandler::SearchVaultItems(
     const std::vector<maho_settings::mojom::VaultItemKind>& kinds,
     SearchVaultItemsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultItemListResult());
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::SearchVaultItemsFromCore(origin, provider,
                                                                kinds));
@@ -4286,8 +4562,35 @@ void MahoSettingsPageHandler::AddVaultLogin(
     const std::string& password,
     AddVaultLoginCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(maho_settings_password_helpers::AddVaultLoginInCore(
-      title, origins, username, password));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kAdd,
+      CreatePasswordAuthenticator(profile_), u"Add password",
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> handler,
+             std::string title, std::vector<std::string> origins,
+             std::string username, std::string password,
+             AddVaultLoginCallback callback, bool success) {
+            if (!handler || !success ||
+                !maho::IsPasswordManagerAllowedForProfile(handler->profile_)) {
+              std::move(callback).Run(MakeVaultUseFailure("reauth_failed"));
+              return;
+            }
+            auto result = maho_settings_password_helpers::AddVaultLoginInCore(
+                PasswordAuthorizationProfileKey(handler->profile_), title,
+                origins, username, password);
+            if (result->success) {
+              handler->ScheduleNotify();
+            }
+            std::move(callback).Run(std::move(result));
+          },
+          weak_factory_.GetWeakPtr(), title, origins, username, password,
+          std::move(callback)));
 }
 
 void MahoSettingsPageHandler::UpdateVaultLogin(
@@ -4299,9 +4602,37 @@ void MahoSettingsPageHandler::UpdateVaultLogin(
     const std::optional<std::string>& password,
     UpdateVaultLoginCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(
-      maho_settings_password_helpers::UpdateVaultLoginInCore(
-          item_id, expected_revision, title, origins, username, password));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kUpdate,
+      CreatePasswordAuthenticator(profile_), u"Edit password",
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> handler,
+             std::string item_id, uint64_t expected_revision,
+             std::string title, std::vector<std::string> origins,
+             std::string username, std::optional<std::string> password,
+             UpdateVaultLoginCallback callback, bool success) {
+            if (!handler || !success ||
+                !maho::IsPasswordManagerAllowedForProfile(handler->profile_)) {
+              std::move(callback).Run(MakeVaultUseFailure("reauth_failed"));
+              return;
+            }
+            auto result =
+                maho_settings_password_helpers::UpdateVaultLoginInCore(
+                    PasswordAuthorizationProfileKey(handler->profile_), item_id,
+                    expected_revision, title, origins, username, password);
+            if (result->success) {
+              handler->ScheduleNotify();
+            }
+            std::move(callback).Run(std::move(result));
+          },
+          weak_factory_.GetWeakPtr(), item_id, expected_revision, title,
+          origins, username, password, std::move(callback)));
 }
 
 void MahoSettingsPageHandler::DeleteVaultItem(
@@ -4309,8 +4640,34 @@ void MahoSettingsPageHandler::DeleteVaultItem(
     uint64_t expected_revision,
     DeleteVaultItemCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  std::move(callback).Run(maho_settings_password_helpers::DeleteVaultItemInCore(
-      item_id, expected_revision));
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
+    return;
+  }
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kDelete,
+      CreatePasswordAuthenticator(profile_), u"Delete password",
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> handler,
+             std::string item_id, uint64_t expected_revision,
+             DeleteVaultItemCallback callback, bool success) {
+            if (!handler || !success ||
+                !maho::IsPasswordManagerAllowedForProfile(handler->profile_)) {
+              std::move(callback).Run(MakeVaultUseFailure("reauth_failed"));
+              return;
+            }
+            auto result = maho_settings_password_helpers::DeleteVaultItemInCore(
+                PasswordAuthorizationProfileKey(handler->profile_), item_id,
+                expected_revision);
+            if (result->success) {
+              handler->ScheduleNotify();
+            }
+            std::move(callback).Run(std::move(result));
+          },
+          weak_factory_.GetWeakPtr(), item_id, expected_revision,
+          std::move(callback)));
 }
 
 void MahoSettingsPageHandler::UseVaultSecret(
@@ -4319,32 +4676,20 @@ void MahoSettingsPageHandler::UseVaultSecret(
     maho_settings::mojom::SecretAction action,
     UseVaultSecretCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (ShouldBypassPasswordReauthForAutomation()) {
-    OnReauthUseVaultSecretComplete(item_id, expected_revision, action, nullptr,
-                                   std::move(callback), true);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure("profile_not_allowed"));
     return;
   }
-  Browser* browser = chrome::FindBrowserWithProfile(profile_);
-  gfx::NativeWindow window =
-      browser ? browser->window()->GetNativeWindow() : gfx::NativeWindow();
-
-  device_reauth::DeviceAuthParams params(
-      base::Seconds(60), device_reauth::DeviceAuthSource::kPasswordManager,
-      "PasswordManager.ReauthToAccessPasswordInSettings");
-
-  auto authenticator =
-      ChromeDeviceAuthenticatorFactory::GetForProfile(profile_, window, params);
-  if (!authenticator) {
-    std::move(callback).Run(MakeVaultUseFailure("reauth_unavailable"));
-    return;
-  }
-
-  auto* authenticator_ptr = authenticator.get();
-  authenticator_ptr->AuthenticateWithMessage(
-      u"저장된 비밀번호 사용",
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kCopy,
+      CreatePasswordAuthenticator(profile_), u"Use saved password",
       base::BindOnce(&MahoSettingsPageHandler::OnReauthUseVaultSecretComplete,
                      weak_factory_.GetWeakPtr(), item_id, expected_revision,
-                     action, std::move(authenticator), std::move(callback)));
+                     action,
+                     std::unique_ptr<device_reauth::DeviceAuthenticator>(),
+                     std::move(callback)));
 }
 
 void MahoSettingsPageHandler::OnReauthUseVaultSecretComplete(
@@ -4354,12 +4699,14 @@ void MahoSettingsPageHandler::OnReauthUseVaultSecretComplete(
     std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
     UseVaultSecretCallback callback,
     bool success) {
-  if (!success) {
-    std::move(callback).Run(MakeVaultUseFailure("reauth_failed"));
+  if (!success || !maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(MakeVaultUseFailure(
+        success ? "profile_not_allowed" : "reauth_failed"));
     return;
   }
   auto result = maho_settings_password_helpers::UseVaultSecretInCore(
-      item_id, expected_revision, action);
+      PasswordAuthorizationProfileKey(profile_), item_id, expected_revision,
+      action);
   if (result->success) {
     ScheduleNotify();
   }
@@ -4369,6 +4716,11 @@ void MahoSettingsPageHandler::OnReauthUseVaultSecretComplete(
 void MahoSettingsPageHandler::GetVaultPolicyStatus(
     GetVaultPolicyStatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultPolicyStatus());
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::GetVaultPolicyStatusFromCore());
 }
@@ -4380,8 +4732,37 @@ void MahoSettingsPageHandler::SetVaultPolicy(
     const std::optional<std::string>& expires_at,
     SetVaultPolicyCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultPolicyStatus());
+    return;
+  }
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kPolicyUpdate,
+      CreatePasswordAuthenticator(profile_), u"Change password access policy",
+      base::BindOnce(
+          &MahoSettingsPageHandler::OnReauthSetVaultPolicyComplete,
+          weak_factory_.GetWeakPtr(), policy, item_id, origin, expires_at,
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnReauthSetVaultPolicyComplete(
+    maho_settings::mojom::VaultAgentPolicy policy,
+    const std::optional<std::string>& item_id,
+    const std::optional<std::string>& origin,
+    const std::optional<std::string>& expires_at,
+    SetVaultPolicyCallback callback,
+    bool success) {
+  if (!success || !maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultPolicyStatus());
+    return;
+  }
   auto status = maho_settings_password_helpers::SetVaultPolicyInCore(
-      policy, item_id, origin, expires_at);
+      PasswordAuthorizationProfileKey(profile_), policy, item_id, origin,
+      expires_at);
   if (status->is_available) {
     ScheduleNotify();
   }
@@ -4393,6 +4774,11 @@ void MahoSettingsPageHandler::GetVaultAuditPage(
     uint32_t limit,
     GetVaultAuditPageCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(
+        maho_settings_password_helpers::BuildUnavailableVaultAuditPage(cursor));
+    return;
+  }
   std::move(callback).Run(
       maho_settings_password_helpers::GetVaultAuditPageFromCore(cursor, limit));
 }
@@ -4439,12 +4825,37 @@ void MahoSettingsPageHandler::CommitPasswordImport(
     const std::string& preview_token,
     CommitPasswordImportCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  auto result = maho_settings_password_helpers::CommitPasswordImportInCore(
-      password_import_job_, preview_token);
-  if (result->success && result->committed > 0) {
-    ScheduleNotify();
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    std::move(callback).Run(maho_settings_password_helpers::
+                                BuildUnavailablePasswordImportOperationResult());
+    return;
   }
-  std::move(callback).Run(std::move(result));
+  maho::passwords::MahoPasswordAuthorizationService::Get()->Authorize(
+      PasswordAuthorizationProfileKey(profile_),
+      maho::passwords::MahoPasswordAuthorizationService::kAllOriginsScope,
+      maho::passwords::PasswordAuthorizationAction::kImportCommit,
+      CreatePasswordAuthenticator(profile_), u"Import passwords",
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> handler,
+             std::string preview_token, CommitPasswordImportCallback callback,
+             bool success) {
+            if (!handler || !success ||
+                !maho::IsPasswordManagerAllowedForProfile(handler->profile_)) {
+              std::move(callback).Run(
+                  maho_settings_password_helpers::
+                      BuildUnavailablePasswordImportOperationResult());
+              return;
+            }
+            auto result =
+                maho_settings_password_helpers::CommitPasswordImportInCore(
+                    PasswordAuthorizationProfileKey(handler->profile_),
+                    handler->password_import_job_, preview_token);
+            if (result->success && result->committed > 0) {
+              handler->ScheduleNotify();
+            }
+            std::move(callback).Run(std::move(result));
+          },
+          weak_factory_.GetWeakPtr(), preview_token, std::move(callback)));
 }
 
 void MahoSettingsPageHandler::FileSelected(const ui::SelectedFileInfo& file,
@@ -6044,25 +6455,79 @@ void MahoSettingsPageHandler::MailSetCalendarVisibility(
 }
 
 // Behavior
+namespace {
+
+maho_settings::mojom::MailNotificationPermission ToMojoPermission(
+    maho::MailOsNotificationPermission permission) {
+  switch (permission) {
+    case maho::MailOsNotificationPermission::kNotDetermined:
+      return maho_settings::mojom::MailNotificationPermission::kNotDetermined;
+    case maho::MailOsNotificationPermission::kPromptPending:
+      return maho_settings::mojom::MailNotificationPermission::kPromptPending;
+    case maho::MailOsNotificationPermission::kDenied:
+      return maho_settings::mojom::MailNotificationPermission::kDenied;
+    case maho::MailOsNotificationPermission::kGranted:
+      return maho_settings::mojom::MailNotificationPermission::kGranted;
+    case maho::MailOsNotificationPermission::kUnsupported:
+      return maho_settings::mojom::MailNotificationPermission::kUnsupported;
+  }
+}
+
+maho_settings::mojom::MailBehaviorSnapshotPtr ToMojoBehaviorSnapshot(
+    const maho::MailBehaviorSnapshot& snapshot,
+    maho::MailOsNotificationPermission permission) {
+  auto result = maho_settings::mojom::MailBehaviorSnapshot::New();
+  result->version = snapshot.version;
+  result->revision = snapshot.revision;
+  result->value_json = maho::SerializeMailBehaviorSnapshot(snapshot);
+  result->notification_permission = ToMojoPermission(permission);
+  return result;
+}
+
+maho_settings::mojom::MailBehaviorUpdateStatus ToMojoUpdateStatus(
+    maho::MailBehaviorUpdateStatus status) {
+  switch (status) {
+    case maho::MailBehaviorUpdateStatus::kApplied:
+      return maho_settings::mojom::MailBehaviorUpdateStatus::kApplied;
+    case maho::MailBehaviorUpdateStatus::kConflict:
+      return maho_settings::mojom::MailBehaviorUpdateStatus::kConflict;
+    case maho::MailBehaviorUpdateStatus::kRejected:
+      return maho_settings::mojom::MailBehaviorUpdateStatus::kRejected;
+    case maho::MailBehaviorUpdateStatus::kInvalid:
+      return maho_settings::mojom::MailBehaviorUpdateStatus::kInvalid;
+  }
+}
+
+}  // namespace
+
 void MahoSettingsPageHandler::MailGetBehaviorPrefs(
     MailGetBehaviorPrefsCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::MahoMailService* service =
       maho::MahoMailServiceFactory::GetForProfile(profile_);
   if (!service) {
-    std::move(callback).Run(false, "Mail service unavailable");
+    std::move(callback).Run(
+        false, ToMojoBehaviorSnapshot(
+                   {}, maho::MailOsNotificationPermission::kUnsupported));
     return;
   }
-  service->GetAppSetting(
-      "mail_behavior_prefs",
-      base::BindOnce(
-          [](MailGetBehaviorPrefsCallback cb, bool ok, std::string result) {
-            std::move(cb).Run(ok, std::move(result));
-          },
-          std::move(callback)));
+  service->GetBehaviorSnapshot(base::BindOnce(
+      [](MailGetBehaviorPrefsCallback callback, bool ok,
+         maho::MailBehaviorSnapshot snapshot) {
+        maho::GetMahoMailNotificationPermission(base::BindOnce(
+            [](MailGetBehaviorPrefsCallback callback, bool ok,
+               maho::MailBehaviorSnapshot snapshot,
+               maho::MailOsNotificationPermission permission) {
+              std::move(callback).Run(
+                  ok, ToMojoBehaviorSnapshot(snapshot, permission));
+            },
+            std::move(callback), ok, std::move(snapshot)));
+      },
+      std::move(callback)));
 }
 
 void MahoSettingsPageHandler::MailSetBehaviorPref(
+    uint64_t expected_revision,
     const std::string& key,
     const std::string& value,
     MailSetBehaviorPrefCallback callback) {
@@ -6070,52 +6535,51 @@ void MahoSettingsPageHandler::MailSetBehaviorPref(
   maho::MahoMailService* service =
       maho::MahoMailServiceFactory::GetForProfile(profile_);
   if (!service) {
-    std::move(callback).Run(false);
+    auto result = maho_settings::mojom::MailBehaviorUpdateResult::New();
+    result->status = maho_settings::mojom::MailBehaviorUpdateStatus::kRejected;
+    result->snapshot = ToMojoBehaviorSnapshot(
+        {}, maho::MailOsNotificationPermission::kUnsupported);
+    std::move(callback).Run(std::move(result));
     return;
   }
-  // Read existing mail_behavior_prefs first to update the specific key inside
-  // JSON
-  service->GetAppSetting(
-      "mail_behavior_prefs",
+  service->UpdateBehavior(
+      expected_revision, key, value,
       base::BindOnce(
           [](base::WeakPtr<MahoSettingsPageHandler> handler,
-             maho::MahoMailService* svc, std::string k, std::string v,
-             MailSetBehaviorPrefCallback cb, bool ok, std::string result) {
-            base::DictValue update_dict;
-            if (ok && !result.empty()) {
-              auto parsed =
-                  base::JSONReader::Read(result, base::JSON_PARSE_RFC);
-              if (parsed && parsed->is_dict()) {
-                for (auto item : parsed->GetDict()) {
-                  update_dict.Set(item.first, item.second.Clone());
-                }
-              }
-            }
-            auto parsed_value = base::JSONReader::Read(v, base::JSON_PARSE_RFC);
-            if (!parsed_value ||
-                !(parsed_value->is_bool() || parsed_value->is_int() ||
-                  parsed_value->is_double() || parsed_value->is_string())) {
-              std::move(cb).Run(false);
-              return;
-            }
-            update_dict.Set(k, std::move(*parsed_value));
-            std::string updated_json;
-            base::JSONWriter::Write(update_dict, &updated_json);
-            svc->SetAppSetting("mail_behavior_prefs", updated_json,
-                               base::BindOnce(
-                                   [](base::WeakPtr<MahoSettingsPageHandler> handler,
-                                      MailSetBehaviorPrefCallback cb_inner,
-                                      bool ok_set, std::string result_set) {
-                                     if (ok_set && handler &&
-                                         handler->page_.is_bound()) {
-                                       handler->page_->OnMailBehaviorChanged();
-                                     }
-                                     std::move(cb_inner).Run(ok_set);
-                                   },
-                                   handler, std::move(cb)));
+             MailSetBehaviorPrefCallback callback,
+             maho::MailBehaviorUpdateResult update) {
+            auto result =
+                maho_settings::mojom::MailBehaviorUpdateResult::New();
+            result->status = ToMojoUpdateStatus(update.status);
+            maho::GetMahoMailNotificationPermission(base::BindOnce(
+                [](base::WeakPtr<MahoSettingsPageHandler> handler,
+                   MailSetBehaviorPrefCallback callback,
+                   maho::MailBehaviorUpdateResult update,
+                   maho_settings::mojom::MailBehaviorUpdateResultPtr result,
+                   maho::MailOsNotificationPermission permission) {
+                  result->snapshot =
+                      ToMojoBehaviorSnapshot(update.snapshot, permission);
+                  if (update.status ==
+                          maho::MailBehaviorUpdateStatus::kApplied &&
+                      handler && handler->page_.is_bound()) {
+                    handler->page_->OnMailBehaviorChanged();
+                  }
+                  std::move(callback).Run(std::move(result));
+                },
+                handler, std::move(callback), std::move(update),
+                std::move(result)));
           },
-          weak_factory_.GetWeakPtr(), service, key, value,
-          std::move(callback)));
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailRequestNotificationPermission(
+    MailRequestNotificationPermissionCallback callback) {
+  maho::RequestMahoMailNotificationPermission(base::BindOnce(
+      [](MailRequestNotificationPermissionCallback callback,
+         maho::MailOsNotificationPermission permission) {
+        std::move(callback).Run(ToMojoPermission(permission));
+      },
+      std::move(callback)));
 }
 
 // Security (PGP/S-MIME)

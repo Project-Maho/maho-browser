@@ -26,6 +26,10 @@ bool IsPrimaryIncognitoAllowedActionId(const std::string& action_id);
 // in-memory container-local toggle and never writes sidebar prefs.
 bool ShouldPersistSidebarToggle(MahoPrivateContextClass klass);
 
+bool CanExecuteMailCommandForTesting(bool feature_enabled,
+                                     bool helper_available,
+                                     bool platform_supported);
+
 // Opens a command suggestion with the given disposition.
 // |disposition| controls whether navigation opens in the current tab,
 // a new foreground tab, or a new background tab.

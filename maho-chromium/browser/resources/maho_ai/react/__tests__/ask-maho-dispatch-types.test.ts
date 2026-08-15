@@ -30,7 +30,7 @@ it('enforces six-argument submitPrompt contract on PageHandlerRemote', () => {
       attachBrowserContext: boolean,
       mode: InteractionMode,
       attachments: ContextAttachment[] | null,
-      chatIntent: ChatIntent) => Promise<void>>();
+      chatIntent: ChatIntent) => Promise<{accepted: boolean}>>();
 });
 
 it('exposes only the Ask Maho source declared by Mojo', () => {

@@ -94,15 +94,7 @@ enum AiProviderResolver {
 
         switch provider {
         case .managed:
-            guard let session = RelayAuthStore.shared.loadSession(),
-                  !session.isAccessTokenExpired,
-                  let proxyBase = currentProxyURL(bridge: bridge) else { return nil }
-            return AiProviderConfig(
-                providerLabel: "Maho AI",
-                apiKey: session.accessToken,
-                endpoint: chatCompletionsEndpoint(base: proxyBase),
-                model: model
-            )
+            return resolveManaged(bridge: bridge)
 
         case .openai:
             guard let key = byokKey(for: provider, bridge: bridge) else { return nil }
@@ -140,6 +132,18 @@ enum AiProviderResolver {
                 model: model
             )
         }
+    }
+
+    static func resolveManaged(bridge: MahoBridge = .shared) -> AiProviderConfig? {
+        guard let session = RelayAuthStore.shared.loadSession(),
+              !session.isAccessTokenExpired,
+              let proxyBase = currentProxyURL(bridge: bridge) else { return nil }
+        return AiProviderConfig(
+            providerLabel: "Maho AI",
+            apiKey: session.accessToken,
+            endpoint: chatCompletionsEndpoint(base: proxyBase),
+            model: model
+        )
     }
 
     private static func byokKey(for provider: AiProvider, bridge: MahoBridge) -> String? {

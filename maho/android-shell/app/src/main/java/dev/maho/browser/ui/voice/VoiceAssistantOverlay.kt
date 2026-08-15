@@ -126,9 +126,12 @@ fun VoiceAssistantOverlay(
     onDismiss: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    isIncognito: Boolean = false,
 ) {
     val shellColors = BrowserShellTheme.colors
     val metrics = BrowserShellTheme.metrics
+    val overlayBase = if (isIncognito) shellColors.incognitoBackground else shellColors.overlayBackground
+    val overlaySurface = if (isIncognito) shellColors.incognitoSurface else shellColors.overlaySurfaceHigh
     val state = manager.state
     val liveTranscript = manager.resultText.trim()
     val isListening = state == VoiceSearchState.Listening
@@ -156,7 +159,7 @@ fun VoiceAssistantOverlay(
         Box(
             modifier = modifier
                 .fillMaxSize()
-                .background(shellColors.overlayBackground)
+                .background(overlayBase)
                 .testTag("voiceAssistantOverlay")
                 .semantics {
                     stateDescription = when (state) {
@@ -171,7 +174,7 @@ fun VoiceAssistantOverlay(
             Box(
                 modifier = Modifier
                     .matchParentSize()
-                    .background(shellColors.overlayBackground.copy(alpha = VoiceGlobalScrimAlpha)),
+                    .background(overlayBase.copy(alpha = VoiceGlobalScrimAlpha)),
             )
             Box(
                 modifier = Modifier
@@ -198,9 +201,9 @@ fun VoiceAssistantOverlay(
                             brush = Brush.verticalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    shellColors.overlayBackground.copy(alpha = VoiceTextVeilEdgeAlpha),
-                                    shellColors.overlayBackground.copy(alpha = VoiceTextVeilCoreAlpha),
-                                    shellColors.overlayBackground.copy(alpha = VoiceTextVeilLowerAlpha),
+                                    overlayBase.copy(alpha = VoiceTextVeilEdgeAlpha),
+                                    overlayBase.copy(alpha = VoiceTextVeilCoreAlpha),
+                                    overlayBase.copy(alpha = VoiceTextVeilLowerAlpha),
                                     Color.Transparent,
                                 ),
                             ),
@@ -232,7 +235,7 @@ fun VoiceAssistantOverlay(
                                 .fillMaxWidth()
                                 .padding(top = metrics.sectionSpacing),
                             shape = RoundedCornerShape(metrics.cardCorner),
-                            color = shellColors.overlaySurfaceHigh.copy(alpha = 0.72f),
+                            color = overlaySurface.copy(alpha = 0.72f),
                             contentColor = shellColors.textPrimary,
                             tonalElevation = 0.dp,
                             border = BorderStroke(1.dp, shellColors.divider.copy(alpha = 0.5f)),

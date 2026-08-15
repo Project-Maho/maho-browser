@@ -6,9 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use maho_core::maho_core::MahoCore;
 use maho_core::vault_manager::VaultCrudError;
-use maho_core::vault_runtime::session::{VaultBackendSession, VaultBackendSessionError};
-use maho_types::vault::{VaultBatchReadRequest, VaultSchemaVersion};
-use zeroize::Zeroize;
+use maho_core::vault_runtime::session::{
+    VaultBackendSecretAction, VaultBackendSession, VaultBackendSessionError,
+};
+use maho_types::vault::{VaultBatchReadRequest, VaultItemId, VaultRevision, VaultSchemaVersion};
+use zeroize::Zeroizing;
 
 mod result;
 
@@ -31,13 +33,13 @@ pub struct MahoVaultBackendResult {
 
 /// Opaque owned JSON bytes returned from a consumed backend result.
 pub struct MahoVaultBackendBuffer {
-    bytes: Vec<u8>,
+    bytes: Zeroizing<Vec<u8>>,
 }
 
 type SharedSession = Arc<Mutex<Option<VaultBackendSession>>>;
 
 enum BackendOutcome {
-    Success(Vec<u8>),
+    Success(Zeroizing<Vec<u8>>),
     InvalidRequest,
     RuntimeUnavailable,
     Locked,
@@ -45,17 +47,81 @@ enum BackendOutcome {
     Consumed,
 }
 
-impl Drop for MahoVaultBackendBuffer {
-    fn drop(&mut self) {
-        self.bytes.zeroize();
-    }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackendCredentialDiscoveryRequest {
+    #[serde(default)]
+    origin: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BackendCredentialRequest {
-    #[serde(default)]
-    origin: Option<String>,
+struct BackendSecretResolutionRequest {
+    item_id: VaultItemId,
+    #[serde(deserialize_with = "deserialize_revision")]
+    expected_revision: VaultRevision,
+    action: VaultBackendSecretAction,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum BackendCredentialRequest {
+    Resolve(BackendSecretResolutionRequest),
+    Discover(BackendCredentialDiscoveryRequest),
+}
+
+#[derive(serde::Serialize)]
+struct BackendResolvedLoginSecret<'secret> {
+    password: &'secret str,
+}
+
+fn deserialize_revision<'de, D>(deserializer: D) -> Result<VaultRevision, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct RevisionVisitor;
+
+    impl serde::de::Visitor<'_> for RevisionVisitor {
+        type Value = VaultRevision;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a non-negative integer or canonical unsigned decimal string")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+            Ok(VaultRevision::new(value))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u64::try_from(value)
+                .map(VaultRevision::new)
+                .map_err(|_| E::custom("Vault revision must not be negative"))
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let canonical = value == "0"
+                || (!value.starts_with('0')
+                    && !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_digit()));
+            if !canonical {
+                return Err(E::custom(
+                    "Vault revision must be a canonical unsigned decimal string",
+                ));
+            }
+            value
+                .parse::<u64>()
+                .map(VaultRevision::new)
+                .map_err(|_| E::custom("Vault revision is out of range"))
+        }
+    }
+
+    deserializer.deserialize_any(RevisionVisitor)
 }
 
 /// Typed status for a backend operation result.
@@ -227,7 +293,7 @@ pub unsafe extern "C" fn maho_vault_backend_session_execute(
                     };
                     match backend_session.batch_read(&request) {
                         Ok(result) => match serde_json::to_vec(&result) {
-                            Ok(payload) => BackendOutcome::Success(payload),
+                            Ok(payload) => BackendOutcome::Success(Zeroizing::new(payload)),
                             Err(_) => BackendOutcome::Failed,
                         },
                         Err(error) => outcome_from_error(error),
@@ -244,7 +310,7 @@ pub unsafe extern "C" fn maho_vault_backend_session_execute(
     )
 }
 
-/// Executes a typed backend-only credential request that may return short-lived login secrets.
+/// Discovers secret-free login descriptors or resolves one revision-bound fill secret.
 ///
 /// # Safety
 /// `session` must be valid and `request_json` must be a valid NUL-terminated UTF-8 string.
@@ -270,12 +336,35 @@ pub unsafe extern "C" fn maho_vault_backend_session_execute_credentials(
                     let Some(backend_session) = state.as_ref() else {
                         return ptr::null_mut();
                     };
-                    match backend_session.login_credentials(request.origin.as_deref()) {
-                        Ok(result) => match serde_json::to_vec(&result) {
-                            Ok(payload) => BackendOutcome::Success(payload),
-                            Err(_) => BackendOutcome::Failed,
-                        },
-                        Err(error) => outcome_from_error(error),
+                    match request {
+                        BackendCredentialRequest::Discover(request) => {
+                            match backend_session.login_credentials(request.origin.as_deref()) {
+                                Ok(result) => match serde_json::to_vec(&result) {
+                                    Ok(payload) => BackendOutcome::Success(Zeroizing::new(payload)),
+                                    Err(_) => BackendOutcome::Failed,
+                                },
+                                Err(error) => outcome_from_error(error),
+                            }
+                        }
+                        BackendCredentialRequest::Resolve(request) => {
+                            match backend_session.resolve_login_secret(
+                                request.item_id,
+                                request.expected_revision,
+                                request.action,
+                            ) {
+                                Ok(secret) => {
+                                    match serde_json::to_vec(&BackendResolvedLoginSecret {
+                                        password: secret.as_str(),
+                                    }) {
+                                        Ok(payload) => {
+                                            BackendOutcome::Success(Zeroizing::new(payload))
+                                        }
+                                        Err(_) => BackendOutcome::Failed,
+                                    }
+                                }
+                                Err(error) => outcome_from_error(error),
+                            }
+                        }
                     }
                 }
                 Err(error) => error,

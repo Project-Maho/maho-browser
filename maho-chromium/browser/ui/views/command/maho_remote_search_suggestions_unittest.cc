@@ -38,7 +38,7 @@ std::vector<RemoteSearchSuggestion> MapMatches(ACMatches matches) {
 
 TEST(MahoRemoteSearchSuggestionMappingTest,
      AcceptedMatchTypesMapToRemoteSuggestions) {
-  const AutocompleteMatchType::Type accepted_types[] = {
+  const std::array<AutocompleteMatchType::Type, 5> accepted_types = {
       AutocompleteMatchType::SEARCH_SUGGEST,
       AutocompleteMatchType::SEARCH_SUGGEST_ENTITY,
       AutocompleteMatchType::SEARCH_SUGGEST_TAIL,
@@ -47,7 +47,7 @@ TEST(MahoRemoteSearchSuggestionMappingTest,
   };
 
   ACMatches matches;
-  for (size_t i = 0; i < std::size(accepted_types); ++i) {
+  for (size_t i = 0; i < accepted_types.size(); ++i) {
     matches.push_back(MakeMatch(
         accepted_types[i],
         std::u16string(u"Weather Query ") + base::NumberToString16(i),
@@ -102,7 +102,7 @@ TEST(MahoRemoteSearchSuggestionCursorTest,
 }
 
 TEST(MahoRemoteSearchSuggestionMappingTest, RejectsNonAcceptedMatchTypes) {
-  const AutocompleteMatchType::Type rejected_types[] = {
+  const std::array<AutocompleteMatchType::Type, 8> rejected_types = {
       AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED,
       AutocompleteMatchType::SEARCH_HISTORY,
       AutocompleteMatchType::SEARCH_OTHER_ENGINE,
@@ -114,7 +114,7 @@ TEST(MahoRemoteSearchSuggestionMappingTest, RejectsNonAcceptedMatchTypes) {
   };
 
   ACMatches matches;
-  for (size_t i = 0; i < std::size(rejected_types); ++i) {
+  for (size_t i = 0; i < rejected_types.size(); ++i) {
     matches.push_back(MakeMatch(
         rejected_types[i],
         std::u16string(u"rejected ") + base::NumberToString16(i),

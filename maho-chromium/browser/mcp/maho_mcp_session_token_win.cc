@@ -2,6 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// Win32 API interop uses raw buffers / pointer arithmetic (memset, .data(),
+// pointer offsets) that cannot be expressed with bounds-checked spans.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
 
 #if BUILDFLAG(IS_WIN)

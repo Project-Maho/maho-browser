@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
+#include "maho/browser/ui/views/command/maho_mail_command_catalog.h"
 
 #include <string>
 
@@ -13,6 +14,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/uuid.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
@@ -36,6 +38,8 @@
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"  // nogncheck
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"  // nogncheck
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
@@ -292,6 +296,12 @@ bool IsPrimaryIncognitoAllowedActionId(const std::string& action_id) {
 
 bool ShouldPersistSidebarToggle(MahoPrivateContextClass klass) {
   return klass == MahoPrivateContextClass::kRegular;
+}
+
+bool CanExecuteMailCommandForTesting(bool feature_enabled,
+                                     bool helper_available,
+                                     bool platform_supported) {
+  return feature_enabled && helper_available && platform_supported;
 }
 
 namespace {
@@ -662,6 +672,42 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
             browser->tab_strip_model()->GetActiveWebContents());
   } else if (action_id == "open_atc_rules") {
     maho::OpenMahoSettingsPane(browser, "");
+  } else if (const MahoMailCommand* mail_command =
+                 FindMahoMailCommand(action_id)) {
+    MahoMailService* mail_service =
+        MahoMailServiceFactory::GetForProfileIfExists(browser->profile());
+    constexpr bool kMailPlatformSupported =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+        true;
+#else
+        false;
+#endif
+    const bool mail_available =
+        mail_service && mail_service->IsCommandAvailable();
+    if (!CanExecuteMailCommandForTesting(
+            /*feature_enabled=*/mail_available,
+            /*helper_available=*/mail_available, kMailPlatformSupported)) {
+      return;
+    }
+    const GURL mail_url(std::string(maho::kMahoMailURL) +
+                        std::string(mail_command->path));
+    TabStripModel* tab_strip = browser->tab_strip_model();
+    if (tab_strip) {
+      for (int i = 0; i < tab_strip->count(); ++i) {
+        content::WebContents* contents = tab_strip->GetWebContentsAt(i);
+        if (contents &&
+            contents->GetLastCommittedURL().host() == maho::kMahoMailHost) {
+          tab_strip->ActivateTabAt(i);
+          contents->GetController().LoadURL(
+              mail_url, content::Referrer(), ui::PAGE_TRANSITION_GENERATED,
+              std::string());
+          return;
+        }
+      }
+    }
+    NavigateParams params(browser, mail_url, ui::PAGE_TRANSITION_GENERATED);
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    Navigate(&params);
   } else if (action_id == "clear_unpinned_tabs") {
     TabStripModel* model = browser->tab_strip_model();
     if (model) {

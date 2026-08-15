@@ -29,6 +29,85 @@ const PASSWORD_PROVIDER_ICONS = {
 
 export type ProviderChoice = PasswordProviderKind | 'none';
 
+export const MIN_MASTER_PASSPHRASE_LENGTH = 8;
+
+export const VAULT_SETUP_MESSAGES = {
+  masterPassphraseRequired: 'Enter a master passphrase.',
+  masterPassphraseTooShort:
+      `Use at least ${MIN_MASTER_PASSPHRASE_LENGTH} characters for the master passphrase.`,
+  confirmPassphraseRequired: 'Re-enter the master passphrase to confirm it.',
+  passphraseMismatch: 'The master passphrases do not match.',
+  recoverySecretRequired: 'Enter a recovery secret.',
+  confirmRecoveryRequired: 'Re-enter the recovery secret to confirm it.',
+  recoveryMismatch: 'The recovery secrets do not match.',
+  recoveryKitNotAcknowledged:
+      'Confirm that you saved the recovery kit before continuing.',
+  unlockPassphraseRequired: 'Enter your master passphrase to unlock the Vault.',
+} as const;
+
+export type VaultSetupFieldId =
+    'masterPassphrase'|'confirmPassphrase'|'recoverySecret'|'confirmRecovery'|
+    'recoveryKitAcknowledged';
+
+export interface VaultSetupValidationInput {
+  readonly masterPassphrase: string;
+  readonly confirmPassphrase: string;
+  readonly recoverySecret: string;
+  readonly confirmRecovery: string;
+  readonly recoveryKitAcknowledged: boolean;
+}
+
+export interface VaultSetupValidationFailure {
+  readonly field: VaultSetupFieldId;
+  readonly message: string;
+}
+
+/**
+ * Returns the first blocking failure for Vault initialization, or null when the
+ * form may be submitted. Field order matches visual order so refocus lands on
+ * the first offending control. Pure: no secret is retained here.
+ */
+export function validateVaultSetup(
+    input: VaultSetupValidationInput): VaultSetupValidationFailure|null {
+  if (input.masterPassphrase.length === 0) {
+    return {field: 'masterPassphrase', message: VAULT_SETUP_MESSAGES.masterPassphraseRequired};
+  }
+  if (input.masterPassphrase.length < MIN_MASTER_PASSPHRASE_LENGTH) {
+    return {field: 'masterPassphrase', message: VAULT_SETUP_MESSAGES.masterPassphraseTooShort};
+  }
+  if (input.confirmPassphrase.length === 0) {
+    return {field: 'confirmPassphrase', message: VAULT_SETUP_MESSAGES.confirmPassphraseRequired};
+  }
+  if (input.masterPassphrase !== input.confirmPassphrase) {
+    return {field: 'confirmPassphrase', message: VAULT_SETUP_MESSAGES.passphraseMismatch};
+  }
+  if (input.recoverySecret.length === 0) {
+    return {field: 'recoverySecret', message: VAULT_SETUP_MESSAGES.recoverySecretRequired};
+  }
+  if (input.confirmRecovery.length === 0) {
+    return {field: 'confirmRecovery', message: VAULT_SETUP_MESSAGES.confirmRecoveryRequired};
+  }
+  if (input.recoverySecret !== input.confirmRecovery) {
+    return {field: 'confirmRecovery', message: VAULT_SETUP_MESSAGES.recoveryMismatch};
+  }
+  if (!input.recoveryKitAcknowledged) {
+    return {
+      field: 'recoveryKitAcknowledged',
+      message: VAULT_SETUP_MESSAGES.recoveryKitNotAcknowledged,
+    };
+  }
+  return null;
+}
+
+/** Returns the blocking failure for the unlock form, or null. */
+export function validateVaultUnlock(masterPassphrase: string):
+    VaultSetupValidationFailure|null {
+  if (masterPassphrase.length === 0) {
+    return {field: 'masterPassphrase', message: VAULT_SETUP_MESSAGES.unlockPassphraseRequired};
+  }
+  return null;
+}
+
 interface ProviderSelectionGridProps {
   readonly store: MahoWelcomeStore;
   readonly disabled: boolean;
@@ -49,15 +128,24 @@ interface NoPasswordManagerConfirmCardProps {
 
 interface VaultCardProps {
   readonly store: MahoWelcomeStore;
+  readonly acknowledgeInputRef: React.Ref<HTMLInputElement>;
+  readonly confirmPassphrase: string;
+  readonly confirmPassphraseInputRef: React.Ref<HTMLInputElement>;
+  readonly confirmRecovery: string;
+  readonly confirmRecoveryInputRef: React.Ref<HTMLInputElement>;
   readonly disabled: boolean;
   readonly isUnlocked: boolean;
-  readonly masterInputRef: React.RefObject<HTMLInputElement | null>;
+  readonly masterInputRef: React.Ref<HTMLInputElement>;
   readonly masterPassphrase: string;
   readonly needsInitialize: boolean;
   readonly needsUnlock: boolean;
-  readonly recoveryInputRef: React.RefObject<HTMLInputElement | null>;
+  readonly recoveryInputRef: React.Ref<HTMLInputElement>;
+  readonly recoveryKitAcknowledged: boolean;
   readonly recoverySecret: string;
+  readonly onConfirmPassphraseChange: (value: string) => void;
+  readonly onConfirmRecoveryChange: (value: string) => void;
   readonly onMasterPassphraseChange: (value: string) => void;
+  readonly onRecoveryKitAcknowledgedChange: (value: boolean) => void;
   readonly onRecoverySecretChange: (value: string) => void;
 }
 
@@ -89,7 +177,7 @@ export function ProviderSelectionGrid({
       id: PASSWORD_PROVIDER_KIND.MahoNative,
       title: nativeOption?.displayName || 'Maho Passwords',
       description:
-        'Built-in encrypted Local Vault stored safely on your device.',
+        'Built-in encrypted Local Vault stored locally on this device.',
       icon: <ShieldCheck className="size-5 text-primary" aria-hidden="true" />,
       badge: 'Recommended',
     },
@@ -237,15 +325,24 @@ export function NoPasswordManagerConfirmCard() {
 
 export function VaultCard(props: VaultCardProps) {
   const {
+    acknowledgeInputRef,
+    confirmPassphrase,
+    confirmPassphraseInputRef,
+    confirmRecovery,
+    confirmRecoveryInputRef,
     disabled,
     isUnlocked,
     masterInputRef,
     masterPassphrase,
     needsInitialize,
     needsUnlock,
+    onConfirmPassphraseChange,
+    onConfirmRecoveryChange,
     onMasterPassphraseChange,
+    onRecoveryKitAcknowledgedChange,
     onRecoverySecretChange,
     recoveryInputRef,
+    recoveryKitAcknowledged,
     recoverySecret,
     store,
   } = props;
@@ -271,7 +368,7 @@ export function VaultCard(props: VaultCardProps) {
       </div>
 
       <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground leading-relaxed">
-        The Local Vault keeps your passwords encrypted on your hardware. Your master passphrase never leaves this machine.
+        The Local Vault encrypts your passwords with a key derived from your master passphrase and stores them locally on this device. Your passphrase is never sent to Maho or any server.
       </div>
 
       {!isUnlocked ? (
@@ -300,27 +397,80 @@ export function VaultCard(props: VaultCardProps) {
             />
           </div>
           {needsInitialize ? (
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="vault-recovery-secret" className="text-xs font-medium">
-                  Recovery Secret
+            <>
+              <div className="space-y-1.5">
+                <Label htmlFor="vault-confirm-passphrase" className="text-xs font-medium">
+                  Confirm Master Passphrase
                 </Label>
-                {recoverySecret ? (
-                  <span className="text-[10px] text-emerald-500 font-medium">Entered</span>
-                ) : null}
+                <Input
+                  ref={confirmPassphraseInputRef}
+                  id="vault-confirm-passphrase"
+                  type="password"
+                  autoComplete="new-password"
+                  disabled={disabled}
+                  required
+                  value={confirmPassphrase}
+                  onChange={event => onConfirmPassphraseChange(event.target.value)}
+                  className="h-9 text-xs bg-background/60"
+                />
               </div>
-              <Input
-                ref={recoveryInputRef}
-                id="vault-recovery-secret"
-                type="password"
-                autoComplete="new-password"
-                disabled={disabled}
-                required
-                value={recoverySecret}
-                onChange={event => onRecoverySecretChange(event.target.value)}
-                className="h-9 text-xs bg-background/60"
-              />
-            </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="vault-recovery-secret" className="text-xs font-medium">
+                    Recovery Secret
+                  </Label>
+                  {recoverySecret ? (
+                    <span className="text-[10px] text-emerald-500 font-medium">Entered</span>
+                  ) : null}
+                </div>
+                <Input
+                  ref={recoveryInputRef}
+                  id="vault-recovery-secret"
+                  type="password"
+                  autoComplete="new-password"
+                  disabled={disabled}
+                  required
+                  value={recoverySecret}
+                  onChange={event => onRecoverySecretChange(event.target.value)}
+                  className="h-9 text-xs bg-background/60"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="vault-confirm-recovery-secret" className="text-xs font-medium">
+                  Confirm Recovery Secret
+                </Label>
+                <Input
+                  ref={confirmRecoveryInputRef}
+                  id="vault-confirm-recovery-secret"
+                  type="password"
+                  autoComplete="new-password"
+                  disabled={disabled}
+                  required
+                  value={confirmRecovery}
+                  onChange={event => onConfirmRecoveryChange(event.target.value)}
+                  className="h-9 text-xs bg-background/60"
+                />
+              </div>
+              <div className="space-y-2 rounded-lg border border-border/40 bg-muted/20 p-3">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Save your recovery kit now: keep the master passphrase and recovery secret somewhere safe outside this browser. Maho cannot recover this vault for you, and neither value is shown again after setup.
+                </p>
+                <label
+                  htmlFor="vault-recovery-kit-acknowledged"
+                  className="flex items-start gap-2 text-xs text-foreground leading-relaxed">
+                  <input
+                    ref={acknowledgeInputRef}
+                    id="vault-recovery-kit-acknowledged"
+                    type="checkbox"
+                    disabled={disabled}
+                    checked={recoveryKitAcknowledged}
+                    onChange={event => onRecoveryKitAcknowledgedChange(event.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>I saved my recovery kit outside this browser.</span>
+                </label>
+              </div>
+            </>
           ) : null}
         </div>
       ) : (

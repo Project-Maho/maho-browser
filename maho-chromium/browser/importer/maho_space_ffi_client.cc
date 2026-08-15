@@ -12,6 +12,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/third_party/maho/maho_ffi.h"
 
 namespace maho {
@@ -154,6 +155,9 @@ std::string MahoSpaceFFIClient::CreateSpace(const std::string& name,
 
   std::string svm_json(svm);
   maho_string_free(svm);
+  SidebarCacheInvalidation invalidation;
+  invalidation.fragments = SidebarCoreFragment::kFooter;
+  InvalidateSidebarCoreCache(invalidation);
 
   auto svm_parsed = base::JSONReader::Read(svm_json, base::JSON_PARSE_RFC);
   if (!svm_parsed || !svm_parsed->is_dict()) return "";
@@ -285,7 +289,11 @@ void MahoSpaceFFIClient::UpdateSpaceConfig(const std::string& space_id,
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
   char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) maho_string_free(result);
+  if (result) {
+    std::string updates(result);
+    maho_string_free(result);
+    InvalidateSidebarCoreCacheForUpdatesJson(updates);
+  }
 }
 
 void MahoSpaceFFIClient::ActivateSpace(const std::string& space_id) {
@@ -293,6 +301,9 @@ void MahoSpaceFFIClient::ActivateSpace(const std::string& space_id) {
   MahoCore* core = maho::GetCore();
   if (!core) return;
   maho_core_activate_space(core, space_id.c_str());
+  SidebarCacheInvalidation invalidation;
+  invalidation.fragments = SidebarCoreFragment::kFooter;
+  InvalidateSidebarCoreCache(invalidation);
 }
 
 void MahoSpaceFFIClient::SetSpaceIcon(const std::string& space_id,
@@ -330,6 +341,7 @@ std::string MahoSpaceFFIClient::DispatchEvent(const base::DictValue& event) {
   if (!result) return std::string();
   std::string out(result);
   maho_string_free(result);
+  InvalidateSidebarCoreCacheForUpdatesJson(out);
   return out;
 }
 

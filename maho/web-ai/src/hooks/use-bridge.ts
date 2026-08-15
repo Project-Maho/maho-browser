@@ -5,12 +5,20 @@
  */
 import { useMemo } from 'preact/hooks';
 import { call } from '../bridge/rpc';
+import { detectPlatform } from '../bridge/platform-detect';
 import type {
+  BrowserToolInvokeResult,
+  ComposerDraft,
   HapticStyle,
   MahoBridge,
 } from '../bridge/types';
 
 function makeBridge(): MahoBridge {
+  const browserToolInvoke = detectPlatform() === 'desktop'
+    ? undefined
+    : (name: string, args: Record<string, unknown>) =>
+        call<BrowserToolInvokeResult>('browserToolInvoke', { name, args });
+
   return {
     // --- BYOK ---
     byokGetProviders: () => call('byokGetProviders'),
@@ -28,25 +36,61 @@ function makeBridge(): MahoBridge {
 
     // --- Chat Session ---
     chatSessionStart: (opts) => call('chatSessionStart', opts as unknown as Record<string, unknown>),
-    chatSessionResume: (conversationId) => call('chatSessionResume', { handle: conversationId }),
+    chatSessionResume: (conversationId, opts) => call('chatSessionResume', {
+      handle: conversationId,
+      ...opts,
+    }),
     chatSessionFree: (handle) => call('chatSessionFree', { handle }),
     chatSendMessage: (handle, content) => call('chatSendMessage', { handle, content }),
     chatCancelTurn: (handle) => call('chatCancelTurn', { handle }),
     chatPollEvents: (handle) => call('chatPollEvents', { handle }),
     chatRegisterTool: (handle, tool) => call('chatRegisterTool', { handle, tool }),
-    chatSendToolResult: (handle, toolCallId, result) => call('chatSendToolResult', { handle, toolCallId, result }),
-    chatAppendAssistantMessage: (handle, content) => call('chatAppendAssistantMessage', { handle, content }),
+    chatSendToolResult: (handle, toolCallId, result, options) => call('chatSendToolResult', {
+      handle,
+      toolCallId,
+      result,
+      toolName: options.toolName,
+      trigger: options.trigger,
+    }),
+    ...(browserToolInvoke === undefined ? {} : { browserToolInvoke }),
+    chatAppendAssistantMessage: (handle, content, toolCallsJson) => call('chatAppendAssistantMessage', {
+      handle,
+      content,
+      ...(toolCallsJson === undefined ? {} : { toolCallsJson }),
+    }),
     chatGetHistory: (handle) => call('chatGetHistory', { handle }),
 
     // --- Conversations ---
     conversationCreate: (meta) => call('conversationCreate', { meta }),
-    conversationList: () => call('conversationList'),
+    conversationList: (options = {}) => call('conversationList', {
+      state: options.state ?? 'active',
+      limit: options.limit ?? 100,
+    }),
     conversationGet: (id) => call('conversationGet', { id }),
     conversationDelete: (id) => call('conversationDelete', { id }),
     conversationRename: (id, title) => call('conversationRename', { id, title }),
+    conversationArchive: (id) => call('conversationArchive', { id }),
+    conversationUnarchive: (id) => call('conversationUnarchive', { id }),
+    conversationBulk: (op, ids) => call('conversationBulk', { op, ids }),
+    conversationGetAutoArchivePolicy: async () => {
+      const days = await call<number>('conversationGetAutoArchivePolicy');
+      return days === -1 ? null : days;
+    },
+    conversationSetAutoArchivePolicy: (afterDays) =>
+      call('conversationSetAutoArchivePolicy', { afterDays }),
     conversationGetMessages: (id) => call('conversationGetMessages', { id }),
+    conversationProjectList: () => call('conversationProjectList'),
+    conversationProjectCreate: (name) => call('conversationProjectCreate', { name }),
+    conversationProjectRename: (id, name) => call('conversationProjectRename', { id, name }),
+    conversationProjectDelete: (id) => call('conversationProjectDelete', { id }),
+    conversationProjectMove: (ids, projectId) => call('conversationProjectMove', { ids, projectId }),
     saveConversationMessage: (sessionId, role, content) =>
       call('saveConversationMessage', { sessionId, role, content }),
+
+    // --- Composer drafts ---
+    composerDraftGet: (scope) => call<ComposerDraft | null>('composerDraftGet', { scope }),
+    composerDraftSet: (scope, text) => call<boolean>('composerDraftSet', { scope, text }),
+    composerDraftDelete: (scope) => call<boolean>('composerDraftDelete', { scope }),
 
     // --- Space AI Config ---
     getSpaceAIConfig: (spaceId) => call('getSpaceAIConfig', { spaceId }),
@@ -75,6 +119,7 @@ function makeBridge(): MahoBridge {
     // --- Relay auth (gated onboarding) ---
     relaySignIn: (email, password) => call('relaySignIn', { email, password }),
     relaySignUp: (email, password, displayName) => call('relaySignUp', { email, password, displayName }),
+    relaySignInWithGoogle: () => call('relaySignInWithGoogle'),
     relayAccountStatus: () => call('relayAccountStatus'),
     openDefaultBrowserSettings: () => call('openDefaultBrowserSettings'),
     completeOnboarding: () => call('completeOnboarding'),

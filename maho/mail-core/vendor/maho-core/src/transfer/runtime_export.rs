@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use base64::Engine as _;
+
 use rusqlite::Connection;
 
 use super::{
@@ -19,8 +19,10 @@ pub fn export_runtime_transfer_artifact(
     artifact_path: &Path,
     passphrase: &str,
     db_copy_path: Option<&Path>,
+    sqlcipher_key: &str,
+    credential_key: &[u8; 32],
 ) -> Result<(), AppError> {
-    let payload = build_runtime_transfer_payload(db_path)?;
+    let payload = build_runtime_transfer_payload(db_path, sqlcipher_key, credential_key)?;
     let artifact = encrypt_transfer_artifact(&payload, passphrase)?;
     write_artifact_atomically(artifact_path, &artifact)?;
     if let Some(destination) = db_copy_path {
@@ -29,19 +31,18 @@ pub fn export_runtime_transfer_artifact(
     Ok(())
 }
 
-pub fn build_runtime_transfer_payload(db_path: &Path) -> Result<CredentialExportPayload, AppError> {
-    let sqlcipher_key = keyring_password("sqlcipher_key")?
-        .ok_or_else(|| AppError::Keyring("sqlcipher_key not found".to_string()))?;
-    let credential_key_b64 = keyring_password("encryption_key")?
-        .ok_or_else(|| AppError::Keyring("encryption_key not found".to_string()))?;
-    let credential_key = decode_credential_key(&credential_key_b64)?;
-    let conn = open_sqlcipher_db(db_path, &sqlcipher_key)?;
+pub fn build_runtime_transfer_payload(
+    db_path: &Path,
+    sqlcipher_key: &str,
+    credential_key: &[u8; 32],
+) -> Result<CredentialExportPayload, AppError> {
+    let conn = open_sqlcipher_db(db_path, sqlcipher_key)?;
     Ok(CredentialExportPayload {
         version: 1,
         exported_at: chrono::Utc::now().to_rfc3339(),
         sqlcipher_key: sqlcipher_key.trim().to_string(),
-        credential_key,
-        credentials: collect_credentials(&conn, &credential_key)?,
+        credential_key: *credential_key,
+        credentials: collect_credentials(&conn, credential_key)?,
     })
 }
 
@@ -167,43 +168,6 @@ fn open_sqlcipher_db(db_path: &Path, sqlcipher_key: &str) -> Result<Connection, 
     conn.pragma_update(None, "key", sqlcipher_key.trim())?;
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
     Ok(conn)
-}
-
-fn decode_credential_key(encoded: &str) -> Result<[u8; 32], AppError> {
-    let bytes = base64::prelude::BASE64_STANDARD
-        .decode(encoded.trim())
-        .map_err(|e| AppError::Keyring(format!("Failed to decode credential key: {e}")))?;
-    if bytes.len() != 32 {
-        return Err(AppError::Keyring(
-            "Invalid credential key length".to_string(),
-        ));
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&bytes);
-    Ok(key)
-}
-
-fn keyring_password(username: &str) -> Result<Option<String>, AppError> {
-    let entry = keyring::Entry::new(service_name(), username)
-        .map_err(|e| AppError::Keyring(format!("Keyring entry creation failed: {e}")))?;
-    match entry.get_password() {
-        Ok(password) => Ok(Some(password)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(AppError::Keyring(format!(
-            "Failed to read keyring item: {e}"
-        ))),
-    }
-}
-
-fn service_name() -> &'static str {
-    #[cfg(test)]
-    {
-        "maho-mail-test"
-    }
-    #[cfg(not(test))]
-    {
-        "maho-mail"
-    }
 }
 
 fn write_artifact_atomically(destination: &Path, bytes: &[u8]) -> Result<(), AppError> {

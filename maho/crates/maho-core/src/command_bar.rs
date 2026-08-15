@@ -9,6 +9,51 @@ use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, Suggesti
 const MAX_HISTORY_ENTRIES: usize = 10000;
 const MAX_RESULTS: usize = 12;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobalMailCommand {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+pub const GLOBAL_MAIL_COMMANDS: &[GlobalMailCommand] = &[
+    GlobalMailCommand {
+        id: "open_mail",
+        label: "Open Mail",
+        aliases: &["mail", "email", "mail app"],
+    },
+    GlobalMailCommand {
+        id: "compose_mail",
+        label: "Compose Mail",
+        aliases: &["compose", "write email", "new message"],
+    },
+    GlobalMailCommand {
+        id: "search_mail",
+        label: "Search Mail",
+        aliases: &["search email", "find message"],
+    },
+    GlobalMailCommand {
+        id: "mail_inbox",
+        label: "Mail Inbox",
+        aliases: &["inbox", "inbox messages"],
+    },
+    GlobalMailCommand {
+        id: "mail_sent",
+        label: "Mail Sent",
+        aliases: &["sent mail", "sent messages"],
+    },
+    GlobalMailCommand {
+        id: "mail_drafts",
+        label: "Mail Drafts",
+        aliases: &["drafts", "draft messages"],
+    },
+    GlobalMailCommand {
+        id: "mail_starred",
+        label: "Mail Starred",
+        aliases: &["starred", "starred messages"],
+    },
+];
+
 fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -33,6 +78,7 @@ struct Action {
     id: String,
     label: String,
     category: String,
+    aliases: Vec<String>,
 }
 
 struct SearchResult {
@@ -192,6 +238,21 @@ impl Default for CommandBarEngine {
 }
 
 impl CommandBarEngine {
+    pub fn add_global_mail_commands(&mut self) {
+        for command in GLOBAL_MAIL_COMMANDS {
+            self.add_action_with_aliases(
+                command.id.into(),
+                command.label.into(),
+                "Mail".into(),
+                command
+                    .aliases
+                    .iter()
+                    .map(|alias| (*alias).into())
+                    .collect(),
+            );
+        }
+    }
+
     fn icon_for_url(ctx: &SearchContext, url: &str) -> Option<ImageData> {
         ctx.tabs
             .iter()
@@ -293,10 +354,21 @@ impl CommandBarEngine {
     }
 
     pub fn add_action(&mut self, id: String, label: String, category: String) {
+        self.add_action_with_aliases(id, label, category, Vec::new());
+    }
+
+    pub fn add_action_with_aliases(
+        &mut self,
+        id: String,
+        label: String,
+        category: String,
+        aliases: Vec<String>,
+    ) {
         self.actions.push(Action {
             id,
             label,
             category,
+            aliases,
         });
     }
 
@@ -709,8 +781,27 @@ impl CommandBarEngine {
 
         // Search actions
         if !lower_query.is_empty() {
+            let has_exact_alias = self.actions.iter().any(|action| {
+                action
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(query.trim()))
+            });
             for action in &self.actions {
-                let target = format!("{} {}", action.label, action.category).to_lowercase();
+                let exact_alias = action
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(query.trim()));
+                if has_exact_alias && !exact_alias {
+                    continue;
+                }
+                let target = format!(
+                    "{} {} {}",
+                    action.label,
+                    action.category,
+                    action.aliases.join(" ")
+                )
+                .to_lowercase();
                 let match_result = Self::fuzzy_match(&lower_query, &target);
                 if match_result.is_match && match_result.score > 0.3 {
                     results.push(SearchResult {
@@ -971,8 +1062,27 @@ impl CommandBarEngine {
                 }
             }
         } else {
+            let has_exact_alias = self.actions.iter().any(|action| {
+                action
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(query.trim()))
+            });
             for action in &self.actions {
-                let target = format!("{} {}", action.label, action.category).to_lowercase();
+                let exact_alias = action
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(query.trim()));
+                if has_exact_alias && !exact_alias {
+                    continue;
+                }
+                let target = format!(
+                    "{} {} {}",
+                    action.label,
+                    action.category,
+                    action.aliases.join(" ")
+                )
+                .to_lowercase();
                 let match_result = if query.is_empty() {
                     FuzzyMatchResult {
                         is_match: true,
@@ -1952,5 +2062,58 @@ mod trigram_eviction_tests {
             .iter()
             .any(|t| t == "zzzbeta"));
         assert!(titles_for(&engine, "zzzalpha").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod mail_action_tests {
+    use super::*;
+
+    fn ctx() -> SearchContext {
+        SearchContext {
+            tabs: Vec::new(),
+            spaces: Vec::new(),
+            folders: Vec::new(),
+            archived_tabs: Vec::new(),
+            bookmarks: Vec::new(),
+            bookmark_favicons: Vec::new(),
+            closed_tabs: Vec::new(),
+            extensions: Vec::new(),
+            is_incognito: false,
+            recent_tabs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn exact_mail_alias_resolves_to_one_command() {
+        let mut engine = CommandBarEngine::new();
+        engine.add_global_mail_commands();
+
+        let actions: Vec<_> = engine
+            .search(">mail", None, &ctx())
+            .into_iter()
+            .filter(|suggestion| matches!(suggestion.kind, SuggestionType::Action))
+            .collect();
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].key, "action:open_mail");
+    }
+
+    #[test]
+    fn global_mail_commands_have_distinct_discoverable_aliases() {
+        let mut engine = CommandBarEngine::new();
+        engine.add_global_mail_commands();
+
+        for command in GLOBAL_MAIL_COMMANDS {
+            for alias in command.aliases {
+                let actions: Vec<_> = engine
+                    .search(&format!(">{alias}"), None, &ctx())
+                    .into_iter()
+                    .filter(|suggestion| matches!(suggestion.kind, SuggestionType::Action))
+                    .collect();
+                assert_eq!(actions.len(), 1, "alias {alias:?} was ambiguous");
+                assert_eq!(actions[0].key, format!("action:{}", command.id));
+            }
+        }
     }
 }

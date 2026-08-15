@@ -41,7 +41,7 @@ class WebViewBridge private constructor(
         webView: WebView,
         activity: Activity,
         mahoBridge: MahoBridge,
-    ) : this(webView, activity, mahoBridge as MahoBridge?, mahoBridge::chatSessionFree)
+    ) : this(webView, activity, mahoBridge as MahoBridge?, BridgeChat::chatSessionFree)
 
     /** Test-only constructor that avoids loading the native library. */
     internal constructor(
@@ -51,6 +51,21 @@ class WebViewBridge private constructor(
 
     private fun requireBridge(): MahoBridge = mahoBridge
         ?: error("MahoBridge not available in test-only mode")
+
+    private fun aiBridge(): BridgeAi {
+        requireBridge()
+        return BridgeAi
+    }
+
+    private fun chatBridge(): BridgeChat {
+        requireBridge()
+        return BridgeChat
+    }
+
+    private fun conversationsBridge(): BridgeConversations {
+        requireBridge()
+        return BridgeConversations
+    }
 
     // ─── Streaming infrastructure ───────────────────────────────────────────────
 
@@ -243,6 +258,17 @@ class WebViewBridge private constructor(
         }
     }
 
+    fun pushThinking(sessionId: String, thinking: String) {
+        val sidJson = JSONObject.quote(sessionId)
+        val thinkingJson = JSONObject.quote(thinking)
+        dispatchOnUiThread {
+            webView.evaluateJavascript(
+                "window.__mahoStreamThinking($sidJson, $thinkingJson)",
+                null,
+            )
+        }
+    }
+
     fun pushStreamComplete(sessionId: String, finalMessage: String) {
         streams.remove(sessionId)?.complete(finalMessage)
     }
@@ -289,20 +315,20 @@ class WebViewBridge private constructor(
             when (method) {
                 // ── BYOK (5) ──
                 "byokGetProviders" -> {
-                    val raw = requireBridge().byokGetProviders()
+                    val raw = aiBridge().byokGetProviders()
                     if (raw != null) JSONArray(raw) else JSONArray()
                 }
-                "byokGetKey" -> requireBridge().byokGetKey(params.req(method, "provider"))
+                "byokGetKey" -> aiBridge().byokGetKey(params.req(method, "provider"))
                 "byokSetKey" -> {
-                    requireBridge().byokSetKey(params.req(method, "provider"), params.req(method, "key"))
+                    aiBridge().byokSetKey(params.req(method, "provider"), params.req(method, "key"))
                     null
                 }
                 "byokDeleteKey" -> {
-                    requireBridge().byokDeleteKey(params.req(method, "provider"))
+                    aiBridge().byokDeleteKey(params.req(method, "provider"))
                     null
                 }
                 "byokValidateKey" -> {
-                    val valid = requireBridge().byokValidateKey(
+                    val valid = aiBridge().byokValidateKey(
                         params.req(method, "provider"),
                         params.req(method, "key"),
                     )
@@ -315,7 +341,7 @@ class WebViewBridge private constructor(
                     val systemInstruction = params.opt("systemInstruction") ?: ""
                     val apiKey = params.opt("apiKey") ?: ""
                     val endpoint = params.opt("endpoint") ?: ""
-                    val rawPtr = requireBridge().chatSessionNew(apiKey, endpoint, model, systemInstruction)
+                    val rawPtr = chatBridge().chatSessionNew(apiKey, endpoint, model, systemInstruction)
                     sessionRegistry.register(rawPtr) // returns UUID string
                 }
                 "chatSessionResume" -> {
@@ -337,7 +363,7 @@ class WebViewBridge private constructor(
                         when (kind) {
                             "text" -> {
                                 val text = content.optString("text", "")
-                                requireBridge().chatSendUserTurn(ptr, text)
+                                chatBridge().chatSendUserTurn(ptr, text)
                             }
                             "image" -> {
                                 val mime = content.optString("mime", "image/png")
@@ -345,29 +371,29 @@ class WebViewBridge private constructor(
                                 val text = content.optString("text", "")
                                 val data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
                                 if (text.isNotEmpty()) {
-                                    requireBridge().chatSendTextWithImage(ptr, text, mime, data)
+                                    chatBridge().chatSendTextWithImage(ptr, text, mime, data)
                                 } else {
-                                    requireBridge().chatSendImage(ptr, mime, data)
+                                    chatBridge().chatSendImage(ptr, mime, data)
                                 }
                             }
-                            else -> requireBridge().chatSendUserTurn(ptr, content.toString())
+                            else -> chatBridge().chatSendUserTurn(ptr, content.toString())
                         }
                     } else {
                         // Fallback: treat params.content as a string
                         val text = params.opt("content") ?: ""
-                        requireBridge().chatSendUserTurn(ptr, text)
+                        chatBridge().chatSendUserTurn(ptr, text)
                     }
                     null
                 }
                 "chatCancelTurn" -> {
                     val ptr = resolveSession(params.req(method, "handle"))
-                    requireBridge().chatCancel(ptr)
+                    chatBridge().chatCancel(ptr)
                     null
                 }
                 "chatPollEvents" -> {
                     val handle = params.req(method, "handle")
                     val ptr = resolveSession(handle)
-                    val raw = requireBridge().chatSessionPollEvent(ptr)
+                    val raw = chatBridge().chatSessionPollEvent(ptr)
                     if (raw != null) {
                         routeStreamEvents(handle, raw)
                         JSONArray("[$raw]")
@@ -382,7 +408,7 @@ class WebViewBridge private constructor(
                     val name = tool.optString("name", "")
                     val description = tool.optString("description", "")
                     val parametersJson = tool.optJSONObject("parameters")?.toString() ?: "{}"
-                    requireBridge().chatRegisterTool(ptr, name, description, parametersJson)
+                    chatBridge().chatRegisterTool(ptr, name, description, parametersJson)
                     null
                 }
                 "chatSendToolResult" -> {
@@ -393,19 +419,19 @@ class WebViewBridge private constructor(
                     val output = resultObj.optString("output", "")
                     // toolName is not provided by A2; use empty string
                     // trigger defaults to true (continues generation after tool result)
-                    requireBridge().chatSendToolResult(ptr, toolCallId, "", output, true)
+                    chatBridge().chatSendToolResult(ptr, toolCallId, "", output, true)
                     null
                 }
                 "chatAppendAssistantMessage" -> {
                     val ptr = resolveSession(params.req(method, "handle"))
                     val content = params.req(method, "content")
-                    requireBridge().chatAppendAssistantMessage(ptr, content, "[]")
+                    chatBridge().chatAppendAssistantMessage(ptr, content, "[]")
                     null
                 }
                 "chatGetHistory" -> {
                     val ptr = resolveSession(params.req(method, "handle"))
                     // Poll all events — this returns the session's serialized history
-                    val raw = requireBridge().chatSessionPollEvent(ptr)
+                    val raw = chatBridge().chatSessionPollEvent(ptr)
                     if (raw != null) JSONArray("[$raw]") else JSONArray()
                 }
 
@@ -417,11 +443,11 @@ class WebViewBridge private constructor(
                     val title = meta.optString("title", "")
                     val spaceId: String? = meta.optString("spaceId", "").ifEmpty { null }
                     val model: String? = meta.optString("model", "").ifEmpty { null }
-                    requireBridge().createConversation(id, title, spaceId, model)
+                    conversationsBridge().createConversation(id, title, spaceId, model)
                     id
                 }
                 "conversationList" -> {
-                    val sessions = requireBridge().listConversations(100L)
+                    val sessions = conversationsBridge().listConversations(100L)
                     val arr = JSONArray()
                     for (session in sessions) {
                         arr.put(JSONObject().apply {
@@ -437,7 +463,7 @@ class WebViewBridge private constructor(
                 }
                 "conversationGet" -> {
                     val id = params.req(method, "id")
-                    val sessions = requireBridge().listConversations(1000L)
+                    val sessions = conversationsBridge().listConversations(1000L)
                     val match = sessions.find { it.id == id }
                     if (match != null) {
                         JSONObject().apply {
@@ -453,15 +479,15 @@ class WebViewBridge private constructor(
                     }
                 }
                 "conversationDelete" -> {
-                    requireBridge().deleteConversation(params.req(method, "id"))
+                    conversationsBridge().deleteConversation(params.req(method, "id"))
                     null
                 }
                 "conversationRename" -> {
-                    requireBridge().renameConversation(params.req(method, "id"), params.req(method, "title"))
+                    conversationsBridge().renameConversation(params.req(method, "id"), params.req(method, "title"))
                     null
                 }
                 "conversationGetMessages" -> {
-                    val turns = requireBridge().getConversationMessages(params.req(method, "id"))
+                    val turns = conversationsBridge().getConversationMessages(params.req(method, "id"))
                     val arr = JSONArray()
                     for (turn in turns) {
                         arr.put(JSONObject().apply {
@@ -520,6 +546,7 @@ class WebViewBridge private constructor(
                 val token = event.optString("token", "")
                 if (token.isNotEmpty()) pushToken(sessionId, token)
             }
+            "thinking" -> pushThinking(sessionId, event.optString("data", ""))
             "tool_call_delta" -> pushToolDelta(sessionId, raw)
             "image_delta" -> pushImageDelta(sessionId, raw)
             "complete" -> {

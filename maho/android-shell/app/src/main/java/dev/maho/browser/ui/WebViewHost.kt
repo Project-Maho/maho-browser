@@ -41,6 +41,7 @@ fun WebViewHost(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val applicationContext = context.applicationContext
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentTabId = rememberUpdatedState(tabId)
     val currentIsIncognito = rememberUpdatedState(isIncognito)
@@ -94,6 +95,11 @@ fun WebViewHost(
                 onLoadingChanged = onLoadingChanged,
                 onNavigationStateChanged = onNavigationStateChanged,
                 onError = onError,
+                isSourceWhitelisted = { host ->
+                    dev.maho.browser.ui.settings.WhitelistManager
+                        .getWhitelist(applicationContext)
+                        .contains(host)
+                },
             )
             webChromeClient = MahoWebChromeClient(
                 tabIdProvider = { currentTabId.value },

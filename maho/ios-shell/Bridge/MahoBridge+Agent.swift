@@ -415,10 +415,10 @@ private let freeCString: @convention(c) (UnsafeMutablePointer<CChar>?) -> Void =
 }
 
 enum AiSettingsKeys {
-    static let provider = "maho.ai.provider"
-    static let baseUrl = "maho.ai.base_url"
-    static let model = "maho.ai.model"
-    static let customApiKeyAccount = "openai-compatible"
+    static let provider = AiProviderResolver.providerDefaultsKey
+    static let baseUrl = AiProviderResolver.baseURLDefaultsKey
+    static let model = AiProviderResolver.modelDefaultsKey
+    static let customApiKeyAccount = AiProvider.openaiCompatible.rawValue
 }
 
 private func agentSecureStorageCallback(

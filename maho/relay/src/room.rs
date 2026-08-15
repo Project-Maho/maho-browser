@@ -10,6 +10,46 @@ use worker::*;
 const AUTH_TIMEOUT_SECS: u64 = 5;
 const MAX_MESSAGES_PER_MIN: u32 = 100;
 const MAX_UNAUTH_CONNECTIONS_PER_ROOM: usize = 2;
+const SYNC_PROTOCOL_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct WsSyncEnvelopeV2 {
+    protocol_version: u32,
+    delivery_id: String,
+    payload: String,
+    relay_seq: Option<i64>,
+}
+
+impl WsSyncEnvelopeV2 {
+    fn validate(&self, max_bytes: usize) -> std::result::Result<Vec<u8>, &'static str> {
+        if self.protocol_version != SYNC_PROTOCOL_VERSION {
+            return Err("unsupported_protocol_version");
+        }
+        if uuid::Uuid::parse_str(&self.delivery_id).is_err() {
+            return Err("invalid_delivery_id");
+        }
+        let payload = base64::engine::general_purpose::STANDARD
+            .decode(&self.payload)
+            .map_err(|_| "invalid_payload_encoding")?;
+        if payload.is_empty() {
+            return Err("empty_payload");
+        }
+        if payload.len() > max_bytes {
+            return Err("message_too_large");
+        }
+        Ok(payload)
+    }
+
+    fn with_seq(&self, seq: i64) -> Self {
+        Self {
+            protocol_version: self.protocol_version,
+            delivery_id: self.delivery_id.clone(),
+            payload: self.payload.clone(),
+            relay_seq: Some(seq),
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WsCtx {
@@ -164,9 +204,27 @@ pub async fn handle_ws_message(
 
     let config = RelayConfig::from_env(&room.env);
 
-    let (payload_bytes, echo_text): (Vec<u8>, Option<String>) = match message {
-        WebSocketIncomingMessage::String(t) => (t.as_bytes().to_vec(), Some(t)),
-        WebSocketIncomingMessage::Binary(b) => (b, None),
+    let raw_message = match message {
+        WebSocketIncomingMessage::String(text) => text,
+        WebSocketIncomingMessage::Binary(_) => {
+            let _ = ws.send_with_str(r#"{"type":"error","msg":"expected_v2_envelope"}"#);
+            return Ok(());
+        }
+    };
+    let envelope: WsSyncEnvelopeV2 = match serde_json::from_str(&raw_message) {
+        Ok(envelope) => envelope,
+        Err(_) => {
+            let _ = ws.send_with_str(r#"{"type":"error","msg":"invalid_v2_envelope"}"#);
+            return Ok(());
+        }
+    };
+    let payload_bytes = match envelope.validate(config.max_message_size_bytes) {
+        Ok(payload) => payload,
+        Err(error) => {
+            let error = serde_json::json!({"type": "error", "msg": error.to_string()}).to_string();
+            let _ = ws.send_with_str(&error);
+            return Ok(());
+        }
     };
 
     if payload_bytes.len() > config.max_message_size_bytes {
@@ -209,7 +267,14 @@ pub async fn handle_ws_message(
         _ => {}
     }
 
-    let seq = match db::store_message(&db, &room_id, payload_bytes.clone()).await {
+    let seq = match db::store_message_with_delivery_id(
+        &db,
+        &room_id,
+        &envelope.delivery_id,
+        payload_bytes,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => {
             console_error!("store_message failed room={}: {e}", redact_key(&room_id));
@@ -229,17 +294,16 @@ pub async fn handle_ws_message(
         if is_sender {
             continue;
         }
-        match echo_text.as_ref() {
-            Some(t) => {
-                let _ = peer.send_with_str(t);
-            }
-            None => {
-                let _ = peer.send_with_bytes(&payload_bytes);
-            }
-        }
+        let payload = serde_json::to_string(&envelope.with_seq(seq))?;
+        let _ = peer.send_with_str(&payload);
     }
 
-    let ack = format!(r#"{{"type":"ack","seq":{seq}}}"#);
+    let ack = serde_json::json!({
+        "type": "ack",
+        "delivery_id": envelope.delivery_id,
+        "seq": seq,
+    })
+    .to_string();
     let _ = ws.send_with_str(&ack);
 
     let _ = ws.serialize_attachment(&ctx);
@@ -384,9 +448,15 @@ async fn process_auth(
         match db::get_messages_since(&db, &key, since_seq).await {
             Ok(messages) => {
                 for m in messages {
-                    let b64 = base64::engine::general_purpose::STANDARD.encode(&m.blob);
-                    let payload =
-                        format!(r#"{{"type":"catchup","seq":{},"blob":"{}"}}"#, m.seq, b64);
+                    let envelope = WsSyncEnvelopeV2 {
+                        protocol_version: SYNC_PROTOCOL_VERSION,
+                        delivery_id: m
+                            .delivery_id
+                            .unwrap_or_else(|| format!("legacy-v1-seq-{}", m.seq)),
+                        payload: base64::engine::general_purpose::STANDARD.encode(&m.blob),
+                        relay_seq: Some(m.seq),
+                    };
+                    let payload = serde_json::to_string(&envelope)?;
                     if ws.send_with_str(&payload).is_err() {
                         return Ok(());
                     }
@@ -414,4 +484,48 @@ fn redact_key(key: &str) -> String {
         prefix.push_str(&format!("{byte:02x}"));
     }
     prefix
+}
+
+#[cfg(test)]
+mod websocket_v2_tests {
+    use super::*;
+
+    const DELIVERY_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+    #[test]
+    fn websocket_v2_envelope_rejects_invalid_metadata_without_decoding_payload() {
+        let envelope = WsSyncEnvelopeV2 {
+            protocol_version: SYNC_PROTOCOL_VERSION,
+            delivery_id: DELIVERY_ID.to_string(),
+            payload: "AA==".to_string(),
+            relay_seq: None,
+        };
+        assert_eq!(envelope.validate(1).expect("opaque payload"), vec![0]);
+
+        let mut invalid_version = envelope.clone();
+        invalid_version.protocol_version = 1;
+        assert_eq!(
+            invalid_version.validate(1),
+            Err("unsupported_protocol_version")
+        );
+
+        let mut invalid_id = envelope.clone();
+        invalid_id.delivery_id = "not-a-uuid".to_string();
+        assert_eq!(invalid_id.validate(1), Err("invalid_delivery_id"));
+    }
+
+    #[test]
+    fn websocket_v2_echo_preserves_delivery_id_and_assigns_sequence() {
+        let envelope = WsSyncEnvelopeV2 {
+            protocol_version: SYNC_PROTOCOL_VERSION,
+            delivery_id: DELIVERY_ID.to_string(),
+            payload: "AA==".to_string(),
+            relay_seq: None,
+        };
+
+        let echoed = envelope.with_seq(42);
+        assert_eq!(echoed.delivery_id, DELIVERY_ID);
+        assert_eq!(echoed.relay_seq, Some(42));
+        assert_eq!(echoed.payload, envelope.payload);
+    }
 }

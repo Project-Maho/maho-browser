@@ -462,6 +462,7 @@ async function main() {
   console.log(`BIN=${BIN}`);
 
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'maho-ai-e2e-'));
+  console.log(`PROFILE=${profileDir}`);
   const { child, cleanup } = launchInstance({ bin: BIN, port: PORT, profileDir, aiConfig: ai });
 
   if (serve) {
@@ -472,7 +473,6 @@ async function main() {
     }
     console.log(`CDP_PORT=${PORT}`);
     console.log(`PID=${child.pid}`);
-    console.log(`PROFILE=${profileDir}`);
     console.log('SERVING (send SIGINT/SIGTERM to stop)');
     const shutdown = () => { cleanup(); rmProfile(profileDir); process.exit(0); };
     process.on('SIGINT', shutdown);

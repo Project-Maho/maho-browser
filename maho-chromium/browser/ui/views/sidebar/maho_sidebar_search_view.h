@@ -43,6 +43,12 @@ class MahoLocationBarUtilityBubbleCoordinator;
 class MahoLocationBarUtilityIconView;
 
 struct MahoTranslateOptionsForTesting {
+  MahoTranslateOptionsForTesting();
+  MahoTranslateOptionsForTesting(MahoTranslateOptionsForTesting&&);
+  MahoTranslateOptionsForTesting& operator=(
+      MahoTranslateOptionsForTesting&&);
+  ~MahoTranslateOptionsForTesting();
+
   std::vector<std::u16string> labels;
   int first_language_command_id = 0;
   int never_translate_command_id = 0;

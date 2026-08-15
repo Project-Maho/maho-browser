@@ -11,6 +11,7 @@ import {
   TidyFolder,
   ViewMode,
 } from './maho_ai.mojom-webui.js';
+import {RoutineOperationsClient, RoutineSurfaceClient} from './routine-client.js';
 import {
     AI_REASONING_EFFORT,
     DEFAULT_AI_REASONING_OPTIONS,
@@ -47,6 +48,13 @@ import {notifyListeners} from '../maho_common/react/store_utils.js';
 import type {Listener} from '../maho_common/react/store_utils.js';
 import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
 import {toast} from 'sonner';
+import {
+  ComposerDraftPersistence,
+  scopeKey,
+  type ComposerDraftPersistencePort,
+  type ComposerDraftRemote,
+  type ComposerDraftScope,
+} from './react/features/compact/composer-draft-persistence.js';
 
 type ToastTone = 'danger'|'info'|'success';
 
@@ -60,11 +68,23 @@ type SubmissionRequest = {
   readonly isQuickAction: boolean;
 };
 
+interface ComposerDraftPageHandlerRemote extends ComposerDraftRemote {}
+
 interface AISelectionRemote {
   setAISelection(
       providerId: string,
       modelId: string,
       reasoningEffort: AIReasoningEffort): Promise<{accepted: boolean}>;
+}
+
+function supportsComposerDraftPersistence(
+    pageHandler: PageHandlerRemote): pageHandler is PageHandlerRemote&ComposerDraftPageHandlerRemote {
+  return 'composerDraftGet' in pageHandler &&
+      typeof pageHandler.composerDraftGet === 'function' &&
+      'composerDraftSet' in pageHandler &&
+      typeof pageHandler.composerDraftSet === 'function' &&
+      'composerDraftDelete' in pageHandler &&
+      typeof pageHandler.composerDraftDelete === 'function';
 }
 
 function supportsAISelection(
@@ -217,6 +237,10 @@ export class MahoAiStore {
   private readonly pendingRuntimeEventsBySessionId = new Map<string, RuntimeEvent[]>();
   private selectionRevision = 0;
   private submissionInFlight = false;
+  private composerDraftScope: ComposerDraftScope = {kind: 'new_task'};
+  private composerDraftRevision = 0;
+  private composerDraftPersistence: ComposerDraftPersistencePort|null;
+  private readonly routineOperationsClient: RoutineOperationsClient;
   /**
    * Intent of the most recent submission per session. Regeneration replays the
    * same typed intent so quick-action turns keep their directive and context.
@@ -239,11 +263,32 @@ export class MahoAiStore {
   constructor(
       private readonly pageHandler: PageHandlerRemote,
       private readonly callbackRouter: PageCallbackRouter) {
+    this.composerDraftPersistence = supportsComposerDraftPersistence(pageHandler) ?
+        new ComposerDraftPersistence(pageHandler) : null;
+    this.routineOperationsClient = new RoutineOperationsClient(
+        pageHandler as unknown as
+            import('./routine-client.js').RoutinePageHandler,
+        callbackRouter);
     this.bindCallbacks();
+  }
+
+  setComposerDraftPersistenceForTesting(
+      persistence: ComposerDraftPersistencePort): void {
+    this.composerDraftPersistence = persistence;
   }
 
   getSnapshot(): AppState {
     return this.state;
+  }
+
+  getRoutineOperationsClient(): RoutineOperationsClient {
+    return this.routineOperationsClient;
+  }
+
+  getRoutineSurfaceClient(
+      onChange: (state: {surface: 'chat'|'routines'; generation: bigint}) => void):
+      RoutineSurfaceClient {
+    return new RoutineSurfaceClient(this.pageHandler, this.callbackRouter, onChange);
   }
 
   subscribe(listener: Listener): () => void {
@@ -290,6 +335,8 @@ export class MahoAiStore {
 
       if (sessionIdToResume) {
         await this.resumeSession(sessionIdToResume);
+      } else {
+        await this.hydrateComposerDraft({kind: 'new_task'});
       }
 
       try {
@@ -313,9 +360,15 @@ export class MahoAiStore {
   }
 
   setComposerPrompt(prompt: string) {
+    ++this.composerDraftRevision;
     this.patch(state => {
       state.composer.prompt = prompt;
     });
+    this.composerDraftPersistence?.schedule(this.composerDraftScope, prompt);
+  }
+
+  async flushComposerDraft(): Promise<void> {
+    await this.composerDraftPersistence?.flush(this.composerDraftScope);
   }
 
   openVoice() {
@@ -384,23 +437,29 @@ export class MahoAiStore {
   }
 
   async startSession(): Promise<void> {
-    const prompt = this.state.composer.prompt.trim() || null;
+    const prompt = this.state.composer.prompt.trim();
+    if (prompt) {
+      await this.startSessionThenSubmit();
+      return;
+    }
+
+    await this.composerDraftPersistence?.clear(this.composerDraftScope);
+    this.composerDraftScope = {kind: 'new_task'};
     const mode = this.state.developerMode ?
         InteractionMode.kDeveloper :
         InteractionMode.kAssistant;
-    const {session} = await this.pageHandler.startSession(prompt, mode);
+    const {session} = await this.pageHandler.startSession(null, mode);
 
     this.patch(state => {
       state.sessionsById[session.sessionId] = session;
       state.sessionOrder = sortSessionIds(state.sessionsById);
       state.currentSessionId = session.sessionId;
       state.selectedInspector = {kind: 'session', id: session.sessionId};
-      state.turnPendingBySessionId[session.sessionId] = !!prompt;
-      state.composer.prompt = '';
+      state.turnPendingBySessionId[session.sessionId] = false;
       state.eventsBySessionId[session.sessionId] = [];
     });
 
-    await this.resumeSession(session.sessionId, false);
+    await this.resumeSession(session.sessionId, false, false);
   }
 
   /**
@@ -430,8 +489,9 @@ export class MahoAiStore {
         state.eventsBySessionId[session.sessionId] = [];
       });
 
-      await this.resumeSession(session.sessionId, false);
+      await this.resumeSession(session.sessionId, false, false);
       await this.submitCapturedRequest(session.sessionId, request);
+      await this.promoteAcceptedNewTaskDraft(session.sessionId);
     } catch (error) {
       this.rollbackSubmission(sessionId, request);
       throw error;
@@ -440,7 +500,8 @@ export class MahoAiStore {
     }
   }
 
-  async resumeSession(sessionId: string, fetchHistory = true): Promise<void> {
+  async resumeSession(
+      sessionId: string, fetchHistory = true, hydrateDraft = true): Promise<void> {
     const selectionRevision = ++this.selectionRevision;
     const {session, replayEvents} = await this.pageHandler.resumeSession(sessionId);
 
@@ -464,6 +525,10 @@ export class MahoAiStore {
     if (fetchHistory && this.selectionRevision === selectionRevision &&
         this.state.currentSessionId === sessionId) {
       await this.loadHistory(sessionId);
+    }
+    if (hydrateDraft && this.selectionRevision === selectionRevision &&
+        this.state.currentSessionId === sessionId) {
+      await this.hydrateComposerDraft({kind: 'conversation', conversationId: sessionId});
     }
   }
 
@@ -918,6 +983,11 @@ export class MahoAiStore {
         state.turnPendingBySessionId[sessionId] = true;
       });
       await this.submitCapturedRequest(sessionId, request);
+      if (this.composerDraftScope.kind === 'new_task') {
+        await this.promoteAcceptedNewTaskDraft(sessionId);
+      } else {
+        await this.composerDraftPersistence?.clear(this.composerDraftScope);
+      }
     } catch (error) {
       this.rollbackSubmission(sessionId, request);
       throw error;
@@ -964,8 +1034,9 @@ export class MahoAiStore {
           state.eventsBySessionId[newSession.sessionId] = [];
         });
 
-        await this.resumeSession(newSession.sessionId, false);
+        await this.resumeSession(newSession.sessionId, false, false);
         await this.submitCapturedRequest(newSession.sessionId, request);
+        await this.promoteAcceptedNewTaskDraft(newSession.sessionId);
       } catch (error) {
         this.rollbackSubmission(createdSessionId, request);
         throw error;
@@ -1094,13 +1165,42 @@ export class MahoAiStore {
   private async submitCapturedRequest(
       sessionId: string, request: SubmissionRequest): Promise<void> {
     this.lastIntentBySessionId.set(sessionId, request.intent);
-    await this.pageHandler.submitPrompt(
+    const result = await this.pageHandler.submitPrompt(
         sessionId,
         request.prompt,
         request.attachBrowserContext,
         request.mode,
         request.attachments,
         request.intent);
+    if (result?.accepted === false) {
+      throw new Error('Maho AI did not accept the prompt.');
+    }
+  }
+
+  private async promoteAcceptedNewTaskDraft(sessionId: string): Promise<void> {
+    const previousScope = this.composerDraftScope;
+    this.composerDraftScope = {kind: 'conversation', conversationId: sessionId};
+    await this.composerDraftPersistence?.clear(previousScope);
+    const replacement = this.state.composer.prompt;
+    if (replacement) {
+      this.composerDraftPersistence?.schedule(this.composerDraftScope, replacement);
+    }
+  }
+
+  private async hydrateComposerDraft(scope: ComposerDraftScope): Promise<void> {
+    this.composerDraftScope = scope;
+    const revision = this.composerDraftRevision;
+    const promptAtStart = this.state.composer.prompt;
+    const restored = await this.composerDraftPersistence?.load(scope);
+    if (restored === null || restored === undefined ||
+        scopeKey(this.composerDraftScope) !== scopeKey(scope) ||
+        this.composerDraftRevision !== revision ||
+        this.state.composer.prompt !== promptAtStart || promptAtStart) {
+      return;
+    }
+    this.patch(state => {
+      state.composer.prompt = restored;
+    });
   }
 
   private rollbackSubmission(sessionId: string|null, request: SubmissionRequest): void {

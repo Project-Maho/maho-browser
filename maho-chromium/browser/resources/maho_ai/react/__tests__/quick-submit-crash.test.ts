@@ -61,6 +61,15 @@ function createDeferred<T>(): {
   return {promise, resolve};
 }
 
+function createDraftPersistence() {
+  return {
+    clear: vi.fn(async () => undefined),
+    flush: vi.fn(async () => undefined),
+    load: vi.fn(async () => null),
+    schedule: vi.fn(),
+  };
+}
+
 function createFixture(): {
   readonly handler: PageHandlerRemote;
   readonly session: SessionInfo;
@@ -72,7 +81,7 @@ function createFixture(): {
   const sessionCreation = createDeferred<{session: SessionInfo}>();
   vi.spyOn(handler, 'startSession').mockReturnValue(sessionCreation.promise);
   vi.spyOn(handler, 'resumeSession').mockResolvedValue({session, replayEvents: []});
-  vi.spyOn(handler, 'submitPrompt').mockResolvedValue();
+  vi.spyOn(handler, 'submitPrompt').mockResolvedValue({accepted: true});
   const store = new MahoAiStore(handler, createPageCallbackRouterFake());
   return {handler, session, sessionCreation, store};
 }
@@ -120,6 +129,37 @@ describe('MahoAiStore quick first-session submission', () => {
         0);
     expect.soft(store.getSnapshot().composer.prompt).toBe('later draft');
     expect.soft(store.getSnapshot().composer.attachments).toEqual([laterAttachment]);
+  });
+
+  it('keeps new_task until accepted persistence, then promotes the scope', async () => {
+    // Given
+    const {handler, session, sessionCreation, store} = createFixture();
+    const persistence = createDraftPersistence();
+    const accepted = createDeferred<{accepted: boolean}>();
+    vi.mocked(handler.submitPrompt).mockReturnValue(accepted.promise);
+    store.setComposerDraftPersistenceForTesting(persistence);
+    store.setComposerPrompt('persist before promotion');
+
+    // When
+    const submission = store.startSessionThenSubmit();
+    sessionCreation.resolve({session});
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Then
+    expect(persistence.clear).not.toHaveBeenCalled();
+
+    // When
+    accepted.resolve({accepted: true});
+    await submission;
+    store.setComposerPrompt('replacement after acceptance');
+
+    // Then
+    expect(persistence.clear).toHaveBeenCalledWith({kind: 'new_task'});
+    expect(persistence.schedule).toHaveBeenLastCalledWith({
+      kind: 'conversation',
+      conversationId: session.sessionId,
+    }, 'replacement after acceptance');
   });
 
   it('coalesces rapid first-session submissions into one session and one Mojo submit', async () => {

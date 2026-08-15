@@ -27,6 +27,7 @@ class TabGridTest {
                     activeTabId = null,
                     isIncognito = false,
                     onTabSelected = {},
+                    onTabArchived = {},
                     onTabClosed = {},
                 )
             }
@@ -51,6 +52,7 @@ class TabGridTest {
                     activeTabId = "tab-1",
                     isIncognito = false,
                     onTabSelected = {},
+                    onTabArchived = {},
                     onTabClosed = {},
                 )
             }
@@ -81,6 +83,7 @@ class TabGridTest {
                     activeTabId = "tab-1",
                     isIncognito = false,
                     onTabSelected = {},
+                    onTabArchived = {},
                     onTabClosed = {},
                 )
             }

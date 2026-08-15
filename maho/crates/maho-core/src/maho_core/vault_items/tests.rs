@@ -33,6 +33,7 @@ fn login_input(origin: &str, username: &str, password: &str) -> VaultLoginInput 
         metadata: login_meta(origin),
         username: username.to_string(),
         password: Zeroizing::new(password.to_string()),
+        form_details: None,
     }
 }
 
@@ -70,6 +71,7 @@ fn vault_crud_injected_persist_fault_rolls_back_and_state_is_identical_after_rel
             metadata: update_meta,
             username: "alice".to_string(),
             password: Some(Zeroizing::new("newpw".to_string())),
+            form_details: None,
         },
     );
     assert!(matches!(update, Err(VaultCrudError::Storage(_))));

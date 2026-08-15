@@ -4,45 +4,61 @@ import LucideIcons
 struct PermissionSheet: View {
     let permissionType: String
     let origin: String
+    var isIncognito: Bool = false
     var onGrant: () -> Void
     var onDeny: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var systemColorScheme
 
     var body: some View {
-        VStack(spacing: 24) {
-            Image(lucide: permissionIcon)
-                .font(.system(size: 48))
-                .foregroundStyle(Color.accentColor)
-                .padding(.top, 24)
+        ScrollView {
+            VStack(spacing: 24) {
+                Image(lucide: permissionIcon)
+                    .font(.system(size: 48))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.top, 24)
 
-            Text("\"\(origin)\" wants to access your \(permissionType)")
-                .font(.headline)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                Text("\"\(origin)\" wants to access your \(permissionType)")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
 
-            Text(permissionDescription)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                Text(permissionDescription)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
 
-            HStack(spacing: 16) {
-                Button("Deny") {
-                    onDeny()
-                    dismiss()
+                HStack(spacing: 16) {
+                    Button("Deny") {
+                        onDeny()
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Allow") {
+                        onGrant()
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.bordered)
-
-                Button("Allow") {
-                    onGrant()
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
+                .padding(.bottom, 24)
             }
-            .padding(.bottom, 24)
+            .frame(maxWidth: .infinity)
         }
-        .presentationDetents([.height(300)])
+        .background(permissionBackground)
+        .presentationDetents([.medium])
+        .environment(\.colorScheme, isIncognito ? .dark : systemColorScheme)
+    }
+
+    @ViewBuilder
+    private var permissionBackground: some View {
+        if isIncognito {
+            ShellTheme.Palette.incognitoBackground.ignoresSafeArea()
+        } else {
+            Color.clear
+        }
     }
 
     private var permissionIcon: UIImage {

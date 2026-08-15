@@ -191,6 +191,7 @@ struct HomeSearchView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("continueTab_\(tab.id)")
                     
                     if index < recentTabs.count - 1 {
                         Divider()

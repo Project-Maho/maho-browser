@@ -15,6 +15,7 @@ import {
   PageCallbackRouter,
   PageHandlerRemote,
   RuntimeConnectionState,
+  type RoutineRunStatus,
   type RuntimeEvent,
   RuntimeEventKind,
   type SessionInfo,
@@ -28,9 +29,13 @@ import {
 type Callback<TArgs extends readonly unknown[]> = (...args: TArgs) => void;
 
 function createCallbackRoute<TArgs extends readonly unknown[]>(): {
-  addListener(listener: Callback<TArgs>): void;
+  addListener(listener: Callback<TArgs>): number;
+  removeListener(id: number): boolean;
 } {
-  return {addListener: vi.fn()};
+  return {
+    addListener: vi.fn(() => 1),
+    removeListener: vi.fn(() => true),
+  };
 }
 
 function createPageCallbackRouterFake(): PageCallbackRouter {
@@ -40,6 +45,8 @@ function createPageCallbackRouterFake(): PageCallbackRouter {
   router.onSessionUpdated = createCallbackRoute<[SessionInfo]>();
   router.onAISettingsChanged = createCallbackRoute<[AISettingsInfo]>();
   router.onAskMahoSessionAccepted = createCallbackRoute<[string, SessionInfo]>();
+  router.onRoutineRunStatusChanged =
+      createCallbackRoute<[RoutineRunStatus]>();
   return router;
 }
 
@@ -64,6 +71,29 @@ function createSession(sessionId: string, title = sessionId): SessionInfo {
 function createRuntimeEvent(
     sessionId: string, kind: RuntimeEventKind, sequence: number, text: string): RuntimeEvent {
   return {sessionId, kind, sequence, timestamp: sequence, text};
+}
+
+function draftPersistenceWithClear(clear: (scope: {
+  readonly kind: 'new_task'|'conversation';
+  readonly conversationId?: string;
+}) => Promise<void>, overrides: Partial<{
+  flush: () => Promise<void>;
+  load: (scope: {
+    readonly kind: 'new_task'|'conversation';
+    readonly conversationId?: string;
+  }) => Promise<string|null>;
+  schedule: (scope: {
+    readonly kind: 'new_task'|'conversation';
+    readonly conversationId?: string;
+  }, text: string) => void;
+}> = {}) {
+  return {
+    clear,
+    flush: async () => undefined,
+    load: async () => null,
+    schedule: () => undefined,
+    ...overrides,
+  };
 }
 
 function createDeferred<T>(): {
@@ -150,6 +180,21 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     mockHandler.openSettingsPane = vi.fn().mockResolvedValue(undefined);
 
     store = new MahoAiStore(mockHandler, mockRouter);
+  });
+
+  it('creates one shared renderer Routine client from the AI handler/router', async () => {
+    mockHandler.listAllRoutines =
+        vi.fn().mockResolvedValue({routines: [{id: 'daily'}]});
+    const statusListener = vi.fn();
+    const routineClient = store.getRoutineOperationsClient();
+    expect(store.getRoutineOperationsClient()).toBe(routineClient);
+    const dispose = routineClient.subscribe(statusListener);
+
+    await expect(routineClient.list()).resolves.toEqual([{id: 'daily'}]);
+    expect(mockHandler.listAllRoutines).toHaveBeenCalledOnce();
+    expect(mockRouter.onRoutineRunStatusChanged.addListener)
+        .toHaveBeenCalledOnce();
+    dispose();
   });
 
   it('boots and automatically resumes session, loading its history', async () => {
@@ -333,7 +378,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
 
   it('serializes overlapping submissions for an existing session', async () => {
     // Given
-    const firstSubmission = createDeferred<void>();
+    const firstSubmission = createDeferred<{accepted: boolean}>();
     const submitPrompt = vi.spyOn(mockHandler, 'submitPrompt')
                              .mockReturnValue(firstSubmission.promise);
     await store.resumeSession('test-session-123', false);
@@ -343,7 +388,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
 
     // When
     const overlappingPromise = store.submitPrompt();
-    firstSubmission.resolve(undefined);
+    firstSubmission.resolve({accepted: true});
     await Promise.all([firstPromise, overlappingPromise]);
 
     // Then
@@ -353,7 +398,8 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
 
   it('keeps a session blocked after Mojo resolves until a terminal runtime event', async () => {
     // Given
-    const submitPrompt = vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+    const submitPrompt = vi.spyOn(mockHandler, 'submitPrompt')
+                             .mockResolvedValue({accepted: true});
     await store.resumeSession('test-session-123', false);
     const runtimeListener = vi.mocked(mockRouter.onRuntimeEvent.addListener).mock.calls[0]?.[0];
     expect(runtimeListener).toBeTypeOf('function');
@@ -424,10 +470,124 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
         .toBe('GPT-4.1');
   });
 
+  it('clears the persisted draft only after Mojo accepts the submission', async () => {
+    // Given
+    const submission = createDeferred<{accepted: boolean}>();
+    const clear = vi.fn(async () => undefined);
+    vi.spyOn(mockHandler, 'submitPrompt').mockReturnValue(submission.promise);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear));
+    await store.resumeSession('test-session-123', false);
+    store.setComposerPrompt('send this request');
+
+    // When
+    const submitPromise = store.submitPrompt();
+
+    // Then
+    expect(clear).not.toHaveBeenCalled();
+
+    // When
+    submission.resolve({accepted: true});
+    await submitPromise;
+
+    // Then
+    expect(clear).toHaveBeenCalledOnce();
+    expect(clear).toHaveBeenCalledWith({
+      kind: 'conversation',
+      conversationId: 'test-session-123',
+    });
+  });
+
+  it('preserves the draft when Mojo explicitly declines acceptance', async () => {
+    // Given
+    const clear = vi.fn(async () => undefined);
+    vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: false});
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear));
+    await store.resumeSession('test-session-123', false);
+    store.setComposerPrompt('keep this request');
+
+    // When / Then
+    await expect(store.submitPrompt()).rejects.toThrow(
+        'Maho AI did not accept the prompt.');
+    expect(store.getSnapshot().composer.prompt).toBe('keep this request');
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('promotes an empty provisional session draft only after its first accepted send', async () => {
+    const provisional = createSession('provisional-session');
+    const submission = createDeferred<{accepted: boolean}>();
+    const clear = vi.fn(async () => undefined);
+    const schedule = vi.fn();
+    vi.spyOn(mockHandler, 'startSession').mockResolvedValue({session: provisional});
+    vi.spyOn(mockHandler, 'resumeSession').mockResolvedValue({session: provisional, replayEvents: []});
+    vi.spyOn(mockHandler, 'submitPrompt').mockReturnValue(submission.promise);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear, {schedule}));
+
+    await store.startSession();
+    const clearsBeforeFirstSend = clear.mock.calls.length;
+    store.setComposerPrompt('first prompt');
+    const sent = store.submitPrompt();
+    await Promise.resolve();
+
+    expect(clear).toHaveBeenCalledTimes(clearsBeforeFirstSend);
+    submission.resolve({accepted: true});
+    await sent;
+
+    expect(clear).toHaveBeenCalledWith({kind: 'new_task'});
+    store.setComposerPrompt('second draft');
+    expect(schedule).toHaveBeenLastCalledWith(
+        {kind: 'conversation', conversationId: 'provisional-session'},
+        'second draft');
+  });
+
+  it('ignores late draft hydration after the user types', async () => {
+    // Given
+    const load = createDeferred<string|null>();
+    const clear = vi.fn(async () => undefined);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear, {
+      load: () => load.promise,
+    }));
+    const resume = store.resumeSession('test-session-123', false);
+    await Promise.resolve();
+    store.setComposerPrompt('typed while loading');
+
+    // When
+    load.resolve('stale persisted text');
+    await resume;
+
+    // Then
+    expect(store.getSnapshot().composer.prompt).toBe('typed while loading');
+  });
+
+  it('ignores late hydration from a scope that is no longer selected', async () => {
+    // Given
+    const firstLoad = createDeferred<string|null>();
+    const load = vi.fn(scope => scope.conversationId === 'test-session-123' ?
+        firstLoad.promise : Promise.resolve('new scope draft'));
+    const clear = vi.fn(async () => undefined);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear, {load}));
+    const firstResume = store.resumeSession('test-session-123', false);
+    await Promise.resolve();
+    vi.mocked(mockHandler.resumeSession).mockResolvedValueOnce({
+      session: createSession('session-b'),
+      replayEvents: [],
+    });
+    await store.resumeSession('session-b', false);
+
+    // When
+    firstLoad.resolve('stale old scope draft');
+    await firstResume;
+
+    // Then
+    expect(store.getSnapshot().currentSessionId).toBe('session-b');
+    expect(store.getSnapshot().composer.prompt).toBe('new scope draft');
+  });
+
   it('rolls back composer state when Mojo rejects a submission', async () => {
     // Given
-    const submission = createDeferred<void>();
+    const submission = createDeferred<{accepted: boolean}>();
+    const clear = vi.fn(async () => undefined);
     vi.spyOn(mockHandler, 'submitPrompt').mockReturnValue(submission.promise);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear));
     await store.resumeSession('test-session-123', false);
     store.setChatBlockedReason('quota-exhausted');
     store.setComposerPrompt('retry this request');
@@ -443,6 +603,29 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     expect.soft(snapshot.turnPendingBySessionId['test-session-123']).toBe(false);
     expect.soft(snapshot.composer.prompt).toBe('retry this request');
     expect.soft(snapshot.chatBlockedReason).toBe('quota-exhausted');
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('preserves a user replacement when a submission fails', async () => {
+    // Given
+    const submission = createDeferred<{accepted: boolean}>();
+    const clear = vi.fn(async () => undefined);
+    vi.spyOn(mockHandler, 'submitPrompt').mockReturnValue(submission.promise);
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear));
+    await store.resumeSession('test-session-123', false);
+    store.setComposerPrompt('submitted text');
+    const submitPromise = store.submitPrompt();
+    store.setComposerPrompt('replacement typed while sending');
+    const rejection = new Error('Mojo submit rejected');
+
+    // When
+    submission.reject(rejection);
+
+    // Then
+    await expect(submitPromise).rejects.toBe(rejection);
+    expect(store.getSnapshot().composer.prompt)
+        .toBe('replacement typed while sending');
+    expect(clear).not.toHaveBeenCalled();
   });
 
   it('opens default settings or a requested pane', async () => {
@@ -488,7 +671,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
 
   describe('regenerateLastResponse', () => {
     it('resubmits the last user prompt without touching the composer', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
       const runtimeListener =
           vi.mocked(mockRouter.onRuntimeEvent.addListener).mock.calls[0]?.[0];
@@ -516,7 +699,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     });
 
     it('uses the newest user prompt when several turns exist', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
       const runtimeListener =
           vi.mocked(mockRouter.onRuntimeEvent.addListener).mock.calls[0]?.[0];
@@ -541,7 +724,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     });
 
     it('replays a quick-action turn with its typed intent and page context', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
       await store.submitQuickAction({
         id: 'quiz-me',
@@ -572,7 +755,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     });
 
     it('does nothing when the session has no user prompt to replay', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
 
       await store.regenerateLastResponse();
@@ -613,7 +796,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     };
 
     it('submits a quick action for an existing session with exact captured parameters and ChatIntent', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
       store.setComposerPrompt('draft prompt text');
 
@@ -633,13 +816,22 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
       expect(snapshot.turnPendingBySessionId['test-session-123']).toBe(true);
     });
 
-    it('creates a new session and submits quick action when no current session exists', async () => {
+    it('creates a new session and promotes quick-action draft scope only after acceptance', async () => {
       const newSession = createSession('new-session-456');
+      const accepted = createDeferred<{accepted: boolean}>();
+      const clear = vi.fn(async () => undefined);
+      const schedule = vi.fn();
       vi.spyOn(mockHandler, 'startSession').mockResolvedValue({session: newSession});
       vi.spyOn(mockHandler, 'resumeSession').mockResolvedValue({session: newSession, replayEvents: []});
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockReturnValue(accepted.promise);
+      store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear, {schedule}));
 
-      await store.submitQuickAction(quizAction);
+      const submission = store.submitQuickAction(quizAction);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(clear).not.toHaveBeenCalled();
+      accepted.resolve({accepted: true});
+      await submission;
 
       expect(mockHandler.startSession).toHaveBeenCalledOnce();
       expect(mockHandler.startSession).toHaveBeenCalledWith(null, InteractionMode.kAssistant);
@@ -655,10 +847,11 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
       const snapshot = store.getSnapshot();
       expect(snapshot.currentSessionId).toBe('new-session-456');
       expect(snapshot.turnPendingBySessionId['new-session-456']).toBe(true);
+      expect(clear).toHaveBeenCalledWith({kind: 'new_task'});
     });
 
     it('normal submitPrompt passes kFreeform intent', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
       store.setComposerPrompt('freeform question');
 
@@ -674,7 +867,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     });
 
     it('does not mutate composer prompt, composer attachments, or chatBlockedReason', async () => {
-      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue();
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
       await store.resumeSession('test-session-123', false);
       store.setComposerPrompt('preserved prompt');
       store.setChatBlockedReason('quota-exhausted');
@@ -716,7 +909,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
       await store.submitQuickAction(summarizeAction);
       expect(submitSpy).toHaveBeenCalledTimes(1);
 
-      submitSpy.mockResolvedValue();
+      submitSpy.mockResolvedValue({accepted: true});
       vi.spyOn(mockHandler, 'resumeSession').mockResolvedValue({
         session: {...createSession('read-only-session'), isReadOnly: true},
         replayEvents: [],

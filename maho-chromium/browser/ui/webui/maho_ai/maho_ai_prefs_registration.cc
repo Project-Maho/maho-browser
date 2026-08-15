@@ -32,7 +32,10 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(ai_prefs::kSessionPersistenceEnabled, true);
   registry->RegisterDictionaryPref(ai_prefs::kSessionEventLogs);
   registry->RegisterStringPref(ai_prefs::kAiViewMode, "sidebar");
+  registry->RegisterIntegerPref(ai_prefs::kPendingSurface, 0);
+  registry->RegisterInt64Pref(ai_prefs::kPendingSurfaceGeneration, 0);
   registry->RegisterBooleanPref(ai_prefs::kAttachBrowserContext, true);
+  registry->RegisterBooleanPref(ai_prefs::kMailReadAllowed, false);
   registry->RegisterStringPref(ai_prefs::kTranslationProvider, std::string());
   registry->RegisterStringPref(ai_prefs::kByokOpenAIEncryptedB64,
                                 std::string());

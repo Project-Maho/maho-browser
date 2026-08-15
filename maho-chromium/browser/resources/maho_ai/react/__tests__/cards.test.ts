@@ -27,6 +27,7 @@ describe('renderTrustedMarkdown', () => {
   it('returns a plain string (not empty) when all sanitize calls throw', () => {
     const result = renderTrustedMarkdown('CRASH_ALL input');
     expect(typeof result).toBe('string');
-    expect(result as string).toBe('[Maho AI] 렌더링 오류가 발생했습니다.');
+    expect(result as unknown as string)
+        .toBe('[Maho AI] 렌더링 오류가 발생했습니다.');
   });
 });

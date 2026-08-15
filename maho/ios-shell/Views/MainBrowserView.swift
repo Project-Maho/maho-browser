@@ -96,8 +96,7 @@ struct MainBrowserView: View {
                         showSettings = true
                     },
                     onResumeTab: { tabId in
-                        bridge.activateTab(id: tabId)
-                        refreshState()
+                        resumeTabFromHome(tabId)
                     },
                     onSelectSite: { url in
                         if let activeSpace = bridge.getActiveSpaceId() {

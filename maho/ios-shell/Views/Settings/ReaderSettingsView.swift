@@ -70,19 +70,11 @@ struct ReaderSettingsView: View {
     }
 
     private var readerBackground: Color {
-        switch readerTheme {
-        case .light: return Color(.systemBackground)
-        case .sepia: return Color(red: 0.98, green: 0.95, blue: 0.87)
-        case .dark: return Color(red: 0.15, green: 0.15, blue: 0.15)
-        }
+        ShellTheme.ReaderPalette.background(for: readerTheme)
     }
 
     private var readerForeground: Color {
-        switch readerTheme {
-        case .light: return .primary
-        case .sepia: return Color(red: 0.35, green: 0.25, blue: 0.15)
-        case .dark: return Color(white: 0.85)
-        }
+        ShellTheme.ReaderPalette.foreground(for: readerTheme)
     }
 
     private func loadSettings() {

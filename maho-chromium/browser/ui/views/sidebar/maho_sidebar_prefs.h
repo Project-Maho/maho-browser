@@ -29,12 +29,26 @@ extern const char kOpenExternalLinksInMahoMini[];
 extern const char kPeekEnabled[];
 extern const char kPeekLinkRoutingEnabled[];
 extern const char kPeekPopupRoutingEnabled[];
+
+// One-time migration marker for kOpenExternalLinksInMahoMini. maho-core is the
+// canonical store for that setting (ATCManager::decide_link_destination reads
+// only core), so the legacy pref above is seeded into core exactly once and
+// this marker records that it happened. The core FFI getter returns a plain
+// bool and cannot distinguish "unset" from "false", so without this marker a
+// later seed would clobber the user's choice on every startup.
+//
+// LOCAL STATE, NOT PROFILE PREFS. The value it guards lives in maho-core, which
+// is a single process-global store shared by every profile. A profile-scoped
+// marker would let profile B re-seed from its own legacy pref after profile A
+// already migrated, overwriting the process-global core value that A (or the
+// user) had set. Registered by RegisterLocalStatePrefs below.
+extern const char kOpenExternalLinksInMahoMiniMigrated[];
+
 extern const char kMahoMiniWindowWidth[];
 extern const char kMahoMiniWindowHeight[];
 
-// Maho Mail feature flag. Mail is deferred from the current ship and stays off
-// until its security/integrity remediation pass completes, so this pref
-// defaults to false. It gates every Mail entry point together (sidebar button,
+// Maho Mail opt-in Beta gate. New profiles default to false and users enable it
+// in Settings. It gates every Mail entry point together (sidebar button,
 // chrome://maho-mail, the helper subprocess, and the settings panes); flipping
 // only one of them leaves the surfaces inconsistent.
 extern const char kMahoMailEnabled[];
@@ -49,8 +63,8 @@ bool IsSidebarPanelExpanded(const PrefService* prefs);
 // Toggle panel expanded/collapsed state.
 void ToggleSidebarPanelExpanded(PrefService* prefs);
 
-// Returns true when Maho Mail is enabled for this profile. False while Mail is
-// deferred, which is the default.
+// Returns true when Maho Mail is enabled for this profile. New profiles default
+// to false until users enable the opt-in Beta in Settings.
 bool IsMahoMailEnabled(const PrefService* prefs);
 
 // Legacy compat: equivalent to IsSidebarLayoutEnabled for callers that
@@ -58,6 +72,11 @@ bool IsMahoMailEnabled(const PrefService* prefs);
 bool ShouldShowSidebarInShell(const PrefService* prefs);
 
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
+
+// Registers sidebar prefs that are process-global rather than per-profile.
+// Currently only kOpenExternalLinksInMahoMiniMigrated, which must be shared by
+// every profile because the maho-core value it guards is process-global.
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 // Migrate legacy kSidebarVisible to 2-state prefs. Call once at profile load.
 void MigrateFromLegacyVisiblePref(PrefService* prefs);
 

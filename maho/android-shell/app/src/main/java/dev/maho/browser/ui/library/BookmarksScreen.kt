@@ -2,6 +2,7 @@
 
 package dev.maho.browser.ui.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,11 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeBookmarks
 import dev.maho.browser.models.BookmarkEntry
+import dev.maho.browser.ui.components.ConfirmDialog
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
 
@@ -156,16 +157,28 @@ private fun BookmarkItem(
     onTap: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    var showConfirm by remember { mutableStateOf(false) }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
-                true
-            } else {
-                false
+                showConfirm = true
             }
+            false
         },
     )
+
+    if (showConfirm) {
+        ConfirmDialog(
+            title = "Delete Bookmark?",
+            message = "This will remove \"${bookmark.title}\" from your bookmarks.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                showConfirm = false
+                onDelete()
+            },
+            onDismiss = { showConfirm = false },
+        )
+    }
 
     SwipeToDismissBox(
         state = dismissState,
@@ -173,12 +186,13 @@ private fun BookmarkItem(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.error)
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
                     contentDescription = "Delete",
-                    tint = Color.White,
+                    tint = MaterialTheme.colorScheme.onError,
                 )
             }
         },

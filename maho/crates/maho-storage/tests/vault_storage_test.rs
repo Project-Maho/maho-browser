@@ -8,8 +8,9 @@
 //! database-key boundary and the ciphertext-only on-disk shape.
 
 use maho_storage::sqlite::{
-    EncryptedVaultItemRow, SqliteStorage, VaultAuditRow, VaultDeviceKeyRow, VaultGrantRow,
-    VaultMetadataRow, VaultPolicyRow, VaultRecoveryRow, VaultSyncVersionRow, VaultTombstoneCas,
+    inspect_vault_database, EncryptedVaultItemRow, SqliteStorage, VaultAuditRow,
+    VaultDatabaseInspection, VaultDatabaseKey, VaultDeviceKeyRow, VaultGrantRow, VaultMetadataRow,
+    VaultPolicyRow, VaultRecoveryRow, VaultSyncVersionRow, VaultTombstoneCas,
 };
 use maho_storage::StorageError;
 use rusqlite::{Connection, ErrorCode};
@@ -133,6 +134,37 @@ fn on_disk_store(key: &str) -> (tempfile::TempDir, String) {
     // Materialize the schema on disk so a raw connection can inspect it.
     drop(SqliteStorage::open_with_key(&path_str, key).unwrap());
     (dir, path_str)
+}
+
+#[test]
+fn vault_database_inspection_reports_plaintext_backup_residue() {
+    let key = test_key();
+    let (dir, path_str) = on_disk_store(&key);
+    let path = std::path::Path::new(&path_str);
+    let storage = SqliteStorage::open_with_key(&path_str, &key).unwrap();
+    storage
+        .save_vault_metadata(&VaultMetadataRow {
+            slot: "kdf_params".to_string(),
+            schema_version: 1,
+            payload: vec![1, 2, 3],
+            updated_at: "2026-08-12T00:00:00Z".to_string(),
+        })
+        .unwrap();
+    drop(storage);
+
+    let backup = path.with_extension("db.plain_backup");
+    let plaintext = Connection::open(&backup).unwrap();
+    plaintext
+        .execute_batch("CREATE TABLE migration_residue (id INTEGER PRIMARY KEY);")
+        .unwrap();
+    drop(plaintext);
+
+    assert!(matches!(
+        inspect_vault_database(path, VaultDatabaseKey::Available(&key)),
+        VaultDatabaseInspection::PlaintextResidue
+    ));
+
+    drop(dir);
 }
 
 #[test]

@@ -25,6 +25,8 @@ _DEPOT_TOOLS_DIR = os.path.join(_CHROMIUM_SRC_ROOT, 'third_party', 'depot_tools'
 _APPLY_OVERRIDES_SCRIPT = os.path.join(_SCRIPT_DIR, 'apply_chromium_src_overrides.py')
 _BUILD_CONFIG_DIR = os.path.join(_MAHO_CHROMIUM_DIR, 'build', 'config')
 _MAHO_APP_PATH = os.path.join(_CHROMIUM_SRC_ROOT, 'out', 'Default', 'Maho.app')
+_PKG_DMG = os.path.join(_CHROMIUM_SRC_ROOT, 'chrome', 'installer', 'mac', 'pkg-dmg')
+_VERSION_TXT = os.path.join(_WORKSPACE_ROOT, 'maho', 'version.txt')
 
 
 def host_platform() -> str:
@@ -165,7 +167,88 @@ def embed_mail_helper(app_path: str, out_dir: str) -> bool:
     return True
 
 
-def find_codesign_identity() -> str | None:
+def require_windows_mail_helper(out_dir: str) -> str:
+    """Return the packaged-layout helper path or fail closed when absent."""
+    helper = os.path.join(
+        _CHROMIUM_SRC_ROOT, out_dir, 'maho_mail_helper.exe')
+    if not os.path.isfile(helper):
+        raise RuntimeError(
+            f'maho_mail_helper.exe is missing from the Windows output: {helper}')
+    return helper
+
+
+def maho_cli_binary_name(rust_target: str) -> str:
+    return 'maho.exe' if 'windows' in rust_target else 'maho'
+
+
+def build_maho_cli(target: str | None) -> str:
+    rust_target, _, _ = build_maho_core.get_target_triple(target)
+    print(f"Building maho CLI for {rust_target}...")
+    subprocess.run(
+        [
+            'cargo',
+            'build',
+            '--release',
+            '--target',
+            rust_target,
+            '--package',
+            'maho-cli',
+            '--bin',
+            'maho',
+        ],
+        cwd=os.path.join(_WORKSPACE_ROOT, 'maho'),
+        check=True,
+    )
+    cli_path = os.path.join(
+        _WORKSPACE_ROOT,
+        'maho',
+        'target',
+        rust_target,
+        'release',
+        maho_cli_binary_name(rust_target),
+    )
+    if not os.path.isfile(cli_path):
+        raise RuntimeError(f'maho CLI build artifact not found: {cli_path}')
+    return cli_path
+
+
+def embed_maho_cli(app_path: str, cli_path: str) -> bool:
+    if not os.path.isfile(cli_path):
+        print(
+            f"error: maho CLI executable not found: {cli_path}; "
+            "cannot embed into app bundle",
+            file=sys.stderr,
+        )
+        return False
+    helpers_dir = os.path.join(app_path, 'Contents', 'Helpers')
+    os.makedirs(helpers_dir, exist_ok=True)
+    destination = os.path.join(helpers_dir, 'maho')
+    if os.path.islink(destination) or os.path.isfile(destination):
+        os.remove(destination)
+    print(f"Embedding maho CLI into {helpers_dir}")
+    shutil.copy2(cli_path, destination)
+    return True
+
+
+def stage_maho_cli_next_to_browser(out_dir: str, cli_path: str) -> str | None:
+    if not os.path.isfile(cli_path):
+        print(
+            f"error: maho CLI executable not found: {cli_path}; "
+            "cannot stage next to browser",
+            file=sys.stderr,
+        )
+        return None
+    out_root = os.path.join(_CHROMIUM_SRC_ROOT, out_dir)
+    os.makedirs(out_root, exist_ok=True)
+    destination = os.path.join(out_root, os.path.basename(cli_path))
+    if os.path.islink(destination) or os.path.isfile(destination):
+        os.remove(destination)
+    print(f"Staging maho CLI at {destination}")
+    shutil.copy2(cli_path, destination)
+    return destination
+
+
+def find_codesign_identity(release: bool = False) -> str | None:
     try:
         res = subprocess.run(
             ['security', 'find-identity', '-v', '-p', 'codesigning'],
@@ -175,12 +258,17 @@ def find_codesign_identity() -> str | None:
         )
         if res.returncode != 0:
             return None
-        sha_re = re.compile(r'^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"')
+        sha_re = re.compile(r'^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"([^"]+)"')
+        fallback = None
         for line in res.stdout.splitlines():
             m = sha_re.match(line)
             if m:
-                return m.group(1).upper()
-        return None
+                identity = m.group(1).upper()
+                if release and m.group(2).startswith('Developer ID Application:'):
+                    return identity
+                if fallback is None:
+                    fallback = identity
+        return fallback
     except Exception:
         return None
 
@@ -246,6 +334,37 @@ def codesign_app(identity: str, app_path: str) -> bool:
                         timeout=120,
                     )
 
+            # Chromium also ships bare Mach-O tools + ANGLE/SwiftShader dylibs
+            # inside the framework. codesign does NOT recurse into these, so sign
+            # each explicitly (Developer ID + hardened runtime + secure
+            # timestamp) BEFORE sealing the framework, or notarization rejects
+            # them ("not signed with a valid Developer ID" / "no secure
+            # timestamp" / "hardened runtime not enabled").
+            libraries_dir = os.path.join(
+                maho_framework_path, 'Versions', 'Current', 'Libraries'
+            )
+            if os.path.isdir(libraries_dir):
+                for lib_name in sorted(os.listdir(libraries_dir)):
+                    if lib_name.endswith('.dylib'):
+                        subprocess.run(
+                            ['codesign', '--force', '--sign', identity,
+                             '--options', 'runtime', '--timestamp',
+                             os.path.join(libraries_dir, lib_name)],
+                            check=True, timeout=180,
+                        )
+            for tool_name in (
+                'app_mode_loader',
+                'chrome_crashpad_handler',
+                'web_app_shortcut_copier',
+            ):
+                tool_path = os.path.join(helpers_dir, tool_name)
+                if os.path.isfile(tool_path):
+                    subprocess.run(
+                        ['codesign', '--force', '--sign', identity,
+                         '--options', 'runtime', '--timestamp', tool_path],
+                        check=True, timeout=180,
+                    )
+
             print("Signing Maho Framework...")
             subprocess.run(
                 [
@@ -293,6 +412,34 @@ def codesign_app(identity: str, app_path: str) -> bool:
                 helper_cmd += ['--entitlements', helper_entitlements_path]
             helper_cmd += [mail_helper]
             subprocess.run(helper_cmd, check=True, timeout=120)
+
+        maho_cli = os.path.join(app_path, 'Contents', 'Helpers', 'maho')
+        if os.path.isfile(maho_cli):
+            print("Signing bundled maho CLI...")
+            subprocess.run(
+                [
+                    'codesign',
+                    '--force',
+                    '--sign',
+                    identity,
+                    '--options',
+                    'runtime',
+                    '--timestamp',
+                    maho_cli,
+                ],
+                check=True,
+                timeout=180,
+            )
+
+        crashpad_handler = os.path.join(
+            app_path, 'Contents', 'MacOS', 'chrome_crashpad_handler')
+        if os.path.isfile(crashpad_handler):
+            subprocess.run(
+                ['codesign', '--force', '--sign', identity, '--options', 'runtime',
+                 '--timestamp', crashpad_handler],
+                check=True,
+                timeout=180,
+            )
 
         cmd = ['codesign', '--force', '--sign', identity, '--options', 'runtime']
         if os.path.isfile(entitlements_path):
@@ -366,6 +513,293 @@ def notarize_app(app_path: str) -> bool:
             os.remove(zip_path)
 
 
+def read_maho_version() -> str:
+    """Return the canonical product version from maho/version.txt.
+
+    This is the single authored product-version source; artifact names and
+    release manifests derive from it. A missing file is a hard error.
+    """
+    with open(_VERSION_TXT) as f:
+        return f.read().strip()
+
+
+def _create_dmg_image(staging_dir: str, dmg_path: str, volname: str) -> None:
+    """Synthesize a read-only compressed DMG from a staging folder.
+
+    Uses `hdiutil create -srcfolder ... -format UDZO` directly. This
+    deliberately avoids Chromium's pkg-dmg, whose read-only path runs
+    `hdiutil makehybrid -hfs`; makehybrid synthesizes `com.apple.FinderInfo`
+    on every catalog entry of the resulting HFS filesystem even when the
+    source tree is completely clean, which makes the embedded app fail
+    `codesign --verify --deep --strict` ("resource fork, Finder information,
+    or similar detritus not allowed"). `hdiutil create -srcfolder` does not
+    inject FinderInfo, producing a detritus-free, deep-strict-clean app.
+    Raises on failure (subprocess check=True).
+    """
+    subprocess.run(
+        ['hdiutil', 'create', '-ov', '-srcfolder', staging_dir,
+         '-volname', volname, '-fs', 'HFS+', '-format', 'UDZO', dmg_path],
+        check=True, timeout=600,
+    )
+
+
+def verify_dmg_app_signature(dmg_path: str) -> bool:
+    """Fail-closed gate: mount the DMG read-only and verify the embedded app.
+
+    Attaches the image read-only at a private temporary mount point (never
+    guesses `/Volumes/...`), runs `codesign --verify --deep --strict` on the
+    embedded Maho.app, and requires ZERO `com.apple.FinderInfo` extended
+    attributes anywhere in the bundle. The mount point is fixed up front so the
+    volume is ALWAYS detached in the finally block, even if a later step fails.
+    A failed `xattr` scan is treated as failure (fail-closed), never as "0
+    FinderInfo". Returns True only when the mounted app is strict-clean.
+    """
+    import tempfile
+    if not os.path.isfile(dmg_path):
+        print(f"error: dmg not found for verification: {dmg_path}", file=sys.stderr)
+        return False
+    mount_point = tempfile.mkdtemp(prefix='maho-dmg-verify-')
+    attached = False
+    try:
+        try:
+            attach = subprocess.run(
+                ['hdiutil', 'attach', '-nobrowse', '-readonly',
+                 '-mountpoint', mount_point, dmg_path],
+                capture_output=True, text=True, timeout=120,
+            )
+        except (SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"error: hdiutil attach failed: {e}", file=sys.stderr)
+            return False
+        if attach.returncode != 0:
+            print(f"error: hdiutil attach failed: {attach.stderr!r}", file=sys.stderr)
+            return False
+        attached = True
+
+        app = os.path.join(mount_point, 'Maho.app')
+        if not os.path.isdir(app):
+            print(f"error: Maho.app missing from mounted dmg: {app}", file=sys.stderr)
+            return False
+        verify = subprocess.run(
+            ['codesign', '--verify', '--deep', '--strict', '--verbose=2', app],
+            capture_output=True, text=True, timeout=300,
+        )
+        if verify.returncode != 0:
+            print(f"error: mounted dmg app failed strict codesign:\n{verify.stderr}",
+                  file=sys.stderr)
+            return False
+        dump = subprocess.run(['xattr', '-lr', app], capture_output=True, text=True, timeout=120)
+        if dump.returncode != 0:
+            # A failed scan must NOT be read as "0 FinderInfo" — fail closed.
+            print(f"error: xattr scan failed (rc={dump.returncode}): {dump.stderr!r}",
+                  file=sys.stderr)
+            return False
+        finderinfo = sum(
+            1 for line in dump.stdout.splitlines() if 'com.apple.FinderInfo' in line
+        )
+        if finderinfo != 0:
+            print(f"error: mounted dmg app has {finderinfo} com.apple.FinderInfo xattrs",
+                  file=sys.stderr)
+            return False
+        print("Mounted dmg app passed strict codesign with 0 FinderInfo xattrs.")
+        return True
+    finally:
+        if attached:
+            subprocess.run(['hdiutil', 'detach', mount_point, '-quiet'],
+                           capture_output=True, timeout=120)
+        try:
+            os.rmdir(mount_point)
+        except OSError:
+            pass
+
+
+def build_dmg(app_path: str, out_dir: str, version: str, identity: str) -> str | None:
+    """Package a signed Maho.app into out/<out_dir>/Maho-<version>.dmg.
+
+    Stages a clean copy of the signed app plus an /Applications symlink, then
+    synthesizes the image with `hdiutil create -srcfolder` (NOT pkg-dmg, whose
+    makehybrid path injects FinderInfo detritus). The disk image is
+    code-signed so Gatekeeper can validate it and it can be notarized+stapled.
+    A fail-closed gate then mounts the finished dmg and verifies the embedded
+    app is deep-strict clean before returning; on any failure the invalid dmg
+    is deleted and None is returned. Returns the dmg path, or None on failure.
+    """
+    if not os.path.isdir(app_path):
+        print(f"error: app bundle not found: {app_path}; cannot build dmg", file=sys.stderr)
+        return None
+    dmg_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, f'Maho-{version}.dmg')
+    if os.path.exists(dmg_path):
+        os.remove(dmg_path)
+
+    # Build a staging root containing ONLY the app + an /Applications symlink.
+    # hdiutil create -srcfolder images exactly this tree, giving the familiar
+    # drag-install layout without pkg-dmg's makehybrid FinderInfo injection.
+    staging_dir = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, '.maho_dmg_stage')
+    if os.path.isdir(staging_dir):
+        shutil.rmtree(staging_dir)
+    os.makedirs(staging_dir)
+    staged_app = os.path.join(staging_dir, 'Maho.app')
+    try:
+        try:
+            # ditto preserves the bundle bytes, symlinks, and code signature exactly.
+            subprocess.run(['ditto', app_path, staged_app], check=True, timeout=600)
+        except (SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"error: staging app copy failed: {e}", file=sys.stderr)
+            return None
+        os.symlink('/Applications', os.path.join(staging_dir, 'Applications'))
+
+        # The staged app must itself be deep-strict clean before we image it; a
+        # drifted or invalid source is a hard error (do not ship it).
+        staged_verify = subprocess.run(
+            ['codesign', '--verify', '--deep', '--strict', staged_app],
+            capture_output=True, text=True, timeout=300,
+        )
+        if staged_verify.returncode != 0:
+            print(f"error: staged app failed strict codesign; not packaging:\n"
+                  f"{staged_verify.stderr}", file=sys.stderr)
+            return None
+
+        print(f"Building disk image: {dmg_path}")
+        try:
+            _create_dmg_image(staging_dir, dmg_path, f'Maho {version}')
+        except (SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"error: hdiutil create failed: {e}", file=sys.stderr)
+            return None
+
+        # Fail-closed: the embedded app must be deep-strict clean in the finished
+        # image BEFORE we sign/notarize. Delete the invalid artifact so no later
+        # step (release publish) can upload it.
+        if not verify_dmg_app_signature(dmg_path):
+            print("error: dmg embedded app failed verification gate; deleting artifact",
+                  file=sys.stderr)
+            if os.path.exists(dmg_path):
+                os.remove(dmg_path)
+            return None
+
+        try:
+            # Sign the disk image itself (codesign contacts Apple's timestamp
+            # server by default, which notarization requires).
+            print(f"Signing disk image: {dmg_path}")
+            subprocess.run(['codesign', '--force', '--sign', identity, dmg_path], check=True, timeout=300)
+        except (SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"error: signing dmg failed: {e}", file=sys.stderr)
+            if os.path.exists(dmg_path):
+                os.remove(dmg_path)
+            return None
+        return dmg_path
+    finally:
+        # Never leave the staging tree behind (success or failure).
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+
+def notarize_dmg(dmg_path: str) -> bool:
+    """Submit the signed .dmg to Apple's notary service and staple the ticket.
+
+    Notarizing the disk image covers the hardened-runtime-signed app inside it,
+    so a stapled .dmg passes Gatekeeper offline. Requires the same
+    APPLE_API_KEY/_KEY_ID/_ISSUER credentials as notarize_app.
+    """
+    import tempfile
+    api_key = os.environ.get('APPLE_API_KEY')
+    key_id = os.environ.get('APPLE_API_KEY_ID')
+    issuer_id = os.environ.get('APPLE_API_ISSUER')
+    if not (api_key and key_id and issuer_id):
+        print("warning: APPLE_API_KEY, APPLE_API_KEY_ID, or APPLE_API_ISSUER environment variables are missing; skipping notarization", file=sys.stderr)
+        return False
+    if not os.path.isfile(dmg_path):
+        print(f"error: dmg not found: {dmg_path}", file=sys.stderr)
+        return False
+    key_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.p8') as f:
+            f.write(api_key)
+            key_path = f.name
+        print("Submitting disk image to Apple Notary Service...")
+        res = subprocess.run(
+            ['xcrun', 'notarytool', 'submit', dmg_path,
+             '--key-id', key_id, '--issuer', issuer_id, '--key', key_path, '--wait'],
+            capture_output=True, text=True,
+        )
+        print(res.stdout)
+        if res.returncode != 0:
+            print(f"error: notarization submission failed:\n{res.stderr}", file=sys.stderr)
+            return False
+        print("Stapling notarization ticket to disk image...")
+        subprocess.run(['xcrun', 'stapler', 'staple', dmg_path], check=True)
+        subprocess.run(['spctl', '-a', '-t', 'open', '--context', 'context:primary-signature', '-vv', dmg_path], check=False)
+        print("DMG notarization and stapling succeeded!")
+        return True
+    except Exception as e:
+        print(f"error: dmg notarization/stapling failed: {e}", file=sys.stderr)
+        return False
+    finally:
+        if key_path and os.path.exists(key_path):
+            os.remove(key_path)
+
+
+def build_windows_installer(out_dir: str, version: str) -> str | None:
+    """Copy the built mini_installer.exe to out/<out_dir>/MahoSetup-<version>.exe.
+
+    The mini_installer ninja target produces mini_installer.exe in the output
+    root; the release artifact name is the version-stamped MahoSetup exe that
+    the download page and Windows update manifest reference. Returns the setup
+    exe path, or None on failure.
+    """
+    src = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'mini_installer.exe')
+    if not os.path.isfile(src):
+        print(f"error: mini_installer.exe not found: {src}; "
+              "build the 'mini_installer' target first", file=sys.stderr)
+        return None
+    setup_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, f'MahoSetup-{version}.exe')
+    print(f"Packaging Windows installer: {setup_path}")
+    shutil.copy2(src, setup_path)
+    return setup_path
+
+
+def sign_windows_binary(path: str) -> bool:
+    """Authenticode-sign a Windows binary with signtool.
+
+    Configured via environment: MAHO_SIGNTOOL (signtool.exe path; falls back to
+    signtool on PATH), MAHO_WIN_CERT_PFX + MAHO_WIN_CERT_PASSWORD (pfx signing),
+    or MAHO_WIN_CERT_SHA1 (thumbprint of a cert already in the Windows store).
+    MAHO_WIN_TIMESTAMP_URL overrides the RFC-3161 timestamp server. Missing
+    credentials skip signing with a warning (mirrors macOS notarization).
+    """
+    signtool = os.environ.get('MAHO_SIGNTOOL') or shutil.which('signtool') or shutil.which('signtool.exe')
+    if not signtool:
+        print("warning: signtool not found (set MAHO_SIGNTOOL); skipping Authenticode signing", file=sys.stderr)
+        return False
+    pfx = os.environ.get('MAHO_WIN_CERT_PFX')
+    pfx_pw = os.environ.get('MAHO_WIN_CERT_PASSWORD')
+    sha1 = os.environ.get('MAHO_WIN_CERT_SHA1')
+    timestamp = os.environ.get('MAHO_WIN_TIMESTAMP_URL', 'http://timestamp.digicert.com')
+    cmd = [signtool, 'sign', '/fd', 'SHA256', '/tr', timestamp, '/td', 'SHA256']
+    if pfx:
+        cmd += ['/f', pfx]
+        if pfx_pw:
+            cmd += ['/p', pfx_pw]
+    elif sha1:
+        cmd += ['/sha1', sha1]
+    else:
+        print("warning: no Windows signing cert configured "
+              "(set MAHO_WIN_CERT_PFX[/_PASSWORD] or MAHO_WIN_CERT_SHA1); "
+              "skipping Authenticode signing", file=sys.stderr)
+        return False
+    cmd.append(path)
+    try:
+        print(f"Authenticode-signing: {path}")
+        subprocess.run(cmd, check=True, timeout=300)
+        subprocess.run([signtool, 'verify', '/pa', path], check=True, timeout=120)
+        return True
+    except (SubprocessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"error: Authenticode signing failed: {e}", file=sys.stderr)
+        return False
+
+
+def sign_windows_installer(exe_path: str) -> bool:
+    """Authenticode-sign the Windows installer with signtool."""
+    return sign_windows_binary(exe_path)
+
+
 def launch_app(app_path: str) -> None:
     if sys.platform != 'darwin':
         return
@@ -388,8 +822,27 @@ def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=
         return
 
     if os.path.isfile(args_gn_path) and not force:
-        print(f'args.gn already exists: {args_gn_path} (use --force-args-template to overwrite)')
-        return
+        # A release build must not silently reuse a stale/dev args.gn: a
+        # component build (or one lacking is_official_build=true) produces a
+        # NON-distributable app (engine dylibs load from the build dir via
+        # rpath and are never bundled, so installed/DMG copies fail to launch).
+        # Regenerate from the release template in that case; otherwise respect
+        # the existing args.gn (preserves locally-synced values).
+        stale_release = False
+        if release:
+            with open(args_gn_path, encoding='utf-8') as existing:
+                current = existing.read()
+            if 'is_component_build = true' in current or 'is_official_build = true' not in current:
+                stale_release = True
+                print(
+                    f'warning: existing {args_gn_path} is not an official '
+                    'non-component release config; regenerating from '
+                    f'{template_path}',
+                    file=sys.stderr,
+                )
+        if not stale_release:
+            print(f'args.gn already exists: {args_gn_path} (use --force-args-template to overwrite)')
+            return
 
     out_dir_abs = os.path.join(chromium_src, out_dir)
     os.makedirs(out_dir_abs, exist_ok=True)
@@ -397,6 +850,44 @@ def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=
     shutil.copy2(template_path, args_gn_path)
     action = 'Overwrote' if already_existed else 'Created'
     print(f'{action} args.gn from {template_path}')
+
+
+def sync_local_google_api_key(workspace_root, args_gn_path, release):
+    if not release:
+        return
+
+    vault_path = os.path.join(
+        workspace_root,
+        '.secrets',
+        'maho',
+        'google_chromium_api_key.env',
+    )
+    if not os.path.isfile(vault_path):
+        raise RuntimeError(
+            'release build requires local Google API key: '
+            f'{vault_path}'
+        )
+
+    with open(vault_path, encoding='utf-8') as vault_file:
+        key_lines = [
+            line.rstrip('\n').removeprefix('GOOGLE_API_KEY=')
+            for line in vault_file
+            if line.startswith('GOOGLE_API_KEY=')
+        ]
+    if len(key_lines) != 1 or not re.fullmatch(r'AIza[0-9A-Za-z_-]{35}', key_lines[0]):
+        raise RuntimeError(f'invalid local Google API key file: {vault_path}')
+
+    with open(args_gn_path, encoding='utf-8') as args_file:
+        args = args_file.read()
+    assignment = f'google_api_key = "{key_lines[0]}"'
+    api_key_pattern = re.compile(r'^google_api_key\s*=\s*"[^"]*"\s*$', re.MULTILINE)
+    if api_key_pattern.search(args):
+        updated_args = api_key_pattern.sub(assignment, args, count=1)
+    else:
+        updated_args = f'{args.rstrip()}\n{assignment}\n'
+    with open(args_gn_path, 'w', encoding='utf-8') as args_file:
+        args_file.write(updated_args)
+    print(f'Synchronized local Google API key into {args_gn_path}')
 
 
 def run_gn_gen(chromium_src, out_dir, depot_tools_dir):
@@ -456,6 +947,101 @@ def apply_tracked_chromium_overrides(platform):
         cwd=_WORKSPACE_ROOT,
         check=True,
     )
+
+
+def _build_windows_ico(branding_dir):
+    """Pack a multi-size Windows .ico (16/32/48/256) from Maho product logos."""
+    import struct
+    png_data = []
+    for size in (16, 32, 48, 256):
+        path = os.path.join(branding_dir, f'product_logo_{size}.png')
+        if not os.path.isfile(path):
+            return None
+        with open(path, 'rb') as handle:
+            png_data.append(handle.read())
+    header = struct.pack('<HHH', 0, 1, len(png_data))
+    entries = []
+    offset = 6 + len(png_data) * 16
+    for data in png_data:
+        width, height = struct.unpack('>II', data[16:24])
+        entries.append(struct.pack(
+            '<BBBBHHII',
+            0 if width >= 256 else width,
+            0 if height >= 256 else height,
+            0, 0, 1, 32, len(data), offset))
+        offset += len(data)
+    return header + b''.join(entries) + b''.join(png_data)
+
+
+def apply_branding(platform):
+    """Overlay Maho product name + icons into the chromium theme dir.
+
+    is_chrome_branded stays false, so Chromium reads its product name (BRANDING)
+    and app icons (product_logo_*, win/chromium.ico) from
+    chrome/app/theme/chromium/. Copy Maho's assets over that dir so the built
+    browser identifies as Maho with Maho icons. Runs before gn gen; idempotent.
+    """
+    branding_dir = os.path.join(_MAHO_CHROMIUM_DIR, 'branding')
+    theme_dir = os.path.join(
+        _CHROMIUM_SRC_ROOT, 'chrome', 'app', 'theme', 'chromium')
+    if not os.path.isdir(branding_dir):
+        raise RuntimeError(f'Maho branding directory is missing: {branding_dir}')
+    if not os.path.isdir(theme_dir):
+        raise RuntimeError(f'Chromium theme directory is missing: {theme_dir}')
+    print('Applying Maho branding (product name + icons)...')
+    applied = 0
+    branding_file = os.path.join(branding_dir, 'BRANDING')
+    if not os.path.isfile(branding_file):
+        raise RuntimeError(f'Maho BRANDING file is missing: {branding_file}')
+    shutil.copyfile(branding_file, os.path.join(theme_dir, 'BRANDING'))
+    applied += 1
+    for name in sorted(os.listdir(branding_dir)):
+        if name.startswith('product_logo') and name.endswith(('.png', '.svg')):
+            shutil.copyfile(
+                os.path.join(branding_dir, name), os.path.join(theme_dir, name))
+            applied += 1
+    if platform == 'win':
+        win_dir = os.path.join(theme_dir, 'win')
+        ico_bytes = _build_windows_ico(branding_dir)
+        if ico_bytes is None:
+            raise RuntimeError('Maho Windows icon source PNGs are incomplete')
+        ico_paths = [
+            os.path.join(win_dir, 'chromium.ico'),
+            os.path.join(
+                _CHROMIUM_SRC_ROOT,
+                'chrome',
+                'installer',
+                'mini_installer',
+                'mini_installer.ico',
+            ),
+            os.path.join(
+                _CHROMIUM_SRC_ROOT,
+                'chrome',
+                'installer',
+                'setup',
+                'setup.ico',
+            ),
+        ]
+        for ico_path in ico_paths:
+            ico_dir = os.path.dirname(ico_path)
+            if not os.path.isdir(ico_dir):
+                raise RuntimeError(f'Windows icon directory is missing: {ico_dir}')
+            with open(ico_path, 'wb') as handle:
+                handle.write(ico_bytes)
+            applied += 1
+        tiles_dir = os.path.join(win_dir, 'tiles')
+        if not os.path.isdir(tiles_dir):
+            raise RuntimeError(f'Windows tiles directory is missing: {tiles_dir}')
+        for source_name, destination_name in (
+            ('product_logo_256.png', 'Logo.png'),
+            ('product_logo_48.png', 'SmallLogo.png'),
+        ):
+            source = os.path.join(branding_dir, source_name)
+            if not os.path.isfile(source):
+                raise RuntimeError(f'Maho Windows tile source is missing: {source}')
+            shutil.copyfile(source, os.path.join(tiles_dir, destination_name))
+            applied += 1
+    print(f'  Applied {applied} branding files to {theme_dir}')
 
 
 _LUCIDE_GENERATE_SCRIPT = os.path.join(_SCRIPT_DIR, 'lucide_icons', 'generate.py')
@@ -532,7 +1118,9 @@ def main():
         help='Run gn gen even if <out-dir>/build.ninja already exists.',
     )
     parser.add_argument('--skip-codesign', action='store_true', help='Skip codesigning on macOS.')
-    parser.add_argument('--notarize', action='store_true', help='Notarize the built app on macOS.')
+    parser.add_argument('--notarize', action='store_true', help='Notarize the built app (or dmg) on macOS.')
+    parser.add_argument('--dmg', action='store_true', help='Force macOS dmg packaging even without --release.')
+    parser.add_argument('--no-dmg', action='store_true', help='Skip macOS dmg packaging even for a --release build.')
     parser.add_argument('--no-launch', action='store_true', help='Do not launch the built app on macOS.')
     parser.add_argument('--codesign-identity', help='Explicit codesigning identity to use.')
     parser.add_argument('--release', action='store_true', help='Build in production release mode.')
@@ -578,35 +1166,99 @@ def main():
                 args.release,
                 args.debug,
             )
+            sync_local_google_api_key(
+                _WORKSPACE_ROOT,
+                os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'args.gn'),
+                args.release,
+            )
             apply_tracked_chromium_overrides(platform)
+            apply_branding(platform)
             build_ninja_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'build.ninja')
-            if not os.path.isfile(build_ninja_path) or args.force_gn_gen:
+            if (not os.path.isfile(build_ninja_path)
+                    or args.force_gn_gen or args.release):
                 run_gn_gen(_CHROMIUM_SRC_ROOT, out_dir, _DEPOT_TOOLS_DIR)
 
             targets = list(args.ninja_target) if args.ninja_target else ['chrome']
-            if (not args.ninja_target and 'chrome' in targets and
-                    'maho_mail_helper' not in targets):
-                targets.append('maho_mail_helper')
+            if not args.ninja_target and 'chrome' in targets:
+                if platform in ('mac', 'win') and 'maho_mail_helper' not in targets:
+                    targets.append('maho_mail_helper')
+                # A release build IS the bundle: the Windows installer artifact
+                # is the mini_installer target, so build it in the same pass.
+                if (platform == 'win' and (args.release or args.dmg)
+                        and 'mini_installer' not in targets):
+                    targets.append('mini_installer')
+            maho_cli_path = None
+            if 'chrome' in targets and platform in ('mac', 'win', 'linux'):
+                maho_cli_path = build_maho_cli(args.target)
+            # Windows: stage (and sign) the CLI into the output dir BEFORE the
+            # build so the mini_installer target packages it alongside the
+            # browser (chrome.release lists maho.exe, so it must exist here
+            # before that edge runs).
+            if platform == 'win' and maho_cli_path:
+                staged_win_cli = stage_maho_cli_next_to_browser(out_dir, maho_cli_path)
+                if staged_win_cli is None:
+                    raise RuntimeError('failed to stage maho CLI for Windows')
+                if not args.skip_codesign:
+                    sign_windows_binary(staged_win_cli)
             build_chromium_app(out_dir, targets, extra_args)
+
+            if platform == 'win' and 'chrome' in targets:
+                require_windows_mail_helper(out_dir)
 
             app_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'Maho.app')
             if 'chrome' in targets:
                 if platform == 'mac':
                     embed_sparkle_framework(app_path)
                     embed_mail_helper(app_path, out_dir)
+                    if maho_cli_path is None or not embed_maho_cli(
+                            app_path, maho_cli_path):
+                        raise RuntimeError('failed to embed maho CLI into app bundle')
                 if platform == 'mac' and not args.skip_codesign:
                     identity = args.codesign_identity
                     if not identity:
-                        identity = find_codesign_identity()
+                        identity = find_codesign_identity(args.release)
                     if identity:
                         if codesign_app(identity, app_path):
-                            if args.notarize:
-                                notarize_app(app_path)
+                            # A release build IS the bundle: package the signed
+                            # app into a dmg unless explicitly opted out.
+                            want_dmg = (args.release or args.dmg) and not args.no_dmg
+                            if want_dmg:
+                                version = read_maho_version()
+                                dmg_path = build_dmg(app_path, out_dir, version, identity)
+                                # Fail closed: a failed packaging/verification
+                                # gate must abort the whole release with a
+                                # nonzero exit so release_local.py (which runs
+                                # this via check=True) never uploads a bad dmg.
+                                if dmg_path is None:
+                                    print("error: dmg packaging/verification failed; aborting",
+                                          file=sys.stderr)
+                                    sys.exit(1)
+                                if args.notarize and not notarize_dmg(dmg_path):
+                                    print("error: dmg notarization/stapling failed; aborting",
+                                          file=sys.stderr)
+                                    sys.exit(1)
+                            elif args.notarize:
+                                if not notarize_app(app_path):
+                                    print("error: notarization failed; aborting",
+                                          file=sys.stderr)
+                                    sys.exit(1)
                     else:
                         print("warning: no valid code signing identity found; built app will not be signed", file=sys.stderr)
 
+                if platform == 'linux' and maho_cli_path:
+                    if stage_maho_cli_next_to_browser(out_dir, maho_cli_path) is None:
+                        raise RuntimeError('failed to stage maho CLI for Linux')
+
                 if not args.no_launch:
                     launch_app(app_path)
+
+            if 'mini_installer' in targets and platform == 'win':
+                want_pkg = (args.release or args.dmg) and not args.no_dmg
+                if want_pkg:
+                    version = read_maho_version()
+                    setup_path = build_windows_installer(out_dir, version)
+                    if setup_path:
+                        sign_windows_installer(setup_path)
 
 
 if __name__ == '__main__':

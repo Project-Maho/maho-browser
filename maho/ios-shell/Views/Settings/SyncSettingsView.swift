@@ -4,6 +4,10 @@ import LucideIcons
 import UIKit
 #endif
 
+private struct SyncBootstrapConfiguration: Decodable {
+    let success: Bool
+}
+
 @MainActor
 struct SyncSettingsView: View {
     private enum AuthMode: String, CaseIterable, Identifiable {
@@ -23,6 +27,7 @@ struct SyncSettingsView: View {
     private let bridge = MahoBridge.shared
     private let authStore: RelayAuthStoreProtocol
     private let apiClient: RelayAPIClientProtocol
+    private let googleCoordinatorProvider: () throws -> any GoogleSignInCoordinating
 
     @State private var syncStatus: SyncStatus = .idle
     @State private var account: AccountInfo?
@@ -40,13 +45,22 @@ struct SyncSettingsView: View {
     @State private var showSyncKeyAlert = false
     @State private var showJoinResult = false
     @State private var isSubmittingAuth = false
+    @State private var pendingDeviceDeletion: IndexSet?
+    @State private var showRemoveDeviceConfirmation = false
 
     init(
         authStore: RelayAuthStoreProtocol = RelayAuthStore.shared,
-        apiClient: RelayAPIClientProtocol = RelayAPIClient()
+        apiClient: RelayAPIClientProtocol = RelayAPIClient(),
+        googleCoordinatorProvider: (() throws -> any GoogleSignInCoordinating)? = nil
     ) {
         self.authStore = authStore
         self.apiClient = apiClient
+        self.googleCoordinatorProvider = googleCoordinatorProvider ?? {
+            guard let configuration = GoogleSignInConfiguration.fromBundle() else {
+                throw GoogleSignInError.missingClientID
+            }
+            return GoogleSignInCoordinator(configuration: configuration)
+        }
     }
 
     var body: some View {
@@ -76,6 +90,20 @@ struct SyncSettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(joinResult ?? "Failed to join sync")
+        }
+        .confirmationDialog(
+            "Remove Device?",
+            isPresented: $showRemoveDeviceConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Device", role: .destructive) {
+                removePendingDevices()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeviceDeletion = nil
+            }
+        } message: {
+            Text("This disconnects the selected device from sync.")
         }
     }
 
@@ -144,6 +172,14 @@ struct SyncSettingsView: View {
                     }
                     .disabled(isAuthActionDisabled)
                 }
+
+                Button("Continue with Google") {
+                    Task {
+                        await signInWithGoogle()
+                    }
+                }
+                .disabled(isSubmittingAuth)
+                .accessibilityIdentifier("continueWithGoogleButton")
 
                 if let authMessage, !authMessage.isEmpty {
                     Text(authMessage)
@@ -220,13 +256,13 @@ struct SyncSettingsView: View {
                     .foregroundStyle(ShellTheme.Palette.accent)
             case .synced:
                 Image(lucide: Lucide.circleCheck)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(ShellTheme.Palette.success)
             case .error:
                 Image(lucide: Lucide.triangleAlert)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(ShellTheme.Palette.error)
             case .offline:
                 Image(lucide: Lucide.wifiOff)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(ShellTheme.Palette.warning)
             }
         }
     }
@@ -281,16 +317,17 @@ struct SyncSettingsView: View {
                             sendActiveTab(to: device)
                         } label: {
                             Image(lucide: Lucide.send)
+                                .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.borderless)
                         .disabled(activeTabForSend == nil)
+                        .accessibilityLabel("Send active tab to \(device.name)")
                     }
                 }
                 .onDelete { offsets in
-                    for index in offsets {
-                        bridge.removeSyncDevice(deviceId: devices[index].id)
-                    }
-                    devices.remove(atOffsets: offsets)
+                    pendingDeviceDeletion = offsets
+                    showRemoveDeviceConfirmation = true
                 }
             } header: {
                 Text("Connected Devices")
@@ -315,6 +352,15 @@ struct SyncSettingsView: View {
     private func sendActiveTab(to device: ConnectedDevice) {
         guard let activeTab = activeTabForSend else { return }
         bridge.sendTabToDevice(url: activeTab.url, title: activeTab.title, deviceId: device.id)
+    }
+
+    private func removePendingDevices() {
+        guard let offsets = pendingDeviceDeletion else { return }
+        for index in offsets {
+            bridge.removeSyncDevice(deviceId: devices[index].id)
+        }
+        devices.remove(atOffsets: offsets)
+        pendingDeviceDeletion = nil
     }
 
     @ViewBuilder
@@ -395,16 +441,8 @@ struct SyncSettingsView: View {
                 displayName: displayName.isEmpty ? nil : displayName
             )
             try authStore.saveSession(session)
-            relaySession = session
-            bridge.signIn(
-                email: session.account.email,
-                displayName: session.account.displayName,
-                password: nil,
-                accessToken: session.accessToken,
-                userId: session.account.id,
-                deviceId: session.device?.id,
-            )
-            SyncManager.shared.relayAuthenticationSucceeded()
+            try await configureAccountSync(session)
+            applyAuthenticatedSession(session)
             authMessage = mode == .login ? "Logged in to relay." : "Relay account created."
             passwordInput = ""
             displayNameInput = ""
@@ -414,27 +452,92 @@ struct SyncSettingsView: View {
         }
     }
 
-    private func signOut() async {
-        defer {
-            bridge.signOut()
-            SyncTransport.shared.clearRelaySession()
-            relaySession = nil
-            syncEnabled = false
-            authMessage = "Logged out of relay."
-            refresh()
-        }
-
-        guard let relaySession else {
-            SyncManager.shared.relayAuthenticationEnded()
-            return
-        }
+    private func signInWithGoogle() async {
+        isSubmittingAuth = true
+        authMessage = nil
+        defer { isSubmittingAuth = false }
 
         do {
-            try await apiClient.logout(session: relaySession)
+            let flow = GoogleRelaySignInFlow(
+                coordinatorProvider: googleCoordinatorProvider,
+                apiClient: apiClient,
+                authStore: authStore
+            )
+            let session = try await flow.signIn()
+            try await configureAccountSync(session)
+            applyAuthenticatedSession(session)
+            authMessage = "Logged in with Google."
+            refresh()
         } catch {
-            // Best effort logout; local credentials are still cleared below.
+            guard !GoogleSignInError.isCancellation(error) else { return }
+            authMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func applyAuthenticatedSession(_ session: RelayAuthSession) {
+        relaySession = session
+        bridge.signIn(
+            email: session.account.email,
+            displayName: session.account.displayName,
+            password: nil,
+            accessToken: session.accessToken,
+            userId: session.account.id,
+            deviceId: session.device?.id,
+        )
+        SyncManager.shared.relayAuthenticationSucceeded()
+    }
+
+    private func configureAccountSync(_ session: RelayAuthSession) async throws {
+        let bootstrap: RelaySyncBootstrap
+        do {
+            bootstrap = try await apiClient.getSyncBootstrap(session: session)
+        } catch RelayAPIError.http(let statusCode, _) where statusCode == 404 {
+            if (try? bridge.syncRoomID()) != nil {
+                throw SyncCoreError.operationFailed(
+                    "Enter your Recovery Phrase to migrate existing Sync."
+                )
+            }
+            guard let generated = bridge.generateSyncBootstrap(),
+                  let data = generated.data(using: .utf8),
+                  let created = try? JSONDecoder().decode(RelaySyncBootstrap.self, from: data)
+            else {
+                throw SyncCoreError.operationFailed("generate account Sync bootstrap")
+            }
+            do {
+                bootstrap = try await apiClient.putSyncBootstrap(created, session: session)
+            } catch RelayAPIError.http(let statusCode, _) where statusCode == 409 {
+                bootstrap = try await apiClient.getSyncBootstrap(session: session)
+            }
         }
 
-        SyncManager.shared.relayAuthenticationEnded()
+        guard let result = bridge.configureSyncBootstrap(
+            serverURL: RelayAPIClient.currentBaseURLString(),
+            seed: bootstrap.seed
+        ),
+        let data = result.data(using: .utf8),
+        let response = try? JSONDecoder().decode(SyncBootstrapConfiguration.self, from: data),
+        response.success
+        else {
+            throw SyncCoreError.operationFailed("configure account Sync bootstrap")
+        }
+    }
+
+    private func signOut() async {
+        guard let relaySession else { return }
+
+        do {
+            try await RelaySignOutFlow(apiClient: apiClient, authStore: authStore)
+                .signOut(session: relaySession) {
+                    SyncManager.shared.relayAuthenticationEnded()
+                    bridge.signOut()
+                    SyncTransport.shared.clearRelaySession()
+                    self.relaySession = nil
+                    syncEnabled = false
+                    authMessage = "Logged out of relay."
+                    refresh()
+                }
+        } catch {
+            authMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
     }
 }

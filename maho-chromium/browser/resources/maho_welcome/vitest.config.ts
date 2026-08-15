@@ -4,16 +4,36 @@ import {defineConfig} from 'vitest/config';
 
 const featureDir = path.dirname(fileURLToPath(import.meta.url));
 
+const sharedExclude = [
+  '**/node_modules/**',
+  '**/dist/**',
+  // Temporarily parked: mail onboarding WIP depends on a newer store/types API
+  // not present in the current active onboarding. Re-enable when reconciled.
+  'react/__tests__/mail_onboarding_lifecycle.test.ts',
+];
+
 export default defineConfig({
   test: {
-    environment: 'node',
-    include: ['react/__tests__/**/*.test.ts'],
-    // Temporarily parked: mail onboarding WIP depends on a newer store/types API
-    // not present in the current active onboarding. Re-enable when reconciled.
-    exclude: [
-      '**/node_modules/**',
-      '**/dist/**',
-      'react/__tests__/mail_onboarding_lifecycle.test.ts',
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          environment: 'node',
+          include: ['react/__tests__/**/*.test.ts'],
+          exclude: sharedExclude,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          // Component tests render real React trees and need a DOM.
+          name: 'component',
+          environment: 'jsdom',
+          include: ['react/__tests__/**/*.test.tsx'],
+          exclude: sharedExclude,
+        },
+      },
     ],
   },
   resolve: {
@@ -57,6 +77,24 @@ export default defineConfig({
             '../../../../website/node_modules/react/jsx-runtime.js'),
       },
       {
+        find: 'react/jsx-dev-runtime',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/react/jsx-dev-runtime.js'),
+      },
+      {
+        find: 'react-dom/client',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/react-dom/client.js'),
+      },
+      {
+        find: 'react-dom',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/react-dom/index.js'),
+      },
+      {
         find: 'react',
         replacement: path.join(
             featureDir,
@@ -67,6 +105,22 @@ export default defineConfig({
         replacement: path.join(
             featureDir,
             '../../../../website/node_modules/lucide-react/dist/esm/lucide-react.js'),
+      },
+      {
+        find: 'class-variance-authority',
+        replacement: path.join(
+            featureDir,
+            '../../../../website/node_modules/class-variance-authority'),
+      },
+      {
+        find: 'tailwind-merge',
+        replacement: path.join(
+            featureDir, '../../../../website/node_modules/tailwind-merge'),
+      },
+      {
+        find: 'clsx',
+        replacement: path.join(
+            featureDir, '../../../../website/node_modules/clsx'),
       },
     ],
   },

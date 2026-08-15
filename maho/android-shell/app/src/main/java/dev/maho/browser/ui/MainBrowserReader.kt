@@ -7,14 +7,19 @@ import dev.maho.browser.models.ExtractedArticle
 import dev.maho.browser.models.ReaderSettings
 import dev.maho.browser.models.ReaderTheme
 import dev.maho.browser.models.TextDirection
+import dev.maho.browser.support.MahoJson
 import dev.maho.browser.support.renderReaderHtml
+import kotlinx.serialization.json.JsonPrimitive
 import org.json.JSONObject
-import org.json.JSONTokener
 import java.util.UUID
+
+internal fun shouldResetReaderModeOnNavigation(readerUrl: String?, navigationUrl: String): Boolean =
+    readerUrl == null || readerUrl != navigationUrl
 
 internal fun runMainBrowserReadabilityExtraction(
     webView: WebView,
     onReaderUrlCaptured: (String?) -> Unit,
+    onReaderContentLoaded: () -> Unit,
 ) {
     val readabilityScript = try {
         webView.context.assets.open("readability.js").bufferedReader().use { it.readText() }
@@ -51,15 +56,7 @@ internal fun runMainBrowserReadabilityExtraction(
     webView.evaluateJavascript(extractionScript) { json ->
         if (json == null || json == "null" || json.startsWith("\"error")) return@evaluateJavascript
         try {
-            val rawJson = if (json.startsWith("\"") && json.endsWith("\"")) {
-                JSONObject.quote(json).substring(1, json.length - 1)
-                    .replace("\\\"", "\"")
-                    .replace("\\\\", "\\")
-            } else json
-            val parsedJson = if (rawJson.startsWith("\"")) {
-                JSONTokener(rawJson).nextValue() as? String ?: rawJson
-            } else rawJson
-            val unescaped = JSONObject(parsedJson)
+            val unescaped = JSONObject(decodeReadabilityResult(json))
             if (unescaped.has("error")) {
                 Log.e("MahoReader", "Readability extraction error: " + unescaped.getString("error"))
                 return@evaluateJavascript
@@ -95,10 +92,16 @@ internal fun runMainBrowserReadabilityExtraction(
                 "UTF-8",
                 null,
             )
+            onReaderContentLoaded()
         } catch (error: Exception) {
             Log.e("MahoReader", "Failed to parse json: " + error.message)
         }
     }
+}
+
+internal fun decodeReadabilityResult(evaluationResult: String): String {
+    val decoded = MahoJson.instance.parseToJsonElement(evaluationResult)
+    return if (decoded is JsonPrimitive && decoded.isString) decoded.content else decoded.toString()
 }
 
 private fun JSONObject.optionalString(key: String): String? =

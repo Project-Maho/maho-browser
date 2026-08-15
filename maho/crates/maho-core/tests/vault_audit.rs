@@ -47,6 +47,7 @@ fn login_input(
         metadata: login_meta(title, origin_values),
         username: username.to_string(),
         password: Zeroizing::new(password.to_string()),
+        form_details: None,
     }
 }
 
@@ -122,6 +123,7 @@ fn vault_audit_records_successful_library_operations_without_item_ids_or_secret_
                 metadata,
                 username: "alice".to_string(),
                 password: Some(Zeroizing::new(SENTINEL.to_string())),
+                form_details: None,
             },
         )
         .expect("update audited login");
@@ -166,6 +168,7 @@ fn vault_audit_records_failed_and_denied_attempts_without_item_ids_or_secret_val
             metadata: login_meta("Audit", &["https://audit-failed.example"]),
             username: "alice".to_string(),
             password: Some(Zeroizing::new("new-secret".to_string())),
+            form_details: None,
         },
     );
     assert!(matches!(

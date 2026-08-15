@@ -12,8 +12,8 @@ use crate::vault_manager::record::{
     serialize_record, RecordSecret, VaultRecordPayload,
 };
 use crate::vault_manager::{
-    VaultCrudError, VaultLoginInput, VaultManager, VaultPasskeyInput, VaultSecureItemInput,
-    VaultTotpInput,
+    VaultCredentialFormDetails, VaultCrudError, VaultLoginInput, VaultManager, VaultPasskeyInput,
+    VaultSecureItemInput, VaultTotpInput,
 };
 use crate::vault_runtime::repository::VaultRepository;
 
@@ -24,6 +24,7 @@ struct VaultItemCreate {
     metadata: VaultItemPublicMetadata,
     username: Option<String>,
     secret: RecordSecret,
+    form_details: Option<VaultCredentialFormDetails>,
 }
 
 impl VaultRuntime {
@@ -43,6 +44,7 @@ impl VaultRuntime {
                 secret: RecordSecret::Login {
                     password: input.password.as_str().to_string(),
                 },
+                form_details: input.form_details,
             },
         )
     }
@@ -63,6 +65,7 @@ impl VaultRuntime {
                 secret: RecordSecret::Totp {
                     seed: input.seed.to_vec(),
                 },
+                form_details: None,
             },
         )
     }
@@ -83,6 +86,7 @@ impl VaultRuntime {
                 secret: RecordSecret::Passkey {
                     private_key: input.private_key.to_vec(),
                 },
+                form_details: None,
             },
         )
     }
@@ -104,6 +108,7 @@ impl VaultRuntime {
                     bytes: input.bytes.to_vec(),
                     notes: input.notes.map(|notes| notes.as_str().to_string()),
                 },
+                form_details: None,
             },
         )
     }
@@ -124,6 +129,7 @@ impl VaultRuntime {
                 kind,
                 &metadata.origins,
                 item.username.as_deref().unwrap_or(""),
+                item.form_details.as_ref(),
             )?;
             let item_id = VaultItemId::new();
             let record = VaultRecordPayload {
@@ -132,6 +138,7 @@ impl VaultRuntime {
                 username: item.username,
                 secret: item.secret,
                 last_used_at: None,
+                form_details: item.form_details,
             };
             let envelope = manager
                 .encrypt_and_wrap(&serialize_record(&record)?, &item_id)
@@ -162,6 +169,7 @@ fn reject_duplicate(
     kind: VaultItemKind,
     origins: &[maho_types::vault::CredentialOrigin],
     username: &str,
+    form_details: Option<&crate::vault_manager::VaultCredentialFormDetails>,
 ) -> Result<(), VaultCrudError> {
     let provider = provider_token(provider);
     for (row, record) in super::crud_query::active_records(manager, repository)? {
@@ -170,6 +178,14 @@ fn reject_duplicate(
         }
         if record.username.as_deref().unwrap_or("").trim() != username.trim() {
             continue;
+        }
+        if let (Some(new_details), Some(stored_details)) = (form_details, &record.form_details) {
+            if new_details.username_element != stored_details.username_element
+                || new_details.password_element != stored_details.password_element
+                || new_details.signon_realm != stored_details.signon_realm
+            {
+                continue;
+            }
         }
         let overlaps = origins.iter().any(|origin| {
             record

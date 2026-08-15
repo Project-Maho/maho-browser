@@ -11,6 +11,7 @@ import type {
   AgentEvent,
   AgentHandle,
   BridgeError,
+  BrowserToolInvokeResult,
   ChatEvent,
   KeyValidationResult,
   MahoBridge,
@@ -116,6 +117,7 @@ describe('bridge type exports', () => {
       'chatPollEvents',
       'chatRegisterTool',
       'chatSendToolResult',
+      'browserToolInvoke',
       'chatAppendAssistantMessage',
       'chatGetHistory',
       // Conversations (6)
@@ -145,7 +147,7 @@ describe('bridge type exports', () => {
       'openSettings',
       'hapticFeedback',
     ];
-    expect(methodNames).toHaveLength(41);
+    expect(methodNames).toHaveLength(42);
   });
 
   it('chatSessionStart returns Promise<SessionHandle> (string), not number', () => {
@@ -171,6 +173,13 @@ describe('bridge type exports', () => {
       'native_error',
     ];
     expect(kinds).toHaveLength(4);
+  });
+
+  it('browser tool invocation results are explicitly discriminated', () => {
+    const success: BrowserToolInvokeResult = { ok: true, result: { opened: true } };
+    const failure: BrowserToolInvokeResult = { ok: false, error: 'Unknown browser tool.' };
+    expect(success.ok).toBe(true);
+    expect(failure.ok).toBe(false);
   });
 
   it('ChatEvent covers all 4 discriminants', () => {

@@ -6,6 +6,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/top_container_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "ui/base/unowned_user_data/unowned_user_data_host.h"
 #include "ui/views/controls/button/label_button.h"
@@ -29,6 +30,42 @@ MahoToolbarButtonProvider::MahoToolbarButtonProvider(
 }
 
 MahoToolbarButtonProvider::~MahoToolbarButtonProvider() = default;
+
+void MahoToolbarButtonProvider::SetSidebarControlActivityIndicator(
+    MahoControlActivityIndicatorView* indicator) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  sidebar_control_activity_ = indicator;
+}
+
+void MahoToolbarButtonProvider::SetToolbarControlActivityIndicator(
+    MahoControlActivityIndicatorView* indicator) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  toolbar_control_activity_ = indicator;
+}
+
+// static
+MahoControlActivityIndicatorView*
+MahoToolbarButtonProvider::ResolveControlActivityHost(
+    MahoControlActivityIndicatorView* sidebar_indicator,
+    bool sidebar_indicator_drawn,
+    MahoControlActivityIndicatorView* toolbar_indicator) {
+  // The sidebar chip wins whenever it is actually on screen; a collapsed or
+  // hidden sidebar falls back to the toolbar chip so controller attribution
+  // and Stop never disappear with the sidebar.
+  if (sidebar_indicator && sidebar_indicator_drawn) {
+    return sidebar_indicator;
+  }
+  return toolbar_indicator;
+}
+
+MahoControlActivityIndicatorView*
+MahoToolbarButtonProvider::GetControlActivityIndicator() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return ResolveControlActivityHost(
+      sidebar_control_activity_,
+      sidebar_control_activity_ && sidebar_control_activity_->IsDrawn(),
+      toolbar_control_activity_);
+}
 
 views::View* MahoToolbarButtonProvider::ResolveTranslateAnchor() const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -80,7 +117,8 @@ views::BubbleAnchor MahoToolbarButtonProvider::GetBubbleAnchor(
   return LastResortAnchor();
 }
 
-views::BubbleAnchor MahoToolbarButtonProvider::GetDefaultExtensionDialogAnchor() {
+views::BubbleAnchor
+MahoToolbarButtonProvider::GetDefaultExtensionDialogAnchor() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (views::View* pill = ResolvePillAnchor()) {
     return views::BubbleAnchor(pill);
@@ -91,7 +129,8 @@ views::BubbleAnchor MahoToolbarButtonProvider::GetDefaultExtensionDialogAnchor()
   return LastResortAnchor();
 }
 
-ExtensionsToolbarDesktop* MahoToolbarButtonProvider::GetExtensionsToolbarDesktop() {
+ExtensionsToolbarDesktop*
+MahoToolbarButtonProvider::GetExtensionsToolbarDesktop() {
   return upstream_toolbar_ ? upstream_toolbar_->GetExtensionsToolbarDesktop()
                            : nullptr;
 }
@@ -122,7 +161,8 @@ AppMenuControl* MahoToolbarButtonProvider::GetAppMenuControl() {
   return upstream_toolbar_ ? upstream_toolbar_->GetAppMenuControl() : nullptr;
 }
 
-gfx::Rect MahoToolbarButtonProvider::GetFindBarBoundingBox(int contents_bottom) {
+gfx::Rect MahoToolbarButtonProvider::GetFindBarBoundingBox(
+    int contents_bottom) {
   if (upstream_toolbar_) {
     return upstream_toolbar_->GetFindBarBoundingBox(contents_bottom);
   }
@@ -135,7 +175,8 @@ void MahoToolbarButtonProvider::FocusToolbar() {
   }
 }
 
-views::AccessiblePaneView* MahoToolbarButtonProvider::GetAsAccessiblePaneView() {
+views::AccessiblePaneView*
+MahoToolbarButtonProvider::GetAsAccessiblePaneView() {
   return upstream_toolbar_ ? upstream_toolbar_->GetAsAccessiblePaneView()
                            : nullptr;
 }
@@ -171,9 +212,8 @@ ToolbarButton* MahoToolbarButtonProvider::GetDownloadButton() {
 
 WebUIToolbarWebView*
 MahoToolbarButtonProvider::GetWebUIToolbarViewForTesting() {
-  return upstream_toolbar_
-             ? upstream_toolbar_->GetWebUIToolbarViewForTesting()
-             : nullptr;
+  return upstream_toolbar_ ? upstream_toolbar_->GetWebUIToolbarViewForTesting()
+                           : nullptr;
 }
 
 }  // namespace maho

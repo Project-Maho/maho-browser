@@ -32,8 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSpaces
 import dev.maho.browser.bridge.BridgeTabs
+import dev.maho.browser.models.ArchivedTabViewModel
 import dev.maho.browser.models.SpaceId
-import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
 
@@ -43,7 +43,7 @@ fun ArchiveScreen(
     onOpenTab: (String) -> Unit = {},
     onBack: () -> Unit = {},
 ) {
-    var archivedTabs by remember { mutableStateOf<List<TabViewModel>>(emptyList()) }
+    var archivedTabs by remember { mutableStateOf<List<ArchivedTabViewModel>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
 
@@ -133,7 +133,7 @@ fun ArchiveScreen(
 
 @Composable
 private fun ArchiveItem(
-    tab: TabViewModel,
+    tab: ArchivedTabViewModel,
     onTap: () -> Unit,
 ) {
     ListItem(
@@ -153,7 +153,7 @@ private fun ArchiveItem(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    text = "Archived ${tab.lastActiveAt}",
+                    text = "Archived ${tab.archivedAt}",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,

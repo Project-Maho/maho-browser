@@ -37,6 +37,7 @@ fn login_input(origin_value: &str, username: &str, password: &str) -> VaultLogin
         },
         username: username.to_string(),
         password: Zeroizing::new(password.to_string()),
+        form_details: None,
     }
 }
 
@@ -157,6 +158,7 @@ fn vault_library_lock_secret_use_and_delete_do_not_pollute_list_search_json() {
         },
         username: "renamed@example.test".to_string(),
         password: Some(Zeroizing::new(SECRET_SENTINEL.to_string())),
+        form_details: None,
     };
     let updated = core
         .vault_update_login(added.id, added.revision, update)

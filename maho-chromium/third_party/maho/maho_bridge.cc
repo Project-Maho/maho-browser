@@ -5,6 +5,7 @@
 #include "build/build_config.h"
 #include "build/buildflag.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -13,6 +14,8 @@
 #include <vector>
 
 #include "base/synchronization/lock.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
@@ -22,6 +25,12 @@
 #include "url/gurl.h"
 
 extern "C" char* maho_normalize_site_exception_key(const char* input);
+extern "C" int32_t maho_core_vault_preflight_state(
+    MahoCore* core,
+    const char* database_path,
+    const char* database_key,
+    bool key_store_key_available,
+    char** out_state_json);
 
 namespace maho::core {
 
@@ -35,6 +44,26 @@ struct VaultBackendFfiState {
 VaultBackendFfiState& GetVaultBackendFfiState() {
   static base::NoDestructor<VaultBackendFfiState> state;
   return *state;
+}
+
+std::atomic<VaultPreflightState> g_vault_preflight_state{
+    VaultPreflightState::kUnavailable};
+
+VaultPreflightState ToVaultPreflightState(int value) {
+  switch (value) {
+    case 0:
+      return VaultPreflightState::kHealthy;
+    case 1:
+      return VaultPreflightState::kLocked;
+    case 2:
+      return VaultPreflightState::kUnrecoverableKey;
+    case 3:
+      return VaultPreflightState::kStructuralCorruption;
+    case 4:
+      return VaultPreflightState::kPlaintextResidue;
+    default:
+      return VaultPreflightState::kUnavailable;
+  }
 }
 
 const VaultBackendFfiForTesting* GetVaultBackendFfiForTesting() {
@@ -288,8 +317,10 @@ bool SetStorageKey(const std::string& hex_key) {
 bool DeriveAndSetStorageKey(const std::string& key_file_path) {
   uint32_t status = 0;
   if (!maho_core_oscrypt_key_path_is_secure(key_file_path.c_str(), &status)) {
-    if (status != 1) { // 1 = IoError (meaning it does not exist)
-      LOG(ERROR) << "Maho storage key path exists but permission verification failed: status=" << status;
+    if (status != 1) {  // 1 = IoError (meaning it does not exist)
+      LOG(ERROR) << "Maho storage key path exists but permission verification "
+                    "failed: status="
+                 << status;
       return false;
     }
   }
@@ -299,11 +330,98 @@ bool DeriveAndSetStorageKey(const std::string& key_file_path) {
     return false;
   }
   if (!maho_core_oscrypt_key_path_is_secure(key_file_path.c_str(), &status)) {
-    LOG(ERROR) << "Maho storage key path permission verification failed after derivation: status=" << status;
+    LOG(ERROR) << "Maho storage key path permission verification failed after "
+                  "derivation: status="
+               << status;
     return false;
   }
-  std::string hex_key = base::HexEncode(base::span<const uint8_t>(key16, 16u));
+  std::string hex_key = base::HexEncode(base::span<const uint8_t>(key16));
   return SetStorageKey(hex_key);
+}
+
+StorageKeySetupResult DeriveAndSetStorageKey(
+    const std::string& key_file_path,
+    const std::string& database_path) {
+  StorageKeySetupResult result;
+  uint32_t status = 0;
+  const base::FilePath key_path =
+      base::FilePath::FromUTF8Unsafe(key_file_path);
+  const base::FilePath vault_database_path =
+      base::FilePath::FromUTF8Unsafe(database_path);
+  const bool database_exists = base::PathExists(vault_database_path);
+  bool key_store_key_available = true;
+  if (!maho_core_oscrypt_key_path_is_secure(key_file_path.c_str(), &status)) {
+    // A first-run profile may create key material only while no database
+    // exists. If persistent data already exists, a missing/unreadable/insecure
+    // key is unrecoverable input to preflight and must never be replaced.
+    const bool key_is_missing = status == 1 && !base::PathExists(key_path);
+    if (!key_is_missing || database_exists) {
+      LOG(ERROR) << "Maho storage key unavailable for existing state: status="
+                 << status;
+      key_store_key_available = false;
+    }
+  }
+
+  uint8_t key16[16] = {0};
+  std::string hex_key;
+  if (key_store_key_available &&
+      maho_core_derive_oscrypt_key(key_file_path.c_str(), key16, &status)) {
+    if (maho_core_oscrypt_key_path_is_secure(key_file_path.c_str(), &status)) {
+      hex_key = base::HexEncode(base::span<const uint8_t>(key16));
+      result.storage_key_ready = SetStorageKey(hex_key);
+    } else {
+      LOG(ERROR) << "Maho storage key path permission verification failed "
+                    "after derivation: status="
+                 << status;
+      key_store_key_available = false;
+    }
+  } else if (key_store_key_available) {
+    LOG(ERROR) << "Maho storage key derivation failed: status=" << status;
+    key_store_key_available = false;
+  }
+
+  // The preflight accessor is deliberately callable on an in-memory core: it
+  // only inspects the supplied database path and never opens persistent core
+  // state. This lets startup classify key loss before deciding whether the
+  // encrypted core can be created.
+  MahoCore* preflight_core = Create();
+  if (preflight_core) {
+    char* state_json = nullptr;
+    const int state = maho_core_vault_preflight_state(
+        preflight_core, database_path.c_str(),
+        key_store_key_available ? hex_key.c_str() : nullptr,
+        key_store_key_available, &state_json);
+    result.vault_preflight_state = ToVaultPreflightState(state);
+    if (state_json) {
+      result.vault_preflight_json.assign(state_json);
+      maho_string_free(state_json);
+    }
+    Destroy(preflight_core);
+  }
+  g_vault_preflight_state.store(result.vault_preflight_state,
+                                std::memory_order_release);
+  return result;
+}
+
+VaultPreflightState GetVaultPreflightState() {
+  return g_vault_preflight_state.load(std::memory_order_acquire);
+}
+
+const char* VaultPreflightStateName(VaultPreflightState state) {
+  switch (state) {
+    case VaultPreflightState::kHealthy:
+      return "healthy";
+    case VaultPreflightState::kLocked:
+      return "locked";
+    case VaultPreflightState::kUnrecoverableKey:
+      return "unrecoverableKey";
+    case VaultPreflightState::kStructuralCorruption:
+      return "structuralCorruption";
+    case VaultPreflightState::kPlaintextResidue:
+      return "plaintextResidue";
+    case VaultPreflightState::kUnavailable:
+      return "unavailable";
+  }
 }
 
 bool SaveState(MahoCore* core) {

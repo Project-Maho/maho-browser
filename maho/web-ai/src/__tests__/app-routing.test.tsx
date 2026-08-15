@@ -13,6 +13,8 @@ const mockBridge = {
   }),
   chatSessionStart: vi.fn().mockResolvedValue('session-1'),
   chatSessionResume: vi.fn().mockResolvedValue('resumed-session-1'),
+  chatSessionFree: vi.fn().mockResolvedValue(undefined),
+  chatPollEvents: vi.fn().mockResolvedValue([]),
   chatGetHistory: vi.fn().mockResolvedValue([]),
   conversationsList: vi.fn().mockResolvedValue([]),
 };

@@ -4,6 +4,9 @@ import LucideIcons
 struct FindInPageView: View {
     let tabId: TabId
     @Binding var isVisible: Bool
+    var isIncognito: Bool = false
+
+    @Environment(\.colorScheme) private var systemColorScheme
 
     @State private var query: String = ""
     @State private var activeMatch: UInt32 = 0
@@ -29,30 +32,40 @@ struct FindInPageView: View {
                         findPrevious()
                     } label: {
                         Image(lucide: Lucide.chevronUp)
+                            .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                            .contentShape(Rectangle())
                     }
                     .disabled(totalMatches == 0)
+                    .accessibilityLabel("Previous match")
 
                     Button {
                         findNext()
                     } label: {
                         Image(lucide: Lucide.chevronDown)
+                            .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                            .contentShape(Rectangle())
                     }
                     .disabled(totalMatches == 0)
+                    .accessibilityLabel("Next match")
 
                     Button {
                         dismissFind()
                     } label: {
                         Image(lucide: Lucide.x)
+                            .frame(minWidth: ShellTheme.Size.touchTarget, minHeight: ShellTheme.Size.touchTarget)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityLabel("Close find in page")
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
+            .background(findBarBackground)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
              .padding(.horizontal)
              .transition(.move(edge: .top).combined(with: .opacity))
+             .environment(\.colorScheme, isIncognito ? .dark : systemColorScheme)
              .onAppear {
                  syncFromBridge()
              }
@@ -65,6 +78,15 @@ struct FindInPageView: View {
     private var resultLabel: String {
         guard totalMatches > 0 else { return "0 of 0" }
         return "\(activeMatch + 1) of \(totalMatches)"
+    }
+
+    @ViewBuilder
+    private var findBarBackground: some View {
+        if isIncognito {
+            ShellTheme.Palette.incognitoBackground
+        } else {
+            Rectangle().fill(.ultraThinMaterial)
+        }
     }
 
     // MARK: - Actions

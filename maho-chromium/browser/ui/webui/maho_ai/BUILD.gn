@@ -6,6 +6,8 @@ import("//testing/test.gni")
 mojom("mojo_bindings") {
   sources = [ "maho_ai.mojom" ]
   webui_module_path = "/"
+
+  deps = [ "//maho/browser/ui/webui/maho_routines:mojo_bindings" ]
 }
 
 source_set("maho_ai_prefs") {
@@ -38,6 +40,8 @@ source_set("maho_ai") {
   sources = [
     "maho_ai_page_handler.cc",
     "maho_ai_page_handler.h",
+    "maho_ai_pending_surface.cc",
+    "maho_ai_pending_surface.h",
     "maho_ai_ui.cc",
     "maho_ai_ui.h",
     "maho_ai_voice_session.cc",
@@ -54,6 +58,7 @@ source_set("maho_ai") {
     "//base",
     "//components/prefs",
     "//content/public/browser",
+    "//maho/browser/ui/webui/maho_routines:routine_page_handler",
     "//services/network/public/cpp",
   ]
 
@@ -107,6 +112,8 @@ source_set("maho_ai_unittests") {
     "//base/test:test_support",
     "//chrome/browser/ui/browser_window",
     "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//maho/browser/ui/webui/maho_routines:routine_page_handler",
     "//testing/gtest",
   ]
 }

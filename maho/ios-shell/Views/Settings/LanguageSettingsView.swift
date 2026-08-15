@@ -62,9 +62,11 @@ struct LanguageSettingsView: View {
             Section {
                 Picker("Recognition Language", selection: $voiceSTTLocale) {
                     Text("System default").tag("")
+                        .accessibilityAddTraits(voiceSTTLocale.isEmpty ? .isSelected : [])
 
                     ForEach(voiceLocaleOptions, id: \.identifier) { locale in
                         Text(Self.localizedName(for: locale)).tag(locale.identifier)
+                            .accessibilityAddTraits(locale.identifier == voiceSTTLocale ? .isSelected : [])
                     }
                 }
 

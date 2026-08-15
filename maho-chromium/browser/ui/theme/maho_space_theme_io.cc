@@ -12,6 +12,7 @@
 #include "base/json/json_writer.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/third_party/maho/maho_ffi.h"
 #include "third_party/skia/include/core/SkColor.h"
 
@@ -274,7 +275,9 @@ bool ApplyThemeJsonToSpace(MahoCore* core,
   base::JSONWriter::Write(base::Value(std::move(event)), &event_json);
   char* result = maho_core_handle_event(core, event_json.c_str());
   if (result) {
+    std::string updates(result);
     maho_string_free(result);
+    maho::InvalidateSidebarCoreCacheForUpdatesJson(updates);
   }
   // Persist to disk so the theme (incl. opacity) survives restart; otherwise
   // update_space_config only mutates in-memory core state and is lost on relaunch.

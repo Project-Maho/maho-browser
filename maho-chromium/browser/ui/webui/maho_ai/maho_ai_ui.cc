@@ -8,44 +8,46 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/logging.h"
 #include "base/functional/bind.h"
-#include "base/task/thread_pool.h"
+#include "base/logging.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/fileicon_source.h"  // nogncheck
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-#include "services/network/public/mojom/content_security_policy.mojom.h"
-#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
+#include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/webui/fileicon_source.h"  // nogncheck
 #include "chrome/browser/ui/webui/webui_embedding_context.h"
-#include "content/public/browser/url_data_source.h"
 #include "chrome/grit/maho_ai_resources.h"
 #include "chrome/grit/maho_ai_resources_map.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/page.h"
 #include "content/public/browser/storage_partition.h"
+#include "content/public/browser/url_data_source.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
-#include "components/prefs/pref_service.h"
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_page_handler.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_pending_surface.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_routines/maho_routines_page_handler.h"
+#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 #include "maho/components/constants/webui_url_constants.h"
+#include "net/base/url_util.h"
+#include "services/network/public/mojom/content_security_policy.mojom.h"
 #include "ui/webui/webui_util.h"
 
-#include "maho/browser/ui/webui/maho_webui_private_boundary.h"
-
 MahoAIUIConfig::MahoAIUIConfig()
-    : DefaultTopChromeWebUIConfig(content::kChromeUIScheme,
-                                   maho::kMahoAIHost) {}
+    : DefaultTopChromeWebUIConfig(content::kChromeUIScheme, maho::kMahoAIHost) {
+}
 
 bool MahoAIUIConfig::ShouldAutoResizeHost() {
   return false;
@@ -57,8 +59,7 @@ bool MahoAIUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
 
 WEB_UI_CONTROLLER_TYPE_IMPL(MahoAIUI)
 
-MahoAIUI::MahoAIUI(content::WebUI* web_ui)
-    : TopChromeWebUIController(web_ui) {
+MahoAIUI::MahoAIUI(content::WebUI* web_ui) : TopChromeWebUIController(web_ui) {
   content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
       Profile::FromWebUI(web_ui), maho::kMahoAIHost);
   PrefService* prefs = Profile::FromWebUI(web_ui)->GetPrefs();
@@ -119,10 +120,18 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
     return;
   }
 
-  auto* side_panel_ui =
-      browser->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
   if (!side_panel_ui) {
     return;
+  }
+
+  std::string view;
+  if (net::GetValueForKeyInQuery(web_contents->GetVisibleURL(), "view",
+                                 &view) &&
+      view == "routines") {
+    maho::ai::MahoAiPendingSurface::Request(
+        Profile::FromWebUI(web_ui())->GetPrefs(),
+        maho_ai::mojom::CompactSurface::kRoutines);
   }
 
   side_panel_ui->Show(SidePanelEntryId::kMahoAiPanel);
@@ -195,12 +204,12 @@ void MahoAIUI::CreatePageHandler(
     return;
   }
 
-  auto url_loader_factory =
-      profile->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess();
+  auto url_loader_factory = profile->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
 
   page_handler_ = std::make_unique<MahoAIPageHandler>(
-      std::move(receiver), std::move(page), std::move(token), browser,
-      host, profile->GetPrefs(), std::move(url_loader_factory));
+      std::move(receiver), std::move(page), std::move(token), browser, host,
+      profile->GetPrefs(), std::move(url_loader_factory));
 
   if (embedder()) {
     embedder()->ShowUI();

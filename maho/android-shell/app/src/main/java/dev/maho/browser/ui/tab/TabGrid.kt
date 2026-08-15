@@ -49,6 +49,7 @@ fun TabGrid(
     activeTabId: TabId?,
     isIncognito: Boolean,
     onTabSelected: (TabId) -> Unit,
+    onTabArchived: (TabId) -> Unit,
     onTabClosed: (TabId) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -289,6 +290,7 @@ fun TabGrid(
                         isIncognito = isIncognito,
                         visualIndex = index,
                         onTap = { onTabSelected(tab.id) },
+                        onArchive = { onTabArchived(tab.id) },
                         onClose = { onTabClosed(tab.id) },
                     )
                 }
@@ -313,6 +315,7 @@ fun TabGrid(
                         isIncognito = isIncognito,
                         visualIndex = index + pinned.size,
                         onTap = { onTabSelected(tab.id) },
+                        onArchive = { onTabArchived(tab.id) },
                         onClose = { onTabClosed(tab.id) },
                     )
                 }

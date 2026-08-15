@@ -24,6 +24,24 @@ describe('normalizeAgentEvent', () => {
     });
   });
 
+  it('extracts a typed credentialErrorCode from the credential envelope', () => {
+    const envelope = JSON.stringify({
+      version: 1,
+      kind: 'credential_error',
+      code: 'secure_store_unavailable',
+    });
+    expect(normalizeAgentEvent(JSON.stringify({ type: 'error', data: envelope }))).toEqual({
+      kind: 'error',
+      message: envelope,
+      credentialErrorCode: 'secure_store_unavailable',
+    });
+
+    expect(normalizeAgentEvent('{"type":"error","data":"network timeout"}')).toEqual({
+      kind: 'error',
+      message: 'network timeout',
+    });
+  });
+
   it('returns null for unknown, malformed, or incomplete events', () => {
     expect(normalizeAgentEvent('{"type":"unknown_type","data":"..."}')).toBeNull();
     expect(normalizeAgentEvent('not-json')).toBeNull();

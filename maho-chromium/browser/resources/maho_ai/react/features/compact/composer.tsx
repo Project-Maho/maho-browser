@@ -43,6 +43,7 @@ import {ComposerTextarea} from '../../components/composer-textarea.js';
 
 export interface ComposerHandlers {
   onCancel: () => void;
+  onComposerBlur?: () => void;
   onLoadOpenTabs: () => void;
   onPromptChange: (value: string) => void;
   onRefreshOpenTabs: () => void;
@@ -776,6 +777,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
         <ComposerTextarea
           className="min-h-[72px] max-h-80 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 shadow-none focus-visible:ring-0"
           focusRequest={state.composer.focusRequest}
+          onBlur={handlers.onComposerBlur}
           onPasteFiles={files => handlers.onAttachFiles(files)}
           onSubmit={handlers.onSubmit}
           onValueChange={handlers.onPromptChange}

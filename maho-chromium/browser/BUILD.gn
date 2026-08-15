@@ -13,7 +13,11 @@ source_set("maho_core_holder") {
   # :maho_mail_launcher source_set rather than being compiled here directly,
   # so the browser service and this holder share one copy. Exposed publicly
   # because consumers of this target use the launcher + version header.
+  # maho_core_holder.h exposes Profile* in its public API
+  # (SetCoreForProfile / GetCoreOwnerProfile / IsPasswordManagerAllowedForProfile)
+  # and the .cc calls Profile methods, so profiles:profile is a public_dep.
   public_deps = [
+    "//chrome/browser/profiles:profile",
     "//maho/browser/mail_helper:maho_mail_launcher",
   ]
   deps = [
@@ -26,15 +30,10 @@ source_set("maho_core_holder") {
     "//mojo/public/cpp/system",
   ]
 
-  # The helper executable is excluded on Windows: maho_mail_ffi statically
-  # links a vendored OpenSSL whose PKCS7/EVP symbols collide with Chromium's
-  # BoringSSL, and lld-link rejects duplicate symbols (mac/linux linkers do
-  # not). Mail is deferred from the current ship, so the helper binary is
-  # unreachable anyway; restoring it on Windows requires resolving the
-  # OpenSSL/BoringSSL conflict in maho/mail-core first.
-  if (!is_win) {
-    deps += [ "//maho/browser/mail_helper:maho_mail_helper" ]
-  }
+  # Keep the out-of-process helper in the browser build graph on every desktop
+  # platform. Windows uses the native Crypt32/NCrypt S/MIME backend, so the
+  # mail static library no longer brings OpenSSL into this executable's link.
+  deps += [ "//maho/browser/mail_helper:maho_mail_helper" ]
 }
 
 
@@ -45,6 +44,9 @@ source_set("maho_routines_scheduler") {
     "maho_routines_scheduler.h",
   ]
   deps = [
+    # The scheduler drives the core tick that evaluates Vault auto-lock and
+    # publishes the resulting lock state through the holder's broadcast.
+    ":maho_core_holder",
     "//base",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
@@ -93,8 +95,53 @@ source_set("maho_password_provider") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+source_set("maho_password_authorization") {
+  sources = [
+    "passwords/maho_password_authorization_service.cc",
+    "passwords/maho_password_authorization_service.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/device_reauth",
+    "//chrome/browser/profiles:profile",
+    "//components/device_reauth",
+    "//ui/base/clipboard",
+    "//url",
+  ]
+}
+
+source_set("maho_password_save_update_view") {
+  # The upstream password bubble factory will link this target from
+  # //chrome/browser/ui:ui, while this view derives from an upstream UI class.
+  # Suppress include-cycle checking without adding the reverse :ui edge.
+  check_includes = false
+
+  sources = [
+    "ui/views/passwords/maho_password_save_update_view.cc",
+    "ui/views/passwords/maho_password_save_update_view.h",
+  ]
+  deps = [
+    ":maho_password_provider",
+    "//base",
+    "//chrome/app:generated_resources",
+    "//components/password_manager/core/browser",
+    "//components/url_formatter",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
   ]
 }
 
@@ -108,7 +155,9 @@ source_set("maho_password_store_backend") {
   ]
   deps = [
     ":maho_core_holder",
+    ":maho_password_authorization",
     ":maho_password_provider",
+    "//components/prefs",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
   ]
@@ -280,13 +329,28 @@ source_set("maho_browser_ai_tools") {
     "ai/maho_browser_tool_executor.h",
     "ai/maho_browser_tool_registry.cc",
     "ai/maho_browser_tool_registry.h",
+    "ai/maho_mail_tool_authorization.h",
   ]
   deps = [
     "//base",
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
+    "//crypto",
     "//maho/browser/mcp:maho_mcp",
     "//ui/accessibility",
+    "//url",
+  ]
+}
+
+source_set("maho_control_activity_service") {
+  sources = [
+    "ai/maho_control_activity_service.cc",
+    "ai/maho_control_activity_service.h",
+  ]
+  public_deps = [ "//base" ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
     "//url",
   ]
 }
@@ -327,6 +391,73 @@ test("maho_browser_tool_executor_test") {
     "//ui/accessibility",
     "//url",
   ]
+}
+
+test("maho_control_activity_service_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ai/maho_control_activity_service_unittest.cc",
+  ]
+  deps = [
+    ":maho_control_activity_service",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//components/keyed_service/core",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//url",
+  ]
+}
+
+source_set("maho_action_marker_headers") {
+  sources = [
+    "ui/views/maho_action_marker_service.cc",
+    "ui/views/maho_action_marker_service.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+test("maho_action_marker_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ui/views/maho_action_marker_service_unittest.cc",
+  ]
+  deps = [
+    ":maho_action_marker_headers",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui",
+    "//testing/gtest",
+    "//ui/gfx",
+  ]
+}
+
+test("maho_sync_relay_client_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "sync/maho_sync_relay_client_unittest.cc",
+  ]
+  deps = [
+    ":maho_sync_relay_protocol",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_sync_relay_protocol") {
+  sources = [
+    "sync/maho_sync_relay_protocol.cc",
+    "sync/maho_sync_relay_protocol.h",
+  ]
+  deps = [ "//base" ]
 }
 
 source_set("maho_tool_execution_graph") {
@@ -798,6 +929,8 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_tab_registry",
     ":maho_theme_support",
     ":maho_mcp_integration",
+    ":maho_sync_relay_protocol",
+    ":maho_control_activity_service",
     "//base",
     "//chrome/browser:main_extra_parts",
     "//chrome/browser/profiles:profile",
@@ -806,6 +939,7 @@ source_set("maho_browser_main_extra_parts") {
     "//services/network/public/mojom",
 
     "//maho/browser/importer",
+    "//maho/browser/mail_helper:maho_mail_notification_coordinator",
     "//maho/browser/mail_helper:maho_mail_service_factory",
     ":maho_download_bridge",
     "//maho/browser/mcp:maho_mcp",
@@ -891,6 +1025,7 @@ source_set("maho_mcp_integration") {
     "mcp/maho_mcp_navigation_tracker.h",
   ]
   deps = [
+    ":maho_action_marker_headers",
     "//maho/browser/mcp:maho_mcp",
     "//base",
     "//content/public/browser",
@@ -952,10 +1087,13 @@ source_set("maho_unified_agent_adapter") {
   deps = [
     ":maho_ai_runtime_adapter_interface",
     ":maho_artifact_registry",
+    ":maho_browser_ai_tools",
     ":maho_conversation_task",
+    ":maho_control_activity_service",
     ":maho_core_holder",
     ":maho_ffi_callback_handle",
     ":maho_tool_execution_graph",
+    "//maho/browser/mcp:maho_mcp",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
@@ -1122,22 +1260,65 @@ test("maho_theme_io_test") {
   ]
 }
 
+test("maho_password_native_views_test") {
+  # Match //chrome/browser/ui:ui: canonical chrome/... includes select the
+  # overlay, and explicit src/... includes select the original implementation.
+  include_dirs = [
+    "../chromium_src",
+    "../../../",
+  ]
+  sources = [
+    "run_all_maho_unittests_main.cc",
+    "ui/views/passwords/maho_password_save_update_view_unittest.cc",
+    "../chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.cc",
+    "../chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.h",
+    "//chrome/browser/ui/views/passwords/password_bubble_view_test_base.cc",
+    "//chrome/browser/ui/views/passwords/password_bubble_view_test_base.h",
+  ]
+  deps = [
+    ":maho_password_provider",
+    ":maho_password_save_update_view",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/app:generated_resources",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/test:test_support",
+    "//components/password_manager/core/browser",
+    "//components/password_manager/core/browser:test_support",
+    "//components/prefs:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
 test("maho_password_store_backend_test") {
   sources = [
     "run_all_maho_unittests_main.cc",
+    "passwords/maho_password_authorization_service_unittest.cc",
     "passwords/maho_password_store_backend_test.cc",
   ]
   deps = [
     ":maho_password_store_backend",
+    ":maho_password_authorization",
     ":maho_core_holder",
+    ":maho_password_provider",
     "//base",
     "//base/test:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//components/device_reauth:test_support",
     "//chrome/browser:browser",
     "//chrome/test:test_support",
     "//content/test:test_support",
     "//maho/browser/net",
     "//mojo/core/embedder",
     "//testing/gtest",
+    "//testing/gmock",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
   ]
@@ -1353,6 +1534,46 @@ test("maho_url_scheme_test") {
 }
 
 if (!is_android) {
+  test("maho_password_fill_browsertest") {
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+    sources = [ "passwords/maho_password_fill_browsertest.cc" ]
+    deps = [
+      ":maho_core_holder",
+      ":maho_password_authorization",
+      ":maho_password_provider",
+      ":maho_password_store_backend",
+      "//base",
+      "//base/test:test_support",
+      "//chrome:packed_resources",
+      "//chrome/browser",
+      "//chrome/browser:browser_process",
+      "//chrome/browser/password_manager/factories",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/profiles:profile_manager",
+      "//chrome/browser/ui",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//chrome/test:browser_tests_runner",
+      "//chrome/test:test_support",
+      "//chrome/test:test_support_ui",
+      "//components/autofill/content/browser:test_support",
+      "//components/autofill/core/browser",
+      "//components/autofill/core/browser:test_support",
+      "//components/keyed_service/core",
+      "//components/password_manager/content/browser",
+      "//components/password_manager/core/browser",
+      "//components/prefs",
+      "//content/public/browser",
+      "//content/test:test_support",
+      "//maho/third_party/maho:maho_core_prebuilt",
+      "//maho/third_party/maho:maho_ffi_headers",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/blink/public/common",
+      "//ui/gfx",
+      "//url",
+    ]
+  }
+
   if (is_mac) {
     test("maho_login_gate_native_url_browsertest") {
       defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]

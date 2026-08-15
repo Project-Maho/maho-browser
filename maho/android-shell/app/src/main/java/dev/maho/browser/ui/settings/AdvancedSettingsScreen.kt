@@ -24,6 +24,7 @@ import dev.maho.browser.bridge.BridgeSettings
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.AdvancedSettingsUpdate
 import dev.maho.browser.ui.icons.MahoIcon
+import dev.maho.browser.ui.theme.BrowserShellTheme
 import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,7 +91,7 @@ fun AdvancedSettingsScreen(
                 Text(
                     "Experimental features may be unstable. Use at your own risk.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
+                    color = BrowserShellTheme.colors.warning,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
             }

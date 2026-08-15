@@ -4,72 +4,128 @@ import XCTest
 private final class InMemoryRelayAuthStore: RelayAuthStoreProtocol {
     var session: RelayAuthSession?
 
-    func loadSession() -> RelayAuthSession? {
-        session
+    func loadSession() -> RelayAuthSession? { session }
+    func saveSession(_ session: RelayAuthSession) throws { self.session = session }
+    func clearSession() throws { session = nil }
+}
+
+private final class FakeSyncCore: SyncCoreClient {
+    var roomID = "0123456789abcdef0123456789abcdef"
+    var outgoing = [SyncEnvelopeV2]()
+    var cursor = 0
+    var acknowledged = [RelayAckV2]()
+    var applied = [SyncEnvelopeV2]()
+    var applyError: Error?
+
+    func signIn(
+        email: String,
+        displayName: String?,
+        accessToken: String?,
+        userId: String?,
+        deviceId: String?
+    ) {}
+
+    func signOut() {}
+
+    func syncState() throws -> SyncStateResponse {
+        SyncStateResponse(
+            kind: .idle,
+            lastSuccessAt: nil,
+            pendingOutboxCount: outgoing.count,
+            lastError: nil
+        )
     }
 
-    func saveSession(_ session: RelayAuthSession) throws {
-        self.session = session
+    func syncRoomID() throws -> String { roomID }
+    func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2] { outgoing }
+
+    func acknowledge(_ ack: RelayAckV2) throws {
+        acknowledged.append(ack)
     }
 
-    func clearSession() throws {
-        session = nil
+    func receiveCursor(roomID: String) throws -> Int { cursor }
+
+    func apply(_ envelope: SyncEnvelopeV2, roomID: String) throws {
+        if let applyError { throw applyError }
+        applied.append(envelope)
+        if let seq = envelope.relaySeq {
+            cursor = max(cursor, seq)
+        }
     }
 }
 
 private final class StubRelayAPIClient: RelayAPIClientProtocol {
-    var authenticatedSession: RelayAuthSession?
-    var refreshedSession: RelayAuthSession?
-    var pushedBatches: [[String]] = []
-    var pullResponses: [RelayPullResponse] = []
-    var pulledSinceSeqs: [Int] = []
-    var pulledLimits: [Int] = []
-    var logoutCalled = false
-    var unauthorizedOnPush = false
+    var refreshSession: RelayAuthSession?
+    var pushResponses = [Result<RelayPushResponse, Error>]()
+    var pullResponses = [Result<RelayPullResponse, Error>]()
+    var pushRequests = [(roomID: String, envelopes: [SyncEnvelopeV2])]()
+    var pullAfterSequences = [Int]()
+    var refreshCount = 0
 
-    func authenticate(mode: RelayAuthMode, email: String, password: String, displayName: String?) async throws -> RelayAuthSession {
-        authenticatedSession ?? makeSession(email: email, displayName: displayName)
+    func authenticate(
+        mode: RelayAuthMode,
+        email: String,
+        password: String,
+        displayName: String?
+    ) async throws -> RelayAuthSession {
+        makeSession(accessToken: "access")
+    }
+
+    func authenticateWithGoogle(idToken: String, nonce: String) async throws -> RelayAuthSession {
+        makeSession(accessToken: "access")
     }
 
     func refresh(using refreshToken: String) async throws -> RelayAuthSession {
-        refreshedSession ?? makeSession(email: "refresh@example.com", displayName: "Refreshed")
+        refreshCount += 1
+        return refreshSession ?? makeSession(accessToken: "refreshed")
     }
 
-    func logout(session: RelayAuthSession) async throws {
-        logoutCalled = true
+    func logout(session: RelayAuthSession) async throws {}
+
+    func getSyncBootstrap(session: RelayAuthSession) async throws -> RelaySyncBootstrap {
+        throw RelayAPIError.http(statusCode: 404, message: "not found")
     }
 
-    func push(blobs: [String], session: RelayAuthSession) async throws -> RelayPushResponse {
-        if unauthorizedOnPush {
-            unauthorizedOnPush = false
-            throw RelayAPIError.unauthorized
-        }
-
-        pushedBatches.append(blobs)
-        return RelayPushResponse(seqs: [5])
+    func putSyncBootstrap(
+        _ bootstrap: RelaySyncBootstrap,
+        session: RelayAuthSession
+    ) async throws -> RelaySyncBootstrap {
+        bootstrap
     }
 
-    func pull(sinceSeq: Int, limit: Int, session: RelayAuthSession) async throws -> RelayPullResponse {
-        pulledSinceSeqs.append(sinceSeq)
-        pulledLimits.append(limit)
+    func push(
+        roomID: String,
+        envelopes: [SyncEnvelopeV2],
+        session: RelayAuthSession
+    ) async throws -> RelayPushResponse {
+        pushRequests.append((roomID, envelopes))
+        guard !pushResponses.isEmpty else { return RelayPushResponse(acks: []) }
+        return try pushResponses.removeFirst().get()
+    }
 
-        if pullResponses.isEmpty {
+    func pull(
+        roomID: String,
+        afterSeq: Int,
+        limit: Int,
+        session: RelayAuthSession
+    ) async throws -> RelayPullResponse {
+        pullAfterSequences.append(afterSeq)
+        guard !pullResponses.isEmpty else {
             return RelayPullResponse(messages: [], hasMore: false)
         }
-
-        return pullResponses.removeFirst()
+        return try pullResponses.removeFirst().get()
     }
 
-    private func makeSession(email: String, displayName: String?) -> RelayAuthSession {
+    private func makeSession(accessToken: String) -> RelayAuthSession {
         RelayAuthSession(
-            accessToken: "access-token",
-            refreshToken: "refresh-token",
+            accessToken: accessToken,
+            refreshToken: "refresh",
             tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(3600),
-            refreshExpiresAt: Date().addingTimeInterval(86400),
-            account: RelayAccount(email: email, displayName: displayName),
-            device: RelayDevice(id: "device", name: "Test Device", deviceType: "ios"),
-            session: RelaySessionInfo(id: "session")
+            expiresAt: Date().addingTimeInterval(3_600),
+            refreshExpiresAt: Date().addingTimeInterval(86_400),
+            account: RelayAccount(email: "sync@example.com", displayName: "Sync"),
+            device: RelayDevice(id: "device-1", name: "Test Device", deviceType: "ios"),
+            session: RelaySessionInfo(id: "session-1")
         )
     }
 }
@@ -77,215 +133,148 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
 @MainActor
 final class SyncTransportTests: XCTestCase {
     private var authStore: InMemoryRelayAuthStore!
-    private var apiClient: StubRelayAPIClient!
-    private var appliedEntities: [String]!
-    private var drainedOutgoingPayload: String?
+    private var api: StubRelayAPIClient!
+    private var core: FakeSyncCore!
     private var transport: SyncTransport!
 
     override func setUp() {
         super.setUp()
         authStore = InMemoryRelayAuthStore()
-        apiClient = StubRelayAPIClient()
-        appliedEntities = []
-        drainedOutgoingPayload = nil
-        transport = SyncTransport(
-            authStore: authStore,
-            apiClient: apiClient,
-            bridge: .shared,
-            drainOutgoing: { [unowned self] in self.drainedOutgoingPayload },
-            applyRemoteEntities: { [unowned self] json in
-                self.appliedEntities.append(json)
-                return json
-            }
-        )
-        UserDefaults.standard.removeObject(forKey: SyncTransport.seqKey)
+        api = StubRelayAPIClient()
+        core = FakeSyncCore()
+        authStore.session = makeSession(accessToken: "access")
+        transport = SyncTransport(authStore: authStore, apiClient: api, core: core)
+        transport.connect()
     }
 
     override func tearDown() {
         transport.disconnect()
-        UserDefaults.standard.removeObject(forKey: SyncTransport.seqKey)
         super.tearDown()
     }
 
-    func testUpdateLastServerSeqPersistsZeroAndHighestAck() {
-        transport.updateLastServerSeq(0)
-        transport.updateLastServerSeq(3)
-        transport.updateLastServerSeq(2)
-        transport.updateLastServerSeq(5)
+    func testSharedV2FixtureUsesIOSRelaySchema() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/sync-v2/protocol.json")
+        let data = try Data(contentsOf: fixture)
+        let root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let pushData = try JSONSerialization.data(withJSONObject: root["push"]!)
+        let ackData = try JSONSerialization.data(withJSONObject: root["ack"]!)
+        let push = try RelayCoding.decoder.decode(RelayPushRequest.self, from: pushData)
+        let ack = try RelayCoding.decoder.decode(RelayAckV2.self, from: ackData)
 
-        XCTAssertEqual(transport.lastServerSeq, 5)
-        XCTAssertEqual(UserDefaults.standard.object(forKey: SyncTransport.seqKey) as? Int, 5)
+        XCTAssertEqual(push.roomId, "0123456789abcdef0123456789abcdef")
+        XCTAssertEqual(push.messages.count, 1)
+        XCTAssertEqual(push.messages.first?.deliveryId, ack.deliveryId)
     }
 
-    func testReplaceRelaySessionPersistsSession() throws {
-        let session = RelayAuthSession(
-            accessToken: "access",
-            refreshToken: "refresh",
-            tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(600),
-            refreshExpiresAt: Date().addingTimeInterval(3600),
-            account: RelayAccount(email: "user@example.com", displayName: "User"),
-            device: RelayDevice(id: "device", name: "Phone", deviceType: "ios"),
-            session: RelaySessionInfo(id: "session")
+    func testV2CycleUsesSharedRoomExactAcksAndPaginatedCursor() async {
+        let outgoing = envelope(id: "550e8400-e29b-41d4-a716-446655440000")
+        let first = envelope(
+            id: "550e8400-e29b-41d4-a716-446655440001",
+            payload: "AQ==",
+            seq: 1
         )
-
-        try transport.replaceRelaySession(session)
-
-        XCTAssertEqual(authStore.loadSession(), session)
-        XCTAssertEqual(transport.currentRelaySession(), session)
-    }
-
-    func testClearRelaySessionRemovesPersistedSession() throws {
-        let session = RelayAuthSession(
-            accessToken: "access",
-            refreshToken: "refresh",
-            tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(600),
-            refreshExpiresAt: Date().addingTimeInterval(3600),
-            account: RelayAccount(email: "user@example.com", displayName: nil),
-            device: nil,
-            session: nil
+        let second = envelope(
+            id: "550e8400-e29b-41d4-a716-446655440002",
+            payload: "Ag==",
+            seq: 2
         )
-        try authStore.saveSession(session)
-
-        transport.clearRelaySession()
-
-        XCTAssertNil(authStore.loadSession())
-    }
-
-    func testTriggerSyncWithoutSessionDoesNotCrash() {
-        transport.connect()
-        transport.triggerSync()
-        transport.disconnect()
-
-        XCTAssertNil(authStore.loadSession())
-    }
-
-    func testConnectPushesOutgoingPayloadAsSingleBase64Blob() async throws {
-        let session = makeSession(email: "user@example.com")
-        try authStore.saveSession(session)
-        drainedOutgoingPayload = "[{\"kind\":\"tab\"}]"
-
-        transport.connect()
-        defer { transport.disconnect() }
-
-        try await waitFor { [weak self] in
-            guard let self else { return false }
-            return self.apiClient.pushedBatches.count == 1
-        }
-
-        XCTAssertEqual(apiClient.pushedBatches.count, 1)
-        let firstBatch = try XCTUnwrap(apiClient.pushedBatches.first)
-        XCTAssertEqual(firstBatch.count, 1)
-        let firstBlob = try XCTUnwrap(firstBatch.first)
-        let decoded = try XCTUnwrap(Data(base64Encoded: firstBlob))
-        XCTAssertEqual(String(decoding: decoded, as: UTF8.self), drainedOutgoingPayload)
-        XCTAssertEqual(transport.lastServerSeq, 5)
-        XCTAssertEqual(UserDefaults.standard.object(forKey: SyncTransport.seqKey) as? Int, 5)
-    }
-
-    func testConnectPullsAllPagesAndAppliesDecodedEntities() async throws {
-        let session = makeSession(email: "user@example.com")
-        try authStore.saveSession(session)
-        transport.updateLastServerSeq(0)
-        apiClient.pullResponses = [
-            RelayPullResponse(
-                messages: [RelayPulledMessage(seq: 1, blob: Data("[{\"kind\":\"remote-1\"}]".utf8).base64EncodedString())],
-                hasMore: true
-            ),
-            RelayPullResponse(
-                messages: [RelayPulledMessage(seq: 2, blob: Data("[{\"kind\":\"remote-2\"}]".utf8).base64EncodedString())],
-                hasMore: false
-            )
+        core.outgoing = [outgoing]
+        api.pushResponses = [.success(RelayPushResponse(acks: [RelayAckV2(deliveryId: outgoing.deliveryId, seq: 9)]))]
+        api.pullResponses = [
+            .success(RelayPullResponse(messages: [first], hasMore: true)),
+            .success(RelayPullResponse(messages: [second], hasMore: false)),
         ]
 
-        transport.connect()
-        defer { transport.disconnect() }
+        let outcome = await transport.runCycle()
 
-        try await waitFor { [weak self] in
-            guard let self else { return false }
-            return self.appliedEntities.count == 2
-        }
-
-        XCTAssertEqual(appliedEntities, ["[{\"kind\":\"remote-1\"}]", "[{\"kind\":\"remote-2\"}]"])
-        XCTAssertEqual(apiClient.pulledSinceSeqs.prefix(2), [0, 1])
-        XCTAssertEqual(apiClient.pulledLimits.prefix(2), [100, 100])
-        XCTAssertEqual(transport.lastServerSeq, 2)
-        XCTAssertEqual(UserDefaults.standard.object(forKey: SyncTransport.seqKey) as? Int, 2)
+        XCTAssertEqual(outcome, .completed(pushed: 1, applied: 2))
+        XCTAssertEqual(api.pushRequests.map(\.roomID), [core.roomID])
+        XCTAssertEqual(api.pullAfterSequences, [0, 1])
+        XCTAssertEqual(core.acknowledged, [RelayAckV2(deliveryId: outgoing.deliveryId, seq: 9)])
+        XCTAssertEqual(core.applied, [first, second])
+        XCTAssertEqual(core.cursor, 2)
     }
 
-    func testUnauthorizedPushRefreshesSessionAndRetriesPollingCycle() async throws {
-        let expiredAccessSession = RelayAuthSession(
-            accessToken: "expired-access",
-            refreshToken: "refresh-token",
-            tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(3600),
-            refreshExpiresAt: Date().addingTimeInterval(86400),
-            account: RelayAccount(email: "user@example.com", displayName: nil),
-            device: nil,
-            session: nil
-        )
-        let refreshedSession = RelayAuthSession(
-            accessToken: "fresh-access",
-            refreshToken: "fresh-refresh",
-            tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(3600),
-            refreshExpiresAt: Date().addingTimeInterval(86400),
-            account: RelayAccount(email: "user@example.com", displayName: "Fresh"),
-            device: nil,
-            session: nil
-        )
-
-        try authStore.saveSession(expiredAccessSession)
-        apiClient.refreshedSession = refreshedSession
-        apiClient.unauthorizedOnPush = true
-        drainedOutgoingPayload = "[{\"kind\":\"outgoing\"}]"
-        apiClient.pullResponses = [
-            RelayPullResponse(
-                messages: [RelayPulledMessage(seq: 7, blob: Data("[{\"kind\":\"remote\"}]".utf8).base64EncodedString())],
-                hasMore: false
-            )
+    func testUnauthorizedPushRefreshesOnceThenRetries() async {
+        let outgoing = envelope(id: "550e8400-e29b-41d4-a716-446655440000")
+        core.outgoing = [outgoing]
+        api.pushResponses = [
+            .failure(RelayAPIError.unauthorized),
+            .success(RelayPushResponse(acks: [RelayAckV2(deliveryId: outgoing.deliveryId, seq: 1)])),
         ]
 
-        transport.connect()
-        defer { transport.disconnect() }
+        let outcome = await transport.runCycle()
 
-        try await waitFor { [weak self] in
-            guard let self else { return false }
-            return self.apiClient.pushedBatches.count == 1 && self.appliedEntities.count == 1
-        }
-
-        XCTAssertEqual(authStore.loadSession(), refreshedSession)
-        XCTAssertEqual(apiClient.pushedBatches.count, 1)
-        XCTAssertEqual(appliedEntities, ["[{\"kind\":\"remote\"}]"])
-        XCTAssertEqual(transport.lastServerSeq, 7)
+        XCTAssertEqual(outcome, .completed(pushed: 1, applied: 0))
+        XCTAssertEqual(api.refreshCount, 1)
+        XCTAssertEqual(api.pushRequests.count, 2)
+        XCTAssertEqual(authStore.session?.accessToken, "refreshed")
     }
 
-    private func makeSession(email: String) -> RelayAuthSession {
+    func testMismatchedAckFailsWithoutCompletingDurableOutbox() async {
+        let outgoing = envelope(id: "550e8400-e29b-41d4-a716-446655440000")
+        core.outgoing = [outgoing]
+        api.pushResponses = [
+            .success(RelayPushResponse(acks: [
+                RelayAckV2(
+                    deliveryId: "550e8400-e29b-41d4-a716-446655440099",
+                    seq: 1
+                ),
+            ])),
+        ]
+
+        let outcome = await transport.runCycle()
+
+        guard case .failed = outcome else {
+            return XCTFail("Expected a relay ACK protocol failure.")
+        }
+        XCTAssertTrue(core.acknowledged.isEmpty)
+    }
+
+    func testFailedEnvelopeApplicationLeavesCursorUntouched() async {
+        core.applyError = SyncCoreError.operationFailed("apply")
+        api.pullResponses = [
+            .success(RelayPullResponse(messages: [
+                envelope(
+                    id: "550e8400-e29b-41d4-a716-446655440001",
+                    payload: "AQ==",
+                    seq: 4
+                ),
+            ], hasMore: false)),
+        ]
+
+        let outcome = await transport.runCycle()
+
+        guard case .failed = outcome else {
+            return XCTFail("Expected envelope application to fail.")
+        }
+        XCTAssertEqual(core.cursor, 0)
+        XCTAssertTrue(core.applied.isEmpty)
+    }
+
+    private func makeSession(accessToken: String) -> RelayAuthSession {
         RelayAuthSession(
-            accessToken: "access",
+            accessToken: accessToken,
             refreshToken: "refresh",
             tokenType: "Bearer",
-            expiresAt: Date().addingTimeInterval(600),
-            refreshExpiresAt: Date().addingTimeInterval(3600),
-            account: RelayAccount(email: email, displayName: nil),
-            device: RelayDevice(id: "device", name: "Phone", deviceType: "ios"),
-            session: RelaySessionInfo(id: "session")
+            expiresAt: Date().addingTimeInterval(3_600),
+            refreshExpiresAt: Date().addingTimeInterval(86_400),
+            account: RelayAccount(email: "sync@example.com", displayName: "Sync"),
+            device: RelayDevice(id: "device-1", name: "Test Device", deviceType: "ios"),
+            session: RelaySessionInfo(id: "session-1")
         )
     }
 
-    private func waitFor(
-        timeout: TimeInterval = 1.5,
-        pollIntervalNanoseconds: UInt64 = 20_000_000,
-        condition: @escaping () -> Bool
-    ) async throws {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            if condition() {
-                return
-            }
-            try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
-        }
-        XCTFail("Condition was not met before timeout")
+    private func envelope(id: String, payload: String = "AA==", seq: Int? = nil) -> SyncEnvelopeV2 {
+        SyncEnvelopeV2(
+            protocolVersion: 2,
+            deliveryId: id,
+            payload: payload,
+            relaySeq: seq
+        )
     }
 }

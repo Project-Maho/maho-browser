@@ -4,7 +4,7 @@ package dev.maho.browser.ui.settings
 
 import android.content.ComponentName
 import android.content.pm.PackageManager
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
@@ -104,10 +106,20 @@ fun AppIconPickerScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             items(options) { option ->
+                val isSelected = selected == option
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { selectIcon(option) },
+                        .selectable(
+                            selected = isSelected,
+                            role = Role.RadioButton,
+                            onClick = { selectIcon(option) },
+                        ),
+                    border = if (isSelected) {
+                        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        null
+                    },
                 ) {
                     Column(
                         modifier = Modifier
@@ -123,7 +135,7 @@ fun AppIconPickerScreen(
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(text = option.name, style = MaterialTheme.typography.labelLarge)
-                        if (selected == option) {
+                        if (isSelected) {
                             Spacer(modifier = Modifier.height(4.dp))
                             Icon(
                                 painter = painterResource(id = MahoIcon.Check.drawableRes),

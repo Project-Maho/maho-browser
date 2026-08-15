@@ -25,7 +25,11 @@ inline constexpr char kSessionPersistenceEnabled[] =
 inline constexpr char kSessionEventLogs[] =
     "maho.ai.session_event_logs";
 inline constexpr char kAiViewMode[] = "maho.ai.view_mode";
+inline constexpr char kPendingSurface[] = "maho.ai.pending_surface";
+inline constexpr char kPendingSurfaceGeneration[] =
+    "maho.ai.pending_surface_generation";
 inline constexpr char kAttachBrowserContext[] = "maho.ai.attach_browser_context";
+inline constexpr char kMailReadAllowed[] = "maho.ai.mail_read_allowed";
 
 // Translation onboarding choice. Cloud-backed (BYOK) — NO local model.
 // Values: "byok" | "skip". Empty = not chosen yet.

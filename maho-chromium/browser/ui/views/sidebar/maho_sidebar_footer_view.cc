@@ -933,9 +933,20 @@ void MahoSidebarFooterView::PerformReorder(int from_index, int to_index) {
   if (dot->space_id().empty()) {
     return;
   }
-  maho_core_reorder_space(core, dot->space_id().c_str(),
+  ReorderSpaceForTesting(core, dot->space_id(), from_index, to_index);
+}
+
+void MahoSidebarFooterView::ReorderSpaceForTesting(
+    ::MahoCore* core,
+    const std::string& space_id,
+    int from_index,
+    int to_index) {
+  maho_core_reorder_space(core, space_id.c_str(),
                           static_cast<uintptr_t>(from_index),
                           static_cast<uintptr_t>(to_index));
+  SidebarCacheInvalidation invalidation;
+  invalidation.fragments = SidebarCoreFragment::kFooter;
+  InvalidateSidebarCoreCache(invalidation);
 }
 
 views::View* MahoSidebarFooterView::GetSpaceDotForTesting(int index) {

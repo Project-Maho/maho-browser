@@ -181,6 +181,7 @@ struct AISettings {
   string model;
   string approval_policy;
   bool session_persistence_enabled;
+  bool mail_read_allowed;
   bool has_byok_openai;
   bool has_byok_anthropic;
 
@@ -237,6 +238,7 @@ enum PasswordProviderKind {
   kMahoNative,
   kBitwarden,
   kOnePassword,
+  kDisabled,
 };
 
 enum VaultLockState {
@@ -244,6 +246,19 @@ enum VaultLockState {
   kLocked,
   kUnlocked,
   kAutoLocked,
+};
+
+// Browser-startup classification of the persisted Vault database/key pair.
+// Fatal states disable Maho Native password operations until the underlying
+// storage issue is resolved. This carries diagnosis only; no key material or
+// credential data crosses Mojo.
+enum VaultPreflightState {
+  kUnavailable,
+  kHealthy,
+  kLocked,
+  kUnrecoverableKey,
+  kStructuralCorruption,
+  kPlaintextResidue,
 };
 
 enum VaultAgentPolicy {
@@ -294,7 +309,6 @@ struct VaultItem {
 
 enum SecretAction {
   kCopy = 0,
-  kFill = 1,
 };
 
 struct VaultOperationResult {
@@ -563,6 +577,33 @@ struct BrowserVersionInfo {
   bool update_supported;
 };
 
+enum MailNotificationPermission {
+  kNotDetermined,
+  kPromptPending,
+  kDenied,
+  kGranted,
+  kUnsupported,
+};
+
+enum MailBehaviorUpdateStatus {
+  kApplied,
+  kConflict,
+  kRejected,
+  kInvalid,
+};
+
+struct MailBehaviorSnapshot {
+  uint32 version;
+  uint64 revision;
+  string value_json;
+  MailNotificationPermission notification_permission;
+};
+
+struct MailBehaviorUpdateResult {
+  MailBehaviorUpdateStatus status;
+  MailBehaviorSnapshot snapshot;
+};
+
 interface PageHandlerFactory {
   CreatePageHandler(pending_remote<Page> page,
                     pending_receiver<PageHandler> handler);
@@ -645,6 +686,7 @@ interface PageHandler {
   SetAIModel(string model);
   SetAIApprovalPolicy(string policy);
   SetAISessionPersistence(bool enabled);
+  SetAIMailReadAllowed(bool allowed) => (bool success);
   FetchProviderModels(string provider_id) => (array<string> model_ids, bool from_cache);
   RefreshProviderModels(string provider_id) => (array<string> model_ids);
   TestManagedConnection() => (bool success, string message);
@@ -684,6 +726,7 @@ interface PageHandler {
   // Inbound passphrases/passwords and consumed secrets are never included in
   // any response DTO; row actions observe only VaultOperationResult status.
   GetVaultStatus() => (VaultOperationResult result);
+  GetVaultPreflightState() => (VaultPreflightState state);
   GetVaultProviderStatus() => (VaultProviderStatus status);
   InitializeVault(string master_passphrase, string recovery_secret)
       => (VaultOperationResult result);
@@ -867,8 +910,11 @@ interface PageHandler {
   MailSetCalendarVisibility(string calendar_row_id, bool visible) => (bool ok);
 
   // Behavior
-  MailGetBehaviorPrefs() => (bool ok, string result_json);
-  MailSetBehaviorPref(string key, string value) => (bool ok);
+  MailGetBehaviorPrefs() => (bool ok, MailBehaviorSnapshot snapshot);
+  MailSetBehaviorPref(uint64 expected_revision, string key, string value)
+      => (MailBehaviorUpdateResult result);
+  MailRequestNotificationPermission()
+      => (MailNotificationPermission permission);
 
   // Security (PGP/S-MIME)
   // PGP/S-MIME material is account-scoped: account_id selects which connected
@@ -903,6 +949,13 @@ interface Page {
 
   // Pushed when background model-list refresh completes.
   ProviderModelsRefreshed(string provider_id, array<string> model_ids);
+
+  // Pushed when the browser process observes the Vault lock state change,
+  // including the inactivity auto-lock evaluated by the periodic core tick,
+  // which no page action can otherwise observe. `locked` is false only for a
+  // fully unlocked Vault, so the page can drop transient secret UI and re-gate
+  // behind the unlock form on every other state.
+  OnVaultLockStateChanged(bool locked);
 
   OnMailAccountsChanged();
 

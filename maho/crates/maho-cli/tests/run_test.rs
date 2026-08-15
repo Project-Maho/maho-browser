@@ -87,6 +87,10 @@ mod agent_loop {
         SwiftideBackend, ZeroizedString,
     };
     use maho_types::chat::ChatMessage;
+    use maho_types::tool::{
+        BrowserToolBridgeError, BrowserToolDescriptor, BrowserToolExecution,
+        BrowserToolExecutionReceipt, BrowserToolPolicy, ToolPermission,
+    };
     use swiftide_core::chat_completion::{
         errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
         ToolCall,
@@ -122,10 +126,51 @@ mod agent_loop {
         calls: Arc<Mutex<Vec<String>>>,
     }
 
+    #[async_trait]
     impl BrowserToolBridge for RecordingBridge {
-        fn invoke(&self, tool_name: &str, _args: &str) -> Result<String, String> {
-            self.calls.lock().unwrap().push(tool_name.to_string());
-            Ok("{\"ok\":true}".to_string())
+        async fn list_tool_descriptors(
+            &self,
+        ) -> Result<Vec<BrowserToolDescriptor>, BrowserToolBridgeError> {
+            Ok(["read_current_page", "browser_navigate"]
+                .into_iter()
+                .map(|name| BrowserToolDescriptor {
+                    capability_id: name.to_string(),
+                    name: name.to_string(),
+                    description: name.to_string(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "additionalProperties": true
+                    }),
+                    schema_version: 1,
+                    policy: BrowserToolPolicy {
+                        sensitive: name == "browser_navigate",
+                        permission: if name == "browser_navigate" {
+                            ToolPermission::AlwaysAsk
+                        } else {
+                            ToolPermission::AutoApprove
+                        },
+                    },
+                })
+                .collect())
+        }
+
+        async fn execute_tool(
+            &self,
+            capability_id: &str,
+            _args_json: &str,
+        ) -> Result<BrowserToolExecution, BrowserToolBridgeError> {
+            self.calls.lock().unwrap().push(capability_id.to_string());
+            Ok(BrowserToolExecution {
+                output_json: "{\"ok\":true}".to_string(),
+                receipt: BrowserToolExecutionReceipt {
+                    capability_id: capability_id.to_string(),
+                    execution_id: "test-execution".to_string(),
+                    metadata: serde_json::json!({
+                        "state": "completed",
+                        "approval": "approved"
+                    }),
+                },
+            })
         }
     }
 
@@ -230,7 +275,7 @@ mod agent_loop {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn run_browser_exploration_auto_approved_without_yolo() {
+    async fn run_new_origin_navigation_requires_approval_without_yolo() {
         let log = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
         let bridge = RecordingBridge::default();
         let calls = Arc::clone(&bridge.calls);
@@ -256,14 +301,10 @@ mod agent_loop {
             .expect("run_prompt must terminate without deadlock");
         result.expect("run_prompt should return normally");
 
-        // Aside parity: browser exploration is auto-approved at the agent layer,
-        // so it reaches the browser bridge even under the strict default policy
-        // and with no --yolo. Enforcement (origin grant + lease) still happens
-        // in the browser capability layer via the shim.
         let dispatched = calls.lock().unwrap().clone();
         assert!(
-            dispatched.iter().any(|name| name == "browser_navigate"),
-            "browser exploration must be auto-approved without --yolo; dispatched={dispatched:?}"
+            !dispatched.iter().any(|name| name == "browser_navigate"),
+            "new-origin navigation must require approval without --yolo; dispatched={dispatched:?}"
         );
     }
 

@@ -8,10 +8,27 @@ import UIKit
 struct TabCardView: View {
     let tab: TabViewModel
     let isActive: Bool
+    let isIncognito: Bool
     let previewImage: Data?
     let deckIndex: Int
     let onTap: () -> Void
     let onClose: () -> Void
+
+    private var cardTitleColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoForeground : .primary
+    }
+
+    private var cardHostColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoMutedForeground : .secondary
+    }
+
+    private var cardSurfaceColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoSurfaceStrong : ShellTheme.Palette.tabCardSurface.opacity(isActive ? 0.96 : 0.88)
+    }
+
+    private var cardBorderColor: Color {
+        isIncognito ? ShellTheme.Palette.incognitoBorder : ShellTheme.Palette.overlayBorder
+    }
 
     private var host: String {
         URLComponents(string: tab.url)?.host?.replacingOccurrences(of: "www.", with: "") ?? "New tab"
@@ -196,12 +213,12 @@ struct TabCardView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(cardTitleColor)
                         .lineLimit(2)
 
                     Text(host)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(cardHostColor)
                         .lineLimit(1)
                 }
 
@@ -301,11 +318,11 @@ struct TabCardView: View {
             .fill(ShellTheme.Materials.tabGridCard)
             .background(
                 RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
-                    .fill(ShellTheme.Palette.tabCardSurface.opacity(isActive ? 0.96 : 0.88))
+                    .fill(cardSurfaceColor)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: ShellTheme.Radius.card, style: .continuous)
-                    .strokeBorder(ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline)
+                    .strokeBorder(cardBorderColor, lineWidth: ShellTheme.Stroke.hairline)
             }
     }
 
@@ -321,7 +338,7 @@ struct TabCardView: View {
     }
 
     private var panelBackground: some View {
-        (isActive ? ShellTheme.Palette.tabGridActiveFill : ShellTheme.Palette.tabCardSurface)
+        (isActive ? ShellTheme.Palette.tabGridActiveFill : (isIncognito ? ShellTheme.Palette.incognitoSurface : ShellTheme.Palette.tabCardSurface))
             .overlay(
                 LinearGradient(
                     colors: [

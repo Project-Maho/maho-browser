@@ -2,9 +2,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use maho_agent::{
-    AgentError, AgentRuntime, AgentStorage, BrowserToolBridge, SwiftideBackend, ZeroizedString,
+    AgentError, AgentRuntime, AgentStorage, BrowserToolBridge, BrowserToolBridgeError,
+    BrowserToolDescriptor, BrowserToolExecution, BrowserToolExecutionReceipt, BrowserToolPolicy,
+    SwiftideBackend, ZeroizedString,
 };
 use maho_types::chat::ChatMessage;
+use maho_types::tool::ToolPermission;
 use swiftide_core::chat_completion::{
     errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
     ToolCall,
@@ -81,10 +84,62 @@ impl RecordingBrowserBridge {
     }
 }
 
+#[async_trait]
 impl BrowserToolBridge for RecordingBrowserBridge {
-    fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        push_locked(&self.calls, (tool_name.to_string(), args_json.to_string()));
-        Ok(r#"{"ok":true,"scrolled":true}"#.to_string())
+    async fn list_tool_descriptors(
+        &self,
+    ) -> Result<Vec<BrowserToolDescriptor>, BrowserToolBridgeError> {
+        let names = [
+            "list_browser_tabs",
+            "read_current_page",
+            "browser_accessibility_snapshot",
+            "browser_navigate",
+            "browser_click",
+            "browser_type",
+            "browser_select",
+            "browser_scroll",
+            "browser_hover",
+            "browser_key_press",
+        ];
+        Ok(names
+            .into_iter()
+            .map(|name| BrowserToolDescriptor {
+                capability_id: name.to_string(),
+                name: name.to_string(),
+                description: format!("Test browser tool {name}"),
+                input_schema: serde_json::json!({"type":"object","properties":{}}),
+                schema_version: 1,
+                policy: BrowserToolPolicy {
+                    sensitive: name.starts_with("browser_")
+                        && name != "browser_accessibility_snapshot",
+                    permission: ToolPermission::AutoApprove,
+                },
+            })
+            .collect())
+    }
+
+    async fn execute_tool(
+        &self,
+        capability_id: &str,
+        args_json: &str,
+    ) -> Result<BrowserToolExecution, BrowserToolBridgeError> {
+        push_locked(
+            &self.calls,
+            (capability_id.to_string(), args_json.to_string()),
+        );
+        let output_json = if capability_id == "browser_tab_list" {
+            r#"{"tabs":[{"id":1,"is_active":true,"targetable":true}]}"#.to_string()
+        } else {
+            r#"{"ok":true,"scrolled":true}"#.to_string()
+        };
+        Ok(BrowserToolExecution {
+            output_json,
+            receipt: BrowserToolExecutionReceipt {
+                capability_id: capability_id.to_string(),
+                execution_id: "test-execution".to_string(),
+                metadata: serde_json::json!({}),
+            },
+        })
     }
 }
 

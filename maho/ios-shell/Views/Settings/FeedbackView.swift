@@ -15,7 +15,7 @@ struct FeedbackView: View {
                 TextField("Email (optional)", text: $email)
                     .keyboardType(.emailAddress)
                     .textContentType(.emailAddress)
-                    .autocapitalization(.none)
+                    .textInputAutocapitalization(.never)
             } header: {
                 Text("Contact Info")
             }

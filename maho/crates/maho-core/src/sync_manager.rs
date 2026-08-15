@@ -10,6 +10,12 @@ use crate::sync_models::{
 };
 use std::collections::HashMap;
 
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedSyncMessage {
+    pub message: SyncMessage,
+    pub queue_row_id: Option<i64>,
+}
+
 /// Outbound sync operation whose keyless (no E2EE key) transport was denied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncTransportOp {
@@ -110,11 +116,12 @@ impl SyncTransportError {
 pub struct SyncManager {
     config: SyncConfig,
     status: SyncStatus,
+    last_success_at: Option<i64>,
     last_error: Option<String>,
     last_transport_error: Option<SyncTransportError>,
     devices: HashMap<DeviceId, DeviceInfo>,
     received_tabs: Vec<ReceivedTab>,
-    outgoing_messages: Vec<SyncMessage>,
+    outgoing_messages: Vec<QueuedSyncMessage>,
     pub(crate) encryption_key: Option<crate::sync_crypto::EncryptionKey>,
     pending_pushes: Vec<SyncEntity>,
     // Audit finding H12: bounded LRU cap prevents unbounded growth over
@@ -131,6 +138,7 @@ impl SyncManager {
         Self {
             config,
             status: SyncStatus::Idle,
+            last_success_at: None,
             last_error: None,
             last_transport_error: None,
             devices: HashMap::new(),
@@ -147,6 +155,14 @@ impl SyncManager {
     /// Get current sync status
     pub fn status(&self) -> &SyncStatus {
         &self.status
+    }
+
+    pub fn last_success_at(&self) -> Option<i64> {
+        self.last_success_at
+    }
+
+    pub fn pending_outbox_count(&self) -> usize {
+        self.outgoing_messages.len() + self.pending_pushes.len()
     }
 
     pub fn last_error(&self) -> Option<&str> {
@@ -184,7 +200,19 @@ impl SyncManager {
 
     /// Set sync status (called by shell when connection state changes)
     pub fn set_status(&mut self, status: SyncStatus) {
+        if status == SyncStatus::Synced {
+            self.last_success_at = Some(chrono::Utc::now().timestamp());
+        }
         self.status = status;
+    }
+
+    pub fn report_transport_state(&mut self, status: SyncStatus, last_error: Option<String>) {
+        let becoming_active = matches!(status, SyncStatus::Synced | SyncStatus::Syncing);
+        self.set_status(status);
+        self.last_error = last_error;
+        if becoming_active {
+            self.flush_offline_queue();
+        }
     }
 
     /// Get current config
@@ -215,6 +243,10 @@ impl SyncManager {
         );
     }
 
+    pub fn remove_entity_version_from_cache(&mut self, key: &str) {
+        self.entity_versions.pop(key);
+    }
+
     // === LWW Entity Sync ===
 
     /// Queue an outgoing entity push. If syncing/synced, add EntityPush to
@@ -240,10 +272,10 @@ impl SyncManager {
 
             match outcome {
                 Ok(data) => {
-                    self.outgoing_messages.push(SyncMessage::Encrypted { data });
-                    if let Some(row_id) = row_id_opt {
-                        self.sent_entities.push(row_id);
-                    }
+                    self.outgoing_messages.push(QueuedSyncMessage {
+                        message: SyncMessage::Encrypted { data },
+                        queue_row_id: row_id_opt,
+                    });
                 }
                 Err(err) => self.record_transport_error(err),
             }
@@ -278,7 +310,10 @@ impl SyncManager {
         };
 
         match outcome {
-            Ok(data) => self.outgoing_messages.push(SyncMessage::Encrypted { data }),
+            Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::Encrypted { data },
+                queue_row_id: None,
+            }),
             Err(err) => self.record_transport_error(err),
         }
     }
@@ -299,6 +334,23 @@ impl SyncManager {
         }
         let entity_type_str = entity.entity_type.as_str();
         let cache_key = format!("{}:{}", entity_type_str, entity.entity_id);
+
+        if let Some(storage) = storage {
+            match storage.get_sync_tombstone(entity_type_str, &entity.entity_id) {
+                Ok(Some(tombstone))
+                    if !entity.deleted && tombstone >= (entity.version, entity.device_id) =>
+                {
+                    return false;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.record_transport_error(SyncTransportError::DatabaseRead {
+                        detail: error.to_string(),
+                    });
+                    return false;
+                }
+            }
+        }
 
         let local_version = if let Some(version_pair) = self.entity_versions.get(&cache_key) {
             Some(version_pair.clone())
@@ -327,6 +379,49 @@ impl SyncManager {
         } else {
             None
         };
+
+        if entity.deleted {
+            let should_apply = local_version
+                .as_ref()
+                .is_none_or(|(hlc_ts, device_id, _, _)| {
+                    (entity.version, entity.device_id) > (*hlc_ts, *device_id)
+                });
+            if !should_apply {
+                return false;
+            }
+
+            self.entity_versions
+                .put(cache_key, (entity.version, entity.device_id, None, None));
+            if let Some(storage) = storage {
+                if let Err(error) = storage.save_entity_version(
+                    entity_type_str,
+                    &entity.entity_id,
+                    entity.version,
+                    entity.device_id,
+                    None,
+                    None,
+                ) {
+                    eprintln!(
+                        "[sync] Failed to persist deleted entity_version for {}:{}: {}",
+                        entity_type_str, entity.entity_id, error
+                    );
+                    return false;
+                }
+                if let Err(error) = storage.save_sync_tombstone(
+                    entity_type_str,
+                    &entity.entity_id,
+                    entity.version,
+                    entity.device_id,
+                ) {
+                    eprintln!(
+                        "[sync] Failed to persist sync tombstone for {}:{}: {}",
+                        entity_type_str, entity.entity_id, error
+                    );
+                    return false;
+                }
+            }
+            return true;
+        }
 
         let mut should_apply = false;
         let mut final_payload = entity.payload_json.clone();
@@ -474,6 +569,18 @@ impl SyncManager {
                         "[sync] Failed to persist entity_version for {}:{}: {}",
                         entity_type_str, entity.entity_id, e
                     );
+                }
+                if let Err(e) = s.remove_sync_tombstone(
+                    entity_type_str,
+                    &entity.entity_id,
+                    entity.version,
+                    entity.device_id,
+                ) {
+                    eprintln!(
+                        "[sync] Failed to clear sync tombstone for {}:{}: {}",
+                        entity_type_str, entity.entity_id, e
+                    );
+                    return false;
                 }
             }
 
@@ -650,7 +757,10 @@ impl SyncManager {
                 self.devices.remove(&device_id);
             }
             SyncMessage::Ping => {
-                self.outgoing_messages.push(SyncMessage::Pong);
+                self.outgoing_messages.push(QueuedSyncMessage {
+                    message: SyncMessage::Pong,
+                    queue_row_id: None,
+                });
             }
             SyncMessage::Pong => {}
         }
@@ -682,13 +792,23 @@ impl SyncManager {
         };
 
         match outcome {
-            Ok(data) => self.outgoing_messages.push(SyncMessage::Encrypted { data }),
+            Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::Encrypted { data },
+                queue_row_id: None,
+            }),
             Err(err) => self.record_transport_error(err),
         }
     }
 
     /// Get and drain outgoing messages (shell sends these via WebSocket)
     pub fn drain_outgoing_messages(&mut self) -> Vec<SyncMessage> {
+        self.drain_outgoing_messages_with_queue_rows()
+            .into_iter()
+            .map(|queued| queued.message)
+            .collect()
+    }
+
+    pub(crate) fn drain_outgoing_messages_with_queue_rows(&mut self) -> Vec<QueuedSyncMessage> {
         std::mem::take(&mut self.outgoing_messages)
     }
 
@@ -712,8 +832,11 @@ impl SyncManager {
     /// Remove a device from the sync group
     pub fn remove_device(&mut self, device_id: &str) {
         self.devices.remove(device_id);
-        self.outgoing_messages.push(SyncMessage::DeviceLeft {
-            device_id: device_id.to_string(),
+        self.outgoing_messages.push(QueuedSyncMessage {
+            message: SyncMessage::DeviceLeft {
+                device_id: device_id.to_string(),
+            },
+            queue_row_id: None,
         });
     }
 
@@ -723,8 +846,11 @@ impl SyncManager {
             return false;
         }
         if self.devices.remove(device_id).is_some() {
-            self.outgoing_messages.push(SyncMessage::DeviceLeft {
-                device_id: device_id.to_string(),
+            self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::DeviceLeft {
+                    device_id: device_id.to_string(),
+                },
+                queue_row_id: None,
             });
             true
         } else {
@@ -740,8 +866,11 @@ impl SyncManager {
         if let Some(device) = self.devices.get_mut(device_id) {
             device.name = new_name;
             let updated_device = device.clone();
-            self.outgoing_messages.push(SyncMessage::DeviceJoined {
-                device: updated_device,
+            self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::DeviceJoined {
+                    device: updated_device,
+                },
+                queue_row_id: None,
             });
             true
         } else {

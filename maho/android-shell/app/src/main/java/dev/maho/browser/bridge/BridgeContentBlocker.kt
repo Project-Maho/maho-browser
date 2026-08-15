@@ -20,7 +20,7 @@ object BridgeContentBlocker {
             MahoJson.instance.decodeFromString<dev.maho.browser.models.Settings>(it)
         }
         return ContentBlockerState(
-            enabled = settings?.privacy?.contentBlockerEnabled ?: false,
+            enabled = settings?.privacy?.isNativeBlockingEnabled ?: false,
             popupBlocking = settings?.privacy?.popupBlockerEnabled ?: false,
             ruleCount = ruleCount,
         )

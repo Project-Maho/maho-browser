@@ -4,13 +4,6 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 
 use base64::Engine as _;
-use openssl::pkcs12::Pkcs12;
-use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
-use openssl::pkey::PKey;
-use openssl::stack::Stack;
-use openssl::symm::Cipher;
-use openssl::x509::store::X509StoreBuilder;
-use openssl::x509::{X509NameRef, X509Ref, X509};
 use pgp::composed::{
     Any, Deserializable, KeyType, Message, SecretKeyParamsBuilder, SignedPublicKey,
     SignedSecretKey, StandaloneSignature, SubkeyParamsBuilder,
@@ -27,6 +20,8 @@ use crate::credentials::{get_encrypted_credential, store_encrypted_credential};
 use crate::error::MailFfiError;
 use crate::ffi::read_api::{accept_read, accept_read_call, blocking_json, MahoMailReadCallback};
 use maho_core::error::AppError;
+
+mod smime;
 
 // Local C-string helper implementations to avoid dependency on private ffi.rs helpers
 fn c_string(ptr: *const c_char, name: &'static str) -> Result<String, MailFfiError> {
@@ -97,7 +92,7 @@ pub struct SmimeIdentity {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SmimeVerifyResult {
+pub(crate) struct SmimeVerifyResult {
     pub valid: bool,
     pub trusted: bool,
     pub signer_email: Option<String>,
@@ -149,6 +144,62 @@ fn delete_private_key(
         rusqlite::params![key_id, credential_type],
     )?;
     Ok(())
+}
+
+fn smime_profile_path(db_path: &std::path::Path) -> Result<&std::path::Path, MailFfiError> {
+    if db_path.file_name() != Some(std::ffi::OsStr::new("maho_mail.db"))
+        || db_path.parent().and_then(std::path::Path::file_name)
+            != Some(std::ffi::OsStr::new("MahoMail"))
+    {
+        return Err(MailFfiError::InvalidRequest(
+            "Mail database path does not match the profile layout".into(),
+        ));
+    }
+    db_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or_else(|| {
+            MailFfiError::InvalidRequest(
+                "Mail database path does not identify a profile root".into(),
+            )
+        })
+}
+
+fn smime_key_scope<'a>(
+    ctx: &'a crate::state::AppCtx,
+    account_id: &'a str,
+) -> Result<smime::SmimeKeyScope<'a>, MailFfiError> {
+    let profile_path = smime_profile_path(&ctx.db_path)?;
+    Ok(smime::SmimeKeyScope {
+        profile_path,
+        account_id,
+    })
+}
+
+pub(crate) fn cleanup_smime_keys_for_account(
+    ctx: &crate::state::AppCtx,
+    conn: &rusqlite::Connection,
+    account_id: &str,
+) -> Result<Vec<String>, MailFfiError> {
+    let mut stmt =
+        conn.prepare("SELECT id, cert_pem FROM smime_identities WHERE account_id = ?1")?;
+    let identities = stmt
+        .query_map([account_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if identities.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scope = smime_key_scope(ctx, account_id)?;
+
+    for (identity_id, cert_pem) in &identities {
+        if let Some(key_pem) = get_private_key(conn, &ctx.credential_key, identity_id, false)? {
+            smime::backend().delete_private_key(cert_pem, &key_pem, scope)?;
+        }
+    }
+
+    Ok(identities.into_iter().map(|(id, _)| id).collect())
 }
 
 fn format_fingerprint(fp: &[u8]) -> String {
@@ -1092,64 +1143,6 @@ fn map_smime_identity(row: &rusqlite::Row) -> rusqlite::Result<SmimeIdentity> {
     })
 }
 
-fn x509_name_to_string(name: &X509NameRef) -> String {
-    name.entries()
-        .map(|e| {
-            let key = e.object().nid().short_name().unwrap_or("??");
-            let val = e
-                .data()
-                .as_utf8()
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            format!("{}={}", key, val)
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn extract_email_from_cert(cert: &X509Ref) -> String {
-    if let Some(sans) = cert.subject_alt_names() {
-        for san in sans {
-            if let Some(email) = san.email() {
-                return email.to_string();
-            }
-        }
-    }
-    if let Some(entries) = cert
-        .subject_name()
-        .entries_by_nid(openssl::nid::Nid::PKCS9_EMAILADDRESS)
-        .next()
-    {
-        if let Ok(val) = entries.data().as_utf8() {
-            return val.to_string();
-        }
-    }
-    if let Some(entries) = cert
-        .subject_name()
-        .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-        .next()
-    {
-        if let Ok(val) = entries.data().as_utf8() {
-            let cn = val.to_string();
-            if cn.contains('@') {
-                return cn;
-            }
-        }
-    }
-    String::new()
-}
-
-fn fingerprint_hex(cert: &X509) -> Result<String, MailFfiError> {
-    let digest = cert
-        .digest(openssl::hash::MessageDigest::sha256())
-        .map_err(|e| internal_err(format!("Failed to compute certificate fingerprint: {}", e)))?;
-    Ok(digest
-        .iter()
-        .map(|b| format!("{:02X}", b))
-        .collect::<Vec<_>>()
-        .join(":"))
-}
-
 fn get_default_smime_identity(
     conn: &rusqlite::Connection,
     account_id: &str,
@@ -1204,46 +1197,11 @@ pub extern "C" fn MahoMailImportSmimeIdentity(
                         validation_err(format!("Failed to decode base64 p12_data: {}", e))
                     })?;
 
-                let pkcs12 = Pkcs12::from_der(&p12_bytes)
-                    .map_err(|e| validation_err(format!("Failed to parse P12/PFX file: {}", e)))?;
-
-                let parsed = pkcs12
-                    .parse2(&req.password)
-                    .map_err(|e| validation_err(format!("Failed to decrypt P12/PFX: {}", e)))?;
-
-                let cert = parsed
-                    .cert
-                    .ok_or_else(|| validation_err("P12/PFX file does not contain a certificate"))?;
-
-                let pkey = parsed
-                    .pkey
-                    .ok_or_else(|| validation_err("P12/PFX file does not contain a private key"))?;
-
-                let cert_pem_bytes = cert.to_pem().map_err(|e| {
-                    internal_err(format!("Failed to encode certificate PEM: {}", e))
-                })?;
-                let cert_pem = String::from_utf8(cert_pem_bytes).map_err(|e| {
-                    internal_err(format!("Certificate PEM is not valid UTF-8: {}", e))
-                })?;
-
-                let key_pem_bytes = pkey.private_key_to_pem_pkcs8().map_err(|e| {
-                    internal_err(format!("Failed to encode private key PEM: {}", e))
-                })?;
-                let key_pem = String::from_utf8(key_pem_bytes).map_err(|e| {
-                    internal_err(format!("Private key PEM is not valid UTF-8: {}", e))
-                })?;
-
-                let email = extract_email_from_cert(&cert);
-                let subject = x509_name_to_string(cert.subject_name());
-                let issuer = x509_name_to_string(cert.issuer_name());
-                let serial = cert
-                    .serial_number()
-                    .to_bn()
-                    .map(|bn| bn.to_hex_str().map(|s| s.to_string()).unwrap_or_default())
-                    .unwrap_or_default();
-                let fingerprint = fingerprint_hex(&cert)?;
-                let not_before = cert.not_before().to_string();
-                let not_after = cert.not_after().to_string();
+                let imported = smime::backend().import_pkcs12(
+                    &p12_bytes,
+                    &req.password,
+                    smime_key_scope(&ctx, &req.account_id)?,
+                )?;
 
                 let id = Uuid::new_v4().to_string();
 
@@ -1252,13 +1210,36 @@ pub extern "C" fn MahoMailImportSmimeIdentity(
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
-                store_private_key(&conn, &ctx.credential_key, &id, &key_pem, false)?;
-
-                conn.execute(
-                    "INSERT INTO smime_identities (id, account_id, email, subject, issuer, serial_number, fingerprint, not_before, not_after, cert_pem, is_default)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)",
-                    params![id, req.account_id, email, subject, issuer, serial, fingerprint, not_before, not_after, cert_pem],
-                )?;
+                let persistence_result = (|| -> Result<(), MailFfiError> {
+                    let transaction = conn.unchecked_transaction()?;
+                    store_private_key(
+                        &transaction,
+                        &ctx.credential_key,
+                        &id,
+                        &imported.key_pem,
+                        false,
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO smime_identities (id, account_id, email, subject, issuer, serial_number, fingerprint, not_before, not_after, cert_pem, is_default)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0)",
+                        params![id, req.account_id, imported.email, imported.subject, imported.issuer, imported.serial_number, imported.fingerprint, imported.not_before, imported.not_after, imported.cert_pem],
+                    )?;
+                    transaction.commit()?;
+                    Ok(())
+                })();
+                if let Err(error) = persistence_result {
+                    let cleanup = smime::backend().delete_private_key(
+                        &imported.cert_pem,
+                        &imported.key_pem,
+                        smime_key_scope(&ctx, &req.account_id)?,
+                    );
+                    return match cleanup {
+                        Ok(()) => Err(error.into()),
+                        Err(cleanup_error) => Err(internal_err(format!(
+                            "{error}; CNG key cleanup also failed: {cleanup_error}",
+                        ))),
+                    };
+                }
 
                 let identity = conn.query_row(
                     "SELECT id, account_id, email, subject, issuer, serial_number, fingerprint, not_before, not_after, is_default, created_at
@@ -1318,7 +1299,19 @@ pub extern "C" fn MahoMailDeleteSmimeIdentity(
                     .pool
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let _ = delete_private_key(&conn, &id, false);
+                let (cert_pem, account_id) = conn.query_row(
+                    "SELECT cert_pem, account_id FROM smime_identities WHERE id = ?1",
+                    params![id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )?;
+                if let Some(key_pem) = get_private_key(&conn, &ctx.credential_key, &id, false)? {
+                    smime::backend().delete_private_key(
+                        &cert_pem,
+                        &key_pem,
+                        smime_key_scope(&ctx, &account_id)?,
+                    )?;
+                }
+                delete_private_key(&conn, &id, false)?;
                 conn.execute("DELETE FROM smime_identities WHERE id = ?1", params![id])?;
                 Ok("{}".to_string())
             })
@@ -1432,26 +1425,12 @@ pub extern "C" fn MahoMailSignEmailSmime(
                         not_found_err("S/MIME private key not found in credential store")
                     })?;
 
-                let cert = X509::from_pem(cert_pem.as_bytes())
-                    .map_err(|e| internal_err(format!("Failed to parse certificate: {}", e)))?;
-
-                let pkey = PKey::private_key_from_pem(key_pem.as_bytes())
-                    .map_err(|e| internal_err(format!("Failed to parse private key: {}", e)))?;
-
-                let certs = Stack::new()
-                    .map_err(|e| internal_err(format!("Failed to create cert stack: {}", e)))?;
-
-                let flags = Pkcs7Flags::DETACHED | Pkcs7Flags::STREAM;
-                let pkcs7 = Pkcs7::sign(&cert, &pkey, &certs, req.body.as_bytes(), flags)
-                    .map_err(|e| internal_err(format!("S/MIME signing failed: {}", e)))?;
-
-                let smime_bytes = pkcs7.to_smime(req.body.as_bytes(), flags).map_err(|e| {
-                    internal_err(format!("Failed to encode S/MIME signed message: {}", e))
-                })?;
-
-                let smime = String::from_utf8(smime_bytes).map_err(|e| {
-                    internal_err(format!("S/MIME output is not valid UTF-8: {}", e))
-                })?;
+                let smime = smime::backend().sign(
+                    &cert_pem,
+                    &key_pem,
+                    &req.body,
+                    smime_key_scope(&ctx, &req.account_id)?,
+                )?;
 
                 Ok(SignEmailSmimeResponse { smime })
             })
@@ -1493,60 +1472,11 @@ pub extern "C" fn MahoMailEncryptEmailSmime(
                 let sender_cert_pem = get_default_smime_identity(&conn, &req.account_id)
                     .ok()
                     .map(|(_, pem, _)| pem);
-
-                let mut certs = Stack::new()
-                    .map_err(|e| internal_err(format!("Failed to create cert stack: {}", e)))?;
-
-                for pem_str in &req.recipient_certs_pem {
-                    let cert = X509::from_pem(pem_str.as_bytes()).map_err(|e| {
-                        internal_err(format!("Failed to parse recipient certificate: {}", e))
-                    })?;
-                    certs
-                        .push(cert)
-                        .map_err(|e| internal_err(format!("Failed to add cert to stack: {}", e)))?;
-                }
-
-                if let Some(ref sender_pem) = sender_cert_pem {
-                    if let Ok(sender_cert) = X509::from_pem(sender_pem.as_bytes()) {
-                        let sender_fp = sender_cert
-                            .digest(openssl::hash::MessageDigest::sha256())
-                            .ok()
-                            .map(|d| {
-                                d.iter()
-                                    .map(|b| format!("{:02X}", b))
-                                    .collect::<Vec<_>>()
-                                    .join(":")
-                            });
-                        let already_included = req.recipient_certs_pem.iter().any(|pem| {
-                            X509::from_pem(pem.as_bytes()).ok().and_then(|c| {
-                                c.digest(openssl::hash::MessageDigest::sha256())
-                                    .ok()
-                                    .map(|d| {
-                                        d.iter()
-                                            .map(|b| format!("{:02X}", b))
-                                            .collect::<Vec<_>>()
-                                            .join(":")
-                                    })
-                            }) == sender_fp
-                        });
-                        if !already_included {
-                            let _ = certs.push(sender_cert);
-                        }
-                    }
-                }
-
-                let cipher = Cipher::aes_256_cbc();
-                let flags = Pkcs7Flags::STREAM;
-                let pkcs7 = Pkcs7::encrypt(&certs, req.body.as_bytes(), cipher, flags)
-                    .map_err(|e| internal_err(format!("S/MIME encryption failed: {}", e)))?;
-
-                let smime_bytes = pkcs7.to_smime(req.body.as_bytes(), flags).map_err(|e| {
-                    internal_err(format!("Failed to encode S/MIME encrypted message: {}", e))
-                })?;
-
-                let smime = String::from_utf8(smime_bytes).map_err(|e| {
-                    internal_err(format!("S/MIME output is not valid UTF-8: {}", e))
-                })?;
+                let smime = smime::backend().encrypt(
+                    &req.recipient_certs_pem,
+                    sender_cert_pem.as_deref(),
+                    &req.body,
+                )?;
 
                 Ok(EncryptEmailSmimeResponse { smime })
             })
@@ -1592,27 +1522,12 @@ pub extern "C" fn MahoMailDecryptEmailSmime(
                         not_found_err("S/MIME private key not found in credential store")
                     })?;
 
-                let cert = X509::from_pem(cert_pem.as_bytes())
-                    .map_err(|e| internal_err(format!("Failed to parse certificate: {}", e)))?;
-
-                let pkey = PKey::private_key_from_pem(key_pem.as_bytes())
-                    .map_err(|e| internal_err(format!("Failed to parse private key: {}", e)))?;
-
-                let pkcs7 = Pkcs7::from_smime(req.encrypted_body.as_bytes())
-                    .map(|(p, _)| p)
-                    .or_else(|_| Pkcs7::from_pem(req.encrypted_body.as_bytes()))
-                    .or_else(|_| Pkcs7::from_der(req.encrypted_body.as_bytes()))
-                    .map_err(|e| {
-                        internal_err(format!("Failed to parse S/MIME encrypted data: {}", e))
-                    })?;
-
-                let plaintext_bytes = pkcs7
-                    .decrypt(&pkey, &cert, Pkcs7Flags::empty())
-                    .map_err(|e| internal_err(format!("S/MIME decryption failed: {}", e)))?;
-
-                let decrypted = String::from_utf8(plaintext_bytes).map_err(|e| {
-                    internal_err(format!("Decrypted data is not valid UTF-8: {}", e))
-                })?;
+                let decrypted = smime::backend().decrypt(
+                    &cert_pem,
+                    &key_pem,
+                    &req.encrypted_body,
+                    smime_key_scope(&ctx, &req.account_id)?,
+                )?;
 
                 Ok(DecryptEmailSmimeResponse { decrypted })
             })
@@ -1631,75 +1546,7 @@ pub extern "C" fn MahoMailVerifyEmailSmime(
             return false;
         };
         accept_read(callback, user_data, move |_ctx| {
-            blocking_json(move || {
-                let parse_result = Pkcs7::from_smime(signed_body.as_bytes())
-                    .map(|(p, _)| p)
-                    .or_else(|_| Pkcs7::from_pem(signed_body.as_bytes()))
-                    .or_else(|_| Pkcs7::from_der(signed_body.as_bytes()));
-
-                let pkcs7 = match parse_result {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return Ok(SmimeVerifyResult {
-                            valid: false,
-                            trusted: false,
-                            signer_email: None,
-                            signer_subject: Some(format!("Failed to parse S/MIME data: {}", e)),
-                        });
-                    }
-                };
-
-                let store = X509StoreBuilder::new()
-                    .and_then(|mut b| {
-                        b.set_default_paths()?;
-                        Ok(b.build())
-                    })
-                    .map_err(|e| internal_err(format!("Failed to build X509 store: {}", e)))?;
-
-                let certs = Stack::new()
-                    .map_err(|e| internal_err(format!("Failed to create cert stack: {}", e)))?;
-
-                let mut output = Vec::new();
-                let full_verify = pkcs7
-                    .verify(&certs, &store, None, Some(&mut output), Pkcs7Flags::empty())
-                    .is_ok();
-
-                let mut signer_email = None;
-                let mut signer_subject = None;
-
-                if let Ok(signers) = pkcs7.signers(&certs, Pkcs7Flags::empty()) {
-                    if let Some(signer_cert) = signers.iter().next() {
-                        signer_email = Some(extract_email_from_cert(signer_cert));
-                        signer_subject = Some(x509_name_to_string(signer_cert.subject_name()));
-                    }
-                }
-
-                let (valid, trusted) = if full_verify {
-                    (true, true)
-                } else {
-                    let sig_only = pkcs7
-                        .verify(
-                            &certs,
-                            &store,
-                            None,
-                            Some(&mut output),
-                            Pkcs7Flags::NOVERIFY,
-                        )
-                        .is_ok();
-                    if sig_only {
-                        signer_subject =
-                            signer_subject.map(|s| format!("{} (certificate not trusted)", s));
-                    }
-                    (sig_only, false)
-                };
-
-                Ok(SmimeVerifyResult {
-                    valid,
-                    trusted,
-                    signer_email,
-                    signer_subject,
-                })
-            })
+            blocking_json(move || Ok(smime::backend().verify(&signed_body)))
         })
     })
 }
@@ -1716,24 +1563,20 @@ pub extern "C" fn MahoMailCleanupSmimeForAccount(
         };
         accept_read(callback, user_data, move |ctx| {
             blocking_json(move || {
-                let conn = ctx
+                let mut conn = ctx
                     .pool
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                let mut stmt =
-                    conn.prepare("SELECT id FROM smime_identities WHERE account_id = ?1")?;
-                let identities = stmt
-                    .query_map([&account_id], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                for identity_id in &identities {
-                    let _ = delete_private_key(&conn, identity_id, false);
+                let transaction = conn.transaction()?;
+                let identity_ids = cleanup_smime_keys_for_account(&ctx, &transaction, &account_id)?;
+                for identity_id in &identity_ids {
+                    delete_private_key(&transaction, identity_id, false)?;
                 }
-
-                conn.execute(
+                transaction.execute(
                     "DELETE FROM smime_identities WHERE account_id = ?1",
                     [&account_id],
                 )?;
+                transaction.commit()?;
 
                 Ok("{}".to_string())
             })
@@ -1746,11 +1589,17 @@ pub extern "C" fn MahoMailCleanupSmimeForAccount(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
     use openssl::asn1::Asn1Time;
+    #[cfg(not(windows))]
     use openssl::bn::BigNum;
+    #[cfg(not(windows))]
     use openssl::hash::MessageDigest;
+    #[cfg(not(windows))]
     use openssl::pkey::PKey;
+    #[cfg(not(windows))]
     use openssl::rsa::Rsa;
+    #[cfg(not(windows))]
     use openssl::x509::{X509NameBuilder, X509};
 
     #[test]
@@ -1765,6 +1614,26 @@ mod tests {
         let fp: Vec<u8> = vec![];
         let result = format_fingerprint(&fp);
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_smime_profile_path_requires_profile_mail_directory_layout() {
+        assert_eq!(
+            smime_profile_path(std::path::Path::new(
+                "/profiles/default/MahoMail/maho_mail.db",
+            ))
+            .unwrap(),
+            std::path::Path::new("/profiles/default"),
+        );
+        assert!(smime_profile_path(std::path::Path::new("maho_mail.db")).is_err());
+        assert!(
+            smime_profile_path(std::path::Path::new("/profiles/default/mail/maho_mail.db"))
+                .is_err(),
+        );
+        assert!(
+            smime_profile_path(std::path::Path::new("/profiles/default/MahoMail/other.db",))
+                .is_err(),
+        );
     }
 
     #[test]
@@ -1803,6 +1672,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(not(windows))]
     fn create_test_cert_with_email(email: &str) -> (X509, PKey<openssl::pkey::Private>) {
         let rsa = Rsa::generate(2048).expect("Failed to generate RSA key");
         let pkey = PKey::from_rsa(rsa).expect("Failed to create PKey");
@@ -1849,12 +1719,12 @@ mod tests {
         (cert_builder.build(), pkey)
     }
 
+    #[cfg(not(windows))]
     #[test]
-    fn test_fingerprint_hex_format() {
+    fn test_smime_backend_fingerprint_format() {
         let (cert, _) = create_test_cert_with_email("test@example.com");
-        let result = fingerprint_hex(&cert);
-        assert!(result.is_ok());
-        let fingerprint = result.unwrap();
+        let cert_pem = String::from_utf8(cert.to_pem().unwrap()).unwrap();
+        let fingerprint = smime::backend().certificate_fingerprint(&cert_pem).unwrap();
         assert_eq!(fingerprint.len(), 95);
         for c in fingerprint.chars() {
             assert!(c.is_ascii_hexdigit() || c == ':');

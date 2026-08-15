@@ -1,9 +1,17 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include <memory>
 #include <string>
 #include <type_traits>
 #include <utility>
 
+#include "base/memory/raw_ptr.h"
+#include "build/build_config.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/testing_profile.h"
+#include "chrome/test/base/testing_profile_manager.h"
+#include "content/public/test/browser_task_environment.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -47,15 +55,28 @@ class MahoVaultRuntimeBridgeTest : public testing::Test {
   void SetUp() override {
     g_fake_ffi = &ffi_;
     core::SetVaultBackendFfiForTesting(&kFakeFfi);
-    SetCore(reinterpret_cast<MahoCore*>(0x1234));
+    owner_profile_ = TestingProfile::Builder().Build();
+    ASSERT_NE(owner_profile_, nullptr);
+    // The core must be installed WITH its owning profile: CreateVaultBackendSession()
+    // routes through IsPasswordManagerAllowedForProfile(GetCoreOwnerProfile()),
+    // so a core set via SetCore() alone has a null owner and yields an invalid
+    // session, which would make every positive assertion below unreachable.
+    SetCoreForProfile(reinterpret_cast<MahoCore*>(0x1234),
+                      owner_profile_.get());
   }
   void TearDown() override {
     SetCore(nullptr);
     core::SetVaultBackendFfiForTesting(nullptr);
     g_fake_ffi = nullptr;
+    owner_profile_.reset();
   }
+
  protected:
+  TestingProfile* owner_profile() { return owner_profile_.get(); }
+
+  content::BrowserTaskEnvironment task_environment_;
   FakeVaultBackendFfi ffi_;
+  std::unique_ptr<TestingProfile> owner_profile_;
 };
 
 TEST(MahoVaultRuntimeBridgeTypesTest, WrappersAreMoveOnly) {
@@ -102,6 +123,124 @@ TEST_F(MahoVaultRuntimeBridgeTest, SessionFailsSafelyAfterCoreIsCleared) {
   SetCore(nullptr);
   EXPECT_FALSE(session.ExecuteBatch("{}").is_valid());
   EXPECT_EQ(ffi_.session_execute_calls, 0);
+}
+
+// ── Password-manager profile ownership (remediation plan, decision 3) ──
+//
+// MahoCore is browser-global but the password manager must behave as if it were
+// profile-scoped: only the ONE regular profile that created the core may reach
+// credentials. Everything else — no core, no owner, incognito/OTR, guest,
+// system, and any SECOND regular profile — fails closed.
+//
+// Failing-first rationale: before owner binding existed there was no
+// GetCoreOwnerProfile() to compare against, so every profile that reached these
+// entry points was admitted; each expectation below except the owner-ALLOW case
+// asserts a denial that did not previously happen, and the owner-ALLOW case
+// pins that the new check did not simply deny everyone.
+class MahoPasswordProfileOwnershipTest : public testing::Test {
+ public:
+  MahoPasswordProfileOwnershipTest()
+      : profile_manager_(TestingBrowserProcess::GetGlobal()) {}
+
+  void SetUp() override {
+    ASSERT_TRUE(profile_manager_.SetUp());
+    owner_profile_ = profile_manager_.CreateTestingProfile("maho-owner");
+    ASSERT_NE(owner_profile_, nullptr);
+    SetCoreForProfile(reinterpret_cast<MahoCore*>(0x1234), owner_profile_);
+  }
+
+  void TearDown() override { SetCore(nullptr); }
+
+ protected:
+  content::BrowserTaskEnvironment task_environment_;
+  TestingProfileManager profile_manager_;
+  raw_ptr<TestingProfile> owner_profile_ = nullptr;
+};
+
+TEST_F(MahoPasswordProfileOwnershipTest, NullProfileIsDenied) {
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(nullptr));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(nullptr).is_valid());
+}
+
+TEST_F(MahoPasswordProfileOwnershipTest, OwnerRegularProfileIsAllowed) {
+  ASSERT_EQ(owner_profile_, GetCoreOwnerProfile());
+  EXPECT_TRUE(IsPasswordManagerAllowedForProfile(owner_profile_));
+}
+
+TEST_F(MahoPasswordProfileOwnershipTest, SecondRegularProfileIsDenied) {
+  // A second regular profile is a legitimate Chromium profile in every other
+  // respect; it is denied purely because it does not own the core. This is the
+  // case that makes the browser-global core safe to keep.
+  TestingProfile* second_profile =
+      profile_manager_.CreateTestingProfile("maho-second");
+  ASSERT_NE(second_profile, nullptr);
+  ASSERT_NE(second_profile, owner_profile_);
+  ASSERT_TRUE(second_profile->IsRegularProfile());
+
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(second_profile));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(second_profile).is_valid());
+}
+
+TEST_F(MahoPasswordProfileOwnershipTest, IncognitoAndOtherOtrProfilesAreDenied) {
+  // The primary OTR profile of the OWNER itself: same underlying profile, so it
+  // would pass a naive pointer/identity check, yet it must still be denied.
+  Profile* primary_otr = owner_profile_->GetPrimaryOTRProfile(
+      /*create_if_needed=*/true);
+  ASSERT_NE(primary_otr, nullptr);
+  ASSERT_TRUE(primary_otr->IsOffTheRecord());
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(primary_otr));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(primary_otr).is_valid());
+
+  const Profile::OTRProfileID other_otr_id =
+      Profile::OTRProfileID::CreateUniqueForTesting();
+  Profile* other_otr = owner_profile_->GetOffTheRecordProfile(
+      other_otr_id, /*create_if_needed=*/true);
+  ASSERT_NE(other_otr, nullptr);
+  ASSERT_TRUE(other_otr->IsOffTheRecord());
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(other_otr));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(other_otr).is_valid());
+}
+
+TEST_F(MahoPasswordProfileOwnershipTest, GuestProfileIsDenied) {
+  TestingProfile* guest_profile = profile_manager_.CreateGuestProfile();
+  ASSERT_NE(guest_profile, nullptr);
+  ASSERT_FALSE(guest_profile->IsRegularProfile());
+
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(guest_profile));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(guest_profile).is_valid());
+}
+
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+TEST_F(MahoPasswordProfileOwnershipTest, SystemProfileIsDenied) {
+  TestingProfile* system_profile = profile_manager_.CreateSystemProfile();
+  ASSERT_NE(system_profile, nullptr);
+  ASSERT_FALSE(system_profile->IsRegularProfile());
+
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(system_profile));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(system_profile).is_valid());
+}
+#endif
+
+TEST_F(MahoPasswordProfileOwnershipTest, OwnerIsDeniedOnceCoreIsGone) {
+  // Ownership alone is not sufficient: with no core there is nothing to
+  // authorize against, so even the owner must fail closed rather than be
+  // admitted on identity.
+  SetCore(nullptr);
+  ASSERT_EQ(nullptr, GetCore());
+
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(owner_profile_));
+  EXPECT_FALSE(CreateVaultBackendSessionForProfile(owner_profile_).is_valid());
+}
+
+TEST_F(MahoPasswordProfileOwnershipTest, UnownedCoreDeniesEveryProfile) {
+  // SetCore() (no owner) is the legacy/test-only entry point. It leaves the
+  // owner null, which must deny everyone rather than fall back to "any regular
+  // profile".
+  SetCore(reinterpret_cast<MahoCore*>(0x1234));
+  ASSERT_EQ(nullptr, GetCoreOwnerProfile());
+
+  EXPECT_FALSE(IsPasswordManagerAllowedForProfile(owner_profile_));
+  EXPECT_FALSE(CreateVaultBackendSession().is_valid());
 }
 
 }  // namespace

@@ -26,6 +26,7 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 #include "maho/browser/ui/views/space_create/maho_space_theme_picker_dialog.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "ui/base/models/dialog_model.h"
 #include "maho/browser/ui/webui/maho_space_config/maho_space_config.mojom.h"
@@ -34,6 +35,42 @@
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/menus/simple_menu_model.h"
+
+namespace maho {
+
+std::string DispatchSpaceContextMenuCoreEventForTesting(
+    MahoCore* core,
+    const std::string& event_json) {
+  if (!core) {
+    return std::string();
+  }
+  char* result = maho_core_handle_event(core, event_json.c_str());
+  if (!result) {
+    return std::string();
+  }
+  std::string updates(result);
+  maho_string_free(result);
+  InvalidateSidebarCoreCacheForUpdatesJson(updates);
+  return updates;
+}
+
+void RecolorSpaceContextMenuForTesting(MahoCore* core,
+                                       const std::string& space_id,
+                                       const std::string& color) {
+  if (!core) {
+    return;
+  }
+  base::DictValue color_dict;
+  color_dict.Set("color", color);
+  std::string color_json;
+  base::JSONWriter::Write(color_dict, &color_json);
+  maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
+  SidebarCacheInvalidation invalidation;
+  invalidation.fragments = SidebarCoreFragment::kFooter;
+  InvalidateSidebarCoreCache(invalidation);
+}
+
+}  // namespace maho
 
 namespace {
 
@@ -149,10 +186,7 @@ void CreateFolderOnPool(const std::string& space_id) {
   event.Set("space_id", space_id);
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
-  char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) {
-    maho_string_free(result);
-  }
+  maho::DispatchSpaceContextMenuCoreEventForTesting(core, event_json);
 }
 
 void ChangeSpaceIconOnPool(const std::string& space_id,
@@ -168,10 +202,7 @@ void ChangeSpaceIconOnPool(const std::string& space_id,
   event.Set("icon", icon);
   std::string event_json;
   base::JSONWriter::Write(event, &event_json);
-  char* result = maho_core_handle_event(core, event_json.c_str());
-  if (result) {
-    maho_string_free(result);
-  }
+  maho::DispatchSpaceContextMenuCoreEventForTesting(core, event_json);
 }
 
 void RecolorSpaceOnPool(const std::string& space_id,
@@ -181,11 +212,7 @@ void RecolorSpaceOnPool(const std::string& space_id,
     return;
   }
 
-  base::DictValue color_dict;
-  color_dict.Set("color", color);
-  std::string color_json;
-  base::JSONWriter::Write(color_dict, &color_json);
-  maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
+  maho::RecolorSpaceContextMenuForTesting(core, space_id, color);
 }
 
 void DeleteSpaceOnPool(const std::string& space_id) {
@@ -194,6 +221,10 @@ void DeleteSpaceOnPool(const std::string& space_id) {
     return;
   }
   maho_core_delete_space(core, space_id.c_str());
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kAll;
+  invalidation.space_ids.push_back(space_id);
+  maho::InvalidateSidebarCoreCache(invalidation);
 
   content::GetUIThreadTaskRunner({})->PostTask(
       FROM_HERE,

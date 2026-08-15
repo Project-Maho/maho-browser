@@ -23,7 +23,7 @@ Terminal email clients that forgot the GUI. Comparing three decades of terminal 
 
 | Feature | Maho Mail | aerc / mutt / neomutt |
 | --- | --- | --- |
-| Desktop GUI | Yes, native desktop app | No, terminal UI only |
+| Desktop GUI | Yes, integrated in Maho Browser | No, terminal UI only |
 | CLI | Yes, JSON output, Unix pipes | Yes, decades of scripting support |
 | MCP Server | Yes, AI agents connect via stdio | No |
 | AI Built In | Yes, summarize, draft, classify | No, possible via external scripts |
@@ -38,7 +38,11 @@ Terminal email clients that forgot the GUI. Comparing three decades of terminal 
 
 aerc, mutt, and neomutt are terminal-native email clients. They render everything in your terminal emulator, which means they are fast, resource-light, and endlessly configurable via dotfiles. But they require a terminal to function, there is no graphical fallback, no rich HTML email rendering, and no point-and-click option for less technical tasks.
 
-Maho Mail provides a native desktop GUI for everyday email alongside a CLI for automation. You can triage your inbox in the GUI, then switch to `maho search --from boss --json` in the terminal without switching tools. For users who split time between visual and terminal workflows, this is the core advantage.
+Maho Mail provides a desktop UI integrated into Maho Browser alongside a CLI
+for automation. You can triage your inbox in the Browser, then switch to
+`maho mail search "from:boss" --json` in the terminal without changing
+profiles. For users who split time between visual and terminal workflows, this
+is the core advantage.
 
 ### Scripting & automation
 
@@ -50,7 +54,11 @@ Maho Mail's CLI produces structured JSON output by default, which makes it easie
 
 None of the traditional terminal clients have built-in AI features. You could pipe mutt output to an LLM via shell commands, but there is no native summarization, classification, or drafting. The integration would be manual and fragile.
 
-Maho Mail has AI built into all three interfaces. Summarize a thread in the GUI, pipe a message to an LLM from the CLI (`maho get 42 --json | llm 'summarize'`), or let an AI agent handle triage through the MCP server. You can use OpenAI, Anthropic, or Ollama, whatever you prefer.
+Maho Mail has AI built into all three interfaces. Summarize a thread in the
+GUI, pipe a message to an LLM from the CLI
+(`maho mail get 42 --json | llm 'summarize'`), or let an AI agent handle triage
+through the MCP server. You can use OpenAI, Anthropic, or Ollama, whatever you
+prefer.
 
 ### Stability & ecosystem
 

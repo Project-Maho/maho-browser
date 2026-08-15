@@ -58,6 +58,13 @@ integration; web-ai owns the converged BYOK, conversations, and chat UI.
 
 ## COMMANDS
 
+### Physical-device QA
+
+Run all user-surface, integration, smoke, and cross-platform convergence QA on
+a physical Android device connected through USB or wireless debugging. Do not
+use an Android emulator for those checks. Emulators remain acceptable only for
+automated unit tests that do not claim device-level validation.
+
 ```bash
 cd maho/android-shell
 ./gradlew app:testDebugUnitTest

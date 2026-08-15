@@ -19,6 +19,15 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import dev.maho.browser.ui.MainBrowserScreen
 import dev.maho.browser.ui.OnboardingScreen
 import dev.maho.browser.ui.theme.ProvideBrowserShellTheme
+import dev.maho.browser.ui.theme.brandColorScheme
+
+internal inline fun runMainActivityForegroundResume(
+    sweepConversations: () -> Int,
+    checkForUpdate: () -> Unit,
+) {
+    sweepConversations()
+    checkForUpdate()
+}
 
 @OptIn(ExperimentalComposeUiApi::class)
 class MainActivity : ComponentActivity() {
@@ -43,7 +52,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = brandColorScheme()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -76,7 +85,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        appUpdateManager.checkForUpdate()
+        runMainActivityForegroundResume(
+            sweepConversations = { MahoBridge.autoArchiveConversations() },
+            checkForUpdate = { appUpdateManager.checkForUpdate() },
+        )
     }
 
     override fun onPause() {

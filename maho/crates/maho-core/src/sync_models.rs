@@ -1,6 +1,8 @@
 //! Sync data models for cross-device synchronization.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// Unique device identifier
 pub type DeviceId = String;
@@ -65,7 +67,7 @@ pub struct DeviceInfo {
 }
 
 /// Sync connection status
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncStatus {
     #[default]
@@ -75,6 +77,107 @@ pub enum SyncStatus {
     Synced,
     Error,
     Offline,
+}
+
+/// Stable shell-facing state for the cross-platform sync transport.
+///
+/// This is intentionally a struct rather than a JSON-encoded enum so every
+/// FFI client can display the same pending-work and error information.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct SyncStateResponse {
+    pub kind: SyncStatus,
+    pub last_success_at: Option<i64>,
+    pub pending_outbox_count: usize,
+    pub last_error: Option<String>,
+}
+
+impl Default for SyncStateResponse {
+    fn default() -> Self {
+        Self {
+            kind: SyncStatus::Idle,
+            last_success_at: None,
+            pending_outbox_count: 0,
+            last_error: None,
+        }
+    }
+}
+
+/// Current wire version for relay envelopes.
+pub const SYNC_PROTOCOL_VERSION: u8 = 2;
+
+/// Versioned opaque transport envelope shared by desktop WebSocket and mobile
+/// HTTP sync clients. The relay can validate this metadata without decrypting
+/// the payload.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct SyncEnvelopeV2 {
+    pub protocol_version: u8,
+    pub delivery_id: String,
+    pub payload: String,
+    pub relay_seq: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct RelayAckV2 {
+    pub delivery_id: String,
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum SyncProtocolError {
+    #[error("unsupported sync protocol version {found}")]
+    UnsupportedProtocolVersion { found: u8 },
+    #[error("sync delivery id is not a UUID")]
+    InvalidDeliveryId,
+    #[error("sync envelope payload is empty")]
+    EmptyPayload,
+    #[error("sync envelope payload is not valid base64")]
+    InvalidPayloadEncoding,
+}
+
+impl SyncEnvelopeV2 {
+    pub fn new(payload: Vec<u8>) -> Result<Self, SyncProtocolError> {
+        if payload.is_empty() {
+            return Err(SyncProtocolError::EmptyPayload);
+        }
+
+        Ok(Self {
+            protocol_version: SYNC_PROTOCOL_VERSION,
+            delivery_id: uuid::Uuid::new_v4().to_string(),
+            payload: base64::engine::general_purpose::STANDARD.encode(payload),
+            relay_seq: None,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), SyncProtocolError> {
+        if self.protocol_version != SYNC_PROTOCOL_VERSION {
+            return Err(SyncProtocolError::UnsupportedProtocolVersion {
+                found: self.protocol_version,
+            });
+        }
+        if uuid::Uuid::parse_str(&self.delivery_id).is_err() {
+            return Err(SyncProtocolError::InvalidDeliveryId);
+        }
+        if self.payload.is_empty() {
+            return Err(SyncProtocolError::EmptyPayload);
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.payload)
+            .map_err(|_| SyncProtocolError::InvalidPayloadEncoding)?;
+        if bytes.is_empty() {
+            return Err(SyncProtocolError::EmptyPayload);
+        }
+        Ok(())
+    }
+
+    pub fn payload_bytes(&self) -> Result<Vec<u8>, SyncProtocolError> {
+        self.validate()?;
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.payload)
+            .map_err(|_| SyncProtocolError::InvalidPayloadEncoding)
+    }
 }
 
 /// Sync configuration
@@ -124,6 +227,7 @@ pub enum SyncEntityType {
     CssMod,
     Easel,
     Conversation,
+    ConversationProject,
     ConversationTurn,
     AutofillAddress,
     AutofillPayment,
@@ -149,6 +253,7 @@ impl SyncEntityType {
             SyncEntityType::CssMod => "cssmod",
             SyncEntityType::Easel => "easel",
             SyncEntityType::Conversation => "conversation",
+            SyncEntityType::ConversationProject => "conversationproject",
             SyncEntityType::ConversationTurn => "conversationturn",
             SyncEntityType::AutofillAddress => "autofilladdress",
             SyncEntityType::AutofillPayment => "autofillpayment",

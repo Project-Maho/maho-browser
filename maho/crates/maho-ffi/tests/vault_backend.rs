@@ -59,6 +59,7 @@ impl TestCore {
                     },
                     username: "backend@example.com".to_string(),
                     password: Zeroizing::new(SECRET.to_string()),
+                    form_details: None,
                 })
                 .expect("add login")
                 .id
@@ -93,6 +94,27 @@ fn request(item_ids: Vec<maho_types::vault::VaultItemId>) -> CString {
     };
     CString::new(serde_json::to_string(&request).expect("serialize request"))
         .expect("request has no NUL")
+}
+
+fn credential_discovery_request(origin: &str) -> CString {
+    CString::new(serde_json::json!({ "origin": origin }).to_string())
+        .expect("discovery request has no NUL")
+}
+
+fn secret_resolution_request(
+    item_id: maho_types::vault::VaultItemId,
+    expected_revision: VaultRevision,
+    action: &str,
+) -> CString {
+    CString::new(
+        serde_json::json!({
+            "itemId": item_id,
+            "expectedRevision": expected_revision.value().to_string(),
+            "action": action,
+        })
+        .to_string(),
+    )
+    .expect("resolution request has no NUL")
 }
 
 unsafe fn consume_json(result: *mut maho_ffi::vault_backend::MahoVaultBackendResult) -> String {
@@ -208,27 +230,85 @@ fn vault_backend_worker_batch_uses_dedicated_buffer_and_keeps_metadata_public() 
 }
 
 #[test]
-fn vault_backend_credentials_endpoint_returns_login_secret_for_browser_backend_only() {
+fn vault_backend_credentials_discovery_is_secret_free_and_fill_resolution_is_exact() {
     let mut fixture = TestCore::new();
     let item_id = fixture.add_login();
     // SAFETY: fixture owns a live core for one snapshot creation call.
     let session = unsafe { maho_vault_backend_session_new(fixture.core) };
-    let request =
-        CString::new(r#"{"origin":"https://backend.example"}"#).expect("request has no NUL");
 
+    let discovery = credential_discovery_request("https://backend.example");
     // SAFETY: session and request are valid for this call.
     let result =
-        unsafe { maho_vault_backend_session_execute_credentials(session, request.as_ptr()) };
+        unsafe { maho_vault_backend_session_execute_credentials(session, discovery.as_ptr()) };
     assert_eq!(
         unsafe { maho_vault_backend_result_status(result) },
         MahoVaultBackendResultStatus::Success
     );
     let payload = unsafe { consume_json(result) };
-    assert!(payload.contains(&item_id.to_string()));
-    assert!(payload.contains(SECRET));
-    assert!(payload.contains("backend@example.com"));
+    let metadata: serde_json::Value = serde_json::from_str(&payload).expect("parse metadata");
+    let descriptor = metadata
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(serde_json::Value::as_object)
+        .expect("one credential descriptor");
+    assert_eq!(descriptor["itemId"], item_id.to_string());
+    assert_eq!(descriptor["observedRevision"], "1");
+    assert_eq!(descriptor["username"], "backend@example.com");
+    assert!(!descriptor.contains_key("password"));
+    assert!(!descriptor.contains_key("secret"));
+    assert!(!payload.contains(SECRET));
     // SAFETY: consumed result ownership is released once.
     unsafe { maho_vault_backend_result_free(result) };
+
+    let resolve = secret_resolution_request(item_id, VaultRevision::new(1), "fill");
+    // SAFETY: exact item identity, observed revision, and fill action are valid.
+    let result =
+        unsafe { maho_vault_backend_session_execute_credentials(session, resolve.as_ptr()) };
+    assert_eq!(
+        unsafe { maho_vault_backend_result_status(result) },
+        MahoVaultBackendResultStatus::Success
+    );
+    let resolved: serde_json::Value =
+        serde_json::from_str(&unsafe { consume_json(result) }).expect("parse resolved secret");
+    assert_eq!(resolved["password"], SECRET);
+    // SAFETY: consumed result ownership is released once.
+    unsafe { maho_vault_backend_result_free(result) };
+
+    // The successful fill advanced the item revision, so replaying the observed
+    // discovery revision is stale and must not return a buffer.
+    let stale = secret_resolution_request(item_id, VaultRevision::new(1), "fill");
+    let result = unsafe { maho_vault_backend_session_execute_credentials(session, stale.as_ptr()) };
+    assert_eq!(
+        unsafe { maho_vault_backend_result_status(result) },
+        MahoVaultBackendResultStatus::Failed
+    );
+    assert!(unsafe { maho_vault_backend_result_consume(result) }.is_null());
+    unsafe { maho_vault_backend_result_free(result) };
+
+    let wrong_item = secret_resolution_request(
+        maho_types::vault::VaultItemId::new(),
+        VaultRevision::new(1),
+        "fill",
+    );
+    let result =
+        unsafe { maho_vault_backend_session_execute_credentials(session, wrong_item.as_ptr()) };
+    assert_eq!(
+        unsafe { maho_vault_backend_result_status(result) },
+        MahoVaultBackendResultStatus::Failed
+    );
+    assert!(unsafe { maho_vault_backend_result_consume(result) }.is_null());
+    unsafe { maho_vault_backend_result_free(result) };
+
+    let non_fill = secret_resolution_request(item_id, VaultRevision::new(2), "copy");
+    let result =
+        unsafe { maho_vault_backend_session_execute_credentials(session, non_fill.as_ptr()) };
+    assert_eq!(
+        unsafe { maho_vault_backend_result_status(result) },
+        MahoVaultBackendResultStatus::InvalidRequest
+    );
+    assert!(unsafe { maho_vault_backend_result_consume(result) }.is_null());
+    unsafe { maho_vault_backend_result_free(result) };
+
     // SAFETY: session is exclusively owned by this test.
     unsafe { maho_vault_backend_session_free(session) };
 }

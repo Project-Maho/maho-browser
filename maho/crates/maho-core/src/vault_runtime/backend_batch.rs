@@ -5,14 +5,13 @@ use maho_types::vault::{
     VaultBatchReadRequest, VaultBatchReadResult, VaultItemCreatedRange, VaultItemId, VaultItemKind,
     VaultItemPublicMetadata, VaultRangeDeleteResult, VaultSchemaVersion,
 };
-use zeroize::Zeroizing;
 
 use crate::vault_manager::origin::{canonicalize_origin, origin_matches};
 use crate::vault_manager::record::{
-    decode_envelope, deserialize_record, encode_envelope, public_dto, serialize_record, LiveSecret,
+    decode_envelope, deserialize_record, encode_envelope, public_dto, serialize_record,
     RecordSecret, VaultRecordPayload,
 };
-use crate::vault_manager::VaultCrudError;
+use crate::vault_manager::{VaultCredentialFormDetails, VaultCrudError};
 use crate::vault_runtime::repository::{VaultRepository, VaultTombstoneCandidate};
 use crate::vault_runtime::session::VaultBackendLoginCredential;
 
@@ -103,16 +102,36 @@ impl VaultRuntime {
         origin: Option<&str>,
     ) -> Result<Vec<VaultBackendLoginCredential>, VaultCrudError> {
         self.with_manager(|manager| {
-            let target = match origin.filter(|origin| !origin.trim().is_empty()) {
-                Some(origin) => Some(canonicalize_origin(origin)?),
-                None => None,
+            let requested = match origin {
+                Some(origin) if origin.trim().is_empty() => {
+                    manager.active_key().map_err(VaultCrudError::from)?;
+                    return Ok(Vec::new());
+                }
+                requested => requested,
+            };
+            let android_realm = requested.filter(|origin| origin.starts_with("android://"));
+            if android_realm.is_some_and(|realm| !is_valid_android_realm(realm)) {
+                manager.active_key().map_err(VaultCrudError::from)?;
+                return Ok(Vec::new());
+            }
+            let target = match requested {
+                Some(origin) if android_realm.is_none() => Some(canonicalize_origin(origin)?),
+                _ => None,
             };
             let mut credentials = Vec::new();
             for (row, record) in super::crud_query::active_records(manager, &repository)? {
                 if record.metadata.item_kind != VaultItemKind::Login {
                     continue;
                 }
-                if let Some(target) = &target {
+                if let Some(android_realm) = android_realm {
+                    let matches_realm = record
+                        .form_details
+                        .as_ref()
+                        .is_some_and(|details| details.signon_realm.as_str() == android_realm);
+                    if !matches_realm {
+                        continue;
+                    }
+                } else if let Some(target) = &target {
                     let matches_origin = record.metadata.origins.iter().any(|stored| {
                         origin_matches(
                             stored,
@@ -125,15 +144,10 @@ impl VaultRuntime {
                     }
                 }
                 let public = public_dto(&row, &record)?;
-                let LiveSecret::LoginPassword(password) =
-                    LiveSecret::from_record(&record.secret, VaultItemKind::Login)?
-                else {
-                    return Err(VaultCrudError::FieldMismatch);
-                };
                 credentials.push(credential_from_record(
                     public,
                     record.username.clone(),
-                    password,
+                    record.form_details.clone(),
                 ));
             }
             Ok(credentials)
@@ -142,26 +156,64 @@ impl VaultRuntime {
     }
 }
 
+fn is_valid_android_realm(realm: &str) -> bool {
+    let Some(authority) = realm.strip_prefix("android://") else {
+        return false;
+    };
+    if authority.is_empty() || authority.contains(['/', '?', '#']) {
+        return false;
+    }
+    let Some((certificate_hash, package_name)) = authority.split_once('@') else {
+        return false;
+    };
+    if certificate_hash.is_empty() || package_name.is_empty() || package_name.contains('@') {
+        return false;
+    }
+
+    let first_padding = certificate_hash.find('=').unwrap_or(certificate_hash.len());
+    let (hash, padding) = certificate_hash.split_at(first_padding);
+    !hash.is_empty()
+        && certificate_hash.len() % 4 == 0
+        && hash
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        && padding.len() <= 2
+        && padding.chars().all(|character| character == '=')
+        && package_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_'))
+}
+
 fn credential_from_record(
     public: maho_types::vault::VaultItemPublicDto,
     username: Option<String>,
-    password: Zeroizing<String>,
+    form_details: Option<VaultCredentialFormDetails>,
 ) -> VaultBackendLoginCredential {
-    let signon_realm = public
-        .origins
-        .first()
-        .map(|origin| origin.as_str().to_string())
+    // The stored `signonRealm` is authoritative when present: it can express
+    // realms a canonical origin cannot (android://, HTTP-auth realms). Legacy
+    // records without form detail fall back to the first origin, then the title,
+    // exactly as before.
+    let signon_realm = form_details
+        .as_ref()
+        .map(|details| details.signon_realm.clone())
+        .filter(|realm| !realm.is_empty())
+        .or_else(|| {
+            public
+                .origins
+                .first()
+                .map(|origin| origin.as_str().to_string())
+        })
         .unwrap_or_else(|| public.title.clone());
     VaultBackendLoginCredential {
         schema_version: public.schema_version,
-        id: public.id,
-        revision: public.revision,
+        item_id: public.id,
+        observed_revision: public.revision,
         signon_realm,
         username: username.unwrap_or_default(),
-        password: password.to_string(),
         created_at: public.created_at,
         updated_at: public.updated_at,
         last_used_at: public.last_used_at,
+        form_details,
     }
 }
 
@@ -204,15 +256,37 @@ fn tombstone_candidate(
         username: None,
         secret: RecordSecret::Tombstone,
         last_used_at: None,
+        form_details: None,
     };
     let envelope = manager
         .encrypt_and_wrap(&serialize_record(&tombstone)?, &id)
         .map_err(VaultCrudError::from)?;
+    let new_revision = next_tombstone_revision(row.revision)?;
     Ok(VaultTombstoneCandidate {
         id: row.id,
         expected_revision: row.revision,
-        new_revision: row.revision + 1,
+        new_revision,
         envelope: encode_envelope(&envelope)?,
         timestamp: timestamp.to_string(),
     })
+}
+
+fn next_tombstone_revision(revision: i64) -> Result<i64, VaultCrudError> {
+    revision
+        .checked_add(1)
+        .ok_or_else(|| VaultCrudError::Storage("range tombstone revision overflow".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_tombstone_revision;
+    use crate::vault_manager::VaultCrudError;
+
+    #[test]
+    fn tombstone_revision_overflow_fails_closed() {
+        assert!(matches!(
+            next_tombstone_revision(i64::MAX),
+            Err(VaultCrudError::Storage(message)) if message == "range tombstone revision overflow"
+        ));
+    }
 }

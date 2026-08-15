@@ -8,6 +8,8 @@ struct NotesView: View {
     @State private var showCreateSheet = false
     @State private var editingNote: NoteViewModel?
     @State private var showExportOptions = false
+    @State private var pendingDeleteNote: NoteViewModel?
+    @State private var showDeleteConfirmation = false
 
     private var filteredNotes: [NoteViewModel] {
         guard !searchText.isEmpty else { return notes }
@@ -31,7 +33,7 @@ struct NotesView: View {
             .navigationTitle("Notes")
             .searchable(text: $searchText, prompt: "Search notes")
             .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Menu {
                         Button {
                             showCreateSheet = true
@@ -84,7 +86,8 @@ struct NotesView: View {
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
-                            deleteNote(id: note.id)
+                            pendingDeleteNote = note
+                            showDeleteConfirmation = true
                         } label: {
                             Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
@@ -100,6 +103,22 @@ struct NotesView: View {
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            "Delete Note?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible,
+            presenting: pendingDeleteNote
+        ) { note in
+            Button("Delete", role: .destructive) {
+                deleteNote(id: note.id)
+                pendingDeleteNote = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteNote = nil
+            }
+        } message: { _ in
+            Text("This note will be permanently deleted.")
+        }
     }
 
     private var emptyState: some View {

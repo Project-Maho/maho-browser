@@ -52,12 +52,14 @@ maho_settings::mojom::VaultItemListResultPtr SearchSavedPasswordLibraryItemsFrom
     const std::optional<maho_settings::mojom::PasswordProviderKind>& provider);
 
 maho_settings::mojom::VaultOperationResultPtr AddSavedPasswordLibraryLoginInCore(
+    const std::string& authorization_profile_key,
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
     const std::string& password);
 
 maho_settings::mojom::VaultOperationResultPtr UpdateSavedPasswordLibraryLoginInCore(
+    const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision,
     const std::string& title,
@@ -66,10 +68,12 @@ maho_settings::mojom::VaultOperationResultPtr UpdateSavedPasswordLibraryLoginInC
     const std::optional<std::string>& password);
 
 maho_settings::mojom::VaultOperationResultPtr DeleteSavedPasswordLibraryItemInCore(
+    const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision);
 
 maho_settings::mojom::VaultOperationResultPtr UseSavedPasswordLibrarySecretInCore(
+    const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision,
     maho_settings::mojom::SecretAction action);
@@ -81,15 +85,20 @@ std::vector<maho_settings::mojom::SavedPasswordPtr> GetSavedPasswordsFromCore();
 std::vector<maho_settings::mojom::SavedPasswordPtr> SearchSavedPasswordsFromCore(
     const std::string& query);
 
-bool AddSavedPasswordCompatibilityShimInCore(const std::string& domain,
+bool AddSavedPasswordCompatibilityShimInCore(
+    const std::string& authorization_profile_key,
+    const std::string& domain,
                                              const std::string& username,
                                              const std::string& password);
 
 bool UpdateSavedPasswordUsernameCompatibilityShimInCore(
+    const std::string& authorization_profile_key,
     const std::string& password_id,
     const std::string& username);
 
-bool DeleteSavedPasswordCompatibilityShimInCore(const std::string& password_id);
+bool DeleteSavedPasswordCompatibilityShimInCore(
+    const std::string& authorization_profile_key,
+    const std::string& password_id);
 
 maho_settings::mojom::VaultProviderStatusPtr BuildVaultProviderStatus(
     const std::string& selected_provider,
@@ -120,6 +129,18 @@ maho_settings::mojom::VaultOperationResultPtr ParseVaultOperationResultJson(
 maho_settings::mojom::VaultItemListResultPtr ParseVaultItemListResultJson(
     const std::string& json);
 
+maho_settings::mojom::VaultItemListResultPtr
+BuildUnavailableVaultItemListResult();
+
+maho_settings::mojom::VaultOperationResultPtr
+BuildUnavailableVaultOperationResult();
+
+maho_settings::mojom::VaultProviderStatusPtr
+BuildUnavailableVaultProviderStatus();
+
+maho_settings::mojom::PasswordImportOperationResultPtr
+BuildUnavailablePasswordImportOperationResult();
+
 maho_settings::mojom::VaultOperationResultPtr GetVaultStatusFromCore();
 
 maho_settings::mojom::VaultOperationResultPtr InitializeVaultInCore(
@@ -146,12 +167,14 @@ maho_settings::mojom::VaultItemListResultPtr SearchVaultItemsFromCore(
     const std::vector<maho_settings::mojom::VaultItemKind>& kinds);
 
 maho_settings::mojom::VaultOperationResultPtr AddVaultLoginInCore(
+    const std::string& authorization_profile_key,
     const std::string& title,
     const std::vector<std::string>& origins,
     const std::string& username,
     const std::string& password);
 
 maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
+    const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision,
     const std::string& title,
@@ -160,10 +183,12 @@ maho_settings::mojom::VaultOperationResultPtr UpdateVaultLoginInCore(
     const std::optional<std::string>& password);
 
 maho_settings::mojom::VaultOperationResultPtr DeleteVaultItemInCore(
+    const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision);
 
 maho_settings::mojom::VaultOperationResultPtr UseVaultSecretInCore(
+    const std::string& authorization_profile_key,
     const std::string& item_id,
     uint64_t expected_revision,
     maho_settings::mojom::SecretAction action);
@@ -180,6 +205,7 @@ maho_settings::mojom::VaultPolicyStatusPtr BuildUnavailableVaultPolicyStatus();
 maho_settings::mojom::VaultPolicyStatusPtr GetVaultPolicyStatusFromCore();
 
 maho_settings::mojom::VaultPolicyStatusPtr SetVaultPolicyInCore(
+    const std::string& authorization_profile_key,
     maho_settings::mojom::VaultAgentPolicy policy,
     const std::optional<std::string>& item_id,
     const std::optional<std::string>& origin,
@@ -206,6 +232,7 @@ maho_settings::mojom::PasswordImportOperationResultPtr CancelPasswordImportJob(
     MahoPasswordImportJob* job);
 
 maho_settings::mojom::PasswordImportOperationResultPtr CommitPasswordImportInCore(
+    const std::string& authorization_profile_key,
     MahoPasswordImportJob* job,
     const std::string& preview_token);
 

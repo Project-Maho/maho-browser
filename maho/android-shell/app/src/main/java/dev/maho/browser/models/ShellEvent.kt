@@ -160,6 +160,9 @@ sealed class ShellEvent {
     @Serializable @SerialName("reopen_last_closed")
     data object ReopenLastClosed : ShellEvent()
 
+    @Serializable @SerialName("archive_tab_by_id")
+    data class ArchiveTabById(@SerialName("tab_id") val tabId: TabId) : ShellEvent()
+
     @Serializable @SerialName("restore_archived_tab")
     data class RestoreArchivedTab(@SerialName("tab_id") val tabId: TabId) : ShellEvent()
 

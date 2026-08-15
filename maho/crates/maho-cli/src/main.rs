@@ -89,6 +89,10 @@ pub enum AgentSubcommands {
         /// Target workspace ID
         #[arg(long)]
         workspace: Option<String>,
+
+        /// Continue an existing persisted session
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 
@@ -204,6 +208,10 @@ pub enum Commands {
         /// Workspace ID to target
         #[arg(long)]
         workspace: Option<String>,
+
+        /// Continue an existing persisted session
+        #[arg(long)]
+        session: Option<String>,
     },
 
     /// Run an autonomous AI agent session or routine
@@ -238,12 +246,28 @@ pub enum Commands {
         /// Workspace ID to target
         #[arg(long)]
         workspace: Option<String>,
+
+        /// Continue an existing persisted session
+        #[arg(long)]
+        session: Option<String>,
     },
 
     /// Tool execution and inspection
     Tool {
         #[command(subcommand)]
         command: ToolCommands,
+    },
+
+    /// Continue and inspect agent sessions in shared storage
+    Session {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
+
+    /// List and export browser-owned session artifacts
+    Artifact {
+        #[command(subcommand)]
+        command: ArtifactCommands,
     },
 
     /// Bounded deep-research mode (Max/PAYG). Runs a capped multi-step research
@@ -335,14 +359,54 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
+pub enum SessionCommands {
+    /// List sessions in the shared desktop-agent store
+    List,
+    /// Resume an existing session by loading its persisted history
+    Resume {
+        /// Opaque session ID
+        session_id: String,
+    },
+    /// Show a session's persisted message history
+    History {
+        /// Opaque session ID
+        session_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ArtifactCommands {
+    /// List artifacts, optionally scoped to one session
+    List {
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Export an artifact to a validated destination
+    Export {
+        /// Opaque artifact ID
+        artifact_id: String,
+        /// Destination file path
+        #[arg(long)]
+        out: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum ToolCommands {
-    /// List all available tools from the browser MCP server
+    /// List browser capabilities and catalog diagnostics
     List,
 
-    /// Call a tool by name with JSON arguments
-    Call {
-        /// Tool name to call
-        name: String,
+    /// Describe one browser capability by canonical ID
+    Describe {
+        /// Canonical capability ID
+        id: String,
+    },
+
+    /// Run one browser capability by canonical ID
+    #[command(alias = "call")]
+    Run {
+        /// Canonical capability ID
+        id: String,
 
         /// Arguments in JSON format
         #[arg(long = "args")]
@@ -988,6 +1052,7 @@ async fn main() -> Result<()> {
             yolo,
             allow_tools,
             workspace,
+            session,
         } => {
             cmd_run(
                 &prompt,
@@ -997,6 +1062,7 @@ async fn main() -> Result<()> {
                 allow_tools,
                 workspace.as_deref(),
                 socket_path.as_deref(),
+                session.as_deref(),
             )
             .await
         }
@@ -1010,6 +1076,7 @@ async fn main() -> Result<()> {
             yolo,
             allow_tools,
             workspace,
+            session,
         } => {
             let (
                 final_prompt,
@@ -1019,6 +1086,7 @@ async fn main() -> Result<()> {
                 final_yolo,
                 final_allow_tools,
                 final_workspace,
+                final_session,
             ) = match subcommand {
                 Some(AgentSubcommands::Run {
                     prompt: sub_prompt,
@@ -1028,6 +1096,7 @@ async fn main() -> Result<()> {
                     yolo: sub_yolo,
                     allow_tools: sub_allow_tools,
                     workspace: sub_workspace,
+                    session: sub_session,
                 }) => (
                     sub_prompt.or(prompt),
                     sub_routine.or(routine),
@@ -1036,6 +1105,7 @@ async fn main() -> Result<()> {
                     sub_yolo || yolo,
                     sub_allow_tools || allow_tools,
                     sub_workspace.or(workspace),
+                    sub_session.or(session),
                 ),
                 None => (
                     prompt,
@@ -1045,6 +1115,7 @@ async fn main() -> Result<()> {
                     yolo,
                     allow_tools,
                     workspace,
+                    session,
                 ),
             };
 
@@ -1076,6 +1147,7 @@ async fn main() -> Result<()> {
                     final_allow_tools,
                     final_workspace.as_deref(),
                     socket_path.as_deref(),
+                    final_session.as_deref(),
                 )
                 .await
             } else {
@@ -1085,6 +1157,14 @@ async fn main() -> Result<()> {
         }
 
         Commands::Tool { command } => cmd_tool(command, socket_path.as_deref(), json_output).await,
+
+        Commands::Session { command } => {
+            cmd_session(command, socket_path.as_deref(), json_output).await
+        }
+
+        Commands::Artifact { command } => {
+            cmd_artifact(command, socket_path.as_deref(), json_output).await
+        }
 
         Commands::Research {
             query,
@@ -2199,49 +2279,25 @@ impl AgentStorage for CliAgentStorage {
     }
 }
 
-/// Bridges the agent's browser tool shims to the running browser's MCP server
-/// over the UDS socket. The agent-facing shim names differ from the browser's
-/// `browser_*` MCP tool names, so they are mapped here before dispatch.
+/// Bridges the agent to the running browser's authoritative MCP capability
+/// discovery and execution endpoints. Browser tool identities are never
+/// reconstructed or aliased in the CLI.
 struct CliBrowserToolBridge {
     socket_path: Option<String>,
-    /// Runtime that owns the cached client's socket reader task.
-    ///
-    /// A `BrowserClient` cannot outlive the Tokio runtime where it connected:
-    /// its response reader is a spawned task. Reusing the client while dropping
-    /// a per-call runtime produced `A Tokio 1.x context was found, but it is
-    /// being shutdown` on the next browser action.
-    runtime: tokio::runtime::Handle,
     /// One reused browser connection for the whole run.
     ///
     /// The MCP server scopes tab leases and the domain allowlist to the
     /// connection, so reconnecting per call threw away the lease the previous call
     /// had just acquired. Holding the client here keeps that state alive.
-    client: Arc<Mutex<Option<Arc<maho_browser_mcp::client::BrowserClient>>>>,
+    client: Arc<tokio::sync::Mutex<Option<Arc<maho_browser_mcp::client::BrowserClient>>>>,
 }
 
 impl CliBrowserToolBridge {
-    fn new(socket_path: Option<String>, runtime: tokio::runtime::Handle) -> Self {
+    fn new(socket_path: Option<String>) -> Self {
         Self {
             socket_path,
-            runtime,
-            client: Arc::new(Mutex::new(Option::None)),
+            client: Arc::new(tokio::sync::Mutex::new(Option::None)),
         }
-    }
-}
-
-fn map_browser_tool_name(name: &str) -> &str {
-    match name {
-        "list_browser_tabs" => "browser_tab_list",
-        // Keep the DOM source: it is the only page representation carrying link
-        // `href` values, which the text extractors drop. Maho's injected ad-block
-        // stylesheet is removed agent-side by strip_injected_stylesheets(), so the
-        // model sees markup without the selector-rule dump.
-        "read_current_page" => "browser_page_content",
-        "get_selected_text" => "browser_page_text",
-        "get_active_tab" => "browser_tab_get",
-        "search_in_page" => "browser_search_in_page",
-        "extract_structured_page_context" => "browser_page_context",
-        other => other,
     }
 }
 
@@ -2313,7 +2369,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use maho_agent::BrowserToolBridge;
+    use maho_agent::{
+        BrowserToolBridge, BrowserToolDescriptor, BrowserToolExecution, BrowserToolExecutionReceipt,
+    };
     use serde_json::{json, Value};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
@@ -2365,57 +2423,70 @@ mod tests {
                     .expect("response must be writable");
             }
         });
-        let bridge = crate::CliBrowserToolBridge::new(
-            Some(socket_path.to_string_lossy().into_owned()),
-            runtime.handle().clone(),
-        );
+        let bridge =
+            crate::CliBrowserToolBridge::new(Some(socket_path.to_string_lossy().into_owned()));
 
-        assert_eq!(
-            bridge.invoke("browser_tab_list", "{}"),
-            Ok("{\"ok\":true}".to_string())
-        );
-        assert_eq!(
-            bridge.invoke("browser_tab_list", "{}"),
-            Ok("{\"ok\":true}".to_string())
-        );
+        let first = runtime
+            .block_on(bridge.execute_tool("browser_tab_list", "{}"))
+            .expect("first execution succeeds");
+        let second = runtime
+            .block_on(bridge.execute_tool("browser_tab_list", "{}"))
+            .expect("second execution succeeds");
+        assert_eq!(first.output_json, "{\"ok\":true}");
+        assert_eq!(second.output_json, "{\"ok\":true}");
         runtime.block_on(server).expect("test server must finish");
         assert_eq!(accepts.load(Ordering::SeqCst), 1);
     }
 
-    /// `browser_page_content` returns the live DOM, which on Maho includes the
-    /// injected ad-block stylesheet: 17 KB of selector rules for a 1 KB page.
-    /// The model then answers "I found the heading" without isolating it, so the
-    /// page-reading tool must map to the text extractor instead.
-    #[test]
-    fn read_current_page_maps_to_dom_source_for_link_urls() {
-        assert_eq!(
-            map_browser_tool_name("read_current_page"),
-            "browser_page_content",
-            "reading a page must keep href values, which text extraction drops"
-        );
-    }
-
-    /// The raw-DOM tool stays reachable under its own name for callers that
-    /// really do want markup.
-    #[test]
-    fn raw_page_content_tool_is_still_addressable() {
-        assert_eq!(
-            map_browser_tool_name("browser_page_content"),
-            "browser_page_content"
-        );
-    }
-
     use super::{
-        mail_tool_request, map_browser_tool_name, select_byok_base_url,
-        unsupported_routine_run_flags, MailCommands,
+        mail_tool_request, select_byok_base_url, unsupported_routine_run_flags, MailCommands,
     };
 
     #[test]
-    fn browser_tool_mapping_routes_tab_list_to_mcp_tool_name() {
+    fn browser_discovery_decodes_only_typed_descriptors() {
+        let descriptor = BrowserToolDescriptor {
+            capability_id: "tab.list".to_string(),
+            name: "browser_tab_list".to_string(),
+            description: "List tabs".to_string(),
+            input_schema: serde_json::json!({"type":"object","properties":{}}),
+            schema_version: 1,
+            policy: maho_agent::BrowserToolPolicy {
+                sensitive: false,
+                permission: maho_types::tool::ToolPermission::AutoApprove,
+            },
+        };
+        let wire = serde_json::json!({"tools": [descriptor.clone()]});
         assert_eq!(
-            map_browser_tool_name("list_browser_tabs"),
-            "browser_tab_list"
+            crate::decode_browser_descriptors(wire).expect("typed discovery decodes"),
+            vec![descriptor]
         );
+        assert!(crate::decode_browser_descriptors(serde_json::json!({
+            "tools": [{"name":"guessed_tool","description":"missing typed policy"}]
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn typed_execution_decoder_preserves_receipt_or_builds_boundary_receipt() {
+        let typed = BrowserToolExecution {
+            output_json: "{\"ok\":true}".to_string(),
+            receipt: BrowserToolExecutionReceipt {
+                capability_id: "tab.list".to_string(),
+                execution_id: "browser-receipt".to_string(),
+                metadata: serde_json::json!({}),
+            },
+        };
+        let decoded = crate::decode_browser_execution(
+            "tab.list",
+            serde_json::to_value(&typed).expect("execution serializes"),
+        )
+        .expect("typed execution decodes");
+        assert_eq!(decoded, typed);
+
+        let wrapped = crate::decode_browser_execution("tab.list", serde_json::json!({"tabs": []}))
+            .expect("legacy result envelope is wrapped at the transport boundary");
+        assert_eq!(wrapped.receipt.capability_id, "tab.list");
+        assert_eq!(wrapped.output_json, "{\"tabs\":[]}");
     }
 
     #[test]
@@ -2522,48 +2593,174 @@ mod tests {
             "tools/call browser_navigate failed: rpc error -32000: domain_approval_required"
         ));
     }
+
+    #[test]
+    fn maho_app_bundle_path_resolves_to_executable() {
+        let temp = tempfile::tempdir().expect("temporary app directory must exist");
+        let app = temp.path().join("Maho.app");
+        let executable = app.join("Contents/MacOS/Maho");
+        std::fs::create_dir_all(
+            executable
+                .parent()
+                .expect("bundle executable must have a parent"),
+        )
+        .expect("bundle executable directory must exist");
+        std::fs::write(&executable, b"fixture").expect("bundle executable fixture must exist");
+
+        assert_eq!(crate::resolve_maho_binary_path(&app), Some(executable));
+    }
+
+    #[test]
+    fn direct_maho_executable_path_is_preserved() {
+        let temp = tempfile::tempdir().expect("temporary binary directory must exist");
+        let executable = temp.path().join("Maho");
+        std::fs::write(&executable, b"fixture").expect("binary fixture must exist");
+
+        assert_eq!(
+            crate::resolve_maho_binary_path(&executable),
+            Some(executable.clone())
+        );
+    }
 }
 
+fn decode_browser_descriptors(
+    result: serde_json::Value,
+) -> Result<Vec<maho_agent::BrowserToolDescriptor>> {
+    let tools = result
+        .get("tools")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("browser tools/list response is missing typed tools"))?;
+    serde_json::from_value(tools).map_err(|error| {
+        anyhow::anyhow!("browser tools/list returned invalid descriptors: {error}")
+    })
+}
+
+fn decode_browser_execution(
+    capability_id: &str,
+    result: serde_json::Value,
+) -> Result<maho_agent::BrowserToolExecution> {
+    if let Ok(execution) =
+        serde_json::from_value::<maho_agent::BrowserToolExecution>(result.clone())
+    {
+        if execution.receipt.capability_id != capability_id {
+            bail!("browser execution receipt capability does not match the requested capability");
+        }
+        return Ok(execution);
+    }
+    Ok(maho_agent::BrowserToolExecution {
+        output_json: serde_json::to_string(&result)?,
+        receipt: maho_agent::BrowserToolExecutionReceipt {
+            capability_id: capability_id.to_string(),
+            execution_id: uuid::Uuid::new_v4().to_string(),
+            metadata: serde_json::json!({"source":"maho-cli-browser-transport"}),
+        },
+    })
+}
+
+#[async_trait::async_trait]
 impl maho_agent::BrowserToolBridge for CliBrowserToolBridge {
-    fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        let mapped = map_browser_tool_name(tool_name).to_string();
+    async fn list_tool_descriptors(
+        &self,
+    ) -> std::result::Result<
+        Vec<maho_agent::BrowserToolDescriptor>,
+        maho_agent::BrowserToolBridgeError,
+    > {
         let socket_path = self.socket_path.clone();
-        let args: serde_json::Value =
-            serde_json::from_str(args_json).unwrap_or_else(|_| serde_json::json!({}));
-        let mut client = self
-            .client
-            .lock()
-            .map_err(|_| "browser connection cache lock poisoned".to_string())?;
-        self.runtime.block_on(async move {
-            // Serialize connection initialization and calls. The browser scopes
-            // domain approval and tab leases to this MCP session, so concurrent
-            // first calls must not create competing sessions and overwrite the
-            // cache while one of them is acquiring state on another connection.
-            if client.is_none() {
-                *client = Some(Arc::new(
-                    browser::connect(socket_path.as_deref())
-                        .await
-                        .map_err(|e| e.to_string())?,
-                ));
-            }
-            let connected = client
-                .as_ref()
-                .ok_or_else(|| "browser client initialization produced no client".to_string())?;
-            let result = match browser::send_stateful_tool_call(connected, &mapped, args.clone()).await {
-                Ok(result) => result,
-                Err(error) => {
-                    let message = error.to_string();
-                    if browser_session_transport_failed(&message) || browser::is_transport_ambiguous(&error) {
-                        *client = None;
-                        return Err(format!(
-                            "browser MCP session invalidated after transport loss; the outcome of `{mapped}` is unknown — start a new session: {message}"
-                        ));
-                    }
-                    return Err(message);
-                }
-            };
-            serde_json::to_string(&result).map_err(|e| e.to_string())
+        let mut client = self.client.lock().await;
+        if client.is_none() {
+            let connected = browser::connect(socket_path.as_deref())
+                .await
+                .map_err(|error| {
+                    maho_agent::BrowserToolBridgeError::new(
+                        "discovery_unavailable",
+                        error.to_string(),
+                        true,
+                    )
+                })?;
+            *client = Some(Arc::new(connected));
+        }
+        let connected = client.as_ref().ok_or_else(|| {
+            maho_agent::BrowserToolBridgeError::new(
+                "discovery_unavailable",
+                "browser client initialization produced no client",
+                true,
+            )
+        })?;
+        let descriptors = connected
+            .call("tools/list", serde_json::json!({}))
+            .await
+            .map_err(|error| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "discovery_unavailable",
+                    error.to_string(),
+                    true,
+                )
+            })?;
+        decode_browser_descriptors(descriptors).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new(
+                "discovery_unavailable",
+                error.to_string(),
+                true,
+            )
         })
+    }
+
+    async fn execute_tool(
+        &self,
+        capability_id: &str,
+        args_json: &str,
+    ) -> std::result::Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError>
+    {
+        let capability_id = capability_id.to_string();
+        let socket_path = self.socket_path.clone();
+        let args = serde_json::from_str(args_json).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new("invalid_arguments", error.to_string(), false)
+        })?;
+        let mut client = self.client.lock().await;
+        if client.is_none() {
+            let connected = browser::connect(socket_path.as_deref())
+                .await
+                .map_err(|error| {
+                    maho_agent::BrowserToolBridgeError::new(
+                        "execution_unavailable",
+                        error.to_string(),
+                        true,
+                    )
+                })?;
+            *client = Some(Arc::new(connected));
+        }
+        let result = {
+            let connected = client.as_ref().ok_or_else(|| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "execution_unavailable",
+                    "browser client initialization produced no client",
+                    true,
+                )
+            })?;
+            browser::send_stateful_tool_call(connected, &capability_id, args).await
+        };
+        match result {
+            Ok(result) => decode_browser_execution(&capability_id, result).map_err(|error| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "execution_failed",
+                    error.to_string(),
+                    false,
+                )
+            }),
+            Err(error) => {
+                let message = error.to_string();
+                if browser_session_transport_failed(&message)
+                    || browser::is_transport_ambiguous(&error)
+                {
+                    *client = None;
+                }
+                Err(maho_agent::BrowserToolBridgeError::new(
+                    "execution_failed",
+                    message,
+                    false,
+                ))
+            }
+        }
     }
 }
 
@@ -2635,10 +2832,7 @@ async fn build_cli_backend(
     // Register the running browser as a tool bridge so the agent can drive
     // page/tab tools over the MCP socket during the loop.
     let browser_bridge: Arc<dyn maho_agent::BrowserToolBridge> =
-        Arc::new(CliBrowserToolBridge::new(
-            socket_path.map(String::from),
-            tokio::runtime::Handle::current(),
-        ));
+        Arc::new(CliBrowserToolBridge::new(socket_path.map(String::from)));
     backend
         .set_browser_tool_bridge(browser_bridge)
         .map_err(|e| anyhow::anyhow!("Failed to set browser tool bridge: {:?}", e))?;
@@ -2768,16 +2962,19 @@ async fn cmd_run(
     allow_tools: bool,
     workspace: Option<&str>,
     socket_path: Option<&str>,
+    session_id: Option<&str>,
 ) -> Result<()> {
     let backend =
         build_cli_backend(provider, model, yolo, allow_tools, workspace, socket_path).await?;
 
     // Run the prompt
     println!("Running autonomous agent session...");
-    let response = backend
-        .run_prompt(prompt)
-        .await
-        .map_err(|e| anyhow::anyhow!("Agent loop failed: {:?}", e))?;
+    let response = if let Some(session_id) = session_id {
+        backend.run_prompt_in_session(session_id, prompt).await
+    } else {
+        backend.run_prompt(prompt).await
+    }
+    .map_err(|e| anyhow::anyhow!("Agent loop failed: {:?}", e))?;
 
     println!("\n--- Agent Response ---\n{}", response);
     Ok(())
@@ -2864,6 +3061,71 @@ async fn cmd_research(
     Ok(())
 }
 
+fn validate_tool_discovery(result: &serde_json::Value) -> Result<()> {
+    let diagnostics = result
+        .get("catalogDiagnostics")
+        .ok_or_else(|| anyhow::anyhow!("browser discovery omitted catalog diagnostics"))?;
+    for field in [
+        "catalogVersion",
+        "schemaVersion",
+        "resultVersion",
+        "canonicalCount",
+    ] {
+        if diagnostics
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            == 0
+        {
+            bail!("browser catalog diagnostics have invalid {field}");
+        }
+    }
+    let tools = result
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("browser discovery omitted tools"))?;
+    let expected = diagnostics
+        .pointer("/surfaces/publicMcp/count")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("browser diagnostics omitted public MCP count"))?;
+    if expected != tools.len() as u64 {
+        bail!("browser catalog diagnostics do not match tools/list");
+    }
+    Ok(())
+}
+
+fn find_tool_by_id<'a>(result: &'a serde_json::Value, id: &str) -> Result<&'a serde_json::Value> {
+    validate_tool_discovery(result)?;
+    result["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools.iter().find(|tool| {
+                tool.get("capabilityId").and_then(serde_json::Value::as_str) == Some(id)
+            })
+        })
+        .ok_or_else(|| anyhow::anyhow!("unknown or unavailable capability '{id}'"))
+}
+
+fn packaged_tool_catalog() -> Result<serde_json::Value> {
+    let catalog: serde_json::Value =
+        serde_json::from_str(include_str!("tool_catalog_snapshot.json"))
+            .context("packaged tool catalog snapshot is invalid")?;
+    validate_tool_discovery(&catalog)?;
+    Ok(catalog)
+}
+
+async fn discover_tool_catalog(
+    socket_path: Option<&str>,
+) -> Result<(serde_json::Value, &'static str, bool)> {
+    let client = match browser::connect(socket_path).await {
+        Ok(client) => client,
+        Err(_) => return Ok((packaged_tool_catalog()?, "packaged_snapshot", false)),
+    };
+    let discovery = client.call("tools/list", serde_json::json!({})).await?;
+    validate_tool_discovery(&discovery)?;
+    Ok((discovery, "live_browser", true))
+}
+
 async fn cmd_tool(
     command: ToolCommands,
     socket_path: Option<&str>,
@@ -2871,42 +3133,67 @@ async fn cmd_tool(
 ) -> Result<()> {
     match command {
         ToolCommands::List => {
-            let client = match browser::connect(socket_path).await {
-                Ok(c) => c,
-                Err(e) => {
-                    bail!("Could not connect to browser to list tools: {}", e);
-                }
-            };
-
-            let result = client.call("tools/list", serde_json::json!({})).await?;
+            let (result, source, runtime_available) = discover_tool_catalog(socket_path).await?;
             if json_output {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
-                    for tool in tools {
-                        let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let desc = tool
-                            .get("description")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        println!("{}: {}", name, desc);
-                    }
-                } else {
-                    println!("No tools found.");
+                let output = serde_json::json!({
+                    "source": source,
+                    "runtimeAvailable": runtime_available,
+                    "catalogDiagnostics": result["catalogDiagnostics"].clone(),
+                    "tools": result["tools"].clone(),
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
+                for tool in tools {
+                    let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let desc = tool
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let id = tool
+                        .get("capabilityId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    println!("{} [{}]: {}", id, name, desc);
                 }
             }
             Ok(())
         }
-        ToolCommands::Call { name, args } => {
+        ToolCommands::Describe { id } => {
+            let (result, source, runtime_available) = discover_tool_catalog(socket_path).await?;
+            let tool = find_tool_by_id(&result, &id)?;
+            if json_output {
+                let output = serde_json::json!({
+                    "source": source,
+                    "runtimeAvailable": runtime_available,
+                    "catalogDiagnostics": result["catalogDiagnostics"].clone(),
+                    "tool": tool,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!("{}", serde_json::to_string_pretty(tool)?);
+            }
+            Ok(())
+        }
+        ToolCommands::Run { id, args } => {
             // Session-binding tools acquire browser-side state (a lease, an
             // in-flight network capture) that must be released by the same
             // session that created it. A one-shot `maho tool call` exits right
             // after the call, orphaning that state — a leaked lease blocks other
             // clients, an in-flight capture never stops. Reject BEFORE connecting
             // or executing anything, regardless of whether the browser is up.
-            if maho_cli::STATEFUL_TOOLS.iter().any(|&t| t == name) {
+            const STATEFUL_CAPABILITY_IDS: &[&str] = &[
+                "capture.network_start",
+                "capture.network_stop",
+                "capture.network_get_har",
+                "lease.acquire",
+                "lease.heartbeat",
+                "lease.release",
+            ];
+            if maho_cli::STATEFUL_TOOLS.iter().any(|&tool| tool == id)
+                || STATEFUL_CAPABILITY_IDS.contains(&id.as_str())
+            {
                 eprintln!(
-                    "Error: '{name}' is a session-binding tool and cannot be run as a one-shot \
+                    "Error: '{id}' is a session-binding tool and cannot be run as a one-shot \
                      `maho tool call` — its browser-side state (lease / network capture) would be \
                      orphaned when the command exits.\n\
                      Run it inside a persistent session instead: `maho repl` holds the session \
@@ -2918,13 +3205,38 @@ async fn cmd_tool(
             let client = match browser::connect(socket_path).await {
                 Ok(c) => c,
                 Err(e) => {
+                    if json_output {
+                        let error = serde_json::json!({
+                            "ok": false,
+                            "error": {
+                                "status": "runtime_unavailable",
+                                "message": format!(
+                                    "Failed to connect to browser to run capability '{}': {}",
+                                    id, e
+                                ),
+                                "data": {
+                                    "capabilityId": id,
+                                    "runtimeAvailable": false,
+                                }
+                            }
+                        });
+                        eprintln!("{}", serde_json::to_string_pretty(&error)?);
+                        std::process::exit(1);
+                    }
                     bail!(
-                        "Failed to connect to browser to call tool '{}': {}",
-                        name,
+                        "Failed to connect to browser to run capability '{}': {}",
+                        id,
                         e
                     );
                 }
             };
+
+            let discovery = client.call("tools/list", serde_json::json!({})).await?;
+            let descriptor = find_tool_by_id(&discovery, &id)?;
+            let name = descriptor
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("capability '{id}' has no executable tool name"))?;
 
             let args_val = if let Some(j) = args {
                 serde_json::from_str(&j).with_context(|| "Failed to parse arguments as JSON")?
@@ -2941,6 +3253,200 @@ async fn cmd_tool(
             Ok(())
         }
     }
+}
+
+fn require_non_empty(value: &str, field: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{field} cannot be empty");
+    }
+    Ok(())
+}
+
+fn print_control_error(error: &maho_cli::session_artifact::CliControlError, json_output: bool) {
+    if json_output {
+        let body = serde_json::json!({
+            "ok": false,
+            "error": {
+                "status": error.status(),
+                "message": error.to_string(),
+                "data": error.data(),
+            }
+        });
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| error.to_string())
+        );
+    } else {
+        eprintln!("Error [{}]: {}", error.status(), error);
+    }
+}
+
+async fn connect_control_browser(
+    socket_path: Option<&str>,
+) -> std::result::Result<
+    maho_browser_mcp::client::BrowserClient,
+    maho_cli::session_artifact::CliControlError,
+> {
+    maho_cli::session_artifact::connect(socket_path).await
+}
+
+async fn run_control_operation(
+    client: &maho_browser_mcp::client::BrowserClient,
+    operation: maho_cli::session_artifact::ControlOperation,
+    arguments: serde_json::Value,
+    json_output: bool,
+) -> Result<serde_json::Value> {
+    match maho_cli::session_artifact::call(client, operation, arguments).await {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            print_control_error(&error, json_output);
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn cmd_session(
+    command: SessionCommands,
+    _socket_path: Option<&str>,
+    json_output: bool,
+) -> Result<()> {
+    let db_path = maho_cli::workspace::default_db_path();
+    let storage = maho_cli::workspace::open_storage(&db_path)
+        .map_err(|error| anyhow::anyhow!("Failed to open shared agent storage: {error}"))?;
+    let result = match command {
+        SessionCommands::List => maho_cli::session_artifact::list_sessions(&storage),
+        SessionCommands::Resume { session_id } => {
+            require_non_empty(&session_id, "session ID")?;
+            maho_cli::session_artifact::resume_session(&storage, &session_id)
+                .map_err(anyhow::Error::new)?
+        }
+        SessionCommands::History { session_id } => {
+            require_non_empty(&session_id, "session ID")?;
+            maho_cli::session_artifact::session_history(&storage, &session_id)
+                .map_err(anyhow::Error::new)?
+        }
+    };
+    print_session_result(&result, json_output)
+}
+
+fn print_session_result(result: &serde_json::Value, json_output: bool) -> Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(result)?);
+        return Ok(());
+    }
+    if let Some(sessions) = result.get("sessions").and_then(serde_json::Value::as_array) {
+        if sessions.is_empty() {
+            println!("No sessions found.");
+        } else {
+            println!("{:<24} {:<24} {}", "SESSION", "UPDATED", "TITLE");
+            for session in sessions {
+                println!(
+                    "{:<24} {:<24} {}",
+                    session.get("id").and_then(|v| v.as_str()).unwrap_or(""),
+                    session
+                        .get("updatedAt")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(""),
+                    session.get("title").and_then(|v| v.as_str()).unwrap_or("")
+                );
+            }
+        }
+    } else {
+        println!("{}", serde_json::to_string_pretty(result)?);
+    }
+    Ok(())
+}
+
+async fn cmd_artifact(
+    command: ArtifactCommands,
+    socket_path: Option<&str>,
+    json_output: bool,
+) -> Result<()> {
+    use maho_cli::session_artifact::{validate_export_destination, ControlOperation};
+
+    let (operation, arguments) = match command {
+        ArtifactCommands::List { session } => {
+            if let Some(session) = session.as_deref() {
+                require_non_empty(session, "session ID")?;
+            }
+            (
+                ControlOperation::ArtifactList,
+                serde_json::json!({"session_id": session}),
+            )
+        }
+        ArtifactCommands::Export { artifact_id, out } => {
+            require_non_empty(&artifact_id, "artifact ID")?;
+            let destination = validate_export_destination(&out).map_err(anyhow::Error::new)?;
+            (
+                ControlOperation::ArtifactExport,
+                serde_json::json!({
+                    "artifact_id": artifact_id,
+                    "destination": destination.to_string_lossy(),
+                }),
+            )
+        }
+    };
+
+    let client = match connect_control_browser(socket_path).await {
+        Ok(client) => client,
+        Err(error) => {
+            print_control_error(&error, json_output);
+            std::process::exit(1);
+        }
+    };
+    let result = run_control_operation(&client, operation, arguments, json_output).await?;
+    print_artifact_result(operation, &result, json_output)
+}
+
+fn print_artifact_result(
+    operation: maho_cli::session_artifact::ControlOperation,
+    result: &serde_json::Value,
+    json_output: bool,
+) -> Result<()> {
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(result)?);
+        return Ok(());
+    }
+    match operation {
+        maho_cli::session_artifact::ControlOperation::ArtifactList => {
+            let artifacts = result
+                .get("artifacts")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if artifacts.is_empty() {
+                println!("No artifacts found.");
+            } else {
+                println!(
+                    "{:<24} {:<12} {:<10} {}",
+                    "ARTIFACT", "SESSION", "BYTES", "NAME"
+                );
+                for artifact in artifacts {
+                    println!(
+                        "{:<24} {:<12} {:<10} {}",
+                        artifact
+                            .get("artifact_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        artifact
+                            .get("session_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(""),
+                        artifact
+                            .get("size_bytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        artifact
+                            .get("display_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                    );
+                }
+            }
+        }
+        _ => println!("{}", serde_json::to_string_pretty(result)?),
+    }
+    Ok(())
 }
 
 // ─── MCP server entrypoint ──────────────────────────────────────────────────
@@ -3192,8 +3698,7 @@ async fn cmd_routine_run(name: &str, socket_path: Option<&str>, json_output: boo
     let client = browser::connect(socket_path).await?;
 
     println!("Running routine '{}'...", name);
-    let args = serde_json::json!({ "id": name });
-    match browser::send_tool_call(&client, "browser_routines_run", args).await {
+    match browser::send_routine_run(&client, name).await {
         Ok(result) => {
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -3204,17 +3709,12 @@ async fn cmd_routine_run(name: &str, socket_path: Option<&str>, json_output: boo
             }
             Ok(())
         }
-        Err(e) => {
-            // Full anyhow chain (includes the browser's RPC error message).
-            let msg = format!("{e:#}");
-            // Preserve the tier-lock CLEAN error: Max-tier gate → exit code 2.
-            if msg.contains("Max tier") {
-                eprintln!("Error: Routines are available on Max tier only");
-                std::process::exit(2);
-            }
-            // Any other browser-side failure (not found, execution error) →
-            // clean, non-zero, non-tier-gate exit.
-            eprintln!("Error: {msg}");
+        Err(browser::RoutineCallError::TierLocked { .. }) => {
+            eprintln!("Error: Routines are available on Max tier only");
+            std::process::exit(2);
+        }
+        Err(browser::RoutineCallError::Other(error)) => {
+            eprintln!("Error: {error}");
             std::process::exit(1);
         }
     }
@@ -3222,13 +3722,22 @@ async fn cmd_routine_run(name: &str, socket_path: Option<&str>, json_output: boo
 
 // ─── Headless command handler ─────────────────────────────────────────────────
 
+fn resolve_maho_binary_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+    if path.extension().is_some_and(|extension| extension == "app") {
+        let executable_name = path.file_stem()?;
+        let executable = path.join("Contents/MacOS").join(executable_name);
+        return executable.exists().then_some(executable);
+    }
+    Some(path.to_path_buf())
+}
+
 fn find_maho_binary() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("MAHO_APP_PATH") {
         let path = std::path::PathBuf::from(&p);
-        if path.exists() {
-            return Some(path);
-        }
-        // Stale override: fall through to defaults rather than hard-failing.
+        return resolve_maho_binary_path(&path);
     }
 
     let candidates = [
@@ -3730,7 +4239,7 @@ Commands:
 ";
 
 async fn cmd_repl(socket_path: Option<&str>, _json_output: bool) -> Result<()> {
-    let client = browser::connect(socket_path).await?;
+    let client = browser::connect_repl(socket_path).await?;
 
     let history_dir = dirs_path();
     std::fs::create_dir_all(&history_dir).ok();
@@ -3779,11 +4288,8 @@ fn dirs_path() -> std::path::PathBuf {
 
 /// Acquire an (auto-stealing) lease on the active tab so subsequent mutations
 /// pass the active-tab lease gate. Best-effort.
-async fn ensure_active_lease(
-    client: &maho_browser_mcp::client::BrowserClient,
-) -> Result<()> {
-    let result =
-        browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
+async fn ensure_active_lease(client: &maho_browser_mcp::client::BrowserClient) -> Result<()> {
+    let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
     if let Some(tabs) = result.get("tabs").and_then(|t| t.as_array()) {
         if let Some(active) = tabs
             .iter()
@@ -4039,7 +4545,11 @@ async fn handle_repl_line(
                     }
                 }
             } else {
-                match rest.split_whitespace().next().and_then(|s| s.parse::<i64>().ok()) {
+                match rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|s| s.parse::<i64>().ok())
+                {
                     Some(n) if n >= 0 => Some(n),
                     _ => {
                         println!("Usage: click <ref> | click @<name>");
@@ -4054,8 +4564,7 @@ async fn handle_repl_line(
         }
         "type" => {
             let rest = line[cmd.len()..].trim_start();
-            let (target, text): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@')
-            {
+            let (target, text): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@') {
                 match sel.split_once('=') {
                     Some((name, val)) => match resolve_ref_by_name(client, name).await? {
                         Some(r) => (Some(r), val.to_string()),
@@ -4070,7 +4579,10 @@ async fn handle_repl_line(
                     }
                 }
             } else {
-                let ref_num = parts.get(1).and_then(|s| s.parse::<i64>().ok()).filter(|n| *n >= 0);
+                let ref_num = parts
+                    .get(1)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|n| *n >= 0);
                 (ref_num, parts.get(2).unwrap_or(&"").to_string())
             };
             match target {
@@ -4108,8 +4620,7 @@ async fn handle_repl_line(
         }
         "select" => {
             let rest = line[cmd.len()..].trim_start();
-            let (target, value): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@')
-            {
+            let (target, value): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@') {
                 match sel.split_once('=') {
                     Some((name, val)) => match resolve_ref_by_name(client, name).await? {
                         Some(r) => (Some(r), val.to_string()),
@@ -4124,7 +4635,10 @@ async fn handle_repl_line(
                     }
                 }
             } else {
-                let ref_num = parts.get(1).and_then(|s| s.parse::<i64>().ok()).filter(|n| *n >= 0);
+                let ref_num = parts
+                    .get(1)
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .filter(|n| *n >= 0);
                 (ref_num, parts.get(2).unwrap_or(&"").to_string())
             };
             match target {

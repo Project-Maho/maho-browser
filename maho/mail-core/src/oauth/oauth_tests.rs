@@ -471,7 +471,8 @@ fn complete_reauthorization_replaces_credentials_without_replacing_account() {
 
     assert_eq!(response.id, "existing-account");
     assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get::<_, i64>(0))
+        conn.query_row("SELECT COUNT(*) FROM accounts", [], |row| row
+            .get::<_, i64>(0))
             .unwrap(),
         1
     );

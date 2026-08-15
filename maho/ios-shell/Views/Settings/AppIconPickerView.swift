@@ -25,26 +25,41 @@ struct AppIconPickerView: View {
             Section {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 72))], spacing: 20) {
                     ForEach(options) { option in
+                        let isSelected = currentIcon == option.id
                         Button {
                             setIcon(option)
                         } label: {
                             VStack(spacing: 8) {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                        .fill(currentIcon == option.id ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
+                                        .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.1))
                                         .frame(width: 72, height: 72)
 
                                     Image(lucide: option.icon)
                                         .font(.system(size: 32))
-                                        .foregroundStyle(currentIcon == option.id ? Color.accentColor : Color.primary)
+                                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+
+                                    if isSelected {
+                                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                            .strokeBorder(Color.accentColor, lineWidth: 2)
+                                            .frame(width: 72, height: 72)
+
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.system(size: 20))
+                                            .foregroundStyle(Color.accentColor, Color(.systemBackground))
+                                            .offset(x: 28, y: -28)
+                                    }
                                 }
 
                                 Text(option.name)
                                     .font(.caption.weight(.medium))
-                                    .foregroundStyle(currentIcon == option.id ? Color.accentColor : Color.primary)
+                                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(option.name)
+                        .accessibilityValue(isSelected ? "Selected" : "")
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
                 }
                 .padding(.vertical, 8)

@@ -232,7 +232,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
   const onSkipClick = useCallback(() => {
     if (snapshot.currentPage === WelcomePage.PasswordSetup) {
-      store.skipPasswordSetup();
+      void store.skipPasswordSetup();
       return;
     }
     if (snapshot.currentPage === WelcomePage.SourceSelect) {

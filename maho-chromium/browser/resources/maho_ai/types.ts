@@ -556,6 +556,7 @@ export interface AppState {
   booting: boolean;
   bootError: string|null;
   developerMode: boolean;
+  activeSurface: 'chat'|'routines';
   connectionState: ConnectionState;
   activeAdapterName: string;
   sessionsById: Record<string, SessionRecord>;
@@ -612,6 +613,7 @@ export function createInitialState(): AppState {
     booting: true,
     bootError: null,
     developerMode: false,
+    activeSurface: 'chat',
     connectionState: RuntimeConnectionState.kConnecting,
     activeAdapterName: 'OpenCode',
     sessionsById: {},

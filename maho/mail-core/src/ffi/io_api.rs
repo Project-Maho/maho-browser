@@ -5,6 +5,8 @@ use std::io::{BufRead, BufReader};
 use std::os::raw::c_char;
 
 use chrono::Utc;
+use rusqlite::TransactionBehavior;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use maho_core::models::email::Email;
@@ -37,6 +39,92 @@ pub struct ImportResult {
     pub skipped: u32,
     pub failed: u32,
     pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BehaviorUpdateStatus {
+    Applied,
+    Conflict,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct BehaviorSnapshot {
+    #[serde(default)]
+    revision: u64,
+    #[serde(flatten)]
+    values: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+struct BehaviorUpdateResult {
+    status: BehaviorUpdateStatus,
+    snapshot: BehaviorSnapshot,
+}
+
+fn update_behavior_setting_atomic(
+    pool: &maho_core::db::SqlitePool,
+    expected_revision: u64,
+    key: &str,
+    value_json: &str,
+) -> Result<BehaviorUpdateResult> {
+    let value: Value = serde_json::from_str(value_json)?;
+    let valid_scalar = matches!(
+        value,
+        Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_)
+    );
+    let valid_preview = key != "notification_preview"
+        || matches!(
+            value.as_str(),
+            Some("sender_subject" | "sender_only" | "generic")
+        );
+    let valid_boolean =
+        !matches!(key, "desktop_notifications" | "unread_badge_enabled") || value.is_boolean();
+
+    let mut db = pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let transaction = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current_json: Option<String> = transaction
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            ["mail_behavior_prefs"],
+            |row| row.get(0),
+        )
+        .ok();
+    let mut snapshot: BehaviorSnapshot =
+        serde_json::from_str(current_json.as_deref().unwrap_or("{}"))?;
+
+    if snapshot.revision != expected_revision {
+        transaction.commit()?;
+        return Ok(BehaviorUpdateResult {
+            status: BehaviorUpdateStatus::Conflict,
+            snapshot,
+        });
+    }
+    if key == "version" || key == "revision" || !valid_scalar || !valid_preview || !valid_boolean {
+        transaction.commit()?;
+        return Ok(BehaviorUpdateResult {
+            status: BehaviorUpdateStatus::Invalid,
+            snapshot,
+        });
+    }
+
+    snapshot.revision += 1;
+    snapshot.values.insert(key.to_string(), value);
+    let persisted = serde_json::to_string(&snapshot)?;
+    transaction.execute(
+        "INSERT INTO app_settings (key, value, updated_at)
+         VALUES (?1, ?2, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at",
+        rusqlite::params!["mail_behavior_prefs", persisted],
+    )?;
+    transaction.commit()?;
+    Ok(BehaviorUpdateResult {
+        status: BehaviorUpdateStatus::Applied,
+        snapshot,
+    })
 }
 
 fn extract_first_addr(addr: Option<&mail_parser::Address>) -> (String, Option<String>) {
@@ -480,6 +568,29 @@ pub extern "C" fn MahoMailSetAppSetting(
 }
 
 #[no_mangle]
+pub extern "C" fn MahoMailUpdateBehaviorSetting(
+    expected_revision: u64,
+    key: *const c_char,
+    value_json: *const c_char,
+    callback: MahoMailReadCallback,
+    user_data: *mut c_void,
+) -> bool {
+    accept_read_call(move || {
+        let Ok(key) = non_empty(key, "key") else {
+            return false;
+        };
+        let Ok(value_json) = c_string(value_json, "value_json") else {
+            return false;
+        };
+        accept_read(callback, user_data, move |ctx| {
+            blocking_json(move || {
+                update_behavior_setting_atomic(&ctx.pool, expected_revision, &key, &value_json)
+            })
+        })
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn MahoMailMd5Hash(
     input: *const c_char,
     callback: MahoMailReadCallback,
@@ -505,7 +616,7 @@ pub extern "C" fn MahoMailMd5Hash(
 mod tests {
     use super::*;
     use std::ffi::{CStr, CString};
-    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::{Arc, Barrier};
 
     struct Capture {
         slot: std::sync::Mutex<Option<(bool, String)>>,
@@ -598,6 +709,67 @@ mod tests {
             assert_eq!(val, "\"test_setting_value\"");
         }
     }
+
+    #[test]
+    fn behavior_settings_compare_and_swap_is_atomic_for_concurrent_writers() {
+        let pool = crate::test_support::pool_with_seeded_data();
+        {
+            let db = pool.get().unwrap();
+            db.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, datetime('now'))",
+                rusqlite::params![
+                    "mail_behavior_prefs",
+                    r#"{"revision":7,"block_remote_images":true,"block_trackers":true}"#,
+                ],
+            )
+            .unwrap();
+        }
+
+        let barrier = Arc::new(Barrier::new(3));
+        let writers = [
+            ("block_remote_images", "false"),
+            ("block_trackers", "false"),
+        ]
+        .map(|(key, value)| {
+            let pool = pool.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                update_behavior_setting_atomic(&pool, 7, key, value).unwrap()
+            })
+        });
+
+        barrier.wait();
+        let results = writers.map(|writer| writer.join().unwrap());
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result.status == BehaviorUpdateStatus::Applied)
+                .count(),
+            1
+        );
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result.status == BehaviorUpdateStatus::Conflict)
+                .count(),
+            1
+        );
+        assert!(results.iter().all(|result| result.snapshot.revision == 8));
+
+        let db = pool.get().unwrap();
+        let persisted: String = db
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                ["mail_behavior_prefs"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let persisted: BehaviorSnapshot = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(persisted.revision, 8);
+        assert_eq!(persisted, results[0].snapshot);
+        assert_eq!(persisted, results[1].snapshot);
+    }
 }
 
 // === [W-J] ===
@@ -633,6 +805,8 @@ pub extern "C" fn MahoMailExportMailTransferArtifact(
                     &art_path,
                     &passphrase,
                     db_copy_path.as_deref(),
+                    &ctx.sqlcipher_key,
+                    &ctx.credential_key,
                 )
                 .map_err(|e| {
                     MailFfiError::Core(maho_core::error::AppError::Internal(e.to_string()))

@@ -383,7 +383,15 @@ void MahoRoutinesPageHandler::RunRoutine(const std::string& id,
   if (tier < 0) {
     tier = 0;
   }
-  maho_routines_run(core, id.c_str(), tier, &OnRoutineComplete, &OnRoutineError, ctx);
+  int rc = maho_routines_run(core, id.c_str(), tier, &OnRoutineComplete,
+                             &OnRoutineError, ctx);
+  if (rc != 0) {
+    auto cb = std::move(ctx->callback);
+    delete ctx;
+    FailRoutine(std::move(cb),
+                tier < 2 ? "Routines are available on Max tier only"
+                         : "Failed to start routine");
+  }
 }
 
 void MahoRoutinesPageHandler::StartRoutine(const std::string& id,

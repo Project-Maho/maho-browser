@@ -77,6 +77,7 @@ impl SettingsManager {
                 ],
                 pinned_close_behavior: PinnedCloseBehavior::Switch,
                 auto_delete_empty_folders_on_tidy: true,
+                new_tab_position: NewTabPosition::Top,
             },
             appearance: AppearanceSettings {
                 theme: Theme::System,
@@ -159,6 +160,9 @@ impl SettingsManager {
             }
             if let Some(v) = general.auto_delete_empty_folders_on_tidy {
                 self.settings.general.auto_delete_empty_folders_on_tidy = v;
+            }
+            if let Some(position) = general.new_tab_position {
+                self.settings.general.new_tab_position = position;
             }
         }
         if let Some(appearance) = changes.appearance {

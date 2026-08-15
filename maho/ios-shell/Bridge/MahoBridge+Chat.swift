@@ -120,6 +120,17 @@ private func enqueueChatToken(_ userData: UnsafeMutableRawPointer?, _ token: Uns
     context.buffer.enqueue(event)
 }
 
+private func enqueueChatThinking(_ userData: UnsafeMutableRawPointer?, _ thinking: UnsafePointer<CChar>?) {
+    guard let userData,
+          let thinking,
+          let event = makeChatEventJSON(type: "thinking", data: String(cString: thinking)) else {
+        return
+    }
+
+    let context = Unmanaged<ChatSessionEventContext>.fromOpaque(userData).takeUnretainedValue()
+    context.buffer.enqueue(event)
+}
+
 private func enqueueChatCompletion(
     _ userData: UnsafeMutableRawPointer?,
     _ fullText: UnsafePointer<CChar>?,
@@ -177,6 +188,7 @@ extension MahoBridge {
                         maho_core_chat_set_event_sink(
                             sessionPointer,
                             enqueueChatToken,
+                            enqueueChatThinking,
                             enqueueChatCompletion,
                             enqueueChatError,
                             contextPointer

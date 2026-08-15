@@ -201,6 +201,7 @@ test("maho_mcp_console_capture_test") {
     "//maho/browser:maho_mcp_integration",
     "//base",
     "//base/test:test_support",
+    "//chrome/browser/ui:ui",
     "//testing/gtest",
     "//third_party/blink/public/common",
   ]
@@ -215,6 +216,7 @@ test("maho_mcp_input_synthesizer_test") {
     "//maho/browser:maho_mcp_integration",
     "//base",
     "//base/test:test_support",
+    "//chrome/browser/ui:ui",
     "//testing/gtest",
     "//third_party/blink/public/common",
     "//ui/events",

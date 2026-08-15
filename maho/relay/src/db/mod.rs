@@ -431,6 +431,7 @@ pub fn account_deletion_plan() -> &'static [(&'static str, AccountDeletionAction
     &[
         ("messages", Delete),
         ("snapshots", Delete),
+        ("user_sync_bootstrap", Delete),
         ("room_meta", Delete),
         ("room_ownership", Delete),
         ("sessions", Delete),
@@ -452,6 +453,7 @@ pub fn account_deletion_plan() -> &'static [(&'static str, AccountDeletionAction
 const DELETE_ACCOUNT_SQL: &str = "
 DELETE FROM messages WHERE room_id IN (SELECT room_id FROM room_ownership WHERE user_id = ?1 UNION SELECT room_id FROM devices WHERE user_id = ?1);
 DELETE FROM snapshots WHERE room_id IN (SELECT room_id FROM room_ownership WHERE user_id = ?1 UNION SELECT room_id FROM devices WHERE user_id = ?1);
+DELETE FROM user_sync_bootstrap WHERE user_id = ?1;
 DELETE FROM room_meta WHERE room_id IN (SELECT room_id FROM room_ownership WHERE user_id = ?1 UNION SELECT room_id FROM devices WHERE user_id = ?1);
 DELETE FROM room_ownership WHERE user_id = ?1;
 DELETE FROM sessions WHERE user_id = ?1;
@@ -609,6 +611,63 @@ pub async fn get_room_owner_user_id(db: &D1Database, room_id: &str) -> Result<Op
     let stmt = stmt.bind(&[js(&room_id)?])?;
     let row = stmt.first::<OwnerRow>(None).await?;
     Ok(row.map(|r| r.user_id))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncBootstrapRecord {
+    pub room_id: String,
+    pub version: i32,
+    pub ciphertext: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub created_at: i64,
+}
+
+pub async fn get_sync_bootstrap(
+    db: &D1Database,
+    user_id: i32,
+) -> Result<Option<SyncBootstrapRecord>> {
+    let row = db
+        .prepare(
+            "SELECT room_id, version, ciphertext, nonce, created_at
+             FROM user_sync_bootstrap
+             WHERE user_id = ?1",
+        )
+        .bind(&[js(&user_id)?])?
+        .first::<SyncBootstrapRecord>(None)
+        .await?;
+    Ok(row)
+}
+
+pub async fn create_sync_bootstrap(
+    db: &D1Database,
+    user_id: i32,
+    room_id: &str,
+    version: i32,
+    ciphertext: Vec<u8>,
+    nonce: Vec<u8>,
+    created_at: i64,
+) -> Result<Option<SyncBootstrapRecord>> {
+    let row = db
+        .prepare(
+            "INSERT INTO user_sync_bootstrap
+                (user_id, room_id, version, ciphertext, nonce, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT DO NOTHING
+             RETURNING room_id, version, ciphertext, nonce, created_at",
+        )
+        .bind(&[
+            js(&user_id)?,
+            js(&room_id)?,
+            js(&version)?,
+            serde_wasm_bindgen::to_value(&ciphertext)
+                .map_err(|error| AppError::Internal(error.to_string()))?,
+            serde_wasm_bindgen::to_value(&nonce)
+                .map_err(|error| AppError::Internal(error.to_string()))?,
+            js(&created_at)?,
+        ])?
+        .first::<SyncBootstrapRecord>(None)
+        .await?;
+    Ok(row)
 }
 
 /// Atomically claim a webhook event for processing.
@@ -963,14 +1022,73 @@ pub async fn insert_admin_audit(
 pub struct StoredMessage {
     pub seq: i64,
     pub blob: Vec<u8>,
+    /// Present only for protocol V2 rows; legacy V1 log entries have none.
+    #[serde(default)]
+    pub delivery_id: Option<String>,
+}
+
+/// SQL mirrored by [`store_message_sqlite`] for host-side coverage: allocate the
+/// next room sequence atomically in one upsert.
+const ALLOCATE_ROOM_SEQ_SQL: &str = "INSERT INTO room_meta (room_id, next_seq, last_activity, total_bytes)
+     VALUES (?1, 1, ?2, ?3)
+     ON CONFLICT(room_id) DO UPDATE SET
+        next_seq = room_meta.next_seq + 1,
+        last_activity = ?2,
+        total_bytes = room_meta.total_bytes + ?3
+     RETURNING next_seq";
+
+/// SQL mirrored by [`store_message_sqlite`]: the partial unique index on
+/// `(room_id, delivery_id)` makes a retried delivery a no-op insert, so the
+/// duplicate is detected by the absence of a returned row rather than by a read.
+const INSERT_V2_MESSAGE_SQL: &str =
+    "INSERT INTO messages (room_id, seq, blob, created_at, delivery_id) VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(room_id, delivery_id) WHERE delivery_id IS NOT NULL DO NOTHING
+     RETURNING seq";
+
+const SELECT_SEQ_BY_DELIVERY_SQL: &str =
+    "SELECT seq FROM messages WHERE room_id = ?1 AND delivery_id = ?2";
+
+#[derive(Deserialize)]
+struct SeqRow {
+    seq: i64,
 }
 
 pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>) -> Result<i64> {
+    store_message_inner(db, room_id, None, blob).await
+}
+
+/// Idempotent V2 store: the same `(room_id, delivery_id)` always resolves to the
+/// single sequence the relay assigned the first time, and never appends a second
+/// copy of the encrypted payload.
+pub async fn store_message_with_delivery_id(
+    db: &D1Database,
+    room_id: &str,
+    delivery_id: &str,
+    blob: Vec<u8>,
+) -> Result<i64> {
+    store_message_inner(db, room_id, Some(delivery_id), blob).await
+}
+
+async fn store_message_inner(
+    db: &D1Database,
+    room_id: &str,
+    delivery_id: Option<&str>,
+    blob: Vec<u8>,
+) -> Result<i64> {
+    // Fast path: a retry of an already stored delivery must not consume another
+    // room sequence. Correctness does not depend on this read - the unique index
+    // below is the authority - it only avoids burning a sequence per retry.
+    if let Some(delivery_id) = delivery_id {
+        if let Some(seq) = find_seq_by_delivery_id(db, room_id, delivery_id).await? {
+            return Ok(seq);
+        }
+    }
+
     let now = chrono::Utc::now().timestamp();
     let blob_len = blob.len() as i64;
 
     #[derive(Deserialize)]
-    struct SeqRow {
+    struct NextSeqRow {
         next_seq: i64,
     }
 
@@ -978,17 +1096,9 @@ pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>) -> Res
     // concurrent messages to a room cannot read the same seq and collide on the
     // idx_messages_room_seq unique index.
     let row = db
-        .prepare(
-            "INSERT INTO room_meta (room_id, next_seq, last_activity, total_bytes)
-             VALUES (?1, 1, ?2, ?3)
-             ON CONFLICT(room_id) DO UPDATE SET
-                next_seq = room_meta.next_seq + 1,
-                last_activity = ?2,
-                total_bytes = room_meta.total_bytes + ?3
-             RETURNING next_seq",
-        )
+        .prepare(ALLOCATE_ROOM_SEQ_SQL)
         .bind(&[js(&room_id)?, js(&now)?, js(&blob_len)?])?
-        .first::<SeqRow>(None)
+        .first::<NextSeqRow>(None)
         .await?
         .ok_or_else(|| AppError::Internal("room_meta upsert returned no row".to_string()))?;
 
@@ -996,12 +1106,95 @@ pub async fn store_message(db: &D1Database, room_id: &str, blob: Vec<u8>) -> Res
 
     let blob_js =
         serde_wasm_bindgen::to_value(&blob).map_err(|e| AppError::Internal(e.to_string()))?;
-    db.prepare("INSERT INTO messages (room_id, seq, blob, created_at) VALUES (?1, ?2, ?3, ?4)")
-        .bind(&[js(&room_id)?, js(&seq)?, blob_js, js(&now)?])?
-        .run()
+
+    let Some(delivery_id) = delivery_id else {
+        db.prepare("INSERT INTO messages (room_id, seq, blob, created_at) VALUES (?1, ?2, ?3, ?4)")
+            .bind(&[js(&room_id)?, js(&seq)?, blob_js, js(&now)?])?
+            .run()
+            .await?;
+        return Ok(seq);
+    };
+
+    let inserted = db
+        .prepare(INSERT_V2_MESSAGE_SQL)
+        .bind(&[
+            js(&room_id)?,
+            js(&seq)?,
+            blob_js,
+            js(&now)?,
+            js(&delivery_id)?,
+        ])?
+        .first::<SeqRow>(None)
         .await?;
 
-    Ok(seq)
+    match inserted {
+        Some(row) => Ok(row.seq),
+        // A concurrent send of the same delivery id won the unique index; the
+        // stored sequence is authoritative and this attempt's seq is skipped.
+        None => find_seq_by_delivery_id(db, room_id, delivery_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Internal("delivery row vanished after conflict".to_string())
+            }),
+    }
+}
+
+async fn find_seq_by_delivery_id(
+    db: &D1Database,
+    room_id: &str,
+    delivery_id: &str,
+) -> Result<Option<i64>> {
+    let row = db
+        .prepare(SELECT_SEQ_BY_DELIVERY_SQL)
+        .bind(&[js(&room_id)?, js(&delivery_id)?])?
+        .first::<SeqRow>(None)
+        .await?;
+    Ok(row.map(|r| r.seq))
+}
+
+/// Host-testable mirror of [`store_message_with_delivery_id`] against real
+/// SQLite (D1 is wasm-only). It runs the exact same statements in the same
+/// order, so the idempotency contract is validated rather than asserted.
+#[cfg(test)]
+fn store_message_sqlite(
+    db: &rusqlite::Connection,
+    room_id: &str,
+    delivery_id: &str,
+    blob: &[u8],
+    now: i64,
+) -> rusqlite::Result<i64> {
+    use rusqlite::{params, OptionalExtension};
+
+    let existing: Option<i64> = db
+        .query_row(SELECT_SEQ_BY_DELIVERY_SQL, params![room_id, delivery_id], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    if let Some(seq) = existing {
+        return Ok(seq);
+    }
+
+    let next_seq: i64 = db.query_row(
+        ALLOCATE_ROOM_SEQ_SQL,
+        params![room_id, now, blob.len() as i64],
+        |row| row.get(0),
+    )?;
+    let seq = assigned_seq(next_seq);
+
+    let inserted: Option<i64> = db
+        .query_row(
+            INSERT_V2_MESSAGE_SQL,
+            params![room_id, seq, blob, now, delivery_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    match inserted {
+        Some(seq) => Ok(seq),
+        None => db.query_row(SELECT_SEQ_BY_DELIVERY_SQL, params![room_id, delivery_id], |row| {
+            row.get(0)
+        }),
+    }
 }
 
 /// Assigned seq given the post-increment `next_seq` the room_meta upsert
@@ -1019,12 +1212,33 @@ pub async fn get_messages_since(
     room_id: &str,
     since_seq: i64,
 ) -> Result<Vec<StoredMessage>> {
-    let stmt = db
-        .prepare("SELECT seq, blob FROM messages WHERE room_id = ?1 AND seq > ?2 ORDER BY seq ASC");
+    let stmt = db.prepare(
+        "SELECT seq, blob, delivery_id FROM messages WHERE room_id = ?1 AND seq > ?2 ORDER BY seq ASC",
+    );
     let stmt = stmt.bind(&[js(&room_id)?, js(&since_seq)?])?;
     let result = stmt.all().await?;
     let messages: Vec<StoredMessage> = result.results()?;
     Ok(messages)
+}
+
+/// Bounded ordered page of the room log for the mobile REST pull cycle. Reads
+/// `limit + 1` rows so the caller can report `has_more` without a second query.
+pub async fn get_messages_page(
+    db: &D1Database,
+    room_id: &str,
+    after_seq: i64,
+    limit: usize,
+) -> Result<(Vec<StoredMessage>, bool)> {
+    let probe = limit as i64 + 1;
+    let stmt = db.prepare(
+        "SELECT seq, blob, delivery_id FROM messages WHERE room_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
+    );
+    let stmt = stmt.bind(&[js(&room_id)?, js(&after_seq)?, js(&probe)?])?;
+    let result = stmt.all().await?;
+    let mut messages: Vec<StoredMessage> = result.results()?;
+    let has_more = messages.len() > limit;
+    messages.truncate(limit);
+    Ok((messages, has_more))
 }
 
 pub async fn get_room_size(db: &D1Database, room_id: &str) -> Result<i64> {
@@ -1043,6 +1257,158 @@ pub async fn get_room_size(db: &D1Database, room_id: &str) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_v2_migration_enforces_room_scoped_delivery_id_idempotency() {
+        use rusqlite::Connection;
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0001_create_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0022_sync_v2_delivery_ids.sql"
+        ))
+        .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0023_create_user_sync_bootstrap.sql"
+        ))
+        .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0023_create_user_sync_bootstrap.sql"
+        ))
+        .unwrap();
+
+        db.execute(
+            "INSERT INTO messages (room_id, seq, blob, created_at, delivery_id) VALUES (?1, 0, x'01', 1, ?2)",
+            ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "550e8400-e29b-41d4-a716-446655440000"],
+        )
+        .unwrap();
+        assert!(db
+            .execute(
+                "INSERT INTO messages (room_id, seq, blob, created_at, delivery_id) VALUES (?1, 1, x'02', 1, ?2)",
+                ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "550e8400-e29b-41d4-a716-446655440000"],
+            )
+            .is_err());
+        db.execute(
+            "INSERT INTO messages (room_id, seq, blob, created_at, delivery_id) VALUES (?1, 0, x'02', 1, ?2)",
+            ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "550e8400-e29b-41d4-a716-446655440000"],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn duplicate_delivery_returns_the_original_sequence_without_growing_the_log() {
+        use rusqlite::{params, Connection};
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0001_create_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0022_sync_v2_delivery_ids.sql"
+        ))
+        .unwrap();
+        let room = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let delivery = "550e8400-e29b-41d4-a716-446655440000";
+
+        let first = store_message_sqlite(&db, room, delivery, b"opaque", 1).unwrap();
+        let duplicate = store_message_sqlite(&db, room, delivery, b"different", 2).unwrap();
+
+        assert_eq!(first, 0);
+        assert_eq!(duplicate, first);
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT blob FROM messages WHERE room_id = ?1 AND delivery_id = ?2",
+                params![room, delivery],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .unwrap(),
+            b"opaque"
+        );
+    }
+
+    #[test]
+    fn account_bootstrap_migration_keeps_one_encrypted_seed_per_account() {
+        use rusqlite::{params, Connection, OptionalExtension};
+
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("../../migrations/0001_create_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!("../../migrations/0002_create_auth_tables.sql"))
+            .unwrap();
+        db.execute_batch(include_str!("../../migrations/0022_sync_v2_delivery_ids.sql"))
+            .unwrap();
+        db.execute_batch(include_str!(
+            "../../migrations/0023_create_user_sync_bootstrap.sql"
+        ))
+        .unwrap();
+
+        db.execute(
+            "INSERT INTO users (id, email, password_hash, display_name, created_at)
+             VALUES (1, 'first@example.com', 'hash', 'First', 1),
+                    (2, 'second@example.com', 'hash', 'Second', 1)",
+            [],
+        )
+        .unwrap();
+
+        let insert = |user_id: i64, room_id: &str, ciphertext: &[u8], nonce: &[u8]| {
+            db.query_row(
+                "INSERT INTO user_sync_bootstrap
+                    (user_id, room_id, version, ciphertext, nonce, created_at)
+                 VALUES (?1, ?2, 1, ?3, ?4, 10)
+                 ON CONFLICT DO NOTHING
+                 RETURNING room_id",
+                params![user_id, room_id, ciphertext, nonce],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        };
+
+        let canonical_room = "0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            insert(1, canonical_room, b"opaque-seed", b"nonce-12byte").unwrap(),
+            Some(canonical_room.to_string())
+        );
+        assert_eq!(
+            insert(
+                1,
+                "fedcba9876543210fedcba9876543210",
+                b"different-seed",
+                b"nonce-2-000",
+            )
+            .unwrap(),
+            None,
+            "a competing first-device bootstrap must not replace the canonical room"
+        );
+        assert_eq!(
+            insert(2, canonical_room, b"another-seed", b"nonce-3-000").unwrap(),
+            None,
+            "one canonical room must not be claimed by another account"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT room_id FROM user_sync_bootstrap WHERE user_id = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            canonical_room
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT ciphertext FROM user_sync_bootstrap WHERE user_id = 1",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .unwrap(),
+            b"opaque-seed",
+            "the database contract must contain ciphertext, never a plaintext seed column"
+        );
+    }
 
     #[test]
     fn refresh_rotation_consumes_the_presented_hash_once() {
@@ -1368,6 +1734,8 @@ mod tests {
             include_str!("../../migrations/0019_drop_funnel_events.sql"),
             include_str!("../../migrations/0020_create_order_refunds.sql"),
             include_str!("../../migrations/0021_add_oauth_identities.sql"),
+            include_str!("../../migrations/0022_sync_v2_delivery_ids.sql"),
+            include_str!("../../migrations/0023_create_user_sync_bootstrap.sql"),
         ] {
             db.execute_batch(migration).unwrap();
         }
@@ -1435,6 +1803,7 @@ mod tests {
             "messages",
             "room_meta",
             "snapshots",
+            "user_sync_bootstrap",
             "oauth_identities",
             "consumed_bypass_tokens",
             "user_activity_days",
@@ -1479,6 +1848,7 @@ mod tests {
             &[
                 ("messages", Delete),
                 ("snapshots", Delete),
+                ("user_sync_bootstrap", Delete),
                 ("room_meta", Delete),
                 ("room_ownership", Delete),
                 ("sessions", Delete),

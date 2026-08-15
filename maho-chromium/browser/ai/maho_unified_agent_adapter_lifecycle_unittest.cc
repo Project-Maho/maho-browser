@@ -145,6 +145,8 @@ MahoAgentSession* FakeCreateSession(
 
 void FakeSetApprovalPolicy(MahoAgentSession*, const char*) {}
 
+void FakeSetMailAuthorizationState(MahoAgentSession*, bool, bool, bool, bool) {}
+
 bool FakeSetPreferredProvider(MahoAgentSession*, const char* provider) {
   if (!g_fake_agent) {
     return false;
@@ -212,8 +214,8 @@ void FakeSetArtifactCreatedCallback(MahoAgentSession*,
                                     void*) {}
 
 const MahoAgentFfi kFakeFfi = {
-    &FakeCreateSession, &FakeSetApprovalPolicy, &FakeSetPreferredProvider,
-    &FakeSendMessage,   &FakeCancel,            &FakeSessionFree,
+    &FakeCreateSession, &FakeSetApprovalPolicy, &FakeSetMailAuthorizationState,
+    &FakeSetPreferredProvider, &FakeSendMessage, &FakeCancel, &FakeSessionFree,
     &FakeSetArtifactRoot, &FakeSetArtifactCreatedCallback,
 };
 
@@ -305,11 +307,12 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
       MahoUnifiedAgentAdapter* adapter,
       const std::string& tool,
       const std::string& extension_id,
-      bool page_derived_justification = false) {
+      bool page_derived_justification = false,
+      std::string consequence = "unknown") {
     auto state = std::make_shared<PermissionCallState>();
     adapter->DecidePermissionOnUiThread(
         adapter->ActiveGenerationForTesting(), tool, extension_id, state,
-        page_derived_justification);
+        page_derived_justification, std::move(consequence));
     return state;
   }
 
@@ -393,9 +396,17 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
     prefs->registry()->RegisterDictionaryPref(maho::ai_prefs::kMcpCredentials);
     prefs->registry()->RegisterStringPref(maho::ai_prefs::kApprovalPolicy,
                                           "prompt");
+    prefs->registry()->RegisterBooleanPref(
+        maho::ai_prefs::kMailReadAllowed, false);
     prefs->registry()->RegisterDictionaryPref(
         maho::ai_prefs::kAgentToolGrants);
     return prefs;
+  }
+
+  std::string ClassifyActionConsequence(const std::string& tool,
+                                        const std::string& arguments) {
+    return MahoUnifiedAgentAdapter::ClassifyActionConsequenceForTesting(
+        tool, arguments);
   }
 
   const MahoAiRuntimeEvent* ExpectCredentialFailure(
@@ -546,7 +557,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   ASSERT_GT(secure_key.len, 0u);
   ASSERT_TRUE(secure_key.free_fn);
 
-  std::memset(secure_key.ptr, 0, secure_key.len);
+  UNSAFE_BUFFERS(std::memset(secure_key.ptr, 0, secure_key.len));
   secure_key.free_fn(secure_key.ptr, secure_key.len);
 }
 
@@ -604,7 +615,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   ASSERT_TRUE(secure_key.ptr);
   ASSERT_GT(secure_key.len, 0u);
   ASSERT_TRUE(secure_key.free_fn);
-  std::memset(secure_key.ptr, 0, secure_key.len);
+  UNSAFE_BUFFERS(std::memset(secure_key.ptr, 0, secure_key.len));
   secure_key.free_fn(secure_key.ptr, secure_key.len);
 
   MahoUnifiedAgentAdapter::ClearActiveBYOKKeys("openai");
@@ -1205,6 +1216,62 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ConsequenceClassificationUsesCanonicalDescriptorAndValidatedContext) {
+  EXPECT_EQ(ClassifyActionConsequence("input.hover", R"({"ref":1})"),
+            "ordinary");
+  EXPECT_EQ(ClassifyActionConsequence("navigation.navigate",
+                                      R"({"url":"https://other.example"})"),
+            "new_origin");
+  EXPECT_EQ(ClassifyActionConsequence("input.click", R"({"ref":2})"),
+            "unknown");
+  EXPECT_EQ(ClassifyActionConsequence(
+                "input.click",
+                R"({"ref":2,"validated_action_context":{"validated":true,"consequence":"submit"}})"),
+            "unknown");
+  EXPECT_EQ(ClassifyActionConsequence("not.a.capability", R"({})"),
+            "unclassified");
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       YoloDoesNotBypassConsequentialApprovalOrExactReceiptState) {
+  auto prefs = CreateSecurePrefs();
+  prefs->SetString(maho::ai_prefs::kApprovalPolicy, "allow");
+  auto adapter = std::make_unique<MahoUnifiedAgentAdapter>(prefs.get(), nullptr);
+  SetAgentFfiForTesting(adapter.get(), &kFakeFfi);
+  adapter->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform,
+                         false, maho_ai::mojom::InteractionMode::kDeveloper,
+                         callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+
+  auto consequential = DriveDecision(adapter.get(), "browser_click",
+                                     "browser-agent", false, "submit");
+  EXPECT_FALSE(consequential->event.IsSignaled());
+  ASSERT_EQ(PendingApprovalCount(adapter.get()), 1u);
+  const MahoAiRuntimeEvent* request = FirstApprovalRequestEvent();
+  ASSERT_TRUE(request);
+  EXPECT_EQ("submit", *request->payload.FindString("consequence"));
+  EXPECT_EQ("allow_all", *request->payload.FindString("approval_policy"));
+
+  const std::string approval_id = FirstApprovalId();
+  adapter->RespondToApproval(approval_id, /*approved=*/true);
+  EXPECT_TRUE(consequential->event.IsSignaled());
+  EXPECT_EQ(consequential->decision, PromptDecision::kAllowOnce);
+  const MahoAiRuntimeEvent* result =
+      LastEventOfType(MahoAiRuntimeEventType::kApprovalResult);
+  ASSERT_TRUE(result);
+  EXPECT_EQ("approved", *result->payload.FindString("approval_state"));
+  EXPECT_EQ("allow_once", *result->payload.FindString("approval_decision"));
+  EXPECT_EQ("submit", *result->payload.FindString("consequence"));
+
+  auto ordinary = DriveDecision(adapter.get(), "browser_scroll",
+                                "browser-agent", false, "ordinary");
+  EXPECT_TRUE(ordinary->event.IsSignaled());
+  EXPECT_EQ(ordinary->decision, PromptDecision::kAllow);
+  EXPECT_EQ(PendingApprovalCount(adapter.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
        ApprovalRequestCarriesTypedMetadataAndNoRawArguments) {
   adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
                           maho_ai::mojom::InteractionMode::kDeveloper,
@@ -1227,6 +1294,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   const std::string* state_text = event->payload.FindString("approval_state");
   ASSERT_TRUE(state_text);
   EXPECT_EQ(*state_text, "pending");
+  EXPECT_EQ(*event->payload.FindString("consequence"), "unknown");
   EXPECT_FALSE(
       event->payload.FindBool("page_derived_justification").value_or(true));
   EXPECT_FALSE(event->payload.FindString("related_tool_arguments"));
@@ -1299,6 +1367,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   EXPECT_EQ("prompt", *request->payload.FindString("approval_policy"));
   EXPECT_EQ("sensitive", *request->payload.FindString("sensitivity"));
   EXPECT_EQ("pending", *request->payload.FindString("approval_state"));
+  EXPECT_EQ("unknown", *request->payload.FindString("consequence"));
   EXPECT_FALSE(request->payload.FindBool("page_derived_justification")
                    .value_or(true));
   EXPECT_FALSE(request->payload.FindString("related_tool_arguments"));
@@ -1328,6 +1397,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   EXPECT_EQ("deny", *result->payload.FindString("approval_decision"));
   EXPECT_EQ("prompt", *result->payload.FindString("approval_policy"));
   EXPECT_EQ("sensitive", *result->payload.FindString("sensitivity"));
+  EXPECT_EQ("unknown", *result->payload.FindString("consequence"));
   EXPECT_FALSE(result->payload.FindBool("page_derived_justification")
                    .value_or(true));
 }
@@ -1383,6 +1453,23 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, CancelTurnDeniesPendingApproval) {
   EXPECT_TRUE(state->event.IsSignaled());
   EXPECT_EQ(state->decision, PromptDecision::kDeny);
   EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       MailReadConsentChangeReachesOnlyMatchingProfileAdapters) {
+  auto prefs = CreateSecurePrefs();
+  auto other_prefs = CreateSecurePrefs();
+  MahoUnifiedAgentAdapter adapter(prefs.get(), nullptr);
+  MahoUnifiedAgentAdapter other_adapter(other_prefs.get(), nullptr);
+
+  EXPECT_FALSE(adapter.IsMailReadAllowedForTesting());
+  EXPECT_FALSE(other_adapter.IsMailReadAllowedForTesting());
+  prefs->SetBoolean(maho::ai_prefs::kMailReadAllowed, true);
+  MahoUnifiedAgentAdapter::NotifyMailReadConsentChanged(prefs.get());
+  task_environment_.RunUntilIdle();
+
+  EXPECT_TRUE(adapter.IsMailReadAllowedForTesting());
+  EXPECT_FALSE(other_adapter.IsMailReadAllowedForTesting());
 }
 
 // Todo 6: Reset() (panel close / session teardown) fails pending approvals
@@ -1550,10 +1637,44 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
       fake_agent_->sends[0].user_data, "read_current_page", "{}");
   ASSERT_TRUE(result.error_ptr);
   EXPECT_STREQ(result.error_ptr, "Browser tool execution timed out after 30s");
+  ASSERT_TRUE(result.error_code_ptr);
+  EXPECT_STREQ(result.error_code_ptr, "transport_timeout");
+  EXPECT_TRUE(result.error_retryable);
   EXPECT_FALSE(result.json_ptr);
-  if (result.free_fn && result.error_ptr) {
+  if (result.free_fn) {
     result.free_fn(result.error_ptr);
+    result.free_fn(result.error_code_ptr);
   }
+
+  adapter_->Reset();
+  task_environment_.RunUntilIdle();
+  SetAgentCallWaitTimeout(base::Seconds(30));
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       BrowserToolPolicyDenialIsPermanentAndOwnsTypedErrorStrings) {
+  adapter_->SubmitMessage("first", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // The callback blocks a Rust worker while the owning sequence resolves the
+  // approval. This direct same-sequence test uses the bounded timeout to drive
+  // the exact fail-closed denial path without waiting for wall-clock seconds.
+  SetAgentCallWaitTimeout(base::Milliseconds(50));
+  MahoAgentToolResult result = CallOnAgentBrowserTool(
+      fake_agent_->sends[0].user_data, "browser.action.click", "{}");
+  ASSERT_TRUE(result.error_ptr);
+  EXPECT_STREQ(result.error_ptr,
+               "Browser action denied by approval policy");
+  ASSERT_TRUE(result.error_code_ptr);
+  EXPECT_STREQ(result.error_code_ptr, "policy_denied");
+  EXPECT_FALSE(result.error_retryable);
+  EXPECT_FALSE(result.json_ptr);
+  ASSERT_TRUE(result.free_fn);
+  result.free_fn(result.error_ptr);
+  result.free_fn(result.error_code_ptr);
 
   adapter_->Reset();
   task_environment_.RunUntilIdle();

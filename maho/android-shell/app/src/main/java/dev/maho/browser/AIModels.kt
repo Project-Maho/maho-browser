@@ -11,6 +11,8 @@ data class ConversationSession(
     val model: String? = null,
     @SerialName("createdAt") val createdAt: String = "",
     @SerialName("updatedAt") val updatedAt: String = "",
+    @SerialName("archivedAt") val archivedAt: String? = null,
+    @SerialName("projectId") val projectId: String? = null,
 ) {
     val space_id: String? get() = spaceId
     val created_at: String get() = createdAt

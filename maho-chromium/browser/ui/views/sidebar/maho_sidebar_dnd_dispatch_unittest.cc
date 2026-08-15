@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_dnd_events.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_section_policy.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
@@ -14,12 +15,18 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
+#include "base/json/string_escape.h"
 #include "base/run_loop.h"
+#include "base/strings/stringprintf.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/values.h"
 #include "components/favicon_base/favicon_types.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -37,9 +44,14 @@
 #include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/drop_helper.h"
 #include "ui/views/widget/widget.h"
+#include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_profile.h"
 #include "chrome/test/base/test_browser_window.h"
 #include "chrome/browser/ui/browser.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/maho_tab_registry.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "components/prefs/pref_service.h"
 #include "ui/views/layout/box_layout_view.h"
@@ -155,6 +167,76 @@ std::optional<base::Value> ParseJson(const std::string& json) {
   return base::JSONReader::Read(json, base::JSON_PARSE_RFC);
 }
 
+std::string ActiveSpaceIdForCore(::MahoCore* core) {
+  char* raw = maho_core_get_active_space_id(core);
+  if (!raw) {
+    return std::string();
+  }
+  std::string json(raw);
+  maho_string_free(raw);
+  auto parsed = ParseJson(json);
+  return parsed && parsed->is_string() ? parsed->GetString() : std::string();
+}
+
+void SetNewTabPosition(::MahoCore* core, std::string_view position) {
+  const std::string settings =
+      base::StringPrintf(R"({"general":{"newTabPosition":"%s"}})",
+                         std::string(position).c_str());
+  maho_core_update_settings(core, settings.c_str());
+}
+
+void DispatchCreateTabToCore(::MahoCore* core,
+                             const std::string& space_id,
+                             const std::string& tab_id,
+                             bool is_private = false) {
+  base::DictValue event;
+  event.Set("kind", "create_tab");
+  event.Set("space_id", space_id);
+  event.Set("tab_id", tab_id);
+  event.Set("url", "https://example.com/" + tab_id);
+  event.Set("is_private", is_private);
+  DispatchTabRegistryShellEventForTesting(core, "create_tab", std::move(event));
+}
+
+void DispatchJsonToCore(::MahoCore* core, base::DictValue event) {
+  std::string json;
+  ASSERT_TRUE(base::JSONWriter::Write(event, &json));
+  char* updates = maho_core_handle_event(core, json.c_str());
+  ASSERT_TRUE(updates);
+  maho_string_free(updates);
+}
+
+base::ListValue SidebarTreeForCore(::MahoCore* core,
+                                   const std::string& space_id) {
+  const std::string quoted_space_id = base::GetQuotedJSONString(space_id);
+  char* raw = maho_core_get_sidebar_state_v2(core, quoted_space_id.c_str());
+  if (!raw) {
+    return base::ListValue();
+  }
+  std::string json(raw);
+  maho_string_free(raw);
+  auto parsed = ParseJson(json);
+  if (!parsed || !parsed->is_dict()) {
+    return base::ListValue();
+  }
+  const base::ListValue* tree = parsed->GetDict().FindList("tree");
+  return tree ? tree->Clone() : base::ListValue();
+}
+
+std::vector<std::string> RootNodeIds(const base::ListValue& tree) {
+  std::vector<std::string> ids;
+  for (const auto& value : tree) {
+    const base::DictValue* node = value.GetIfDict();
+    if (!node) {
+      continue;
+    }
+    if (const std::string* id = node->FindString("id")) {
+      ids.push_back(*id);
+    }
+  }
+  return ids;
+}
+
 views::Button::PressedCallback NoOpPressedCallback() {
   return base::BindRepeating([](const ui::Event&) {});
 }
@@ -197,6 +279,543 @@ class SidebarDnDDispatchTest : public views::ViewsTestBase {
  protected:
   RecordingShellEventObserver observer_;
 };
+
+
+class MahoNewTabPositionCoreTest : public testing::Test {
+ public:
+  void SetUp() override {
+    core_ = maho_core_new();
+    ASSERT_TRUE(core_);
+    space_id_ = ActiveSpaceIdForCore(core_);
+    ASSERT_FALSE(space_id_.empty());
+  }
+
+  void TearDown() override {
+    maho_core_free(core_);
+    core_ = nullptr;
+  }
+
+ protected:
+  static constexpr char kTabOne[] =
+      "00000000-0000-4000-8000-000000000001";
+  static constexpr char kTabTwo[] =
+      "00000000-0000-4000-8000-000000000002";
+  static constexpr char kTabThree[] =
+      "00000000-0000-4000-8000-000000000003";
+
+  ::MahoCore* core_ = nullptr;
+  std::string space_id_;
+};
+
+TEST_F(MahoNewTabPositionCoreTest, TopBottomAndEmptyInsertion) {
+  DispatchCreateTabToCore(core_, space_id_, kTabOne);
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({kTabOne}));
+
+  DispatchCreateTabToCore(core_, space_id_, kTabTwo);
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({kTabTwo, kTabOne}));
+
+  SetNewTabPosition(core_, "bottom");
+  DispatchCreateTabToCore(core_, space_id_, kTabThree);
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({kTabTwo, kTabOne, kTabThree}));
+}
+
+TEST_F(MahoNewTabPositionCoreTest, InvalidValueFallsBackToTop) {
+  SetNewTabPosition(core_, "bottom");
+  SetNewTabPosition(core_, "diagonal");
+  DispatchCreateTabToCore(core_, space_id_, kTabOne);
+  DispatchCreateTabToCore(core_, space_id_, kTabTwo);
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({kTabTwo, kTabOne}));
+}
+
+TEST_F(MahoNewTabPositionCoreTest, ReannouncementPreservesRestoredOrder) {
+  SetNewTabPosition(core_, "bottom");
+  DispatchCreateTabToCore(core_, space_id_, kTabOne);
+  DispatchCreateTabToCore(core_, space_id_, kTabTwo);
+  DispatchCreateTabToCore(core_, space_id_, kTabOne);
+  EXPECT_EQ(RootNodeIds(SidebarTreeForCore(core_, space_id_)),
+            std::vector<std::string>({kTabOne, kTabTwo}));
+}
+
+TEST_F(MahoNewTabPositionCoreTest, PrivateAndPinnedBoundariesPreserveChoice) {
+  SetNewTabPosition(core_, "bottom");
+  DispatchCreateTabToCore(core_, space_id_, kTabOne, true);
+
+  base::DictValue pin;
+  pin.Set("kind", "pin_tab");
+  pin.Set("tab_id", kTabOne);
+  DispatchJsonToCore(core_, std::move(pin));
+
+  DispatchCreateTabToCore(core_, space_id_, kTabTwo, true);
+  SetNewTabPosition(core_, "top");
+  DispatchCreateTabToCore(core_, space_id_, kTabThree);
+
+  const base::ListValue tree = SidebarTreeForCore(core_, space_id_);
+  EXPECT_EQ(RootNodeIds(tree),
+            std::vector<std::string>({kTabThree, kTabOne, kTabTwo}));
+  ASSERT_EQ(tree.size(), 3u);
+  EXPECT_FALSE(tree[0].GetDict().FindBool("isPrivate").value_or(false));
+  EXPECT_TRUE(tree[1].GetDict().FindBool("isPinned").value_or(false));
+  EXPECT_TRUE(tree[2].GetDict().FindBool("isPrivate").value_or(false));
+}
+
+TEST_F(MahoNewTabPositionCoreTest, FolderAndExplicitReorderRemainAuthoritative) {
+  SetNewTabPosition(core_, "bottom");
+  DispatchCreateTabToCore(core_, space_id_, kTabOne);
+
+  base::DictValue create_folder;
+  create_folder.Set("kind", "create_folder_with_tabs");
+  create_folder.Set("space_id", space_id_);
+  create_folder.Set("name", "Existing group");
+  base::ListValue tab_ids;
+  tab_ids.Append(kTabOne);
+  create_folder.Set("tab_ids", std::move(tab_ids));
+  DispatchJsonToCore(core_, std::move(create_folder));
+
+  DispatchCreateTabToCore(core_, space_id_, kTabTwo);
+  base::ListValue tree = SidebarTreeForCore(core_, space_id_);
+  ASSERT_EQ(tree.size(), 2u);
+  const std::string* first_kind = tree[0].GetDict().FindString("kind");
+  ASSERT_TRUE(first_kind);
+  EXPECT_EQ(*first_kind, "folder");
+  const std::string* second_id = tree[1].GetDict().FindString("id");
+  ASSERT_TRUE(second_id);
+  EXPECT_EQ(*second_id, kTabTwo);
+
+  DispatchCreateTabToCore(core_, space_id_, kTabThree);
+  base::DictValue reorder;
+  reorder.Set("kind", "reorder_root_item");
+  reorder.Set("space_id", space_id_);
+  base::DictValue item;
+  item.Set("kind", "tab");
+  item.Set("id", kTabThree);
+  reorder.Set("item", std::move(item));
+  base::DictValue target;
+  target.Set("kind", "tab");
+  target.Set("id", kTabTwo);
+  base::DictValue insertion_point;
+  insertion_point.Set("kind", "before");
+  insertion_point.Set("target", std::move(target));
+  reorder.Set("insertion_point", std::move(insertion_point));
+  DispatchJsonToCore(core_, std::move(reorder));
+
+  tree = SidebarTreeForCore(core_, space_id_);
+  ASSERT_EQ(tree.size(), 3u);
+  const std::string* second_reordered_id =
+      tree[1].GetDict().FindString("id");
+  ASSERT_TRUE(second_reordered_id);
+  EXPECT_EQ(*second_reordered_id, kTabThree);
+  const std::string* third_reordered_id =
+      tree[2].GetDict().FindString("id");
+  ASSERT_TRUE(third_reordered_id);
+  EXPECT_EQ(*third_reordered_id, kTabTwo);
+}
+
+class MahoNativeTabStripNewTabPositionTest
+    : public BrowserWithTestWindowTest {
+ public:
+  void SetUp() override {
+    BrowserWithTestWindowTest::SetUp();
+    core_ = maho_core_new();
+    ASSERT_TRUE(core_);
+    saved_core_ = maho::GetCore();
+    maho::SetCore(core_);
+    space_id_ = ActiveSpaceIdForCore(core_);
+    ASSERT_FALSE(space_id_.empty());
+    MahoSpaceProfileBridge::GetInstance()->SetActiveSpaceId(browser(),
+                                                            space_id_);
+    MahoTabRegistry::Get()->OnBrowserCreated(browser());
+  }
+
+  void TearDown() override {
+    MahoTabRegistry::Get()->OnBrowserClosed(browser());
+    MahoSpaceProfileBridge::GetInstance()->ClearBrowserActiveSpace(browser());
+    maho::SetCore(saved_core_);
+    maho_core_free(core_);
+    core_ = nullptr;
+    BrowserWithTestWindowTest::TearDown();
+  }
+
+ protected:
+  ::MahoCore* core_ = nullptr;
+  ::MahoCore* saved_core_ = nullptr;
+  std::string space_id_;
+};
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       NativeTabStripInsertDispatchesBottomChoiceToCore) {
+  SetNewTabPosition(core_, "bottom");
+  AddTab(browser(), GURL("https://first.example/"));
+  AddTab(browser(), GURL("https://second.example/"));
+
+  const base::ListValue tree = SidebarTreeForCore(core_, space_id_);
+  ASSERT_EQ(tree.size(), 2u);
+  const std::string* first_url = tree[0].GetDict().FindString("url");
+  ASSERT_TRUE(first_url);
+  EXPECT_EQ(*first_url, "https://first.example/");
+  const std::string* second_url = tree[1].GetDict().FindString("url");
+  ASSERT_TRUE(second_url);
+  EXPECT_EQ(*second_url, "https://second.example/");
+}
+
+TEST_F(MahoNativeTabStripNewTabPositionTest,
+       PrimaryOtrSidebarRefreshDoesNotTouchCoreCache) {
+  Profile* otr_profile = profile()->GetPrimaryOTRProfile(true);
+  ASSERT_TRUE(otr_profile);
+  TestBrowserWindow* window = new TestBrowserWindow();
+  Browser::CreateParams params(otr_profile, true);
+  params.window = window;
+  Browser* otr_browser = Browser::Create(params);
+  ASSERT_TRUE(otr_browser);
+
+  ResetSidebarCoreCacheForTesting();
+  MahoSidebarView sidebar(otr_browser);
+  sidebar.RefreshAllSynchronously();
+
+  const auto counters = GetSidebarCoreCacheCountersForTesting();
+  EXPECT_EQ(counters.footer_hits + counters.footer_misses, 0u);
+  EXPECT_EQ(counters.tree_bundle_hits + counters.tree_bundle_misses, 0u);
+  EXPECT_EQ(counters.favorites_hits + counters.favorites_misses, 0u);
+  ResetSidebarCoreCacheForTesting();
+}
+
+class MahoSidebarCoreCacheTest : public testing::Test {
+ public:
+  void SetUp() override {
+    ResetSidebarCoreCacheForTesting();
+    core_ = Core(1);
+    InstallFetchers();
+  }
+
+  void TearDown() override { ResetSidebarCoreCacheForTesting(); }
+
+ protected:
+  static ::MahoCore* Core(uintptr_t identity) {
+    return reinterpret_cast<::MahoCore*>(identity);
+  }
+
+  void InstallFetchers() {
+    SidebarCoreCacheFetchersForTesting fetchers;
+    fetchers.footer = base::BindRepeating(
+        [](MahoSidebarCoreCacheTest* self, ::MahoCore*) {
+          ++self->footer_fetches_;
+          if (self->footer_fetch_started_) {
+            self->footer_fetch_started_->Signal();
+            self->footer_fetch_continue_->Wait();
+          }
+          FooterSpaceState state;
+          state.has_core_state = true;
+          state.space_count = 1;
+          return state;
+        },
+        base::Unretained(this));
+    fetchers.tree_bundle = base::BindRepeating(
+        [](MahoSidebarCoreCacheTest* self, ::MahoCore*, const std::string&) {
+          ++self->tree_fetches_;
+          SidebarStateBackgroundResult result;
+          result.parsed_tree = base::Value(base::ListValue());
+          return result;
+        },
+        base::Unretained(this));
+    fetchers.favorites = base::BindRepeating(
+        [](MahoSidebarCoreCacheTest* self, ::MahoCore*, const std::string&) {
+          ++self->favorites_fetches_;
+          return MakeFavoritesModelForTesting(1);
+        },
+        base::Unretained(this));
+    SetSidebarCoreCacheFetchersForTesting(std::move(fetchers));
+  }
+
+  SidebarStateBackgroundResult Build(const std::string& space_id,
+                                     bool bypass = false) {
+    return BuildSidebarStateOnBackgroundForTesting(
+        core_, base::GetQuotedJSONString(space_id), bypass);
+  }
+
+  ::MahoCore* core_ = nullptr;
+  int footer_fetches_ = 0;
+  int tree_fetches_ = 0;
+  int favorites_fetches_ = 0;
+  base::WaitableEvent* footer_fetch_started_ = nullptr;
+  base::WaitableEvent* footer_fetch_continue_ = nullptr;
+};
+
+TEST_F(MahoSidebarCoreCacheTest, InvalidationMaskTableCoversCoreVariants) {
+  struct Case {
+    const char* json;
+    SidebarCoreFragment fragments;
+    size_t space_count;
+  };
+  const Case cases[] = {
+      {R"({"kind":"full_state"})", SidebarCoreFragment::kAll, 0},
+      {R"({"kind":"tab_created","tab":{"space_id":"s"}})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 1},
+      {R"({"kind":"tab_updated"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 0},
+      {R"({"kind":"tab_closed"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 0},
+      {R"({"kind":"tab_order_changed","space_id":"s"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 1},
+      {R"({"kind":"navigation_state_changed"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 0},
+      {R"({"kind":"tab_favicon_changed"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 0},
+      {R"({"kind":"tab_lifecycle_changed"})", SidebarCoreFragment::kTreeBundle,
+       0},
+      {R"({"kind":"tab_role_changed"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 0},
+      {R"({"kind":"tabs_migrated","from_space_id":"a","to_space_id":"b"})",
+       SidebarCoreFragment::kTreeBundle | SidebarCoreFragment::kFavorites, 2},
+      {R"({"kind":"folder_created"})", SidebarCoreFragment::kTreeBundle, 0},
+      {R"({"kind":"folder_updated"})", SidebarCoreFragment::kTreeBundle, 0},
+      {R"({"kind":"folder_deleted"})", SidebarCoreFragment::kTreeBundle, 0},
+      {R"({"kind":"folder_order_changed","space_id":"s"})",
+       SidebarCoreFragment::kTreeBundle, 1},
+      {R"({"kind":"space_created"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"space_updated"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"space_deleted","space_id":"s"})", SidebarCoreFragment::kAll,
+       1},
+      {R"({"kind":"space_order_changed"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"active_space_changed"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"profile_created"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"profile_updated"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"profile_deleted"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"active_profile_changed"})", SidebarCoreFragment::kFooter,
+       0},
+      {R"({"kind":"space_config_updated","space_id":"s"})",
+       SidebarCoreFragment::kAll, 1},
+      {R"({"kind":"settings_changed"})", SidebarCoreFragment::kFooter, 0},
+      {R"({"kind":"tab_audio_state_changed"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"tab_preview_updated"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"download_started"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"download_progress"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"download_completed"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"download_renamed"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"sync_state_changed"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"split_view_changed"})", SidebarCoreFragment::kNone, 0},
+      {R"({"kind":"favorite_limit_reached"})", SidebarCoreFragment::kNone,
+       0},
+  };
+  for (const auto& test_case : cases) {
+    SCOPED_TRACE(test_case.json);
+    auto invalidation =
+        GetSidebarCacheInvalidationForUpdateJsonForTesting(test_case.json);
+    EXPECT_EQ(invalidation.fragments, test_case.fragments);
+    EXPECT_EQ(invalidation.space_ids.size(), test_case.space_count);
+  }
+}
+
+TEST_F(MahoSidebarCoreCacheTest, ConsecutiveBuildsFetchEachFragmentOnce) {
+  Build("a");
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 1);
+  EXPECT_EQ(tree_fetches_, 1);
+  EXPECT_EQ(favorites_fetches_, 1);
+  const auto counters = GetSidebarCoreCacheCountersForTesting();
+  EXPECT_EQ(counters.footer_misses, 1u);
+  EXPECT_EQ(counters.footer_hits, 1u);
+  EXPECT_EQ(counters.tree_bundle_misses, 1u);
+  EXPECT_EQ(counters.tree_bundle_hits, 1u);
+  EXPECT_EQ(counters.favorites_misses, 1u);
+  EXPECT_EQ(counters.favorites_hits, 1u);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, FooterInvalidationIsFragmentIsolated) {
+  Build("a");
+  InvalidateSidebarCoreCacheForUpdatesJson(R"([{"kind":"space_updated"}])");
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 2);
+  EXPECT_EQ(tree_fetches_, 1);
+  EXPECT_EQ(favorites_fetches_, 1);
+}
+
+TEST_F(MahoSidebarCoreCacheTest,
+       FooterSpaceReorderInvalidatesCachedFooterFragment) {
+  ::MahoCore* real_core = maho_core_new();
+  ASSERT_TRUE(real_core);
+  core_ = real_core;
+  InstallFetchers();
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 1);
+
+  MahoSidebarFooterView::ReorderSpaceForTesting(real_core, "space-a", 0,
+                                                 1);
+
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 2);
+  maho_core_free(real_core);
+  core_ = Core(1);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, FolderUpdateInvalidatesOnlyTree) {
+  Build("a");
+  InvalidateSidebarCoreCacheForUpdatesJson(R"([{"kind":"folder_updated"}])");
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 1);
+  EXPECT_EQ(tree_fetches_, 2);
+  EXPECT_EQ(favorites_fetches_, 1);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, SpaceDeleteEvictsOnlyDeletedSpaceAndFooter) {
+  Build("a");
+  Build("b");
+  InvalidateSidebarCoreCacheForUpdatesJson(
+      R"([{"kind":"space_deleted","space_id":"a"}])");
+  Build("b");
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 2);
+  EXPECT_EQ(tree_fetches_, 3);
+  EXPECT_EQ(favorites_fetches_, 3);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, InFlightInvalidationDiscardsStalePublish) {
+  base::WaitableEvent fetch_started;
+  base::WaitableEvent fetch_continue;
+  footer_fetch_started_ = &fetch_started;
+  footer_fetch_continue_ = &fetch_continue;
+  std::thread thread([this] { Build("a"); });
+  fetch_started.Wait();
+  InvalidateSidebarCoreCacheForUpdatesJson(R"([{"kind":"space_updated"}])");
+  fetch_continue.Signal();
+  thread.join();
+  footer_fetch_started_ = nullptr;
+  footer_fetch_continue_ = nullptr;
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 2);
+  EXPECT_EQ(
+      GetSidebarCoreCacheCountersForTesting().stale_publications_discarded, 1u);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, PerSpaceEntriesRemainIndependent) {
+  Build("a");
+  Build("b");
+  Build("a");
+  Build("b");
+  EXPECT_EQ(footer_fetches_, 1);
+  EXPECT_EQ(tree_fetches_, 2);
+  EXPECT_EQ(favorites_fetches_, 2);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, CorePointerReplacementClearsAllEntries) {
+  Build("a");
+  core_ = Core(2);
+  Build("a");
+  EXPECT_EQ(footer_fetches_, 2);
+  EXPECT_EQ(tree_fetches_, 2);
+  EXPECT_EQ(favorites_fetches_, 2);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, ExplicitSafeModeBypassNeverPopulatesCache) {
+  Build("a", true);
+  Build("a", true);
+  EXPECT_EQ(footer_fetches_, 0);
+  EXPECT_EQ(tree_fetches_, 0);
+  EXPECT_EQ(favorites_fetches_, 0);
+  const auto counters = GetSidebarCoreCacheCountersForTesting();
+  EXPECT_EQ(counters.footer_hits + counters.footer_misses, 0u);
+  EXPECT_EQ(counters.tree_bundle_hits + counters.tree_bundle_misses, 0u);
+  EXPECT_EQ(counters.favorites_hits + counters.favorites_misses, 0u);
+}
+
+TEST_F(MahoSidebarCoreCacheTest,
+       RawContextMenuCreateFolderInvalidatesCachedTree) {
+  ::MahoCore* real_core = maho_core_new();
+  ASSERT_TRUE(real_core);
+  core_ = real_core;
+  InstallFetchers();
+  char* active_space_json = maho_core_get_active_space_id(real_core);
+  ASSERT_TRUE(active_space_json);
+  auto active_space =
+      base::JSONReader::Read(active_space_json, base::JSON_PARSE_RFC);
+  maho_string_free(active_space_json);
+  ASSERT_TRUE(active_space && active_space->is_string());
+  const std::string space_id = active_space->GetString();
+  Build(space_id);
+  EXPECT_EQ(tree_fetches_, 1);
+
+  base::DictValue create_folder;
+  create_folder.Set("kind", "create_folder");
+  create_folder.Set("space_id", space_id);
+  create_folder.Set("name", "Context menu folder");
+  std::string event_json;
+  ASSERT_TRUE(base::JSONWriter::Write(create_folder, &event_json));
+  EXPECT_FALSE(
+      DispatchSpaceContextMenuCoreEventForTesting(real_core, event_json)
+          .empty());
+
+  Build(space_id);
+  EXPECT_EQ(tree_fetches_, 2);
+  maho_core_free(real_core);
+  core_ = Core(1);
+}
+
+TEST_F(MahoSidebarCoreCacheTest,
+       TypedContextMenuRecolorInvalidatesCachedFooter) {
+  ::MahoCore* real_core = maho_core_new();
+  ASSERT_TRUE(real_core);
+  core_ = real_core;
+  InstallFetchers();
+  char* active_space_json = maho_core_get_active_space_id(real_core);
+  ASSERT_TRUE(active_space_json);
+  auto active_space =
+      base::JSONReader::Read(active_space_json, base::JSON_PARSE_RFC);
+  maho_string_free(active_space_json);
+  ASSERT_TRUE(active_space && active_space->is_string());
+  const std::string space_id = active_space->GetString();
+  Build(space_id);
+  EXPECT_EQ(footer_fetches_, 1);
+
+  RecolorSpaceContextMenuForTesting(real_core, space_id, "#336699");
+
+  Build(space_id);
+  EXPECT_EQ(footer_fetches_, 2);
+  maho_core_free(real_core);
+  core_ = Core(1);
+}
+
+TEST_F(MahoSidebarCoreCacheTest, CreateTabCoreDispatchInvalidatesCachedTree) {
+  ::MahoCore* real_core = maho_core_new();
+  ASSERT_TRUE(real_core);
+  core_ = real_core;
+  InstallFetchers();
+  char* active_space_json = maho_core_get_active_space_id(real_core);
+  ASSERT_TRUE(active_space_json);
+  auto active_space =
+      base::JSONReader::Read(active_space_json, base::JSON_PARSE_RFC);
+  maho_string_free(active_space_json);
+  ASSERT_TRUE(active_space && active_space->is_string());
+  const std::string space_id = active_space->GetString();
+  Build(space_id);
+  EXPECT_EQ(tree_fetches_, 1);
+
+  base::DictValue create_tab;
+  create_tab.Set("kind", "create_tab");
+  create_tab.Set("space_id", space_id);
+  create_tab.Set("tab_id", "tab-1");
+  create_tab.Set("url", "https://example.com/");
+  DispatchTabRegistryShellEventForTesting(real_core, "create_tab",
+                                          std::move(create_tab));
+
+  Build(space_id);
+  EXPECT_EQ(tree_fetches_, 2);
+  maho_core_free(real_core);
+  core_ = Core(1);
+}
+
+TEST_F(MahoSidebarCoreCacheTest,
+       SynchronousFavoritesRefreshPublishesFreshCacheEntry) {
+  Build("a");
+  EXPECT_EQ(favorites_fetches_, 1);
+  auto refreshed = RefreshSidebarFavoritesForTesting(
+      core_, base::GetQuotedJSONString("a"));
+  EXPECT_EQ(refreshed.items.size(), 1u);
+  EXPECT_EQ(favorites_fetches_, 2);
+  Build("a");
+  EXPECT_EQ(favorites_fetches_, 2);
+}
 
 TEST_F(SidebarDnDDispatchTest, RootTabInsertionLaneDispatchesReorderRootItem) {
   MahoSidebarTabListView list(/*browser=*/nullptr);
@@ -1499,6 +2118,25 @@ TEST_F(SidebarDnDDispatchTest,
   EXPECT_FALSE(top_bar.back_button_for_testing()->GetEnabled());
   EXPECT_FALSE(top_bar.forward_button_for_testing()->GetEnabled());
   EXPECT_FALSE(top_bar.reload_button_for_testing()->GetEnabled());
+}
+TEST_F(SidebarDnDDispatchTest, TopBarMailVisibilityTracksEnabledPrefLive) {
+  TestingProfile profile;
+  TestBrowserWindow* window = new TestBrowserWindow();
+  Browser::CreateParams params(&profile, true);
+  params.window = window;
+  Browser* browser = Browser::Create(params);
+
+  PrefService* prefs = profile.GetPrefs();
+  prefs->SetBoolean(sidebar_prefs::kMahoMailEnabled, false);
+  MahoSidebarTopBarView top_bar(browser);
+  ASSERT_TRUE(top_bar.mail_button_for_testing());
+  EXPECT_FALSE(top_bar.mail_button_for_testing()->GetVisible());
+
+  prefs->SetBoolean(sidebar_prefs::kMahoMailEnabled, true);
+  EXPECT_TRUE(top_bar.mail_button_for_testing()->GetVisible());
+
+  prefs->SetBoolean(sidebar_prefs::kMahoMailEnabled, false);
+  EXPECT_FALSE(top_bar.mail_button_for_testing()->GetVisible());
 }
 
 TEST_F(SidebarDnDDispatchTest,

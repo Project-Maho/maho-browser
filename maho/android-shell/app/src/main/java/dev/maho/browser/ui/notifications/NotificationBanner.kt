@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.ui.icons.MahoIcon
+import dev.maho.browser.ui.theme.BrowserShellTheme
 import androidx.compose.ui.res.painterResource
 
 data class BannerAction(
@@ -35,12 +36,19 @@ fun NotificationBanner(
     icon: MahoIcon,
     actions: List<BannerAction> = emptyList(),
     onDismiss: () -> Unit,
+    isIncognito: Boolean = false,
 ) {
+    val shellColors = BrowserShellTheme.colors
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        colors = if (isIncognito) {
+            CardDefaults.cardColors(containerColor = shellColors.incognitoSurface)
+        } else {
+            CardDefaults.cardColors()
+        },
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -49,7 +57,7 @@ fun NotificationBanner(
             Icon(
                 painter = painterResource(id = icon.drawableRes),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (isIncognito) shellColors.incognitoAccent else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(32.dp),
             )
             Spacer(modifier = Modifier.width(12.dp))

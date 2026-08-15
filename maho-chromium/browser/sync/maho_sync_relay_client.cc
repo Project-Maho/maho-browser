@@ -2,6 +2,7 @@
 
 #include "maho/browser/sync/maho_sync_relay_client.h"
 
+#include <cstdlib>
 #include <utility>
 
 #include "base/json/json_reader.h"
@@ -10,6 +11,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/storage_partition.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/sync/maho_sync_relay_protocol.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "net/base/isolation_info.h"
 #include "net/storage_access_api/status.h"
@@ -67,7 +69,12 @@ std::string GetWebSocketUrl(const std::string& server_url, const std::string& ke
 
 MahoSyncRelayClient::MahoSyncRelayClient(Profile* profile)
     : profile_(profile),
-      readable_watcher_(FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::MANUAL, base::SequencedTaskRunner::GetCurrentDefault()) {
+      readable_watcher_(FROM_HERE,
+                        mojo::SimpleWatcher::ArmingPolicy::MANUAL,
+                        base::SequencedTaskRunner::GetCurrentDefault()),
+      writable_watcher_(FROM_HERE,
+                        mojo::SimpleWatcher::ArmingPolicy::MANUAL,
+                        base::SequencedTaskRunner::GetCurrentDefault()) {
   DETACH_FROM_SEQUENCE(sequence_checker_);
 }
 
@@ -211,6 +218,7 @@ void MahoSyncRelayClient::Disconnect() {
   active_key_.clear();
 
   readable_watcher_.Cancel();
+  writable_watcher_.Cancel();
   readable_.reset();
   writable_.reset();
   websocket_.reset();
@@ -231,11 +239,14 @@ void MahoSyncRelayClient::SendAuthMessage() {
   if (!token_c) return;
   std::string token(token_c);
   maho_core_free_string(token_c);
+  const uint64_t cursor =
+      maho_core_get_sync_receive_cursor(core, active_key_.c_str());
 
   base::DictValue auth_msg;
   auth_msg.Set("type", "auth");
   auth_msg.Set("key", active_key_);
   auth_msg.Set("token", token);
+  auth_msg.Set("since_seq", static_cast<double>(cursor));
 
   std::string auth_json;
   if (base::JSONWriter::Write(base::Value(std::move(auth_msg)), &auth_json)) {
@@ -248,7 +259,7 @@ void MahoSyncRelayClient::SendOutgoingMessages() {
   ::MahoCore* core = maho::GetCore();
   if (!core) return;
 
-  char* outgoing_json = maho_core_drain_outgoing(core);
+  char* outgoing_json = maho_core_drain_outgoing_envelopes(core);
   if (!outgoing_json) return;
 
   std::optional<base::Value> val = base::JSONReader::Read(outgoing_json, base::JSON_PARSE_RFC);
@@ -267,10 +278,98 @@ void MahoSyncRelayClient::SendOutgoingMessages() {
 void MahoSyncRelayClient::WriteData(const std::string& data) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (state_ != State::kConnected) return;
+  pending_writes_.push_back(data);
+  FlushWriteQueue();
+}
 
-  websocket_->SendMessage(network::mojom::WebSocketMessageType::TEXT, data.size());
-  size_t actually_written = 0;
-  writable_->WriteData(base::as_byte_span(data), MOJO_WRITE_DATA_FLAG_NONE, actually_written);
+void MahoSyncRelayClient::FlushWriteQueue() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (state_ != State::kConnected || write_in_flight_ || pending_writes_.empty()) {
+    return;
+  }
+
+  const std::string& data = pending_writes_.front();
+  if (pending_write_offset_ == 0) {
+    websocket_->SendMessage(network::mojom::WebSocketMessageType::TEXT, data.size());
+  }
+  size_t written = 0;
+  MojoResult result = writable_->WriteData(
+      base::as_byte_span(data).subspan(pending_write_offset_),
+      MOJO_WRITE_DATA_FLAG_NONE, written);
+  if (result == MOJO_RESULT_OK) {
+    pending_write_offset_ += written;
+    if (pending_write_offset_ == data.size()) {
+      pending_writes_.pop_front();
+      pending_write_offset_ = 0;
+    }
+    FlushWriteQueue();
+  } else if (result == MOJO_RESULT_SHOULD_WAIT) {
+    write_in_flight_ = true;
+    writable_watcher_.ArmOrNotify();
+  } else {
+    Disconnect();
+  }
+}
+
+void MahoSyncRelayClient::OnWritable(
+    MojoResult result,
+    const mojo::HandleSignalsState& state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (result != MOJO_RESULT_OK || state_ != State::kConnected) {
+    Disconnect();
+    return;
+  }
+  write_in_flight_ = false;
+  FlushWriteQueue();
+}
+
+void MahoSyncRelayClient::HandleRelayFrame(const std::string& frame) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const MahoSyncRelayFrameKind frame_kind =
+      ClassifyMahoSyncRelayFrame(frame);
+  if (frame_kind == MahoSyncRelayFrameKind::kInvalid) {
+    Disconnect();
+    return;
+  }
+
+  if (frame_kind == MahoSyncRelayFrameKind::kEnvelope) {
+    ::MahoCore* core = maho::GetCore();
+    if (!core ||
+        maho_core_handle_incoming_sync_envelope(core, frame.c_str()) != 0) {
+      Disconnect();
+      return;
+    }
+    DrainReceivedTabs();
+    return;
+  }
+
+  if (frame_kind == MahoSyncRelayFrameKind::kAuthOk) {
+    authenticated_ = true;
+    SendOutgoingMessages();
+    return;
+  }
+
+  if (frame_kind == MahoSyncRelayFrameKind::kCatchupDone) {
+    return;
+  }
+
+  std::optional<base::Value> value =
+      base::JSONReader::Read(frame, base::JSON_PARSE_RFC);
+  if (!value || !value->is_dict()) {
+    Disconnect();
+    return;
+  }
+  const base::DictValue& dict = value->GetDict();
+  const std::string* delivery_id = dict.FindString("delivery_id");
+  const std::optional<int> seq = dict.FindInt("seq");
+  DCHECK(delivery_id);
+  DCHECK(seq);
+  ::MahoCore* core = maho::GetCore();
+  if (!core ||
+      maho_core_ack_sync_delivery(core, delivery_id->c_str(),
+                                  static_cast<uint64_t>(*seq)) != true) {
+    Disconnect();
+  }
 }
 
 void MahoSyncRelayClient::OnOpeningHandshakeStarted(
@@ -314,6 +413,12 @@ void MahoSyncRelayClient::OnConnectionEstablished(
                                    base::Unretained(this))),
            MOJO_RESULT_OK);
   readable_watcher_.ArmOrNotify();
+  CHECK_EQ(writable_watcher_.Watch(
+               writable_.get(), MOJO_HANDLE_SIGNAL_WRITABLE,
+               MOJO_TRIGGER_CONDITION_SIGNALS_SATISFIED,
+               base::BindRepeating(&MahoSyncRelayClient::OnWritable,
+                                   base::Unretained(this))),
+           MOJO_RESULT_OK);
 
   websocket_->StartReceiving();
   state_ = State::kConnected;
@@ -366,34 +471,14 @@ void MahoSyncRelayClient::ReadFromDataPipe(MojoResult result,
       client_receiver_.Resume();
       if (pending_read_finished_) {
         std::string message_str(pending_read_data_.begin(), pending_read_data_.end());
-        pending_read_data_.clear();
-        pending_read_data_index_ = 0;
-        pending_read_finished_ = false;
+  pending_read_data_.clear();
+  pending_read_data_index_ = 0;
+  pending_read_finished_ = false;
+  pending_writes_.clear();
+  pending_write_offset_ = 0;
+  write_in_flight_ = false;
 
-        if (!authenticated_) {
-          std::optional<base::Value> val = base::JSONReader::Read(message_str, base::JSON_PARSE_RFC);
-          if (val && val->is_dict()) {
-            const std::string* type_val = val->GetDict().FindString("type");
-            if (type_val && *type_val == "authOk") {
-              authenticated_ = true;
-              SendOutgoingMessages();
-            } else {
-              Disconnect();
-            }
-          } else {
-            Disconnect();
-          }
-        } else {
-          ::MahoCore* core = maho::GetCore();
-          if (core) {
-            maho_core_handle_incoming_websocket_message(core, message_str.c_str());
-            // Surface anything the message just enqueued immediately. Waiting
-            // for the next timer tick both delayed the received-tab toast by up
-            // to the poll interval and forced every tick to pay a drain call
-            // plus a JSON list parse even when nothing had arrived.
-            DrainReceivedTabs();
-          }
-        }
+        HandleRelayFrame(message_str);
       }
     }
   } else if (mojo_res == MOJO_RESULT_SHOULD_WAIT) {

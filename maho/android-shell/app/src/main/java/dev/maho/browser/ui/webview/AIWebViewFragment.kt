@@ -73,10 +73,8 @@ class AIWebViewFragment : Fragment() {
         super.onDestroyView()
     }
 
-    /** Called by the host Activity/Fragment when the back button is pressed. */
     fun onBackPressed(): Boolean {
-        host?.onBack()
-        return true
+        return false
     }
 }
 

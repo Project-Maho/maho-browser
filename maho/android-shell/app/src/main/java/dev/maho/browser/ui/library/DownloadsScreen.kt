@@ -2,6 +2,7 @@
 
 package dev.maho.browser.ui.library
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,7 +43,9 @@ import dev.maho.browser.bridge.BridgeDownloads
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.DownloadState
 import dev.maho.browser.models.DownloadViewModel
+import dev.maho.browser.ui.components.ConfirmDialog
 import dev.maho.browser.ui.icons.MahoIcon
+import dev.maho.browser.ui.theme.BrowserShellTheme
 import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -148,22 +151,49 @@ private fun DownloadItem(
     onRemove: () -> Unit,
     onProgressUpdate: (DownloadViewModel) -> Unit,
 ) {
+    var expanded by remember { mutableStateOf(false) }
+    var showRemoveConfirm by remember { mutableStateOf(false) }
+    var showCancelConfirm by remember { mutableStateOf(false) }
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.EndToStart) {
-                onRemove()
-                true
-            } else {
-                false
+                showRemoveConfirm = true
             }
+            false
         },
     )
 
-    var expanded by remember { mutableStateOf(false) }
     val progress = if (download.totalBytes > 0) {
         download.receivedBytes.toFloat() / download.totalBytes.toFloat()
     } else {
         0f
+    }
+
+    if (showRemoveConfirm) {
+        ConfirmDialog(
+            title = "Remove Download?",
+            message = "This removes \"${download.filename}\" from your downloads list.",
+            confirmLabel = "Remove",
+            onConfirm = {
+                showRemoveConfirm = false
+                onRemove()
+            },
+            onDismiss = { showRemoveConfirm = false },
+        )
+    }
+
+    if (showCancelConfirm) {
+        ConfirmDialog(
+            title = "Cancel Download?",
+            message = "This stops and cancels \"${download.filename}\".",
+            confirmLabel = "Cancel Download",
+            onConfirm = {
+                showCancelConfirm = false
+                onCancel()
+            },
+            onDismiss = { showCancelConfirm = false },
+            dismissLabel = "Keep",
+        )
     }
 
     SwipeToDismissBox(
@@ -172,12 +202,13 @@ private fun DownloadItem(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.error)
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 Icon(painter = painterResource(id = MahoIcon.Delete.drawableRes),
                     contentDescription = "Delete",
-                    tint = Color.White,
+                    tint = MaterialTheme.colorScheme.onError,
                 )
             }
         },
@@ -243,7 +274,7 @@ private fun DownloadItem(
                                     },
                                     onClick = {
                                         expanded = false
-                                        onCancel()
+                                        showCancelConfirm = true
                                     },
                                 )
                             }
@@ -265,7 +296,7 @@ private fun DownloadItem(
                                     },
                                     onClick = {
                                         expanded = false
-                                        onCancel()
+                                        showCancelConfirm = true
                                     },
                                 )
                             }
@@ -277,7 +308,7 @@ private fun DownloadItem(
                                     },
                                     onClick = {
                                         expanded = false
-                                        onRemove()
+                                        showRemoveConfirm = true
                                     },
                                 )
                             }
@@ -297,12 +328,16 @@ private fun stateLabel(state: DownloadState): String = when (state) {
     DownloadState.Cancelled -> "Cancelled"
 }
 
-private fun stateColor(state: DownloadState): Color = when (state) {
-    DownloadState.Downloading -> Color(0xFF2196F3)
-    DownloadState.Paused -> Color(0xFFFF9800)
-    DownloadState.Completed -> Color(0xFF4CAF50)
-    DownloadState.Failed -> Color(0xFFF44336)
-    DownloadState.Cancelled -> Color(0xFF9E9E9E)
+@Composable
+private fun stateColor(state: DownloadState): Color {
+    val colors = BrowserShellTheme.colors
+    return when (state) {
+        DownloadState.Downloading -> colors.accent
+        DownloadState.Paused -> colors.warning
+        DownloadState.Completed -> colors.success
+        DownloadState.Failed -> colors.error
+        DownloadState.Cancelled -> colors.textSecondary
+    }
 }
 
 private fun formatBytes(bytes: Long): String {

@@ -10,12 +10,15 @@ interface ComposerProps {
   onDraftChange: (value: string) => void;
   onSubmit: () => void;
   onStop: () => void;
+  /** Flush hook for draft persistence; fired when the textarea loses focus. */
+  onBlur?: () => void;
 }
 
 export function Composer({
   draft,
   phase,
   hasMessages,
+  onBlur,
   onDraftChange,
   onSubmit,
   onStop,
@@ -58,6 +61,7 @@ export function Composer({
           onCompositionEnd={() => {
             composingRef.current = false;
           }}
+          onBlur={() => onBlur?.()}
           onInput={(event) => onDraftChange(readTextAreaValue(event))}
           onKeyDown={handleKeyDown}
         />

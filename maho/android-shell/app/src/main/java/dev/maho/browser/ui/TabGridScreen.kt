@@ -243,6 +243,11 @@ fun TabGridScreen(
                         onTabSelected(tabId)
                         onDismiss()
                     },
+                    onTabArchived = { tabId ->
+                        BridgeTabs.archiveTab(tabId)
+                        refresh()
+                        onTabSelected(BridgeTabs.getActiveTabId())
+                    },
                     onTabClosed = { tabId ->
                         BridgeTabs.closeTab(tabId)
                         refresh()

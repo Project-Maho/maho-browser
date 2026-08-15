@@ -49,6 +49,7 @@ class Replacement:
 # platforms on which that file exists in the Chromium checkout.  A path
 # absent from this map is treated as enabled on all platforms.
 FILE_PLATFORMS: dict[str, frozenset[str]] = {
+    "chrome/installer/mini_installer/chrome.release": frozenset({"win"}),
     "chrome/app/app-Info.plist": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.h": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
@@ -100,6 +101,46 @@ _BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/notifications/notification_handler.h": [
+        Replacement(
+            old=(
+                "    MAHO_MAIL = 5,\n"
+                "    SHARING = 6,\n"
+            ),
+            new="    SHARING = 6,\n",
+            description="Maho: remove the obsolete deprecated-slot Mail enum",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "    DEFAULT_BROWSER_CHANGED = 11,\n"
+                "    MAX = DEFAULT_BROWSER_CHANGED,\n"
+            ),
+            new=(
+                "    DEFAULT_BROWSER_CHANGED = 11,\n"
+                "    MAHO_MAIL = 12,\n"
+                "    MAX = MAHO_MAIL,\n"
+            ),
+            description="Maho: append an ABI-safe native notification type for Mail",
+            guard="    MAHO_MAIL = 12,",
+        ),
+    ],
+    "chrome/installer/mini_installer/chrome.release": [
+        Replacement(
+            old=(
+                "chrome.exe: %(ChromeDir)s\\\n"
+                "chrome_proxy.exe: %(ChromeDir)s\\\n"
+            ),
+            new=(
+                "chrome.exe: %(ChromeDir)s\\\n"
+                "chrome_proxy.exe: %(ChromeDir)s\\\n"
+                "maho.exe: %(ChromeDir)s\\\n"
+                "maho_mail_helper.exe: %(ChromeDir)s\\\n"
+            ),
+            description="Maho: bundle the CLI and Mail helper in the Windows installer",
+            guard="maho_mail_helper.exe: %(ChromeDir)s\\",
+        ),
+    ],
     "ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm": [
         Replacement(
             old="    root_ca_layer_.opaque = YES;\n",
@@ -2781,6 +2822,87 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/BUILD.gn": [
         Replacement(
             old=(
+                'static_library("ui") {\n'
+                '  # Keep the overlay first: canonical chrome/... includes must resolve\n'
+                '  # to chromium_src, while the parent root is only for explicit src/...\n'
+                '  # includes of the original Chromium implementation.\n'
+                '  include_dirs = [\n'
+                '    "//maho/chromium_src",\n'
+                '    "../../../..",\n'
+                '  ]\n'
+                '\n'
+                '  sources = [\n'
+            ),
+            new='static_library("ui") {\n  sources = [\n',
+            description=(
+                "Maho: remove target-wide chromium_src include shadowing from "
+                "chrome/browser/ui:ui"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old='static_library("ui") {\n  sources = [\n',
+            new=(
+                'static_library("ui") {\n'
+                '  # The password bubble wrapper includes its overlay explicitly.\n'
+                '  # This parent root is only for its src/... Chromium fallback.\n'
+                '  include_dirs = [ "../../../.." ]\n'
+                '\n'
+                '  sources = [\n'
+            ),
+            description=(
+                "Maho: expose the explicit Chromium password bubble fallback to "
+                "chrome/browser/ui:ui"
+            ),
+            guard='  include_dirs = [ "../../../.." ]\n',
+        ),
+        Replacement(
+            old='    include_dirs = [ "$target_gen_dir" ]\n',
+            new='    include_dirs += [ "$target_gen_dir" ]\n',
+            description=(
+                "Maho: preserve password bubble overlay include roots when macOS "
+                "adds target_gen_dir to chrome/browser/ui:ui"
+            ),
+            guard='    include_dirs += [ "$target_gen_dir" ]\n',
+        ),
+        Replacement(
+            old=(
+                '      "views/passwords/password_bubble_view_base.cc",\n'
+                '      "views/passwords/password_bubble_view_base.h",\n'
+            ),
+            new=(
+                '      "//maho/chromium_src/chrome/browser/ui/views/passwords/'
+                'password_bubble_view_base.cc",\n'
+                '      "//maho/chromium_src/chrome/browser/ui/views/passwords/'
+                'password_bubble_view_base.h",\n'
+            ),
+            description=(
+                "Maho: compile the chromium_src password bubble factory override "
+                "in chrome/browser/ui:ui"
+            ),
+            guard=(
+                '      "//maho/chromium_src/chrome/browser/ui/views/passwords/'
+                'password_bubble_view_base.cc",\n'
+            ),
+        ),
+        Replacement(
+            old=(
+                '    "//build/config/linux/dbus:buildflags",\n'
+                '    "//maho/browser/net",\n'
+            ),
+            new=(
+                '    "//build/config/linux/dbus:buildflags",\n'
+                '    "//maho/browser:maho_password_save_update_view",\n'
+                '    "//maho/browser/net",\n'
+            ),
+            description=(
+                "Maho: link the native password save/update view into "
+                "chrome/browser/ui:ui"
+            ),
+            guard='    "//maho/browser:maho_password_save_update_view",\n',
+        ),
+        Replacement(
+            old=(
                 '      "//maho/browser/ui/views/peek:maho_peek",\n'
             ),
             new=(
@@ -2794,9 +2916,36 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='"//maho/browser/ui/views/peek:maho_peek_route"',
         ),
         Replacement(
-            old='    "//maho/browser:maho_link_preview",\n',
+            old='    "//maho/browser:maho_link_preview",\\n',
             new="",
             description="Maho: strip deleted maho_link_preview dep from chrome/browser/ui:ui",
+            idempotent=True,
+        ),
+        Replacement(
+            old='    "//maho/browser:maho_features",\\n',
+            new="",
+            description=(
+                "Maho: strip deleted maho_features dep from chrome/browser/ui:ui "
+                "(target and sources no longer exist in the overlay)"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old='      "//maho/browser:maho_mac_sf_symbol_helper",\n',
+            new="",
+            description=(
+                "Maho: strip deleted maho_mac_sf_symbol_helper dep "
+                "(target and sources no longer exist in the overlay)"
+            ),
+            idempotent=True,
+        ),
+        Replacement(
+            old='      "//maho/browser/ui/views/sidebar:maho_sidebar_boosts",\n',
+            new="",
+            description=(
+                "Maho: strip deleted maho_sidebar_boosts dep "
+                "(target and sources no longer exist in the overlay)"
+            ),
             idempotent=True,
         ),
         Replacement(
@@ -2926,14 +3075,42 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.cc",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",\n'
+                '      "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h",\n'
+                '      "//maho/browser/ui/views/maho_action_marker_service.cc",\n'
+                '      "//maho/browser/ui/views/maho_action_marker_service.h",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.cc",\n'
                 '      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h",\n'
-                '      "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_mac.mm",\n'
                 '      "//maho/browser/ai/maho_tab_tidy_orchestrator.cc",\n'
                 '      "//maho/browser/ai/maho_tab_tidy_orchestrator.h",\n'
             ),
             description="Include Maho tab preview controller sources in Chromium browser UI build",
-            guard='      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.cc",\n',
+            guard='      "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",\n',
+        ),
+        Replacement(
+            old=(
+                '    if (is_mac) {\n'
+                '      sources +=\n'
+                '          [ "views/user_education/browser_help_bubble_event_relay_mac.mm" ]\n'
+                '    }'
+            ),
+            new=(
+                '    if (is_mac) {\n'
+                '      sources += [\n'
+                '        "views/user_education/browser_help_bubble_event_relay_mac.mm",\n'
+                '        "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_mac.mm",\n'
+                '      ]\n'
+                '    } else {\n'
+                '      sources +=\n'
+                '          [ "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_stub.cc" ]\n'
+                '    }'
+            ),
+            description=(
+                "Maho: compile traffic-light geometry per-platform (mac .mm on "
+                "macOS, stub .cc elsewhere) so chrome/browser/ui:ui resolves "
+                "maho::GetTrafficLightCenterYInView on Linux/Windows"
+            ),
+            guard='maho_traffic_light_geometry_stub.cc',
         ),
         Replacement(
             old=(
@@ -2982,12 +3159,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
                 '#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"\n'
                 '#include "maho/browser/mail_helper/maho_mail_service.h"\n'
+                '#include "maho/browser/passwords/maho_password_provider_utils.h"\n'
             ),
             description=(
-                "Include maho_ctrl_tab_prefs.h and maho_mail_service.h in browser_prefs.cc for pref "
-                "registration of Ctrl+Tab MRU switcher and Mail service settings"
+                "Include maho_ctrl_tab_prefs.h, maho_mail_service.h, and maho_password_provider_utils.h "
+                "in browser_prefs.cc for pref registration of Ctrl+Tab, Mail, and Password Manager kill switch"
             ),
-            guard='#include "maho/browser/mail_helper/maho_mail_service.h"',
+            guard='#include "maho/browser/passwords/maho_password_provider_utils.h"',
         ),
         Replacement(
             old='  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n',
@@ -3001,6 +3179,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "alongside the other Maho profile prefs"
             ),
             guard="maho::MahoMailService::RegisterProfilePrefs",
+        ),
+        Replacement(
+            old='void RegisterLocalState(PrefRegistrySimple* registry) {\n',
+            new=(
+                'void RegisterLocalState(PrefRegistrySimple* registry) {\n'
+                '  maho::passwords::RegisterLocalStatePrefs(registry);\n'
+            ),
+            description="Register Maho passwords local state kill switch pref",
+            guard="maho::passwords::RegisterLocalStatePrefs(registry);",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_view.h": [
@@ -5380,19 +5567,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
 
         Replacement(
             old=(
-                '#include "maho/browser/ui/views/peek/maho_peek_route.h"\n'
-            ),
-            new=(
-                '#include "maho/browser/ui/views/peek/maho_peek_route.h"\n'
-                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
-            ),
-            description="Include the shared Peek source-role seam in browser.cc",
-            guard=(
-                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"'
-            ),
-        ),
-        Replacement(
-            old=(
                 '#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"\n'
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
             ),
@@ -7587,74 +7761,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Register Maho artifact registry factory at startup",
             guard='  maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();\n',
         ),
-        Replacement(
-            old='#include "maho/browser/net/maho_shield_site_state_factory.h"\n',
-            new=(
-                '#include "maho/browser/net/maho_shield_site_state_factory.h"\n'
-                '#include "maho/browser/mail_helper/maho_mail_service.h"\n'
-                '#include "chrome/browser/notifications/notification_display_service.h"\n'
-                '#include "chrome/browser/notifications/notification_display_service_factory.h"\n'
-                '#include "chrome/browser/notifications/notification_handler.h"\n'
-                '#include "base/strings/utf_string_conversions.h"\n'
-                '#include "base/functional/bind.h"\n'
-                '#include "ui/base/models/image_model.h"\n'
-                '#include "ui/message_center/public/cpp/notification.h"\n'
-                '#include "ui/message_center/public/cpp/notifier_id.h"\n'
-                '#include "url/gurl.h"\n'
-            ),
-            description="Include Maho mail-notification display headers in profiles.cc",
-            guard='#include "maho/browser/mail_helper/maho_mail_service.h"\n',
-        ),
-        Replacement(
-            old=(
-                '// static\n'
-                'void ChromeBrowserMainExtraPartsProfiles::\n'
-                '    EnsureBrowserContextKeyedServiceFactoriesBuilt() {\n'
-            ),
-            new=(
-                'namespace {\n'
-                '\n'
-                '// Maho: surfaces an OS notification for newly arrived mail. Installed as\n'
-                '// the MahoMailService notification hook so the mail service target need\n'
-                '// not depend on //chrome/browser/notifications (a GN dependency cycle).\n'
-                'void MahoShowNewMailNotification(Profile* profile,\n'
-                '                                 const std::string& title,\n'
-                '                                 const std::string& body,\n'
-                '                                 const std::string& notification_id) {\n'
-                '  if (!profile) {\n'
-                '    return;\n'
-                '  }\n'
-                '  message_center::Notification notification(\n'
-                '      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,\n'
-                '      base::UTF8ToUTF16(title), base::UTF8ToUTF16(body), ui::ImageModel(),\n'
-                '      u"Maho Mail", GURL("chrome://maho-mail"),\n'
-                '      message_center::NotifierId(\n'
-                '          message_center::NotifierType::SYSTEM_COMPONENT, "maho.mail"),\n'
-                '      message_center::RichNotificationData(), /*delegate=*/nullptr);\n'
-                '  NotificationDisplayServiceFactory::GetForProfile(profile)->Display(\n'
-                '      NotificationHandler::Type::TRANSIENT, notification,\n'
-                '      /*metadata=*/nullptr);\n'
-                '}\n'
-                '\n'
-                '}  // namespace\n'
-                '\n'
-                '// static\n'
-                'void ChromeBrowserMainExtraPartsProfiles::\n'
-                '    EnsureBrowserContextKeyedServiceFactoriesBuilt() {\n'
-            ),
-            description="Define Maho new-mail OS notification helper in profiles.cc",
-            guard='void MahoShowNewMailNotification(',
-        ),
-        Replacement(
-            old='  maho::MahoShieldSiteStateFactory::GetInstance();\n',
-            new=(
-                '  maho::MahoShieldSiteStateFactory::GetInstance();\n'
-                '  maho::SetMahoMailNotificationCallback(\n'
-                '      base::BindRepeating(&MahoShowNewMailNotification));\n'
-            ),
-            description="Install Maho new-mail OS notification hook at startup",
-            guard='maho::SetMahoMailNotificationCallback',
-        ),
     ],
     "chrome/browser/ui/views/frame/contents_container_outline.h": [
         Replacement(
@@ -8549,6 +8655,632 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="if (browser()->is_maho_mini()) {\n    return gfx::Size(400",
         ),
     ],
+    "components/password_manager/core/browser/password_form_digest.h": [
+        Replacement(
+            old=(
+                '#include <string>\n\n'
+                '#include "components/password_manager/core/browser/password_form.h"\n'
+            ),
+            new=(
+                '#include <string>\n\n'
+                '#include "components/password_manager/core/browser/password_form.h"\n'
+                '#include "maho/chromium_src/components/password_manager/core/browser/'
+                'password_fill_request.h"\n'
+            ),
+            description="Maho: include standalone password fill request contract",
+            guard='password_fill_request.h',
+        ),
+    ],
+    "components/password_manager/core/browser/password_store/password_store_interface.h": [
+        Replacement(
+            old=(
+                '  virtual void GetLogins(\n'
+                '      const PasswordFormDigest& form,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
+                '    GetLogins(form, std::move(consumer));\n'
+                '  }\n\n'
+                '  // Starts final delivery. The default fails closed.\n'
+                '  virtual void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver) {\n'
+                '    std::move(resolver).Run(std::nullopt);\n'
+                '  }\n'
+            ),
+            new=(
+                '  virtual void GetLogins(\n'
+                '      const PasswordFormDigest& form,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      base::WeakPtr<PasswordStoreConsumer> consumer);\n\n'
+                '  // Starts final delivery. The default fails closed.\n'
+                '  virtual void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver);\n'
+            ),
+            description="Maho: move password store virtual defaults out of line",
+            idempotent=True,
+            guard=(
+                '      base::WeakPtr<PasswordStoreConsumer> consumer);\n\n'
+                '  // Starts final delivery. The default fails closed.\n'
+            ),
+        ),
+        Replacement(
+            old='#include <vector>\n',
+            new='#include <utility>\n#include <vector>\n',
+            description="Maho: include utility for password store default adapters",
+            guard='#include <utility>\n',
+        ),
+        Replacement(
+            old=(
+                '  virtual void GetLogins(const PasswordFormDigest& form,\n'
+                '                         base::WeakPtr<PasswordStoreConsumer> consumer) = 0;\n'
+            ),
+            new=(
+                '  virtual void GetLogins(const PasswordFormDigest& form,\n'
+                '                         base::WeakPtr<PasswordStoreConsumer> consumer) = 0;\n\n'
+                '  // Context-aware adapter. Legacy stores keep their exact retrieval behavior.\n'
+                '  virtual void GetLogins(\n'
+                '      const PasswordFormDigest& form,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      base::WeakPtr<PasswordStoreConsumer> consumer);\n\n'
+                '  // Starts a just-in-time, secret-free resolution check. Backends opt in;\n'
+                '  // the default fails closed and never exposes credential material.\n'
+                '  virtual void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver);\n'
+            ),
+            description="Maho: add context-aware password store interface adapters",
+            guard="virtual void ResolvePasswordFill(",
+        ),
+    ],
+    "components/password_manager/core/browser/password_store/password_store_consumer.cc": [
+        Replacement(
+            old='void PasswordStoreConsumer::OnGetPasswordStoreResults(\n',
+            new=(
+                'void PasswordStoreInterface::GetLogins(\n'
+                '    const PasswordFormDigest& form,\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
+                '  GetLogins(form, std::move(consumer));\n'
+                '}\n\n'
+                'void PasswordStoreInterface::ResolvePasswordFill(\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    const PasswordFillSelection& selection,\n'
+                '    PasswordFillResolver resolver) {\n'
+                '  std::move(resolver).Run(std::nullopt);\n'
+                '}\n\n'
+                'void PasswordStoreConsumer::OnGetPasswordStoreResults(\n'
+            ),
+            description="Maho: implement out-of-line PasswordStoreInterface defaults",
+            guard="void PasswordStoreInterface::ResolvePasswordFill(",
+        ),
+    ],
+    "components/password_manager/core/browser/password_store/password_store_backend.h": [
+        Replacement(
+            old=(
+                '  virtual void GetGroupedMatchingLoginsAsync(\n'
+                '      const PasswordFormDigest& form_digest,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      BackendLoginsOrErrorReply callback) {\n'
+                '    GetGroupedMatchingLoginsAsync(form_digest, std::move(callback));\n'
+                '  }\n\n'
+                '  virtual void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver) {\n'
+                '    std::move(resolver).Run(std::nullopt);\n'
+                '  }\n'
+            ),
+            new=(
+                '  virtual void GetGroupedMatchingLoginsAsync(\n'
+                '      const PasswordFormDigest& form_digest,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      BackendLoginsOrErrorReply callback);\n\n'
+                '  virtual void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver);\n'
+            ),
+            description="Maho: move password backend virtual defaults out of line",
+            idempotent=True,
+            guard=(
+                '      const PasswordFillRequestContext& context,\n'
+                '      BackendLoginsOrErrorReply callback);\n'
+            ),
+        ),
+        Replacement(
+            old='#include <optional>\n',
+            new='#include <optional>\n#include <utility>\n',
+            description="Maho: include utility for password backend default adapters",
+            guard='#include <utility>\n',
+        ),
+        Replacement(
+            old=(
+                '  virtual void GetGroupedMatchingLoginsAsync(\n'
+                '      const PasswordFormDigest& form_digest,\n'
+                '      BackendLoginsOrErrorReply callback) = 0;\n'
+            ),
+            new=(
+                '  virtual void GetGroupedMatchingLoginsAsync(\n'
+                '      const PasswordFormDigest& form_digest,\n'
+                '      BackendLoginsOrErrorReply callback) = 0;\n\n'
+                '  // Context-aware adapter preserving every legacy backend unchanged.\n'
+                '  virtual void GetGroupedMatchingLoginsAsync(\n'
+                '      const PasswordFormDigest& form_digest,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      BackendLoginsOrErrorReply callback);\n\n'
+                '  virtual void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver);\n'
+            ),
+            description="Maho: add context-aware password backend adapters",
+            guard="const PasswordFillSelection& selection",
+        ),
+    ],
+    "components/password_manager/core/browser/password_store/password_store_backend_metrics_recorder.cc": [
+        Replacement(
+            old=(
+                '#include "components/password_manager/core/browser/password_store/'
+                'password_store_backend_metrics_recorder.h"\n'
+            ),
+            new=(
+                '#include "components/password_manager/core/browser/password_store/'
+                'password_store_backend_metrics_recorder.h"\n'
+                '#include "components/password_manager/core/browser/password_store/'
+                'password_store_backend.h"\n'
+            ),
+            description="Maho: include backend interface for out-of-line defaults",
+            guard='#include "components/password_manager/core/browser/password_store/password_store_backend.h"\n',
+        ),
+        Replacement(
+            old='namespace password_manager {\n',
+            new=(
+                'namespace password_manager {\n\n'
+                'void PasswordStoreBackend::GetGroupedMatchingLoginsAsync(\n'
+                '    const PasswordFormDigest& form_digest,\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    BackendLoginsOrErrorReply callback) {\n'
+                '  GetGroupedMatchingLoginsAsync(form_digest, std::move(callback));\n'
+                '}\n\n'
+                'void PasswordStoreBackend::ResolvePasswordFill(\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    const PasswordFillSelection& selection,\n'
+                '    PasswordFillResolver resolver) {\n'
+                '  std::move(resolver).Run(std::nullopt);\n'
+                '}\n'
+            ),
+            description="Maho: implement out-of-line PasswordStoreBackend defaults",
+            guard="void PasswordStoreBackend::ResolvePasswordFill(",
+        ),
+    ],
+    "components/password_manager/core/browser/password_store/password_store.h": [
+        Replacement(
+            old=(
+                '  void GetLogins(const PasswordFormDigest& form,\n'
+                '                 base::WeakPtr<PasswordStoreConsumer> consumer) override;\n'
+            ),
+            new=(
+                '  void GetLogins(const PasswordFormDigest& form,\n'
+                '                 base::WeakPtr<PasswordStoreConsumer> consumer) override;\n'
+                '  void GetLogins(\n'
+                '      const PasswordFormDigest& form,\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      base::WeakPtr<PasswordStoreConsumer> consumer) override;\n'
+                '  void ResolvePasswordFill(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const PasswordFillSelection& selection,\n'
+                '      PasswordFillResolver resolver) override;\n'
+            ),
+            description="Maho: declare context-aware PasswordStore forwarding",
+            guard="PasswordFillResolver resolver) override;",
+        ),
+    ],
+    "components/password_manager/core/browser/password_store/password_store.cc": [
+        Replacement(
+            old=(
+                '    post_init_callback_ = std::move(post_init_callback_)\n'
+                '                              .Then(base::BindOnce(&PasswordStore::GetLogins,\n'
+                '                                                   this, form, consumer));\n'
+            ),
+            new=(
+                '    post_init_callback_ =\n'
+                '        std::move(post_init_callback_)\n'
+                '            .Then(base::BindOnce(\n'
+                '                static_cast<void (PasswordStore::*)(\n'
+                '                    const PasswordFormDigest&,\n'
+                '                    base::WeakPtr<PasswordStoreConsumer>)>(\n'
+                '                    &PasswordStore::GetLogins),\n'
+                '                this, form, consumer));\n'
+            ),
+            description="Maho: disambiguate legacy PasswordStore GetLogins callback",
+            guard=(
+                'static_cast<void (PasswordStore::*)(\n'
+                '                    const PasswordFormDigest&,\n'
+                '                    base::WeakPtr<PasswordStoreConsumer>)>'
+            ),
+        ),
+        Replacement(
+            old='void PasswordStore::GetAutofillableLogins(\n',
+            new=(
+                'void PasswordStore::GetLogins(\n'
+                '    const PasswordFormDigest& form,\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
+                '  DCHECK(main_task_runner_->RunsTasksInCurrentSequence());\n'
+                '  if (!backend_) {\n'
+                '    return;\n'
+                '  }\n'
+                '  if (post_init_callback_) {\n'
+                '    post_init_callback_ =\n'
+                '        std::move(post_init_callback_)\n'
+                '            .Then(base::BindOnce(\n'
+                '                static_cast<void (PasswordStore::*)(\n'
+                '                    const PasswordFormDigest&,\n'
+                '                    const PasswordFillRequestContext&,\n'
+                '                    base::WeakPtr<PasswordStoreConsumer>)>(\n'
+                '                    &PasswordStore::GetLogins),\n'
+                '                this, form, context, consumer));\n'
+                '    return;\n'
+                '  }\n'
+                '  backend_->GetGroupedMatchingLoginsAsync(\n'
+                '      form, context,\n'
+                '      base::BindOnce(&ConsumerReplyConverter, consumer,\n'
+                '                     base::RetainedRef(this)));\n'
+                '}\n\n'
+                'void PasswordStore::ResolvePasswordFill(\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    const PasswordFillSelection& selection,\n'
+                '    PasswordFillResolver resolver) {\n'
+                '  if (!backend_) {\n'
+                '    std::move(resolver).Run(std::nullopt);\n'
+                '    return;\n'
+                '  }\n'
+                '  backend_->ResolvePasswordFill(context, selection, std::move(resolver));\n'
+                '}\n\n'
+                'void PasswordStore::GetAutofillableLogins(\n'
+            ),
+            description="Maho: forward context-aware requests and resolver callbacks",
+            guard="void PasswordStore::ResolvePasswordFill(",
+        ),
+    ],
+    "components/password_manager/core/browser/form_fetcher.h": [
+        Replacement(
+            old='#include "components/password_manager/core/browser/password_form.h"\n',
+            new=(
+                '#include "components/password_manager/core/browser/password_form.h"\n'
+                '#include "components/password_manager/core/browser/password_form_digest.h"\n'
+            ),
+            description="Maho: include password fill request context in FormFetcher",
+            guard="#include \"components/password_manager/core/browser/password_form_digest.h\"",
+        ),
+        Replacement(
+            old='  virtual void Fetch() = 0;\n',
+            new=(
+                '  virtual void Fetch() = 0;\n\n'
+                '  // Captures the requesting document before the asynchronous store read.\n'
+                '  virtual void SetPasswordFillRequestContext(\n'
+                '      const PasswordFillRequestContext& context);\n'
+            ),
+            description="Maho: add optional FormFetcher document context capture",
+            guard="virtual void SetPasswordFillRequestContext(",
+        ),
+    ],
+    "components/password_manager/core/browser/form_fetcher_impl.h": [
+        Replacement(
+            old='  void Fetch() override;\n',
+            new=(
+                '  void Fetch() override;\n'
+                '  void SetPasswordFillRequestContext(\n'
+                '      const PasswordFillRequestContext& context) override;\n'
+            ),
+            description="Maho: declare FormFetcherImpl context capture",
+            guard="void SetPasswordFillRequestContext(",
+        ),
+        Replacement(
+            old='  const PasswordFormDigest form_digest_;\n',
+            new=(
+                '  const PasswordFormDigest form_digest_;\n'
+                '  std::optional<PasswordFillRequestContext> fill_request_context_;\n'
+            ),
+            description="Maho: retain captured password fill request context",
+            guard="fill_request_context_",
+        ),
+    ],
+    "components/password_manager/core/browser/form_fetcher_impl.cc": [
+        Replacement(
+            old='void FormFetcherImpl::Fetch() {\n',
+            new=(
+                'void FormFetcher::SetPasswordFillRequestContext(\n'
+                '    const PasswordFillRequestContext& context) {}\n\n'
+                'void FormFetcherImpl::SetPasswordFillRequestContext(\n'
+                '    const PasswordFillRequestContext& context) {\n'
+                '  fill_request_context_ = context;\n'
+                '}\n\n'
+                'void FormFetcherImpl::Fetch() {\n'
+            ),
+            description="Maho: implement FormFetcher document context capture",
+            guard="void FormFetcherImpl::SetPasswordFillRequestContext(",
+        ),
+        Replacement(
+            old=(
+                '  profile_password_store->GetLogins(form_digest_,\n'
+                '                                    weak_ptr_factory_.GetWeakPtr());\n'
+                '  if (account_password_store) {\n'
+                '    account_password_store->GetLogins(form_digest_,\n'
+                '                                      weak_ptr_factory_.GetWeakPtr());\n'
+                '  }\n'
+            ),
+            new=(
+                '  if (fill_request_context_) {\n'
+                '    profile_password_store->GetLogins(\n'
+                '        form_digest_, *fill_request_context_,\n'
+                '        weak_ptr_factory_.GetWeakPtr());\n'
+                '    if (account_password_store) {\n'
+                '      account_password_store->GetLogins(\n'
+                '          form_digest_, *fill_request_context_,\n'
+                '          weak_ptr_factory_.GetWeakPtr());\n'
+                '    }\n'
+                '  } else {\n'
+                '    profile_password_store->GetLogins(\n'
+                '        form_digest_, weak_ptr_factory_.GetWeakPtr());\n'
+                '    if (account_password_store) {\n'
+                '      account_password_store->GetLogins(\n'
+                '          form_digest_, weak_ptr_factory_.GetWeakPtr());\n'
+                '    }\n'
+                '  }\n'
+            ),
+            description="Maho: issue context-aware password store requests when captured",
+            guard="if (fill_request_context_)",
+        ),
+        Replacement(
+            old='  return result;\n}\n\nstd::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {\n',
+            new=(
+                '  result->fill_request_context_ = fill_request_context_;\n'
+                '  return result;\n}\n\nstd::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {\n'
+            ),
+            description="Maho: preserve document context when cloning FormFetcherImpl",
+            guard="result->fill_request_context_ = fill_request_context_;",
+        ),
+    ],
+    "components/password_manager/core/browser/password_manager_driver.h": [
+        Replacement(
+            old='#include <string>\n',
+            new='#include <string>\n#include <utility>\n',
+            description="Maho: include utility for driver default adapter",
+            guard='#include <utility>\n',
+        ),
+        Replacement(
+            old='#include "components/autofill/core/common/unique_ids.h"\n',
+            new=(
+                '#include "components/autofill/core/common/unique_ids.h"\n'
+                '#include "components/password_manager/core/browser/password_form_digest.h"\n'
+            ),
+            description="Maho: include document-aware password fill types in driver",
+            guard='#include "components/password_manager/core/browser/password_form_digest.h"',
+        ),
+        Replacement(
+            old='  virtual int GetId() const = 0;\n',
+            new=(
+                '  virtual int GetId() const = 0;\n\n'
+                '  PasswordFillRequestContext GetPasswordFillRequestContext() const {\n'
+                '    return {GetLastCommittedOrigin(), document_token_};\n'
+                '  }\n\n'
+                '  bool IsPasswordFillRequestContextCurrent(\n'
+                '      const PasswordFillRequestContext& context) const {\n'
+                '    return context.document_token == document_token_ &&\n'
+                '           context.requesting_origin == GetLastCommittedOrigin();\n'
+                '  }\n\n'
+                '  void SetPasswordFillRequestContextForTesting(\n'
+                '      const PasswordFillRequestContext& context) {\n'
+                '    document_token_ = context.document_token;\n'
+                '  }\n'
+            ),
+            description="Maho: expose driver-owned document fill context",
+            guard="SetPasswordFillRequestContextForTesting(",
+        ),
+        Replacement(
+            old=(
+                '  virtual void FillSuggestion(\n'
+                '      const std::u16string& username,\n'
+                '      const std::u16string& password,\n'
+                '      base::OnceCallback<void(bool)> success_callback) = 0;\n'
+            ),
+            new=(
+                '  virtual void FillSuggestion(\n'
+                '      const std::u16string& username,\n'
+                '      const std::u16string& password,\n'
+                '      base::OnceCallback<void(bool)> success_callback) = 0;\n\n'
+                '  // Rechecks the captured document immediately before legacy dispatch.\n'
+                '  virtual void FillSuggestion(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      const std::u16string& username,\n'
+                '      const std::u16string& password,\n'
+                '      base::OnceCallback<void(bool)> success_callback) {\n'
+                '    if (!IsPasswordFillRequestContextCurrent(context)) {\n'
+                '      std::move(success_callback).Run(false);\n'
+                '      return;\n'
+                '    }\n'
+                '    FillSuggestion(username, password, std::move(success_callback));\n'
+                '  }\n\n'
+                '  // Produces the only callback that may receive a resolved secret. It is\n'
+                '  bound to this exact driver and captured document context.\n'
+                '  PasswordFillResolver CreatePasswordFillResolver(\n'
+                '      const PasswordFillRequestContext& context,\n'
+                '      std::u16string username,\n'
+                '      base::OnceCallback<void(bool)> success_callback) {\n'
+                '    return PasswordFillResolver(base::BindOnce(\n'
+                '        [](base::WeakPtr<PasswordManagerDriver> driver,\n'
+                '           PasswordFillRequestContext context, std::u16string username,\n'
+                '           base::OnceCallback<void(bool)> success_callback,\n'
+                '           std::optional<PasswordFillResolution> resolution) {\n'
+                '          if (!driver || !resolution ||\n'
+                '              !driver->IsPasswordFillRequestContextCurrent(context)) {\n'
+                '            std::move(success_callback).Run(false);\n'
+                '            return;\n'
+                '          }\n'
+                '          driver->FillSuggestion(context, username, resolution->secret(),\n'
+                '                                 std::move(success_callback));\n'
+                '        },\n'
+                '        AsWeakPtr(), context, std::move(username),\n'
+                '        std::move(success_callback)));\n'
+                '  }\n'
+            ),
+            description="Maho: add context-aware driver fill adapter",
+            guard="CreatePasswordFillResolver(",
+        ),
+        Replacement(
+            old='  virtual base::WeakPtr<PasswordManagerDriver> AsWeakPtr() = 0;\n',
+            new=(
+                '  virtual base::WeakPtr<PasswordManagerDriver> AsWeakPtr() = 0;\n\n'
+                ' protected:\n'
+                '  void RotatePasswordManagerDocumentToken() {\n'
+                '    document_token_ = PasswordManagerDocumentToken();\n'
+                '  }\n\n'
+                ' private:\n'
+                '  PasswordManagerDocumentToken document_token_;\n'
+            ),
+            description="Maho: make PasswordManagerDriver own a rotating document token",
+            guard="PasswordManagerDocumentToken document_token_;",
+        ),
+    ],
+    "components/password_manager/core/browser/password_form_digest.cc": [
+        Replacement(
+            old="PasswordFormDigest& PasswordFormDigest::operator=(PasswordFormDigest&& other) =\n    default;\n",
+            new=(
+                "PasswordFormDigest& PasswordFormDigest::operator=(PasswordFormDigest&& other) =\n"
+                "    default;\n\n"
+                "PasswordFillResolution::PasswordFillResolution(std::u16string secret)\n"
+                "    : secret_(std::move(secret)) {}\n\n"
+                "PasswordFillResolution::PasswordFillResolution(PasswordFillResolution&& other) noexcept\n"
+                "    : secret_(std::move(other.secret_)) {}\n\n"
+                "PasswordFillResolution& PasswordFillResolution::operator=(\n"
+                "    PasswordFillResolution&& other) noexcept {\n"
+                "  if (this != &other) {\n"
+                "    Zeroize();\n"
+                "    secret_ = std::move(other.secret_);\n"
+                "  }\n"
+                "  return *this;\n"
+                "}\n\n"
+                "PasswordFillResolution::~PasswordFillResolution() {\n"
+                "  Zeroize();\n"
+                "}\n\n"
+                "void PasswordFillResolution::Zeroize() {\n"
+                "  std::fill(secret_.begin(), secret_.end(), u'\\0');\n"
+                "  secret_.clear();\n"
+                "}\n\n"
+                "PasswordFillResolver::PasswordFillResolver(PasswordFillResolver&&) noexcept =\n"
+                "    default;\n\n"
+                "PasswordFillResolver& PasswordFillResolver::operator=(\n"
+                "    PasswordFillResolver&&) noexcept = default;\n\n"
+                "PasswordFillResolver::~PasswordFillResolver() = default;\n\n"
+                "PasswordFillResolver::PasswordFillResolver(\n"
+                "    base::OnceCallback<void(std::optional<PasswordFillResolution>)> callback)\n"
+                "    : callback_(std::move(callback)) {}\n\n"
+                "void PasswordFillResolver::Run(\n"
+                "    std::optional<PasswordFillResolution> resolution) && {\n"
+                "  std::move(callback_).Run(std::move(resolution));\n"
+                "}\n"
+            ),
+            description="Maho: define PasswordFillResolution and PasswordFillResolver in password_form_digest.cc",
+            guard="PasswordFillResolver::PasswordFillResolver(PasswordFillResolver&&)",
+        ),
+    ],
+    "components/password_manager/core/browser/stub_password_manager_driver.cc": [
+        Replacement(
+            old=(
+                'void PasswordManagerDriver::FillSuggestion(\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    const std::u16string& username,\n'
+                '    const std::u16string& password,\n'
+                '    base::OnceCallback<void(bool)> success_callback) {\n'
+                '  if (!IsPasswordFillRequestContextCurrent(context)) {\n'
+                '    std::move(success_callback).Run(false);\n'
+                '    return;\n'
+                '  }\n'
+                '  FillSuggestion(username, password, std::move(success_callback));\n'
+                '}\n\n'
+            ),
+            new="",
+            description=(
+                "Maho: remove production driver default from stub test support"
+            ),
+            idempotent=True,
+        ),
+    ],
+    "components/password_manager/content/browser/content_password_manager_driver.h": [
+        Replacement(
+            old=(
+                '  void FillSuggestion(const std::u16string& username,\n'
+                '                      const std::u16string& password,\n'
+                '                      base::OnceCallback<void(bool)> success_callback) override;\n'
+            ),
+            new=(
+                '  void FillSuggestion(const std::u16string& username,\n'
+                '                      const std::u16string& password,\n'
+                '                      base::OnceCallback<void(bool)> success_callback) override;\n'
+            ),
+            description="Maho: keep ContentPasswordManagerDriver interface unchanged",
+            idempotent=True,
+        ),
+    ],
+    "components/password_manager/content/browser/content_password_manager_driver.cc": [
+        Replacement(
+            old='void ContentPasswordManagerDriver::DidNavigate() {\n',
+            new=(
+                'void PasswordManagerDriver::FillSuggestion(\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    const std::u16string& username,\n'
+                '    const std::u16string& password,\n'
+                '    base::OnceCallback<void(bool)> success_callback) {\n'
+                '  if (!IsPasswordFillRequestContextCurrent(context)) {\n'
+                '    std::move(success_callback).Run(false);\n'
+                '    return;\n'
+                '  }\n'
+                '  FillSuggestion(username, password, std::move(success_callback));\n'
+                '}\n\n'
+                'void ContentPasswordManagerDriver::DidNavigate() {\n'
+            ),
+            description=(
+                "Maho: define context-aware driver default in production driver source"
+            ),
+            guard='void PasswordManagerDriver::FillSuggestion(\n',
+        ),
+        Replacement(
+            old='void ContentPasswordManagerDriver::DidNavigate() {\n',
+            new=(
+                'void ContentPasswordManagerDriver::DidNavigate() {\n'
+                '  RotatePasswordManagerDocumentToken();\n'
+            ),
+            description="Maho: rotate password fill token after committed navigation",
+            guard="  RotatePasswordManagerDocumentToken();",
+        ),
+    ],
+    "components/password_manager/core/browser/password_form_manager.cc": [
+        Replacement(
+            old=(
+                '  if (driver_) {\n'
+                '    driver_id_ = driver->GetId();\n'
+                '    cached_driver_frame_id_ = driver->GetFrameId();\n'
+                '  }\n\n'
+                '  metrics_recorder_->RecordFormSignature('
+            ),
+            new=(
+                '  if (driver_) {\n'
+                '    driver_id_ = driver->GetId();\n'
+                '    cached_driver_frame_id_ = driver->GetFrameId();\n'
+                '    form_fetcher_->SetPasswordFillRequestContext(\n'
+                '        driver_->GetPasswordFillRequestContext());\n'
+                '  }\n\n'
+                '  metrics_recorder_->RecordFormSignature('
+            ),
+            description="Maho: capture requesting document before FormFetcher starts",
+            guard="form_fetcher_->SetPasswordFillRequestContext(",
+        ),
+    ],
     "chrome/browser/password_manager/factories/password_store_backend_factory.cc": [
         Replacement(
             old=(
@@ -8561,6 +9293,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "#else  // BUILDFLAG(IS_ANDROID)\n"
                 "#include \"components/password_manager/core/browser/password_store/login_database.h\"\n"
                 "#include \"components/password_manager/core/browser/password_store/password_store_built_in_backend.h\"\n"
+                "#include \"maho/browser/maho_core_holder.h\"\n"
                 "#include \"maho/browser/passwords/maho_password_store_backend.h\"\n"
                 "#endif  // BUILDFLAG(IS_ANDROID)"
             ),
@@ -8569,6 +9302,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                '#include "maho/browser/passwords/maho_password_store_backend.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/maho_core_holder.h"\n'
+                '#include "maho/browser/passwords/maho_password_store_backend.h"\n'
+            ),
+            description=(
+                "Maho: include profile identity helper beside an already-applied "
+                "password backend factory override"
+            ),
+            guard='#include "maho/browser/maho_core_holder.h"',
+        ),
+        Replacement(
+            old=(
                 "#else   //  BUILDFLAG(IS_ANDROID)\n"
                 "  std::unique_ptr<password_manager::LoginDatabase> login_db(\n"
                 "      password_manager::CreateLoginDatabase(is_account_store,\n"
@@ -8590,15 +9337,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  SetIsUserDataDirPolicySet(login_db.get());\n"
                 "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
                 "  // and disable account store in Maho Native.\n"
+                "  const std::string profile_key = maho::GetProfileIdentityKey(\n"
+                "      login_db_directory, prefs);\n"
                 "  if (is_account_store) {\n"
-                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "        /*enabled=*/false, profile_key);\n"
                 "  }\n"
-                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "      /*enabled=*/true, profile_key);\n"
                 "#endif  // BUILDFLAG(IS_ANDROID)"
             ),
             description="Maho: Repair partial password backend factory override in password_store_backend_factory.cc",
             idempotent=True,
-            guard="return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();",
+            guard="const std::string profile_key = maho::GetProfileIdentityKey(",
         ),
         Replacement(
             old=(
@@ -8622,14 +9373,46 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  SetIsUserDataDirPolicySet(login_db.get());\n"
                 "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
                 "  // and disable account store in Maho Native.\n"
+                "  const std::string profile_key = maho::GetProfileIdentityKey(\n"
+                "      login_db_directory, prefs);\n"
                 "  if (is_account_store) {\n"
-                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "        /*enabled=*/false, profile_key);\n"
                 "  }\n"
-                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "      /*enabled=*/true, profile_key);\n"
                 "#endif  // BUILDFLAG(IS_ANDROID)"
             ),
             description="Maho: Route CreatePasswordStoreBackend through Maho password store backend in password_store_backend_factory.cc",
-            guard="return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();",
+            idempotent=True,
+            guard="const std::string profile_key = maho::GetProfileIdentityKey(",
+        ),
+        Replacement(
+            old=(
+                "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
+                "  // and disable account store in Maho Native.\n"
+                "  if (is_account_store) {\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "  }\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();"
+            ),
+            new=(
+                "  // Maho: Route CreatePasswordStoreBackend through Maho's password store backend\n"
+                "  // and disable account store in Maho Native.\n"
+                "  const std::string profile_key = maho::GetProfileIdentityKey(\n"
+                "      login_db_directory, prefs);\n"
+                "  if (is_account_store) {\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "        /*enabled=*/false, profile_key);\n"
+                "  }\n"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "      /*enabled=*/true, profile_key);"
+            ),
+            description=(
+                "Maho: bind an already-routed password backend factory to its "
+                "construction-time profile identity"
+            ),
+            guard="const std::string profile_key = maho::GetProfileIdentityKey(",
         ),
         Replacement(
             old=(
@@ -8649,13 +9432,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();"
             ),
             new=(
+                "  const std::string profile_key = maho::GetProfileIdentityKey(\n"
+                "      login_db_directory, prefs);\n"
                 "  if (is_account_store) {\n"
-                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(false);\n"
+                "    return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "        /*enabled=*/false, profile_key);\n"
                 "  }\n"
-                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>();"
+                "  return std::make_unique<maho::passwords::MahoPasswordStoreBackend>(\n"
+                "      /*enabled=*/true, profile_key);"
             ),
             description="Maho: Replace null account password backend with disabled Maho backend",
-            guard="MahoPasswordStoreBackend>(false)",
+            guard="const std::string profile_key = maho::GetProfileIdentityKey(",
         ),
     ],
     "chrome/browser/password_manager/factories/BUILD.gn": [
@@ -8667,12 +9454,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 "  deps = [\n"
+                "    \"//maho/browser:maho_core_holder\",\n"
                 "    \"//maho/browser:maho_password_store_backend\",\n"
                 "    \"//components/password_manager/core/browser\",\n"
                 "    \"//components/password_manager/core/browser:password_manager_buildflags\","
             ),
             description="Maho: Link password backend factory against Maho password store backend",
-            guard="//maho/browser:maho_password_store_backend",
+            idempotent=True,
+            guard="//maho/browser:maho_core_holder",
+        ),
+        Replacement(
+            old='    "//maho/browser:maho_password_store_backend",\n',
+            new=(
+                '    "//maho/browser:maho_core_holder",\n'
+                '    "//maho/browser:maho_password_store_backend",\n'
+            ),
+            description=(
+                "Maho: add profile identity helper dependency beside an "
+                "already-applied password backend factory override"
+            ),
+            guard='    "//maho/browser:maho_core_holder",\n',
         ),
     ],
 }
@@ -8680,7 +9481,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
 
 def _guard_replacement_literal_keys() -> None:
     """Reject duplicate literal paths before Python can silently discard them."""
-    module = ast.parse(Path(__file__).read_text())
+    module = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     for node in module.body:
         if not (
             isinstance(node, ast.AnnAssign)
@@ -9095,13 +9896,41 @@ def normalize_maho_url_alias_handlers(text: str) -> tuple[str, int]:
     return text, normalized_count
 
 
+def normalize_browser_view_mru_decl(text: str) -> tuple[str, int]:
+    """Collapse a doubled MaybeHandleMruTabSwitch declaration in browser_view.h.
+
+    A chromium/src checkout synced from the desktop tree already carries the
+    MRU switcher declaration; a stale replacement re-injects the identical
+    comment + declaration, which clang rejects as a redeclared class member.
+    Remove the second consecutive copy so the header declares it exactly once.
+    The later injection rules are guarded on GetOrCreateMahoPeekController(),
+    so once this collapses to a single copy they no longer re-add it.
+    """
+    decl_marker = "  bool MaybeHandleMruTabSwitch(bool forward);\n"
+    if text.count(decl_marker) < 2:
+        return text, 0
+    block = (
+        "  // Routes Ctrl+Tab / Ctrl+Shift+Tab through the Maho MRU tab\n"
+        "  // switcher when the pref is enabled and at least two tabs\n"
+        "  // exist. Returns true when the MRU switcher handled the\n"
+        "  // command; the caller must skip the upstream positional\n"
+        "  // SelectNextTab/SelectPreviousTab in that case.\n"
+        "  bool MaybeHandleMruTabSwitch(bool forward);\n"
+    )
+    if block + "\n" + block in text:
+        return text.replace(block + "\n" + block, block, 1), 1
+    if block + block in text:
+        return text.replace(block + block, block, 1), 1
+    return text, 0
+
+
 def apply_replacements(
     target_file: Path,
     replacements: list[Replacement],
     dry_run: bool = False,
     relative_path: str | None = None,
 ) -> tuple[bool, list[str]]:
-    text = target_file.read_text()
+    text = target_file.read_text(encoding="utf-8")
     changed = False
     applied: list[str] = []
 
@@ -9116,6 +9945,14 @@ def apply_replacements(
         if normalized_count:
             changed = True
             applied.append("patched: Make Maho browser-view paths unconditional")
+
+    if target_file.name == "browser_view.h":
+        text, normalized_count = normalize_browser_view_mru_decl(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Collapse duplicate MaybeHandleMruTabSwitch declaration"
+            )
 
     if target_file.name == "browser.cc":
         text, normalized_count = normalize_peek_open_url_routing(text)
@@ -9194,7 +10031,7 @@ def apply_replacements(
             )
 
     if changed and not dry_run:
-        target_file.write_text(text)
+        target_file.write_text(text, encoding="utf-8")
 
     return changed, applied
 

@@ -21,6 +21,7 @@ import type {Listener} from '../../maho_common/react/store_utils.js';
 import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
 import {
   createInitialState,
+  PASSWORD_PROVIDER_KIND,
   VAULT_LOCK_STATE,
   WelcomePage,
 } from './types.js';
@@ -481,8 +482,11 @@ export class MahoWelcomeStore {
     if (!await this.setPasswordProvider(provider)) {
       return false;
     }
-    if (this.state.passwordSetup.vaultStatus?.lockState !==
-        VAULT_LOCK_STATE.Unlocked) {
+    // Only the Maho Native provider depends on the local Vault. External
+    // providers (and the disabled choice) must complete onboarding without one.
+    if (provider === PASSWORD_PROVIDER_KIND.MahoNative &&
+        this.state.passwordSetup.vaultStatus?.lockState !==
+            VAULT_LOCK_STATE.Unlocked) {
       this.setPasswordSetupError('Unlock your local Vault to continue.');
       return false;
     }
@@ -500,20 +504,47 @@ export class MahoWelcomeStore {
     return true;
   }
 
-  skipPasswordSetup(): void {
+  /**
+   * Records the explicit "no password manager" choice. The choice is persisted
+   * as the disabled provider so it survives onboarding, and onboarding always
+   * completes — an unlocked Vault is never required for this path.
+   */
+  async skipPasswordSetup(): Promise<boolean> {
     if (this.state.currentPage !== WelcomePage.PasswordSetup) {
-      return;
+      return false;
     }
+
+    let persisted = false;
+    let errorMessage = '';
+    try {
+      const {success} = await this.pageHandler.setPasswordProvider(
+          PASSWORD_PROVIDER_KIND.Disabled);
+      persisted = success;
+      if (!success) {
+        errorMessage =
+            'Password management stays off, but the choice could not be saved.';
+      }
+    } catch (error) {
+      errorMessage = error instanceof Error ?
+          error.message :
+          'Password management stays off, but the choice could not be saved.';
+    }
+
+    if (this.state.currentPage !== WelcomePage.PasswordSetup) {
+      return persisted;
+    }
+
     this.patch(draft => {
       draft.currentPage = WelcomePage.SyncKeyBackup;
       draft.direction = 'forward';
       draft.passwordSetup = {
         ...draft.passwordSetup,
         status: 'ready',
-        errorMessage: '',
+        errorMessage,
         passwordManagerSkipped: true,
       };
     });
+    return persisted;
   }
 
   async generateSyncKey(): Promise<{syncKey: string; roomId: string; recoveryPhrase: string} | null> {

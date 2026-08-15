@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/views/command/maho_mail_command_catalog.h"
 
 #include <algorithm>
 #include <map>
@@ -25,6 +26,7 @@
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "url/gurl.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
@@ -58,6 +60,8 @@
 #include "ui/gfx/image/image_skia.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "maho/browser/mail_helper/maho_mail_service.h"  // nogncheck
+#include "maho/browser/mail_helper/maho_mail_service_factory.h"  // nogncheck
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
@@ -1219,6 +1223,19 @@ void MahoCommandModel::OnResults(
     UMA_HISTOGRAM_TIMES("Maho.CommandPalette.SearchLatency", elapsed);
   }
 
+  MahoMailService* mail_service =
+      browser_ && browser_->profile()
+          ? MahoMailServiceFactory::GetForProfileIfExists(browser_->profile())
+          : nullptr;
+  constexpr bool kMailPlatformSupported =
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+      true;
+#else
+      false;
+#endif
+  ApplyMailAvailabilityGate(results,
+                            kMailPlatformSupported && mail_service &&
+                                mail_service->IsCommandAvailable());
   local_snapshot_ = PrepareLocalCandidates(
       std::move(results), actions_only_, mode_, query_);
   base::WeakPtr<MahoCommandModel> alive = weak_factory_.GetWeakPtr();
@@ -1673,6 +1690,26 @@ void MahoCommandModel::ApplyQuickActionGate(std::vector<CommandSuggestion>& resu
       });
     }
   }
+}
+
+// static
+void MahoCommandModel::ApplyMailAvailabilityGate(
+    std::vector<CommandSuggestion>& results,
+    bool mail_available) {
+  if (mail_available) {
+    return;
+  }
+  std::erase_if(results, [](const CommandSuggestion& suggestion) {
+    const std::string action_id =
+        !suggestion.action_id.empty()
+            ? suggestion.action_id
+            : (base::StartsWith(suggestion.key, "action:",
+                                base::CompareCase::SENSITIVE)
+                   ? suggestion.key.substr(7)
+                   : std::string());
+    return suggestion.type == CommandSuggestionType::kAction &&
+           FindMahoMailCommand(action_id);
+  });
 }
 
 // static

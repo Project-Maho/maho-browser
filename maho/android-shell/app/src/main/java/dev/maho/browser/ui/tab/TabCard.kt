@@ -59,6 +59,7 @@ fun TabCard(
     isIncognito: Boolean,
     visualIndex: Int,
     onTap: () -> Unit,
+    onArchive: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -204,6 +205,13 @@ fun TabCard(
                     }
                 )
                 androidx.compose.material3.HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Archive") },
+                    onClick = {
+                        showMenu = false
+                        onArchive()
+                    }
+                )
                 DropdownMenuItem(
                     text = { Text("Close") },
                     onClick = {

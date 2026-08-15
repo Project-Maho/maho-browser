@@ -5,8 +5,10 @@ import os
 import plistlib
 import subprocess
 import sys
+import tempfile
 import types
 import unittest
+from contextlib import ExitStack
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -91,6 +93,16 @@ class TestFindCodesignIdentity(unittest.TestCase):
             result = find_codesign_identity()
         self.assertEqual(result, 'AAAA0000000000000000000000000000000000AA')
 
+    def test_release_prefers_developer_id_application(self):
+        output = (
+            '  1) AAAA0000000000000000000000000000000000AA "Apple Development: Test"\n'
+            '  2) BBBB0000000000000000000000000000000000BB "Apple Distribution: Test"\n'
+            '  3) CCCC0000000000000000000000000000000000CC "Developer ID Application: Test"\n'
+        )
+        with patch('subprocess.run', return_value=self._make_result(output)):
+            result = find_codesign_identity(release=True)
+        self.assertEqual(result, 'CCCC0000000000000000000000000000000000CC')
+
     def test_uppercases_sha(self):
         output = '  1) aaaa7f04ed95d8e9b5b0249809819945a905c75b "Apple Development: Test"\n'
         with patch('subprocess.run', return_value=self._make_result(output)):
@@ -144,14 +156,38 @@ class TestCodesignApp(unittest.TestCase):
             timeout=120,
         )
 
-    def test_signs_existing_bundle_with_sparkle(self):
-        with patch('os.path.isdir', return_value=True), \
-             patch('os.path.isfile', return_value=True), \
+    def test_signs_top_level_crashpad_handler_for_notarization(self):
+        crashpad_handler = '/fake/Maho.app/Contents/MacOS/chrome_crashpad_handler'
+
+        with patch('os.path.isdir', side_effect=lambda path: path == '/fake/Maho.app'), \
+             patch('os.path.isfile', side_effect=lambda path: path == crashpad_handler), \
              patch('subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
+
         self.assertTrue(result)
-        self.assertEqual(mock_run.call_count, 12)
+        self.assertIn(
+            ['codesign', '--force', '--sign', 'DEADBEEF', '--options', 'runtime',
+             '--timestamp', crashpad_handler],
+            [call.args[0] for call in mock_run.call_args_list],
+        )
+
+    def test_signs_existing_bundle_with_sparkle(self):
+        app_path = '/fake/Maho.app'
+        framework_path = f'{app_path}/Contents/Frameworks/Maho Framework.framework'
+        sparkle_path = f'{app_path}/Contents/Frameworks/Sparkle.framework'
+        with patch(
+            'os.path.isdir',
+            side_effect=lambda path: path != (
+                f'{framework_path}/Versions/Current/Libraries'
+            ),
+        ), \
+             patch('os.path.isfile', return_value=True), \
+             patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = codesign_app('DEADBEEF', app_path)
+        self.assertTrue(result)
+        self.assertEqual(mock_run.call_count, 17)
 
     def test_signs_chromium_framework_before_outer_app(self):
         framework_path = (
@@ -190,7 +226,14 @@ class TestCodesignApp(unittest.TestCase):
             'os.path.isdir',
             side_effect=lambda path: path == '/fake/Maho.app',
         ), \
-             patch('os.path.isfile', return_value=True), \
+             patch(
+                 'os.path.isfile',
+                 side_effect=lambda path: path.endswith((
+                     'maho_mail_helper',
+                     'helper-entitlements.plist',
+                     'entitlements.plist',
+                 )),
+             ), \
              patch('subprocess.run') as mock_run:
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
 
@@ -251,9 +294,127 @@ class TestCodesignApp(unittest.TestCase):
         self.assertFalse(result)
 
     def test_success_does_not_raise(self):
-        with patch('os.path.isdir', return_value=True), \
+        with patch('os.path.isdir', side_effect=lambda path: path == '/fake/Maho.app'), \
+             patch('os.path.isfile', return_value=False), \
              patch('subprocess.run', return_value=MagicMock(returncode=0)):
             self.assertTrue(codesign_app('MYIDENTITY', '/fake/Maho.app'))
+
+    def test_signs_bundled_cli_before_outer_app(self):
+        app_path = '/fake/Maho.app'
+        cli_path = f'{app_path}/Contents/Helpers/maho'
+
+        with patch('os.path.isdir', side_effect=lambda path: path == app_path), \
+             patch('os.path.isfile', side_effect=lambda path: path == cli_path), \
+             patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = codesign_app('DEADBEEF', app_path)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [call.args[0][-1] for call in mock_run.call_args_list],
+            [cli_path, app_path],
+        )
+        self.assertIn(
+            '--timestamp',
+            mock_run.call_args_list[0].args[0],
+        )
+
+
+class TestEmbedMahoCli(unittest.TestCase):
+
+    def test_copies_cli_to_helpers_directory_with_execute_permission(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = os.path.join(temp_dir, 'maho')
+            app_path = os.path.join(temp_dir, 'Maho.app')
+            with open(source, 'wb') as cli_file:
+                cli_file.write(b'maho-cli')
+            os.chmod(source, 0o755)
+
+            self.assertTrue(_bm.embed_maho_cli(app_path, source))
+
+            destination = os.path.join(
+                app_path,
+                'Contents',
+                'Helpers',
+                'maho',
+            )
+            self.assertTrue(os.path.isfile(destination))
+            self.assertTrue(os.access(destination, os.X_OK))
+            with open(destination, 'rb') as cli_file:
+                self.assertEqual(cli_file.read(), b'maho-cli')
+
+    def test_fails_closed_when_cli_artifact_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_path = os.path.join(temp_dir, 'Maho.app')
+            source = os.path.join(temp_dir, 'missing-maho')
+
+            self.assertFalse(_bm.embed_maho_cli(app_path, source))
+            self.assertFalse(os.path.exists(
+                os.path.join(app_path, 'Contents', 'Helpers', 'maho'),
+            ))
+
+
+class TestMahoCliBinaryName(unittest.TestCase):
+
+    def test_windows_triple_gets_exe_suffix(self):
+        self.assertEqual(_bm.maho_cli_binary_name('x86_64-pc-windows-msvc'), 'maho.exe')
+        self.assertEqual(_bm.maho_cli_binary_name('aarch64-pc-windows-msvc'), 'maho.exe')
+
+    def test_unix_triples_have_no_suffix(self):
+        self.assertEqual(_bm.maho_cli_binary_name('aarch64-apple-darwin'), 'maho')
+        self.assertEqual(_bm.maho_cli_binary_name('x86_64-unknown-linux-gnu'), 'maho')
+
+
+class TestRequireWindowsMailHelper(unittest.TestCase):
+
+    def test_returns_helper_beside_browser(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            helper = os.path.join(temp_dir, 'out', 'Default', 'maho_mail_helper.exe')
+            os.makedirs(os.path.dirname(helper))
+            with open(helper, 'wb') as helper_file:
+                helper_file.write(b'helper')
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', temp_dir):
+                self.assertEqual(
+                    _bm.require_windows_mail_helper('out/Default'), helper)
+
+    def test_fails_closed_when_helper_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(_bm, '_CHROMIUM_SRC_ROOT', temp_dir):
+            with self.assertRaisesRegex(RuntimeError, 'maho_mail_helper.exe'):
+                _bm.require_windows_mail_helper('out/Default')
+
+
+class TestStageMahoCliNextToBrowser(unittest.TestCase):
+
+    def test_copies_cli_next_to_browser_preserving_exec_bit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = os.path.join(temp_dir, 'maho')
+            with open(source, 'wb') as cli_file:
+                cli_file.write(b'maho-cli')
+            os.chmod(source, 0o755)
+            out_dir = 'out/Rel'
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', temp_dir):
+                dest = _bm.stage_maho_cli_next_to_browser(out_dir, source)
+            self.assertEqual(dest, os.path.join(temp_dir, out_dir, 'maho'))
+            self.assertTrue(os.path.isfile(dest))
+            self.assertTrue(os.access(dest, os.X_OK))
+
+    def test_preserves_windows_exe_basename(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = os.path.join(temp_dir, 'maho.exe')
+            with open(source, 'wb') as cli_file:
+                cli_file.write(b'maho-cli')
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', temp_dir):
+                dest = _bm.stage_maho_cli_next_to_browser('out/Default', source)
+            self.assertTrue(dest.endswith('maho.exe'))
+            self.assertTrue(os.path.isfile(dest))
+
+    def test_fails_closed_when_artifact_missing(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', temp_dir):
+                self.assertIsNone(
+                    _bm.stage_maho_cli_next_to_browser('out/Default',
+                                                       os.path.join(temp_dir, 'missing')))
 
 
 class TestMacPasskeySigningContract(unittest.TestCase):
@@ -351,6 +512,88 @@ class TestNormalizeAutoninja(unittest.TestCase):
 
 class TestArgsTemplateSelection(unittest.TestCase):
 
+    def test_release_templates_match_macos_symbol_policy(self):
+        config_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'config',
+        )
+        for platform in ('mac', 'win', 'linux'):
+            with self.subTest(platform=platform):
+                config_path = os.path.join(
+                    config_dir,
+                    f'args_{platform}_release.gn',
+                )
+                with open(config_path, encoding='utf-8') as config_file:
+                    config = config_file.read()
+                self.assertIn('symbol_level = 1', config)
+                self.assertIn('blink_symbol_level = 0', config)
+                self.assertIn('strip_debug_info = true', config)
+
+    def test_release_syncs_local_google_api_key_into_default_args(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = os.path.join(temp_dir, 'workspace')
+            chromium_src = os.path.join(workspace, 'chromium', 'src')
+            args_path = os.path.join(chromium_src, 'out', 'Default', 'args.gn')
+            vault_path = os.path.join(
+                workspace,
+                '.secrets',
+                'maho',
+                'google_chromium_api_key.env',
+            )
+            os.makedirs(os.path.dirname(args_path))
+            os.makedirs(os.path.dirname(vault_path))
+            with open(args_path, 'w', encoding='utf-8') as args_file:
+                args_file.write('is_official_build = true\n')
+            with open(vault_path, 'w', encoding='utf-8') as vault_file:
+                vault_file.write(
+                    'GOOGLE_API_KEY=AIza12345678901234567890123456789012345\n'
+                )
+
+            _bm.sync_local_google_api_key(workspace, args_path, release=True)
+
+            with open(args_path, encoding='utf-8') as args_file:
+                args = args_file.read()
+        self.assertIn(
+            'google_api_key = "AIza12345678901234567890123456789012345"',
+            args,
+        )
+        self.assertNotIn('google_default_client_secret', args)
+
+    def test_non_release_does_not_sync_local_google_api_key(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = os.path.join(temp_dir, 'workspace')
+            args_path = os.path.join(workspace, 'chromium', 'src', 'out', 'Default', 'args.gn')
+            vault_path = os.path.join(
+                workspace,
+                '.secrets',
+                'maho',
+                'google_chromium_api_key.env',
+            )
+            os.makedirs(os.path.dirname(args_path))
+            os.makedirs(os.path.dirname(vault_path))
+            with open(args_path, 'w', encoding='utf-8') as args_file:
+                args_file.write('is_official_build = false\n')
+            with open(vault_path, 'w', encoding='utf-8') as vault_file:
+                vault_file.write(
+                    'GOOGLE_API_KEY=AIza12345678901234567890123456789012345\n'
+                )
+
+            _bm.sync_local_google_api_key(workspace, args_path, release=False)
+
+            with open(args_path, encoding='utf-8') as args_file:
+                args = args_file.read()
+        self.assertNotIn('google_api_key', args)
+
+    def test_release_without_local_google_api_key_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args_path = os.path.join(temp_dir, 'out', 'Default', 'args.gn')
+            os.makedirs(os.path.dirname(args_path))
+            with open(args_path, 'w', encoding='utf-8') as args_file:
+                args_file.write('is_official_build = true\n')
+
+            with self.assertRaisesRegex(RuntimeError, 'requires local Google API key'):
+                _bm.sync_local_google_api_key(temp_dir, args_path, release=True)
+
     def test_debug_uses_debug_template(self):
         with patch.object(_bm, '_BUILD_CONFIG_DIR', '/configs'), \
              patch('os.path.isfile', side_effect=lambda path: path == '/configs/args_win_debug.gn'), \
@@ -373,6 +616,58 @@ class TestArgsTemplateSelection(unittest.TestCase):
         with open(config_path, encoding='utf-8') as config_file:
             self.assertIn('use_siso = false', config_file.read())
 
+    def test_release_regenerates_when_existing_args_is_component_build(self):
+        # A stale dev args.gn (component build) must NOT be reused for --release:
+        # a component build is non-distributable (engine dylibs load from the
+        # build dir via rpath, never bundled).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args_path = os.path.join(temp_dir, 'out', 'Default', 'args.gn')
+            os.makedirs(os.path.dirname(args_path))
+            with open(args_path, 'w', encoding='utf-8') as f:
+                f.write('is_component_build = true\nis_debug = false\n')
+            template = os.path.join(temp_dir, 'args_mac_release.gn')
+            with open(template, 'w', encoding='utf-8') as f:
+                f.write('is_official_build = true\n')
+            with patch.object(_bm, '_BUILD_CONFIG_DIR', temp_dir):
+                ensure_args_gn(temp_dir, 'out/Default', 'mac', False, release=True)
+            with open(args_path, encoding='utf-8') as f:
+                result = f.read()
+        self.assertIn('is_official_build = true', result)
+        self.assertNotIn('is_component_build = true', result)
+
+    def test_release_regenerates_when_existing_args_lacks_official_flag(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args_path = os.path.join(temp_dir, 'out', 'Default', 'args.gn')
+            os.makedirs(os.path.dirname(args_path))
+            with open(args_path, 'w', encoding='utf-8') as f:
+                f.write('is_debug = false\ntarget_cpu = "arm64"\n')
+            template = os.path.join(temp_dir, 'args_mac_release.gn')
+            with open(template, 'w', encoding='utf-8') as f:
+                f.write('is_official_build = true\n')
+            with patch.object(_bm, '_BUILD_CONFIG_DIR', temp_dir):
+                ensure_args_gn(temp_dir, 'out/Default', 'mac', False, release=True)
+            with open(args_path, encoding='utf-8') as f:
+                result = f.read()
+        self.assertIn('is_official_build = true', result)
+
+    def test_release_keeps_existing_official_noncomponent_args(self):
+        # A valid official (non-component) args.gn is respected, not clobbered.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args_path = os.path.join(temp_dir, 'out', 'Default', 'args.gn')
+            os.makedirs(os.path.dirname(args_path))
+            sentinel = 'is_official_build = true\ngoogle_api_key = "LOCAL_SENTINEL"\n'
+            with open(args_path, 'w', encoding='utf-8') as f:
+                f.write(sentinel)
+            template = os.path.join(temp_dir, 'args_mac_release.gn')
+            with open(template, 'w', encoding='utf-8') as f:
+                f.write('is_official_build = true\n')
+            with patch.object(_bm, '_BUILD_CONFIG_DIR', temp_dir):
+                ensure_args_gn(temp_dir, 'out/Default', 'mac', False, release=True)
+            with open(args_path, encoding='utf-8') as f:
+                result = f.read()
+        # untouched -> local sentinel (e.g. synced google key) preserved
+        self.assertIn('LOCAL_SENTINEL', result)
+
 
 class TestChromiumSourceRoot(unittest.TestCase):
 
@@ -384,7 +679,130 @@ class TestChromiumSourceRoot(unittest.TestCase):
         mock_realpath.assert_called_once_with('/workspace/chromium/src')
 
 
+class TestApplyBranding(unittest.TestCase):
+
+    def test_windows_brands_browser_installer_and_tiles(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            maho_dir = os.path.join(temp_dir, 'maho-chromium')
+            branding_dir = os.path.join(maho_dir, 'branding')
+            chromium_root = os.path.join(temp_dir, 'chromium', 'src')
+            theme_dir = os.path.join(
+                chromium_root, 'chrome', 'app', 'theme', 'chromium')
+            os.makedirs(os.path.join(theme_dir, 'win', 'tiles'))
+            os.makedirs(os.path.join(
+                chromium_root, 'chrome', 'installer', 'mini_installer'))
+            os.makedirs(os.path.join(
+                chromium_root, 'chrome', 'installer', 'setup'))
+            os.makedirs(branding_dir)
+
+            with open(os.path.join(branding_dir, 'BRANDING'), 'w') as branding:
+                branding.write('PRODUCT_FULLNAME=Maho\n')
+
+            logos = {}
+            for size in (16, 32, 48, 256):
+                logo = (
+                    b'\x89PNG\r\n\x1a\n'
+                    + b'\0' * 8
+                    + size.to_bytes(4, 'big') * 2
+                )
+                logos[size] = logo
+                with open(
+                    os.path.join(branding_dir, f'product_logo_{size}.png'),
+                    'wb',
+                ) as file:
+                    file.write(logo)
+
+            with patch.object(_bm, '_MAHO_CHROMIUM_DIR', maho_dir), \
+                 patch.object(_bm, '_CHROMIUM_SRC_ROOT', chromium_root):
+                _bm.apply_branding('win')
+
+            expected_ico = _bm._build_windows_ico(branding_dir)
+            self.assertIsNotNone(expected_ico)
+            for path in (
+                os.path.join(theme_dir, 'win', 'chromium.ico'),
+                os.path.join(
+                    chromium_root,
+                    'chrome',
+                    'installer',
+                    'mini_installer',
+                    'mini_installer.ico',
+                ),
+                os.path.join(
+                    chromium_root,
+                    'chrome',
+                    'installer',
+                    'setup',
+                    'setup.ico',
+                ),
+            ):
+                with open(path, 'rb') as file:
+                    self.assertEqual(file.read(), expected_ico)
+
+            with open(
+                os.path.join(theme_dir, 'win', 'tiles', 'Logo.png'),
+                'rb',
+            ) as file:
+                self.assertEqual(file.read(), logos[256])
+            with open(
+                os.path.join(theme_dir, 'win', 'tiles', 'SmallLogo.png'),
+                'rb',
+            ) as file:
+                self.assertEqual(file.read(), logos[48])
+
+            output_paths = (
+                os.path.join(theme_dir, 'win', 'chromium.ico'),
+                os.path.join(
+                    chromium_root,
+                    'chrome',
+                    'installer',
+                    'mini_installer',
+                    'mini_installer.ico',
+                ),
+                os.path.join(
+                    chromium_root,
+                    'chrome',
+                    'installer',
+                    'setup',
+                    'setup.ico',
+                ),
+                os.path.join(theme_dir, 'win', 'tiles', 'Logo.png'),
+                os.path.join(theme_dir, 'win', 'tiles', 'SmallLogo.png'),
+                os.path.join(theme_dir, 'BRANDING'),
+            )
+            first_outputs = {}
+            for path in output_paths:
+                with open(path, 'rb') as file:
+                    first_outputs[path] = file.read()
+
+            with patch.object(_bm, '_MAHO_CHROMIUM_DIR', maho_dir), \
+                 patch.object(_bm, '_CHROMIUM_SRC_ROOT', chromium_root):
+                _bm.apply_branding('win')
+
+            for path, first_output in first_outputs.items():
+                with open(path, 'rb') as file:
+                    self.assertEqual(file.read(), first_output)
+
+
 class TestMainFlags(unittest.TestCase):
+
+    def setUp(self) -> None:
+        for name in (
+            'ensure_overlay_mount',
+            'ensure_args_gn',
+            'sync_local_google_api_key',
+            'apply_tracked_chromium_overrides',
+            'apply_branding',
+            'run_lucide_icon_check',
+            'run_gn_gen',
+            'embed_sparkle_framework',
+            'embed_mail_helper',
+            'require_windows_mail_helper',
+            'build_windows_installer',
+            'sign_windows_installer',
+        ):
+            patcher = patch.object(_bm, name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def _run_main(self, argv, platform='darwin'):
         mock_lock_cm = MagicMock()
@@ -395,31 +813,57 @@ class TestMainFlags(unittest.TestCase):
 
         with patch.object(sys, 'argv', ['build_maho.py'] + argv), \
              patch.object(sys, 'platform', platform), \
+             patch.object(_bm, 'ensure_overlay_mount'), \
+             patch.object(_bm, 'ensure_args_gn'), \
+             patch.object(_bm, 'sync_local_google_api_key'), \
              patch.object(_bm, 'apply_tracked_chromium_overrides'), \
-             patch.object(_bm, 'build_chromium_app'), \
+             patch.object(_bm, 'apply_branding'), \
+             patch.object(_bm, 'run_lucide_icon_check'), \
+             patch.object(_bm, 'run_gn_gen'), \
+             patch.object(_bm, 'build_chromium_app') as mock_build_chromium, \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho') as mock_build_cli, \
+             patch.object(_bm, 'embed_sparkle_framework', return_value=True), \
+             patch.object(_bm, 'embed_maho_cli', return_value=True) as mock_embed_cli, \
+             patch.object(_bm, 'embed_mail_helper', return_value=True), \
+             patch.object(_bm, 'stage_maho_cli_next_to_browser', return_value='/fake/out/maho') as mock_stage_cli, \
+             patch.object(_bm, 'sign_windows_binary', return_value=True) as mock_sign_win, \
              patch.object(_bm, 'find_codesign_identity', return_value='FAKSHA') as mock_find, \
              patch.object(_bm, 'codesign_app') as mock_sign, \
              patch.object(_bm, 'launch_app') as mock_launch:
             _bm.main()
 
-        return mock_find, mock_sign, mock_launch
+        self.mock_build_chromium = mock_build_chromium
+        return mock_build_cli, mock_embed_cli, mock_find, mock_sign, mock_launch
 
     def test_default_darwin_codesigns_and_launches(self):
-        mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust'])
+        mock_build_cli, mock_embed_cli, mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust'])
+        mock_build_cli.assert_called_once_with(None)
+        mock_embed_cli.assert_called_once_with(_bm._MAHO_APP_PATH, '/fake/maho')
         mock_find.assert_called_once()
         mock_sign.assert_called_once()
         mock_launch.assert_called_once()
 
     def test_skip_codesign_skips_sign_but_still_launches(self):
-        mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust', '--skip-codesign'])
+        _, _, mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust', '--skip-codesign'])
         mock_find.assert_not_called()
         mock_sign.assert_not_called()
         mock_launch.assert_called_once()
 
     def test_no_launch_skips_launch_but_still_signs(self):
-        mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust', '--no-launch'])
+        _, _, _, mock_sign, mock_launch = self._run_main(['--skip-rust', '--no-launch'])
         mock_sign.assert_called_once()
         mock_launch.assert_not_called()
+
+    def test_windows_release_includes_mini_installer(self):
+        self._run_main(
+            ['--skip-rust', '--release', '--no-launch'],
+            platform='win32',
+        )
+
+        self.assertEqual(
+            self.mock_build_chromium.call_args.args[1],
+            ['chrome', 'maho_mail_helper', 'mini_installer'],
+        )
 
     def test_codesign_identity_overrides_autodetect(self):
         mock_lock_cm = MagicMock()
@@ -432,6 +876,8 @@ class TestMainFlags(unittest.TestCase):
              patch.object(sys, 'platform', 'darwin'), \
              patch.object(_bm, 'apply_tracked_chromium_overrides'), \
              patch.object(_bm, 'build_chromium_app'), \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'), \
+             patch.object(_bm, 'embed_maho_cli', return_value=True), \
              patch.object(_bm, 'find_codesign_identity') as mock_find, \
              patch.object(_bm, 'codesign_app') as mock_sign, \
              patch.object(_bm, 'launch_app'):
@@ -441,16 +887,76 @@ class TestMainFlags(unittest.TestCase):
         mock_sign.assert_called_once_with('MYID', _bm._MAHO_APP_PATH)
 
     def test_skip_chromium_skips_codesign_and_launch(self):
-        mock_find, mock_sign, mock_launch = self._run_main(['--skip-chromium'])
+        _, _, mock_find, mock_sign, mock_launch = self._run_main(['--skip-chromium'])
         mock_find.assert_not_called()
         mock_sign.assert_not_called()
         mock_launch.assert_not_called()
 
     def test_codesign_skipped_on_linux(self):
-        mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust'], platform='linux')
+        _, _, mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust'], platform='linux')
         mock_find.assert_not_called()
         mock_sign.assert_not_called()
         mock_launch.assert_called_once()
+
+    def test_linux_stages_cli_next_to_browser(self):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+
+        with patch.object(sys, 'argv', ['build_maho.py', '--skip-rust']), \
+             patch.object(sys, 'platform', 'linux'), \
+             patch.object(_bm, 'apply_tracked_chromium_overrides'), \
+             patch.object(_bm, 'build_chromium_app'), \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'), \
+             patch.object(_bm, 'stage_maho_cli_next_to_browser', return_value='/fake/out/maho') as mock_stage, \
+             patch.object(_bm, 'sign_windows_binary') as mock_sign_win, \
+             patch.object(_bm, 'launch_app'):
+            _bm.main()
+
+        mock_stage.assert_called_once_with('out/Default', '/fake/maho')
+        mock_sign_win.assert_not_called()
+
+    def test_windows_stages_and_signs_cli_before_build(self):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+        call_order = []
+
+        with patch.object(sys, 'argv', ['build_maho.py', '--skip-rust']), \
+             patch.object(sys, 'platform', 'win32'), \
+             patch.object(_bm, 'apply_tracked_chromium_overrides'), \
+             patch.object(_bm, 'build_chromium_app', side_effect=lambda *a, **k: call_order.append('build')), \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho.exe'), \
+             patch.object(_bm, 'stage_maho_cli_next_to_browser', side_effect=lambda *a, **k: call_order.append('stage') or '/fake/out/maho.exe'), \
+             patch.object(_bm, 'sign_windows_binary', side_effect=lambda *a, **k: call_order.append('sign')), \
+             patch.object(_bm, 'launch_app'):
+            _bm.main()
+
+        self.assertEqual(call_order, ['stage', 'sign', 'build'])
+
+    def test_windows_skip_codesign_stages_without_signing(self):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+
+        with patch.object(sys, 'argv', ['build_maho.py', '--skip-rust', '--skip-codesign']), \
+             patch.object(sys, 'platform', 'win32'), \
+             patch.object(_bm, 'apply_tracked_chromium_overrides'), \
+             patch.object(_bm, 'build_chromium_app'), \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho.exe'), \
+             patch.object(_bm, 'stage_maho_cli_next_to_browser', return_value='/fake/out/maho.exe') as mock_stage, \
+             patch.object(_bm, 'sign_windows_binary') as mock_sign_win, \
+             patch.object(_bm, 'launch_app'):
+            _bm.main()
+
+        mock_stage.assert_called_once()
+        mock_sign_win.assert_not_called()
 
     def test_no_identity_prints_warning_does_not_crash(self):
         mock_lock_cm = MagicMock()
@@ -463,6 +969,8 @@ class TestMainFlags(unittest.TestCase):
              patch.object(sys, 'platform', 'darwin'), \
              patch.object(_bm, 'apply_tracked_chromium_overrides'), \
              patch.object(_bm, 'build_chromium_app'), \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'), \
+             patch.object(_bm, 'embed_maho_cli', return_value=True), \
              patch.object(_bm, 'find_codesign_identity', return_value=None), \
              patch.object(_bm, 'codesign_app') as mock_sign, \
              patch.object(_bm, 'launch_app'):
@@ -502,6 +1010,284 @@ class TestMainFlags(unittest.TestCase):
              patch.object(sys, 'stderr'):
             with self.assertRaises(SystemExit):
                 _bm.main()
+
+
+class TestCreateDmgImage(unittest.TestCase):
+
+    def test_uses_hdiutil_create_srcfolder_udzo_not_makehybrid(self):
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            _bm._create_dmg_image('/stage', '/out/Maho-1.0.0.dmg', 'Maho 1.0.0')
+        argv = mock_run.call_args_list[0].args[0]
+        self.assertEqual(argv[0], 'hdiutil')
+        self.assertEqual(argv[1], 'create')
+        self.assertIn('-srcfolder', argv)
+        self.assertEqual(argv[argv.index('-srcfolder') + 1], '/stage')
+        self.assertIn('-format', argv)
+        self.assertEqual(argv[argv.index('-format') + 1], 'UDZO')
+        self.assertIn('-volname', argv)
+        self.assertEqual(argv[argv.index('-volname') + 1], 'Maho 1.0.0')
+        self.assertEqual(argv[-1], '/out/Maho-1.0.0.dmg')
+        self.assertNotIn('makehybrid', argv)
+
+
+class TestVerifyDmgAppSignature(unittest.TestCase):
+
+    def _dispatch(self, codesign_rc=0, xattr_rc=0, xattr_stdout=''):
+        def _run(cmd, *a, **k):
+            if cmd[:2] == ['hdiutil', 'attach']:
+                return MagicMock(returncode=0, stdout='', stderr='')
+            if cmd[:1] == ['codesign']:
+                return MagicMock(returncode=codesign_rc, stdout='', stderr='detritus' if codesign_rc else '')
+            if cmd[:1] == ['xattr']:
+                return MagicMock(returncode=xattr_rc, stdout=xattr_stdout, stderr='boom' if xattr_rc else '')
+            if cmd[:2] == ['hdiutil', 'detach']:
+                return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='', stderr='')
+        return _run
+
+    def _run_verify(self, dispatch):
+        with patch('tempfile.mkdtemp', return_value='/tmp/maho-dmg-verify-x'), \
+             patch('os.path.isfile', return_value=True), \
+             patch('os.path.isdir', return_value=True), \
+             patch('os.rmdir'), \
+             patch('subprocess.run', side_effect=dispatch) as mock_run:
+            result = _bm.verify_dmg_app_signature('/out/Maho-1.0.0.dmg')
+        detaches = [c for c in mock_run.call_args_list
+                    if c.args[0][:2] == ['hdiutil', 'detach']]
+        return result, detaches
+
+    def test_passes_when_mounted_app_clean(self):
+        result, detaches = self._run_verify(
+            self._dispatch(xattr_stdout='some/path: com.apple.provenance\n'))
+        self.assertTrue(result)
+        self.assertEqual(len(detaches), 1)
+        self.assertEqual(detaches[0].args[0][2], '/tmp/maho-dmg-verify-x')
+
+    def test_fails_closed_and_detaches_when_finderinfo_present(self):
+        result, detaches = self._run_verify(
+            self._dispatch(xattr_stdout='a: com.apple.FinderInfo\nb: com.apple.FinderInfo\n'))
+        self.assertFalse(result)
+        self.assertEqual(len(detaches), 1, 'must detach in finally even on failure')
+
+    def test_fails_closed_and_detaches_when_codesign_fails(self):
+        result, detaches = self._run_verify(self._dispatch(codesign_rc=1))
+        self.assertFalse(result)
+        self.assertEqual(len(detaches), 1)
+
+    def test_fails_closed_and_detaches_when_xattr_scan_errors(self):
+        # A failed xattr scan must NOT be read as "0 FinderInfo" (fail-open).
+        result, detaches = self._run_verify(self._dispatch(xattr_rc=1, xattr_stdout=''))
+        self.assertFalse(result, 'xattr failure must fail closed, not pass')
+        self.assertEqual(len(detaches), 1)
+
+    def test_detaches_when_app_missing_after_attach(self):
+        def _run(cmd, *a, **k):
+            if cmd[:2] == ['hdiutil', 'attach']:
+                return MagicMock(returncode=0, stdout='', stderr='')
+            if cmd[:2] == ['hdiutil', 'detach']:
+                return MagicMock(returncode=0)
+            return MagicMock(returncode=0, stdout='', stderr='')
+        with patch('tempfile.mkdtemp', return_value='/tmp/maho-dmg-verify-y'), \
+             patch('os.path.isfile', return_value=True), \
+             patch('os.path.isdir', return_value=False), \
+             patch('os.rmdir'), \
+             patch('subprocess.run', side_effect=_run) as mock_run:
+            result = _bm.verify_dmg_app_signature('/out/Maho-1.0.0.dmg')
+        self.assertFalse(result)
+        detaches = [c for c in mock_run.call_args_list
+                    if c.args[0][:2] == ['hdiutil', 'detach']]
+        self.assertEqual(len(detaches), 1, 'attach succeeded so must detach')
+
+
+class TestBuildDmg(unittest.TestCase):
+
+    def _patches(self, run_side_effect, gate=True):
+        return [
+            patch('os.path.isdir', return_value=True),
+            patch('os.path.exists', return_value=False),
+            patch('os.makedirs'),
+            patch('os.symlink'),
+            patch('os.remove'),
+            patch('shutil.rmtree'),
+            patch('subprocess.run', side_effect=run_side_effect),
+            patch.object(_bm, 'verify_dmg_app_signature', return_value=gate),
+        ]
+
+    def test_synthesizes_via_hdiutil_create_not_pkgdmg(self):
+        calls = []
+
+        def _run(cmd, *a, **k):
+            calls.append(cmd)
+            return MagicMock(returncode=0, stdout='', stderr='')
+
+        ctx = self._patches(_run, gate=True)
+        for p in ctx:
+            p.start()
+        try:
+            result = _bm.build_dmg('/out/Default/Maho.app', 'out/Default', '1.0.0', 'DEADBEEF')
+        finally:
+            for p in reversed(ctx):
+                p.stop()
+
+        self.assertTrue(result and result.endswith('Maho-1.0.0.dmg'))
+        flat = [c[0] for c in calls]
+        self.assertIn('ditto', flat)
+        self.assertTrue(any(c[0] == 'hdiutil' and c[1] == 'create' and '-srcfolder' in c for c in calls),
+                        'must synthesize the image with hdiutil create -srcfolder')
+        self.assertFalse(any('pkg-dmg' in str(c) or 'makehybrid' in str(c) for c in calls),
+                         'must not use pkg-dmg/makehybrid')
+
+    def test_returns_none_and_removes_dmg_when_gate_fails(self):
+        def _run(cmd, *a, **k):
+            return MagicMock(returncode=0, stdout='', stderr='')
+
+        removed = []
+        ctx = [
+            patch('os.path.isdir', return_value=True),
+            patch('os.path.exists', return_value=True),
+            patch('os.makedirs'),
+            patch('os.symlink'),
+            patch('os.remove', side_effect=lambda p: removed.append(p)),
+            patch('shutil.rmtree'),
+            patch('subprocess.run', side_effect=_run),
+            patch.object(_bm, 'verify_dmg_app_signature', return_value=False),
+        ]
+        for p in ctx:
+            p.start()
+        try:
+            result = _bm.build_dmg('/out/Default/Maho.app', 'out/Default', '1.0.0', 'DEADBEEF')
+        finally:
+            for p in reversed(ctx):
+                p.stop()
+
+        self.assertIsNone(result)
+        self.assertTrue(any(r.endswith('Maho-1.0.0.dmg') for r in removed),
+                        'must delete the invalid dmg on gate failure')
+
+    def test_returns_none_when_staged_app_fails_strict_verify(self):
+        def _run(cmd, *a, **k):
+            if cmd[:1] == ['codesign'] and '--verify' in cmd:
+                return MagicMock(returncode=1, stdout='', stderr='nested code invalid')
+            return MagicMock(returncode=0, stdout='', stderr='')
+
+        ctx = self._patches(_run, gate=True)
+        for p in ctx:
+            p.start()
+        try:
+            result = _bm.build_dmg('/out/Default/Maho.app', 'out/Default', '1.0.0', 'DEADBEEF')
+        finally:
+            for p in reversed(ctx):
+                p.stop()
+
+        self.assertIsNone(result)
+
+
+class TestMainDmgFatalPaths(unittest.TestCase):
+
+    def _run(self, argv, build_dmg_ret, notarize_ret=True):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(sys, 'argv', ['build_maho.py'] + argv))
+            stack.enter_context(patch.object(sys, 'platform', 'darwin'))
+            for name in (
+                'ensure_overlay_mount',
+                'apply_tracked_chromium_overrides',
+                'apply_branding',
+                'run_lucide_icon_check',
+                'build_chromium_app',
+                'embed_sparkle_framework',
+                'embed_mail_helper',
+                'ensure_args_gn',
+                'sync_local_google_api_key',
+                'run_gn_gen',
+            ):
+                stack.enter_context(patch.object(_bm, name))
+            stack.enter_context(
+                patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'))
+            stack.enter_context(
+                patch.object(_bm, 'embed_maho_cli', return_value=True))
+            stack.enter_context(
+                patch.object(_bm, 'find_codesign_identity', return_value='FAKSHA'))
+            stack.enter_context(patch.object(_bm, 'codesign_app', return_value=True))
+            stack.enter_context(
+                patch.object(_bm, 'read_maho_version', return_value='1.0.0'))
+            stack.enter_context(patch('os.path.isfile', return_value=True))
+            mock_dmg = stack.enter_context(
+                patch.object(_bm, 'build_dmg', return_value=build_dmg_ret))
+            mock_notarize = stack.enter_context(
+                patch.object(_bm, 'notarize_dmg', return_value=notarize_ret))
+            mock_launch = stack.enter_context(patch.object(_bm, 'launch_app'))
+            try:
+                _bm.main()
+                exited = None
+            except SystemExit as e:
+                exited = e.code
+        return mock_dmg, mock_notarize, mock_launch, exited
+
+    def test_exits_nonzero_when_dmg_gate_fails(self):
+        mock_dmg, mock_notarize, mock_launch, exited = self._run(
+            ['--skip-rust', '--dmg', '--no-launch'], build_dmg_ret=None)
+        mock_dmg.assert_called_once()
+        self.assertIsNotNone(exited)
+        self.assertNotEqual(exited, 0)
+        mock_notarize.assert_not_called()
+
+    def test_exits_nonzero_when_notarize_fails(self):
+        mock_dmg, mock_notarize, mock_launch, exited = self._run(
+            ['--skip-rust', '--dmg', '--notarize', '--no-launch'],
+            build_dmg_ret='/out/Maho-1.0.0.dmg', notarize_ret=False)
+        mock_notarize.assert_called_once()
+        self.assertIsNotNone(exited)
+        self.assertNotEqual(exited, 0)
+
+    def test_no_exit_when_dmg_ok_and_no_notarize(self):
+        mock_dmg, mock_notarize, mock_launch, exited = self._run(
+            ['--skip-rust', '--dmg'], build_dmg_ret='/out/Maho-1.0.0.dmg')
+        self.assertIsNone(exited)
+        mock_notarize.assert_not_called()
+        mock_launch.assert_called_once()
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'macOS-only real image synthesis')
+class TestRealDmgSynthesis(unittest.TestCase):
+
+    def test_real_dmg_synthesis_has_no_finderinfo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = os.path.join(tmp, 'stage')
+            app = os.path.join(stage, 'Maho.app', 'Contents', 'MacOS')
+            os.makedirs(app)
+            with open(os.path.join(app, 'Maho'), 'wb') as f:
+                f.write(b'\xcf\xfa\xed\xfe payload')
+            os.symlink('/Applications', os.path.join(stage, 'Applications'))
+            subprocess.run(['xattr', '-cr', stage], check=True)
+            dmg = os.path.join(tmp, 'probe.dmg')
+            _bm._create_dmg_image(stage, dmg, 'Probe')
+            self.assertTrue(os.path.isfile(dmg))
+            # Reuse the production gate's mount+FinderInfo check via a direct
+            # mount (codesign on an unsigned fake app would fail, so assert the
+            # image-synthesis property this fix guarantees: 0 FinderInfo).
+            import plistlib
+            at = subprocess.run(
+                ['hdiutil', 'attach', '-nobrowse', '-readonly', '-plist', dmg],
+                capture_output=True, check=True)
+            info = plistlib.loads(at.stdout)
+            mnt = next(e['mount-point'] for e in info['system-entities'] if e.get('mount-point'))
+            dev = min((e['dev-entry'] for e in info['system-entities'] if e.get('dev-entry')), key=len)
+            try:
+                dump = subprocess.run(['xattr', '-lr', os.path.join(mnt, 'Maho.app')],
+                                      capture_output=True, text=True)
+                finderinfo = sum(1 for ln in dump.stdout.splitlines()
+                                 if 'com.apple.FinderInfo' in ln)
+                self.assertEqual(finderinfo, 0,
+                                 'hdiutil create must not inject FinderInfo detritus')
+            finally:
+                subprocess.run(['hdiutil', 'detach', dev, '-quiet'], capture_output=True)
 
 
 if __name__ == '__main__':

@@ -18,6 +18,7 @@
 #include "maho/browser/ui/theme/maho_space_theme_io.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/space_config/maho_space_config_dialog.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -153,6 +154,7 @@ std::optional<base::FilePath> UpdateProfileOnPool(
   }
   const std::string result_json(result);
   maho_string_free(result);
+  maho::InvalidateSidebarCoreCacheForUpdatesJson(result_json);
   if (!CoreAcceptedSpaceConfigUpdate(result_json, space_id,
                                      update.profile_id) ||
       maho_core_save_state(core) == 0) {
@@ -204,6 +206,9 @@ bool RenameSpaceOnPool(const std::string& space_id,
     return false;
   }
   maho_core_rename_space(core, space_id.c_str(), name.c_str());
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kFooter;
+  maho::InvalidateSidebarCoreCache(invalidation);
   return true;
 }
 
@@ -221,6 +226,9 @@ bool RecolorSpaceOnPool(const std::string& space_id,
   base::JSONWriter::Write(color_dict, &color_json);
 
   maho_core_recolor_space(core, space_id.c_str(), color_json.c_str());
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kFooter;
+  maho::InvalidateSidebarCoreCache(invalidation);
 
   if (!theme_json.empty()) {
     std::optional<base::Value> theme_value =
@@ -239,7 +247,9 @@ bool RecolorSpaceOnPool(const std::string& space_id,
     base::JSONWriter::Write(event, &event_json);
     char* result = maho_core_handle_event(core, event_json.c_str());
     if (result) {
+      std::string updates(result);
       maho_string_free(result);
+      maho::InvalidateSidebarCoreCacheForUpdatesJson(updates);
     }
   }
 
@@ -372,7 +382,9 @@ void MahoSpaceConfigPageHandler::UpdateIcon(
             if (!result) {
               return false;
             }
+            std::string updates(result);
             maho_string_free(result);
+            maho::InvalidateSidebarCoreCacheForUpdatesJson(updates);
             maho_core_save_state(core);
             return true;
           },

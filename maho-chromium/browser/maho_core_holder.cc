@@ -1,20 +1,27 @@
 #include "maho/browser/maho_core_holder.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
+#include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/values.h"
+#include "chrome/browser/profiles/profile.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -25,6 +32,7 @@ namespace maho {
 
 namespace {
 std::atomic<::MahoCore*> g_core{nullptr};
+std::atomic<Profile*> g_core_owner_profile{nullptr};
 std::atomic<bool> g_blocker_quiesced{false};
 std::atomic<bool> g_vault_backend_quiesced{false};
 std::atomic<bool> g_core_tasks_quiesced{true};
@@ -33,6 +41,18 @@ base::Lock& GetVaultBackendCreationLock() {
   static base::NoDestructor<base::Lock> lock;
   return *lock;
 }
+
+// Vault lock-state broadcast state. Both the list and the cached value are
+// owned by the publishing sequence (BrowserThread::UI in production, the test
+// sequence in unit tests); they are never touched from the core task runner.
+VaultLockStateCallbackList& GetVaultLockStateCallbackList() {
+  static base::NoDestructor<VaultLockStateCallbackList> callbacks;
+  return *callbacks;
+}
+
+// Fail-closed default: nothing has published a state yet, so treat the Vault as
+// unusable for secret access.
+bool g_vault_locked_for_ui = true;
 
 // UI-sequence-owned compile coalescing state. Both flags are only ever touched
 // on the BrowserThread::UI sequence (the PostBlockerEngineCompileAndInstall
@@ -78,15 +98,37 @@ using ScopedCompiledEngine =
 }
 
 void SetCore(::MahoCore* core) {
+  SetCoreForProfile(core, nullptr);
+}
+
+void SetCoreForProfile(::MahoCore* core, Profile* owner_profile) {
   base::AutoLock lock(GetVaultBackendCreationLock());
   if (!core) {
     g_vault_backend_quiesced.store(true, std::memory_order_release);
     maho::core::QuiesceVaultBackendSessions();
+    g_core_owner_profile.store(nullptr, std::memory_order_release);
   } else {
     g_vault_backend_quiesced.store(false, std::memory_order_release);
     g_core_tasks_quiesced.store(false, std::memory_order_release);
+    g_core_owner_profile.store(owner_profile, std::memory_order_release);
   }
   g_core.store(core, std::memory_order_release);
+}
+
+Profile* GetCoreOwnerProfile() {
+  return g_core_owner_profile.load(std::memory_order_acquire);
+}
+
+bool IsPasswordManagerAllowedForProfile(Profile* profile) {
+  Profile* owner_profile = GetCoreOwnerProfile();
+  return GetCore() && profile && owner_profile && !profile->IsOffTheRecord() &&
+         profile->IsRegularProfile() && profile == owner_profile;
+}
+
+std::string GetProfileIdentityKey(const base::FilePath& profile_path,
+                                  const PrefService* profile_prefs) {
+  return profile_path.AsUTF8Unsafe() + "#" +
+         base::NumberToString(reinterpret_cast<uintptr_t>(profile_prefs));
 }
 
 scoped_refptr<base::SequencedTaskRunner> GetCoreTaskRunner() {
@@ -117,9 +159,46 @@ void QuiesceCoreTasksAndWait() {
   drained.Run();
 }
 
+base::CallbackListSubscription AddVaultLockStateChangeCallback(
+    base::RepeatingCallback<void(bool)> callback) {
+  return GetVaultLockStateCallbackList().Add(std::move(callback));
+}
+
+bool NotifyVaultLockStateChanged(bool locked) {
+  if (g_vault_locked_for_ui == locked) {
+    return false;
+  }
+  g_vault_locked_for_ui = locked;
+  GetVaultLockStateCallbackList().Notify(locked);
+  return true;
+}
+
+bool IsVaultLockedForUi() {
+  return g_vault_locked_for_ui;
+}
+
 maho::core::VaultBackendSession CreateVaultBackendSession() {
+  return CreateVaultBackendSessionForProfile(GetCoreOwnerProfile());
+}
+
+maho::core::VaultBackendSession CreateVaultBackendSessionForProfile(
+    Profile* profile) {
+  if (!profile) {
+    return maho::core::VaultBackendSession();
+  }
+  return CreateVaultBackendSessionForProfileKey(
+      GetProfileIdentityKey(profile->GetPath(), profile->GetPrefs()));
+}
+
+maho::core::VaultBackendSession CreateVaultBackendSessionForProfileKey(
+    std::string_view profile_key) {
   base::AutoLock lock(GetVaultBackendCreationLock());
-  if (g_vault_backend_quiesced.load(std::memory_order_acquire)) {
+  Profile* owner_profile = g_core_owner_profile.load(std::memory_order_acquire);
+  if (g_vault_backend_quiesced.load(std::memory_order_acquire) ||
+      !owner_profile || owner_profile->IsOffTheRecord() ||
+      !owner_profile->IsRegularProfile() ||
+      profile_key != GetProfileIdentityKey(owner_profile->GetPath(),
+                                           owner_profile->GetPrefs())) {
     return maho::core::VaultBackendSession();
   }
   return maho::core::CreateVaultBackendSession(

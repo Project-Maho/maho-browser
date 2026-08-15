@@ -3,12 +3,15 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_STATE_ADAPTER_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "base/values.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/gfx/image/image.h"
@@ -57,6 +60,88 @@ struct SidebarStateBackgroundResult {
   MahoSidebarFavoritesModel favorites_model;
 };
 
+enum class SidebarCoreFragment : uint8_t {
+  kNone = 0,
+  kFooter = 1 << 0,
+  kTreeBundle = 1 << 1,
+  kFavorites = 1 << 2,
+  kAll = (1 << 0) | (1 << 1) | (1 << 2),
+};
+
+SidebarCoreFragment operator|(SidebarCoreFragment lhs, SidebarCoreFragment rhs);
+SidebarCoreFragment operator&(SidebarCoreFragment lhs, SidebarCoreFragment rhs);
+
+struct SidebarCacheInvalidation {
+  SidebarCacheInvalidation();
+  SidebarCacheInvalidation(const SidebarCacheInvalidation&);
+  SidebarCacheInvalidation& operator=(const SidebarCacheInvalidation&);
+  SidebarCacheInvalidation(SidebarCacheInvalidation&&);
+  SidebarCacheInvalidation& operator=(SidebarCacheInvalidation&&);
+  ~SidebarCacheInvalidation();
+
+  SidebarCoreFragment fragments = SidebarCoreFragment::kNone;
+  // Empty means every space for per-space fragments.
+  std::vector<std::string> space_ids;
+};
+
+struct SidebarCoreCacheCounters {
+  uint64_t footer_hits = 0;
+  uint64_t footer_misses = 0;
+  uint64_t tree_bundle_hits = 0;
+  uint64_t tree_bundle_misses = 0;
+  uint64_t favorites_hits = 0;
+  uint64_t favorites_misses = 0;
+  uint64_t stale_publications_discarded = 0;
+};
+
+struct SidebarCoreCacheFetchersForTesting {
+  SidebarCoreCacheFetchersForTesting();
+  SidebarCoreCacheFetchersForTesting(const SidebarCoreCacheFetchersForTesting&);
+  SidebarCoreCacheFetchersForTesting& operator=(
+      const SidebarCoreCacheFetchersForTesting&);
+  SidebarCoreCacheFetchersForTesting(SidebarCoreCacheFetchersForTesting&&);
+  SidebarCoreCacheFetchersForTesting& operator=(
+      SidebarCoreCacheFetchersForTesting&&);
+  ~SidebarCoreCacheFetchersForTesting();
+
+  base::RepeatingCallback<FooterSpaceState(::MahoCore*)> footer;
+  base::RepeatingCallback<SidebarStateBackgroundResult(::MahoCore*,
+                                                       const std::string&)>
+      tree_bundle;
+  base::RepeatingCallback<MahoSidebarFavoritesModel(::MahoCore*,
+                                                    const std::string&)>
+      favorites;
+};
+
+// Invalidates explicitly classified fragments for typed FFI mutations that do
+// not return CoreUpdates.
+void InvalidateSidebarCoreCache(const SidebarCacheInvalidation& invalidation);
+
+// Parses authoritative CoreUpdate JSON returned by HandleEvent and invalidates
+// only the affected cached core fragments.
+void InvalidateSidebarCoreCacheForUpdatesJson(std::string_view updates_json);
+
+// Test-only cache controls and instrumentation.
+SidebarCacheInvalidation GetSidebarCacheInvalidationForUpdateJsonForTesting(
+    std::string_view update_json);
+SidebarCoreCacheCounters GetSidebarCoreCacheCountersForTesting();
+void ResetSidebarCoreCacheForTesting();
+void SetSidebarCoreCacheFetchersForTesting(
+    SidebarCoreCacheFetchersForTesting fetchers);
+SidebarStateBackgroundResult BuildSidebarStateOnBackgroundForTesting(
+    ::MahoCore* core,
+    std::string space_id_json,
+    bool bypass_cache);
+MahoSidebarFavoritesModel RefreshSidebarFavoritesForTesting(
+    ::MahoCore* core,
+    std::string space_id_json);
+std::string DispatchSpaceContextMenuCoreEventForTesting(
+    ::MahoCore* core,
+    const std::string& event_json);
+void RecolorSpaceContextMenuForTesting(::MahoCore* core,
+                                       const std::string& space_id,
+                                       const std::string& color);
+
 class ShellEventObserver {
  public:
   virtual ~ShellEventObserver() = default;
@@ -69,8 +154,9 @@ class ShellEventObserver {
 void SetShellEventObserverForTesting(ShellEventObserver* observer);
 
 // Centralized ShellEvent dispatch: builds JSON and sends to maho-core.
-void DispatchShellEvent(const std::string& kind,
-                        const std::vector<std::pair<std::string, std::string>>& fields);
+void DispatchShellEvent(
+    const std::string& kind,
+    const std::vector<std::pair<std::string, std::string>>& fields);
 
 // Creates a folder and returns the generated folder id (empty on failure).
 std::string DispatchCreateFolder(const std::string& space_id,
@@ -97,8 +183,7 @@ void DispatchShellEventEx(const std::string& kind,
                           const std::vector<ShellEventField>& fields);
 
 // Variant for events with nested JSON structure (e.g. ReorderRootItem).
-void DispatchShellEventDict(const std::string& kind,
-                            base::DictValue dict);
+void DispatchShellEventDict(const std::string& kind, base::DictValue dict);
 
 bool IsSidebarSafeMode();
 
@@ -118,6 +203,11 @@ class MahoSidebarStateAdapter {
   MahoSidebarTopBarModel BuildTopBarModel(Browser* browser) const;
   MahoSidebarSearchModel BuildSearchModel(Browser* browser) const;
   static MahoSidebarFavoritesModel BuildFavoritesModelForSpaceIdJson(
+      std::string active_space_id_json);
+  // Invalidates, fetches, and republishes the favorites fragment atomically
+  // with respect to the shared cache. Use for synchronous post-drop refreshes
+  // so the following full rebuild cannot clobber fresh UI with an older entry.
+  static MahoSidebarFavoritesModel RefreshFavoritesModelForSpaceIdJson(
       std::string active_space_id_json);
   void SetFavoritesModel(MahoSidebarFavoritesModel favorites_model);
   MahoSidebarFavoritesModel BuildFavoritesModel(Browser* browser) const;
@@ -146,11 +236,12 @@ class MahoSidebarStateAdapter {
   std::u16string GetActiveHostText(Browser* browser) const;
 
   // V2 FFI: single call replacing 3 separate v1 FFI hops.
-  std::string FetchSidebarStateV2(
-      ::MahoCore* core, const std::string& space_id_json) const;
+  std::string FetchSidebarStateV2(::MahoCore* core,
+                                  const std::string& space_id_json) const;
 
-  // Prebuilt favicon map from v2 FFI (base64 decoded PNG bytes keyed by tab ID).
-  // Set during BuildViewStateModel, consumed by ParseTreeNode, cleared after.
+  // Prebuilt favicon map from v2 FFI (base64 decoded PNG bytes keyed by tab
+  // ID). Set during BuildViewStateModel, consumed by ParseTreeNode, cleared
+  // after.
   mutable base::flat_map<std::string, std::vector<uint8_t>> v2_favicon_map_;
 
   // Parsed tree from v2 FFI. When non-null, BuildTabListModel uses this.

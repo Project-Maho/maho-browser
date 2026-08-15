@@ -2,7 +2,7 @@
 
 **Created:** 2026-05-02  
 **Status:** Active reference for Chromium sidebar drag-and-drop behavior and gap analysis  
-**Implementation repo:** `/Users/indo/code/project/maho-workspace/maho-chromium/`
+**Implementation repo:** `maho-chromium/` relative to the workspace root
 
 ---
 
@@ -14,7 +14,7 @@ It captures:
 
 1. the current product wiring status in Chromium native sidebar Views;
 2. the current core capability in `maho-core`;
-3. the current macOS AX E2E limitations;
+3. the historical macOS AX E2E limitations;
 4. the Swift source-of-truth behaviors that Chromium is expected to match;
 5. the implementation and testing framing that should be reused in future work.
 
@@ -58,14 +58,18 @@ The underlying event and ordering capabilities live here:
 - `crates/maho-core/src/space_manager.rs`
 - `crates/maho-core/tests/test_batch_1.rs`
 
-### 2.4 Current AX verification surface
+### 2.4 Historical AX verification surface (unavailable)
 
-The current native macOS AX harness lives here:
+The former native macOS AX harness file is unavailable. Its historical command
+is intentionally omitted so this document cannot be mistaken for an executable
+runbook. The current desktop lifecycle is documented in
+`docs/chromium-desktop-e2e.md`.
 
-- `build/scripts/e2e_chromium_sidebar.py`
-- `docs/chromium-desktop-e2e.md`
-
-That harness can still validate the broader desktop launch flow and some non-folder drag outcomes. It should not be treated as authoritative for folder-heavy parity, because the live AX tree does not yet provide a strong enough verification path for every folder interaction.
+It is no longer a shipped executable surface. References below to AX runs or
+observations are retained as historical context only and must not be presented
+as current executable evidence. The supported desktop lifecycle is documented
+in `docs/chromium-desktop-e2e.md` and the workspace-level
+`docs/operations/macos-vm-e2e.md` runbook.
 
 ---
 
@@ -75,13 +79,16 @@ There are two different classes of failure in current Chromium sidebar DnD work.
 
 ### 3.1 AX testability gaps
 
-These are cases where the product wiring exists, but the native macOS accessibility tree still does not make every folder-heavy interaction easy to verify from the current AX harness.
+These are historical cases where product wiring existed but the native macOS
+accessibility tree did not make every folder-heavy interaction easy to verify.
+The former AX harness is unavailable, so these observations are context rather
+than a current executable verification layer.
 
 Examples:
 
-- folder-target drag paths can be hard to observe reliably in live Chromium AX;
+- historical folder-target drag paths were hard to observe reliably;
 - some folder-heavy drops still need stronger non-AX verification;
-- the harness can confirm launches and some support-contract checks, but not full folder parity.
+- archived observations did not establish full folder parity.
 
 ### 3.2 Product wiring gaps
 
@@ -95,7 +102,43 @@ Examples:
 Do not confuse these. AX stabilization does not fix missing product wiring, and AX weakness does not imply the Views layer is missing the path.
 ---
 
-## 4. Current capability matrix\n\n### Legend\n\n- **Core:** `maho-core` event and state support exists.\n- **Chromium Views:** native sidebar Views wiring exists.\n- **AX E2E:** current macOS AX harness can sometimes exercise it, but may not prove it cleanly.\n- **Status:** overall current state.\n\n### 4.1 Finalized lane/body DnD contract\n\nThe current sidebar DnD model is lane and body based, not row hover based. The finalized interaction contract is:\n\n- default before and after lanes reorder only;\n- tab on tab body routes to split view;\n- tab on folder body moves into that folder;\n- folder on folder body moves into that folder;\n- folder on tab body is invalid and a no-op;\n- mixed root ordering is supported through the unified root-order contract;\n- append-after-last is explicit and tested.\n\n### 4.2 Current capability matrix\n\n| Interaction | Core | Chromium Views | AX E2E | Status |\n| --- | --- | --- | --- | --- |\n| Root tab reorder | Yes | Yes | Weak, can be hard to prove from current AX runs | Product wired, mixed root ordering uses the unified root-order contract |\n| Folder sibling reorder at root | Yes | Yes | Weak, currently better proven by unit dispatch than AX runs | Product wired, append-after-last is explicit and tested |\n| Tab: pinned ↔ normal | Yes | Yes | Weak, no-op observed in current harness runs | Product wired, verification is still weak |\n| Folder: pinned ↔ normal | Yes | Yes | No reliable AX path | Product wired, verification is still weak |\n| Tab ↔ favorites | Yes | Yes | Favorite reorder no-op observed in current harness, support-contract exists | Product wired, runtime behavior still needs stronger verification |\n| Tab -> folder | Yes | Yes | Folder AX is weak | Product wired |\n| Folder -> folder | Yes | Yes | Folder AX is weak | Product wired |\n| Folder reorder inside folder | Yes | Yes | Weak, currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |\n| Tab reorder inside folder | Yes | Yes | Weak, currently better proven by unit dispatch than AX runs | Product wired, AX verification remains weak |\n| Tab out of folder to root | Yes | Yes | Weak, current AX runs do not fully prove it | Product wired, AX verification remains weak |\n\n---
+## 4. Current capability matrix
+
+### Legend
+
+- **Core:** `maho-core` event and state support exists.
+- **Chromium Views:** native sidebar Views wiring exists.
+- **Historical AX evidence:** archived observations from the unavailable harness.
+- **Status:** overall current state.
+
+### 4.1 Finalized lane/body DnD contract
+
+The current sidebar DnD model is lane and body based, not row hover based. The finalized interaction contract is:
+
+- default before and after lanes reorder only;
+- tab on tab body routes to split view;
+- tab on folder body moves into that folder;
+- folder on folder body moves into that folder;
+- folder on tab body is invalid and a no-op;
+- mixed root ordering is supported through the unified root-order contract;
+- append-after-last is explicit and tested.
+
+### 4.2 Current capability matrix
+
+| Interaction | Core | Chromium Views | Historical AX evidence | Status |
+| --- | --- | --- | --- | --- |
+| Root tab reorder | Yes | Yes | Weak archived evidence | Product wired; mixed root ordering uses the unified root-order contract |
+| Folder sibling reorder at root | Yes | Yes | Weak archived evidence | Product wired; append-after-last is explicit and tested |
+| Tab: pinned ↔ normal | Yes | Yes | Historical no-op observation | Product wired; current E2E verification is pending |
+| Folder: pinned ↔ normal | Yes | Yes | No reliable archived path | Product wired; current E2E verification is pending |
+| Tab ↔ favorites | Yes | Yes | Historical no-op observation | Product wired; runtime behavior needs current verification |
+| Tab -> folder | Yes | Yes | Weak archived evidence | Product wired |
+| Folder -> folder | Yes | Yes | Weak archived evidence | Product wired |
+| Folder reorder inside folder | Yes | Yes | Weak archived evidence | Product wired; current E2E verification is pending |
+| Tab reorder inside folder | Yes | Yes | Weak archived evidence | Product wired; current E2E verification is pending |
+| Tab out of folder to root | Yes | Yes | Weak archived evidence | Product wired; current E2E verification is pending |
+
+---
 
 ## 5. Evidence by interaction class
 
@@ -124,7 +167,10 @@ Expected end-state:
 
 ### Current status
 
-Product wiring exists. Current AX harness runs classify this as a **no-op** in Chromium runtime, so the remaining question is runtime behavior correctness vs DnD gesture delivery, not missing core support.
+Product wiring exists. Archived AX observations classified this as a **no-op**
+in Chromium runtime, but the unavailable harness cannot provide current proof.
+The remaining question is runtime behavior correctness versus gesture delivery,
+not missing core support.
 
 ---
 
@@ -204,7 +250,8 @@ Folder drop behavior at section boundaries:
 
 #### Status
 
-Product wired, but current AX harness has observed favorite reorder as a runtime no-op. This needs stronger non-AX verification.
+Product wired. Archived AX observations recorded favorite reorder as a runtime
+no-op; current verification requires the supported non-AX layers.
 
 ### Folder ↔ favorites
 
@@ -241,7 +288,8 @@ Status:
 
 ### Status
 
-Product wired. Current AX harness cannot verify reliably because folder rows are not stably exposed.
+Product wired. Archived AX evidence was unreliable because folder rows were not
+stably exposed; the unavailable harness is not a current verification surface.
 
 ---
 
@@ -346,13 +394,13 @@ That means folder-heavy operations are representable in both sections.
 However:
 
 - the wired folder-heavy interactions now include `tab -> folder`, `folder -> folder`, root folder reorder, same-parent nested folder reorder, folder-scoped tab reorder, and tab-out-of-folder-to-root dispatch;
-- AX verification is still the weak link for folder-heavy parity, so these paths should be described as product wired but not fully proven by the current harness.
+- current end-to-end proof remains pending for folder-heavy parity because the historical AX harness is unavailable.
 
 Practical status:
 
 - **3 and 4**: model parity exists; product wiring exists.
 - **5 and 6**: product wiring exists, but AX proof is still weaker than the Views dispatch evidence.
-- **tab out of folder**: product wiring exists, but the current AX harness is not authoritative for the full folder-heavy path.
+- **tab out of folder**: product wiring exists, but archived AX evidence is not authoritative for the full folder-heavy path.
 
 ---
 
@@ -382,15 +430,13 @@ Preferred verification for product wiring:
 
 This is now the main non-AX verification layer for current Chromium sidebar DnD and should remain the primary proof surface for product wiring.
 
-### 7.3 AX / artifact E2E
+### 7.3 Supported desktop E2E and artifacts
 
-Keep the current AX harness for:
+Use the isolated macOS VM lifecycle for current desktop smoke and artifact
+proof. Treat historical AX observations only as diagnostic context; the former
+harness is unavailable and must not be invoked or cited as current evidence.
 
-- favorites baseline;
-- support-contract checks;
-- selected smoke validation where AX is stable.
-
-Do not force folder-heavy parity to depend on AX stability.
+Do not make folder-heavy parity depend on the unavailable AX surface.
 
 ---
 
@@ -416,7 +462,6 @@ Do not force folder-heavy parity to depend on AX stability.
 
 ### Current E2E and support-contract surface
 
-- `build/scripts/e2e_chromium_sidebar.py`
 - `docs/chromium-desktop-e2e.md`
 - `browser/ui/webui/maho_test/maho_test_ui.cc`
 
@@ -439,7 +484,7 @@ The correct framing for future work is:
 At the time of writing:
 
 - Chromium already wires **tab pinned/normal transfers**, **folder pinned/normal transfers**, **tab into folder**, **folder into folder**, **root folder reorder**, **same-parent nested folder reorder**, **folder-scoped tab reorder**, **tab out of folder to root**, and **favorite drag paths**;
-- the current AX harness can still run useful checks, but it should not be treated as authoritative for folder-heavy parity when the dispatch proof is the stronger evidence;
+- archived AX observations are non-authoritative context, while the supported VM lifecycle and native dispatch tests are the current proof surfaces;
 - the live macOS accessibility tree is still the limiting factor for strong end-to-end proof on folder-heavy flows.
 
 Any future sidebar DnD implementation or review should begin from this document.

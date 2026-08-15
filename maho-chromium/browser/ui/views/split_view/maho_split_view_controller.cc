@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 
+#include <algorithm>
+
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
@@ -47,6 +49,21 @@ MahoSplitViewController::~MahoSplitViewController() = default;
 bool MahoSplitViewController::ShouldDispatchPersistentSplitEvent(
     MahoSplitPersistence mode) {
   return mode == MahoSplitPersistence::kPersistent;
+}
+
+// static
+MahoSplitDropSide MahoSplitViewController::ResolveDropSide(int x, int width) {
+  return x < std::max(width, 1) / 2 ? MahoSplitDropSide::kLeft
+                                    : MahoSplitDropSide::kRight;
+}
+
+// static
+bool MahoSplitViewController::IsSplitDropEligible(bool is_multi_drag,
+                                                  bool source_is_target,
+                                                  bool source_already_split,
+                                                  bool target_already_split) {
+  return !is_multi_drag && !source_is_target && !source_already_split &&
+         !target_already_split;
 }
 
 void MahoSplitViewController::AddSplit() {

@@ -1,0 +1,30 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "lucide-icons-swift",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/JakubMazur/lucide-icons-swift",
+          "name" : "lucide-icons-swift"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "7410cd403143e89a472a0cc6bb3ddd97bc2e3a39",
+            "version" : "1.19.0"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "lucide-icons-swift"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

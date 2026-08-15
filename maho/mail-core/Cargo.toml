@@ -55,10 +55,18 @@ md-5 = "0.10"
 aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
-openssl = { version = "0.10", features = ["vendored"] }
 pgp = "0.14"
 smallvec = "1"
 rand = "0.8"
+
+[target.'cfg(not(windows))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
 
 [build-dependencies]
 cbindgen = "0.27"

@@ -12,6 +12,7 @@ maho-types = { path = "../maho-types" }
 maho-import = { path = "../maho-import" }
 maho-agent = { path = "../maho-agent" }
 maho-storage = { path = "../maho-storage" }
+async-trait = "0.1"
 tracing = "0.1"
 serde = { workspace = true }
 uuid = { workspace = true }

@@ -14,6 +14,10 @@ enum ShellTheme {
     enum Palette {
         static let accent = Color.accentColor
 
+        static let success = Color(red: 48.0 / 255.0, green: 209.0 / 255.0, blue: 88.0 / 255.0)
+        static let warning = Color(red: 255.0 / 255.0, green: 159.0 / 255.0, blue: 10.0 / 255.0)
+        static let error = Color(red: 255.0 / 255.0, green: 69.0 / 255.0, blue: 58.0 / 255.0)
+
 #if canImport(UIKit)
         static func dynamicColor(light: UIColor, dark: UIColor) -> Color {
             Color(uiColor: UIColor { traits in traits.userInterfaceStyle == .dark ? dark : light })
@@ -230,26 +234,29 @@ enum ShellTheme {
         }
 
         static func searchOverlayCanvas(isIncognito: Bool) -> Color {
+            if isIncognito { return incognitoBackground }
 #if canImport(UIKit)
-            Color(uiColor: .secondarySystemBackground)
+            return Color(uiColor: .secondarySystemBackground)
 #else
-            Color.primary.opacity(0.06)
+            return Color.primary.opacity(0.06)
 #endif
         }
 
         static func searchOverlayElevatedCanvas(isIncognito: Bool) -> Color {
+            if isIncognito { return incognitoBackground }
 #if canImport(UIKit)
-            Color(uiColor: .secondarySystemBackground)
+            return Color(uiColor: .secondarySystemBackground)
 #else
-            Color.primary.opacity(0.06)
+            return Color.primary.opacity(0.06)
 #endif
         }
 
         static func searchOverlayFieldFill(isIncognito: Bool) -> Color {
+            if isIncognito { return incognitoSurfaceStrong }
 #if canImport(UIKit)
-            Color(uiColor: .tertiarySystemBackground)
+            return Color(uiColor: .tertiarySystemBackground)
 #else
-            Color.primary.opacity(0.1)
+            return Color.primary.opacity(0.1)
 #endif
         }
 
@@ -276,6 +283,45 @@ enum ShellTheme {
         static let voiceAssistantControlFill = Color(red: 15.0 / 255.0, green: 23.0 / 255.0, blue: 42.0 / 255.0).opacity(0.34)
         static let voiceAssistantErrorFill = voiceAssistantGlowPurple.opacity(0.16)
         static let voiceAssistantErrorBorder = voiceAssistantWaveformActive.opacity(0.28)
+    }
+
+    enum ReaderPalette {
+        struct Scheme {
+            let backgroundHex: String
+            let foregroundHex: String
+            let mutedForegroundHex: String
+            let linkHex: String
+        }
+
+        static func scheme(for theme: ReaderTheme) -> Scheme {
+            switch theme {
+            case .light:
+                return Scheme(backgroundHex: "#ffffff", foregroundHex: "#000000", mutedForegroundHex: "#666666", linkHex: "#0066cc")
+            case .sepia:
+                return Scheme(backgroundHex: "#faf2df", foregroundHex: "#5a402a", mutedForegroundHex: "#666666", linkHex: "#0066cc")
+            case .dark:
+                return Scheme(backgroundHex: "#1e1e1e", foregroundHex: "#dcdcdc", mutedForegroundHex: "#888888", linkHex: "#88c0d0")
+            }
+        }
+
+        static func background(for theme: ReaderTheme) -> Color {
+            color(fromHex: scheme(for: theme).backgroundHex)
+        }
+
+        static func foreground(for theme: ReaderTheme) -> Color {
+            color(fromHex: scheme(for: theme).foregroundHex)
+        }
+
+        private static func color(fromHex hex: String) -> Color {
+            let cleaned = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            let scanner = Scanner(string: cleaned)
+            var value: UInt64 = 0
+            scanner.scanHexInt64(&value)
+            let red = Double((value & 0xFF0000) >> 16) / 255.0
+            let green = Double((value & 0x00FF00) >> 8) / 255.0
+            let blue = Double(value & 0x0000FF) / 255.0
+            return Color(red: red, green: green, blue: blue)
+        }
     }
 
     enum Materials {

@@ -8,7 +8,9 @@ pub mod vault_backend;
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::ptr;
 use std::str::FromStr;
 use std::sync::{Arc as FfiArc, Condvar as FfiCondvar, Mutex as FfiMutex, MutexGuard};
@@ -16,6 +18,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use maho_core::content_blocker::normalize_site_exception_key;
 use maho_core::maho_core::MahoCore;
+use maho_core::vault_manager::VaultPreflightState;
 use maho_core::workspace_manager::WorkspaceManager;
 
 use maho_types::keyboard::KeyCombo;
@@ -288,6 +291,234 @@ fn vault_login_item_by_id(core: &MahoCore, id: VaultItemId) -> Option<VaultItemP
         .find(|item| item.id == id)
 }
 
+/// Stable integer values returned by `maho_core_vault_preflight_state`.
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MahoVaultPreflightState {
+    Healthy = 0,
+    Locked = 1,
+    UnrecoverableKey = 2,
+    StructuralCorruption = 3,
+    PlaintextResidue = 4,
+}
+
+const MAHO_VAULT_PREFLIGHT_STATE_INVALID: i32 = -1;
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultPreflightStatePayload {
+    state: &'static str,
+    value: i32,
+}
+
+fn encode_vault_preflight_state(
+    state: VaultPreflightState,
+    out_state_json: *mut *mut c_char,
+) -> i32 {
+    let (state, state_name) = match state {
+        VaultPreflightState::Healthy => (MahoVaultPreflightState::Healthy, "healthy"),
+        VaultPreflightState::Locked => (MahoVaultPreflightState::Locked, "locked"),
+        VaultPreflightState::UnrecoverableKey => (
+            MahoVaultPreflightState::UnrecoverableKey,
+            "unrecoverableKey",
+        ),
+        VaultPreflightState::StructuralCorruption => (
+            MahoVaultPreflightState::StructuralCorruption,
+            "structuralCorruption",
+        ),
+        VaultPreflightState::PlaintextResidue => (
+            MahoVaultPreflightState::PlaintextResidue,
+            "plaintextResidue",
+        ),
+    };
+    let value = state as i32;
+    if !out_state_json.is_null() {
+        // SAFETY: The caller supplied a non-null out pointer. Ownership of the
+        // allocated string transfers to the caller and is released by
+        // `maho_string_free`, matching the rest of this C ABI.
+        unsafe {
+            *out_state_json = to_json_cstring(&VaultPreflightStatePayload {
+                state: state_name,
+                value,
+            });
+        }
+    }
+    value
+}
+
+/// Performs a read-only Vault database preflight.
+///
+/// Stable return values are defined by `MahoVaultPreflightState`; `-1` means
+/// invalid input, an active import, or a caught panic. When `out_state_json` is
+/// non-null, successful calls also return `{"state": ..., "value": ...}` and
+/// the caller must free that string with `maho_string_free`.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `database_path` must be valid null-terminated UTF-8. When
+/// `key_store_key_available` is true, `database_key` must also be valid
+/// null-terminated UTF-8. `out_state_json` may be null or point to writable
+/// storage for one C string pointer.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_vault_preflight_state(
+    ptr: *mut MahoCore,
+    database_path: *const c_char,
+    database_key: *const c_char,
+    key_store_key_available: bool,
+    out_state_json: *mut *mut c_char,
+) -> i32 {
+    ffi_safe!(
+        {
+            if !out_state_json.is_null() {
+                *out_state_json = ptr::null_mut();
+            }
+            if ptr.is_null() || database_path.is_null() {
+                return MAHO_VAULT_PREFLIGHT_STATE_INVALID;
+            }
+            if import_gate::is_active() {
+                return MAHO_VAULT_PREFLIGHT_STATE_INVALID;
+            }
+            let database_path = match CStr::from_ptr(database_path).to_str() {
+                Ok(path) => Path::new(path),
+                Err(_) => return MAHO_VAULT_PREFLIGHT_STATE_INVALID,
+            };
+            let database_key = if key_store_key_available {
+                if database_key.is_null() {
+                    return MAHO_VAULT_PREFLIGHT_STATE_INVALID;
+                }
+                match CStr::from_ptr(database_key).to_str() {
+                    Ok(key) => maho_storage::sqlite::VaultDatabaseKey::Available(key),
+                    Err(_) => return MAHO_VAULT_PREFLIGHT_STATE_INVALID,
+                }
+            } else {
+                maho_storage::sqlite::VaultDatabaseKey::Unrecoverable
+            };
+            let state = (&*ptr).vault_preflight_state(database_path, database_key);
+            encode_vault_preflight_state(state, out_state_json)
+        },
+        MAHO_VAULT_PREFLIGHT_STATE_INVALID
+    )
+}
+
+#[cfg(test)]
+mod vault_preflight_ffi_tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use maho_core::vault_manager::VaultManager;
+    use maho_storage::sqlite::{SqliteStorage, VaultMetadataRow};
+
+    const DATABASE_KEY: &str = "vault-preflight-ffi-database-key";
+    const MASTER_PASSPHRASE: &[u8] = b"correct horse battery staple";
+    const RECOVERY_SECRET: &[u8] = b"deterministic recovery secret";
+
+    fn create_encrypted_database(path: &Path) {
+        drop(
+            SqliteStorage::open_with_key(path.to_str().expect("UTF-8 test path"), DATABASE_KEY)
+                .expect("create encrypted profile database"),
+        );
+    }
+
+    fn call_preflight_export(
+        core: &mut MahoCore,
+        path: &Path,
+        key: Option<&str>,
+    ) -> (i32, serde_json::Value) {
+        let path = CString::new(path.to_str().expect("UTF-8 test path")).expect("path CString");
+        let key = key.map(|value| CString::new(value).expect("key CString"));
+        let mut state_json = ptr::null_mut();
+        // SAFETY: All pointers remain valid for the duration of this direct ABI
+        // call, and the returned CString is consumed below exactly once.
+        let value = unsafe {
+            maho_core_vault_preflight_state(
+                core,
+                path.as_ptr(),
+                key.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+                key.is_some(),
+                &mut state_json,
+            )
+        };
+        assert!(!state_json.is_null());
+        // SAFETY: The ABI returned ownership of one Rust CString.
+        let state_json = unsafe { CString::from_raw(state_json) };
+        let payload = serde_json::from_str(state_json.to_str().expect("UTF-8 state JSON"))
+            .expect("valid state JSON");
+        (value, payload)
+    }
+
+    #[test]
+    fn vault_preflight_export_preserves_every_typed_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let healthy_path = dir.path().join("healthy.db");
+        create_encrypted_database(&healthy_path);
+
+        let locked_path = dir.path().join("locked.db");
+        let storage = SqliteStorage::open_with_key(
+            locked_path.to_str().expect("UTF-8 test path"),
+            DATABASE_KEY,
+        )
+        .expect("create locked profile database");
+        let mut manager = VaultManager::new();
+        let now = Utc.with_ymd_and_hms(2026, 8, 12, 12, 0, 0).unwrap();
+        let slots = manager
+            .initialize(MASTER_PASSPHRASE, RECOVERY_SECRET, now)
+            .expect("create valid wrapped-key slots");
+        for (slot, payload) in [
+            ("kdf_params", slots.kdf_params),
+            ("wrapped_user_key", slots.wrapped_user_key),
+            ("wrapped_recovery_key", slots.wrapped_recovery_key),
+        ] {
+            storage
+                .save_vault_metadata(&VaultMetadataRow {
+                    slot: slot.to_string(),
+                    schema_version: 1,
+                    payload,
+                    updated_at: now.to_rfc3339(),
+                })
+                .expect("persist wrapped-key slot");
+        }
+        drop(storage);
+
+        let lost_key_path = dir.path().join("lost-key.db");
+        create_encrypted_database(&lost_key_path);
+
+        let corrupt_path = dir.path().join("corrupt.db");
+        std::fs::write(&corrupt_path, b"not a sqlite or sqlcipher database")
+            .expect("write corrupt database fixture");
+
+        let residue_path = dir.path().join("residue.db");
+        create_encrypted_database(&residue_path);
+        std::fs::write(
+            residue_path.with_extension("db.plain_backup"),
+            b"stale plaintext backup residue",
+        )
+        .expect("write plaintext residue marker");
+
+        let mut core = MahoCore::new();
+        for (path, key, expected_value, expected_name) in [
+            (healthy_path.as_path(), Some(DATABASE_KEY), 0, "healthy"),
+            (locked_path.as_path(), Some(DATABASE_KEY), 1, "locked"),
+            (lost_key_path.as_path(), None, 2, "unrecoverableKey"),
+            (
+                corrupt_path.as_path(),
+                Some(DATABASE_KEY),
+                3,
+                "structuralCorruption",
+            ),
+            (
+                residue_path.as_path(),
+                Some(DATABASE_KEY),
+                4,
+                "plaintextResidue",
+            ),
+        ] {
+            let (value, payload) = call_preflight_export(&mut core, path, key);
+            assert_eq!(value, expected_value);
+            assert_eq!(payload["state"], expected_name);
+            assert_eq!(payload["value"], expected_value);
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn maho_core_new() -> *mut MahoCore {
     ffi_safe!(
@@ -303,6 +534,7 @@ pub unsafe extern "C" fn maho_core_free(ptr: *mut MahoCore) {
     ffi_safe!(
         {
             if !ptr.is_null() {
+                remove_routine_run_registry(ptr);
                 let mut core = Box::from_raw(ptr);
                 core.handle_event(maho_types::events::shell_event::ShellEvent::AppWillTerminate);
                 drop(core);
@@ -658,6 +890,37 @@ pub unsafe extern "C" fn maho_core_tick(ptr: *mut MahoCore) -> *mut c_char {
             }
             let core = &mut *ptr;
             let updates = core.tick();
+            process_split_callbacks_for_updates(&updates);
+            to_json_cstring(&updates)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Deterministic sibling of `maho_core_tick`: drives `MahoCore::tick_at` with
+/// a caller-supplied timestamp instead of the wall clock. This is the test
+/// seam the native scheduler hook (`MahoRoutinesScheduler::RunTickForTesting`)
+/// uses to exercise Vault inactivity auto-lock without real time.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_tick_at(ptr: *mut MahoCore, now_sec: i64) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let Some(now) = chrono::DateTime::<chrono::Utc>::from_timestamp(now_sec, 0) else {
+                return ptr::null_mut();
+            };
+            let core = &mut *ptr;
+            let updates = core.tick_at(now);
             process_split_callbacks_for_updates(&updates);
             to_json_cstring(&updates)
         },
@@ -1668,6 +1931,7 @@ pub unsafe extern "C" fn maho_core_add_password(
                     },
                     username: username.to_string(),
                     password: zeroize::Zeroizing::new(pass),
+                    form_details: None,
                 };
                 core.vault_add_login(input).is_ok()
             } else {
@@ -1723,6 +1987,7 @@ pub unsafe extern "C" fn maho_core_update_password_username(
                 metadata,
                 username: username.to_string(),
                 password: None,
+                form_details: None,
             };
             core.vault_update_login(item_id, item.revision, update)
                 .is_ok()
@@ -7900,6 +8165,25 @@ pub unsafe extern "C" fn maho_core_get_sync_key(ptr: *mut MahoCore) -> *mut c_ch
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// Caller must free the returned string with `maho_string_free`.
 #[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sync_room_id(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            core.get_sync_room_id()
+                .and_then(|room_id| CString::new(room_id).ok())
+                .map_or(ptr::null_mut(), CString::into_raw)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
 pub unsafe extern "C" fn maho_core_get_sync_auth_token(ptr: *mut MahoCore) -> *mut c_char {
     ffi_safe!(
         {
@@ -7940,6 +8224,32 @@ pub unsafe extern "C" fn maho_core_handle_incoming_websocket_message(
             };
             match core.handle_incoming_websocket_message(json_str) {
                 Ok(_) => 0,
+                Err(_) => -1,
+            }
+        },
+        -1
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `envelope_json` must be a valid C string containing a V2 sync envelope.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_handle_incoming_sync_envelope(
+    ptr: *mut MahoCore,
+    envelope_json: *const c_char,
+) -> i32 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || envelope_json.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            let envelope_json = match CStr::from_ptr(envelope_json).to_str() {
+                Ok(value) => value,
+                Err(_) => return -1,
+            };
+            match (&mut *ptr).handle_incoming_sync_envelope(envelope_json) {
+                Ok(()) => 0,
                 Err(_) => -1,
             }
         },
@@ -8035,6 +8345,30 @@ pub unsafe extern "C" fn maho_core_generate_sync_key(ptr: *mut MahoCore) -> *mut
 
 /// # Safety
 /// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_generate_sync_bootstrap(
+    ptr: *mut MahoCore,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            CString::new(core.generate_sync_bootstrap())
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
 /// `server_url` must be a valid null-terminated C string.
 /// `recovery_phrase` must be a valid null-terminated C string.
 /// Caller must free the returned string with `maho_string_free`.
@@ -8113,6 +8447,52 @@ pub unsafe extern "C" fn maho_core_configure_sync_encryption(
                 .to_string(),
             };
             CString::new(json)
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `server_url` and `bootstrap_seed` must be valid null-terminated C strings.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_configure_sync_bootstrap(
+    ptr: *mut MahoCore,
+    server_url: *const c_char,
+    bootstrap_seed: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || server_url.is_null() || bootstrap_seed.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &mut *ptr;
+            let url = match CStr::from_ptr(server_url).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let seed = match CStr::from_ptr(bootstrap_seed).to_str() {
+                Ok(value) => value,
+                Err(_) => return ptr::null_mut(),
+            };
+            let json = match core.configure_sync_encryption_from_bootstrap(url, seed) {
+                Ok(room_id) => serde_json::json!({
+                    "success": true,
+                    "roomId": room_id,
+                    "deviceId": core.sync_device_id()
+                }),
+                Err(error) => serde_json::json!({
+                    "success": false,
+                    "error": error
+                }),
+            };
+            CString::new(json.to_string())
                 .map(CString::into_raw)
                 .unwrap_or(ptr::null_mut())
         },
@@ -8318,6 +8698,81 @@ pub unsafe extern "C" fn maho_core_ack_sync_entity(
     )
 }
 
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `delivery_id` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_ack_sync_delivery(
+    ptr: *mut MahoCore,
+    delivery_id: *const c_char,
+    relay_seq: u64,
+) -> bool {
+    ffi_safe!(
+        {
+            if ptr.is_null() || delivery_id.is_null() || import_gate::is_active() {
+                return false;
+            }
+            let delivery_id = match CStr::from_ptr(delivery_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            (&*ptr)
+                .ack_sync_delivery(delivery_id, relay_seq)
+                .unwrap_or(false)
+        },
+        false
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `ack_json` must be a valid C string containing a relay V2 ACK.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_accept_sync_ack(
+    ptr: *mut MahoCore,
+    ack_json: *const c_char,
+) -> i32 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || ack_json.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            let ack_json = match CStr::from_ptr(ack_json).to_str() {
+                Ok(value) => value,
+                Err(_) => return -1,
+            };
+            match (&*ptr).accept_sync_ack(ack_json) {
+                Ok(true) => 0,
+                Ok(false) | Err(_) => -1,
+            }
+        },
+        -1
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+/// `room_id` must be a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_sync_receive_cursor(
+    ptr: *mut MahoCore,
+    room_id: *const c_char,
+) -> u64 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || room_id.is_null() || import_gate::is_active() {
+                return 0;
+            }
+            let room_id = match CStr::from_ptr(room_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return 0,
+            };
+            (&*ptr).get_sync_receive_cursor(room_id).unwrap_or(0)
+        },
+        0
+    )
+}
+
 /// Apply incoming entity batch from server.
 /// `entities_json` is a JSON array of SyncEntity objects.
 /// Returns JSON array of actually-applied entities.
@@ -8376,6 +8831,26 @@ pub unsafe extern "C" fn maho_core_drain_outgoing(ptr: *mut MahoCore) -> *mut c_
             let core = &mut *ptr;
             let messages = core.drain_sync_outgoing();
             to_json_cstring(&messages)
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `ptr` must be valid.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_drain_outgoing_envelopes(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let envelopes = match (&mut *ptr).drain_sync_outgoing_envelopes() {
+                Ok(envelopes) => envelopes,
+                Err(_) => return ptr::null_mut(),
+            };
+            to_json_cstring(&envelopes)
         },
         ptr::null_mut()
     )
@@ -9396,6 +9871,9 @@ pub unsafe extern "C" fn maho_core_chat_register_tool(
 pub unsafe extern "C" fn maho_core_chat_set_event_sink(
     ptr: *mut maho_core::chat_session::ChatSession,
     on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
+    on_thinking: Option<
+        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
+    >,
     on_complete: Option<
         unsafe extern "C" fn(
             user_data: *mut std::ffi::c_void,
@@ -9414,6 +9892,7 @@ pub unsafe extern "C" fn maho_core_chat_set_event_sink(
             let session = &mut *ptr;
             let sink = maho_core::chat_session::MahoChatEventSink {
                 on_token,
+                on_thinking,
                 on_complete,
                 on_error,
                 user_data,
@@ -9656,7 +10135,9 @@ pub unsafe extern "C" fn maho_core_list_conversations(
             }
             let core = &*core;
             let conversations = if let Some(storage) = core.storage_ref() {
-                storage.list_conversations(limit).unwrap_or_default()
+                storage
+                    .list_conversations(maho_types::chat::ConversationListState::Active, limit)
+                    .unwrap_or_default()
             } else {
                 return empty;
             };
@@ -9818,6 +10299,402 @@ pub unsafe extern "C" fn maho_core_rename_conversation(
                 Err(_) => return false,
             };
             core.rename_conversation_persisted(id_str, title_str)
+        },
+        false
+    )
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationListQuery {
+    #[serde(default)]
+    state: maho_types::chat::ConversationListState,
+    #[serde(default = "default_conversation_limit")]
+    limit: usize,
+}
+fn default_conversation_limit() -> usize {
+    100
+}
+#[derive(serde::Deserialize)]
+struct ConversationBulkRequest {
+    op: maho_types::chat::ConversationBulkOperation,
+    ids: Vec<String>,
+}
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationMoveRequest {
+    ids: Vec<String>,
+    project_id: Option<String>,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_list_conversations_v2(
+    core: *mut MahoCore,
+    query_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || query_json.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let query = match CStr::from_ptr(query_json)
+                .to_str()
+                .ok()
+                .and_then(|s| serde_json::from_str::<ConversationListQuery>(s).ok())
+            {
+                Some(q) if q.limit > 0 => q,
+                _ => return ptr::null_mut(),
+            };
+            let rows = match (&*core).list_conversations(query.state, query.limit) {
+                Ok(v) => v,
+                Err(_) => return ptr::null_mut(),
+            };
+            CString::new(serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into()))
+                .map_or(ptr::null_mut(), CString::into_raw)
+        },
+        ptr::null_mut()
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_archive_conversation(
+    core: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || id.is_null() || import_gate::is_active() {
+                return false;
+            }
+            CStr::from_ptr(id)
+                .to_str()
+                .ok()
+                .is_some_and(|id| (&mut *core).archive_conversation_persisted(id))
+        },
+        false
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_unarchive_conversation(
+    core: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || id.is_null() || import_gate::is_active() {
+                return false;
+            }
+            CStr::from_ptr(id)
+                .to_str()
+                .ok()
+                .is_some_and(|id| (&mut *core).unarchive_conversation_persisted(id))
+        },
+        false
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_active_conversation_ids(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            CString::new(serde_json::to_string(&(&*core).active_conversation_ids()).unwrap())
+                .unwrap()
+                .into_raw()
+        },
+        ptr::null_mut()
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_apply_conversation_bulk_operation(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || request_json.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let req = match CStr::from_ptr(request_json)
+                .to_str()
+                .ok()
+                .and_then(|s| serde_json::from_str::<ConversationBulkRequest>(s).ok())
+            {
+                Some(v) => v,
+                None => return ptr::null_mut(),
+            };
+            let now = chrono::Utc::now().to_rfc3339();
+            let value = match (&mut *core).apply_conversation_bulk_operation(req.op, req.ids, &now)
+            {
+                Ok(v) => serde_json::to_value(v).unwrap(),
+                Err(v) => v,
+            };
+            CString::new(value.to_string()).unwrap().into_raw()
+        },
+        ptr::null_mut()
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_conversation_auto_archive_policy(
+    core: *mut MahoCore,
+) -> i32 {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            (&*core)
+                .get_conversation_auto_archive_policy()
+                .unwrap_or(-1)
+        },
+        -1
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_conversation_auto_archive_policy(
+    core: *mut MahoCore,
+    days: i32,
+) -> bool {
+    ffi_safe!(
+        {
+            !core.is_null()
+                && !import_gate::is_active()
+                && (&*core).set_conversation_auto_archive_policy(days)
+        },
+        false
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_auto_archive_conversations(
+    core: *mut MahoCore,
+    now_sec: i64,
+) -> i32 {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            match (&mut *core).auto_archive_conversations(now_sec) {
+                Ok(Some(n)) => i32::try_from(n).unwrap_or(-1),
+                Ok(None) => -2,
+                Err(_) => -1,
+            }
+        },
+        -1
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_list_conversation_projects(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            CString::new(serde_json::to_string(&(&*core).list_conversation_projects()).unwrap())
+                .unwrap()
+                .into_raw()
+        },
+        ptr::null_mut()
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_create_conversation_project(
+    core: *mut MahoCore,
+    name: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || name.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let p = CStr::from_ptr(name)
+                .to_str()
+                .ok()
+                .and_then(|n| (&mut *core).create_conversation_project_persisted(n));
+            p.and_then(|p| CString::new(serde_json::to_string(&p).ok()?).ok())
+                .map_or(ptr::null_mut(), CString::into_raw)
+        },
+        ptr::null_mut()
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_rename_conversation_project(
+    core: *mut MahoCore,
+    id: *const c_char,
+    name: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || id.is_null() || name.is_null() || import_gate::is_active() {
+                return false;
+            }
+            match (CStr::from_ptr(id).to_str(), CStr::from_ptr(name).to_str()) {
+                (Ok(id), Ok(name)) => (&mut *core).rename_conversation_project_persisted(id, name),
+                _ => false,
+            }
+        },
+        false
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_delete_conversation_project(
+    core: *mut MahoCore,
+    id: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || id.is_null() || import_gate::is_active() {
+                return false;
+            }
+            CStr::from_ptr(id)
+                .to_str()
+                .ok()
+                .is_some_and(|id| (&mut *core).delete_conversation_project_persisted(id))
+        },
+        false
+    )
+}
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_move_conversations_to_project(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || request_json.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let req = match CStr::from_ptr(request_json)
+                .to_str()
+                .ok()
+                .and_then(|s| serde_json::from_str::<ConversationMoveRequest>(s).ok())
+            {
+                Some(v) => v,
+                None => return ptr::null_mut(),
+            };
+            match (&mut *core)
+                .move_conversations_to_project_persisted(req.ids, req.project_id.as_deref())
+            {
+                Ok(v) => CString::new(serde_json::to_string(&v).unwrap())
+                    .unwrap()
+                    .into_raw(),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+// ============================================================
+// Composer draft FFI functions
+// Drafts are device/profile-local (settings table), never synced.
+// Scope JSON: {"kind":"new_task"} | {"kind":"conversation","conversationId":"<id>"}
+// ============================================================
+
+/// Read the composer draft for `scope_json`.
+///
+/// Returns a JSON string `{"version":1,"text":...,"updatedAt":<RFC3339>}` on success, or
+/// null when the scope is malformed, no draft exists, the stored value is corrupt, or the
+/// scope names a conversation that no longer exists (the orphan row is purged in that case).
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`, or null (returns null);
+/// `scope_json` must be a valid NUL-terminated C string or null (returns null).
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_composer_draft(
+    core: *mut MahoCore,
+    scope_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || scope_json.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*core;
+            let scope = match CStr::from_ptr(scope_json).to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            match core.get_composer_draft(scope) {
+                Some(json) => match CString::new(json) {
+                    Ok(c) => c.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                },
+                None => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Write the composer draft for `scope_json`. Empty `text` deletes the draft.
+/// Text is stored verbatim; the timestamp is assigned natively. Returns true on success,
+/// false on malformed scope, null input, missing storage, or storage error.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `scope_json` and `text`
+/// must be valid NUL-terminated C strings (null returns false).
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_composer_draft(
+    core: *mut MahoCore,
+    scope_json: *const c_char,
+    text: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || scope_json.is_null() || text.is_null() {
+                return false;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return false;
+            }
+            let core = &*core;
+            let scope = match CStr::from_ptr(scope_json).to_str() {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            let text_str = match CStr::from_ptr(text).to_str() {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            core.set_composer_draft(scope, text_str)
+        },
+        false
+    )
+}
+
+/// Delete the composer draft for `scope_json`. Deleting an absent draft succeeds.
+/// Returns false on malformed scope, null input, missing storage, or storage error.
+///
+/// # Safety
+/// `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `scope_json` must be a
+/// valid NUL-terminated C string (null returns false).
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_delete_composer_draft(
+    core: *mut MahoCore,
+    scope_json: *const c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || scope_json.is_null() {
+                return false;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return false;
+            }
+            let core = &*core;
+            let scope = match CStr::from_ptr(scope_json).to_str() {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            core.delete_composer_draft(scope)
         },
         false
     )
@@ -10168,6 +11045,7 @@ pub struct MahoAgentSession {
         ) -> MahoAgentToolResult,
     >,
     session_id: String,
+    active_conversation_registry: Arc<Mutex<std::collections::HashMap<String, usize>>>,
     core: std::ptr::NonNull<MahoCore>,
     workspace_root: std::path::PathBuf,
     active_space_id: Option<String>,
@@ -10179,6 +11057,38 @@ pub struct MahoAgentSession {
         unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
     >,
     artifact_created_user_data: usize,
+}
+
+struct ActiveConversationGuard {
+    registry: Arc<Mutex<std::collections::HashMap<String, usize>>>,
+    session_id: String,
+}
+
+impl ActiveConversationGuard {
+    fn new(
+        registry: Arc<Mutex<std::collections::HashMap<String, usize>>>,
+        session_id: String,
+    ) -> Self {
+        let mut sessions = registry.lock().unwrap_or_else(|e| e.into_inner());
+        *sessions.entry(session_id.clone()).or_insert(0) += 1;
+        drop(sessions);
+        Self {
+            registry,
+            session_id,
+        }
+    }
+}
+
+impl Drop for ActiveConversationGuard {
+    fn drop(&mut self) {
+        let mut sessions = self.registry.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = sessions.get_mut(&self.session_id) {
+            *count -= 1;
+            if *count == 0 {
+                sessions.remove(&self.session_id);
+            }
+        }
+    }
 }
 
 fn apply_agent_skill_system_prompt(session: &MahoAgentSession, runtime: &SwiftideBackend) {
@@ -10392,6 +11302,8 @@ pub struct MahoAgentToolResult {
     pub json_ptr: *mut std::os::raw::c_char,
     pub error_ptr: *mut std::os::raw::c_char,
     pub free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char)>,
+    pub error_code_ptr: *mut std::os::raw::c_char,
+    pub error_retryable: bool,
 }
 
 struct FfiBrowserToolBridge {
@@ -10407,51 +11319,521 @@ struct FfiBrowserToolBridge {
     _turn_callback_lease: Option<Arc<TurnCallbackLease>>,
 }
 
-impl maho_agent::BrowserToolBridge for FfiBrowserToolBridge {
-    fn invoke(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        let name_c = match CString::new(tool_name) {
-            Ok(s) => s,
-            Err(e) => return Err(format!("Invalid tool_name UTF-8: {e}")),
-        };
-        let args_c = match CString::new(args_json) {
-            Ok(s) => s,
-            Err(e) => return Err(format!("Invalid args_json UTF-8: {e}")),
-        };
-        let cb = self.cb.0;
-        let ud = self.user_data.0 as *mut std::ffi::c_void;
-        let result = unsafe { cb(ud, name_c.as_ptr(), args_c.as_ptr()) };
+impl FfiBrowserToolBridge {
+    fn call_browser_callback(
+        &self,
+        request: &str,
+        args_json: &str,
+    ) -> Result<String, maho_agent::BrowserToolBridgeError> {
+        let request = CString::new(request).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new(
+                "invalid_request",
+                format!("browser callback request contains NUL: {error}"),
+                false,
+            )
+        })?;
+        let args = CString::new(args_json).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new(
+                "invalid_arguments",
+                format!("browser callback arguments contain NUL: {error}"),
+                false,
+            )
+        })?;
+        let callback = self.cb.0;
+        let user_data = self.user_data.0 as *mut std::ffi::c_void;
+        // SAFETY: the callback and user data remain owned by the session/turn
+        // lease, and both C strings remain live for the duration of this call.
+        let result = unsafe { callback(user_data, request.as_ptr(), args.as_ptr()) };
 
-        let json_opt = if !result.json_ptr.is_null() {
-            let s = unsafe { CStr::from_ptr(result.json_ptr) }
+        let read_and_free = |pointer: *mut c_char| {
+            if pointer.is_null() {
+                return None;
+            }
+            // SAFETY: the embedder transfers one NUL-terminated allocation in
+            // each non-null result field. Copy it before invoking its matching
+            // deallocator exactly once.
+            let value = unsafe { CStr::from_ptr(pointer) }
                 .to_string_lossy()
                 .into_owned();
             if let Some(free_fn) = result.free_fn {
-                unsafe {
-                    free_fn(result.json_ptr);
-                }
+                // SAFETY: `free_fn` is the deallocator supplied for this result.
+                unsafe { free_fn(pointer) };
             }
-            Some(s)
-        } else {
-            None
+            Some(value)
         };
-        let err_opt = if !result.error_ptr.is_null() {
-            let s = unsafe { CStr::from_ptr(result.error_ptr) }
-                .to_string_lossy()
-                .into_owned();
-            if let Some(free_fn) = result.free_fn {
-                unsafe {
-                    free_fn(result.error_ptr);
-                }
-            }
-            Some(s)
-        } else {
-            None
-        };
-        match (json_opt, err_opt) {
-            (_, Some(err)) => Err(err),
+        let json = read_and_free(result.json_ptr);
+        let error = read_and_free(result.error_ptr);
+        let error_code = read_and_free(result.error_code_ptr);
+
+        match (json, error) {
+            (_, Some(message)) => Err(maho_agent::BrowserToolBridgeError::new(
+                error_code.as_deref().unwrap_or("callback_error"),
+                message,
+                error_code.is_none() || result.error_retryable,
+            )),
             (Some(json), None) => Ok(json),
-            (None, None) => Err("Browser tool returned no result".to_string()),
+            (None, None) => Err(maho_agent::BrowserToolBridgeError::new(
+                "bridge_offline",
+                "browser callback returned no result",
+                true,
+            )),
         }
+    }
+}
+
+fn decode_ffi_browser_descriptors(
+    response_json: &str,
+) -> Result<Vec<maho_agent::BrowserToolDescriptor>, maho_agent::BrowserToolBridgeError> {
+    let response: serde_json::Value = serde_json::from_str(response_json).map_err(|error| {
+        maho_agent::BrowserToolBridgeError::new(
+            "malformed_discovery",
+            format!("browser tools/list returned invalid JSON: {error}"),
+            false,
+        )
+    })?;
+    let tools = response.get("tools").cloned().ok_or_else(|| {
+        maho_agent::BrowserToolBridgeError::new(
+            "malformed_discovery",
+            "browser tools/list response is missing typed tools",
+            false,
+        )
+    })?;
+    serde_json::from_value(tools).map_err(|error| {
+        maho_agent::BrowserToolBridgeError::new(
+            "malformed_discovery",
+            format!("browser tools/list returned invalid descriptors: {error}"),
+            false,
+        )
+    })
+}
+
+fn decode_ffi_browser_execution(
+    capability_id: &str,
+    response_json: &str,
+) -> Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError> {
+    let result: serde_json::Value = serde_json::from_str(response_json).map_err(|error| {
+        maho_agent::BrowserToolBridgeError::new(
+            "malformed_execution",
+            format!("browser execution returned invalid JSON: {error}"),
+            false,
+        )
+    })?;
+    let is_typed_envelope = result
+        .as_object()
+        .is_some_and(|object| object.contains_key("outputJson") || object.contains_key("receipt"));
+    if is_typed_envelope {
+        let execution = serde_json::from_value::<maho_agent::BrowserToolExecution>(result)
+            .map_err(|error| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "malformed_execution",
+                    format!("browser execution returned an invalid typed receipt: {error}"),
+                    false,
+                )
+            })?;
+        if execution.receipt.capability_id != capability_id {
+            return Err(maho_agent::BrowserToolBridgeError::new(
+                "receipt_mismatch",
+                "browser execution receipt capability does not match the requested capability",
+                false,
+            ));
+        }
+        if execution.receipt.execution_id.trim().is_empty() {
+            return Err(maho_agent::BrowserToolBridgeError::new(
+                "malformed_execution",
+                "browser execution receipt is missing an execution ID",
+                false,
+            ));
+        }
+        return Ok(execution);
+    }
+
+    let output_json = serde_json::to_string(&result).map_err(|error| {
+        maho_agent::BrowserToolBridgeError::new(
+            "malformed_execution",
+            format!("browser execution result could not be serialized: {error}"),
+            false,
+        )
+    })?;
+    Ok(maho_agent::BrowserToolExecution {
+        output_json,
+        receipt: maho_agent::BrowserToolExecutionReceipt {
+            capability_id: capability_id.to_string(),
+            execution_id: uuid::Uuid::new_v4().to_string(),
+            metadata: serde_json::json!({"source": "maho-desktop-ffi-legacy-result"}),
+        },
+    })
+}
+
+#[async_trait::async_trait]
+impl maho_agent::BrowserToolBridge for FfiBrowserToolBridge {
+    async fn list_tool_descriptors(
+        &self,
+    ) -> Result<Vec<maho_agent::BrowserToolDescriptor>, maho_agent::BrowserToolBridgeError> {
+        let response = self.call_browser_callback("tools/list", "{}")?;
+        decode_ffi_browser_descriptors(&response)
+    }
+
+    async fn execute_tool(
+        &self,
+        capability_id: &str,
+        args_json: &str,
+    ) -> Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError> {
+        serde_json::from_str::<serde_json::Value>(args_json).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new(
+                "invalid_arguments",
+                format!("browser tool arguments are not valid JSON: {error}"),
+                false,
+            )
+        })?;
+        let response = self.call_browser_callback(capability_id, args_json)?;
+        decode_ffi_browser_execution(capability_id, &response)
+    }
+}
+
+#[cfg(test)]
+mod ffi_browser_tool_bridge_tests {
+    use super::*;
+    use maho_agent::BrowserToolBridge;
+    use std::collections::VecDeque;
+
+    #[derive(Default)]
+    struct FakeBrowserCallback {
+        responses: std::sync::Mutex<VecDeque<Result<String, String>>>,
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    unsafe extern "C" fn free_fake_result(pointer: *mut c_char) {
+        if !pointer.is_null() {
+            // SAFETY: every fake result pointer is created by CString::into_raw
+            // below and returned to the bridge exactly once.
+            drop(unsafe { CString::from_raw(pointer) });
+        }
+    }
+
+    unsafe extern "C" fn fake_browser_callback(
+        user_data: *mut c_void,
+        request: *const c_char,
+        args_json: *const c_char,
+    ) -> MahoAgentToolResult {
+        if user_data.is_null() || request.is_null() || args_json.is_null() {
+            return MahoAgentToolResult {
+                json_ptr: ptr::null_mut(),
+                error_ptr: ptr::null_mut(),
+                free_fn: Some(free_fake_result),
+                error_code_ptr: ptr::null_mut(),
+                error_retryable: false,
+            };
+        }
+        // SAFETY: the test bridge passes this context and live C strings.
+        let context = unsafe { &*(user_data as *const FakeBrowserCallback) };
+        let request = unsafe { CStr::from_ptr(request) }
+            .to_string_lossy()
+            .into_owned();
+        let args_json = unsafe { CStr::from_ptr(args_json) }
+            .to_string_lossy()
+            .into_owned();
+        context
+            .calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((request, args_json));
+        let response = context
+            .responses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front();
+        let mut result = MahoAgentToolResult {
+            json_ptr: ptr::null_mut(),
+            error_ptr: ptr::null_mut(),
+            free_fn: Some(free_fake_result),
+            error_code_ptr: ptr::null_mut(),
+            error_retryable: false,
+        };
+        match response {
+            Some(Ok(json)) => {
+                result.json_ptr = CString::new(json)
+                    .map(CString::into_raw)
+                    .unwrap_or(ptr::null_mut());
+            }
+            Some(Err(error)) => {
+                result.error_ptr = CString::new(error)
+                    .map(CString::into_raw)
+                    .unwrap_or(ptr::null_mut());
+            }
+            None => {}
+        }
+        result
+    }
+
+    fn bridge_with_responses(
+        responses: impl IntoIterator<Item = Result<serde_json::Value, String>>,
+    ) -> (FfiBrowserToolBridge, Box<FakeBrowserCallback>) {
+        let context = Box::new(FakeBrowserCallback {
+            responses: std::sync::Mutex::new(
+                responses
+                    .into_iter()
+                    .map(|response| response.map(|value| value.to_string()))
+                    .collect(),
+            ),
+            calls: std::sync::Mutex::new(Vec::new()),
+        });
+        let bridge = FfiBrowserToolBridge {
+            cb: SendableCallback(fake_browser_callback),
+            user_data: SendableUserData((&*context as *const FakeBrowserCallback) as usize),
+            _session_callback_lease: None,
+            _turn_callback_lease: None,
+        };
+        (bridge, context)
+    }
+
+    fn descriptor(capability_id: &str, name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "capabilityId": capability_id,
+            "name": name,
+            "description": format!("Desktop {name}"),
+            "inputSchema": {"type": "object", "additionalProperties": false},
+            "schemaVersion": 1,
+            "policy": {"sensitive": false, "permission": "auto_approve"}
+        })
+    }
+
+    #[tokio::test]
+    async fn desktop_discovery_requests_tools_list_and_decodes_two_descriptors() {
+        let (bridge, context) = bridge_with_responses([Ok(serde_json::json!({
+            "tools": [
+                descriptor("browser.tabs.list", "browser_list_tabs"),
+                descriptor("browser.page.read", "browser_read_page")
+            ]
+        }))]);
+
+        let descriptors = bridge
+            .list_tool_descriptors()
+            .await
+            .expect("typed discovery succeeds");
+        assert_eq!(descriptors.len(), 2);
+        assert_eq!(descriptors[0].capability_id, "browser.tabs.list");
+        assert_eq!(descriptors[1].name, "browser_read_page");
+        assert_eq!(
+            *context
+                .calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![("tools/list".to_string(), "{}".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn desktop_discovery_fails_closed_on_malformed_or_missing_metadata() {
+        for malformed in [
+            serde_json::json!({"tools": [descriptor("browser.tabs.list", "browser_list_tabs"), {"name": "missing_metadata"}]}),
+            serde_json::json!({"notTools": []}),
+        ] {
+            let (bridge, _context) = bridge_with_responses([Ok(malformed)]);
+            let error = bridge
+                .list_tool_descriptors()
+                .await
+                .expect_err("malformed discovery is rejected");
+            assert_eq!(error.code, "malformed_discovery");
+            assert!(!error.retryable);
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_execution_uses_canonical_capability_id_and_preserves_typed_receipt() {
+        let (bridge, context) = bridge_with_responses([Ok(serde_json::json!({
+            "outputJson": "{\"ok\":true}",
+            "receipt": {
+                "capabilityId": "browser.tabs.list",
+                "executionId": "desktop-execution-1",
+                "metadata": {"source": "desktop"}
+            }
+        }))]);
+
+        let execution = bridge
+            .execute_tool("browser.tabs.list", r#"{"windowId":7}"#)
+            .await
+            .expect("typed execution succeeds");
+        assert_eq!(execution.receipt.execution_id, "desktop-execution-1");
+        assert_eq!(
+            *context
+                .calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            vec![(
+                "browser.tabs.list".to_string(),
+                r#"{"windowId":7}"#.to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn desktop_execution_rejects_receipt_mismatch_and_malformed_typed_metadata() {
+        for (response, expected_code) in [
+            (
+                serde_json::json!({
+                    "outputJson": "{}",
+                    "receipt": {
+                        "capabilityId": "browser.page.read",
+                        "executionId": "wrong-capability",
+                        "metadata": {}
+                    }
+                }),
+                "receipt_mismatch",
+            ),
+            (
+                serde_json::json!({
+                    "outputJson": "{}",
+                    "receipt": {
+                        "capabilityId": "browser.tabs.list",
+                        "executionId": "missing-metadata"
+                    }
+                }),
+                "malformed_execution",
+            ),
+        ] {
+            let (bridge, _context) = bridge_with_responses([Ok(response)]);
+            let error = bridge
+                .execute_tool("browser.tabs.list", "{}")
+                .await
+                .expect_err("invalid typed receipt is rejected");
+            assert_eq!(error.code, expected_code);
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_execution_wraps_legacy_raw_result_with_safe_boundary_receipt() {
+        let (bridge, _context) =
+            bridge_with_responses([Ok(serde_json::json!({"tabs": [{"id": 7}]}))]);
+        let execution = bridge
+            .execute_tool("browser.tabs.list", "{}")
+            .await
+            .expect("legacy result remains compatible");
+
+        assert_eq!(execution.receipt.capability_id, "browser.tabs.list");
+        assert!(!execution.receipt.execution_id.is_empty());
+        assert_eq!(
+            execution.receipt.metadata,
+            serde_json::json!({"source": "maho-desktop-ffi-legacy-result"})
+        );
+        assert_eq!(execution.output_json, r#"{"tabs":[{"id":7}]}"#);
+    }
+
+    static TYPED_ERROR_FREE_COUNT: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    unsafe extern "C" fn free_typed_error_result(pointer: *mut c_char) {
+        if !pointer.is_null() {
+            TYPED_ERROR_FREE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // SAFETY: each field is independently allocated with CString::into_raw.
+            drop(unsafe { CString::from_raw(pointer) });
+        }
+    }
+
+    unsafe extern "C" fn typed_policy_error_browser_callback(
+        _user_data: *mut c_void,
+        _request: *const c_char,
+        _args_json: *const c_char,
+    ) -> MahoAgentToolResult {
+        MahoAgentToolResult {
+            json_ptr: ptr::null_mut(),
+            error_ptr: CString::new("Browser action denied by approval policy")
+                .expect("test error contains no NUL")
+                .into_raw(),
+            free_fn: Some(free_typed_error_result),
+            error_code_ptr: CString::new("policy_denied")
+                .expect("test code contains no NUL")
+                .into_raw(),
+            error_retryable: false,
+        }
+    }
+
+    unsafe extern "C" fn typed_transport_error_browser_callback(
+        _user_data: *mut c_void,
+        _request: *const c_char,
+        _args_json: *const c_char,
+    ) -> MahoAgentToolResult {
+        MahoAgentToolResult {
+            json_ptr: ptr::null_mut(),
+            error_ptr: CString::new("Browser callback transport is unavailable")
+                .expect("test error contains no NUL")
+                .into_raw(),
+            free_fn: Some(free_typed_error_result),
+            error_code_ptr: CString::new("transport_unavailable")
+                .expect("test code contains no NUL")
+                .into_raw(),
+            error_retryable: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_callback_preserves_typed_error_kind_and_frees_every_field() {
+        for (callback, expected_code, expected_retryable) in [
+            (
+                typed_policy_error_browser_callback
+                    as unsafe extern "C" fn(
+                        *mut c_void,
+                        *const c_char,
+                        *const c_char,
+                    ) -> MahoAgentToolResult,
+                "policy_denied",
+                false,
+            ),
+            (
+                typed_transport_error_browser_callback
+                    as unsafe extern "C" fn(
+                        *mut c_void,
+                        *const c_char,
+                        *const c_char,
+                    ) -> MahoAgentToolResult,
+                "transport_unavailable",
+                true,
+            ),
+        ] {
+            TYPED_ERROR_FREE_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+            let bridge = FfiBrowserToolBridge {
+                cb: SendableCallback(callback),
+                user_data: SendableUserData(0),
+                _session_callback_lease: None,
+                _turn_callback_lease: None,
+            };
+
+            let error = bridge
+                .execute_tool("browser.click", "{}")
+                .await
+                .expect_err("typed callback error propagates");
+            assert_eq!(error.code, expected_code);
+            assert_eq!(error.retryable, expected_retryable);
+            assert_eq!(
+                TYPED_ERROR_FREE_COUNT.load(std::sync::atomic::Ordering::SeqCst),
+                2,
+                "message and code allocations must each be freed exactly once"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_callback_error_and_empty_result_fail_closed() {
+        let (error_bridge, _context) =
+            bridge_with_responses([Err("desktop callback unavailable".to_string())]);
+        let error = error_bridge
+            .list_tool_descriptors()
+            .await
+            .expect_err("callback error propagates");
+        assert_eq!(error.code, "callback_error");
+        assert!(error.retryable);
+
+        let (offline_bridge, _context) = bridge_with_responses([]);
+        let error = offline_bridge
+            .list_tool_descriptors()
+            .await
+            .expect_err("empty callback result is offline");
+        assert_eq!(error.code, "bridge_offline");
+        assert!(error.retryable);
+    }
+
+    #[test]
+    fn missing_desktop_callback_installs_no_browser_bridge() {
+        assert!(leased_browser_tool_bridge(None, ptr::null_mut(), &None).is_none());
     }
 }
 
@@ -10797,6 +12179,7 @@ unsafe fn maho_agent_create_session_impl(
                 runtime.set_active_space_id(Some(sid.clone()));
             }
 
+            core_ref.mark_conversation_session_active(&sid);
             let session = Box::new(MahoAgentSession {
                 runtime,
                 isolation,
@@ -10807,6 +12190,7 @@ unsafe fn maho_agent_create_session_impl(
                 permission_callback: session_permission_callback,
                 browser_tool_callback: session_browser_tool_callback,
                 session_id: sid,
+                active_conversation_registry: core_ref.active_conversation_registry(),
                 core: core_ptr,
                 workspace_root: session_workspace_root,
                 active_space_id,
@@ -10945,6 +12329,9 @@ pub unsafe extern "C" fn maho_agent_session_free(session: *mut MahoAgentSession)
             if !session.is_null() {
                 let session_ref = &*session;
                 session_ref.accepted_leased_turns.signal_current();
+                // SAFETY: the core pointer is required to outlive every agent session.
+                unsafe { session_ref.core.as_ref() }
+                    .mark_conversation_session_inactive(&session_ref.session_id);
                 let runtime = Arc::clone(&session_ref.runtime);
                 let session_id = session_ref.session_id.clone();
                 let isolation = Arc::clone(&session_ref.isolation);
@@ -11075,7 +12462,12 @@ unsafe fn maho_agent_send_message_impl(
                                 }
                             }
                         }
-                        maho_agent::AgentStreamEvent::ToolResult { id, name, result, succeeded } => {
+                        maho_agent::AgentStreamEvent::ToolResult {
+                            id,
+                            name,
+                            result,
+                            succeeded,
+                        } => {
                             if let Some(cb) = on_tool_result_sendable.0 {
                                 if let (Ok(id_c), Ok(name_c), Ok(result_c)) =
                                     (CString::new(id), CString::new(name), CString::new(result))
@@ -11123,7 +12515,13 @@ unsafe fn maho_agent_send_message_impl(
                 callback_lease.arm();
             }
 
+            let active_guard = ActiveConversationGuard::new(
+                Arc::clone(&session.active_conversation_registry),
+                session_id.clone(),
+            );
+
             let fut = async move {
+                let _active_guard = active_guard;
                 let user_chat_msg = maho_types::chat::ChatMessage::user(
                     maho_types::chat::ChatContent::text(msg_str),
                 );
@@ -11374,7 +12772,13 @@ pub unsafe extern "C" fn maho_agent_send_message_simple(
             let on_error = SendableCallback(on_error);
             let user_data_val = SendableUserData(user_data as usize);
 
+            let active_guard = ActiveConversationGuard::new(
+                Arc::clone(&session.active_conversation_registry),
+                session_id.clone(),
+            );
+
             let fut = async move {
+                let _active_guard = active_guard;
                 let user_chat_msg = maho_types::chat::ChatMessage::user(
                     maho_types::chat::ChatContent::text(msg_str),
                 );
@@ -11463,6 +12867,35 @@ pub unsafe extern "C" fn maho_agent_set_approval_policy(
             if let Ok(p) = CStr::from_ptr(policy).to_str() {
                 session.runtime.set_approval_policy(p.to_string());
             }
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer to a `MahoAgentSession`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_set_mail_authorization_state(
+    session: *mut MahoAgentSession,
+    feature_enabled: bool,
+    helper_ready: bool,
+    helper_starting: bool,
+    read_allowed: bool,
+) {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return;
+            }
+            let session = &*session;
+            session
+                .runtime
+                .set_mail_authorization_state(maho_agent::MailAuthorizationState {
+                    feature_enabled,
+                    helper_ready,
+                    helper_starting,
+                    read_allowed,
+                });
         },
         ()
     )
@@ -12435,6 +13868,244 @@ pub unsafe extern "C" fn maho_account_get_tier(core: *mut MahoCore) -> i32 {
 // Routines FFI
 // ============================================================
 
+type RoutineStatusCb = unsafe extern "C" fn(*mut c_void, *const c_char);
+
+#[derive(Clone)]
+struct RoutineStatusCallback {
+    token: u64,
+    core: usize,
+    user_data: usize,
+    callback: RoutineStatusCb,
+    lease: FfiArc<CallbackLease>,
+}
+
+static ROUTINE_RUN_REGISTRIES: OnceLock<
+    StdMutex<HashMap<usize, FfiArc<maho_core::routine_runs::RoutineRunRegistry>>>,
+> = OnceLock::new();
+static ROUTINE_STATUS_CALLBACKS: OnceLock<StdMutex<Vec<RoutineStatusCallback>>> = OnceLock::new();
+
+fn routine_status_callbacks() -> &'static StdMutex<Vec<RoutineStatusCallback>> {
+    ROUTINE_STATUS_CALLBACKS.get_or_init(|| StdMutex::new(Vec::new()))
+}
+
+fn routine_run_registry(
+    core: *mut MahoCore,
+) -> FfiArc<maho_core::routine_runs::RoutineRunRegistry> {
+    let key = core as usize;
+    let registries = ROUTINE_RUN_REGISTRIES.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut registries = registries
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(registry) = registries.get(&key) {
+        return FfiArc::clone(registry);
+    }
+    let registry = FfiArc::new(maho_core::routine_runs::RoutineRunRegistry::default());
+    registry.add_observer(FfiArc::new(move |status| {
+        let json = match serde_json::to_string(status)
+            .ok()
+            .and_then(|json| CString::new(json).ok())
+        {
+            Some(json) => json,
+            None => return,
+        };
+        let callbacks = routine_status_callbacks()
+            .lock()
+            .map(|callbacks| {
+                callbacks
+                    .iter()
+                    .filter(|entry| entry.core == key)
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for entry in callbacks {
+            let Some(_invocation) = entry.lease.enter(entry.token) else {
+                continue;
+            };
+            unsafe {
+                (entry.callback)(entry.user_data as *mut c_void, json.as_ptr());
+            }
+        }
+    }));
+    registries.insert(key, FfiArc::clone(&registry));
+    registry
+}
+
+fn remove_routine_run_registry(core: *mut MahoCore) {
+    let key = core as usize;
+    if let Some(registries) = ROUTINE_RUN_REGISTRIES.get() {
+        registries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&key);
+    }
+    let removed = routine_status_callbacks()
+        .lock()
+        .map(|mut callbacks| {
+            let mut removed = Vec::new();
+            let mut index = 0;
+            while index < callbacks.len() {
+                if callbacks[index].core == key {
+                    removed.push(callbacks.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            removed
+        })
+        .unwrap_or_default();
+    for entry in removed {
+        entry.lease.remove_and_wait(entry.token);
+    }
+}
+
+fn validate_routine_start(
+    core: *mut MahoCore,
+    id: &str,
+    tier: maho_core::routines::UserTier,
+) -> Result<String, String> {
+    if tier != maho_core::routines::UserTier::Max {
+        return Err("Routines are available on Max tier only".to_string());
+    }
+    let db_path = unsafe { &*core }
+        .sqlite_db_path()
+        .map(str::to_string)
+        .ok_or_else(|| "Routine storage unavailable".to_string())?;
+    let storage = maho_storage::sqlite::SqliteStorage::open(&db_path)
+        .map_err(|error| format!("Failed to open storage: {error}"))?;
+    let exists = maho_core::routines::list_all_routines(&storage)
+        .map_err(|error| error.to_string())?
+        .iter()
+        .any(|routine| routine.id == id);
+    if !exists {
+        return Err(format!("No routine found with id: {id}"));
+    }
+    Ok(db_path)
+}
+
+fn spawn_tracked_routine(
+    core: *mut MahoCore,
+    id: String,
+    tier: maho_core::routines::UserTier,
+    source: maho_core::routines::RoutineRunSource,
+    on_complete: SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char)>>,
+    on_error: SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char)>>,
+    user_data: SendableUserData,
+) -> Result<maho_core::routine_runs::RoutineRunStatus, String> {
+    let db_path = validate_routine_start(core, &id, tier)?;
+    let registry = routine_run_registry(core);
+    let queued = registry.begin(&id, source);
+    let queued_for_worker = queued.clone();
+    maho_core::memory_manager::get_runtime().spawn_blocking(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(error) => {
+                let message = format!("Failed to build runtime: {error}");
+                let _ = registry.mark_setup_failed(&queued_for_worker.run_id, message.clone());
+                if let Some(callback) = on_error.0 {
+                    if let Ok(error) = CString::new(message) {
+                        unsafe { callback(user_data.0 as *mut c_void, error.as_ptr()) };
+                    }
+                }
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    let message = format!("Failed to open storage: {error}");
+                    let _ = registry.mark_setup_failed(&queued_for_worker.run_id, message.clone());
+                    if let Some(callback) = on_error.0 {
+                        if let Ok(error) = CString::new(message) {
+                            unsafe { callback(user_data.0 as *mut c_void, error.as_ptr()) };
+                        }
+                    }
+                    return;
+                }
+            };
+            let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+            let approval_registry = FfiArc::clone(&registry);
+            let approval_run_id = queued_for_worker.run_id.clone();
+            let permission_callback: maho_agent::PermissionCallback = Box::new(move |request| {
+                let registry = FfiArc::clone(&approval_registry);
+                let run_id = approval_run_id.clone();
+                Box::pin(async move {
+                    if request.sensitivity != maho_agent::ToolSensitivity::Sensitive {
+                        return maho_agent::PermissionDecision::Allow;
+                    }
+                    match registry.request_approval(
+                        &run_id,
+                        request.tool_name,
+                        request.sensitivity.as_str().to_string(),
+                    ) {
+                        Ok(waiter) => {
+                            if waiter.await {
+                                maho_agent::PermissionDecision::Allow
+                            } else {
+                                maho_agent::PermissionDecision::Deny
+                            }
+                        }
+                        Err(_) => maho_agent::PermissionDecision::Deny,
+                    }
+                })
+            });
+            let backend = SwiftideBackend::new(
+                Arc::new(agent_storage),
+                Some(permission_callback),
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                true,
+            );
+            let resolve_storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                Ok(storage) => storage,
+                Err(error) => {
+                    let message = format!("Failed to open storage: {error}");
+                    let _ = registry.mark_setup_failed(&queued_for_worker.run_id, message.clone());
+                    if let Some(callback) = on_error.0 {
+                        if let Ok(error) = CString::new(message) {
+                            unsafe { callback(user_data.0 as *mut c_void, error.as_ptr()) };
+                        }
+                    }
+                    return;
+                }
+            };
+            let result = maho_core::routines::run_routine_and_record_tracked(
+                &id,
+                tier,
+                &resolve_storage,
+                source,
+                |prompt| async move { backend.run_prompt(&prompt).await.map_err(|e| e.to_string()) },
+                &registry,
+                queued_for_worker,
+            )
+            .await;
+            match result {
+                Ok(result) => {
+                    if let Some(callback) = on_complete.0 {
+                        if let Some(json) = serde_json::to_string(&result)
+                            .ok()
+                            .and_then(|json| CString::new(json).ok())
+                        {
+                            unsafe { callback(user_data.0 as *mut c_void, json.as_ptr()) };
+                        }
+                    }
+                }
+                Err(error) => {
+                    if let Some(callback) = on_error.0 {
+                        if let Ok(error) = CString::new(error.to_string()) {
+                            unsafe { callback(user_data.0 as *mut c_void, error.as_ptr()) };
+                        }
+                    }
+                }
+            }
+        });
+    });
+    Ok(queued)
+}
+
 /// Returns JSON array of all hardcoded routines.
 /// Caller must free with `maho_string_free`.
 ///
@@ -12479,12 +14150,8 @@ pub unsafe extern "C" fn maho_routines_run(
             if core.is_null() || id.is_null() {
                 return -1;
             }
-            let db_path = match (&*core).sqlite_db_path() {
-                Some(p) => p.to_string(),
-                None => return -1,
-            };
-            let id_str = match CStr::from_ptr(id).to_str() {
-                Ok(s) => s.to_string(),
+            let id = match CStr::from_ptr(id).to_str() {
+                Ok(id) => id.to_string(),
                 Err(_) => return -1,
             };
             let tier = match user_tier {
@@ -12493,104 +14160,160 @@ pub unsafe extern "C" fn maho_routines_run(
                 2 => maho_core::routines::UserTier::Max,
                 _ => return -1,
             };
-
-            let on_complete_cb = SendableCallback(on_complete);
-            let on_error_cb = SendableCallback(on_error);
-            let user_data_val = SendableUserData(user_data as usize);
-
-            // Dispatch onto the shared, owned maho-core runtime instead of the ambient
-            // runtime. `maho_routines_run` is called from the Chromium C++ browser
-            // thread which has NO ambient tokio runtime; a bare `tokio::spawn` there
-            // panics and the routine silently never executes.
-            //
-            // `run_routine_resolved` borrows a `!Send` SqliteStorage across an await, so
-            // it cannot ride the shared multi-threaded runtime via `spawn` (which
-            // requires `Send`). Run it on a dedicated current-thread runtime pinned to a
-            // `spawn_blocking` thread: the future is created and driven entirely on that
-            // one thread and never migrates, so no `Send` bound is imposed and no panic
-            // can cross the FFI boundary.
-            maho_core::memory_manager::get_runtime().spawn_blocking(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        eprintln!("[maho_routines_run] failed to build runtime: {e}");
-                        return;
-                    }
-                };
-                rt.block_on(async move {
-                    let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            if let Some(cb) = on_error_cb.0 {
-                                let err_c = CString::new(format!("Failed to open storage: {e}"))
-                                    .unwrap_or_else(|_| CString::new("error").unwrap());
-                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
-                            }
-                            return;
-                        }
-                    };
-                    let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
-                    let backend = SwiftideBackend::new(
-                        Arc::new(agent_storage),
-                        None,
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                        true,
-                    );
-
-                    // Resolution needs its own read handle: the agent's storage was moved
-                    // into the backend above. Route through `run_routine_resolved` so that
-                    // user-defined custom recipes are runnable in addition to built-ins.
-                    let resolve_storage = match maho_storage::sqlite::SqliteStorage::open(&db_path)
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            if let Some(cb) = on_error_cb.0 {
-                                let err_c = CString::new(format!("Failed to open storage: {e}"))
-                                    .unwrap_or_else(|_| CString::new("error").unwrap());
-                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
-                            }
-                            return;
-                        }
-                    };
-
-                    let result = maho_core::routines::run_routine_and_record(
-                        &id_str,
-                        tier,
-                        &resolve_storage,
-                        maho_core::routines::RoutineRunSource::Manual,
-                        |prompt| async move {
-                            backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
-                        },
-                    )
-                    .await;
-
-                    match result {
-                        Ok(res) => {
-                            if let Some(cb) = on_complete_cb.0 {
-                                let json = serde_json::to_string(&res).unwrap_or_default();
-                                let json_c = CString::new(json)
-                                    .unwrap_or_else(|_| CString::new("{}").unwrap());
-                                cb(user_data_val.0 as *mut std::ffi::c_void, json_c.as_ptr());
-                            }
-                        }
-                        Err(e) => {
-                            if let Some(cb) = on_error_cb.0 {
-                                let err_c = CString::new(e.to_string())
-                                    .unwrap_or_else(|_| CString::new("error").unwrap());
-                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
-                            }
-                        }
-                    }
-                });
-            });
-
-            0
+            match spawn_tracked_routine(
+                core,
+                id,
+                tier,
+                maho_core::routines::RoutineRunSource::Manual,
+                SendableCallback(on_complete),
+                SendableCallback(on_error),
+                SendableUserData(user_data as usize),
+            ) {
+                Ok(_) => 0,
+                Err(_) => -1,
+            }
         },
         -1
     )
+}
+
+/// Start a manual routine and return its queued status JSON immediately.
+/// Caller owns the returned string and must free it with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_start(
+    core: *mut MahoCore,
+    id: *const c_char,
+    user_tier: i32,
+    source: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || id.is_null() || source.is_null() {
+                return ptr::null_mut();
+            }
+            let id = match CStr::from_ptr(id).to_str() {
+                Ok(id) => id.to_string(),
+                Err(_) => return ptr::null_mut(),
+            };
+            let source = match CStr::from_ptr(source).to_str() {
+                Ok("manual") => maho_core::routines::RoutineRunSource::Manual,
+                Ok("scheduled") => maho_core::routines::RoutineRunSource::Scheduled,
+                Ok("event") => maho_core::routines::RoutineRunSource::Event,
+                _ => return ptr::null_mut(),
+            };
+            let tier = match user_tier {
+                0 => maho_core::routines::UserTier::Free,
+                1 => maho_core::routines::UserTier::Pro,
+                2 => maho_core::routines::UserTier::Max,
+                _ => return ptr::null_mut(),
+            };
+            match spawn_tracked_routine(
+                core,
+                id,
+                tier,
+                source,
+                SendableCallback(None),
+                SendableCallback(None),
+                SendableUserData(0),
+            ) {
+                Ok(status) => to_json_cstring(&status),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Return every routine run known to this browser process, including terminal
+/// runs. This is the initial snapshot paired with status callbacks.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_respond_to_approval(
+    core: *mut MahoCore,
+    run_id: *const c_char,
+    approval_id: *const c_char,
+    approved: bool,
+) -> bool {
+    ffi_safe!(
+        {
+            if core.is_null() || run_id.is_null() || approval_id.is_null() {
+                return false;
+            }
+            let run_id = match CStr::from_ptr(run_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            let approval_id = match CStr::from_ptr(approval_id).to_str() {
+                Ok(value) => value,
+                Err(_) => return false,
+            };
+            routine_run_registry(core).respond_to_approval(run_id, approval_id, approved)
+        },
+        false
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_active_runs(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return ptr::null_mut();
+            }
+            to_json_cstring(&routine_run_registry(core).snapshot())
+        },
+        ptr::null_mut()
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_register_status_callback(
+    core: *mut MahoCore,
+    user_data: *mut c_void,
+    callback: RoutineStatusCb,
+) -> u64 {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return 0;
+            }
+            let _ = routine_run_registry(core);
+            let token = NEXT_CALLBACK_TOKEN.fetch_add(1, Ordering::SeqCst);
+            routine_status_callbacks()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(RoutineStatusCallback {
+                    token,
+                    core: core as usize,
+                    user_data: user_data as usize,
+                    callback,
+                    lease: FfiArc::new(CallbackLease::default()),
+                });
+            token
+        },
+        0
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_unregister_status_callback(core: *mut MahoCore, token: u64) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if core.is_null() || token == 0 {
+            return;
+        }
+        let core_key = core as usize;
+        let removed = routine_status_callbacks()
+            .lock()
+            .ok()
+            .and_then(|mut callbacks| {
+                callbacks
+                    .iter()
+                    .position(|entry| entry.core == core_key && entry.token == token)
+                    .map(|index| callbacks.remove(index))
+            });
+        if let Some(entry) = removed {
+            entry.lease.remove_and_wait(token);
+        }
+    }));
 }
 
 // ============================================================
@@ -12821,6 +14544,7 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                 Some(p) => p.to_string(),
                 None => return,
             };
+            let registry = routine_run_registry(core);
 
             // Dispatch onto the shared, owned maho-core runtime (see `maho_routines_run`
             // for the no-ambient-runtime rationale). `fire_event_routines` borrows a
@@ -12846,33 +14570,61 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                             return;
                         }
                     };
-                    // Separate handle backing the agent's own memory/session storage.
-                    let agent_storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
-                        Ok(s) => MutexAgentStorage(Arc::new(Mutex::new(s))),
-                        Err(e) => {
-                            eprintln!(
-                                "[maho_routines_fire_event] failed to open agent storage: {e}"
-                            );
-                            return;
-                        }
+                    // `fire_event_routines` may run several routines, so each run owns a
+                    // backend whose permission callback is keyed to that run id.
+                    let runner = |prompt: String, run_id: String| {
+                        let agent_storage =
+                            match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                                Ok(storage) => MutexAgentStorage(Arc::new(Mutex::new(storage))),
+                                Err(error) => {
+                                    return Box::pin(async move { Err(error.to_string()) })
+                                        as Pin<Box<dyn Future<Output = Result<String, String>>>>;
+                                }
+                            };
+                        let approval_registry = FfiArc::clone(&registry);
+                        let permission_callback: maho_agent::PermissionCallback =
+                            Box::new(move |request| {
+                                let registry = FfiArc::clone(&approval_registry);
+                                let run_id = run_id.clone();
+                                Box::pin(async move {
+                                    if request.sensitivity != maho_agent::ToolSensitivity::Sensitive
+                                    {
+                                        return maho_agent::PermissionDecision::Allow;
+                                    }
+                                    match registry.request_approval(
+                                        &run_id,
+                                        request.tool_name,
+                                        request.sensitivity.as_str().to_string(),
+                                    ) {
+                                        Ok(waiter) => {
+                                            if waiter.await {
+                                                maho_agent::PermissionDecision::Allow
+                                            } else {
+                                                maho_agent::PermissionDecision::Deny
+                                            }
+                                        }
+                                        Err(_) => maho_agent::PermissionDecision::Deny,
+                                    }
+                                })
+                            });
+                        let backend = SwiftideBackend::new(
+                            Arc::new(agent_storage),
+                            Some(permission_callback),
+                            std::env::current_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                            true,
+                        );
+                        Box::pin(async move {
+                            backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
+                        })
+                            as Pin<Box<dyn Future<Output = Result<String, String>>>>
                     };
-                    let backend = Arc::new(SwiftideBackend::new(
-                        Arc::new(agent_storage),
-                        None,
-                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-                        true,
-                    ));
-                    // `fire_event_routines` requires `Fn` (it may run several routines), so
-                    // clone the shared backend into each per-routine future.
-                    let runner = |prompt: String| {
-                        let backend = backend.clone();
-                        async move { backend.run_prompt(&prompt).await.map_err(|e| e.to_string()) }
-                    };
-                    if let Err(e) = maho_core::routines::fire_event_routines(
+                    if let Err(e) = maho_core::routines::fire_event_routines_tracked(
                         event,
                         maho_core::routines::UserTier::Max,
                         &storage,
                         runner,
+                        &registry,
                     )
                     .await
                     {
@@ -12951,6 +14703,9 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                     // Fire the routine asynchronously via the existing run_routine mechanism
                     let id_str = routine.id.to_string();
                     let db_path_clone = db_path.clone();
+                    let registry = routine_run_registry(core);
+                    let queued =
+                        registry.begin(&id_str, maho_core::routines::RoutineRunSource::Scheduled);
 
                     // Spawn onto the shared, owned maho-core runtime. `maho_routines_tick`
                     // is called once/minute from the Chromium C++ browser thread which has
@@ -12971,7 +14726,9 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                         {
                             Ok(rt) => rt,
                             Err(e) => {
-                                eprintln!("[routines scheduled] failed to build runtime: {e}");
+                                let message = format!("Failed to build runtime: {e}");
+                                let _ = registry.mark_setup_failed(&queued.run_id, message.clone());
+                                eprintln!("[routines scheduled] {message}");
                                 return;
                             }
                         };
@@ -12980,10 +14737,10 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                                 match maho_storage::sqlite::SqliteStorage::open(&db_path_clone) {
                                     Ok(s) => s,
                                     Err(e) => {
-                                        eprintln!(
-                                        "[routines scheduled] failed to open sqlite storage: {:?}",
-                                        e
-                                    );
+                                        let message = format!("Failed to open sqlite storage: {e}");
+                                        let _ = registry
+                                            .mark_setup_failed(&queued.run_id, message.clone());
+                                        eprintln!("[routines scheduled] {message}");
                                         return;
                                     }
                                 };
@@ -12993,23 +14750,51 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                                 match maho_storage::sqlite::SqliteStorage::open(&db_path_clone) {
                                     Ok(s) => s,
                                     Err(e) => {
-                                        eprintln!(
-                                        "[routines scheduled] failed to open record storage: {:?}",
-                                        e
-                                    );
+                                        let message = format!("Failed to open record storage: {e}");
+                                        let _ = registry
+                                            .mark_setup_failed(&queued.run_id, message.clone());
+                                        eprintln!("[routines scheduled] {message}");
                                         return;
                                     }
                                 };
                             let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
+                            let approval_registry = FfiArc::clone(&registry);
+                            let approval_run_id = queued.run_id.clone();
+                            let permission_callback: maho_agent::PermissionCallback =
+                                Box::new(move |request| {
+                                    let registry = FfiArc::clone(&approval_registry);
+                                    let run_id = approval_run_id.clone();
+                                    Box::pin(async move {
+                                        if request.sensitivity
+                                            != maho_agent::ToolSensitivity::Sensitive
+                                        {
+                                            return maho_agent::PermissionDecision::Allow;
+                                        }
+                                        match registry.request_approval(
+                                            &run_id,
+                                            request.tool_name,
+                                            request.sensitivity.as_str().to_string(),
+                                        ) {
+                                            Ok(waiter) => {
+                                                if waiter.await {
+                                                    maho_agent::PermissionDecision::Allow
+                                                } else {
+                                                    maho_agent::PermissionDecision::Deny
+                                                }
+                                            }
+                                            Err(_) => maho_agent::PermissionDecision::Deny,
+                                        }
+                                    })
+                                });
                             let backend = SwiftideBackend::new(
                                 Arc::new(agent_storage),
-                                None,
+                                Some(permission_callback),
                                 std::env::current_dir()
                                     .unwrap_or_else(|_| std::path::PathBuf::from(".")),
                                 true,
                             );
 
-                            let result = maho_core::routines::run_routine_and_record(
+                            let result = maho_core::routines::run_routine_and_record_tracked(
                                 &id_str,
                                 maho_core::routines::UserTier::Max,
                                 &record_storage,
@@ -13017,6 +14802,8 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                                 |prompt| async move {
                                     backend.run_prompt(&prompt).await.map_err(|e| e.to_string())
                                 },
+                                &registry,
+                                queued,
                             )
                             .await;
 
@@ -13677,6 +15464,219 @@ impl GoogleSignInSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RoutineStatusTestContext {
+        events: std::sync::Mutex<Vec<serde_json::Value>>,
+    }
+
+    unsafe extern "C" fn record_routine_status(user_data: *mut c_void, json: *const c_char) {
+        let context = unsafe { &*(user_data as *const RoutineStatusTestContext) };
+        let json = unsafe { CStr::from_ptr(json) }
+            .to_str()
+            .expect("status utf8");
+        context
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(serde_json::from_str(json).expect("status json"));
+    }
+
+    #[test]
+    fn routine_status_callback_unregister_stops_delivery_and_is_core_scoped() {
+        let core = maho_core_new();
+        let other_core = maho_core_new();
+        assert!(!core.is_null());
+        assert!(!other_core.is_null());
+        let context = Box::new(RoutineStatusTestContext {
+            events: std::sync::Mutex::new(Vec::new()),
+        });
+        let context_ptr = Box::into_raw(context);
+        let token = unsafe {
+            maho_routines_register_status_callback(core, context_ptr.cast(), record_routine_status)
+        };
+        assert_ne!(token, 0);
+
+        let registry = routine_run_registry(core);
+        let first = registry.begin("r", maho_core::routines::RoutineRunSource::Manual);
+        registry.mark_running(&first.run_id).expect("running");
+        assert_eq!(
+            unsafe {
+                (*context_ptr)
+                    .events
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len()
+            },
+            2
+        );
+
+        // A token cannot be removed through a different core.
+        unsafe { maho_routines_unregister_status_callback(other_core, token) };
+        registry
+            .mark_succeeded(&first.run_id, "done".to_string())
+            .expect("succeeded");
+        assert_eq!(
+            unsafe {
+                (*context_ptr)
+                    .events
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len()
+            },
+            3
+        );
+
+        unsafe { maho_routines_unregister_status_callback(core, token) };
+        let _second = registry.begin("r", maho_core::routines::RoutineRunSource::Event);
+        let events = unsafe {
+            (*context_ptr)
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        };
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0]["state"], "queued");
+        assert_eq!(events[1]["state"], "running");
+        assert_eq!(events[2]["state"], "succeeded");
+
+        unsafe {
+            drop(Box::from_raw(context_ptr));
+            maho_core_free(other_core);
+            maho_core_free(core);
+        }
+    }
+
+    #[test]
+    fn routine_approval_ffi_rejects_stale_ids_and_resolves_current_id() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        let registry = routine_run_registry(core);
+        let queued = registry.begin("r", maho_core::routines::RoutineRunSource::Manual);
+        registry.mark_running(&queued.run_id).expect("running");
+        let waiter = registry
+            .request_approval(
+                &queued.run_id,
+                "browser_type".to_string(),
+                "sensitive".to_string(),
+            )
+            .expect("awaiting approval");
+        let approval_id = registry.snapshot()[0]
+            .approval
+            .as_ref()
+            .expect("approval")
+            .approval_id
+            .clone();
+        let run_id = CString::new(queued.run_id.clone()).expect("run id");
+        let wrong_id = CString::new("wrong").expect("wrong id");
+        let approval_id_c = CString::new(approval_id.clone()).expect("approval id");
+
+        assert!(!unsafe {
+            maho_routines_respond_to_approval(core, run_id.as_ptr(), wrong_id.as_ptr(), true)
+        });
+        assert_eq!(registry.snapshot()[0].revision, 3);
+        assert!(unsafe {
+            maho_routines_respond_to_approval(core, run_id.as_ptr(), approval_id_c.as_ptr(), true)
+        });
+        assert!(maho_core::memory_manager::get_runtime().block_on(waiter));
+        assert_eq!(
+            registry.snapshot()[0].state,
+            maho_core::routine_runs::RoutineRunState::Running
+        );
+        assert!(!unsafe {
+            maho_routines_respond_to_approval(core, run_id.as_ptr(), approval_id_c.as_ptr(), false)
+        });
+        assert_eq!(registry.snapshot()[0].revision, 4);
+
+        unsafe { maho_core_free(core) };
+    }
+
+    #[test]
+    fn routine_active_runs_ffi_returns_owned_snapshot_json() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        let queued = routine_run_registry(core)
+            .begin("routine-id", maho_core::routines::RoutineRunSource::Manual);
+
+        let snapshot = unsafe { maho_routines_active_runs(core) };
+        assert!(!snapshot.is_null());
+        let json = unsafe { CStr::from_ptr(snapshot) }
+            .to_str()
+            .expect("snapshot utf8")
+            .to_owned();
+        unsafe { maho_string_free(snapshot) };
+        let runs: Vec<serde_json::Value> = serde_json::from_str(&json).expect("snapshot json");
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0]["runId"], queued.run_id);
+        assert_eq!(runs[0]["routineId"], "routine-id");
+        assert_eq!(runs[0]["state"], "queued");
+        assert!(unsafe { maho_routines_active_runs(ptr::null_mut()) }.is_null());
+
+        unsafe { maho_core_free(core) };
+    }
+
+    struct BlockingRoutineStatusContext {
+        entered: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    unsafe extern "C" fn block_routine_status(user_data: *mut c_void, _json: *const c_char) {
+        let context = unsafe { &*(user_data as *const BlockingRoutineStatusContext) };
+        context.entered.send(()).expect("entered signal");
+        context
+            .release
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .recv()
+            .expect("release signal");
+    }
+
+    #[test]
+    fn routine_status_unregister_waits_for_in_flight_callback() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let context = Box::new(BlockingRoutineStatusContext {
+            entered: entered_tx,
+            release: std::sync::Mutex::new(release_rx),
+        });
+        let context_ptr = Box::into_raw(context);
+        let token = unsafe {
+            maho_routines_register_status_callback(core, context_ptr.cast(), block_routine_status)
+        };
+        assert_ne!(token, 0);
+
+        let registry = routine_run_registry(core);
+        let publish = std::thread::spawn(move || {
+            registry.begin("r", maho_core::routines::RoutineRunSource::Manual);
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("callback entered");
+
+        let core_key = core as usize;
+        let (unregistered_tx, unregistered_rx) = std::sync::mpsc::sync_channel(1);
+        let unregister = std::thread::spawn(move || {
+            unsafe { maho_routines_unregister_status_callback(core_key as *mut MahoCore, token) };
+            unregistered_tx.send(()).expect("unregistered signal");
+        });
+        assert!(unregistered_rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_err());
+        release_tx.send(()).expect("release callback");
+        unregistered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("unregister completed");
+        publish.join().expect("publisher completed");
+        unregister.join().expect("unregister completed");
+
+        unsafe {
+            drop(Box::from_raw(context_ptr));
+            maho_core_free(core);
+        }
+    }
 
     struct SelfUnregisterContext {
         core: usize,
@@ -14929,6 +16929,33 @@ struct VaultFfiResponse<T> {
     error: Option<VaultFfiError>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultMutationResult {
+    id: VaultItemId,
+    #[serde(serialize_with = "serialize_vault_revision_as_decimal_string")]
+    revision: VaultRevision,
+}
+
+impl From<VaultItemPublicDto> for VaultMutationResult {
+    fn from(item: VaultItemPublicDto) -> Self {
+        Self {
+            id: item.id,
+            revision: item.revision,
+        }
+    }
+}
+
+fn serialize_vault_revision_as_decimal_string<S>(
+    revision: &VaultRevision,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&revision.value().to_string())
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultInitializeRequest {
@@ -14954,25 +16981,90 @@ struct VaultLoginRequest {
     metadata: VaultItemPublicMetadata,
     username: String,
     password: String,
+    /// Task 4: optional browser-form detail persisted inside the encrypted
+    /// record so a Chromium `PasswordForm` round-trips. Absent for callers that
+    /// have no form context (settings, importers).
+    #[serde(default)]
+    form_details: Option<maho_core::vault_manager::VaultCredentialFormDetails>,
+}
+
+fn deserialize_vault_revision<'de, D>(deserializer: D) -> Result<VaultRevision, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct VaultRevisionVisitor;
+
+    impl serde::de::Visitor<'_> for VaultRevisionVisitor {
+        type Value = VaultRevision;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a non-negative integer or canonical unsigned decimal string")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+            Ok(VaultRevision::new(value))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u64::try_from(value)
+                .map(VaultRevision::new)
+                .map_err(|_| E::custom("Vault revision must not be negative"))
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let canonical = value == "0"
+                || (!value.starts_with('0')
+                    && !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_digit()));
+            if !canonical {
+                return Err(E::custom(
+                    "Vault revision must be a canonical unsigned decimal string",
+                ));
+            }
+            value
+                .parse::<u64>()
+                .map(VaultRevision::new)
+                .map_err(|_| E::custom("Vault revision is out of range"))
+        }
+    }
+
+    deserializer.deserialize_any(VaultRevisionVisitor)
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VaultLoginUpdateRequest {
     id: VaultItemId,
-    #[serde(default, alias = "expected_revision")]
+    #[serde(
+        default,
+        alias = "expected_revision",
+        deserialize_with = "deserialize_vault_revision"
+    )]
     expected_revision: VaultRevision,
     metadata: VaultItemPublicMetadata,
     username: String,
     #[serde(default)]
     password: Option<String>,
+    /// Absent leaves the stored form detail untouched; present replaces it.
+    #[serde(default)]
+    form_details: Option<maho_core::vault_manager::VaultCredentialFormDetails>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct VaultDeleteRequest {
     id: VaultItemId,
-    #[serde(default, alias = "expected_revision")]
+    #[serde(
+        default,
+        alias = "expected_revision",
+        deserialize_with = "deserialize_vault_revision"
+    )]
     expected_revision: VaultRevision,
 }
 
@@ -15360,6 +17452,7 @@ pub unsafe extern "C" fn maho_vault_add_login_json(
                 metadata: request.metadata,
                 username: request.username,
                 password: zeroize::Zeroizing::new(request.password),
+                form_details: request.form_details,
             };
             match core.vault_add_login(input) {
                 Ok(item) => vault_ok(item),
@@ -15477,6 +17570,7 @@ pub unsafe extern "C" fn maho_vault_update_login_json(
                 metadata: request.metadata,
                 username: request.username,
                 password: request.password.map(zeroize::Zeroizing::new),
+                form_details: request.form_details,
             };
             match core.vault_update_login(request.id, request.expected_revision, update) {
                 Ok(item) => vault_ok(item),
@@ -15599,6 +17693,116 @@ mod vault_ffi_tests {
         CString::new(value.to_string()).expect("test JSON contains no NUL")
     }
 
+    fn update_request_with_revision(revision: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id": VaultItemId::new(),
+            "expectedRevision": revision,
+            "metadata": {
+                "title": "Revision Test",
+                "origins": ["https://revision.example"],
+                "usernameHint": "revision@example.test",
+                "itemKind": "login",
+                "totp": null,
+                "passkey": null
+            },
+            "username": "revision@example.test"
+        })
+    }
+
+    fn delete_request_with_revision(revision: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id": VaultItemId::new(),
+            "expectedRevision": revision
+        })
+    }
+
+    #[test]
+    fn vault_mutation_requests_accept_string_and_legacy_numeric_revisions() {
+        for value in [
+            serde_json::json!(u64::MAX.to_string()),
+            serde_json::json!(42),
+        ] {
+            let update: VaultLoginUpdateRequest =
+                serde_json::from_value(update_request_with_revision(value.clone()))
+                    .expect("update request accepts supported revision encoding");
+            let delete: VaultDeleteRequest =
+                serde_json::from_value(delete_request_with_revision(value))
+                    .expect("delete request accepts supported revision encoding");
+            let expected = if update.expected_revision.value() == u64::MAX {
+                u64::MAX
+            } else {
+                42
+            };
+            assert_eq!(update.expected_revision.value(), expected);
+            assert_eq!(delete.expected_revision.value(), expected);
+        }
+    }
+
+    #[test]
+    fn vault_mutation_results_expose_lossless_identity() {
+        let (core, path) = core_with_storage();
+        let init = initialize_request();
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+
+        let add = add_login_request();
+        let added = read_owned_json(unsafe { maho_vault_add_login_json(core, add.as_ptr()) });
+        assert_eq!(added["ok"], true);
+        let id = added["data"]["id"]
+            .as_str()
+            .expect("add mutation result carries UUID")
+            .to_string();
+        assert_eq!(added["data"]["revision"], "1");
+
+        let update = request(serde_json::json!({
+            "id": id,
+            "expectedRevision": "1",
+            "metadata": {
+                "title": "Updated Example",
+                "origins": ["https://example.com"],
+                "usernameHint": "ignored-by-core",
+                "itemKind": "login",
+                "totp": null,
+                "passkey": null
+            },
+            "username": "person@example.com",
+            "password": null
+        }));
+        let updated =
+            read_owned_json(unsafe { maho_vault_update_login_json(core, update.as_ptr()) });
+        assert_eq!(updated["ok"], true);
+        assert_eq!(updated["data"]["id"], id);
+        assert_eq!(updated["data"]["revision"], "2");
+
+        free_core(core, &path);
+    }
+
+    #[test]
+    fn vault_mutation_requests_reject_invalid_revision_encodings() {
+        let invalid = [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("not-a-number"),
+            serde_json::json!("-1"),
+            serde_json::json!("1.5"),
+            serde_json::json!("01"),
+            serde_json::json!("18446744073709551616"),
+        ];
+
+        for value in invalid {
+            assert!(serde_json::from_value::<VaultLoginUpdateRequest>(
+                update_request_with_revision(value.clone())
+            )
+            .is_err());
+            assert!(
+                serde_json::from_value::<VaultDeleteRequest>(delete_request_with_revision(value))
+                    .is_err()
+            );
+        }
+    }
+
     fn read_owned_json(pointer: *mut c_char) -> serde_json::Value {
         assert!(!pointer.is_null(), "Vault JSON ABI returned null");
         // SAFETY: the Vault FFI returns a CString allocated by Rust and owned by this test.
@@ -15652,6 +17856,87 @@ mod vault_ffi_tests {
         }))
     }
 
+    // Task 4: the FFI JSON contract must carry the browser-form detail the C++
+    // adapter sends, and hand it back on the backend credential read.
+    //
+    // Failing-first rationale: `VaultLoginRequest` uses `deny_unknown_fields`, so
+    // before Task 4 an add request containing `formDetails` was REJECTED
+    // outright; the request below returned ok=false and no detail could ever
+    // round-trip.
+    #[test]
+    fn vault_ffi_add_login_round_trips_form_details_through_the_json_contract() {
+        let (core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+
+        let add = request(serde_json::json!({
+            "metadata": {
+                "title": "Detail",
+                "origins": ["https://detail.example"],
+                "usernameHint": "ignored-by-core",
+                "itemKind": "login",
+                "totp": null,
+                "passkey": null,
+            },
+            "username": "person@detail.example",
+            "password": SECRET,
+            "formDetails": {
+                "scheme": 1,
+                "signonRealm": "https://detail.example",
+                "url": "https://detail.example/login",
+                "action": "https://detail.example/submit",
+                "usernameElement": "user",
+                "passwordElement": "pass",
+                "blockedByUser": true,
+                "matchType": 4,
+                "inStore": 1,
+                "formData": "cGlja2xl",
+            },
+        }));
+        // SAFETY: the core and request are valid for the duration of this call.
+        let added = read_owned_json(unsafe { maho_vault_add_login_json(core, add.as_ptr()) });
+        assert_eq!(added["ok"], true);
+
+        // SAFETY: the core is uniquely owned by this test.
+        let core_ref = unsafe { &*core };
+        let session = core_ref
+            .create_vault_backend_session()
+            .expect("backend session");
+        let credentials = session
+            .login_credentials(Some("https://detail.example"))
+            .expect("backend credential read");
+        assert_eq!(1, credentials.len());
+        let details = credentials[0]
+            .form_details
+            .as_ref()
+            .expect("form details survive the FFI contract");
+        assert_eq!(1, details.scheme);
+        assert_eq!("https://detail.example/login", details.url);
+        assert_eq!("https://detail.example/submit", details.action);
+        assert_eq!("user", details.username_element);
+        assert_eq!("pass", details.password_element);
+        assert!(details.blocked_by_user);
+        assert_eq!(Some(4), details.match_type);
+        assert_eq!(1, details.in_store);
+        assert_eq!("cGlja2xl", details.form_data);
+        // Public list metadata must NOT gain the form detail: it stays inside the
+        // encrypted record.
+        let list = request(
+            serde_json::json!({"schemaVersion": 1, "provider": null, "kinds": [], "cursor": null, "limit": 50}),
+        );
+        // SAFETY: the core and request are valid for the duration of this call.
+        let listed = read_owned_json(unsafe { maho_vault_list_items_json(core, list.as_ptr()) });
+        assert!(!listed.to_string().contains("formDetails"));
+        assert!(!listed.to_string().contains("passwordElement"));
+
+        drop(session);
+        free_core(core, &path);
+    }
+
     #[test]
     fn vault_secret_buffer_free_accepts_owned_secret_buffer() {
         let secret = CString::new("miri-secret-buffer").expect("test secret has no NUL");
@@ -15703,6 +17988,43 @@ mod vault_ffi_tests {
         assert_eq!(response["error"]["code"], "storage_failure");
         // SAFETY: `core` is uniquely owned by this test.
         unsafe { maho_core_free(core) };
+    }
+
+    #[test]
+    fn core_tick_at_returns_null_for_null_core() {
+        // SAFETY: the function tolerates a null core and must return null.
+        assert!(unsafe { maho_core_tick_at(std::ptr::null_mut(), 0) }.is_null());
+    }
+
+    #[test]
+    fn core_tick_at_drives_vault_auto_lock_deterministically() {
+        let (core, path) = core_with_storage();
+        let init = initialize_request();
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_initialize_json(core, init.as_ptr()) })["ok"],
+            true
+        );
+        let unlock = request(serde_json::json!({"masterPassphrase": MASTER}));
+        // SAFETY: the core and request are valid for the duration of this call.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_unlock_json(core, unlock.as_ptr()) })["data"]
+                ["lockState"],
+            "unlocked"
+        );
+
+        let future = chrono::Utc::now().timestamp() + 172_800; // two days out
+                                                               // SAFETY: the core is a valid profile-owned core; the returned string is
+                                                               // freed by `read_owned_json`.
+        let updates = read_owned_json(unsafe { maho_core_tick_at(core, future) });
+        assert!(updates.is_array());
+
+        // SAFETY: the core is a valid profile-owned core.
+        assert_eq!(
+            read_owned_json(unsafe { maho_vault_status_json(core) })["data"]["lockState"],
+            "auto_locked"
+        );
+        free_core(core, &path);
     }
 
     #[test]
@@ -15842,7 +18164,8 @@ mod vault_ffi_tests {
         // SAFETY: the core and request are valid for the duration of this call.
         let updated =
             read_owned_json(unsafe { maho_vault_update_login_json(core, update.as_ptr()) });
-        assert_eq!(updated["data"]["title"], "Renamed Example");
+        assert_eq!(updated["data"]["id"], id);
+        assert!(updated["data"]["revision"].is_string());
         let delete = request(serde_json::json!({
             "id": updated["data"]["id"],
             "expectedRevision": updated["data"]["revision"],

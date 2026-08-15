@@ -189,6 +189,9 @@ class MahoCommandModel : public TabStripModelObserver,
   static void ApplyQuickActionGate(std::vector<CommandSuggestion>& results,
                                    CommandOverlayMode mode,
                                    const std::string& query);
+  static void ApplyMailAvailabilityGate(
+      std::vector<CommandSuggestion>& results,
+      bool mail_available);
   static std::vector<CommandSuggestion> PrepareLocalCandidates(
       std::vector<CommandSuggestion> results,
       bool actions_only,

@@ -6,8 +6,10 @@ use maho_types::common::{Orientation, Url};
 use maho_types::events::core_update::CoreUpdate;
 use maho_types::events::shell_event::ShellEvent;
 use maho_types::identifiers::{FolderId, SpaceId, TabId};
-use maho_types::settings::{GeneralSettingsUpdate, PinnedCloseBehavior, SettingsUpdate};
-use maho_types::space::{SpaceColor, SpaceConfigUpdate};
+use maho_types::settings::{
+    GeneralSettingsUpdate, NewTabPosition, PinnedCloseBehavior, SettingsUpdate,
+};
+use maho_types::space::{RootInsertionPoint, RootItem, SpaceColor, SpaceConfigUpdate};
 use maho_types::tab::TabRole;
 use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, TabViewModel};
 
@@ -3535,4 +3537,227 @@ fn pinned_tab_suspend_then_close_deletes_tab() {
         !pinned.iter().any(|t| t.id == tab_id),
         "suspended pinned tab must be fully deleted on close"
     );
+}
+
+// === new_tab_position (sidebar new-tab insertion) ===
+
+fn set_new_tab_position(core: &mut MahoCore, position: NewTabPosition) {
+    core.update_settings(SettingsUpdate {
+        general: Some(GeneralSettingsUpdate {
+            new_tab_position: Some(position),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+}
+
+fn root_tab_order(core: &MahoCore, space_id: &SpaceId) -> Vec<TabId> {
+    core.space_manager()
+        .get_root_order(space_id)
+        .into_iter()
+        .filter_map(|item| match item {
+            RootItem::Tab(tab_id) => Some(tab_id),
+            RootItem::Folder(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn new_tab_position_defaults_to_top() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+
+    let first = create_tab_with_url(&mut core, "https://first.example");
+    let second = create_tab_with_url(&mut core, "https://second.example");
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![second, first],
+        "default (top) must insert each new tab above the previous ones"
+    );
+}
+
+#[test]
+fn new_tab_position_bottom_appends_new_tabs() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let first = create_tab_with_url(&mut core, "https://first.example");
+    let second = create_tab_with_url(&mut core, "https://second.example");
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![first, second],
+        "bottom must append each new tab below the existing ones"
+    );
+}
+
+#[test]
+fn new_tab_position_top_after_bottom_switches_back() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+    let first = create_tab_with_url(&mut core, "https://first.example");
+
+    set_new_tab_position(&mut core, NewTabPosition::Top);
+    let second = create_tab_with_url(&mut core, "https://second.example");
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![second, first],
+        "switching back to top must apply to the next new tab only"
+    );
+}
+
+// Unknown/garbage wire values must not silently reposition tabs: settings JSON
+// carrying an unrecognized newTabPosition decodes to the default (top).
+#[test]
+fn new_tab_position_unknown_pref_value_falls_back_to_top() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let update: SettingsUpdate =
+        serde_json::from_str(r#"{"general":{"newTabPosition":"diagonal"}}"#)
+            .expect("unknown position value must not fail settings decode");
+    core.update_settings(update);
+
+    let first = create_tab_with_url(&mut core, "https://first.example");
+    let second = create_tab_with_url(&mut core, "https://second.example");
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![second, first],
+        "unknown position value must fall back to top"
+    );
+}
+
+// Re-announce (session restore / window move) carries an explicit tab_id for an
+// already-known tab. It must never reposition the tab, under either setting.
+#[test]
+fn new_tab_position_bottom_does_not_reposition_reannounced_tab() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let first = create_tab_with_url(&mut core, "https://first.example");
+    let second = create_tab_with_url(&mut core, "https://second.example");
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![first.clone(), second.clone()]
+    );
+
+    core.handle_event(ShellEvent::CreateTab {
+        space_id: space_id.clone(),
+        url: Some(Url::new("https://first.example")),
+        parent_id: None,
+        tab_id: Some(first.clone()),
+        window_id: None,
+        is_private: false,
+    });
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![first, second],
+        "re-announce must not reshuffle an existing tab"
+    );
+}
+
+// Explicit reorder wins over the insertion preference: the setting governs only
+// where NEW tabs land, never subsequent user-driven ordering. The sidebar drags
+// root items, so this exercises ReorderRootItem (the path that owns root_order).
+#[test]
+fn new_tab_position_bottom_does_not_affect_explicit_reorder() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let first = create_tab_with_url(&mut core, "https://first.example");
+    let second = create_tab_with_url(&mut core, "https://second.example");
+
+    core.handle_event(ShellEvent::ReorderRootItem {
+        space_id: space_id.clone(),
+        item: RootItem::Tab(second.clone()),
+        insertion_point: RootInsertionPoint::Before {
+            target: RootItem::Tab(first.clone()),
+        },
+    });
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![second, first],
+        "explicit reorder must survive the bottom insertion preference"
+    );
+}
+
+#[test]
+fn new_tab_position_empty_space_accepts_top_and_bottom() {
+    for position in [NewTabPosition::Top, NewTabPosition::Bottom] {
+        let mut core = MahoCore::new();
+        let space_id = core.get_active_space_id();
+        set_new_tab_position(&mut core, position);
+
+        let only = create_tab_with_url(&mut core, "https://only.example");
+
+        assert_eq!(root_tab_order(&core, &space_id), vec![only]);
+    }
+}
+
+#[test]
+fn new_tab_position_bottom_applies_to_private_tabs() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let first = create_tab_with_url_and_privacy(&mut core, "https://private-one.example", true);
+    let second = create_tab_with_url_and_privacy(&mut core, "https://private-two.example", true);
+
+    assert_eq!(root_tab_order(&core, &space_id), vec![first, second]);
+}
+
+#[test]
+fn new_tab_position_top_preserves_pinned_section_order() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let pinned = create_tab_with_url(&mut core, "https://pinned.example");
+    core.handle_event(ShellEvent::PinTab {
+        tab_id: pinned.clone(),
+    });
+    let existing = create_tab_with_url(&mut core, "https://existing.example");
+
+    set_new_tab_position(&mut core, NewTabPosition::Top);
+    let new_tab = create_tab_with_url(&mut core, "https://new.example");
+
+    assert_eq!(
+        root_tab_order(&core, &space_id),
+        vec![new_tab, pinned, existing],
+        "top inserts the new normal tab without reordering existing pinned/root items"
+    );
+}
+
+#[test]
+fn new_tab_position_bottom_preserves_existing_folder_root_order() {
+    let mut core = MahoCore::new();
+    let space_id = core.get_active_space_id();
+    set_new_tab_position(&mut core, NewTabPosition::Bottom);
+
+    let grouped = create_tab_with_url(&mut core, "https://grouped.example");
+    core.handle_event(ShellEvent::CreateFolderWithTabs {
+        space_id: space_id.clone(),
+        name: "Existing group".to_string(),
+        tab_ids: vec![grouped],
+    });
+    let before = core.space_manager().get_root_order(&space_id);
+    assert_eq!(before.len(), 1);
+    assert!(matches!(before[0], RootItem::Folder(_)));
+
+    let new_tab = create_tab_with_url(&mut core, "https://new.example");
+    let after = core.space_manager().get_root_order(&space_id);
+
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[0], before[0]);
+    assert_eq!(after[1], RootItem::Tab(new_tab));
 }

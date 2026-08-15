@@ -8,7 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/files/file_path.h"
+#include "base/functional/function_ref.h"
 #include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
@@ -59,6 +61,13 @@ namespace maho_settings::testing {
 enum class ProfileObservablesDecisionKind { kSnapshot, kRetry, kNull };
 
 struct ProfileObservablesDecision {
+  ProfileObservablesDecision(
+      ProfileObservablesDecisionKind kind,
+      maho_settings::mojom::ProfileObservablesSnapshotPtr snapshot);
+  ProfileObservablesDecision(ProfileObservablesDecision&&);
+  ProfileObservablesDecision& operator=(ProfileObservablesDecision&&);
+  ~ProfileObservablesDecision();
+
   ProfileObservablesDecisionKind kind;
   maho_settings::mojom::ProfileObservablesSnapshotPtr snapshot;
 };
@@ -117,6 +126,11 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void NotifyShortcutRecorded(maho_settings::mojom::MojoKeyComboPtr key_combo);
 
   struct SelectedProfileRequestState {
+    SelectedProfileRequestState();
+    SelectedProfileRequestState(SelectedProfileRequestState&&);
+    SelectedProfileRequestState& operator=(SelectedProfileRequestState&&);
+    ~SelectedProfileRequestState();
+
     std::string selected_id;
     std::string target_token;
     std::string attached_id;
@@ -255,6 +269,76 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
     }
     return maho_settings::mojom::ProfileTargetErrorCode::kInternal;
   }
+  // C5: `atc.open_external_links_in_maho_mini` lives in maho-core, which is the
+  // only store ATCManager::decide_link_destination reads. The legacy Chromium
+  // profile pref (sidebar_prefs::kOpenExternalLinksInMahoMini) is seeded into
+  // core exactly once so existing users keep their choice, then never consulted
+  // again — otherwise a later seed would clobber whatever the user set through
+  // the settings surface. The core FFI getter returns a plain bool and cannot
+  // distinguish "unset" from "false", so the marker is the sole record that the
+  // seed already happened.
+  //
+  // This IS the production implementation of that sequence — read marker,
+  // decide, seed core, persist marker. MigrateAtcExternalMiniSettingToCore()
+  // is only a binding of it to local_state_/prefs_, and the unit tests drive
+  // this exact function rather than restating its logic.
+  //
+  // The marker accessors MUST be backed by process-global storage (local
+  // state), because `core` is a single process-global store shared by every
+  // profile. `read_legacy_profile_pref` is the per-profile legacy value being
+  // migrated. Returns true iff this call seeded core.
+  static bool RunAtcExternalMiniMigration(
+      MahoCore* core,
+      base::FunctionRef<bool()> read_migrated_marker,
+      base::FunctionRef<bool()> read_legacy_profile_pref,
+      base::FunctionRef<void()> write_migrated_marker) {
+    if (!core) {
+      // Core is not up yet. Leave the marker unset so the seed is retried
+      // later; recording a migration that never reached core would strand the
+      // user's legacy value forever.
+      return false;
+    }
+    if (read_migrated_marker()) {
+      return false;
+    }
+    maho_core_set_open_external_links_in_maho_mini(
+        core, read_legacy_profile_pref());
+    write_migrated_marker();
+    return true;
+  }
+
+  // Completes a successful Settings Vault lifecycle mutation by replacing its
+  // status with a fresh canonical read and synchronously publishing the
+  // resulting process-wide lock state. A missing/malformed canonical status is
+  // treated as locked and turns the otherwise-successful reply into a failure.
+  // Public so the narrow Settings test target can exercise the production
+  // decision and publication sequence without constructing a full WebUI.
+  static maho_settings::mojom::VaultOperationResultPtr
+  FinalizeVaultLifecycleOperation(
+      maho_settings::mojom::VaultOperationResultPtr operation,
+      maho_settings::mojom::VaultOperationResultPtr canonical_status,
+      base::FunctionRef<void(bool locked)> publish_lock_state) {
+    if (!operation || !operation->success) {
+      return operation;
+    }
+    if (!canonical_status || !canonical_status->success ||
+        !canonical_status->status) {
+      publish_lock_state(/*locked=*/true);
+      operation->success = false;
+      operation->status.reset();
+      operation->error_code = "status_unavailable";
+      operation->error_message = "Vault operation failed.";
+      return operation;
+    }
+
+    const bool locked =
+        canonical_status->status->lock_state !=
+        maho_settings::mojom::VaultLockState::kUnlocked;
+    operation->status = canonical_status->status.Clone();
+    publish_lock_state(locked);
+    return operation;
+  }
+
   static bool CanDeleteProfileForTesting(bool is_default,
                                          bool is_final_ready_profile,
                                          bool is_host,
@@ -475,6 +559,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void SetAIModel(const std::string& model) override;
   void SetAIApprovalPolicy(const std::string& policy) override;
   void SetAISessionPersistence(bool enabled) override;
+  void SetAIMailReadAllowed(bool allowed,
+                            SetAIMailReadAllowedCallback callback) override;
   void FetchProviderModels(const std::string& provider_id,
                            FetchProviderModelsCallback callback) override;
   void RefreshProviderModels(const std::string& provider_id,
@@ -515,6 +601,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
       GetCurrentBrowserSpaceSnapshotCallback callback) override;
 
   void GetVaultStatus(GetVaultStatusCallback callback) override;
+  void GetVaultPreflightState(
+      GetVaultPreflightStateCallback callback) override;
   void GetVaultProviderStatus(GetVaultProviderStatusCallback callback) override;
   void InitializeVault(const std::string& master_passphrase,
                        const std::string& recovery_secret,
@@ -739,9 +827,12 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
 
   // Behavior
   void MailGetBehaviorPrefs(MailGetBehaviorPrefsCallback callback) override;
-  void MailSetBehaviorPref(const std::string& key,
+  void MailSetBehaviorPref(uint64_t expected_revision,
+                           const std::string& key,
                            const std::string& value,
                            MailSetBehaviorPrefCallback callback) override;
+  void MailRequestNotificationPermission(
+      MailRequestNotificationPermissionCallback callback) override;
 
   // Security (PGP/S-MIME)
   void MailGeneratePgpKey(const std::string& account_id,
@@ -836,6 +927,11 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void OnSelectedProfileDownloadDirectoryChosen(
       const base::FilePath& directory);
 
+  // Seeds maho-core's canonical `open_external_links_in_maho_mini` value from
+  // the legacy Chromium pref exactly once, guarded by the marker pref. No-op
+  // once the marker is set, so later user writes to core are never clobbered.
+  void MigrateAtcExternalMiniSettingToCore();
+
   static const char* GetPrefPath(const std::string& maho_key);
   std::string ReadSetting(const std::string& maho_key);
   void OnPrefChanged(const std::string& pref_name);
@@ -873,6 +969,11 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                               std::optional<std::string> response_body);
   void BroadcastAccountStatus();
 
+  // Forwards a browser-process Vault lock-state transition (notably the
+  // inactivity auto-lock evaluated by the periodic core tick) to the page so
+  // transient secret UI is cleared and re-gated behind unlock.
+  void OnVaultLockStateChanged(bool locked);
+
   mojo::Receiver<maho_settings::mojom::PageHandler> receiver_;
   mojo::Remote<maho_settings::mojom::Page> page_;
   raw_ptr<Profile> profile_;
@@ -881,6 +982,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   PrefChangeRegistrar pref_registrar_;
   raw_ptr<PrefService> local_state_;
   PrefChangeRegistrar local_state_pref_registrar_;
+  base::CallbackListSubscription vault_lock_state_subscription_;
 
   raw_ptr<Profile> selected_profile_ = nullptr;
   base::ScopedObservation<Profile, ProfileObserver>
@@ -927,6 +1029,13 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
       maho_settings::mojom::SecretAction action,
       std::unique_ptr<device_reauth::DeviceAuthenticator> authenticator,
       UseVaultSecretCallback callback,
+      bool success);
+  void OnReauthSetVaultPolicyComplete(
+      maho_settings::mojom::VaultAgentPolicy policy,
+      const std::optional<std::string>& item_id,
+      const std::optional<std::string>& origin,
+      const std::optional<std::string>& expires_at,
+      SetVaultPolicyCallback callback,
       bool success);
 
   struct PendingByokSave {

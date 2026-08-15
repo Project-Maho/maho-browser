@@ -44,7 +44,7 @@ struct AdvancedSettingsView: View {
                 if experimentalFeatures {
                     Text("Experimental features may be unstable. Use at your own risk.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(ShellTheme.Palette.warning)
                 }
             }
         }

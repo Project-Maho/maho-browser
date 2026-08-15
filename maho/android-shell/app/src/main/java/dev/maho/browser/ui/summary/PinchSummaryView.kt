@@ -28,10 +28,13 @@ fun PinchSummaryView(
     sentences: List<String>,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    isIncognito: Boolean = false,
 ) {
     val shellColors = BrowserShellTheme.colors
     val metrics = BrowserShellTheme.metrics
     val displayTitle = title.trim().ifEmpty { "This page" }
+    val accentColor = if (isIncognito) shellColors.incognitoAccent else shellColors.accent
+    val cardColor = if (isIncognito) shellColors.incognitoSurface else shellColors.tabCard
 
     Box(
         modifier = modifier
@@ -43,7 +46,7 @@ fun PinchSummaryView(
         // Card Container
         Card(
             shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = shellColors.tabCard),
+            colors = CardDefaults.cardColors(containerColor = cardColor),
             border = androidx.compose.foundation.BorderStroke(1.dp, shellColors.divider.copy(alpha = 0.24f)),
             modifier = Modifier
                 .fillMaxWidth()
@@ -67,12 +70,12 @@ fun PinchSummaryView(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(shellColors.accent.copy(alpha = 0.12f))
+                            .background(accentColor.copy(alpha = 0.12f))
                     ) {
                         Icon(
                             painter = painterResource(id = MahoIcon.SparklesAi.drawableRes),
                             contentDescription = null,
-                            tint = shellColors.accent,
+                            tint = accentColor,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -102,13 +105,13 @@ fun PinchSummaryView(
 
                     // Close Button
                     IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.size(24.dp)
+                        onClick = onDismiss
                     ) {
                         Icon(
                             painter = painterResource(id = MahoIcon.Close.drawableRes),
                             contentDescription = "Close",
-                            tint = shellColors.textSecondary
+                            tint = shellColors.textSecondary,
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
@@ -142,13 +145,13 @@ fun PinchSummaryView(
                                         .padding(top = 4.dp)
                                         .size(20.dp)
                                         .clip(CircleShape)
-                                        .background(if (index == 0) shellColors.accent.copy(alpha = 0.16f) else shellColors.divider.copy(alpha = 0.42f))
+                                        .background(if (index == 0) accentColor.copy(alpha = 0.16f) else shellColors.divider.copy(alpha = 0.42f))
                                 ) {
                                     Box(
                                         modifier = Modifier
                                             .size(5.dp)
                                             .clip(CircleShape)
-                                            .background(if (index == 0) shellColors.accent else shellColors.textSecondary)
+                                            .background(if (index == 0) accentColor else shellColors.textSecondary)
                                     )
                                 }
 
@@ -192,8 +195,8 @@ fun PinchSummaryView(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(metrics.compactCorner),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = shellColors.accent.copy(alpha = 0.12f),
-                            contentColor = shellColors.accent
+                            containerColor = accentColor.copy(alpha = 0.12f),
+                            contentColor = accentColor
                         ),
                         modifier = Modifier.testTag("pinchSummaryBackButton")
                     ) {

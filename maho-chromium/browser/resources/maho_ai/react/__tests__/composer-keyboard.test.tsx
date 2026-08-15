@@ -62,6 +62,22 @@ describe('Composer keyboard and input interactions', () => {
     });
   }
 
+  it('flushes the draft through the textarea blur event', async () => {
+    // Given
+    const onComposerBlur = vi.fn();
+    renderComposer(createHandlers({onComposerBlur}));
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea).not.toBeNull();
+
+    // When
+    await act(async () => {
+      textarea?.dispatchEvent(new FocusEvent('focusout', {bubbles: true}));
+    });
+
+    // Then
+    expect(onComposerBlur).toHaveBeenCalledOnce();
+  });
+
   it('Shift+Enter inserts a newline (does NOT submit), while Enter submits', async () => {
     // Given
     const onSubmit = vi.fn();

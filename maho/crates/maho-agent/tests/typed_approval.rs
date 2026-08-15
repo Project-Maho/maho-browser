@@ -66,6 +66,19 @@ fn typed_approval_legacy_policy_parser_fails_closed() {
 }
 
 #[test]
+fn typed_approval_policy_canonical_strings_roundtrip() {
+    for policy in [
+        ApprovalPolicy::Prompt,
+        ApprovalPolicy::AllowAll,
+        ApprovalPolicy::AllowMcp,
+        ApprovalPolicy::DenySensitive,
+        ApprovalPolicy::DenyAll,
+    ] {
+        assert_eq!(ApprovalPolicy::from_legacy_pref(policy.as_str()), policy);
+    }
+}
+
+#[test]
 fn typed_approval_sensitive_policy_decision_metadata_is_structured() {
     let metadata = ApprovalPolicy::DenySensitive
         .immediate_decision("browser_click", ToolSensitivity::Sensitive)

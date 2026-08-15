@@ -16,6 +16,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
@@ -53,6 +54,9 @@ bool MahoSpaceProfileBridge::SwitchToSpace(Browser* browser,
   MahoCore* core = maho::GetCore();
   if (core) {
     maho_core_activate_space(core, space_id.c_str());
+    SidebarCacheInvalidation invalidation;
+    invalidation.fragments = SidebarCoreFragment::kFooter;
+    InvalidateSidebarCoreCache(invalidation);
   }
 
   if (profile_changed) {

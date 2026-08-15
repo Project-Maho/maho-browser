@@ -17,6 +17,7 @@
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/third_party/maho/maho_bridge.h"
 
 namespace {
@@ -145,7 +146,9 @@ std::string MahoInlineEditHandler::HandleEventOnBackground(
   if (!core) {
     return "{}";
   }
-  return maho::core::HandleEvent(core, event_json.c_str());
+  std::string updates = maho::core::HandleEvent(core, event_json.c_str());
+  maho::InvalidateSidebarCoreCacheForUpdatesJson(updates);
+  return updates;
 }
 
 void MahoInlineEditHandler::OnRustEventResponse(

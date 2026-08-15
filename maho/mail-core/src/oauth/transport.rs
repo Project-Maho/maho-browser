@@ -81,7 +81,10 @@ impl OAuthTransport for ReqwestTransport {
                 chrono::Duration::seconds(secs)
                     .to_std()
                     .ok()
-                    .and_then(|duration| chrono::Utc::now().checked_add_signed(chrono::Duration::from_std(duration).ok()?))
+                    .and_then(|duration| {
+                        chrono::Utc::now()
+                            .checked_add_signed(chrono::Duration::from_std(duration).ok()?)
+                    })
                     .map(|dt| dt.to_rfc3339())
             })
         });

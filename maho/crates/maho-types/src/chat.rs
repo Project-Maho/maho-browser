@@ -137,6 +137,50 @@ pub struct Conversation {
     pub model: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub archived_at: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationProject {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationListState {
+    Active,
+    Archived,
+    All,
+}
+
+impl Default for ConversationListState {
+    fn default() -> Self {
+        Self::Active
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationBulkOperation {
+    Archive,
+    Unarchive,
+    Delete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationBulkResult {
+    pub requested_count: usize,
+    pub affected_ids: Vec<String>,
+    pub unchanged_ids: Vec<String>,
+    pub missing_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

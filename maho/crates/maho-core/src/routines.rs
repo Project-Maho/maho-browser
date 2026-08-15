@@ -29,6 +29,8 @@ use tokio::sync::Mutex;
 use maho_storage::sqlite::SqliteStorage;
 use maho_storage::CustomRoutine;
 
+use crate::routine_runs::{RoutineRunRegistry, RoutineRunStatus};
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -459,19 +461,81 @@ where
     F: FnOnce(String) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
+    run_routine_and_record_inner(id, user_tier, storage, source, agent_prompt_runner, None).await
+}
+
+/// Execute through the same resolved-and-recorded path while publishing the
+/// process-lifetime run status that was already queued by the caller.
+pub async fn run_routine_and_record_tracked<F, Fut>(
+    id: &str,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    source: RoutineRunSource,
+    agent_prompt_runner: F,
+    registry: &RoutineRunRegistry,
+    queued: RoutineRunStatus,
+) -> Result<RoutineResult, RoutineError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    run_routine_and_record_inner(
+        id,
+        user_tier,
+        storage,
+        source,
+        agent_prompt_runner,
+        Some((registry, queued)),
+    )
+    .await
+}
+
+async fn run_routine_and_record_inner<F, Fut>(
+    id: &str,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    source: RoutineRunSource,
+    agent_prompt_runner: F,
+    tracked: Option<(&RoutineRunRegistry, RoutineRunStatus)>,
+) -> Result<RoutineResult, RoutineError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    if let Some((registry, queued)) = tracked.as_ref() {
+        if let Err(error) = registry.mark_running(&queued.run_id) {
+            eprintln!("[routines] failed to mark run running: {error}");
+        }
+    }
+
     let result = run_routine_resolved(id, user_tier, storage, agent_prompt_runner).await;
     match &result {
-        Ok(res) => persist_result(storage, res, source),
-        Err(RoutineError::ExecutionFailed(msg)) => {
-            let failed = RoutineResult {
-                id: id.to_string(),
-                ran_at: chrono::Utc::now().timestamp(),
-                content: msg.clone(),
-                success: false,
-            };
-            persist_result(storage, &failed, source);
+        Ok(res) => {
+            persist_result(storage, res, source);
+            if let Some((registry, queued)) = tracked.as_ref() {
+                if let Err(error) = registry.mark_succeeded(&queued.run_id, res.content.clone()) {
+                    eprintln!("[routines] failed to mark run succeeded: {error}");
+                }
+            }
         }
-        Err(_) => {}
+        Err(error) => {
+            if let RoutineError::ExecutionFailed(msg) = error {
+                let failed = RoutineResult {
+                    id: id.to_string(),
+                    ran_at: chrono::Utc::now().timestamp(),
+                    content: msg.clone(),
+                    success: false,
+                };
+                persist_result(storage, &failed, source);
+            }
+            if let Some((registry, queued)) = tracked.as_ref() {
+                if let Err(transition_error) =
+                    registry.mark_failed(&queued.run_id, error.to_string())
+                {
+                    eprintln!("[routines] failed to mark run failed: {transition_error}");
+                }
+            }
+        }
     }
     result
 }
@@ -490,6 +554,48 @@ pub async fn fire_event_routines<F, Fut>(
 ) -> Result<Vec<RoutineResult>, RoutineError>
 where
     F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    fire_event_routines_inner(
+        event,
+        user_tier,
+        storage,
+        |prompt, _run_id| agent_prompt_runner(prompt),
+        None,
+    )
+    .await
+}
+
+pub async fn fire_event_routines_tracked<F, Fut>(
+    event: RoutineEvent,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    agent_prompt_runner: F,
+    registry: &RoutineRunRegistry,
+) -> Result<Vec<RoutineResult>, RoutineError>
+where
+    F: Fn(String, String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, String>>,
+{
+    fire_event_routines_inner(
+        event,
+        user_tier,
+        storage,
+        agent_prompt_runner,
+        Some(registry),
+    )
+    .await
+}
+
+async fn fire_event_routines_inner<F, Fut>(
+    event: RoutineEvent,
+    user_tier: UserTier,
+    storage: &SqliteStorage,
+    agent_prompt_runner: F,
+    registry: Option<&RoutineRunRegistry>,
+) -> Result<Vec<RoutineResult>, RoutineError>
+where
+    F: Fn(String, String) -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
     if user_tier != UserTier::Max {
@@ -513,9 +619,19 @@ where
             continue;
         }
 
+        let queued = registry.map(|runs| runs.begin(&c.id, RoutineRunSource::Event));
+        if let (Some(runs), Some(status)) = (registry, queued.as_ref()) {
+            if let Err(error) = runs.mark_running(&status.run_id) {
+                eprintln!("[routines] failed to mark event run running: {error}");
+            }
+        }
         let prompt = build_custom_prompt(&c);
         let ran_at = chrono::Utc::now().timestamp();
-        let result = match agent_prompt_runner(prompt).await {
+        let run_id = queued
+            .as_ref()
+            .map(|status| status.run_id.clone())
+            .unwrap_or_default();
+        let result = match agent_prompt_runner(prompt, run_id).await {
             Ok(content) => RoutineResult {
                 id: c.id,
                 ran_at,
@@ -530,6 +646,16 @@ where
             },
         };
         persist_result(storage, &result, RoutineRunSource::Event);
+        if let (Some(runs), Some(status)) = (registry, queued.as_ref()) {
+            let transition = if result.success {
+                runs.mark_succeeded(&status.run_id, result.content.clone())
+            } else {
+                runs.mark_failed(&status.run_id, result.content.clone())
+            };
+            if let Err(error) = transition {
+                eprintln!("[routines] failed to finish event run: {error}");
+            }
+        }
         results.push(result);
     }
     Ok(results)

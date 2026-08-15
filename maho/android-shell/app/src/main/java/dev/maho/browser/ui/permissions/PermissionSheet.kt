@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.ui.icons.MahoIcon
+import dev.maho.browser.ui.theme.BrowserShellTheme
 import androidx.compose.ui.res.painterResource
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -32,7 +34,9 @@ fun PermissionSheet(
     onGrant: () -> Unit,
     onDeny: () -> Unit,
     onDismiss: () -> Unit,
+    isIncognito: Boolean = false,
 ) {
+    val shellColors = BrowserShellTheme.colors
     val sheetState = rememberModalBottomSheetState()
     val icon = when (permissionType) {
         "camera" -> MahoIcon.Camera
@@ -52,6 +56,7 @@ fun PermissionSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        containerColor = if (isIncognito) shellColors.incognitoSurface else BottomSheetDefaults.ContainerColor,
     ) {
         Column(
             modifier = Modifier
@@ -62,7 +67,7 @@ fun PermissionSheet(
             Icon(
                 painter = painterResource(id = icon.drawableRes),
                 contentDescription = permissionType,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (isIncognito) shellColors.incognitoAccent else MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(48.dp),
             )
             Spacer(modifier = Modifier.height(16.dp))

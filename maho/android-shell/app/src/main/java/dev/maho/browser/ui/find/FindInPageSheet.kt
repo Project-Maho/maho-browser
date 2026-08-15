@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeFind
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.TabId
+import dev.maho.browser.ui.theme.BrowserShellTheme
 import kotlinx.coroutines.delay
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
@@ -33,7 +34,9 @@ import androidx.compose.ui.res.painterResource
 fun FindInPageSheet(
     visibleTabId: TabId?,
     onDismiss: () -> Unit = {},
+    isIncognito: Boolean = false,
 ) {
+    val shellColors = BrowserShellTheme.colors
     var query by remember { mutableStateOf("") }
     var matchCount by remember { mutableIntStateOf(0) }
     var activeIndex by remember { mutableIntStateOf(0) }
@@ -67,6 +70,8 @@ fun FindInPageSheet(
     Surface(
         tonalElevation = 3.dp,
         shadowElevation = 3.dp,
+        color = if (isIncognito) shellColors.incognitoSurface else MaterialTheme.colorScheme.surface,
+        contentColor = if (isIncognito) shellColors.textPrimary else MaterialTheme.colorScheme.onSurface,
     ) {
         Row(
             modifier = Modifier

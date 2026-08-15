@@ -7,6 +7,8 @@ struct ReadingListView: View {
     @State private var items: [ReadingListItem] = []
     @State private var isLoading = false
     @State private var filterMode: FilterMode = .all
+    @State private var pendingRemoveItem: ReadingListItem?
+    @State private var showRemoveConfirmation = false
 
     private enum FilterMode: String, CaseIterable {
         case all = "All"
@@ -40,7 +42,7 @@ struct ReadingListView: View {
             }
             .navigationTitle("Reading List")
             .toolbar {
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Picker("Filter", selection: $filterMode) {
                         ForEach(FilterMode.allCases, id: \.self) { mode in
                             Text(mode.rawValue).tag(mode)
@@ -81,7 +83,8 @@ struct ReadingListView: View {
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
-                            removeItem(item)
+                            pendingRemoveItem = item
+                            showRemoveConfirmation = true
                         } label: {
                             Label { Text("Remove") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
                         }
@@ -97,6 +100,22 @@ struct ReadingListView: View {
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            "Remove From Reading List?",
+            isPresented: $showRemoveConfirmation,
+            titleVisibility: .visible,
+            presenting: pendingRemoveItem
+        ) { item in
+            Button("Remove", role: .destructive) {
+                removeItem(item)
+                pendingRemoveItem = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingRemoveItem = nil
+            }
+        } message: { item in
+            Text("\"\(item.title.isEmpty ? item.url : item.title)\" will be removed from your reading list.")
+        }
     }
 
     private var emptyState: some View {

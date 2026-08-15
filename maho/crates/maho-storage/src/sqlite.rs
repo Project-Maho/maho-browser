@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::StorageError;
 
@@ -19,6 +19,169 @@ pub use vault::{
 static SQLCIPHER_KEY: RwLock<Option<String>> = RwLock::new(None);
 
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+
+const REQUIRED_VAULT_TABLES: &[&str] = &[
+    "vault_schema_info",
+    "vault_metadata",
+    "vault_items",
+    "vault_device_keys",
+    "vault_recovery",
+    "vault_capability_grants",
+    "vault_agent_policies",
+    "vault_audit_events",
+    "vault_sync_versions",
+];
+
+/// Caller-established state of the SQLCipher key material associated with an
+/// existing profile database. `Available` means the caller has verified that
+/// this is the persisted key for the database; `Unrecoverable` means key-store
+/// checks proved the material missing, empty, corrupt, or replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultDatabaseKey<'key> {
+    Available(&'key str),
+    Unrecoverable,
+}
+
+/// Opaque Vault metadata read by the non-mutating database preflight. Payloads
+/// remain uninterpreted here; `maho-core` owns their structural decoding.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VaultDatabaseSnapshot {
+    pub kdf_params: Option<Vec<u8>>,
+    pub wrapped_user_key: Option<Vec<u8>>,
+    pub wrapped_recovery_key: Option<Vec<u8>>,
+}
+
+/// Storage-layer evidence returned without creating, migrating, repairing, or
+/// otherwise mutating the database. `maho-core` maps this evidence to its public
+/// typed Vault preflight state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VaultDatabaseInspection {
+    Absent,
+    Readable(VaultDatabaseSnapshot),
+    UnrecoverableKey,
+    StructuralCorruption,
+    PlaintextResidue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyncQueueLease {
+    pub id: i64,
+    pub delivery_id: String,
+}
+
+/// Inspect an on-disk SQLCipher/Vault database without changing it.
+///
+/// Key loss is intentionally caller-established: SQLCipher gives the same
+/// `not a database` signal for a wrong key and corrupt encrypted pages, so this
+/// function never invents an unsafe oracle. Missing key material is only fatal
+/// when a database exists. With verified key material, unreadable pages, failed
+/// integrity checks, and broken Vault schema are structural corruption.
+pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDatabaseInspection {
+    if !path.exists() {
+        return VaultDatabaseInspection::Absent;
+    }
+    if !path.is_file() {
+        return VaultDatabaseInspection::StructuralCorruption;
+    }
+    if is_plaintext_database(path) || migration_backup_path(path).exists() {
+        return VaultDatabaseInspection::PlaintextResidue;
+    }
+
+    let cipher_key = match key {
+        VaultDatabaseKey::Available(key) if !key.is_empty() => key,
+        VaultDatabaseKey::Available(_) | VaultDatabaseKey::Unrecoverable => {
+            return VaultDatabaseInspection::UnrecoverableKey;
+        }
+    };
+
+    let Ok(conn) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return VaultDatabaseInspection::StructuralCorruption;
+    };
+    if apply_key(&conn, cipher_key).is_err()
+        || !database_integrity_is_valid(&conn)
+        || !vault_schema_is_valid(&conn)
+    {
+        return VaultDatabaseInspection::StructuralCorruption;
+    }
+    if plaintext_vault_shape_exists(&conn) {
+        return VaultDatabaseInspection::PlaintextResidue;
+    }
+
+    match read_vault_database_snapshot(&conn) {
+        Ok(snapshot) => VaultDatabaseInspection::Readable(snapshot),
+        Err(_) => VaultDatabaseInspection::StructuralCorruption,
+    }
+}
+
+fn database_integrity_is_valid(conn: &Connection) -> bool {
+    conn.query_row("PRAGMA quick_check(1);", [], |row| row.get::<_, String>(0))
+        .is_ok_and(|result| result == "ok")
+}
+
+fn vault_schema_is_valid(conn: &Connection) -> bool {
+    let version = conn.query_row(
+        "SELECT vault_schema_version FROM vault_schema_info WHERE id = 0",
+        [],
+        |row| row.get::<_, i64>(0),
+    );
+    if !matches!(version, Ok(version) if version == vault::VAULT_SCHEMA_VERSION) {
+        return false;
+    }
+
+    REQUIRED_VAULT_TABLES.iter().all(|table| {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            rusqlite::params![table],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false)
+    })
+}
+
+fn plaintext_vault_shape_exists(conn: &Connection) -> bool {
+    let plaintext_table_exists = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name IN ('passwords', 'legacy_passwords_archive')
+            )",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap_or(false);
+    if plaintext_table_exists {
+        return true;
+    }
+
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM pragma_table_info('vault_items')
+            WHERE name IN ('domain', 'username', 'password', 'notes', 'totp', 'passkey', 'title', 'origin')
+        )",
+        [],
+        |row| row.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
+}
+
+fn read_vault_database_snapshot(
+    conn: &Connection,
+) -> Result<VaultDatabaseSnapshot, rusqlite::Error> {
+    fn payload(conn: &Connection, slot: &str) -> Result<Option<Vec<u8>>, rusqlite::Error> {
+        conn.query_row(
+            "SELECT payload FROM vault_metadata WHERE slot = ?1",
+            rusqlite::params![slot],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    Ok(VaultDatabaseSnapshot {
+        kdf_params: payload(conn, "kdf_params")?,
+        wrapped_user_key: payload(conn, "wrapped_user_key")?,
+        wrapped_recovery_key: payload(conn, "wrapped_recovery_key")?,
+    })
+}
 
 /// Cap for unindexed `LIKE '%q%'` suggestion scans (see `search_bookmarks`).
 const SEARCH_RESULT_LIMIT: i64 = 200;
@@ -578,6 +741,114 @@ impl SqliteStorage {
             let _ = self.conn.execute("DROP TABLE session_event_logs", []);
         }
 
+        let has_archived_at = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('conversations') WHERE name='archived_at'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_archived_at {
+            self.conn
+                .execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT", [])?;
+        }
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS conversation_projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )?;
+        let has_project_id = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('conversations') WHERE name='project_id'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_project_id {
+            self.conn
+                .execute("ALTER TABLE conversations ADD COLUMN project_id TEXT", [])?;
+        }
+        let has_project_foreign_key = {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA foreign_key_list('conversations')")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })?;
+            let has_foreign_key = rows.filter_map(Result::ok).any(|(table, from, on_delete)| {
+                table == "conversation_projects"
+                    && from == "project_id"
+                    && on_delete.eq_ignore_ascii_case("SET NULL")
+            });
+            has_foreign_key
+        };
+        if !has_project_foreign_key {
+            let has_system_prompt_snapshot = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM pragma_table_info('conversations') WHERE name='system_prompt_snapshot'",
+                    [],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            self.conn.execute_batch("PRAGMA foreign_keys=OFF;")?;
+            let rebuild_result = (|| -> Result<(), StorageError> {
+                let tx = self.conn.unchecked_transaction()?;
+                tx.execute_batch(
+                    "CREATE TABLE conversations_with_project_fk (
+                        id TEXT PRIMARY KEY,
+                        title TEXT,
+                        space_id TEXT,
+                        model TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                        archived_at TEXT,
+                        project_id TEXT REFERENCES conversation_projects(id) ON DELETE SET NULL,
+                        system_prompt_snapshot TEXT
+                    );",
+                )?;
+                let snapshot_source = if has_system_prompt_snapshot {
+                    "system_prompt_snapshot"
+                } else {
+                    "NULL"
+                };
+                tx.execute_batch(&format!(
+                    "INSERT INTO conversations_with_project_fk
+                        (id,title,space_id,model,created_at,updated_at,archived_at,project_id,system_prompt_snapshot)
+                     SELECT id,title,space_id,model,created_at,updated_at,archived_at,
+                        CASE WHEN project_id IS NULL OR EXISTS(
+                            SELECT 1 FROM conversation_projects WHERE conversation_projects.id=conversations.project_id
+                        ) THEN project_id ELSE NULL END,
+                        {snapshot_source}
+                     FROM conversations;
+                     DROP TABLE conversations;
+                     ALTER TABLE conversations_with_project_fk RENAME TO conversations;"
+                ))?;
+                tx.commit()?;
+                Ok(())
+            })();
+            let foreign_keys_result = self.conn.execute_batch("PRAGMA foreign_keys=ON;");
+            rebuild_result?;
+            foreign_keys_result?;
+        }
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_conversations_active_updated
+                ON conversations(updated_at DESC) WHERE archived_at IS NULL;
+            CREATE INDEX IF NOT EXISTS idx_conversations_archived_at
+                ON conversations(archived_at DESC) WHERE archived_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_conversations_project_id
+                ON conversations(project_id);",
+        )?;
+
         self.run_ai_extensibility_migrations()?;
 
         self.run_routines_migrations()?;
@@ -1085,7 +1356,13 @@ impl SqliteStorage {
                 payload_json TEXT NOT NULL,
                 deleted INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
-                sent_at INTEGER
+                sent_at INTEGER,
+                acked_at INTEGER,
+                delivery_id TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at INTEGER,
+                relay_seq INTEGER
             );
             CREATE TABLE IF NOT EXISTS sync_state (
                 entity_type TEXT PRIMARY KEY,
@@ -1100,13 +1377,21 @@ impl SqliteStorage {
                 share_link TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS conversation_projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 title TEXT,
                 space_id TEXT,
                 model TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                archived_at TEXT,
+                project_id TEXT REFERENCES conversation_projects(id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS conversation_turns (
                 id TEXT PRIMARY KEY,
@@ -1183,6 +1468,86 @@ impl SqliteStorage {
                 .conn
                 .execute("ALTER TABLE sync_queue ADD COLUMN acked_at INTEGER", []);
         }
+
+        for (column, sql) in [
+            (
+                "delivery_id",
+                "ALTER TABLE sync_queue ADD COLUMN delivery_id TEXT",
+            ),
+            (
+                "state",
+                "ALTER TABLE sync_queue ADD COLUMN state TEXT NOT NULL DEFAULT 'pending'",
+            ),
+            (
+                "attempt_count",
+                "ALTER TABLE sync_queue ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
+                "last_attempt_at",
+                "ALTER TABLE sync_queue ADD COLUMN last_attempt_at INTEGER",
+            ),
+            (
+                "relay_seq",
+                "ALTER TABLE sync_queue ADD COLUMN relay_seq INTEGER",
+            ),
+        ] {
+            let exists: bool = self
+                .conn
+                .query_row(
+                    "SELECT 1 FROM pragma_table_info('sync_queue') WHERE name=?1",
+                    [column],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if !exists {
+                self.conn.execute(sql, [])?;
+            }
+        }
+
+        let mut missing_delivery_ids = self
+            .conn
+            .prepare("SELECT id FROM sync_queue WHERE delivery_id IS NULL OR delivery_id = ''")?;
+        let missing_delivery_ids = missing_delivery_ids
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in missing_delivery_ids {
+            self.conn.execute(
+                "UPDATE sync_queue SET delivery_id = ?1 WHERE id = ?2",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), id],
+            )?;
+        }
+        self.conn.execute(
+            "UPDATE sync_queue
+             SET state = CASE
+                 WHEN acked_at IS NOT NULL THEN 'acknowledged'
+                 ELSE 'pending'
+             END
+             WHERE state IS NULL OR state = '' OR state = 'inflight'",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_queue_delivery_id
+             ON sync_queue(delivery_id)",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS sync_receive_cursors (
+                room_id TEXT PRIMARY KEY,
+                last_relay_seq INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS sync_tombstones (
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                hlc_ts INTEGER NOT NULL,
+                device_id INTEGER NOT NULL,
+                deleted_at INTEGER NOT NULL,
+                PRIMARY KEY (entity_type, entity_id)
+            )",
+            [],
+        )?;
 
         let has_fields_hlc: bool = self
             .conn
@@ -1415,6 +1780,16 @@ impl SqliteStorage {
             rusqlite::params![key, value],
         )?;
         Ok(())
+    }
+
+    /// Delete a settings row. Returns true when a row was removed, false when the key
+    /// was absent (not an error).
+    pub fn delete_setting(&self, key: &str) -> Result<bool, StorageError> {
+        let affected = self.conn.execute(
+            "DELETE FROM settings WHERE key = ?1",
+            rusqlite::params![key],
+        )?;
+        Ok(affected > 0)
     }
 
     // === Profiles ===
@@ -2558,8 +2933,20 @@ impl SqliteStorage {
     ) -> Result<i64, StorageError> {
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
-            "INSERT INTO sync_queue (entity_type, entity_id, version, modified_at, payload_json, deleted, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            rusqlite::params![entity_type, entity_id, version, modified_at, payload_json, deleted as i32, now],
+            "INSERT INTO sync_queue (
+                entity_type, entity_id, version, modified_at, payload_json,
+                deleted, created_at, delivery_id, state
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')",
+            rusqlite::params![
+                entity_type,
+                entity_id,
+                version,
+                modified_at,
+                payload_json,
+                deleted as i32,
+                now,
+                uuid::Uuid::new_v4().to_string(),
+            ],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -2570,7 +2957,10 @@ impl SqliteStorage {
         &self,
     ) -> Result<Vec<(i64, String, String, u64, i64, String, bool)>, StorageError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, entity_type, entity_id, version, modified_at, payload_json, deleted FROM sync_queue WHERE sent_at IS NULL AND acked_at IS NULL ORDER BY id ASC"
+            "SELECT id, entity_type, entity_id, version, modified_at, payload_json, deleted
+             FROM sync_queue
+             WHERE state != 'acknowledged'
+             ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -2595,7 +2985,11 @@ impl SqliteStorage {
         let now = chrono::Utc::now().timestamp();
         for id in ids {
             self.conn.execute(
-                "UPDATE sync_queue SET sent_at = ?1 WHERE id = ?2",
+                "UPDATE sync_queue
+                 SET state = 'inflight',
+                     attempt_count = attempt_count + 1,
+                     last_attempt_at = ?1
+                 WHERE id = ?2 AND state != 'acknowledged'",
                 rusqlite::params![now, id],
             )?;
         }
@@ -2607,7 +3001,9 @@ impl SqliteStorage {
         let now = chrono::Utc::now().timestamp();
         for id in ids {
             self.conn.execute(
-                "UPDATE sync_queue SET acked_at = ?1 WHERE id = ?2",
+                "UPDATE sync_queue
+                 SET acked_at = ?1, state = 'acknowledged'
+                 WHERE id = ?2",
                 rusqlite::params![now, id],
             )?;
         }
@@ -2623,8 +3019,148 @@ impl SqliteStorage {
     ) -> Result<(), StorageError> {
         let now = chrono::Utc::now().timestamp();
         self.conn.execute(
-            "UPDATE sync_queue SET acked_at = ?1 WHERE entity_type = ?2 AND entity_id = ?3 AND version = ?4",
+            "UPDATE sync_queue
+             SET acked_at = ?1, state = 'acknowledged'
+             WHERE entity_type = ?2 AND entity_id = ?3 AND version = ?4",
             rusqlite::params![now, entity_type, entity_id, version],
+        )?;
+        Ok(())
+    }
+
+    pub fn lease_sync_entities(&self, ids: &[i64]) -> Result<Vec<SyncQueueLease>, StorageError> {
+        self.mark_sync_entities_sent(ids)?;
+        let mut statement = self.conn.prepare(
+            "SELECT id, delivery_id
+             FROM sync_queue
+             WHERE id = ?1 AND state = 'inflight'
+             ORDER BY id ASC",
+        )?;
+        let mut leases = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(lease) = statement
+                .query_row([id], |row| {
+                    Ok(SyncQueueLease {
+                        id: row.get(0)?,
+                        delivery_id: row.get(1)?,
+                    })
+                })
+                .optional()?
+            {
+                leases.push(lease);
+            }
+        }
+        Ok(leases)
+    }
+
+    pub fn ack_sync_delivery(
+        &self,
+        delivery_id: &str,
+        relay_seq: u64,
+    ) -> Result<bool, StorageError> {
+        let now = chrono::Utc::now().timestamp();
+        let changed = self.conn.execute(
+            "UPDATE sync_queue
+             SET acked_at = ?1, state = 'acknowledged', relay_seq = ?2
+             WHERE delivery_id = ?3 AND state != 'acknowledged'",
+            rusqlite::params![now, relay_seq, delivery_id],
+        )?;
+        Ok(changed == 1)
+    }
+
+    pub fn pending_sync_outbox_count(&self) -> Result<usize, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM sync_queue WHERE state != 'acknowledged'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from)
+    }
+
+    pub fn get_sync_receive_cursor(&self, room_id: &str) -> Result<u64, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT last_relay_seq FROM sync_receive_cursors WHERE room_id = ?1",
+                [room_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map(|cursor| cursor.unwrap_or(0))
+            .map_err(StorageError::from)
+    }
+
+    pub fn set_sync_receive_cursor(
+        &self,
+        room_id: &str,
+        relay_seq: u64,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO sync_receive_cursors (room_id, last_relay_seq)
+             VALUES (?1, ?2)
+             ON CONFLICT(room_id) DO UPDATE SET
+                 last_relay_seq = MAX(last_relay_seq, excluded.last_relay_seq)",
+            rusqlite::params![room_id, relay_seq],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_sync_tombstone(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<Option<(u64, u32)>, StorageError> {
+        self.conn
+            .query_row(
+                "SELECT hlc_ts, device_id
+                 FROM sync_tombstones
+                 WHERE entity_type = ?1 AND entity_id = ?2",
+                rusqlite::params![entity_type, entity_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    pub fn save_sync_tombstone(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        hlc_ts: u64,
+        device_id: u32,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO sync_tombstones (
+                entity_type, entity_id, hlc_ts, device_id, deleted_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+                hlc_ts = excluded.hlc_ts,
+                device_id = excluded.device_id,
+                deleted_at = excluded.deleted_at
+             WHERE (excluded.hlc_ts, excluded.device_id) >
+                   (sync_tombstones.hlc_ts, sync_tombstones.device_id)",
+            rusqlite::params![
+                entity_type,
+                entity_id,
+                hlc_ts,
+                device_id,
+                chrono::Utc::now().timestamp(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_sync_tombstone(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+        hlc_ts: u64,
+        device_id: u32,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "DELETE FROM sync_tombstones
+             WHERE entity_type = ?1 AND entity_id = ?2
+               AND (hlc_ts, device_id) < (?3, ?4)",
+            rusqlite::params![entity_type, entity_id, hlc_ts, device_id],
         )?;
         Ok(())
     }
@@ -2718,6 +3254,18 @@ impl SqliteStorage {
         self.conn.execute(
             "INSERT OR REPLACE INTO entity_versions (entity_type, entity_id, hlc_ts, device_id, fields_hlc_json, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![entity_type, entity_id, hlc_ts, device_id, fields_hlc_json, payload_json],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_entity_version(
+        &self,
+        entity_type: &str,
+        entity_id: &str,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "DELETE FROM entity_versions WHERE entity_type=?1 AND entity_id=?2",
+            rusqlite::params![entity_type, entity_id],
         )?;
         Ok(())
     }
@@ -3709,7 +4257,7 @@ impl SqliteStorage {
             rusqlite::params![id, session_id, role, content, url_context],
         )?;
         let _ = self.conn.execute(
-            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?1",
+            "UPDATE conversations SET updated_at = datetime('now'), archived_at = NULL WHERE id = ?1",
             rusqlite::params![session_id],
         );
         Ok(())
@@ -3736,12 +4284,25 @@ impl SqliteStorage {
 
     pub fn list_conversations(
         &self,
+        state: maho_types::chat::ConversationListState,
         limit: usize,
     ) -> Result<Vec<maho_types::chat::Conversation>, StorageError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, title, space_id, model, created_at, updated_at \
-             FROM conversations ORDER BY updated_at DESC LIMIT ?1",
-        )?;
+        let filter = match state {
+            maho_types::chat::ConversationListState::Active => "WHERE archived_at IS NULL",
+            maho_types::chat::ConversationListState::Archived => "WHERE archived_at IS NOT NULL",
+            maho_types::chat::ConversationListState::All => "",
+        };
+        let order = match state {
+            maho_types::chat::ConversationListState::Archived => {
+                "ORDER BY archived_at DESC, updated_at DESC"
+            }
+            _ => "ORDER BY updated_at DESC",
+        };
+        let sql = format!(
+            "SELECT id, title, space_id, model, created_at, updated_at, archived_at, project_id \
+             FROM conversations {filter} {order} LIMIT ?1"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
             Ok(maho_types::chat::Conversation {
                 id: row.get(0)?,
@@ -3750,6 +4311,8 @@ impl SqliteStorage {
                 model: row.get(3)?,
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                archived_at: row.get(6)?,
+                project_id: row.get(7)?,
             })
         })?;
         let mut out = Vec::new();
@@ -3845,6 +4408,22 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub fn upsert_conversation(
+        &self,
+        conversation: &maho_types::chat::Conversation,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO conversations (id,title,space_id,model,created_at,updated_at,archived_at,project_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT(id) DO UPDATE SET title=excluded.title,space_id=excluded.space_id,
+             model=excluded.model,created_at=excluded.created_at,updated_at=excluded.updated_at,
+             archived_at=excluded.archived_at,project_id=excluded.project_id",
+            rusqlite::params![conversation.id,conversation.title,conversation.space_id,conversation.model,
+                conversation.created_at,conversation.updated_at,conversation.archived_at,conversation.project_id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_system_prompt_snapshot_if_absent(
         &self,
         conversation_id: &str,
@@ -3878,12 +4457,272 @@ impl SqliteStorage {
         }
     }
 
+    /// True when a conversations row with this id exists.
+    pub fn conversation_exists(&self, id: &str) -> Result<bool, StorageError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM conversations WHERE id = ?1 LIMIT 1")?;
+        let mut rows = stmt.query(rusqlite::params![id])?;
+        Ok(rows.next()?.is_some())
+    }
+
     pub fn delete_conversation(&self, id: &str) -> Result<bool, StorageError> {
-        let affected = self.conn.execute(
-            "DELETE FROM conversations WHERE id = ?1",
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM session_artifacts WHERE session_id=?1",
             rusqlite::params![id],
         )?;
+        tx.execute(
+            "DELETE FROM settings WHERE key=?1",
+            rusqlite::params![format!("web_ai.composer_draft.v1.conversation:{id}")],
+        )?;
+        let affected = tx.execute(
+            "DELETE FROM conversations WHERE id=?1",
+            rusqlite::params![id],
+        )?;
+        tx.commit()?;
         Ok(affected > 0)
+    }
+
+    pub fn archive_conversation(&self, id: &str, now: &str) -> Result<bool, StorageError> {
+        Ok(self.conn.execute(
+            "UPDATE conversations SET archived_at=?1 WHERE id=?2 AND archived_at IS NULL",
+            rusqlite::params![now, id],
+        )? > 0)
+    }
+
+    pub fn unarchive_conversation(&self, id: &str, now: &str) -> Result<bool, StorageError> {
+        Ok(self.conn.execute("UPDATE conversations SET archived_at=NULL,updated_at=?1 WHERE id=?2 AND archived_at IS NOT NULL", rusqlite::params![now,id])? > 0)
+    }
+
+    pub fn apply_conversation_bulk_operation(
+        &self,
+        operation: maho_types::chat::ConversationBulkOperation,
+        ids: &[String],
+        now: &str,
+    ) -> Result<maho_types::chat::ConversationBulkResult, StorageError> {
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&str> = ids
+            .iter()
+            .map(String::as_str)
+            .filter(|id| seen.insert((*id).to_string()))
+            .collect();
+        if unique.is_empty() || unique.len() > 500 {
+            return Err(StorageError::Other(
+                "conversation bulk ids must contain 1..=500 unique ids".into(),
+            ));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let mut result = maho_types::chat::ConversationBulkResult {
+            requested_count: unique.len(),
+            affected_ids: vec![],
+            unchanged_ids: vec![],
+            missing_ids: vec![],
+        };
+        for id in unique {
+            let archived_at: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT archived_at FROM conversations WHERE id=?1",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(archived_at) = archived_at else {
+                result.missing_ids.push(id.into());
+                continue;
+            };
+            let affected = match operation {
+                maho_types::chat::ConversationBulkOperation::Archive if archived_at.is_none() => {
+                    tx.execute(
+                        "UPDATE conversations SET archived_at=?1 WHERE id=?2",
+                        rusqlite::params![now, id],
+                    )?;
+                    true
+                }
+                maho_types::chat::ConversationBulkOperation::Unarchive if archived_at.is_some() => {
+                    tx.execute(
+                        "UPDATE conversations SET archived_at=NULL,updated_at=?1 WHERE id=?2",
+                        rusqlite::params![now, id],
+                    )?;
+                    true
+                }
+                maho_types::chat::ConversationBulkOperation::Delete => {
+                    tx.execute(
+                        "DELETE FROM session_artifacts WHERE session_id=?1",
+                        rusqlite::params![id],
+                    )?;
+                    tx.execute(
+                        "DELETE FROM settings WHERE key=?1",
+                        rusqlite::params![format!("web_ai.composer_draft.v1.conversation:{id}")],
+                    )?;
+                    tx.execute(
+                        "DELETE FROM conversations WHERE id=?1",
+                        rusqlite::params![id],
+                    )?;
+                    true
+                }
+                _ => false,
+            };
+            if affected {
+                result.affected_ids.push(id.into());
+            } else {
+                result.unchanged_ids.push(id.into());
+            }
+        }
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn auto_archive_conversations(
+        &self,
+        now_sec: i64,
+        after_days: i32,
+    ) -> Result<Vec<String>, StorageError> {
+        if after_days <= 0 {
+            return Err(StorageError::Other("after_days must be positive".into()));
+        }
+        let cutoff = now_sec
+            .checked_sub(i64::from(after_days) * 86_400)
+            .ok_or_else(|| StorageError::Other("auto archive cutoff overflow".into()))?;
+        let tx = self.conn.unchecked_transaction()?;
+        let ids = {
+            let mut stmt = tx.prepare("SELECT id FROM conversations WHERE archived_at IS NULL AND updated_at <= datetime(?1,'unixepoch') ORDER BY updated_at ASC,id ASC")?;
+            let rows = stmt.query_map(rusqlite::params![cutoff], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for id in &ids {
+            tx.execute("UPDATE conversations SET archived_at=datetime(?1,'unixepoch') WHERE id=?2 AND archived_at IS NULL", rusqlite::params![now_sec,id])?;
+        }
+        tx.commit()?;
+        Ok(ids)
+    }
+
+    pub fn list_conversation_projects(
+        &self,
+    ) -> Result<Vec<maho_types::chat::ConversationProject>, StorageError> {
+        let mut stmt = self.conn.prepare("SELECT id,name,created_at,updated_at FROM conversation_projects ORDER BY updated_at DESC,id ASC")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(maho_types::chat::ConversationProject {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn create_conversation_project(
+        &self,
+        id: &str,
+        name: &str,
+        now: &str,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "INSERT INTO conversation_projects(id,name,created_at,updated_at) VALUES(?1,?2,?3,?3)",
+            rusqlite::params![id, name, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_conversation_project(
+        &self,
+        project: &maho_types::chat::ConversationProject,
+    ) -> Result<(), StorageError> {
+        self.conn.execute("INSERT INTO conversation_projects(id,name,created_at,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET name=excluded.name,created_at=excluded.created_at,updated_at=excluded.updated_at", rusqlite::params![project.id,project.name,project.created_at,project.updated_at])?;
+        Ok(())
+    }
+
+    pub fn rename_conversation_project(
+        &self,
+        id: &str,
+        name: &str,
+        now: &str,
+    ) -> Result<bool, StorageError> {
+        Ok(self.conn.execute(
+            "UPDATE conversation_projects SET name=?1,updated_at=?2 WHERE id=?3",
+            rusqlite::params![name, now, id],
+        )? > 0)
+    }
+
+    pub fn delete_conversation_project(&self, id: &str) -> Result<bool, StorageError> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE conversations SET project_id=NULL WHERE project_id=?1",
+            rusqlite::params![id],
+        )?;
+        let affected = tx.execute(
+            "DELETE FROM conversation_projects WHERE id=?1",
+            rusqlite::params![id],
+        )?;
+        tx.commit()?;
+        Ok(affected > 0)
+    }
+
+    pub fn move_conversations_to_project(
+        &self,
+        ids: &[String],
+        project_id: Option<&str>,
+        now: &str,
+    ) -> Result<maho_types::chat::ConversationBulkResult, StorageError> {
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<&str> = ids
+            .iter()
+            .map(String::as_str)
+            .filter(|id| seen.insert((*id).to_string()))
+            .collect();
+        if unique.is_empty() || unique.len() > 500 {
+            return Err(StorageError::Other(
+                "conversation move ids must contain 1..=500 unique ids".into(),
+            ));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        if let Some(project_id) = project_id {
+            if tx
+                .query_row(
+                    "SELECT 1 FROM conversation_projects WHERE id=?1",
+                    rusqlite::params![project_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_none()
+            {
+                return Err(StorageError::NotFound {
+                    entity: "conversation_project".into(),
+                    id: project_id.into(),
+                });
+            }
+        }
+        let mut result = maho_types::chat::ConversationBulkResult {
+            requested_count: unique.len(),
+            affected_ids: vec![],
+            unchanged_ids: vec![],
+            missing_ids: vec![],
+        };
+        for id in unique {
+            let current: Option<Option<String>> = tx
+                .query_row(
+                    "SELECT project_id FROM conversations WHERE id=?1",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match current {
+                None => result.missing_ids.push(id.into()),
+                Some(current) if current.as_deref() == project_id => {
+                    result.unchanged_ids.push(id.into())
+                }
+                Some(_) => {
+                    tx.execute(
+                        "UPDATE conversations SET project_id=?1,updated_at=?2 WHERE id=?3",
+                        rusqlite::params![project_id, now, id],
+                    )?;
+                    result.affected_ids.push(id.into());
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(result)
     }
 
     pub fn delete_conversation_turn(&self, id: &str) -> Result<bool, StorageError> {
@@ -3920,7 +4759,7 @@ impl SqliteStorage {
             rusqlite::params![id, session_id, role, content, url_context],
         )?;
         let _ = self.conn.execute(
-            "UPDATE conversations SET updated_at = datetime('now') WHERE id = ?1",
+            "UPDATE conversations SET updated_at = datetime('now'), archived_at = NULL WHERE id = ?1",
             rusqlite::params![session_id],
         );
         Ok(true)

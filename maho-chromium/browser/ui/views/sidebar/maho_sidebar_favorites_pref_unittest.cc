@@ -19,6 +19,10 @@ class MahoSidebarFavoritesPrefTest : public views::ViewsTestBase {
   TestingPrefServiceSimple prefs_;
 };
 
+TEST_F(MahoSidebarFavoritesPrefTest, MailBetaDefaultsOff) {
+  EXPECT_FALSE(prefs_.GetBoolean(sidebar_prefs::kMahoMailEnabled));
+}
+
 TEST_F(MahoSidebarFavoritesPrefTest,
        DismissHintPersistsPrefAndCollapsesEmptyState) {
   MahoSidebarFavoritesGridView view(nullptr);

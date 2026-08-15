@@ -175,6 +175,49 @@ describe('PasswordSetup store flow', () => {
     expect(store.getSnapshot().passwordSetup.status).toBe('error');
   });
 
+  it('persists and completes the "None" choice without an unlocked Vault', async () => {
+    configurePasswordSetup(VAULT_LOCK_STATE.Uninitialized);
+    const store = new MahoWelcomeStore();
+    await moveToPasswordSetup(store);
+
+    await expect(store.skipPasswordSetup()).resolves.toBe(true);
+
+    expect(mockHandler.setPasswordProvider)
+      .toHaveBeenCalledWith(PASSWORD_PROVIDER_KIND.Disabled);
+    expect(mockHandler.unlockVault).not.toHaveBeenCalled();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+    expect(store.getSnapshot().passwordSetup.passwordManagerSkipped).toBe(true);
+    expect(store.getSnapshot().passwordSetup.errorMessage).toBe('');
+  });
+
+  it('completes the "None" choice even when persistence fails, and says so', async () => {
+    configurePasswordSetup(VAULT_LOCK_STATE.Uninitialized);
+    mockHandler.setPasswordProvider.mockResolvedValue({success: false});
+    const store = new MahoWelcomeStore();
+    await moveToPasswordSetup(store);
+
+    await expect(store.skipPasswordSetup()).resolves.toBe(false);
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+    expect(store.getSnapshot().passwordSetup.passwordManagerSkipped).toBe(true);
+    expect(store.getSnapshot().passwordSetup.errorMessage).not.toBe('');
+  });
+
+  it('persists and completes an external provider without an unlocked Vault', async () => {
+    configurePasswordSetup(VAULT_LOCK_STATE.Uninitialized);
+    const store = new MahoWelcomeStore();
+    await moveToPasswordSetup(store);
+
+    await expect(store.advanceFromPasswordSetup(PASSWORD_PROVIDER_KIND.Bitwarden))
+      .resolves.toBe(true);
+
+    expect(mockHandler.setPasswordProvider)
+      .toHaveBeenCalledWith(PASSWORD_PROVIDER_KIND.Bitwarden);
+    expect(mockHandler.unlockVault).not.toHaveBeenCalled();
+    expect(mockHandler.initializeVault).not.toHaveBeenCalled();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+  });
+
   it('does not retain Vault secrets in Welcome state', async () => {
     const store = new MahoWelcomeStore();
     const masterPassphrase = 'master-only-in-call';

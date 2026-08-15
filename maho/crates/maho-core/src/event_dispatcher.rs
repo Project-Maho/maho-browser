@@ -3,7 +3,7 @@ use maho_types::common::{MemoryPressureLevel, Url};
 use maho_types::events::core_update::{CoreUpdate, FolderUpdate, MemoryAction};
 use maho_types::events::shell_event::{QuickAction, ShellEvent};
 use maho_types::identifiers::{FolderId, NoteId, ProfileId, SpaceId, TabId};
-use maho_types::settings::{Settings, SettingsUpdate};
+use maho_types::settings::{NewTabPosition, Settings, SettingsUpdate};
 use maho_types::space::{Space, SpaceColor};
 use maho_types::tab::{Tab, TabRole};
 use maho_types::traits::shell_renderer::{
@@ -221,6 +221,8 @@ pub trait NoteManagerInterface {
 
 pub trait SettingsInterface {
     fn update_settings(&mut self, changes: SettingsUpdate) -> Settings;
+    /// Where newly created tabs are inserted in the sidebar's normal section.
+    fn new_tab_position(&self) -> NewTabPosition;
 }
 
 pub trait ContentBlockerInterface {
@@ -301,7 +303,7 @@ impl EventDispatcher {
         space_mgr: &mut dyn SpaceManagerInterface,
         cmd_bar: &dyn CommandBarInterface,
         _note_mgr: &mut dyn NoteManagerInterface,
-        _settings_mgr: &mut dyn SettingsInterface,
+        settings_mgr: &mut dyn SettingsInterface,
         _content_blocker: &mut dyn ContentBlockerInterface,
         notification_mgr: &mut dyn NotificationManagerInterface,
         llm_mgr: &mut dyn LLMManagerInterface,
@@ -376,9 +378,18 @@ impl EventDispatcher {
                     tab_mgr.create_tab(space_id.clone(), resolved_url, parent_id, window_id, is_private)
                 };
                 // New tabs (freshly created, even with a C++-assigned id) open at the
-                // TOP of the normal area. Re-announce of an already-existing tab
-                // (session wake / move) keeps None so its position is not reshuffled.
-                let insert_position = if is_reannounce { None } else { Some(0) };
+                // position the user chose in Settings: TOP (index 0, the historical
+                // default) or BOTTOM (append, expressed as None). Re-announce of an
+                // already-existing tab (session wake / move) always keeps None so its
+                // position is not reshuffled.
+                let insert_position = if is_reannounce {
+                    None
+                } else {
+                    match settings_mgr.new_tab_position() {
+                        NewTabPosition::Top => Some(0),
+                        NewTabPosition::Bottom => None,
+                    }
+                };
                 space_mgr.add_tab_to_space(&space_id, tab.id.clone(), insert_position);
                 if let Some(explicit_id) = tab_id_clone {
                     let is_in_folder = space_mgr.is_tab_in_folder(&space_id, &explicit_id);
@@ -1603,6 +1614,9 @@ impl NoteManagerInterface for NoteManager {
 impl SettingsInterface for SettingsManager {
     fn update_settings(&mut self, changes: SettingsUpdate) -> Settings {
         self.update_settings(changes).clone()
+    }
+    fn new_tab_position(&self) -> NewTabPosition {
+        self.get_settings().general.new_tab_position
     }
 }
 

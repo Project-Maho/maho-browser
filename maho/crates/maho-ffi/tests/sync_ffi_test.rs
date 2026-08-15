@@ -102,6 +102,54 @@ fn configure_sync_encryption_is_deterministic_across_cores() {
 }
 
 #[test]
+fn configure_sync_bootstrap_is_deterministic_and_fail_closed() {
+    let origin = maho_ffi::maho_core_new();
+    let joiner = maho_ffi::maho_core_new();
+    let url = CString::new(TEST_RELAY_URL).unwrap();
+    let generated = take_json(unsafe { maho_ffi::maho_core_generate_sync_bootstrap(origin) });
+    let bootstrap = CString::new(
+        generated["seed"]
+            .as_str()
+            .expect("generated bootstrap contains a seed"),
+    )
+    .unwrap();
+
+    let origin_result = take_json(unsafe {
+        maho_ffi::maho_core_configure_sync_bootstrap(
+            origin,
+            url.as_ptr(),
+            bootstrap.as_ptr(),
+        )
+    });
+    let joiner_result = take_json(unsafe {
+        maho_ffi::maho_core_configure_sync_bootstrap(
+            joiner,
+            url.as_ptr(),
+            bootstrap.as_ptr(),
+        )
+    });
+
+    assert_eq!(origin_result["success"], Value::Bool(true));
+    assert_eq!(origin_result["roomId"], joiner_result["roomId"]);
+
+    let malformed = CString::new("not-base64").unwrap();
+    let rejected = take_json(unsafe {
+        maho_ffi::maho_core_configure_sync_bootstrap(
+            joiner,
+            url.as_ptr(),
+            malformed.as_ptr(),
+        )
+    });
+    assert_eq!(rejected["success"], Value::Bool(false));
+    assert!(rejected["error"].is_string());
+
+    unsafe {
+        maho_ffi::maho_core_free(origin);
+        maho_ffi::maho_core_free(joiner);
+    }
+}
+
+#[test]
 fn configure_sync_encryption_rejects_invalid_phrase() {
     let core = maho_ffi::maho_core_new();
     let url = CString::new(TEST_RELAY_URL).unwrap();

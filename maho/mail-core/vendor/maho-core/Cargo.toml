@@ -9,7 +9,7 @@ edition = "2021"
 # `MahoMail*` symbols do not collide when maho-core is linked as a dependency of
 # that real FFI crate. Nothing in the app references it.
 default = []
-legacy-ffi = []
+legacy-ffi = ["dep:keyring"]
 
 [dependencies]
 rusqlite = { workspace = true }
@@ -40,7 +40,7 @@ regex = "1"
 pgp = "0.14"
 smallvec = "1"
 sha2 = "0.10"
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 futures = "0.3"
 urlencoding = "2"
 md-5 = "0.10"

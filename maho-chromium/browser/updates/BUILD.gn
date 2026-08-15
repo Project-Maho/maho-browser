@@ -1,5 +1,19 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 
+if (is_mac) {
+  config("maho_sparkle_loader_paths") {
+    ldflags = [
+      "-Wl,-rpath,@loader_path/.",
+      "-Wl,-rpath,@loader_path/../../..",
+    ]
+  }
+
+  copy("stage_sparkle_framework") {
+    sources = [ "//maho/third_party/sparkle/Sparkle.framework" ]
+    outputs = [ "$root_out_dir/{{source_file_part}}" ]
+  }
+}
+
 source_set("maho_updates_prefs") {
   sources = [
     "maho_update_pref_names.h",
@@ -59,6 +73,8 @@ component("maho_updates_lib") {
     sources += [ "maho_update_delegate_mac.mm" ]
     frameworks = [ "Sparkle.framework" ]
     framework_dirs = [ rebase_path("//maho/third_party/sparkle") ]
+    all_dependent_configs = [ ":maho_sparkle_loader_paths" ]
+    data_deps = [ ":stage_sparkle_framework" ]
   }
   if (is_win) {
     sources += [

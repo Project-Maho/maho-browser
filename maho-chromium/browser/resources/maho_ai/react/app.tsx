@@ -1,15 +1,18 @@
-import React, {Component, useCallback, useEffect, useMemo, useRef} from 'react';
+import React, {Component, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {ErrorInfo, ReactNode} from 'react';
 import {createRoot} from 'react-dom/client';
 import {toast} from 'sonner';
 
 import type {MahoAiStore} from '../store.js';
+import {bindComposerDraftLifecycle} from './features/compact/composer-draft-persistence.js';
 import {createFileAttachment, isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
 import type {AISelectionRequest, AppState, QuickAction, TimelineEntry} from '../types.js';
 import {getToolProgressLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
+import {CompactTopbar} from './features/compact/compact-topbar.js';
+import {RoutineWorkspace} from './features/compact/routine-workspace.js';
 import {SuggestionChips} from './features/compact/compact-stage.js';
 import {VoiceInputModal} from './features/compact/voice-input-modal.js';
 import {SlashEditors} from './features/compact/slash-editors.js';
@@ -122,9 +125,24 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function MahoAiApp({store}: {store: MahoAiStore}) {
+  const [compactSurface, setCompactSurface] =
+      useState<'chat'|'routines'>('chat');
+  const routineSurfaceClient = useMemo(
+      () => store.getRoutineSurfaceClient(
+          surface => setCompactSurface(surface.surface)),
+      [store]);
+  const routineClient =
+      useMemo(() => store.getRoutineOperationsClient(), [store]);
   const state = useAppState(store);
   const bootstrappedRef = useRef(false);
   const [handlerTimedOut, setHandlerTimedOut] = React.useState(false);
+
+  useEffect(() => {
+    void routineSurfaceClient.initialize().catch((error: unknown) => {
+      console.error('[maho-ai] Routine surface handoff failed:', error);
+    });
+    return () => routineSurfaceClient.dispose();
+  }, [routineSurfaceClient]);
   useEffect(() => {
     (window as unknown as Record<string, unknown>)['__mahoAiMounted'] = true;
     applyTheme("auto");
@@ -133,13 +151,10 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
 
   useEffect(() => {
     void store.refreshAISettings();
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        void store.refreshAISettings();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
+    return bindComposerDraftLifecycle(
+        document,
+        () => void store.flushComposerDraft(),
+        () => void store.refreshAISettings());
   }, [store]);
 
   useEffect(() => {
@@ -321,6 +336,9 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     onCancel: () => {
       void store.cancelTurn();
     },
+    onComposerBlur: () => {
+      void store.flushComposerDraft();
+    },
     onStartSession: () => {
       void store.startSession();
     },
@@ -420,6 +438,26 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   return (
     <div className="maho-ai-page-surface flex h-screen min-h-0 flex-col overflow-hidden rounded-l-xl border border-border bg-background/90 text-foreground shadow-[var(--shadow-overlay)] backdrop-blur-2xl">
       <section className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 p-3 max-[520px]:gap-2 max-[520px]:p-2">
+        <div hidden={compactSurface !== 'routines'}>
+          <CompactTopbar
+            store={store}
+            onClosePanel={modeHandlers.onClosePanel}
+            onGetViewMode={modeHandlers.onGetViewMode}
+            onOpenRoutines={() => setCompactSurface('routines')}
+            onOpenSettings={modeHandlers.onOpenSettings}
+            onSetViewMode={modeHandlers.onSetViewMode}
+            onStartSession={() => {
+              setCompactSurface('chat');
+              modeHandlers.onNewSession();
+            }}
+            routinesActive
+          />
+          <RoutineWorkspace
+            client={routineClient}
+            onBackToChat={() => setCompactSurface('chat')}
+          />
+        </div>
+        <div className="contents" hidden={compactSurface !== 'chat'}>
         {state.bootError ? <BootErrorCard message={state.bootError} /> : (
           <>
             <div className={cn(
@@ -445,11 +483,15 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   onClosePanel={modeHandlers.onClosePanel}
                   onConnect={modeHandlers.onConnectMcp}
                   onGetViewMode={modeHandlers.onGetViewMode}
+                  onOpenRoutines={() => setCompactSurface('routines')}
                   onOpenSettings={modeHandlers.onOpenSettings}
                   onRegenerate={handleRegenerate}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
                   onSetViewMode={modeHandlers.onSetViewMode}
-                  onStartSession={modeHandlers.onNewSession}
+                  onStartSession={() => {
+                    setCompactSurface('chat');
+                    modeHandlers.onNewSession();
+                  }}
                   readOnly={readOnly}
                   thinkingLabel={thinkingLabel}
                 />
@@ -469,6 +511,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
             </div>
           </>
         )}
+        </div>
       </section>
       {state.voice.active ? (
         <VoiceInputModal

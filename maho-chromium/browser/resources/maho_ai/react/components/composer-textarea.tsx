@@ -11,6 +11,7 @@ import { Textarea } from '@ui/textarea';
 interface ComposerTextareaProps {
   className?: string;
   focusRequest: number;
+  onBlur?: () => void;
   onPasteFiles?: (files: File[]) => void;
   onSubmit: () => void;
   onValueChange: (value: string) => void;
@@ -24,6 +25,7 @@ export function ComposerTextarea(
     {
       className,
       focusRequest,
+      onBlur,
       onPasteFiles,
       onSubmit,
       onValueChange,
@@ -87,6 +89,7 @@ export function ComposerTextarea(
       disabled={readOnly}
       placeholder={placeholder}
       rows={rows}
+      onBlur={onBlur}
       onCompositionEnd={event => {
         compositionActiveRef.current = false;
         onValueChange(event.currentTarget.value);

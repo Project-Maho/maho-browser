@@ -20,6 +20,7 @@
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
@@ -94,6 +95,7 @@ class TidyRun {
     base::JSONWriter::Write(event_dict, &event_json);
 
     std::string updates = maho::core::HandleEvent(core, event_json.c_str());
+    InvalidateSidebarCoreCacheForUpdatesJson(updates);
     std::optional<base::Value> parsed =
         base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
     if (!parsed) {
@@ -160,6 +162,7 @@ class TidyRun {
 
     std::string updates =
         maho::core::HandleEvent(core, llm_result_json.c_str());
+    InvalidateSidebarCoreCacheForUpdatesJson(updates);
     std::optional<base::Value> parsed =
         base::JSONReader::Read(updates, base::JSON_PARSE_RFC);
     if (!parsed) {
@@ -180,6 +183,7 @@ class TidyRun {
 
     std::string apply_updates =
         maho::core::HandleEvent(core, apply_json.c_str());
+    InvalidateSidebarCoreCacheForUpdatesJson(apply_updates);
     std::optional<base::Value> apply_parsed =
         base::JSONReader::Read(apply_updates, base::JSON_PARSE_RFC);
 

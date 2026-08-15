@@ -27,8 +27,6 @@ jobs:
             labels: [self-hosted, chromium-builder, macos, arm64]
           - os: linux-x64
             labels: [self-hosted, chromium-builder, linux, x64]
-          - os: linux-arm64
-            labels: [self-hosted, chromium-builder, linux, arm64]
           - os: windows-x64
             labels: [self-hosted, chromium-builder, windows, x64]
     runs-on: ${{ matrix.labels }}
@@ -49,7 +47,12 @@ jobs:
 
       - name: Package (Linux)
         if: startsWith(matrix.os, 'linux')
-        run: python3 maho-chromium/build/scripts/build_maho_linux_packages.py
+        run: >
+          python3 maho-chromium/build/scripts/build_maho_linux_packages.py
+          --format all --release --skip-rust --skip-chromium
+
+      - name: Test release contracts
+        run: python3 -m unittest maho-chromium/build/scripts/test_release_build_contracts.py
 
       - name: Generate macOS appcast
         if: matrix.os == 'macos-arm64'
@@ -68,15 +71,36 @@ jobs:
             --version "${{ steps.ver.outputs.version }}" \
             --win-exe "chromium/src/out/Default/MahoSetup-${{ steps.ver.outputs.version }}.exe"
 
-      - name: Upload release artifacts
+      - name: Upload macOS release artifacts
+        if: matrix.os == 'macos-arm64'
         uses: actions/upload-artifact@v4
         with:
           name: maho-release-${{ matrix.os }}
-          if-no-files-found: ignore
+          if-no-files-found: error
           path: |
-            chromium/src/out/Default/MahoSetup-*.exe
-            chromium/src/out/Default/*.deb
-            chromium/src/out/Default/*.rpm
             chromium/src/out/Default/Maho-*.dmg
             chromium/src/out/Default/appcast.xml
+
+      - name: Upload Windows release artifacts
+        if: matrix.os == 'windows-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maho-release-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            chromium/src/out/Default/MahoSetup-*.exe
             chromium/src/out/Default/update-win.json
+
+      - name: Upload Linux release artifacts
+        if: matrix.os == 'linux-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: maho-release-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            chromium/src/out/Linux-tarball/*.tar.gz
+            chromium/src/out/Linux-tarball/*.tar.gz.sig
+            chromium/src/out/Linux-deb/*.deb
+            chromium/src/out/Linux-deb/*.deb.sig
+            chromium/src/out/Linux-rpm/rpmbuild/RPMS/x86_64/*.rpm
+            chromium/src/out/Linux-rpm/rpmbuild/RPMS/x86_64/*.rpm.sig

@@ -6,7 +6,8 @@
     "test": "node run-tests.js",
     "test:ios": "node run-tests.js",
     "test:android": "node run-android-smoke.js",
-    "test:edge": "node edge-case-tests.js"
+    "test:edge": "node edge-case-tests.js",
+    "test:desktop-mail": "node desktop-mail/run-desktop-mail-e2e.js"
   },
   "dependencies": {
     "webdriverio": "^9.7.4"

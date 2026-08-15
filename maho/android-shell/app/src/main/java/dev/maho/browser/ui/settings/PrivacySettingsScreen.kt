@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSettings
 import dev.maho.browser.bridge.sendEvent
 import dev.maho.browser.MahoBridge
+import dev.maho.browser.models.ContentBlockingMode
 import dev.maho.browser.models.PrivacySettingsUpdate
 import dev.maho.browser.models.ShellEvent
 import dev.maho.browser.ui.icons.MahoIcon
@@ -39,6 +40,7 @@ fun PrivacySettingsScreen(
     var doNotTrack by remember { mutableStateOf(false) }
     var blockThirdPartyCookies by remember { mutableStateOf(true) }
     var contentBlockerEnabled by remember { mutableStateOf(false) }
+    var contentBlockingMode by remember { mutableStateOf(ContentBlockingMode.NATIVE) }
     var popupBlockerEnabled by remember { mutableStateOf(true) }
     var searchSuggestionsEnabled by remember { mutableStateOf(false) }
     var secureDnsEnabled by remember { mutableStateOf(false) }
@@ -53,6 +55,7 @@ fun PrivacySettingsScreen(
         doNotTrack = p.doNotTrack
         blockThirdPartyCookies = p.blockThirdPartyCookies
         contentBlockerEnabled = p.contentBlockerEnabled
+        contentBlockingMode = p.contentBlockingMode
         popupBlockerEnabled = p.popupBlockerEnabled
         searchSuggestionsEnabled = p.searchSuggestionsEnabled
         secureDnsEnabled = p.secureDnsEnabled
@@ -111,11 +114,12 @@ fun PrivacySettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
             SectionHeader("Content")
-            SwitchPreference("Content Blocker", contentBlockerEnabled) {
+            val nativeBlockingEnabled = contentBlockingMode.isNative && contentBlockerEnabled
+            SwitchPreference("Content Blocker", nativeBlockingEnabled) {
                 contentBlockerEnabled = it
                 BridgeSettings.updatePrivacySettings(PrivacySettingsUpdate(contentBlockerEnabled = it))
             }
-            if (contentBlockerEnabled) {
+            if (nativeBlockingEnabled) {
                 var showAddWhitelistDialog by remember { mutableStateOf(false) }
                 var newWhitelistDomain by remember { mutableStateOf("") }
                 val context = androidx.compose.ui.platform.LocalContext.current

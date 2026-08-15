@@ -3,25 +3,24 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_TOP_BAR_VIEW_H_
 #define MAHO_BROWSER_UI_VIEWS_SIDEBAR_MAHO_SIDEBAR_TOP_BAR_VIEW_H_
 
+#include <memory>
 #include <string>
 #include <string_view>
-#include <memory>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/functional/callback.h"
 #include "build/build_config.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
+#include "maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
-
-namespace views {
-class DotIndicator;
-}  // namespace views
 
 class AppMenu;
 class AppMenuModel;
@@ -33,12 +32,16 @@ class Event;
 
 namespace views {
 class ImageButton;
+class Label;
 class View;
 }  // namespace views
 
 namespace maho {
 
-class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarTopBarView, views::View)
+class MahoSidebarTopBarView
+    : public views::View,
+      public maho::ai::MahoControlActivityService::Observer {
+  METADATA_HEADER(MahoSidebarTopBarView, views::View)
 
  public:
   explicit MahoSidebarTopBarView(Browser* browser);
@@ -49,8 +52,17 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   void Update(const MahoSidebarTopBarModel& model);
   void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
 
-  // R-12: Applies the private-window top-bar treatment. Removes the mail
-  // overlay button. No profile/pref reads.
+  // Pushes the resolved control-activity state into the hosted chip. The top
+  // bar owns the chip's placement only; controller/session truth stays with
+  // the caller, so an idle model simply hides the chip.
+  void SetControlActivity(const MahoControlActivityIndicatorModel& model);
+  void SetControlledTabChangedCallback(
+      base::RepeatingCallback<void(std::string)> callback) {
+    controlled_tab_changed_callback_ = std::move(callback);
+  }
+
+  // R-12: Applies the private-window top-bar treatment. Mail visibility is
+  // recomputed from the profile's off-the-record state and enabled pref.
   void SetPrivateAppearance();
   bool ShowAppMenu();
   void SetNavClusterVisible(bool visible);
@@ -59,6 +71,8 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   void SetLeadingActionsVisible(bool visible);
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   void AddedToWidget() override;
+  void OnControlActivityChanged(
+      const maho::ai::ControlActivity& activity) override;
 
   views::View* leading_cluster_for_testing() { return leading_cluster_; }
   views::View* nav_cluster_for_testing() { return nav_cluster_; }
@@ -71,6 +85,10 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   views::ImageButton* reload_button_for_testing() { return reload_button_; }
   views::ImageButton* ai_button_for_testing() { return ai_button_; }
   views::ImageButton* mail_button_for_testing() { return mail_button_; }
+  views::Label* mail_unread_badge_for_testing() { return mail_unread_badge_; }
+  MahoControlActivityIndicatorView* control_activity_indicator_for_testing() {
+    return control_activity_indicator_;
+  }
   const MahoSidebarPalette& sidebar_palette_for_testing() const {
     return palette_;
   }
@@ -89,6 +107,10 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   // invalidates layout on inset change, so does not loop with
   // OnBoundsChanged.
   void MaybeUpdateDynamicTopInset();
+  // Switches the control-activity chip to its compact form once the top bar is
+  // narrower than the shared compact-navigation threshold, so the chip's Stop
+  // affordance survives a 320dp window.
+  void MaybeUpdateControlActivityCompact();
   void UpdateButtonState(views::ImageButton* button,
                          bool enabled,
                          const gfx::VectorIcon& icon,
@@ -98,8 +120,9 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   void OnReloadPressed(const ui::Event& event);
   void OnAiPressed(const ui::Event& event);
   void OnMailPressed(const ui::Event& event);
-  // Shows/hides the unread dot on the Mail button from the
-  // `maho.mail.unread_count` pref.
+  // Shows/hides the Mail entry point from the canonical enabled pref while
+  // keeping it hidden for off-the-record profiles.
+  void UpdateMailButtonVisibility();
   void UpdateMailUnreadBadge();
   void OnToggleSidebarPressed(const ui::Event& event);
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
@@ -121,7 +144,9 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
   raw_ptr<views::ImageButton> mail_button_ = nullptr;
-  raw_ptr<views::DotIndicator> mail_unread_dot_ = nullptr;
+  raw_ptr<views::Label> mail_unread_badge_ = nullptr;
+  raw_ptr<MahoControlActivityIndicatorView> control_activity_indicator_ =
+      nullptr;
   PrefChangeRegistrar mail_pref_registrar_;
   MahoSidebarPalette palette_;
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
@@ -131,6 +156,11 @@ class MahoSidebarTopBarView : public views::View {  METADATA_HEADER(MahoSidebarT
   int app_menu_generation_ = 0;
 #endif
   MahoSidebarTopBarModel model_;
+  raw_ptr<maho::ai::MahoControlActivityService> control_activity_service_ =
+      nullptr;
+  uint64_t control_activity_revision_ = 0;
+  std::string control_activity_id_;
+  base::RepeatingCallback<void(std::string)> controlled_tab_changed_callback_;
   base::WeakPtrFactory<MahoSidebarTopBarView> weak_factory_{this};
 };
 

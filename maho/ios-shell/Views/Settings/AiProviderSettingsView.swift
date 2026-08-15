@@ -55,13 +55,16 @@ struct AiProviderSettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .accessibilityLabel("Base URL")
+                        .accessibilityIdentifier("aiProviderBaseURLField")
                         .onChange(of: baseURL) { _, newValue in
                             AiProviderResolver.setBaseURL(newValue)
                         }
                 } header: {
                     Text("Base URL")
                 } footer: {
-                    Text("OpenAI-compatible endpoint, e.g. https://api.together.xyz/v1")
+                    Text("Enter the provider's OpenAI-compatible API endpoint, including its version path.")
                 }
                 keySection
                 modelSection
@@ -88,6 +91,8 @@ struct AiProviderSettingsView: View {
             SecureField(keyPlaceholder, text: $apiKey)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .accessibilityLabel("API Key")
+                .accessibilityIdentifier("aiProviderAPIKeyField")
                 .onChange(of: apiKey) { _, newValue in
                     persistKey(newValue)
                 }
@@ -105,6 +110,8 @@ struct AiProviderSettingsView: View {
             TextField(modelPlaceholder, text: $model)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+                .accessibilityLabel("Model")
+                .accessibilityIdentifier("aiProviderModelField")
                 .onChange(of: model) { _, newValue in
                     AiProviderResolver.setModel(newValue)
                 }

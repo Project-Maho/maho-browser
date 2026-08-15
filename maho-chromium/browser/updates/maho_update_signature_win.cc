@@ -1,5 +1,12 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+// Win32 crypto API interop: CMSG_SIGNER_INFO is populated in-place by
+// CryptMsgGetParam via a reinterpret_cast over a byte buffer, which cannot be
+// expressed with bounds-checked spans.
+#pragma allow_unsafe_buffers
+#endif
+
 #include "maho/browser/updates/maho_update_signature_win.h"
 
 #include <windows.h>

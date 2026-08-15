@@ -33,9 +33,21 @@ class RpcParams private constructor(
     fun string(name: String, index: Int): String =
         optString(name, index) ?: throw IllegalArgumentException("Missing required param '$name'")
 
+    fun has(name: String, index: Int): Boolean = when {
+        obj != null -> obj.has(name)
+        arr != null -> index < arr.length()
+        else -> false
+    }
+
+    fun raw(name: String, index: Int): Any? = when {
+        obj != null -> if (obj.has(name)) obj.get(name) else null
+        arr != null -> if (index < arr.length()) arr.get(index) else null
+        else -> null
+    }
+
     fun long(name: String, index: Int, default: Long): Long = when {
-        obj != null -> if (obj.has(name)) obj.getLong(name) else default
-        arr != null -> if (index < arr.length()) arr.getLong(index) else default
+        obj != null -> if (obj.has(name) && !obj.isNull(name)) obj.getLong(name) else default
+        arr != null -> if (index < arr.length() && !arr.isNull(index)) arr.getLong(index) else default
         else -> default
     }
 

@@ -36,7 +36,9 @@ fn test_sync_sqlite_integration_flow() {
     core.set_sync_status(SyncStatus::Synced);
     core.sync_push_entity_persisted(entity.clone());
 
-    let outgoing = core.drain_sync_outgoing();
+    let outgoing = core
+        .drain_sync_outgoing_envelopes()
+        .expect("V2 envelope drain");
     assert_eq!(outgoing.len(), 1);
 
     let pending = core
@@ -44,9 +46,21 @@ fn test_sync_sqlite_integration_flow() {
         .unwrap()
         .load_pending_sync_entities()
         .unwrap();
-    assert!(pending.is_empty());
+    assert_eq!(pending.len(), 1, "outbox remains durable until relay ACK");
 
-    core.ack_sync_entity("shortcut", "test-action", version);
+    assert!(
+        core.ack_sync_delivery(&outgoing[0].delivery_id, 1)
+            .expect("ACK delivery"),
+        "relay ACK must complete the matching durable outbox row"
+    );
+    assert!(
+        core.storage_ref()
+            .unwrap()
+            .load_pending_sync_entities()
+            .unwrap()
+            .is_empty(),
+        "ACKed outbox entry must not retry"
+    );
 
     let mut remote_entity = entity.clone();
     remote_entity.version = version + 1;
@@ -225,7 +239,9 @@ fn test_sync_queue_survives_restart_and_flushes() {
             .expect("configure encryption");
         core2.set_sync_status(SyncStatus::Synced);
 
-        let msgs = core2.drain_sync_outgoing();
+        let msgs = core2
+            .drain_sync_outgoing_envelopes()
+            .expect("drain V2 envelopes");
         assert_eq!(
             msgs.len(),
             1,
@@ -233,7 +249,10 @@ fn test_sync_queue_survives_restart_and_flushes() {
         );
         assert!(
             matches!(
-                msgs[0],
+                serde_json::from_slice::<maho_core::sync_models::SyncMessage>(
+                    &msgs[0].payload_bytes().expect("decode envelope")
+                )
+                .expect("decode encrypted message"),
                 maho_core::sync_models::SyncMessage::Encrypted { .. }
             ),
             "flushed queue entry must be encrypted, never plaintext"
@@ -244,9 +263,22 @@ fn test_sync_queue_survives_restart_and_flushes() {
             .unwrap()
             .load_pending_sync_entities()
             .unwrap();
+        assert_eq!(
+            pending_after.len(),
+            1,
+            "queue entry must remain until the relay acknowledges its delivery"
+        );
+        core2
+            .ack_sync_delivery(&msgs[0].delivery_id, 2)
+            .expect("ACK restarted delivery");
         assert!(
-            pending_after.is_empty(),
-            "queue entry must be marked sent after flush"
+            core2
+                .storage_ref()
+                .unwrap()
+                .load_pending_sync_entities()
+                .unwrap()
+                .is_empty(),
+            "ACKed restarted delivery must leave the durable outbox"
         );
     }
 }

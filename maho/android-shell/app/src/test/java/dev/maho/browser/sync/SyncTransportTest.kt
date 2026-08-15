@@ -1,7 +1,7 @@
 package dev.maho.browser.sync
 
-import android.content.Context
-import android.util.Base64
+import dev.maho.browser.support.MahoJson
+import kotlinx.serialization.json.jsonObject
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -10,141 +10,168 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
-import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowLooper
-import java.nio.charset.StandardCharsets
+import java.io.File
 import java.util.concurrent.TimeUnit
 
-class FakeBridgeAdapter : SyncBridgeAdapter {
-    val appliedEntities = mutableListOf<String>()
-    var drainResult: String? = null
+private class FakeV2BridgeAdapter : SyncBridgeAdapter {
+    var roomId: String? = "0123456789abcdef0123456789abcdef"
+    var outgoing = emptyList<SyncEnvelopeV2>()
+    var cursor = 0L
+    val acknowledged = mutableListOf<RelayAckV2>()
+    val applied = mutableListOf<SyncEnvelopeV2>()
+    val states = mutableListOf<SyncTransportStateReport>()
 
-    override fun applyRemoteEntities(json: String) {
-        appliedEntities.add(json)
+    override fun getSyncRoomId(): String? = roomId
+    override fun leaseOutgoingEnvelopes(limit: Int): List<SyncEnvelopeV2> = outgoing.take(limit)
+    override fun acknowledge(ack: RelayAckV2): Boolean {
+        acknowledged += ack
+        return outgoing.any { it.deliveryId == ack.deliveryId }
     }
-
-    override fun drainOutgoing(): String? = drainResult
+    override fun getReceiveCursor(roomId: String): Long = cursor
+    override fun applyEnvelopeAndAdvanceCursor(roomId: String, envelope: SyncEnvelopeV2): Boolean {
+        applied += envelope
+        cursor = envelope.relaySeq ?: return false
+        return true
+    }
+    override fun reportTransportState(report: SyncTransportStateReport) {
+        states += report
+    }
 }
 
-@RunWith(RobolectricTestRunner::class)
-@Config(application = android.app.Application::class)
+private class InMemoryV2SessionPersistence(
+    private var session: RelaySession?,
+) : RelaySessionPersistence {
+    override fun load(): RelaySession? = session
+    override fun save(session: RelaySession): Boolean {
+        this.session = session
+        return true
+    }
+    override fun getServerUrl(defaultUrl: String): String = session?.serverUrl ?: defaultUrl
+}
+
 class SyncTransportTest {
-    private lateinit var mockServer: MockWebServer
-    private lateinit var fakeAdapter: FakeBridgeAdapter
+    private lateinit var server: MockWebServer
+    private lateinit var bridge: FakeV2BridgeAdapter
+    private lateinit var persistence: InMemoryV2SessionPersistence
     private lateinit var transport: SyncTransport
 
     @Before
     fun setUp() {
-        mockServer = MockWebServer()
-        fakeAdapter = FakeBridgeAdapter()
-        transport = SyncTransport(fakeAdapter)
-        mockServer.start()
-        transport.initContext(RuntimeEnvironment.getApplication())
+        server = MockWebServer()
+        server.start()
+        bridge = FakeV2BridgeAdapter()
+        persistence = InMemoryV2SessionPersistence(
+            RelaySession(
+                email = "sync@example.com",
+                accessToken = "access",
+                refreshToken = "refresh",
+                serverUrl = server.url("/").toString(),
+            ),
+        )
+        transport = SyncTransport(
+            bridgeAdapter = bridge,
+            authClient = RelayAuthClient(),
+            sessionPersistence = persistence,
+        )
     }
 
     @After
     fun tearDown() {
-        try { transport.disconnect() } catch (_: Exception) {}
-        try { mockServer.shutdown() } catch (_: Exception) {}
-        val context = RuntimeEnvironment.getApplication()
-        context.getSharedPreferences("maho_sync", Context.MODE_PRIVATE)
-            .edit().remove("SyncTransport.lastServerSeq").commit()
+        transport.cancel()
+        server.shutdown()
     }
 
-    private fun startSession(): RelaySession {
-        return RelaySession(
-            email = "test@example.com",
-            accessToken = "access-token",
-            refreshToken = "refresh-token",
-            serverUrl = mockServer.url("/").toString(),
+    @Test
+    fun sharedV2FixtureUsesAndroidRelaySchema() {
+        val fixture = File(System.getProperty("user.dir"), "../../tests/fixtures/sync-v2/protocol.json")
+        val payload = fixture.readText()
+        val push = MahoJson.instance.decodeFromString<RelaySyncPushRequest>(
+            MahoJson.instance.parseToJsonElement(payload)
+                .jsonObject["push"]!!
+                .toString(),
         )
-    }
+        val ack = MahoJson.instance.decodeFromString<RelayAckV2>(
+            MahoJson.instance.parseToJsonElement(payload)
+                .jsonObject["ack"]!!
+                .toString(),
+        )
 
-    private fun waitFor(timeoutMs: Long = 2_000L, predicate: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            if (predicate()) return
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(20)
-        }
-        if (!predicate()) {
-            throw AssertionError("Condition was not met within ${timeoutMs}ms")
-        }
+        assertEquals("0123456789abcdef0123456789abcdef", push.roomId)
+        assertEquals(ack.deliveryId, push.messages.single().deliveryId)
     }
 
     @Test
-    fun polling_pushes_base64_blob_and_pulls_paginated_messages() {
-        val drained = "[{\"id\":\"1\"}]"
-        fakeAdapter.drainResult = drained
-        val expectedBlob = Base64.encodeToString(drained.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"messages\":[{\"seq\":0,\"blob\":\"aGVsbG8=\"},{\"seq\":5,\"blob\":\"d29ybGQ=\"}],\"has_more\":true}"))
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"messages\":[{\"seq\":7,\"blob\":\"eyJmb28iOiJiYXIifQ==\"}],\"has_more\":false}"))
+    fun bounded_cycle_pushes_v2_envelope_acks_and_pulls_shared_room() {
+        val outgoing = SyncEnvelopeV2(
+            protocolVersion = SYNC_PROTOCOL_VERSION,
+            deliveryId = "550e8400-e29b-41d4-a716-446655440000",
+            payload = "AA==",
+        )
+        bridge.outgoing = listOf(outgoing)
+        val inbound = SyncEnvelopeV2(
+            protocolVersion = SYNC_PROTOCOL_VERSION,
+            deliveryId = "550e8400-e29b-41d4-a716-446655440001",
+            payload = "AQ==",
+            relaySeq = 4,
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"acks":[{"delivery_id":"${outgoing.deliveryId}","seq":3}]}""",
+            ),
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"messages":[{"protocol_version":2,"delivery_id":"${inbound.deliveryId}","payload":"AQ==","relay_seq":4}],"has_more":false}""",
+            ),
+        )
 
-        transport.start(mockServer.url("/").toString(), startSession())
-        transport.triggerSync()
+        val result = transport.runBoundedCycle()
 
-        waitFor { mockServer.requestCount >= 3 }
-        val pushRequest = mockServer.takeRequest(5, TimeUnit.SECONDS)!!
-        assertEquals("POST", pushRequest.method)
-        assertTrue(pushRequest.path!!.contains("/sync/push"))
-        assertFalse(pushRequest.path!!.contains("since_seq"))
-        val pushBody = pushRequest.body.readUtf8()
-        assertTrue(pushBody.contains("\"blobs\""))
-        assertTrue(pushBody.contains(expectedBlob))
-
-        val firstPull = mockServer.takeRequest(5, TimeUnit.SECONDS)!!
-        assertEquals("GET", firstPull.method)
-        assertTrue(firstPull.path!!.contains("/sync/pull"))
-        assertTrue(firstPull.path!!.contains("since_seq=0"))
-        assertTrue(firstPull.path!!.contains("limit=100"))
-
-        val secondPull = mockServer.takeRequest(5, TimeUnit.SECONDS)!!
-        assertEquals("GET", secondPull.method)
-        assertTrue(secondPull.path!!.contains("/sync/pull"))
-        assertTrue(secondPull.path!!.contains("since_seq=5"))
-        assertTrue(secondPull.path!!.contains("limit=100"))
-
-        waitFor { transport.lastServerSeq == 7L }
-        assertEquals(listOf("hello", "world", "{\"foo\":\"bar\"}"), fakeAdapter.appliedEntities)
+        assertEquals(SyncCycleOutcome.SUCCESS, result.outcome)
+        assertEquals(listOf(RelayAckV2(outgoing.deliveryId, 3)), bridge.acknowledged)
+        assertEquals(listOf(inbound), bridge.applied)
+        assertEquals(4, bridge.cursor)
+        val push = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertTrue(push.path!!.contains("/sync/push"))
+        val pushBody = push.body.readUtf8()
+        assertTrue(pushBody.contains(bridge.roomId!!))
+        assertTrue(pushBody.contains(outgoing.deliveryId))
+        val pull = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertTrue(pull.path!!.contains("/sync/pull"))
+        assertTrue(pull.path!!.contains("room_id=${bridge.roomId}"))
+        assertTrue(pull.path!!.contains("after_seq=0"))
     }
 
     @Test
-    fun polling_refreshes_session_after_unauthorized_response() {
-        val drained = "[{\"id\":\"1\"}]"
-        fakeAdapter.drainResult = drained
-        mockServer.enqueue(MockResponse().setResponseCode(401).setBody("unauthorized"))
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\",\"email\":\"test@example.com\"}"))
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"messages\":[],\"has_more\":false}"))
+    fun mismatched_ack_set_keeps_outbox_unacknowledged() {
+        val outgoing = SyncEnvelopeV2(
+            protocolVersion = SYNC_PROTOCOL_VERSION,
+            deliveryId = "550e8400-e29b-41d4-a716-446655440000",
+            payload = "AA==",
+        )
+        bridge.outgoing = listOf(outgoing)
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"acks":[{"delivery_id":"550e8400-e29b-41d4-a716-446655440099","seq":3}]}""",
+            ),
+        )
 
-        transport.start(mockServer.url("/").toString(), startSession())
-        transport.triggerSync()
+        val result = transport.runBoundedCycle()
 
-        waitFor { mockServer.requestCount >= 4 }
-        val firstPush = mockServer.takeRequest(5, TimeUnit.SECONDS)!!
-        assertTrue(firstPush.path!!.contains("/sync/push"))
-        val refresh = mockServer.takeRequest(5, TimeUnit.SECONDS)!!
-        assertTrue(refresh.path!!.contains("/auth/refresh"))
-        val retriedPush = mockServer.takeRequest(5, TimeUnit.SECONDS)!!
-        assertTrue(retriedPush.path!!.contains("/sync/push"))
-        assertTrue(retriedPush.getHeader("Authorization")!!.contains("new-access"))
+        assertEquals(SyncCycleOutcome.PERMANENT_FAILURE, result.outcome)
+        assertTrue(bridge.acknowledged.isEmpty())
+        assertTrue(bridge.states.last().kind == "error")
     }
 
     @Test
-    fun disconnect_stops_future_polling() {
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("{\"messages\":[],\"has_more\":false}"))
+    fun missing_recovery_derived_room_fails_before_network() {
+        bridge.roomId = null
 
-        transport.start(mockServer.url("/").toString(), startSession())
-        transport.disconnect()
-        transport.triggerSync()
-        ShadowLooper.idleMainLooper()
+        val result = transport.runBoundedCycle()
 
-        assertFalse(transport.isConnected)
-        assertEquals(0, mockServer.requestCount)
+        assertEquals(SyncCycleOutcome.PERMANENT_FAILURE, result.outcome)
+        assertTrue(result.error!!.contains("recovery phrase"))
+        assertEquals(0, server.requestCount)
+        assertFalse(bridge.states.isEmpty())
     }
 }

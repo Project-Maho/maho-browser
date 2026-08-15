@@ -90,6 +90,11 @@ pub extern "C" fn MahoMailStartAllAccountSync() -> bool {
     })
 }
 
+#[no_mangle]
+pub extern "C" fn MahoMailSetSyncIntervalMinutes(minutes: u64) -> bool {
+    crate::sync::set_sync_interval_minutes(minutes)
+}
+
 /// Guarded auto-start of sync + backfill for every known account. Per-account
 /// work goes through the idempotent [`state::start_account_workers`] guard so a
 /// second call never double-spawns. Enumeration is the only fallible step;
@@ -219,11 +224,27 @@ pub type MahoMailEventCallback = unsafe extern "C" fn(
     reason: *const c_char,
 );
 
+pub type MahoMailNewMailCallback = unsafe extern "C" fn(
+    account_id: *const c_char,
+    email_id: *const c_char,
+    message_id: *const c_char,
+    sender: *const c_char,
+    subject: *const c_char,
+    cursor: u64,
+    epoch: u64,
+);
+
 static EVENT_CALLBACK: std::sync::OnceLock<MahoMailEventCallback> = std::sync::OnceLock::new();
+static NEW_MAIL_CALLBACK: std::sync::OnceLock<MahoMailNewMailCallback> = std::sync::OnceLock::new();
 
 #[no_mangle]
 pub extern "C" fn MahoMailRegisterEventCallback(callback: MahoMailEventCallback) -> bool {
     EVENT_CALLBACK.set(callback).is_ok()
+}
+
+#[no_mangle]
+pub extern "C" fn MahoMailRegisterNewMailCallback(callback: MahoMailNewMailCallback) -> bool {
+    NEW_MAIL_CALLBACK.set(callback).is_ok()
 }
 
 fn safe_c_string(s: &str) -> std::ffi::CString {
@@ -266,8 +287,33 @@ pub fn emit_accounts_changed_event(account_id: &str) {
     emit_event("accounts-changed", account_id, "", "");
 }
 
-pub fn emit_new_mail_event(account_id: &str) {
-    emit_event("new-mail", account_id, "", "");
+pub fn emit_new_mail_event(
+    account_id: &str,
+    email_id: &str,
+    message_id: &str,
+    sender: &str,
+    subject: &str,
+    cursor: u64,
+    epoch: u64,
+) {
+    if let Some(callback) = NEW_MAIL_CALLBACK.get() {
+        let account_id = safe_c_string(account_id);
+        let email_id = safe_c_string(email_id);
+        let message_id = safe_c_string(message_id);
+        let sender = safe_c_string(sender);
+        let subject = safe_c_string(subject);
+        unsafe {
+            callback(
+                account_id.as_ptr(),
+                email_id.as_ptr(),
+                message_id.as_ptr(),
+                sender.as_ptr(),
+                subject.as_ptr(),
+                cursor,
+                epoch,
+            );
+        }
+    }
 }
 
 #[cfg(test)]

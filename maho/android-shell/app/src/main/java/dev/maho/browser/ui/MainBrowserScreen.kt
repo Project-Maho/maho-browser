@@ -158,17 +158,18 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     }
 
     fun applyDisplayOptions() {
-        webViewRef?.applyDisplayOptions(
-            isReaderMode = isReaderMode,
-            zoomLevel = zoomLevel,
-        )
+        webViewRef?.applyDisplayOptions(isReaderMode = isReaderMode, zoomLevel = zoomLevel)
     }
 
     fun runReadabilityExtraction() {
         val webView = webViewRef ?: return
-        runMainBrowserReadabilityExtraction(webView) { readerUrl ->
-            if (urlBeforeReaderMode == null) urlBeforeReaderMode = readerUrl
-        }
+        runMainBrowserReadabilityExtraction(
+            webView = webView,
+            onReaderUrlCaptured = { readerUrl ->
+                if (urlBeforeReaderMode == null) urlBeforeReaderMode = readerUrl
+            },
+            onReaderContentLoaded = { isReaderMode = true },
+        )
     }
 
     fun toggleDesktopMode() {
@@ -638,7 +639,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                 isIncognito = isIncognito,
                                 isHomeMode = false,
                                 homeQuery = homeQuery,
-                                isReaderMode = isReaderMode,
+                                isReaderMode = isReaderMode || urlBeforeReaderMode != null,
                                 isDesktopMode = isDesktopMode,
                                 currentTitle = currentTitle,
                                 currentUrl = currentUrl,
@@ -722,14 +723,13 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     }
                                 },
                                 onToggleReaderMode = {
-                                    isReaderMode = !isReaderMode
-                                    if (isReaderMode) {
+                                    val originalUrl = urlBeforeReaderMode
+                                    if (originalUrl == null) {
                                         runReadabilityExtraction()
                                     } else {
-                                        urlBeforeReaderMode?.let {
-                                            webViewRef?.loadUrl(it)
-                                            urlBeforeReaderMode = null
-                                        } ?: webViewRef?.reload()
+                                        isReaderMode = false
+                                        urlBeforeReaderMode = null
+                                        webViewRef?.loadUrl(originalUrl)
                                     }
                                 },
                                 onReaderSettingsClick = {
@@ -874,7 +874,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             },
                             onLoadingChanged = { loading ->
                                 isLoading = loading
-                                if (loading) {
+                                if (loading && shouldResetReaderModeOnNavigation(urlBeforeReaderMode, currentUrl)) {
                                     isReaderMode = false
                                     urlBeforeReaderMode = null
                                     revealBottomBar(lockMillis = 700)

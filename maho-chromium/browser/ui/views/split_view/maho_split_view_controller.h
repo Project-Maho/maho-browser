@@ -16,6 +16,13 @@ enum class MahoSplitPersistence {
   kPrivateLocal,
 };
 
+// Landing side for a sidebar tab-on-tab split drag. This is preview-only until
+// the drop callback commits the split.
+enum class MahoSplitDropSide {
+  kLeft,
+  kRight,
+};
+
 // Manages split-view tab layout for a single browser window.
 //
 // Lifecycle: BrowserView owns one persistent instance created lazily on first
@@ -40,6 +47,15 @@ class MahoSplitViewController {
   // Only kPersistent may mirror split membership to MahoCore; kPrivateLocal
   // must not (primary Incognito). Shared by production and unit tests.
   static bool ShouldDispatchPersistentSplitEvent(MahoSplitPersistence mode);
+
+  // Shared by sidebar hover and drop handling so the preview always describes
+  // the side that will be committed. These helpers are pure and never mutate
+  // split state.
+  static MahoSplitDropSide ResolveDropSide(int x, int width);
+  static bool IsSplitDropEligible(bool is_multi_drag,
+                                  bool source_is_target,
+                                  bool source_already_split,
+                                  bool target_already_split);
 
   static void RestoreForWindow(Browser* browser);
 

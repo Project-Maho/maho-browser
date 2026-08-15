@@ -13,6 +13,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/base/mojom/dialog_button.mojom.h"
 #include "ui/gfx/geometry/insets.h"
@@ -70,6 +71,10 @@ void DeleteSpaceOnPool(const std::string& space_id) {
   }
 
   maho_core_delete_space(core, space_id.c_str());
+  maho::SidebarCacheInvalidation invalidation;
+  invalidation.fragments = maho::SidebarCoreFragment::kAll;
+  invalidation.space_ids.push_back(space_id);
+  maho::InvalidateSidebarCoreCache(invalidation);
 }
 
 class MahoSpaceDeleteConfirmationDialogView : public views::DialogDelegate {

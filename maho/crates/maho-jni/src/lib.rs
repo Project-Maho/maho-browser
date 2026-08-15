@@ -3,6 +3,9 @@ use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 use maho_core::maho_core::MahoCore;
 use std::ffi::{c_char, c_void, CStr};
+use std::sync::Mutex;
+
+static CONTENT_BLOCKER_QUERY_GATE: Mutex<()> = Mutex::new(());
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3030,7 +3033,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
 use swiftide_core::chat_completion::{
     errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
@@ -4023,6 +4025,9 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeQueryFilter
         None => return 0,
     };
 
+    let Ok(_query_guard) = CONTENT_BLOCKER_QUERY_GATE.lock() else {
+        return 0;
+    };
     if core.should_block_request(&url_str, &source_str, &type_str) {
         1
     } else {

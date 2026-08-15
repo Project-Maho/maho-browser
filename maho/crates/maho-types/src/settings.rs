@@ -68,6 +68,35 @@ fn default_pinned_close_behavior() -> PinnedCloseBehavior {
     PinnedCloseBehavior::Switch
 }
 
+/// Where a newly created tab is inserted in the sidebar's normal-tab section.
+/// `Top` reproduces the historical behaviour (insert above existing tabs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NewTabPosition {
+    Top,
+    Bottom,
+}
+
+/// Unknown wire values decode to `Top` rather than failing. Settings arrive as
+/// one JSON blob, so a value written by a newer/older shell (or a hand-edited
+/// store) must not take the whole settings decode down with it.
+impl<'de> Deserialize<'de> for NewTabPosition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(match raw.as_str() {
+            "bottom" => NewTabPosition::Bottom,
+            _ => NewTabPosition::Top,
+        })
+    }
+}
+
+fn default_new_tab_position() -> NewTabPosition {
+    NewTabPosition::Top
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReaderSettings {
@@ -114,6 +143,8 @@ pub struct GeneralSettings {
     pub pinned_close_behavior: PinnedCloseBehavior,
     #[serde(default = "default_true")]
     pub auto_delete_empty_folders_on_tidy: bool,
+    #[serde(default = "default_new_tab_position")]
+    pub new_tab_position: NewTabPosition,
 }
 
 fn default_archive_timeout() -> f64 {
@@ -378,6 +409,8 @@ pub struct GeneralSettingsUpdate {
     pub pinned_close_behavior: Option<PinnedCloseBehavior>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_delete_empty_folders_on_tidy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_tab_position: Option<NewTabPosition>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

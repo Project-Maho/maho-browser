@@ -5,6 +5,7 @@ struct NotificationSettingsView: View {
     @State private var calendarNotifications: Bool = true
     @State private var updateNotifications: Bool = true
     @State private var soundEnabled: Bool = true
+    @State private var showDismissAllConfirmation = false
 
     private let bridge = MahoBridge.shared
 
@@ -48,7 +49,17 @@ struct NotificationSettingsView: View {
 
             Section {
                 Button("Dismiss All Notifications", role: .destructive) {
-                    bridge.sendEvent(.dismissAllNotifications)
+                    showDismissAllConfirmation = true
+                }
+                .confirmationDialog(
+                    "Dismiss All Notifications?",
+                    isPresented: $showDismissAllConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Dismiss All", role: .destructive) {
+                        bridge.sendEvent(.dismissAllNotifications)
+                    }
+                    Button("Cancel", role: .cancel) {}
                 }
             }
         }

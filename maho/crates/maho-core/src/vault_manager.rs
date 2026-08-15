@@ -4,6 +4,7 @@
 //! key material only. `MahoCore` coordinates opaque-slot persistence, hydration,
 //! and grant revocation. Time is an explicit timestamp seam (no sleeps).
 
+mod credential_form;
 mod crypto_ops;
 mod device;
 mod item_error;
@@ -15,6 +16,9 @@ mod state;
 mod throttle;
 mod unlock;
 
+pub use credential_form::{
+    VaultAlternativeElement, VaultCredentialFormDetails, VaultCredentialNote,
+};
 pub use crypto_ops::ProtectedEnvelopeReader;
 pub use item_error::VaultCrudError;
 pub use item_input::{
@@ -24,6 +28,12 @@ pub use origin::OriginMatchPolicy;
 pub use persistence::{
     VaultHydrationOutcome, VaultHydrationSlots, VaultPersistedSlots, SLOT_KDF_PARAMS,
     SLOT_WRAPPED_RECOVERY_KEY, SLOT_WRAPPED_USER_KEY,
+};
+
+use std::path::Path;
+
+use maho_storage::sqlite::{
+    inspect_vault_database, VaultDatabaseInspection, VaultDatabaseKey, VaultDatabaseSnapshot,
 };
 
 use chrono::{DateTime, Duration, Utc};
@@ -41,6 +51,45 @@ use throttle::UnlockThrottle;
 
 const MANAGER_WRAP_AAD: &[u8] = b"maho-vault-manager-v1";
 const DEFAULT_AUTO_LOCK_MINUTES: u32 = 15;
+
+/// Typed startup classification for the persisted Vault key/database pair.
+/// Later FFI/C++ propagation can match this enum directly without parsing an
+/// error string or relying on a boolean unlock probe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultPreflightState {
+    Healthy,
+    Locked,
+    UnrecoverableKey,
+    StructuralCorruption,
+    PlaintextResidue,
+}
+
+/// Inspect the SQLCipher/Vault database without creating, migrating, repairing,
+/// or unlocking it. Key-store provenance comes from `key`; opaque Vault slots
+/// are structurally decoded through the same hydration seam used at startup.
+pub fn preflight_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultPreflightState {
+    match inspect_vault_database(path, key) {
+        VaultDatabaseInspection::Absent => VaultPreflightState::Healthy,
+        VaultDatabaseInspection::UnrecoverableKey => VaultPreflightState::UnrecoverableKey,
+        VaultDatabaseInspection::StructuralCorruption => VaultPreflightState::StructuralCorruption,
+        VaultDatabaseInspection::PlaintextResidue => VaultPreflightState::PlaintextResidue,
+        VaultDatabaseInspection::Readable(snapshot) => preflight_readable_database(snapshot),
+    }
+}
+
+fn preflight_readable_database(snapshot: VaultDatabaseSnapshot) -> VaultPreflightState {
+    let mut manager = VaultManager::new();
+    let slots = VaultHydrationSlots {
+        kdf_params: snapshot.kdf_params,
+        wrapped_user_key: snapshot.wrapped_user_key,
+        wrapped_recovery_key: snapshot.wrapped_recovery_key,
+    };
+    match manager.hydrate_locked(slots) {
+        Ok(VaultHydrationOutcome::Uninitialized) => VaultPreflightState::Healthy,
+        Ok(VaultHydrationOutcome::Locked) => VaultPreflightState::Locked,
+        Err(_) => VaultPreflightState::StructuralCorruption,
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultManagerError {

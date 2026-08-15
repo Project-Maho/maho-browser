@@ -11,7 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@ui/tooltip';
-import {Edit, Settings, Grid, X} from '@icons/lucide';
+import {Edit, Grid, RefreshCw, Settings, X} from '@icons/lucide';
 import {ViewMode} from '../../../types.js';
 import {ProfileSwitcher} from '../../components/profile-switcher.js';
 import {MahoAiStore} from '../../../store.js';
@@ -23,6 +23,8 @@ export function CompactTopbar(
       onOpenSettings,
       onSetViewMode,
       onGetViewMode,
+      onOpenRoutines = () => {},
+      routinesActive = false,
       onStartSession,
     }: {
       store: MahoAiStore;
@@ -30,6 +32,8 @@ export function CompactTopbar(
       onOpenSettings: () => void;
       onSetViewMode: (mode: ViewMode) => void;
       onGetViewMode: () => Promise<ViewMode>;
+      onOpenRoutines?: () => void;
+      routinesActive?: boolean;
       onStartSession: () => void;
     }) {
   const [currentMode, setCurrentMode] = useState<ViewMode>(ViewMode.kSidebar);
@@ -65,6 +69,20 @@ export function CompactTopbar(
               </Button>
             </TooltipTrigger>
             <TooltipContent>New session</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Open Routines"
+                aria-pressed={routinesActive}
+                className={iconButtonClass}
+                size="icon"
+                variant={routinesActive ? 'secondary' : 'ghost'}
+                onClick={onOpenRoutines}>
+                <RefreshCw className="size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Routines</TooltipContent>
           </Tooltip>
         </div>
 

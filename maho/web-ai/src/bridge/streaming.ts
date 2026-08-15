@@ -20,6 +20,7 @@ export interface ImageDelta {
 
 export interface StreamSubscriber {
   onToken?: (token: string, droppedCount?: number) => void;
+  onThinking?: (thinking: string) => void;
   onComplete?: (finalMessage: string) => void;
   onError?: (error: string) => void;
   onToolDelta?: (delta: ToolCallDelta) => void;
@@ -69,6 +70,7 @@ if (typeof window !== 'undefined') {
     __mahoStreamComplete?: (sessionId: string, finalMessage: string) => void;
     __mahoStreamError?: (sessionId: string, error: string) => void;
     __mahoStreamToolDelta?: (sessionId: string, delta: ToolCallDelta | string) => void;
+    __mahoStreamThinking?: (sessionId: string, thinking: string) => void;
     __mahoStreamImageDelta?: (sessionId: string, delta: ImageDelta | string) => void;
     __mahoPinchSummaryEvent?: (tabId: string, event: unknown) => void;
   };
@@ -92,6 +94,10 @@ if (typeof window !== 'undefined') {
 
   globalWindow.__mahoStreamToolDelta = (sessionId, delta) => {
     subscribers.get(sessionId)?.onToolDelta?.(coerceToolDelta(delta));
+  };
+
+  globalWindow.__mahoStreamThinking = (sessionId, thinking) => {
+    subscribers.get(sessionId)?.onThinking?.(thinking);
   };
 
   globalWindow.__mahoStreamImageDelta = (sessionId, delta) => {
