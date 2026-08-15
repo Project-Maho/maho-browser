@@ -25,6 +25,7 @@ import {cn} from '@lib/utils';
 import type {PaneDefinition} from '../models.js';
 import type {PageHandlerRemote} from '../maho_settings.mojom-webui.js';
 import {PaneShell, SectionCard} from './domain_panes.js';
+import {classifyMailSettingsFailure, createMailSettingsContentState, type MailSettingsState} from './mail_settings_state.js';
 import type {MahoSettingsStore} from './store.js';
 
 // The connected-account rows Settings manages. `id` and `email` are the only
@@ -125,8 +126,8 @@ export function MailAccountsPane(
     {pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler: PageHandlerRemote = store.getHandler();
   const mountedRef = useRef(true);
-  const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<MailAccount[]>([]);
+  const [modelState, setModelState] = useState<MailSettingsState<MailAccount[]>>({status: 'loading'});
   const [view, setView] = useState<View>('list');
   const [oauthProvider, setOAuthProvider] = useState<OAuthProvider>('gmail');
   const [busy, setBusy] = useState(false);
@@ -144,27 +145,39 @@ export function MailAccountsPane(
   }, []);
 
   const loadAccounts = useCallback(async (): Promise<MailAccount[] | null> => {
-    const {ok, resultJson} = await handler.mailListAccounts();
-    if (!mountedRef.current) {
-      return null;
-    }
-    if (!ok) {
-      setLoadError(resultJson || 'Mail accounts are unavailable.');
-      return null;
-    }
-    const parsed = parseMailAccounts(resultJson);
-    setLoadError(null);
-    setAccounts(parsed ?? []);
-
-    if (view === 'oauth' && activeOAuthState.current && parsed) {
-      const connected = parsed.some(account => !preOAuthIds.current.has(account.id));
-      if (connected) {
-        activeOAuthState.current = null;
-        setFeedback({kind: 'success', message: 'Mail account connected.'});
-        setView('list');
+    setModelState({status: 'loading'});
+    try {
+      const {ok, resultJson} = await handler.mailListAccounts();
+      if (!mountedRef.current) {
+        return null;
       }
+      if (!ok) {
+        setModelState(classifyMailSettingsFailure(resultJson, 'Could not load mail accounts.'));
+        return null;
+      }
+      const parsed = parseMailAccounts(resultJson);
+      if (parsed === null) {
+        setModelState({status: 'error', message: 'The mail service returned invalid account data.'});
+        return null;
+      }
+      setAccounts(parsed);
+      setModelState(createMailSettingsContentState(parsed));
+
+      if (view === 'oauth' && activeOAuthState.current) {
+        const connected = parsed.some(account => !preOAuthIds.current.has(account.id));
+        if (connected) {
+          activeOAuthState.current = null;
+          setFeedback({kind: 'success', message: 'Mail account connected.'});
+          setView('list');
+        }
+      }
+      return parsed;
+    } catch {
+      if (mountedRef.current) {
+        setModelState({status: 'error', message: 'Could not load mail accounts.'});
+      }
+      return null;
     }
-    return parsed ?? [];
   }, [handler, view]);
 
   useEffect(() => {
@@ -239,7 +252,7 @@ export function MailAccountsPane(
     setBusy(true);
     setFeedback(null);
     setOAuthProvider(provider);
-    preOAuthIds.current = new Set((accounts ?? []).map(account => account.id));
+    preOAuthIds.current = new Set(accounts.map(account => account.id));
     const {ok, resultJson} = await handler.mailBeginOAuth(provider);
     setBusy(false);
     if (!ok) {
@@ -283,6 +296,7 @@ export function MailAccountsPane(
 
   return (
     <PaneShell pane={pane}>
+      <div data-mail-settings-state={modelState.status}>
       {feedback ? (
         <Alert className="mb-6" variant={feedback.kind === 'error' ? 'destructive' : 'success'}>
           <AlertDescription>{feedback.message}</AlertDescription>
@@ -298,27 +312,27 @@ export function MailAccountsPane(
             Add account
           </Button>
         ) : null}>
-        {accounts === null && loadError === null ? (
+        {modelState.status === 'loading' ? (
           <div className="flex items-center gap-3 border-b border-border px-6 py-6 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             Loading mail accounts…
           </div>
         ) : null}
 
-        {loadError !== null ? (
+        {modelState.status === 'unavailable' || modelState.status === 'error' ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-6 py-4 text-sm text-muted-foreground">
-            <span>{loadError}</span>
+            <span>{modelState.message}</span>
             <Button type="button" size="sm" variant="outline" onClick={() => { void loadAccounts(); }}>Retry</Button>
           </div>
         ) : null}
 
-        {accounts !== null && accounts.length === 0 && loadError === null ? (
+        {modelState.status === 'empty' ? (
           <div className="border-b border-border px-6 py-4 text-sm leading-6 text-muted-foreground">
             No mail accounts connected yet.
           </div>
         ) : null}
 
-        {(accounts ?? []).map(account => {
+        {accounts.map(account => {
           const needsAttention = account.status !== '' && account.status !== 'connected' && account.status !== 'ok';
           const secondary = [account.displayName, account.provider].filter(Boolean).join(' · ');
           return (
@@ -412,6 +426,7 @@ export function MailAccountsPane(
           </div>
         ) : null}
       </SectionCard>
+      </div>
     </PaneShell>
   );
 }

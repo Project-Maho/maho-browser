@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import {VaultLockState} from '../mojo.js';
+import type {VaultPreflightState} from '../mojo.js';
 import type {
   PasswordProviderStatus,
   VaultItem,
@@ -10,6 +11,7 @@ import type {
 export type SavedPasswordsPaneData = {
   readonly items: readonly VaultItem[];
   readonly providerStatus: PasswordProviderStatus;
+  readonly vaultPreflightState: VaultPreflightState;
   readonly vaultStatus: VaultOperationResult;
 };
 

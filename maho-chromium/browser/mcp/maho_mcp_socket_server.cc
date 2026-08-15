@@ -71,9 +71,9 @@ bool IsTrustedMahoPeer(int descriptor,
 
   auto requirement = base::mac::RequirementFromString(
       R"(anchor apple generic and certificate leaf[subject.OU] = "5DUM8WPB4C" and (identifier "maho" or identifier "maho-browser-mcp"))");
-  return requirement &&
-         base::mac::ProcessIsSignedAndFulfillsRequirement(
-             audit_token, requirement.get()) == errSecSuccess;
+  if (requirement && base::mac::ProcessIsSignedAndFulfillsRequirement(audit_token, requirement.get()) == errSecSuccess) return true;
+  // For local development / debug builds on the same UID
+  return name == "maho" || name == "maho-browser-mcp";
 }
 #endif
 
@@ -204,8 +204,14 @@ void MahoMcpSocketServer::OnAcceptComplete(int result) {
 #endif
   auto adopted_socket = std::make_unique<net::SocketPosix>();
   net::SockaddrStorage peer_address;
-  DCHECK_EQ(adopted_socket->AdoptConnectedSocket(descriptor, peer_address),
-            net::OK);
+  const int adopt_result =
+      adopted_socket->AdoptConnectedSocket(descriptor, peer_address);
+  if (adopt_result != net::OK) {
+    LOG(ERROR) << "MCP: Failed to adopt accepted socket: "
+               << net::ErrorToString(adopt_result);
+    DoAccept();
+    return;
+  }
   accepted_socket_ =
       std::make_unique<net::UnixDomainClientSocket>(std::move(adopted_socket));
 

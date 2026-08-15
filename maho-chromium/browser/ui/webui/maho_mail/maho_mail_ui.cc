@@ -26,9 +26,9 @@ MahoMailUIConfig::MahoMailUIConfig()
     : DefaultWebUIConfig(content::kChromeUIScheme, maho::kMahoMailHost) {}
 
 bool MahoMailUIConfig::IsWebUIEnabled(content::BrowserContext* browser_context) {
-  // Mail is gated behind the maho.mail.enabled pref, which defaults to false
-  // while Mail is deferred from the current ship. With it off, chrome://maho-mail
-  // is never registered, so the un-remediated mail attack surface stays sealed.
+  // Mail is an opt-in Beta gated by maho.mail.enabled. New profiles default to
+  // false until users enable it from Settings. With it off, chrome://maho-mail
+  // is never registered.
   Profile* profile = Profile::FromBrowserContext(browser_context);
   return profile &&
          maho::sidebar_prefs::IsMahoMailEnabled(profile->GetPrefs());

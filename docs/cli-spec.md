@@ -4,6 +4,16 @@
 
 The Maho CLI (`maho`) provides a developer command-line interface and stdio/UDS MCP tool server bridging desktop AI, routines, mail, and local browser capabilities.
 
+Mail commands connect to the active Maho Browser profile. They do not open the
+encrypted Mail database directly and do not start a standalone daemon.
+Argument and subcommand errors exit with status `2`; runtime availability or
+authorization denials exit with status `1`. `--help` is available regardless
+of runtime Mail state.
+
+Mail tool discovery reports `feature_disabled`, `read_consent_required`,
+`helper_starting`, or `helper_unavailable`. Global approval does not bypass the
+profile-level Mail-read permission, and writes retain typed approval.
+
 ## CLI Subcommands
 
 ### 1. `maho agent`

@@ -2,10 +2,12 @@
 
 #include "maho/browser/mail_helper/maho_mail_service.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/base64.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -30,19 +32,80 @@
 
 namespace maho {
 
+MailBehaviorSnapshot::MailBehaviorSnapshot() = default;
+
+MailBehaviorSnapshot::~MailBehaviorSnapshot() = default;
+
+MailBehaviorSnapshot::MailBehaviorSnapshot(
+    const MailBehaviorSnapshot& other)
+    : version(other.version),
+      revision(other.revision),
+      desktop_notifications(other.desktop_notifications),
+      notification_preview(other.notification_preview),
+      unread_badge_enabled(other.unread_badge_enabled),
+      muted_thread_ids(other.muted_thread_ids),
+      values(other.values.Clone()) {}
+
+MailBehaviorSnapshot& MailBehaviorSnapshot::operator=(
+    const MailBehaviorSnapshot& other) {
+  if (this != &other) {
+    version = other.version;
+    revision = other.revision;
+    desktop_notifications = other.desktop_notifications;
+    notification_preview = other.notification_preview;
+    unread_badge_enabled = other.unread_badge_enabled;
+    muted_thread_ids = other.muted_thread_ids;
+    values = other.values.Clone();
+  }
+  return *this;
+}
+
+MailBehaviorSnapshot::MailBehaviorSnapshot(MailBehaviorSnapshot&&) = default;
+
+MailBehaviorSnapshot& MailBehaviorSnapshot::operator=(
+    MailBehaviorSnapshot&&) = default;
+
 namespace {
 
-// Process-wide OS-notification hook (see header). Installed by the browser
-// layer; null until then, so this is a no-op in unit tests and until wired.
-MailNotificationCallback& GetMailNotificationCallback() {
-  static base::NoDestructor<MailNotificationCallback> callback;
+MailNotificationPermissionStatusCallback&
+GetMailNotificationPermissionStatusCallback() {
+  static base::NoDestructor<MailNotificationPermissionStatusCallback> callback;
+  return *callback;
+}
+
+MailNotificationPermissionRequestCallback&
+GetMailNotificationPermissionRequestCallback() {
+  static base::NoDestructor<MailNotificationPermissionRequestCallback> callback;
   return *callback;
 }
 
 }  // namespace
 
-void SetMahoMailNotificationCallback(MailNotificationCallback callback) {
-  GetMailNotificationCallback() = std::move(callback);
+void SetMahoMailNotificationPermissionCallbacks(
+    MailNotificationPermissionStatusCallback status_callback,
+    MailNotificationPermissionRequestCallback request_callback) {
+  GetMailNotificationPermissionStatusCallback() = std::move(status_callback);
+  GetMailNotificationPermissionRequestCallback() = std::move(request_callback);
+}
+
+void GetMahoMailNotificationPermission(
+    base::OnceCallback<void(MailOsNotificationPermission)> callback) {
+  const auto& status_callback = GetMailNotificationPermissionStatusCallback();
+  if (!status_callback) {
+    std::move(callback).Run(MailOsNotificationPermission::kUnsupported);
+    return;
+  }
+  status_callback.Run(std::move(callback));
+}
+
+void RequestMahoMailNotificationPermission(
+    base::OnceCallback<void(MailOsNotificationPermission)> callback) {
+  const auto& request_callback = GetMailNotificationPermissionRequestCallback();
+  if (!request_callback) {
+    std::move(callback).Run(MailOsNotificationPermission::kUnsupported);
+    return;
+  }
+  request_callback.Run(std::move(callback));
 }
 
 int64_t ComputeInboxUnreadForBadge(const std::string& folders_json,
@@ -96,6 +159,134 @@ std::optional<bool> GetUnreadBadgePreference(
   return parsed->GetDict().FindBool("unread_badge_enabled");
 }
 
+std::optional<MailBehaviorSnapshot> ParseMailBehaviorSnapshot(
+    const std::string& behavior_prefs_json,
+    uint64_t fallback_revision) {
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(behavior_prefs_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return std::nullopt;
+  }
+
+  MailBehaviorSnapshot snapshot;
+  snapshot.values = parsed->GetDict().Clone();
+  snapshot.version = 1;
+  snapshot.revision = static_cast<uint64_t>(
+      std::max(0, snapshot.values.FindInt("revision").value_or(
+                      static_cast<int>(fallback_revision))));
+  snapshot.desktop_notifications =
+      snapshot.values.FindBool("desktop_notifications").value_or(true);
+  snapshot.unread_badge_enabled =
+      snapshot.values.FindBool("unread_badge_enabled").value_or(true);
+
+  const std::string* preview =
+      snapshot.values.FindString("notification_preview");
+  if (preview && *preview == "sender_only") {
+    snapshot.notification_preview = MailNotificationPreview::kSenderOnly;
+  } else if (preview && *preview == "generic") {
+    snapshot.notification_preview = MailNotificationPreview::kGeneric;
+  } else {
+    snapshot.notification_preview = MailNotificationPreview::kSenderSubject;
+  }
+
+  if (const base::ListValue* muted =
+          snapshot.values.FindList("muted_thread_ids")) {
+    for (const base::Value& value : *muted) {
+      if (value.is_string()) {
+        snapshot.muted_thread_ids.push_back(value.GetString());
+      }
+    }
+  }
+
+  snapshot.values.Set("version", 1);
+  snapshot.values.Set("revision", static_cast<int>(snapshot.revision));
+  snapshot.values.Set("desktop_notifications",
+                      snapshot.desktop_notifications);
+  snapshot.values.Set(
+      "notification_preview",
+      snapshot.notification_preview == MailNotificationPreview::kSenderOnly
+          ? "sender_only"
+          : snapshot.notification_preview == MailNotificationPreview::kGeneric
+                ? "generic"
+                : "sender_subject");
+  snapshot.values.Set("unread_badge_enabled",
+                      snapshot.unread_badge_enabled);
+  base::ListValue muted;
+  for (const std::string& thread_id : snapshot.muted_thread_ids) {
+    muted.Append(thread_id);
+  }
+  snapshot.values.Set("muted_thread_ids", std::move(muted));
+  return snapshot;
+}
+
+std::string SerializeMailBehaviorSnapshot(const MailBehaviorSnapshot& snapshot) {
+  std::string serialized;
+  base::JSONWriter::Write(snapshot.values, &serialized);
+  return serialized;
+}
+
+MailBehaviorUpdateResult ApplyMailBehaviorUpdate(
+    const MailBehaviorSnapshot& current,
+    uint64_t expected_revision,
+    const std::string& key,
+    const std::string& value_json) {
+  MailBehaviorUpdateResult result;
+  result.snapshot = current;
+  if (current.revision != expected_revision) {
+    result.status = MailBehaviorUpdateStatus::kConflict;
+    return result;
+  }
+  if (key == "version" || key == "revision") {
+    result.status = MailBehaviorUpdateStatus::kInvalid;
+    return result;
+  }
+
+  std::optional<base::Value> value =
+      base::JSONReader::Read(value_json, base::JSON_PARSE_RFC);
+  if (!value || !(value->is_bool() || value->is_int() || value->is_double() ||
+                  value->is_string() || value->is_list())) {
+    result.status = MailBehaviorUpdateStatus::kInvalid;
+    return result;
+  }
+  if (key == "notification_preview" &&
+      (!value->is_string() ||
+       (value->GetString() != "sender_subject" &&
+        value->GetString() != "sender_only" &&
+        value->GetString() != "generic"))) {
+    result.status = MailBehaviorUpdateStatus::kInvalid;
+    return result;
+  }
+  if ((key == "desktop_notifications" || key == "unread_badge_enabled") &&
+      !value->is_bool()) {
+    result.status = MailBehaviorUpdateStatus::kInvalid;
+    return result;
+  }
+
+  result.snapshot.values.Set(key, std::move(*value));
+  result.snapshot.values.Set("revision",
+                             static_cast<int>(current.revision + 1));
+  auto reparsed = ParseMailBehaviorSnapshot(
+      SerializeMailBehaviorSnapshot(result.snapshot), current.revision + 1);
+  if (!reparsed) {
+    result.status = MailBehaviorUpdateStatus::kInvalid;
+    result.snapshot = current;
+    return result;
+  }
+  result.status = MailBehaviorUpdateStatus::kApplied;
+  result.snapshot = std::move(*reparsed);
+  return result;
+}
+
+MailOsNotificationPermission MapMailNotificationPermissionForTesting(
+    bool platform_supported,
+    bool permission_denied) {
+  if (!platform_supported) {
+    return MailOsNotificationPermission::kUnsupported;
+  }
+  return permission_denied ? MailOsNotificationPermission::kDenied
+                           : MailOsNotificationPermission::kGranted;
+}
+
 namespace {
 
 // Mail is gated behind the maho.mail.enabled pref (default false). While it is
@@ -137,7 +328,7 @@ bool IsPathSafeIdentifier(const std::string& value) {
 // "../" input would let the renderer redirect reads/writes elsewhere. This is a
 // boundary check, not a permission check - the helper still confines the
 // operation to the user-selected location.
-bool IsSafeUserFilePath(const std::string& value) {
+[[maybe_unused]] bool IsSafeUserFilePath(const std::string& value) {
   if (value.empty() || value.size() > 4096 ||
       value.find('\0') != std::string::npos) {
     return false;
@@ -177,7 +368,7 @@ void ForwardReadReply(MahoMailService::ReadCallback callback,
 // exactly once with the deterministic unavailable error instead of never being
 // invoked. Normal success/error replies forward unchanged through
 // ForwardReadReply.
-base::OnceCallback<void(bool, const std::string&)> WrapReadReply(
+base::OnceCallback<void(bool, const std::string&)> WrapUntrackedReadReply(
     MahoMailService::ReadCallback callback) {
   return mojo::WrapCallbackWithDefaultInvokeIfNotRun(
       base::BindOnce(&ForwardReadReply, std::move(callback)),
@@ -213,16 +404,39 @@ std::string DecryptByokKey(const os_crypt_async::Encryptor& encryptor,
 
 }  // namespace
 
-MahoMailService::MahoMailService(Profile* profile, os_crypt_async::OSCryptAsync* os_crypt_async) : profile_(profile) {
-#if BUILDFLAG(IS_MAC)
+MahoMailService::MahoMailService(
+    Profile* profile,
+    os_crypt_async::OSCryptAsync* os_crypt_async)
+    : profile_(profile),
+      launcher_factory_(base::BindRepeating(
+          []() { return std::make_unique<MahoMailHelperLauncher>(); })) {
+  if (profile_) {
+    profile_identity_ = profile_->GetPath().AsUTF8Unsafe();
+    const base::FilePath mail_root =
+        profile_->GetPath().AppendASCII("MahoMail");
+    attachment_registry_ = std::make_unique<MahoMailAttachmentRegistry>(
+        profile_identity_, mail_root.AppendASCII("AttachmentCache"),
+        mail_root.AppendASCII("AttachmentStaging"),
+        profile_->GetPath().AppendASCII("MahoMailAttachmentLaunch"));
+  }
+  enabled_for_testing_ = profile_ == nullptr;
   if (profile_) {
     PrefService* prefs = profile_->GetPrefs();
+    mail_pref_registrar_.Init(prefs);
+    mail_pref_registrar_.Add(
+        sidebar_prefs::kMahoMailEnabled,
+        base::BindRepeating(&MahoMailService::OnMailEnabledPrefChanged,
+                            weak_ptr_factory_.GetWeakPtr()));
+#if BUILDFLAG(IS_MAC)
     SetMailDockBadge(
         prefs->GetInteger("maho.mail.unread_count"),
         sidebar_prefs::IsMahoMailEnabled(prefs) &&
             prefs->GetBoolean("maho.mail.badge_enabled"));
-  }
 #endif
+    lifecycle_state_ = sidebar_prefs::IsMahoMailEnabled(prefs)
+                           ? LifecycleState::kStopped
+                           : LifecycleState::kDisabled;
+  }
   if (profile_ && os_crypt_async) {
     os_crypt_async->GetInstance(
         base::BindOnce(&MahoMailService::OnOsCryptReady,
@@ -244,6 +458,9 @@ void MahoMailService::RegisterProfilePrefs(PrefRegistrySimple* registry) {
   // When true, the aggregate unread count is shown on the sidebar Mail icon
   // and (macOS) the Dock tile badge.
   registry->RegisterBooleanPref("maho.mail.badge_enabled", true);
+  registry->RegisterDictionaryPref("maho.mail.notification_watermarks");
+  registry->RegisterListPref("maho.mail.notification_message_ids");
+  registry->RegisterListPref("maho.mail.notification_muted_threads");
 }
 
 void MahoMailService::OnOsCryptReady(os_crypt_async::Encryptor encryptor) {
@@ -261,18 +478,23 @@ void MahoMailService::EnsureHelperLaunched(
     const std::string& profile_path,
     const base::FilePath& crashpad_database) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  // Mail deferred from this ship: never spawn the (un-sandboxed) helper. This
-  // is the sole chokepoint that creates launcher_ and calls Launch(), so
-  // returning here guarantees no helper subprocess and no remote MIME/IMAP
-  // parsing. Reads resolve with the deterministic "unavailable" error. Flip
-  // the maho.mail.enabled pref on to re-enable mail.
-  if (!profile_ ||
-      !maho::sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())) {
+  launch_inputs_ = PendingLaunch{expected_version, profile_path,
+                                 crashpad_database};
+  // Mail is an opt-in Beta: never spawn the helper until users enable the
+  // canonical pref in Settings. This is the sole chokepoint that creates
+  // launcher_ and calls Launch(), so returning here guarantees no helper
+  // subprocess. Reads resolve with the deterministic "unavailable" error.
+  if (!IsEnabled()) {
+    lifecycle_state_ = LifecycleState::kDisabled;
     return;
   }
-  if (!launcher_) {
-    launcher_ = std::make_unique<MahoMailHelperLauncher>();
-    launcher_->SetObserver(this);
+  if (lifecycle_state_ == LifecycleState::kDraining) {
+    restart_after_drain_ = true;
+    return;
+  }
+  if (lifecycle_state_ == LifecycleState::kStarting ||
+      lifecycle_state_ == LifecycleState::kReady) {
+    return;
   }
 
   std::string sqlcipher_key;
@@ -325,8 +547,9 @@ void MahoMailService::EnsureHelperLaunched(
     }
   }
 
-  launcher_->InjectDatabaseKeys(sqlcipher_key, credential_key);
-  launcher_->Launch(expected_version, profile_path, crashpad_database);
+  sqlcipher_key_ = std::move(sqlcipher_key);
+  credential_key_ = std::move(credential_key);
+  StartGeneration();
 }
 
 void MahoMailService::InjectDatabaseKeys(const std::string& sqlcipher_key,
@@ -340,10 +563,35 @@ void MahoMailService::InjectDatabaseKeys(const std::string& sqlcipher_key,
 
 void MahoMailService::Shutdown() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (launcher_) {
-    launcher_->Shutdown();
-    launcher_.reset();
+  mail_pref_registrar_.RemoveAll();
+  pending_launch_.reset();
+  shutdown_requested_ = true;
+  restart_after_drain_ = false;
+  ClearUnreadState();
+  BeginDrain(LifecycleState::kStopped);
+}
+
+void MahoMailService::OnMailEnabledPrefChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (IsEnabled()) {
+    if (lifecycle_state_ == LifecycleState::kDisabled ||
+        lifecycle_state_ == LifecycleState::kStopped ||
+        lifecycle_state_ == LifecycleState::kFailed) {
+      if (launch_inputs_) {
+        PendingLaunch launch = *launch_inputs_;
+        EnsureHelperLaunched(launch.expected_version, launch.profile_path,
+                             launch.crashpad_database);
+      }
+    } else if (lifecycle_state_ == LifecycleState::kDraining) {
+      restart_after_drain_ = true;
+    }
+    return;
   }
+
+  pending_launch_.reset();
+  restart_after_drain_ = false;
+  ClearUnreadState();
+  BeginDrain(LifecycleState::kDisabled);
 }
 
 void MahoMailService::MarkRead(const std::string& email_id, ReadCallback callback) {
@@ -539,15 +787,169 @@ void MahoMailService::ListPendingMutations(const std::string& account_id, ReadCa
 void MahoMailService::SetLauncherForTesting(
     std::unique_ptr<MahoMailHelperLauncher> launcher) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  enabled_for_testing_ = true;
+  if (launcher) {
+    ClearUnreadState();
+    ++generation_;
+  }
   launcher_ = std::move(launcher);
   if (launcher_) {
     launcher_->SetObserver(this);
+    lifecycle_state_ = launcher_->GetHelper() ? LifecycleState::kReady
+                                              : LifecycleState::kStarting;
+  }
+}
+
+void MahoMailService::SetLauncherFactoryForTesting(
+    LauncherFactory launcher_factory) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  launcher_factory_ = std::move(launcher_factory);
+}
+
+void MahoMailService::SetEnabledForTesting(bool enabled) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  enabled_for_testing_ = enabled;
+  OnMailEnabledPrefChanged();
+}
+
+MahoMailService::ReadCallback
+MahoMailService::StartFolderBadgeRefreshForTesting(
+    const std::string& account_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const uint64_t request_token = unread_badge_state_.BeginRefresh(account_id);
+  return base::BindOnce(&MahoMailService::ApplyFolderBadgeReply,
+                        weak_ptr_factory_.GetWeakPtr(), account_id, generation_,
+                        request_token);
+}
+
+bool MahoMailService::IsEnabled() const {
+  return profile_ ? sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())
+                  : enabled_for_testing_;
+}
+
+bool MahoMailService::IsCommandAvailable() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return IsEnabled() && lifecycle_state_ == LifecycleState::kReady &&
+         launcher_ && !launcher_->has_given_up() && launcher_->GetHelper();
+}
+
+void MahoMailService::StartGeneration() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (shutdown_requested_ || !IsEnabled() || !launch_inputs_ ||
+      sqlcipher_key_.empty() || credential_key_.empty() ||
+      lifecycle_state_ == LifecycleState::kStarting ||
+      lifecycle_state_ == LifecycleState::kReady ||
+      lifecycle_state_ == LifecycleState::kDraining) {
+    return;
+  }
+  launcher_ = launcher_factory_.Run();
+  launcher_->SetObserver(this);
+  ++generation_;
+  if (attachment_registry_) {
+    attachment_registry_->SetGeneration(generation_);
+  }
+  lifecycle_state_ = LifecycleState::kStarting;
+  NotifyLifecycleChanged();
+  launcher_->InjectDatabaseKeys(sqlcipher_key_, credential_key_);
+  launcher_->Launch(launch_inputs_->expected_version, launch_inputs_->profile_path,
+                    launch_inputs_->crashpad_database);
+}
+
+void MahoMailService::BeginDrain(LifecycleState terminal_state) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (attachment_registry_) {
+    attachment_registry_->RevokeAll();
+  }
+  drain_terminal_state_ = terminal_state;
+  if (lifecycle_state_ == LifecycleState::kDraining) {
+    return;
+  }
+  if (!launcher_) {
+    std::vector<base::OnceClosure> queued_work = std::move(queued_ready_work_);
+    queued_ready_work_.clear();
+    lifecycle_state_ = terminal_state;
+    NotifyLifecycleChanged();
+    for (auto& work : queued_work) {
+      std::move(work).Run();
+    }
+    return;
+  }
+  lifecycle_state_ = LifecycleState::kDraining;
+  NotifyLifecycleChanged();
+  std::vector<base::OnceClosure> queued_work = std::move(queued_ready_work_);
+  queued_ready_work_.clear();
+  helper_drain_complete_ = false;
+  launcher_->Shutdown(base::BindOnce(&MahoMailService::OnGenerationDrained,
+                                     weak_ptr_factory_.GetWeakPtr(),
+                                     generation_));
+  for (auto& work : queued_work) {
+    std::move(work).Run();
+  }
+}
+
+void MahoMailService::OnGenerationDrained(uint64_t generation) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (generation != generation_ || lifecycle_state_ != LifecycleState::kDraining) {
+    return;
+  }
+  helper_drain_complete_ = true;
+  if (tracked_replies_ != 0) {
+    return;
+  }
+  launcher_.reset();
+  lifecycle_state_ = drain_terminal_state_;
+  NotifyLifecycleChanged();
+  if (restart_after_drain_ && !shutdown_requested_ && IsEnabled()) {
+    restart_after_drain_ = false;
+    StartGeneration();
+  }
+}
+
+base::OnceCallback<void(bool, const std::string&)>
+MahoMailService::WrapReadReply(ReadCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ++tracked_replies_;
+  return WrapUntrackedReadReply(base::BindOnce(
+      [](base::WeakPtr<MahoMailService> service, ReadCallback callback, bool ok,
+         std::string result) {
+        std::move(callback).Run(ok, std::move(result));
+        if (service) {
+          service->OnTrackedReplyComplete();
+        }
+      },
+      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+base::OnceCallback<void(bool)> MahoMailService::WrapCancelReply(
+    CancelCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ++tracked_replies_;
+  return mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+      base::BindOnce(
+          [](base::WeakPtr<MahoMailService> service, CancelCallback callback,
+             bool accepted) {
+            std::move(callback).Run(accepted);
+            if (service) {
+              service->OnTrackedReplyComplete();
+            }
+          },
+          weak_ptr_factory_.GetWeakPtr(), std::move(callback)),
+      /*accepted=*/false);
+}
+
+void MahoMailService::OnTrackedReplyComplete() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DCHECK_GT(tracked_replies_, 0u);
+  --tracked_replies_;
+  if (lifecycle_state_ == LifecycleState::kDraining && helper_drain_complete_) {
+    OnGenerationDrained(generation_);
   }
 }
 
 mojom::MahoMailHelper* MahoMailService::GetHelperOrNull() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!launcher_ || launcher_->has_given_up()) {
+  if (!IsEnabled() || lifecycle_state_ != LifecycleState::kReady || !launcher_ ||
+      launcher_->has_given_up()) {
     return nullptr;
   }
   return launcher_->GetHelper();
@@ -555,6 +957,12 @@ mojom::MahoMailHelper* MahoMailService::GetHelperOrNull() {
 
 void MahoMailService::ListAccounts(ReadCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (lifecycle_state_ == LifecycleState::kStarting && IsEnabled()) {
+    queued_ready_work_.push_back(base::BindOnce(
+        &MahoMailService::ListAccounts, weak_ptr_factory_.GetWeakPtr(),
+        std::move(callback)));
+    return;
+  }
   mojom::MahoMailHelper* helper = GetHelperOrNull();
   if (!helper) {
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
@@ -579,17 +987,23 @@ void MahoMailService::ListFolders(const std::string& account_id,
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
+  const uint64_t request_token = unread_badge_state_.BeginRefresh(account_id);
   helper->ListFolders(
       account_id,
       WrapReadReply(base::BindOnce(
           [](base::WeakPtr<MahoMailService> service, std::string account_id,
-             ReadCallback callback, bool ok, std::string result_json) {
+             uint64_t generation, uint64_t request_token,
+             ReadCallback callback, bool ok,
+             std::string result_json) {
             if (service && ok) {
-              service->OnFoldersForBadge(account_id, false, true, result_json);
+              service->OnFoldersForBadge(account_id, generation,
+                                         request_token, true, result_json);
             }
             std::move(callback).Run(ok, std::move(result_json));
           },
-          weak_ptr_factory_.GetWeakPtr(), account_id, std::move(callback))));
+          weak_ptr_factory_.GetWeakPtr(), account_id, generation_,
+          request_token,
+          std::move(callback))));
 }
 
 void MahoMailService::ListEmails(const std::string& account_id,
@@ -669,7 +1083,24 @@ void MahoMailService::DeleteAccount(const std::string& account_id, ReadCallback 
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  helper->DeleteAccount(account_id, WrapReadReply(std::move(callback)));
+  helper->DeleteAccount(
+      account_id,
+      WrapReadReply(base::BindOnce(
+          [](base::WeakPtr<MahoMailService> service, std::string account_id,
+             ReadCallback callback, bool ok, std::string result) {
+            if (ok && service) {
+              if (service->attachment_registry_) {
+                service->attachment_registry_->RevokeAccount(account_id);
+              }
+              service->unread_badge_state_.RemoveAccount(account_id);
+              service->UpdateUnreadCountPref();
+              for (auto& observer : service->observers_) {
+                observer.OnAccountRemoved(account_id);
+              }
+            }
+            std::move(callback).Run(ok, std::move(result));
+          },
+          weak_ptr_factory_.GetWeakPtr(), account_id, std::move(callback))));
 }
 
 void MahoMailService::OAuthStartUrl(const std::string& provider,
@@ -851,7 +1282,56 @@ void MahoMailService::DownloadAttachment(const std::string& account_id, int64_t 
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  helper->DownloadAttachment(account_id, email_uid, folder_id, part_id, filename, WrapReadReply(std::move(callback)));
+  helper->DownloadAttachment(
+      account_id, email_uid, folder_id, part_id, filename,
+      WrapReadReply(base::BindOnce(
+          [](base::WeakPtr<MahoMailService> service,
+             MailAttachmentMessageIdentity message, MailReadCallback callback,
+             bool ok, std::string result_json) {
+            if (!ok || !service || !service->attachment_registry_) {
+              std::move(callback).Run(
+                  false, ok ? "attachment staging unavailable"
+                            : std::move(result_json));
+              return;
+            }
+            std::optional<base::Value> parsed = base::JSONReader::Read(
+                result_json, base::JSON_PARSE_RFC);
+            if (!parsed || !parsed->is_string()) {
+              std::move(callback).Run(false, "invalid attachment staging reply");
+              return;
+            }
+            service->attachment_registry_->StageDownloadedFile(
+                message, base::FilePath::FromUTF8Unsafe(parsed->GetString()),
+                base::BindOnce(
+                    [](MailReadCallback callback, bool staged,
+                       std::string token, std::string error) {
+                      if (!staged) {
+                        std::move(callback).Run(false, std::move(error));
+                        return;
+                      }
+                      std::string token_json;
+                      base::JSONWriter::Write(base::Value(std::move(token)),
+                                              &token_json);
+                      std::move(callback).Run(true, std::move(token_json));
+                    },
+                    std::move(callback)));
+          },
+          weak_ptr_factory_.GetWeakPtr(),
+          MailAttachmentMessageIdentity{account_id, email_uid, folder_id,
+                                        part_id},
+          std::move(callback))));
+}
+
+void MahoMailService::OpenAttachment(
+    const std::string& capability_token,
+    MahoMailAttachmentRegistry::ConsumeCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!attachment_registry_) {
+    std::move(callback).Run(nullptr, "attachment staging unavailable");
+    return;
+  }
+  attachment_registry_->Consume(capability_token, profile_identity_,
+                                std::move(callback));
 }
 
 void MahoMailService::ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback) {
@@ -931,7 +1411,12 @@ void MahoMailService::MuteThread(const std::string& account_id, const std::strin
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  helper->MuteThread(account_id, message_id, WrapReadReply(std::move(callback)));
+  helper->MuteThread(
+      account_id, message_id,
+      WrapReadReply(base::BindOnce(
+          &MahoMailService::OnPersistedThreadMuteChanged,
+          weak_ptr_factory_.GetWeakPtr(), account_id, message_id,
+          /*muted=*/true, std::move(callback))));
 }
 
 void MahoMailService::UnmuteThread(const std::string& account_id, const std::string& message_id, MailReadCallback callback) {
@@ -941,7 +1426,28 @@ void MahoMailService::UnmuteThread(const std::string& account_id, const std::str
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  helper->UnmuteThread(account_id, message_id, WrapReadReply(std::move(callback)));
+  helper->UnmuteThread(
+      account_id, message_id,
+      WrapReadReply(base::BindOnce(
+          &MahoMailService::OnPersistedThreadMuteChanged,
+          weak_ptr_factory_.GetWeakPtr(), account_id, message_id,
+          /*muted=*/false, std::move(callback))));
+}
+
+void MahoMailService::OnPersistedThreadMuteChanged(
+    const std::string& account_id,
+    const std::string& message_id,
+    bool muted,
+    MailReadCallback callback,
+    bool ok,
+    std::string result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (ok) {
+    for (auto& observer : observers_) {
+      observer.OnThreadMuteChanged(account_id, message_id, muted);
+    }
+  }
+  std::move(callback).Run(ok, std::move(result));
 }
 
 void MahoMailService::IsThreadMuted(const std::string& account_id, const std::string& message_id, MailReadCallback callback) {
@@ -1981,23 +2487,146 @@ void MahoMailService::SetAppSetting(const std::string& key, const std::string& v
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  const std::optional<bool> desktop_notifications =
-      key == "mail_behavior_prefs"
-          ? GetDesktopNotificationPreference(value)
-          : std::nullopt;
-  if (profile_ && desktop_notifications) {
-    profile_->GetPrefs()->SetBoolean("maho.mail.notifications_enabled",
-                                     *desktop_notifications);
+  helper->SetAppSetting(
+      key, value,
+      WrapReadReply(base::BindOnce(
+          [](base::WeakPtr<MahoMailService> service, std::string setting_key,
+             std::string setting_value, MailReadCallback callback, bool ok,
+             std::string result) {
+            if (ok && service && service->profile_ &&
+                setting_key == "mail_behavior_prefs") {
+              const auto snapshot = ParseMailBehaviorSnapshot(setting_value);
+              if (snapshot) {
+                service->behavior_snapshot_ = *snapshot;
+                PrefService* prefs = service->profile_->GetPrefs();
+                prefs->SetBoolean("maho.mail.notifications_enabled",
+                                  snapshot->desktop_notifications);
+                prefs->SetBoolean("maho.mail.badge_enabled",
+                                  snapshot->unread_badge_enabled);
+                service->UpdateUnreadCountPref();
+                if (service->behavior_mirror_callback_for_testing_) {
+                  service->behavior_mirror_callback_for_testing_.Run(*snapshot);
+                }
+              }
+            } else if (ok && service &&
+                       setting_key == "mail_behavior_prefs" &&
+                       service->behavior_mirror_callback_for_testing_) {
+              const auto snapshot = ParseMailBehaviorSnapshot(setting_value);
+              if (snapshot) {
+                service->behavior_snapshot_ = *snapshot;
+                service->behavior_mirror_callback_for_testing_.Run(*snapshot);
+              }
+            }
+            std::move(callback).Run(ok, std::move(result));
+          },
+          weak_ptr_factory_.GetWeakPtr(), key, value, std::move(callback))));
+}
+
+void MahoMailService::GetBehaviorSnapshot(BehaviorReadCallback callback) {
+  GetAppSetting(
+      "mail_behavior_prefs",
+      base::BindOnce(
+          [](base::WeakPtr<MahoMailService> service,
+             BehaviorReadCallback callback, bool ok, std::string result) {
+            if (!ok) {
+              std::move(callback).Run(false, MailBehaviorSnapshot());
+              return;
+            }
+            const auto snapshot = ParseMailBehaviorSnapshot(
+                result.empty() ? "{}" : result);
+            if (!snapshot) {
+              std::move(callback).Run(false, MailBehaviorSnapshot());
+              return;
+            }
+            if (service) {
+              service->behavior_snapshot_ = *snapshot;
+            }
+            const std::string migrated =
+                SerializeMailBehaviorSnapshot(*snapshot);
+            if (migrated != result) {
+              // Best-effort canonicalization is intentionally deferred to the
+              // next successful CAS write; reads remain side-effect free.
+            }
+            std::move(callback).Run(true, *snapshot);
+          },
+          weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoMailService::UpdateBehavior(uint64_t expected_revision,
+                                     const std::string& key,
+                                     const std::string& value_json,
+                                     BehaviorUpdateCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  mojom::MahoMailHelper* helper = GetHelperOrNull();
+  if (!helper) {
+    MailBehaviorUpdateResult result;
+    result.status = MailBehaviorUpdateStatus::kRejected;
+    result.snapshot = behavior_snapshot_;
+    std::move(callback).Run(std::move(result));
+    return;
   }
-  if (profile_ && key == "mail_behavior_prefs") {
-    const std::optional<bool> badge_enabled = GetUnreadBadgePreference(value);
-    if (badge_enabled) {
-      profile_->GetPrefs()->SetBoolean("maho.mail.badge_enabled",
-                                       *badge_enabled);
-      UpdateUnreadCountPref();
-    }
-  }
-  helper->SetAppSetting(key, value, WrapReadReply(std::move(callback)));
+  helper->UpdateBehaviorSetting(
+      expected_revision, key, value_json,
+      WrapUntrackedReadReply(base::BindOnce(
+          [](base::WeakPtr<MahoMailService> service,
+             BehaviorUpdateCallback callback, bool ok,
+             std::string result_json) {
+            MailBehaviorUpdateResult result;
+            result.status = MailBehaviorUpdateStatus::kRejected;
+            if (!ok) {
+              result.snapshot = service ? service->behavior_snapshot_
+                                        : MailBehaviorSnapshot();
+              std::move(callback).Run(std::move(result));
+              return;
+            }
+            std::optional<base::Value> parsed =
+                base::JSONReader::Read(result_json, base::JSON_PARSE_RFC);
+            const base::DictValue* dict =
+                parsed && parsed->is_dict() ? &parsed->GetDict() : nullptr;
+            const std::string* status = dict ? dict->FindString("status") : nullptr;
+            const base::DictValue* snapshot_dict =
+                dict ? dict->FindDict("snapshot") : nullptr;
+            std::string snapshot_json;
+            if (!status || !snapshot_dict ||
+                !base::JSONWriter::Write(*snapshot_dict, &snapshot_json)) {
+              result.snapshot = service ? service->behavior_snapshot_
+                                        : MailBehaviorSnapshot();
+              std::move(callback).Run(std::move(result));
+              return;
+            }
+            std::optional<MailBehaviorSnapshot> snapshot =
+                ParseMailBehaviorSnapshot(snapshot_json);
+            if (!snapshot) {
+              result.snapshot = service ? service->behavior_snapshot_
+                                        : MailBehaviorSnapshot();
+              std::move(callback).Run(std::move(result));
+              return;
+            }
+            result.status = *status == "applied"
+                                ? MailBehaviorUpdateStatus::kApplied
+                                : *status == "conflict"
+                                      ? MailBehaviorUpdateStatus::kConflict
+                                      : *status == "invalid"
+                                            ? MailBehaviorUpdateStatus::kInvalid
+                                            : MailBehaviorUpdateStatus::kRejected;
+            result.snapshot = *snapshot;
+            if (service && result.status == MailBehaviorUpdateStatus::kApplied) {
+              service->behavior_snapshot_ = *snapshot;
+              if (service->profile_) {
+                PrefService* prefs = service->profile_->GetPrefs();
+                prefs->SetBoolean("maho.mail.notifications_enabled",
+                                  snapshot->desktop_notifications);
+                prefs->SetBoolean("maho.mail.badge_enabled",
+                                  snapshot->unread_badge_enabled);
+                service->UpdateUnreadCountPref();
+              }
+              if (service->behavior_mirror_callback_for_testing_) {
+                service->behavior_mirror_callback_for_testing_.Run(*snapshot);
+              }
+            }
+            std::move(callback).Run(std::move(result));
+          },
+          weak_ptr_factory_.GetWeakPtr(), std::move(callback))));
 }
 
 void MahoMailService::Md5Hash(const std::string& input, MailReadCallback callback) {
@@ -2086,7 +2715,35 @@ void MahoMailService::OnAccountsChanged() {
 
 void MahoMailService::OnHelperReady() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (lifecycle_state_ != LifecycleState::kStarting || !IsEnabled()) {
+    return;
+  }
+  lifecycle_state_ = LifecycleState::kReady;
+  NotifyLifecycleChanged();
+  std::vector<base::OnceClosure> queued_work = std::move(queued_ready_work_);
+  queued_ready_work_.clear();
+  for (auto& work : queued_work) {
+    std::move(work).Run();
+  }
   ListAccounts(base::BindOnce([](bool, std::string) {}));
+}
+
+void MahoMailService::OnHelperFailed(bool will_retry) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (lifecycle_state_ == LifecycleState::kDraining) {
+    return;
+  }
+  ClearUnreadState();
+  lifecycle_state_ = will_retry ? LifecycleState::kStarting
+                                : LifecycleState::kFailed;
+  NotifyLifecycleChanged();
+}
+
+void MahoMailService::NotifyLifecycleChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  for (auto& observer : observers_) {
+    observer.OnLifecycleChanged(lifecycle_state_, generation_);
+  }
 }
 
 void MahoMailService::RefreshBadgesForAccounts(
@@ -2106,14 +2763,21 @@ void MahoMailService::RefreshBadgesForAccounts(
   if (!accounts) {
     return;
   }
+  std::set<std::string> account_ids;
   for (const base::Value& account : *accounts) {
     if (!account.is_dict()) {
       continue;
     }
     const std::string* account_id = account.GetDict().FindString("id");
     if (account_id && !account_id->empty()) {
-      RefreshMailBadge(*account_id, false);
+      account_ids.insert(*account_id);
     }
+  }
+  if (unread_badge_state_.RetainAccounts(account_ids)) {
+    UpdateUnreadCountPref();
+  }
+  for (const std::string& account_id : account_ids) {
+    RefreshMailBadge(account_id);
   }
 }
 
@@ -2137,16 +2801,23 @@ void MahoMailService::OnStatusChanged(const std::string& account_id, bool connec
     observer.OnStatusChanged(account_id, connected);
   }
   if (connected) {
-    RefreshMailBadge(account_id, /*notify=*/false);
+    RefreshMailBadge(account_id);
   }
 }
 
-void MahoMailService::OnNewMail(const std::string& account_id) {
+void MahoMailService::OnNewMail(const std::string& account_id,
+                                const std::string& email_id,
+                                const std::string& message_id,
+                                const std::string& sender,
+                                const std::string& subject,
+                                uint64_t cursor,
+                                uint64_t epoch) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   for (auto& observer : observers_) {
-    observer.OnNewMail(account_id);
+    observer.OnNewMail(account_id, email_id, message_id, sender, subject,
+                       cursor, epoch);
   }
-  RefreshMailBadge(account_id, /*notify=*/true);
+  RefreshMailBadge(account_id);
 }
 
 void MahoMailService::OnMutation(const std::string& account_id, const std::string& payload) {
@@ -2155,7 +2826,7 @@ void MahoMailService::OnMutation(const std::string& account_id, const std::strin
     observer.OnMutation(account_id, payload);
   }
   // Flag mutations (mark read/unread, delete) change the unread total.
-  RefreshMailBadge(account_id, /*notify=*/false);
+  RefreshMailBadge(account_id);
 }
 
 void MahoMailService::OnOutbox(const std::string& account_id, const std::string& payload) {
@@ -2200,103 +2871,49 @@ void MahoMailService::OAuthCancel(const std::string& state, CancelCallback callb
     std::move(callback).Run(false);
     return;
   }
-  helper->OAuthCancel(
-      state, mojo::WrapCallbackWithDefaultInvokeIfNotRun(std::move(callback), false));
+  helper->OAuthCancel(state, WrapCancelReply(std::move(callback)));
 }
 
 // === Unread-badge + new-mail-notification pipeline ===
 
-void MahoMailService::RefreshMailBadge(const std::string& account_id,
-                                       bool notify) {
+void MahoMailService::RefreshMailBadge(const std::string& account_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!profile_ || account_id.empty()) {
     return;
   }
-  ListFolders(account_id,
-              base::BindOnce(&MahoMailService::OnFoldersForBadge,
-                             weak_ptr_factory_.GetWeakPtr(), account_id, notify));
+  ListFolders(account_id, base::DoNothing());
 }
 
 void MahoMailService::OnFoldersForBadge(const std::string& account_id,
-                                        bool notify,
+                                        uint64_t generation,
+                                        uint64_t request_token,
                                         bool ok,
                                         std::string result_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!ok || !profile_) {
+  if (!profile_) {
     return;
   }
-  std::string inbox_folder_id;
-  const int64_t inbox_unread =
-      ComputeInboxUnreadForBadge(result_json, &inbox_folder_id);
-  account_unread_counts_[account_id] = inbox_unread;
-  UpdateUnreadCountPref();
-
-  if (notify && !inbox_folder_id.empty() &&
-      profile_->GetPrefs()->GetBoolean("maho.mail.notifications_enabled")) {
-    ListEmails(account_id, inbox_folder_id, /*limit=*/1, /*offset=*/0,
-               base::BindOnce(&MahoMailService::OnLatestInboxEmailForNotify,
-                              weak_ptr_factory_.GetWeakPtr(), account_id));
-  }
+  ApplyFolderBadgeReply(account_id, generation, request_token, ok,
+                        std::move(result_json));
 }
 
-void MahoMailService::OnLatestInboxEmailForNotify(const std::string& account_id,
-                                                  bool ok,
-                                                  std::string result_json) {
+void MahoMailService::ApplyFolderBadgeReply(const std::string& account_id,
+                                             uint64_t generation,
+                                             uint64_t request_token,
+                                             bool ok,
+                                             std::string result_json) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!ok || !profile_) {
+  if (!ok || generation != generation_ ||
+      lifecycle_state_ != LifecycleState::kReady) {
     return;
   }
-  std::optional<base::Value> parsed =
-      base::JSONReader::Read(result_json, base::JSON_PARSE_RFC);
-  if (!parsed) {
+  const int64_t inbox_unread =
+      ComputeInboxUnreadForBadge(result_json, nullptr);
+  if (!unread_badge_state_.CompleteRefresh(account_id, request_token,
+                                           inbox_unread)) {
     return;
   }
-  // ListEmails may return a bare array or a {emails:[...]} envelope.
-  const base::ListValue* emails = nullptr;
-  if (parsed->is_list()) {
-    emails = &parsed->GetList();
-  } else if (parsed->is_dict()) {
-    emails = parsed->GetDict().FindList("emails");
-  }
-  if (!emails || emails->empty()) {
-    return;
-  }
-  const base::Value& first = emails->front();
-  if (!first.is_dict()) {
-    return;
-  }
-  const base::DictValue& email = first.GetDict();
-  // Only notify for genuinely unread mail.
-  if (email.FindBool("is_read").value_or(true)) {
-    return;
-  }
-  const std::string* email_id = email.FindString("id");
-  const std::string* subject = email.FindString("subject");
-  const std::string* from_name = email.FindString("from_name");
-  const std::string* from_address = email.FindString("from_address");
-
-  std::string sender;
-  if (from_name && !from_name->empty()) {
-    sender = *from_name;
-  } else if (from_address && !from_address->empty()) {
-    sender = *from_address;
-  } else {
-    sender = "New mail";
-  }
-  std::string subject_text =
-      (subject && !subject->empty()) ? *subject : "(no subject)";
-
-  const std::string notification_id =
-      "maho-mail-new-" + (email_id ? *email_id : account_id);
-
-  // Surface the OS notification through the injected browser-layer hook. The
-  // mail service intentionally does not depend on //chrome/browser/notifications
-  // (that would create a GN dependency cycle); the hook is null until the
-  // browser layer installs it.
-  MailNotificationCallback& notifier = GetMailNotificationCallback();
-  if (notifier) {
-    notifier.Run(profile_, sender, subject_text, notification_id);
-  }
+  UpdateUnreadCountPref();
 }
 
 void MahoMailService::UpdateUnreadCountPref() {
@@ -2304,17 +2921,21 @@ void MahoMailService::UpdateUnreadCountPref() {
   if (!profile_) {
     return;
   }
-  int64_t total = 0;
-  for (const auto& entry : account_unread_counts_) {
-    total += entry.second;
-  }
+  const int64_t total = unread_badge_state_.total();
   profile_->GetPrefs()->SetInteger("maho.mail.unread_count",
                                    static_cast<int>(total));
 #if BUILDFLAG(IS_MAC)
   SetMailDockBadge(
       static_cast<int>(total),
-      profile_->GetPrefs()->GetBoolean("maho.mail.badge_enabled"));
+      sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs()) &&
+          profile_->GetPrefs()->GetBoolean("maho.mail.badge_enabled"));
 #endif
+}
+
+void MahoMailService::ClearUnreadState() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  unread_badge_state_.Clear();
+  UpdateUnreadCountPref();
 }
 
 }  // namespace maho

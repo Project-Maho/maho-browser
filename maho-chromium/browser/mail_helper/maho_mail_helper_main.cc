@@ -4,14 +4,26 @@
 #include <string>
 #include <vector>
 
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_LINUX)
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #if BUILDFLAG(IS_MAC)
 #include "sandbox/mac/seatbelt.h"
 #endif
+#if BUILDFLAG(IS_LINUX)
+#include "maho/browser/mail_helper/maho_mail_helper_sandbox_linux.h"
+#endif
 
 #include "base/files/file_path.h"
+#include "base/files/scoped_file.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
@@ -20,6 +32,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/run_loop.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/single_thread_task_executor.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/threading/thread.h"
@@ -48,6 +61,10 @@ constexpr char kBaseBundleIdSwitch[] = "maho-mail-base-bundle-id";
 // Command-line switch through which the host launcher passes the Crashpad
 // database directory (shared with the browser's crash pipeline).
 constexpr char kCrashpadDatabaseSwitch[] = "maho-mail-crashpad-database";
+#if BUILDFLAG(IS_LINUX)
+constexpr char kMailRootSwitch[] = "maho-mail-root";
+constexpr char kOAuthLoopbackFdEnv[] = "MAHO_MAIL_OAUTH_LOOPBACK_FD";
+#endif
 
 // Name of the shared Crashpad handler executable shipped alongside the browser.
 #if BUILDFLAG(IS_WIN)
@@ -61,7 +78,8 @@ constexpr char kCrashpadHandlerName[] = "chrome_crashpad_handler";
 // same crash pipeline as the browser. Best-effort: logs and continues if the
 // handler or database cannot be resolved so a crash-reporting failure never
 // prevents the mail helper from starting.
-void InstallCrashpadHandler(const base::CommandLine& cmd_line) {
+[[maybe_unused]] void InstallCrashpadHandler(
+    const base::CommandLine& cmd_line) {
   base::FilePath exe_dir;
   if (!base::PathService::Get(base::DIR_EXE, &exe_dir)) {
     LOG(ERROR) << "[MahoMailHelper] Crashpad: failed to resolve DIR_EXE.";
@@ -69,6 +87,12 @@ void InstallCrashpadHandler(const base::CommandLine& cmd_line) {
   }
 
   base::FilePath handler_path = exe_dir.AppendASCII(kCrashpadHandlerName);
+  if (!base::PathExists(handler_path)) {
+    LOG(WARNING) << "[MahoMailHelper] Crashpad handler is not present at "
+                 << handler_path.value() << "; continuing without crash "
+                    "reporting.";
+    return;
+  }
 
   base::FilePath database_path =
       cmd_line.GetSwitchValuePath(kCrashpadDatabaseSwitch);
@@ -100,14 +124,13 @@ void InstallCrashpadHandler(const base::CommandLine& cmd_line) {
 // Seatbelt profile for the mail helper. Deny-by-default, then allow exactly
 // what mail needs. Each allowance below is required by observed runtime
 // behavior, not speculation:
-//   - the profile subtree holds the SQLCipher DB (mail-core opens
+//   - the MahoMail subtree holds the SQLCipher DB (mail-core opens
 //     <profile>/MahoMail/maho_mail.db)
 //   - DNS resolution reads resolver config and talks to mDNSResponder
 //     (imap_client resolves hosts via ToSocketAddrs)
 //   - TLS verification loads the system trust store through Security.framework
 //     (rustls-native-certs), which needs trustd/ocspd
 //   - OAuth uses a loopback listener, so local bind/accept is required
-//   - attachment previews are staged under the system temp dir
 // Process creation is denied outright: that is the payoff, since a remote
 // MIME/IMAP parsing bug then cannot escalate into code execution.
 constexpr char kMailHelperSandboxProfile[] = R"(
@@ -133,9 +156,6 @@ constexpr char kMailHelperSandboxProfile[] = R"(
 
 ; Mail data lives entirely under the profile directory.
 (allow file-read* file-write* (subpath (param "PROFILE_PATH")))
-
-; Attachment staging.
-(allow file-read* file-write* (subpath (param "TEMP_PATH")))
 
 ; Crash reports.
 (allow file-read* file-write* (subpath (param "CRASHPAD_PATH")))
@@ -193,23 +213,22 @@ bool EnterMailHelperSandbox(const std::string& profile_path) {
     return false;
   }
 
-  base::FilePath temp_dir;
-  if (!base::GetTempDir(&temp_dir)) {
-    LOG(ERROR) << "[MahoMailHelper] Cannot resolve temp dir for sandbox.";
-    return false;
-  }
-
-  const base::FilePath crashpad_path =
+  base::FilePath crashpad_path =
       base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
           kCrashpadDatabaseSwitch);
 
+  // Keep the helper below <profile>/MahoMail. Browser-owned attachment launch
+  // copies live in a sibling directory that this sandbox cannot reach.
+  const base::FilePath mail_root =
+      base::FilePath::FromUTF8Unsafe(profile_path).AppendASCII("MahoMail");
+  if (crashpad_path.empty()) {
+    crashpad_path = mail_root.AppendASCII("Crashpad");
+  }
   // InitWithParams takes a flat key,value,key,value,... list.
   const std::vector<std::string> params = {
-      "PROFILE_PATH",  profile_path,
+      "PROFILE_PATH",  mail_root.value(),
       "BUNDLE_PATH",   bundle_path.value(),
-      "TEMP_PATH",     temp_dir.value(),
-      "CRASHPAD_PATH",
-      crashpad_path.empty() ? temp_dir.value() : crashpad_path.value(),
+      "CRASHPAD_PATH", crashpad_path.value(),
   };
   std::string error;
   const bool ok = sandbox::Seatbelt::InitWithParams(
@@ -222,13 +241,35 @@ bool EnterMailHelperSandbox(const std::string& profile_path) {
   LOG(INFO) << "[MahoMailHelper] Sandbox active.";
   return true;
 }
-#else
+#elif !BUILDFLAG(IS_LINUX)
 bool EnterMailHelperSandbox(const std::string& profile_path) {
   // Sandboxing for other platforms is tracked separately; entry is a no-op so
   // the fail-closed check above does not block non-mac builds.
   return true;
 }
 #endif  // BUILDFLAG(IS_MAC)
+
+#if BUILDFLAG(IS_LINUX)
+base::ScopedFD CreateOAuthLoopbackListener() {
+  base::ScopedFD listener(
+      socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP));
+  if (!listener.is_valid()) {
+    PLOG(ERROR) << "[MahoMailHelper] OAuth loopback socket failed";
+    return {};
+  }
+  sockaddr_in address = {};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0;
+  if (bind(listener.get(), reinterpret_cast<sockaddr*>(&address),
+           sizeof(address)) != 0 ||
+      listen(listener.get(), 4) != 0) {
+    PLOG(ERROR) << "[MahoMailHelper] OAuth loopback bind/listen failed";
+    return {};
+  }
+  return listener;
+}
+#endif
 
 }  // namespace
 
@@ -270,6 +311,29 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
               },
               std::move(ev), std::move(acc), std::move(prov), std::move(reas)));
     });
+    MahoMailRegisterNewMailCallback(
+        [](const char* account_id, const char* email_id,
+           const char* message_id, const char* sender, const char* subject,
+           uint64_t cursor, uint64_t epoch) {
+          std::string acc(account_id);
+          std::string eid(email_id);
+          std::string mid(message_id);
+          std::string from(sender);
+          std::string subj(subject);
+          (*main_runner)->PostTask(
+              FROM_HERE,
+              base::BindOnce(
+                  [](std::string acc, std::string eid, std::string mid,
+                     std::string from, std::string subj, uint64_t cursor,
+                     uint64_t epoch) {
+                    if (g_helper_impl && g_helper_impl->client_.is_bound()) {
+                      g_helper_impl->client_->OnNewMail(
+                          acc, eid, mid, from, subj, cursor, epoch);
+                    }
+                  },
+                  std::move(acc), std::move(eid), std::move(mid),
+                  std::move(from), std::move(subj), cursor, epoch));
+        });
   }
 
   ~MahoMailHelperImpl() override {
@@ -299,8 +363,6 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
       client_->OnAuthRefreshSucceeded(acc);
     } else if (ev == "accounts-changed") {
       client_->OnAccountsChanged();
-    } else if (ev == "new-mail") {
-      client_->OnNewMail(acc);
     } else if (ev == "mutation") {
       client_->OnMutation(acc, reas);
     } else if (ev == "outbox") {
@@ -328,10 +390,19 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
                   InitializeCallback callback) override {
     LOG(INFO) << "[MahoMailHelper] Initializing. Version=" << version_token
               << " Profile=" << profile_path;
-    // Enter the sandbox before any mail data is touched. This is the first
-    // point where profile_path is known (it arrives over mojo, not on the
-    // command line), and MahoMailInitialize only records paths - the SQLCipher
-    // pool is opened later by InjectKeys - so the DB is still unopened here.
+#if BUILDFLAG(IS_LINUX)
+    const base::FilePath expected_mail_root =
+        base::FilePath::FromUTF8Unsafe(profile_path).AppendASCII("MahoMail");
+    if (!expected_mail_root.IsAbsolute() || expected_mail_root.ReferencesParent() ||
+        expected_mail_root.StripTrailingSeparators() !=
+            base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+                kMailRootSwitch)) {
+      LOG(ERROR) << "[MahoMailHelper] Initialize profile disagrees with the "
+                    "trusted Mail-root launch contract.";
+      std::move(callback).Run(false);
+      return;
+    }
+#else
     if (!EnterMailHelperSandbox(profile_path)) {
       // Fail closed: running unsandboxed would defeat the isolation, so report
       // failure and let the browser-side launcher give up after its bounded
@@ -340,6 +411,7 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
       std::move(callback).Run(false);
       return;
     }
+#endif
     bool success = MahoMailInitialize(version_token.c_str(), profile_path.c_str());
     std::move(callback).Run(success);
   }
@@ -2097,6 +2169,23 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
         }, std::move(callback)));
   }
 
+  void UpdateBehaviorSetting(uint64_t expected_revision,
+                             const std::string& key,
+                             const std::string& value_json,
+                             UpdateBehaviorSettingCallback callback) override {
+    MahoMailReadBridge::Start(
+        base::BindOnce([](uint64_t expected_revision, std::string key,
+                          std::string value_json, MahoMailReadCallback cb,
+                          void* ud) {
+          return MahoMailUpdateBehaviorSetting(expected_revision, key.c_str(),
+                                               value_json.c_str(), cb, ud);
+        }, expected_revision, key, value_json),
+        base::BindOnce([](UpdateBehaviorSettingCallback cb, bool ok,
+                          std::string json) {
+          std::move(cb).Run(ok, std::move(json));
+        }, std::move(callback)));
+  }
+
   void Md5Hash(const std::string& input, Md5HashCallback callback) override {
     MahoMailReadBridge::Start(
         base::BindOnce([](std::string input, MahoMailReadCallback cb, void* ud) {
@@ -2586,7 +2675,12 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
       return;
     }
     if (command == "StartAutoSync") {
-      bool ok = MahoMailStartAllAccountSync();
+      const int interval_minutes = get_int("interval_minutes", 15);
+      const bool ok =
+          interval_minutes > 0 &&
+          MahoMailSetSyncIntervalMinutes(
+              static_cast<uint64_t>(interval_minutes)) &&
+          MahoMailStartAllAccountSync();
       std::move(callback).Run(
           ok, ok ? "{}" : "{\"error\":\"Failed to start sync\"}");
       return;
@@ -3001,13 +3095,8 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
       return;
     }
     if (command == "ExportPgpKey") {
-      MahoMailReadBridge::Start(
-          base::BindOnce([](std::string kid, bool priv, MahoMailReadCallback cb, void* ud) {
-            return MahoMailExportPgpKey(kid.c_str(), priv, cb, ud);
-          }, get_str("key_id"), get_bool("include_private", false)),
-          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
-            std::move(cb).Run(ok, std::move(json));
-          }, std::move(callback)));
+      std::move(callback).Run(false,
+                              "generic PGP export is not permitted");
       return;
     }
     if (command == "ListPgpKeys") {
@@ -3389,7 +3478,47 @@ int main(int argc, char** argv) {
 
   LOG(INFO) << "[MahoMailHelper] Starting helper process...";
 
+  mojo::PlatformChannelEndpoint endpoint;
+#if BUILDFLAG(IS_LINUX)
+  endpoint = mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
+      *base::CommandLine::ForCurrentProcess());
+  if (!endpoint.is_valid() || !endpoint.platform_handle().is_fd()) {
+    LOG(ERROR) << "[MahoMailHelper] Invalid PlatformChannel endpoint.";
+    return 1;
+  }
+  base::ScopedFD oauth_loopback_listener = CreateOAuthLoopbackListener();
+  if (!oauth_loopback_listener.is_valid()) {
+    return 1;
+  }
+  const std::string oauth_loopback_fd =
+      base::NumberToString(oauth_loopback_listener.get());
+  if (setenv(kOAuthLoopbackFdEnv, oauth_loopback_fd.c_str(), 1) != 0) {
+    PLOG(ERROR) << "[MahoMailHelper] Failed to publish OAuth loopback fd";
+    return 1;
+  }
+  const int mojo_fd = endpoint.platform_handle().GetFD().get();
+  if (!maho::mail_helper::CloseLinuxMailHelperInheritedFds(
+          mojo_fd, oauth_loopback_listener.get())) {
+    LOG(ERROR) << "[MahoMailHelper] Failed to close inherited descriptors.";
+    return 1;
+  }
+  const base::FilePath mail_root =
+      base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+          kMailRootSwitch);
+  if (!maho::mail_helper::InitializeLinuxMailHelperSandbox(
+          mail_root, oauth_loopback_listener.get())) {
+    LOG(ERROR) << "[MahoMailHelper] Linux sandbox initialization failed; "
+                  "refusing to start.";
+    return 1;
+  }
+#else
+  // Starting Crashpad launches a handler process, so Linux must not do this
+  // before seccomp (which would violate startup ordering) or after seccomp
+  // (where process creation is deliberately denied).
   InstallCrashpadHandler(*base::CommandLine::ForCurrentProcess());
+  endpoint = mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
+      *base::CommandLine::ForCurrentProcess());
+#endif
 
   // Initialize Mojo
   mojo::core::Init();
@@ -3405,9 +3534,6 @@ int main(int argc, char** argv) {
   base::ThreadPoolInstance::CreateAndStartWithDefaultParams("maho_mail_helper_thread_pool");
 
   base::RunLoop run_loop;
-
-  auto endpoint = mojo::PlatformChannel::RecoverPassedEndpointFromCommandLine(
-      *base::CommandLine::ForCurrentProcess());
 
   std::unique_ptr<maho::MahoMailHelperImpl> helper_impl;
 

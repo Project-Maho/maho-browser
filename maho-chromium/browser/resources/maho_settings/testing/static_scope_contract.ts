@@ -61,6 +61,7 @@ const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
   'atc.peek_popup_routing_enabled': 'profile',
   'autofill.password_provider': 'core-global',
   'autofill.passwords_enabled': 'core-global',
+  'conversation.auto_archive_after_days': 'core-global',
   'general.homepage': 'profile',
   'general.prompt_for_download': 'profile',
   'general.restore_on_startup': 'profile',
@@ -73,6 +74,7 @@ const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
   'search.suggestions': 'profile',
   'tabs.archive_timeout': 'profile',
   'tabs.auto_delete_empty_folders_on_tidy': 'core-global',
+  'sidebar.new_tab_position': 'core-global',
   'tabs.pinned_close_behavior': 'core-global',
   'tabs.today_tab_timeout': 'core-global',
 };
@@ -155,6 +157,7 @@ assertExhaustiveOwnershipMetadata(ALL_PANE_DEFINITIONS, 'selectedProfileSupport'
 const expectedPaneSupport: Readonly<Record<string, SelectedProfileSupport>> = {
   account: 'not-applicable', advanced: 'partial', appearance: 'partial', autofill: 'host-only', billing: 'not-applicable',
   'chromium-settings': 'host-only', 'content-blocker': 'partial', extensions: 'host-only', general: 'supported',
+  mail: 'host-only',
   'maho-ai': 'host-only', 'maho-ai-developers': 'host-only', 'maho-mini': 'host-only', notifications: 'supported',
   passwords: 'host-only', profiles: 'partial', 'saved-passwords': 'host-only', shortcuts: 'not-applicable', tabs: 'partial',
   'mail-accounts': 'host-only', 'mail-signatures': 'host-only', 'mail-rules': 'host-only', 'mail-calendar': 'host-only',
@@ -171,6 +174,8 @@ check(!panesForSettings(false).some(pane => pane.domain === 'mail'), 'Mail panes
 check(resolveReachablePaneKey('mail-accounts', false) === 'general', 'disabled Mail deep link must redirect to General');
 check(resolveReachablePaneKey('mail-accounts', true) === 'mail-accounts', 'enabled Mail deep link must remain reachable');
 check(resolveReachablePaneKey('privacy', false) === 'content-blocker', 'legacy pane alias must remain deterministic');
+check(resolveReachablePaneKey('features', false) === 'mail', 'legacy Features deep link must land on the top-level Mail pane');
+check(panesForSettings(false).some(pane => pane.key === 'mail'), 'top-level Mail pane must stay reachable while Mail is disabled');
 
 const storeSource = repoFile('maho-chromium/browser/resources/maho_settings/react/store.ts');
 check(storeSource.includes('resolvePaneKey(this.state.currentPaneKey, mailEnabled)'), 'bootstrap must resolve the current pane against the Mail gate');

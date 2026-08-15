@@ -2,7 +2,12 @@
 
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 
-import {PasswordProviderKind, SecretAction, VaultItemKind, VaultLockState} from '../mojo.js';
+import {
+  PasswordProviderKind,
+  SecretAction,
+  VaultItemKind,
+  VaultLockState,
+} from '../mojo.js';
 import type {SettingValue, VaultItem, VaultItemListResult, VaultOperationResult} from '../mojo.js';
 import type {PaneDefinition} from '../models.js';
 import {
@@ -44,6 +49,10 @@ export function SavedPasswordsPane(
       createSavedPasswordLoadingState());
   const [searchInputValue, setSearchInputValue] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  // Bumped on every transient-state reset so child-owned confirmation UI
+  // (e.g. the delete dialog) is discarded in the same render, not one commit
+  // later; a stale confirmation must never survive a Vault lock.
+  const [transientResetToken, setTransientResetToken] = useState(0);
   const hasLoadedOnceRef = useRef(false);
   const requestIdRef = useRef(0);
   const passwordsEnabled = getPasswordsEnabled(settings);
@@ -51,6 +60,7 @@ export function SavedPasswordsPane(
   const clearTransientState = useCallback(() => {
     setActionStatus(null);
     setDrawer(null);
+    setTransientResetToken(token => token + 1);
   }, []);
 
   const loadSavedPasswords: LoadSavedPasswords = useCallback(async (showLoading = true) => {
@@ -60,16 +70,19 @@ export function SavedPasswordsPane(
     }
 
     try {
-      const [providerResult, vaultStatusResult] = await Promise.all([
-        handler.getPasswordProviderStatus(),
-        handler.getVaultStatus(),
-      ]);
+      const [providerResult, vaultStatusResult, vaultPreflightResult] =
+          await Promise.all([
+            handler.getPasswordProviderStatus(),
+            handler.getVaultStatus(),
+            handler.getVaultPreflightState(),
+          ]);
       if (requestId !== requestIdRef.current) {
         return;
       }
 
       const providerStatus = providerResult.status;
       const vaultStatus = vaultStatusResult.result;
+      const vaultPreflightState = vaultPreflightResult.state;
       const isUnlocked = vaultStatus.status?.lockState === VaultLockState.kUnlocked;
       let items: VaultItem[] = [];
       if (passwordsEnabled && isMahoNativeProvider(providerStatus.provider) && isUnlocked) {
@@ -90,7 +103,12 @@ export function SavedPasswordsPane(
       }
 
       hasLoadedOnceRef.current = true;
-      setLoadState(createSavedPasswordLoadedState({items, providerStatus, vaultStatus}));
+      setLoadState(createSavedPasswordLoadedState({
+        items,
+        providerStatus,
+        vaultPreflightState,
+        vaultStatus,
+      }));
     } catch (error) {
       if (requestId !== requestIdRef.current) {
         return;
@@ -112,6 +130,17 @@ export function SavedPasswordsPane(
     clearTransientState();
     void loadSavedPasswords(!hasLoadedOnceRef.current);
   }, [clearTransientState, loadSavedPasswords, settings]);
+
+  useEffect(() => {
+    const router = store.getCallbackRouter();
+    const listenerId = router.onVaultLockStateChanged.addListener(() => {
+      clearTransientState();
+      void loadSavedPasswords(false);
+    });
+    return () => {
+      router.removeListener(listenerId);
+    };
+  }, [clearTransientState, loadSavedPasswords, store]);
 
   useEffect(() => {
     return () => {
@@ -189,9 +218,8 @@ export function SavedPasswordsPane(
     }
     setActionStatus({
       itemId: item.id,
-      message: action === SecretAction.kCopy ?
-          'Copied by the browser process. No password was returned to this page.' :
-          'Fill request sent through the status-only path. If no compatible field is active, no page field changes.',
+      message:
+          'Copied by the browser process. No password was returned to this page.',
       status: 'success',
     });
     await loadSavedPasswords(false);
@@ -220,6 +248,7 @@ export function SavedPasswordsPane(
           searchInputValue={searchInputValue}
           searchQuery={searchQuery}
           store={store}
+          transientResetToken={transientResetToken}
           loadSavedPasswords={loadSavedPasswords}
         />
       ) : null}

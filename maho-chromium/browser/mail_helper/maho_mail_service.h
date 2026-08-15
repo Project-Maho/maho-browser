@@ -6,8 +6,9 @@
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <string>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
 #include "base/functional/callback.h"
@@ -17,8 +18,12 @@
 #include "base/observer_list.h"
 #include "base/observer_list_types.h"
 #include "base/sequence_checker.h"
+#include "base/values.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/os_crypt/async/common/encryptor.h"
+#include "components/prefs/pref_change_registrar.h"
+#include "maho/browser/mail_helper/maho_mail_attachment_registry.h"
+#include "maho/browser/mail_helper/maho_mail_badge.h"
 #include "maho/browser/mail_helper/maho_mail_helper_launcher.h"
 
 namespace base {
@@ -38,9 +43,67 @@ namespace mojom {
 class MahoMailHelper;
 }  // namespace mojom
 
+enum class MailNotificationPreview {
+  kSenderSubject,
+  kSenderOnly,
+  kGeneric,
+};
+
+enum class MailBehaviorUpdateStatus {
+  kApplied,
+  kConflict,
+  kRejected,
+  kInvalid,
+};
+
+enum class MailOsNotificationPermission {
+  kNotDetermined,
+  kPromptPending,
+  kDenied,
+  kGranted,
+  kUnsupported,
+};
+
+struct MailBehaviorSnapshot {
+  MailBehaviorSnapshot();
+  ~MailBehaviorSnapshot();
+  MailBehaviorSnapshot(const MailBehaviorSnapshot& other);
+  MailBehaviorSnapshot& operator=(const MailBehaviorSnapshot& other);
+  MailBehaviorSnapshot(MailBehaviorSnapshot&&);
+  MailBehaviorSnapshot& operator=(MailBehaviorSnapshot&&);
+
+  uint32_t version = 1;
+  uint64_t revision = 0;
+  bool desktop_notifications = true;
+  MailNotificationPreview notification_preview =
+      MailNotificationPreview::kSenderSubject;
+  bool unread_badge_enabled = true;
+  std::vector<std::string> muted_thread_ids;
+  base::DictValue values;
+
+  bool operator==(const MailBehaviorSnapshot&) const = default;
+};
+
+struct MailBehaviorUpdateResult {
+  MailBehaviorUpdateStatus status = MailBehaviorUpdateStatus::kInvalid;
+  MailBehaviorSnapshot snapshot;
+};
+
 class MahoMailService : public KeyedService,
                         public MahoMailHelperLauncher::Observer {
  public:
+  enum class LifecycleState {
+    kDisabled,
+    kStarting,
+    kReady,
+    kDraining,
+    kStopped,
+    kFailed,
+  };
+
+  using LauncherFactory =
+      base::RepeatingCallback<std::unique_ptr<MahoMailHelperLauncher>()>;
+
   class Observer : public base::CheckedObserver {
    public:
     virtual void OnAuthRequired(const std::string& account_id,
@@ -48,10 +111,22 @@ class MahoMailService : public KeyedService,
                                 const std::string& reason) {}
     virtual void OnAuthRefreshSucceeded(const std::string& account_id) {}
     virtual void OnAccountsChanged() {}
+    virtual void OnLifecycleChanged(LifecycleState state,
+                                    uint64_t generation) {}
+    virtual void OnAccountRemoved(const std::string& account_id) {}
+    virtual void OnThreadMuteChanged(const std::string& account_id,
+                                     const std::string& message_id,
+                                     bool muted) {}
     virtual void OnSyncEvent(const std::string& event_type, const std::string& payload) {}
     virtual void OnBackfillEvent(const std::string& event_type, const std::string& payload) {}
     virtual void OnStatusChanged(const std::string& account_id, bool connected) {}
-    virtual void OnNewMail(const std::string& account_id) {}
+    virtual void OnNewMail(const std::string& account_id,
+                           const std::string& email_id,
+                           const std::string& message_id,
+                           const std::string& sender,
+                           const std::string& subject,
+                           uint64_t cursor,
+                           uint64_t epoch) {}
     virtual void OnMutation(const std::string& account_id, const std::string& payload) {}
     virtual void OnOutbox(const std::string& account_id, const std::string& payload) {}
     virtual void OnScheduler(const std::string& account_id, const std::string& payload) {}
@@ -77,10 +152,17 @@ class MahoMailService : public KeyedService,
   void OnAuthRefreshSucceeded(const std::string& account_id) override;
   void OnAccountsChanged() override;
   void OnHelperReady() override;
+  void OnHelperFailed(bool will_retry) override;
   void OnSyncEvent(const std::string& event_type, const std::string& payload) override;
   void OnBackfillEvent(const std::string& event_type, const std::string& payload) override;
   void OnStatusChanged(const std::string& account_id, bool connected) override;
-  void OnNewMail(const std::string& account_id) override;
+  void OnNewMail(const std::string& account_id,
+                 const std::string& email_id,
+                 const std::string& message_id,
+                 const std::string& sender,
+                 const std::string& subject,
+                 uint64_t cursor,
+                 uint64_t epoch) override;
   void OnMutation(const std::string& account_id, const std::string& payload) override;
   void OnOutbox(const std::string& account_id, const std::string& payload) override;
   void OnScheduler(const std::string& account_id, const std::string& payload) override;
@@ -177,6 +259,8 @@ class MahoMailService : public KeyedService,
   void DeleteOutboxItem(const std::string& item_id, MailReadCallback callback);
   void FlushOutbox(MailReadCallback callback);
   void DownloadAttachment(const std::string& account_id, int64_t email_uid, const std::string& folder_id, const std::string& part_id, const std::string& filename, MailReadCallback callback);
+  void OpenAttachment(const std::string& capability_token,
+                      MahoMailAttachmentRegistry::ConsumeCallback callback);
   void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback);
   void SnoozeEmail(const std::string& email_id, const std::string& snooze_until, MailReadCallback callback);
   void UnsnoozeEmail(const std::string& email_id, MailReadCallback callback);
@@ -287,6 +371,15 @@ class MahoMailService : public KeyedService,
   void GoogleCalendarFreeBusy(const std::string& request_json, MailReadCallback callback);
   void GetAppSetting(const std::string& key, MailReadCallback callback);
   void SetAppSetting(const std::string& key, const std::string& value, MailReadCallback callback);
+  using BehaviorReadCallback =
+      base::OnceCallback<void(bool, MailBehaviorSnapshot)>;
+  using BehaviorUpdateCallback =
+      base::OnceCallback<void(MailBehaviorUpdateResult)>;
+  void GetBehaviorSnapshot(BehaviorReadCallback callback);
+  void UpdateBehavior(uint64_t expected_revision,
+                      const std::string& key,
+                      const std::string& value_json,
+                      BehaviorUpdateCallback callback);
   void Md5Hash(const std::string& input, MailReadCallback callback);
 
   // === [W-C.Additional.Typed] ===
@@ -298,15 +391,54 @@ class MahoMailService : public KeyedService,
 
   void CallBackend(const std::string& command, const std::string& args_json, ReadCallback callback);
 
+  LifecycleState lifecycle_state() const { return lifecycle_state_; }
+  uint64_t generation() const { return generation_; }
+  bool IsCommandAvailable() const;
+  MailBehaviorSnapshot behavior_snapshot() const { return behavior_snapshot_; }
+
   // Test-only: installs `launcher` as this service's launcher, replacing any
   // existing one, so unit tests can drive the read proxies against a fake
   // helper without spawning a process via EnsureHelperLaunched().
   void SetLauncherForTesting(std::unique_ptr<MahoMailHelperLauncher> launcher);
+  void SetLauncherFactoryForTesting(LauncherFactory launcher_factory);
+  void SetEnabledForTesting(bool enabled);
+  void SetBehaviorMirrorCallbackForTesting(
+      base::RepeatingCallback<void(const MailBehaviorSnapshot&)> callback) {
+    behavior_mirror_callback_for_testing_ = std::move(callback);
+  }
+  LifecycleState lifecycle_state_for_testing() const {
+    return lifecycle_state();
+  }
+  uint64_t generation_for_testing() const { return generation(); }
+  int64_t unread_count_for_testing() const { return unread_badge_state_.total(); }
+  ReadCallback StartFolderBadgeRefreshForTesting(
+      const std::string& account_id);
 
  private:
-  // Returns the bound helper interface, or nullptr when the helper is missing,
-  // unbound, or the launcher has given up after exceeding its crash-loop cap.
+  // Returns the bound helper interface, or nullptr when Mail is disabled, the
+  // helper is missing or unbound, or the launcher has given up after exceeding
+  // its crash-loop cap.
   mojom::MahoMailHelper* GetHelperOrNull();
+
+  base::OnceCallback<void(bool, const std::string&)> WrapReadReply(
+      ReadCallback callback);
+  base::OnceCallback<void(bool)> WrapCancelReply(CancelCallback callback);
+  void OnTrackedReplyComplete();
+  void NotifyLifecycleChanged();
+  void StartGeneration();
+  void BeginDrain(LifecycleState terminal_state);
+  void OnGenerationDrained(uint64_t generation);
+  bool IsEnabled() const;
+  void OnPersistedThreadMuteChanged(const std::string& account_id,
+                                    const std::string& message_id,
+                                    bool muted,
+                                    MailReadCallback callback,
+                                    bool ok,
+                                    std::string result);
+
+  // Tears down a live or pending helper when Mail is disabled. Enabling remains
+  // lazy: the next explicit EnsureHelperLaunched() call starts the helper.
+  void OnMailEnabledPrefChanged();
 
   // Decrypts the browser's OSCrypt-encrypted BYOK keys from profile prefs and
   // pushes them to the helper (browser->helper->mail-core only; never to a
@@ -316,27 +448,33 @@ class MahoMailService : public KeyedService,
   // Unread-badge + new-mail-notification pipeline. All no-op without a profile.
   // RefreshMailBadge fetches the account's folders, recomputes the inbox unread
   // total, and writes it to the `maho.mail.unread_count` pref (summed across
-  // accounts). When `notify` is true and notifications are enabled it also
-  // surfaces an OS notification for the newest inbox message.
-  void RefreshMailBadge(const std::string& account_id, bool notify);
+  // accounts). Native notification policy is owned by the profile coordinator.
+  void RefreshMailBadge(const std::string& account_id);
+  void ClearUnreadState();
   void RefreshBadgesForAccounts(const std::string& result_json);
   void OnFoldersForBadge(const std::string& account_id,
-                         bool notify,
+                         uint64_t generation,
+                         uint64_t request_token,
                          bool ok,
                          std::string result_json);
-  void OnLatestInboxEmailForNotify(const std::string& account_id,
-                                   bool ok,
-                                   std::string result_json);
+  void ApplyFolderBadgeReply(const std::string& account_id,
+                             uint64_t generation,
+                             uint64_t request_token,
+                             bool ok,
+                             std::string result_json);
   void UpdateUnreadCountPref();
 
-  // Per-account inbox unread counts, summed into the pref. Keyed by account id.
-  std::map<std::string, int64_t> account_unread_counts_;
+  MailUnreadBadgeState unread_badge_state_;
 
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
 
   SEQUENCE_CHECKER(sequence_checker_);
   raw_ptr<Profile> profile_ = nullptr;
+  std::string profile_identity_;
+  std::unique_ptr<MahoMailAttachmentRegistry> attachment_registry_;
   std::unique_ptr<MahoMailHelperLauncher> launcher_;
+  LauncherFactory launcher_factory_;
+  PrefChangeRegistrar mail_pref_registrar_;
 
   std::optional<os_crypt_async::Encryptor> encryptor_;
 
@@ -346,22 +484,26 @@ class MahoMailService : public KeyedService,
     base::FilePath crashpad_database;
   };
   std::optional<PendingLaunch> pending_launch_;
+  std::optional<PendingLaunch> launch_inputs_;
+  std::string sqlcipher_key_;
+  std::string credential_key_;
+  LifecycleState lifecycle_state_ = LifecycleState::kStopped;
+  LifecycleState drain_terminal_state_ = LifecycleState::kStopped;
+  bool enabled_for_testing_ = false;
+  bool shutdown_requested_ = false;
+  bool restart_after_drain_ = false;
+  bool helper_drain_complete_ = false;
+  uint64_t generation_ = 0;
+  size_t tracked_replies_ = 0;
+  std::vector<base::OnceClosure> queued_ready_work_;
   base::ObserverList<Observer> observers_;
+  base::RepeatingCallback<void(const MailBehaviorSnapshot&)>
+      behavior_mirror_callback_for_testing_;
+  MailBehaviorSnapshot behavior_snapshot_;
 
   base::WeakPtrFactory<MahoMailService> weak_ptr_factory_{this};
 };
 
-// Process-wide hook used to surface OS notifications for newly arrived mail.
-// The mail service invokes this instead of calling NotificationDisplayService
-// directly, so the mail_service GN target does not depend on
-// //chrome/browser/notifications (which forms a dependency cycle). The browser
-// layer installs the concrete implementation at startup.
-using MailNotificationCallback =
-    base::RepeatingCallback<void(Profile* profile,
-                                 const std::string& title,
-                                 const std::string& body,
-                                 const std::string& notification_id)>;
-void SetMahoMailNotificationCallback(MailNotificationCallback callback);
 
 // Parses a ListFolders JSON array and returns the summed unread_count across
 // Inbox-type folders. When `out_inbox_folder_id` is non-null it receives the id
@@ -375,6 +517,33 @@ std::optional<bool> GetDesktopNotificationPreference(
 
 std::optional<bool> GetUnreadBadgePreference(
     const std::string& behavior_prefs_json);
+
+std::optional<MailBehaviorSnapshot> ParseMailBehaviorSnapshot(
+    const std::string& behavior_prefs_json,
+    uint64_t fallback_revision = 0);
+std::string SerializeMailBehaviorSnapshot(const MailBehaviorSnapshot& snapshot);
+MailBehaviorUpdateResult ApplyMailBehaviorUpdate(
+    const MailBehaviorSnapshot& current,
+    uint64_t expected_revision,
+    const std::string& key,
+    const std::string& value_json);
+MailOsNotificationPermission MapMailNotificationPermissionForTesting(
+    bool platform_supported,
+    bool permission_denied);
+
+using MailNotificationPermissionStatusCallback =
+    base::RepeatingCallback<void(
+        base::OnceCallback<void(MailOsNotificationPermission)>)>;
+using MailNotificationPermissionRequestCallback =
+    base::RepeatingCallback<void(
+        base::OnceCallback<void(MailOsNotificationPermission)>)>;
+void SetMahoMailNotificationPermissionCallbacks(
+    MailNotificationPermissionStatusCallback status_callback,
+    MailNotificationPermissionRequestCallback request_callback);
+void GetMahoMailNotificationPermission(
+    base::OnceCallback<void(MailOsNotificationPermission)> callback);
+void RequestMahoMailNotificationPermission(
+    base::OnceCallback<void(MailOsNotificationPermission)> callback);
 
 }  // namespace maho
 

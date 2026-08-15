@@ -280,14 +280,14 @@ export function EmailBodyView({
                       }
 
                       try {
-                        const path = await api.downloadAttachment(
+                        const capabilityToken = await api.downloadAttachment(
                           email.account_id,
                           email.uid,
                           email.folder_id,
                           att.part_id,
                           att.filename ?? "attachment",
                         );
-                        await api.openAttachment(path);
+                        await api.openAttachment(capabilityToken);
                       } catch (err) {
                         toast("error", err instanceof Error ? err.message : "Failed to open attachment");
                       }

@@ -106,8 +106,8 @@ export const downloadAttachment = (
 ): Promise<string> =>
   wrapMojoCall<string>(() => handler.downloadAttachment(accountId, BigInt(emailUid || 0), folderId, partId, filename), 'downloadAttachment');
 
-export const openAttachment = async (path: string): Promise<void> => {
-  const res = await handler.openAttachment(path);
+export const openAttachment = async (capabilityToken: string): Promise<void> => {
+  const res = await handler.openAttachment(capabilityToken);
   if (!res.ok) throw new Error(res.errorMsg || 'openAttachment failed');
 };
 
@@ -227,8 +227,8 @@ export const deleteFolder = (accountId: string, folderId: string): Promise<void>
 export const syncFolder = (accountId: string, folderId: string): Promise<Types.EmailSummary[]> =>
   wrapMojoCall<Types.EmailSummary[]>(() => handler.syncFolder(accountId, folderId), 'syncFolder');
 
-export const startAutoSync = (accountId: string | null, intervalSecs: number): Promise<void> =>
-  callBackend<void>('StartAutoSync', { account_id: accountId, interval_secs: intervalSecs });
+export const startAutoSync = (accountId: string | null, intervalMinutes: number): Promise<void> =>
+  callBackend<void>('StartAutoSync', { account_id: accountId, interval_minutes: intervalMinutes });
 
 export const stopAutoSync = (): Promise<void> =>
   callBackend<void>('StopAutoSync');
@@ -512,12 +512,6 @@ export const queueEmail = (request: Types.QueueEmailRequest): Promise<Types.Outb
 
 export const listOutbox = (accountId?: string): Promise<Types.OutboxItem[]> =>
   wrapMojoCall<Types.OutboxItem[]>(() => handler.listOutbox(accountId ?? ''), 'listOutbox');
-
-export const checkForAppUpdate = (): Promise<any> =>
-  Promise.resolve(null);
-
-export const relaunchApp = (): Promise<void> =>
-  Promise.resolve();
 
 export const listCalendarEvents = (
   accountId: string,

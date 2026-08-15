@@ -209,6 +209,8 @@ interface MahoMailHelper {
   GoogleCalendarFreeBusy(string request_json) => (bool ok, string result_json);
   GetAppSetting(string key) => (bool ok, string result_json);
   SetAppSetting(string key, string value) => (bool ok, string result_json);
+  UpdateBehaviorSetting(uint64 expected_revision, string key, string value_json)
+      => (bool ok, string result_json);
   Md5Hash(string input) => (bool ok, string result_json);
 
   // === [W-C.Additional.Typed] ===
@@ -230,7 +232,8 @@ interface MahoMailHelperClient {
   OnAuthRefreshSucceeded(string account_id);
   OnAccountsChanged();
   // === [W-C..W-K.Events] ===
-  OnNewMail(string account_id);
+  OnNewMail(string account_id, string email_id, string message_id,
+            string sender, string subject, uint64 cursor, uint64 epoch);
   OnMutation(string account_id, string payload);
   OnOutbox(string account_id, string payload);
   OnScheduler(string account_id, string payload);

@@ -1,11 +1,12 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {Loader2, Check} from 'lucide-react';
+import {Loader2} from 'lucide-react';
 import {Button} from '@ui/button';
 import {Switch} from '@ui/switch';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@ui/select';
 import {PaneShell, SectionCard} from './domain_panes.js';
+import {classifyMailSettingsFailure, type MailSettingsState} from './mail_settings_state.js';
 import type {PaneDefinition} from '../models.js';
 import type {MahoSettingsStore} from './store.js';
 
@@ -30,71 +31,44 @@ interface AccountCalendar {
   visible: boolean;
 }
 
+const DEFAULT_CALENDAR_PREFS: CalendarPrefs = {
+  hide_weekends: false,
+  week_start: 1,
+  working_hours_start: '09:00',
+  working_hours_end: '17:00',
+  default_reminder_minutes: 15,
+};
+
 export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const router = store.getCallbackRouter();
   const mountedRef = useRef(true);
-  const retryCountRef = useRef(0);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadRef = useRef<() => void>(() => {});
-  const [prefs, setPrefs] = useState<CalendarPrefs>({
-    hide_weekends: false,
-    week_start: 1,
-    working_hours_start: '09:00',
-    working_hours_end: '17:00',
-    default_reminder_minutes: 15,
-  });
+
+  const [prefs, setPrefs] = useState<CalendarPrefs>(DEFAULT_CALENDAR_PREFS);
   const [categories, setCategories] = useState<CalendarCategory[]>([]);
   const [calendars, setCalendars] = useState<AccountCalendar[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [modelState, setModelState] = useState<MailSettingsState<CalendarPrefs>>({status: 'loading'});
   const [error, setError] = useState('');
-  const [loadError, setLoadError] = useState('');
-
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
     };
   }, []);
 
-  // Returns true while a bounded retry is pending (≤3), false once the cap is hit.
-  const scheduleRetry = useCallback((): boolean => {
-    if (retryCountRef.current >= 3) {
-      return false;
-    }
-    retryCountRef.current += 1;
-    if (retryTimerRef.current !== null) {
-      clearTimeout(retryTimerRef.current);
-    }
-    retryTimerRef.current = setTimeout(() => {
-      retryTimerRef.current = null;
-      if (mountedRef.current) {
-        loadRef.current();
-      }
-    }, 800);
-    return true;
-  }, []);
-
   const loadCalendarData = useCallback(async () => {
-    setLoading(true);
+    setModelState({status: 'loading'});
     try {
       const {ok: okPrefs, resultJson: prefsJson} = await handler.mailGetCalendarPrefs();
       if (!mountedRef.current) return;
       if (!okPrefs) {
-        if (!scheduleRetry()) {
-          setLoadError('Failed to load calendar settings');
-          setLoading(false);
-        }
+        setModelState(classifyMailSettingsFailure(prefsJson, 'Failed to load calendar settings'));
         return;
       }
+      let nextPrefs = DEFAULT_CALENDAR_PREFS;
       if (prefsJson) {
-        setPrefs(JSON.parse(prefsJson) as CalendarPrefs);
+        nextPrefs = JSON.parse(prefsJson) as CalendarPrefs;
+        setPrefs(nextPrefs);
       }
-      setLoadError('');
-      retryCountRef.current = 0;
 
       const {ok: okCat, resultJson: catJson} = await handler.mailListCalendarCategories('');
       if (mountedRef.current) {
@@ -112,20 +86,13 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
         } else {
           setError('Failed to load account calendars');
         }
-        setLoading(false);
+        setModelState({status: 'ready', data: nextPrefs});
       }
-    } catch (e) {
+    } catch {
       if (!mountedRef.current) return;
-      if (!scheduleRetry()) {
-        setLoadError('Failed to load calendar settings');
-        setLoading(false);
-      }
+      setModelState({status: 'error', message: 'Failed to load calendar settings'});
     }
-  }, [handler, scheduleRetry]);
-
-  useEffect(() => {
-    loadRef.current = () => { void loadCalendarData(); };
-  }, [loadCalendarData]);
+  }, [handler]);
 
   useEffect(() => {
     void loadCalendarData();
@@ -141,10 +108,20 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
   }, [router, loadCalendarData]);
 
   const updatePrefs = async (newPrefs: CalendarPrefs) => {
+    const previous = prefs;
     setPrefs(newPrefs);
-    const {ok} = await handler.mailSetCalendarPrefs(JSON.stringify(newPrefs));
-    if (!ok) {
-      setError('Failed to update calendar preferences');
+    setError('');
+    try {
+      const {ok} = await handler.mailSetCalendarPrefs(JSON.stringify(newPrefs));
+      if (!ok) {
+        setPrefs(previous);
+        setError('Failed to update calendar preferences');
+      }
+    } catch {
+      if (mountedRef.current) {
+        setPrefs(previous);
+        setError('Failed to update calendar preferences');
+      }
     }
   };
 
@@ -159,18 +136,16 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
 
   return (
     <PaneShell pane={pane}>
-      {loading ? (
+      <div data-mail-settings-state={modelState.status}>
+      {modelState.status === 'loading' ? (
         <p className="py-4 text-center text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Loading calendar settings...</p>
+      ) : modelState.status === 'unavailable' || modelState.status === 'error' ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground"><span>{modelState.message}</span><Button type="button" size="sm" variant="outline" onClick={() => { void loadCalendarData(); }}>Retry</Button></div>
       ) : (
         <div className="space-y-6">
           <SectionCard title="Calendar Preferences">
             {error && <p className="p-4 text-sm text-destructive">{error}</p>}
-            {loadError && (
-              <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
-                <span>{loadError}</span>
-                <Button type="button" size="sm" variant="outline" onClick={() => { retryCountRef.current = 0; setLoadError(''); void loadCalendarData(); }}>Retry</Button>
-              </div>
-            )}
+
             <div className="divide-y divide-border">
               <div className="flex items-center justify-between p-4">
                 <div>
@@ -233,6 +208,7 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
           </SectionCard>
         </div>
       )}
+      </div>
     </PaneShell>
   );
 }

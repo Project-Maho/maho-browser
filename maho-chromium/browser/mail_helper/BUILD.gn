@@ -30,12 +30,24 @@ source_set("maho_mail_launcher") {
 
 # Profile-keyed broker (browser side). Owns the launcher and proxies the
 # helper's asynchronous JSON read methods for one regular profile.
+source_set("maho_mail_badge") {
+  sources = [
+    "maho_mail_badge.cc",
+    "maho_mail_badge.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 source_set("maho_mail_service") {
   sources = [
+    "maho_mail_attachment_registry.cc",
+    "maho_mail_attachment_registry.h",
+    "maho_mail_notification_permission.h",
     "maho_mail_service.cc",
     "maho_mail_service.h",
   ]
   public_deps = [
+    ":maho_mail_badge",
     ":mojo_bindings",
     "//base",
     "//components/keyed_service/core",
@@ -53,9 +65,78 @@ source_set("maho_mail_service") {
     sources += [
       "maho_mail_dock_badge_mac.h",
       "maho_mail_dock_badge_mac.mm",
+      "maho_mail_notification_permission_mac.mm",
     ]
-    frameworks = [ "AppKit.framework" ]
+    frameworks = [
+      "AppKit.framework",
+      "UserNotifications.framework",
+    ]
+  } else if (is_win) {
+    sources += [ "maho_mail_notification_permission_win.cc" ]
+    deps += [ "//chrome/installer/util:with_no_strings" ]
+    libs = [
+      "ole32.lib",
+      "runtimeobject.lib",
+      "shell32.lib",
+    ]
+  } else {
+    sources += [ "maho_mail_notification_permission.cc" ]
   }
+}
+
+source_set("maho_mail_integration_test_support") {
+  testonly = true
+  sources = [
+    "maho_mail_integration_test_support.cc",
+    "maho_mail_integration_test_support.h",
+  ]
+  deps = [ "//base" ]
+}
+
+test("maho_mail_attachment_registry_test") {
+  sources = [
+    "maho_mail_attachment_registry_unittest.cc",
+    "maho_mail_service_test_main.cc",
+  ]
+  deps = [
+    ":maho_mail_service",
+    "//base",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_mail_notification_coordinator") {
+  sources = [
+    "maho_mail_notification_coordinator.cc",
+    "maho_mail_notification_coordinator.h",
+  ]
+  public_deps = [
+    ":maho_mail_service",
+    "//base",
+    "//components/prefs",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+  ]
+}
+
+test("maho_mail_notification_coordinator_test") {
+  sources = [
+    "maho_mail_notification_coordinator_unittest.cc",
+    "maho_mail_service_test_main.cc",
+  ]
+  deps = [
+    ":maho_mail_notification_coordinator",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+  ]
 }
 
 # Profile-keyed factory: creates one MahoMailService per regular profile and
@@ -89,11 +170,13 @@ test("maho_mail_service_test") {
     "maho_mail_service_unittest.cc",
   ]
   deps = [
+    ":maho_mail_integration_test_support",
     ":maho_mail_launcher",
     ":maho_mail_service",
     ":mojo_bindings",
     "//base",
     "//base/test:test_support",
+
     "//mojo/core/embedder",
     "//mojo/public/cpp/bindings",
     "//testing/gtest",
@@ -151,6 +234,7 @@ executable("maho_mail_helper") {
     "//mojo/public/cpp/platform",
     "//mojo/public/cpp/system",
     "//maho/third_party/maho:maho_mail_ffi",
+    "//third_party/boringssl",
     "//third_party/crashpad/crashpad/client",
   ]
 
@@ -158,5 +242,42 @@ executable("maho_mail_helper") {
     # Seatbelt: the helper sandboxes itself in Initialize() before opening the
     # mail DB or touching the network.
     deps += [ "//sandbox/mac:seatbelt" ]
+  }
+
+  if (is_linux) {
+    # Runtime credentials are injected by the browser before Mail work starts,
+    # so the sandboxed helper needs no session-bus transport.
+    sources += [
+      "maho_mail_helper_sandbox_linux.cc",
+      "maho_mail_helper_sandbox_linux.h",
+    ]
+    deps += [
+      "//sandbox/linux:sandbox_services",
+      "//sandbox/linux:seccomp_bpf",
+      "//sandbox/policy",
+      "//sandbox/policy/mojom",
+    ]
+
+  }
+}
+
+if (is_linux) {
+  test("maho_mail_helper_sandbox_test") {
+    sources = [
+      "maho_mail_helper_sandbox_linux.cc",
+      "maho_mail_helper_sandbox_linux.h",
+      "maho_mail_helper_sandbox_linux_unittest.cc",
+      "maho_mail_helper_sandbox_test_main.cc",
+    ]
+    deps = [
+      "//base",
+      "//base/test:test_support",
+      "//sandbox/linux:sandbox_services",
+      "//sandbox/linux:seccomp_bpf",
+      "//sandbox/policy",
+      "//sandbox/policy/mojom",
+      "//testing/gtest",
+    ]
+    libs = [ "dl" ]
   }
 }

@@ -3,6 +3,33 @@
 // Generated at build time; this file provides tsc with the shape of the Mojo
 // bindings so the React bundle can type-check without touching generated code.
 
+export enum MailNotificationPermission {
+  kNotDetermined = 0,
+  kPromptPending = 1,
+  kDenied = 2,
+  kGranted = 3,
+  kUnsupported = 4,
+}
+
+export enum MailBehaviorUpdateStatus {
+  kApplied = 0,
+  kConflict = 1,
+  kRejected = 2,
+  kInvalid = 3,
+}
+
+export interface MailBehaviorSnapshot {
+  version: number;
+  revision: bigint;
+  valueJson: string;
+  notificationPermission: MailNotificationPermission;
+}
+
+export interface MailBehaviorUpdateResult {
+  status: MailBehaviorUpdateStatus;
+  snapshot: MailBehaviorSnapshot;
+}
+
 export interface SettingValue {
   key: string;
   value: string;
@@ -177,6 +204,7 @@ export interface AISettings {
   model: string;
   approvalPolicy: string;
   sessionPersistenceEnabled: boolean;
+  mailReadAllowed: boolean;
   hasByokOpenai: boolean;
   hasByokAnthropic: boolean;
   hasRelaySession: boolean;
@@ -235,6 +263,15 @@ export enum VaultLockState {
   kAutoLocked = 3,
 }
 
+export enum VaultPreflightState {
+  kUnavailable = 0,
+  kHealthy = 1,
+  kLocked = 2,
+  kUnrecoverableKey = 3,
+  kStructuralCorruption = 4,
+  kPlaintextResidue = 5,
+}
+
 export enum VaultAgentPolicy {
   kDeny = 0,
   kAskEveryUse = 1,
@@ -255,6 +292,7 @@ export enum PasswordProviderKind {
   kMahoNative = 0,
   kBitwarden = 1,
   kOnePassword = 2,
+  kDisabled = 3,
 }
 
 export interface PasswordProviderCapabilities {
@@ -317,7 +355,6 @@ export interface VaultItem {
 
 export enum SecretAction {
   kCopy = 0,
-  kFill = 1,
 }
 
 export interface VaultOperationResult {
@@ -557,6 +594,9 @@ export class PageCallbackRouter {
   providerModelsRefreshed: {
     addListener(listener: (providerId: string, modelIds: string[]) => void): number;
   };
+  onVaultLockStateChanged: {
+    addListener(listener: (locked: boolean) => void): number;
+  };
   onMailAccountsChanged: {
     addListener(listener: () => void): number;
   };
@@ -655,6 +695,7 @@ export class PageHandlerRemote {
   setAIModel(model: string): Promise<void>;
   setAIApprovalPolicy(policy: string): Promise<void>;
   setAISessionPersistence(enabled: boolean): Promise<void>;
+  setAIMailReadAllowed(allowed: boolean): Promise<{success: boolean}>;
   fetchProviderModels(providerId: string): Promise<{modelIds: string[]; fromCache: boolean}>;
   refreshProviderModels(providerId: string): Promise<{modelIds: string[]}>;
   testManagedConnection(): Promise<{success: boolean; message: string}>;
@@ -687,6 +728,7 @@ export class PageHandlerRemote {
   updatePasswordUsername(passwordId: string, username: string): Promise<{success: boolean}>;
   deletePassword(passwordId: string): Promise<{success: boolean}>;
   getVaultStatus(): Promise<{result: VaultOperationResult}>;
+  getVaultPreflightState(): Promise<{state: VaultPreflightState}>;
   getVaultProviderStatus(): Promise<{status: VaultProviderStatus}>;
   initializeVault(masterPassphrase: string, recoverySecret: string): Promise<{
     result: VaultOperationResult;
@@ -821,8 +863,9 @@ export class PageHandlerRemote {
   mailListCalendarCategories(accountId: string): Promise<{ok: boolean; resultJson: string}>;
   mailSetCalendarVisibility(id: string, visible: boolean): Promise<{ok: boolean}>;
   mailListAccountCalendars(accountId: string): Promise<{ok: boolean; resultJson: string}>;
-  mailGetBehaviorPrefs(): Promise<{ok: boolean; resultJson: string}>;
-  mailSetBehaviorPref(key: string, value: string): Promise<{ok: boolean}>;
+  mailGetBehaviorPrefs(): Promise<{ok: boolean; snapshot: MailBehaviorSnapshot}>;
+  mailSetBehaviorPref(expectedRevision: bigint, key: string, value: string): Promise<{result: MailBehaviorUpdateResult}>;
+  mailRequestNotificationPermission(): Promise<{permission: MailNotificationPermission}>;
   mailGetAIConfig(feature: string): Promise<{ok: boolean; resultJson: string}>;
   mailSetAIConfig(feature: string, configJson: string): Promise<{ok: boolean}>;
   mailSetAIKey(provider: string, apiKey: string): Promise<{ok: boolean}>;

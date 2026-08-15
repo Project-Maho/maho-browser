@@ -8,13 +8,19 @@ import {
 import * as api from "../api";
 
 export type EmailBodyFontFamily = "system-ui" | "Georgia" | "Courier New";
+export type NotificationPreview = "sender_subject" | "sender_only" | "generic";
 
 export interface MailBehaviorPrefs {
+  readonly version: number;
+  readonly revision: number;
   readonly sidebar_width: number;
   readonly email_list_width: number;
   readonly block_remote_images: boolean;
   readonly block_trackers: boolean;
   readonly desktop_notifications: boolean;
+  readonly notification_preview: NotificationPreview;
+  readonly unread_badge_enabled: boolean;
+  readonly muted_thread_ids: readonly string[];
   readonly sound_enabled: boolean;
   readonly undo_send_delay: number;
   readonly auto_save_drafts: boolean;
@@ -69,15 +75,20 @@ const BEHAVIOR_PREFS_CACHE_KEY = "maho-mail-behavior-prefs-cache-v1";
 const EMAIL_LIST_WIDTH_MIN = 280;
 const EMAIL_LIST_WIDTH_MAX = 600;
 const DEFAULT_PREFS: MailBehaviorPrefs = {
+  version: 1,
+  revision: 0,
   sidebar_width: 240, // Matches test fallback to 240
   email_list_width: 350, // Matches test fallback to 350
   block_remote_images: true,
   block_trackers: true,
-  desktop_notifications: false, // Matches test default to false
+  desktop_notifications: true,
+  notification_preview: "sender_subject",
+  unread_badge_enabled: true,
+  muted_thread_ids: [],
   sound_enabled: true,
   undo_send_delay: 5,
   auto_save_drafts: true,
-  sync_interval: 0, // Matches test default to 0
+  sync_interval: 15,
   font_size: 14,
   language: "en",
   analytics_enabled: true,
@@ -126,17 +137,38 @@ export function parseMailBehaviorPrefs(raw: string | null): MailBehaviorPrefs {
     parsed.email_body_font_family === "Georgia" || parsed.email_body_font_family === "Courier New"
       ? parsed.email_body_font_family
       : "system-ui";
+  const rawSyncInterval =
+    typeof parsed.sync_interval === "number"
+      ? parsed.sync_interval
+      : DEFAULT_PREFS.sync_interval;
+  const migratedSyncInterval =
+    rawSyncInterval > 60 && rawSyncInterval % 60 === 0
+      ? rawSyncInterval / 60
+      : rawSyncInterval;
+  const syncInterval = [5, 15, 30, 60].includes(migratedSyncInterval)
+    ? migratedSyncInterval
+    : DEFAULT_PREFS.sync_interval;
 
   return {
+    version: 1,
+    revision: readNumber(parsed, "revision", DEFAULT_PREFS.revision, 0, Number.MAX_SAFE_INTEGER),
     sidebar_width: readNumber(parsed, "sidebar_width", DEFAULT_PREFS.sidebar_width, 200, 400),
     email_list_width: readNumber(parsed, "email_list_width", DEFAULT_PREFS.email_list_width, EMAIL_LIST_WIDTH_MIN, EMAIL_LIST_WIDTH_MAX),
     block_remote_images: readBoolean(parsed, "block_remote_images", DEFAULT_PREFS.block_remote_images),
     block_trackers: readBoolean(parsed, "block_trackers", DEFAULT_PREFS.block_trackers),
     desktop_notifications: readBoolean(parsed, "desktop_notifications", DEFAULT_PREFS.desktop_notifications),
+    notification_preview:
+      parsed.notification_preview === "sender_only" || parsed.notification_preview === "generic"
+        ? parsed.notification_preview
+        : "sender_subject",
+    unread_badge_enabled: readBoolean(parsed, "unread_badge_enabled", DEFAULT_PREFS.unread_badge_enabled),
+    muted_thread_ids: Array.isArray(parsed.muted_thread_ids)
+      ? parsed.muted_thread_ids.filter((item): item is string => typeof item === "string")
+      : [],
     sound_enabled: readBoolean(parsed, "sound_enabled", DEFAULT_PREFS.sound_enabled),
     undo_send_delay: readNumber(parsed, "undo_send_delay", DEFAULT_PREFS.undo_send_delay, 0, 30),
     auto_save_drafts: readBoolean(parsed, "auto_save_drafts", DEFAULT_PREFS.auto_save_drafts),
-    sync_interval: readNumber(parsed, "sync_interval", DEFAULT_PREFS.sync_interval, 0, 3600),
+    sync_interval: syncInterval,
     font_size: readNumber(parsed, "font_size", DEFAULT_PREFS.font_size, 12, 20),
     language,
     analytics_enabled: readBoolean(parsed, "analytics_enabled", DEFAULT_PREFS.analytics_enabled),
@@ -289,7 +321,14 @@ export function useSettings(): UseSettingsReturn {
 
   return {
     syncInterval: prefs.sync_interval,
-    setSyncInterval: (value) => persistPref("sync_interval", value),
+    setSyncInterval: (value) => {
+      const minutes =
+        value > 60 && value % 60 === 0 ? value / 60 : value;
+      persistPref(
+        "sync_interval",
+        [5, 15, 30, 60].includes(minutes) ? minutes : 15,
+      );
+    },
     sidebarWidth: prefs.sidebar_width,
     setSidebarWidth: (value) => {
       const clamped = Math.min(Math.max(value, 200), 400);

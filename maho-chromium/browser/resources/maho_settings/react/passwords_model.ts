@@ -30,7 +30,8 @@ export type PasswordsLoadState<T> =
 
 export type LoadPasswords = (searchQuery: string, showLoading?: boolean) => Promise<void>;
 
-export type PasswordProviderBackendValue = 'maho_native' | 'bitwarden' | 'onepassword';
+export type PasswordProviderBackendValue =
+    'maho_native' | 'bitwarden' | 'onepassword' | 'disabled';
 
 export type PasswordImportFileFormat = 'csv' | 'one_pux' | 'json';
 
@@ -71,6 +72,7 @@ const PASSWORD_PROVIDER_BACKEND_VALUES = {
   [PasswordProviderKind.kMahoNative]: 'maho_native',
   [PasswordProviderKind.kBitwarden]: 'bitwarden',
   [PasswordProviderKind.kOnePassword]: 'onepassword',
+  [PasswordProviderKind.kDisabled]: 'disabled',
 } as const satisfies Record<PasswordProviderKind, PasswordProviderBackendValue>;
 
 export const PASSWORD_IMPORT_SOURCE_DESCRIPTORS = [

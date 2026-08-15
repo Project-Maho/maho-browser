@@ -113,6 +113,11 @@ function resolvePaneKey(key: string, mailEnabled = true): string {
   return resolveReachablePaneKey(key, mailEnabled);
 }
 
+function isMailEnabled(settings: SettingValue[]): boolean {
+  return settings.some(
+      setting => setting.key === 'mail.enabled' && setting.value === 'true');
+}
+
 function paneKeyFromCurrentUrl(): string {
   const param = new URLSearchParams(window.location.search).get('pane');
   return param ? resolvePaneKey(param) : PANE_DEFINITIONS[0]!.key;
@@ -283,8 +288,7 @@ export class MahoSettingsStore {
       const {settings} = await this.pageHandler.getSettings();
       this.bootstrapComplete = true;
       this.replaceSettings(settings);
-      const mailEnabled = settings.some(
-          setting => setting.key === 'mail.enabled' && setting.value === 'true');
+      const mailEnabled = isMailEnabled(settings);
       const reachablePaneKey = resolvePaneKey(this.state.currentPaneKey, mailEnabled);
       if (reachablePaneKey !== this.state.currentPaneKey) {
         this.patch(state => ({...state, currentPaneKey: reachablePaneKey}));
@@ -328,13 +332,19 @@ export class MahoSettingsStore {
     if (settingsEqual(this.state.settings, settings)) {
       return;
     }
+    const reachablePaneKey = resolvePaneKey(
+        this.state.currentPaneKey, isMailEnabled(settings));
     this.patch(state => ({
       ...state,
+      currentPaneKey: reachablePaneKey,
       settings: cloneSettings(settings),
     }));
+    if (reachablePaneKey !== this.state.currentPaneKey) {
+      writePaneToUrl(reachablePaneKey, true);
+    }
   }
   selectPane(key: string): void {
-    const nextPaneKey = resolvePaneKey(key);
+    const nextPaneKey = resolvePaneKey(key, isMailEnabled(this.state.settings));
     if (nextPaneKey === this.state.currentPaneKey) {
       return;
     }

@@ -6,6 +6,7 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/path_service.h"
@@ -24,6 +25,9 @@ namespace {
 constexpr char kBaseBundleIdSwitch[] = "maho-mail-base-bundle-id";
 #endif
 constexpr char kCrashpadDatabaseSwitch[] = "maho-mail-crashpad-database";
+#if BUILDFLAG(IS_LINUX)
+constexpr char kMailRootSwitch[] = "maho-mail-root";
+#endif
 
 #if BUILDFLAG(IS_WIN)
 constexpr char kHelperExecutableName[] = "maho_mail_helper.exe";
@@ -36,6 +40,10 @@ MahoMailHelperLauncher::MahoMailHelperLauncher() = default;
 
 MahoMailHelperLauncher::~MahoMailHelperLauncher() {
   ForceClose();
+}
+
+mojom::MahoMailHelper* MahoMailHelperLauncher::GetHelper() const {
+  return (ready_ && helper_.is_bound()) ? helper_.get() : nullptr;
 }
 
 void MahoMailHelperLauncher::Launch(const std::string& expected_version,
@@ -68,6 +76,23 @@ void MahoMailHelperLauncher::LaunchInternal() {
   base::FilePath helper_path = exe_dir.AppendASCII(kHelperExecutableName);
 
   base::CommandLine cmd_line(helper_path);
+#if BUILDFLAG(IS_LINUX)
+  const base::FilePath mail_root =
+      base::FilePath::FromUTF8Unsafe(profile_path_).AppendASCII("MahoMail");
+  if (!base::CreateDirectory(mail_root)) {
+    LOG(ERROR) << "[MahoMailHelperLauncher] Failed to create Mail root.";
+    HandleFailureAndMaybeRelaunch();
+    return;
+  }
+  base::FilePath canonical_mail_root;
+  if (!base::NormalizeFilePath(mail_root, &canonical_mail_root)) {
+    LOG(ERROR) << "[MahoMailHelperLauncher] Failed to canonicalize Mail root.";
+    HandleFailureAndMaybeRelaunch();
+    return;
+  }
+  profile_path_ = canonical_mail_root.DirName().AsUTF8Unsafe();
+  cmd_line.AppendSwitchPath(kMailRootSwitch, canonical_mail_root);
+#endif
   if (!crashpad_database_.empty()) {
     cmd_line.AppendSwitchPath(kCrashpadDatabaseSwitch, crashpad_database_);
   }
@@ -196,10 +221,17 @@ void MahoMailHelperLauncher::OnAccountsChanged() {
   }
 }
 
-void MahoMailHelperLauncher::OnNewMail(const std::string& account_id) {
+void MahoMailHelperLauncher::OnNewMail(const std::string& account_id,
+                                       const std::string& email_id,
+                                       const std::string& message_id,
+                                       const std::string& sender,
+                                       const std::string& subject,
+                                       uint64_t cursor,
+                                       uint64_t epoch) {
   LOG(INFO) << "[MahoMailHelperLauncher] OnNewMail for " << account_id;
   if (observer_) {
-    observer_->OnNewMail(account_id);
+    observer_->OnNewMail(account_id, email_id, message_id, sender, subject,
+                         cursor, epoch);
   }
 }
 
@@ -330,6 +362,9 @@ void MahoMailHelperLauncher::HandleFailureAndMaybeRelaunch() {
     LOG(ERROR) << "[MahoMailHelperLauncher] Crash-loop cap reached ("
                << kMaxRespawns << " respawns within " << kCrashWindow.InSeconds()
                << "s). Giving up; mail helper is unavailable.";
+    if (observer_) {
+      observer_->OnHelperFailed(/*will_retry=*/false);
+    }
     return;
   }
 
@@ -337,6 +372,9 @@ void MahoMailHelperLauncher::HandleFailureAndMaybeRelaunch() {
   ++respawn_count_;
   LOG(WARNING) << "[MahoMailHelperLauncher] Scheduling respawn #"
                << respawn_count_ << " in " << backoff.InMilliseconds() << "ms.";
+  if (observer_) {
+    observer_->OnHelperFailed(/*will_retry=*/true);
+  }
   relaunch_timer_.Start(FROM_HERE, backoff,
                         base::BindOnce(&MahoMailHelperLauncher::LaunchInternal,
                                        weak_ptr_factory_.GetWeakPtr()));
@@ -351,20 +389,68 @@ base::TimeDelta MahoMailHelperLauncher::ComputeBackoff() const {
   return backoff > kMaxBackoff ? kMaxBackoff : backoff;
 }
 
-void MahoMailHelperLauncher::Shutdown() {
-  // Best-effort, non-blocking teardown. KeyedService::Shutdown() is synchronous
-  // and this launcher is destroyed immediately afterward, so we must not spin a
-  // nested UI-thread RunLoop nor capture stack pointers across async Mojo
-  // replies to await a graceful ack. Dropping the remote signals disconnect to
-  // the helper (letting it begin its own drain) and the process is then force-
-  // terminated. FOLLOW-UP RISK: the graceful PrepareShutdown -> Shutdown Mojo
-  // drain (IMAP IDLE / in-flight SMTP) is no longer awaited here.
+void MahoMailHelperLauncher::Shutdown(base::OnceClosure drained_callback) {
+  if (shutting_down_) {
+    if (drained_callback) {
+      drained_callbacks_.push_back(std::move(drained_callback));
+    }
+    return;
+  }
+
+  shutting_down_ = true;
+  relaunch_timer_.Stop();
+  ready_ = false;
+  if (drained_callback) {
+    drained_callbacks_.push_back(std::move(drained_callback));
+  }
+  if (!helper_.is_bound()) {
+    CompleteShutdown();
+    return;
+  }
+
+  shutdown_timer_.Start(
+      FROM_HERE, shutdown_timeout_,
+      base::BindOnce(&MahoMailHelperLauncher::OnShutdownTimeout,
+                     weak_ptr_factory_.GetWeakPtr()));
+  helper_->PrepareShutdown(
+      base::BindOnce(&MahoMailHelperLauncher::OnPrepareShutdownComplete,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void MahoMailHelperLauncher::OnPrepareShutdownComplete() {
+  if (!shutting_down_ || !helper_.is_bound()) {
+    CompleteShutdown();
+    return;
+  }
+  helper_->Shutdown(
+      base::BindOnce(&MahoMailHelperLauncher::OnShutdownComplete,
+                     weak_ptr_factory_.GetWeakPtr()));
+}
+
+void MahoMailHelperLauncher::OnShutdownComplete() {
+  CompleteShutdown();
+}
+
+void MahoMailHelperLauncher::OnShutdownTimeout() {
+  LOG(WARNING) << "[MahoMailHelperLauncher] Graceful shutdown timed out; "
+                  "force-closing helper.";
+  CompleteShutdown();
+}
+
+void MahoMailHelperLauncher::CompleteShutdown() {
+  shutdown_timer_.Stop();
   ForceClose();
+  std::vector<base::OnceClosure> callbacks = std::move(drained_callbacks_);
+  drained_callbacks_.clear();
+  for (auto& callback : callbacks) {
+    std::move(callback).Run();
+  }
 }
 
 void MahoMailHelperLauncher::ForceClose() {
   shutting_down_ = true;
   relaunch_timer_.Stop();
+  shutdown_timer_.Stop();
   ready_ = false;
   helper_.reset();
   if (process_.IsValid()) {

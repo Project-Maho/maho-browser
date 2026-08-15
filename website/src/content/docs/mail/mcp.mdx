@@ -1,49 +1,71 @@
 ---
-title: MCP Server
-description: Connecting Maho Mail to AI agents via the Model Context Protocol
+title: MCP and Agent access
+description: Use Mail tools through Maho Browser
 sidebar:
   order: 2
 ---
 
 ## Overview
 
-Maho Mail includes a built-in Model Context Protocol (MCP) server. This allows any MCP-compatible AI agent (like Claude Desktop, Cursor, or your own custom agents) to read, search, and draft emails directly from your inbox using standard `stdio` or SSE communication.
+Mail tools are available through Maho Browser's MCP and Agent surfaces. Maho
+Browser and its profile-scoped Mail helper must be running. There is no
+standalone Mail daemon, no separate Mail binary, and no Mail server that
+outlives the browser.
 
-## Why use MCP with Email?
+MCP clients connect through `maho mcp`, the stdio bridge shipped with the CLI.
+It forwards bytes to the browser's local socket; the protocol itself lives in
+the browser process. See [Agent Protocol](/api/agent-protocol/).
 
-Instead of copying and pasting text between your email client and an AI, you can connect the AI directly to your inbox.
-- "Did I get an email from John about the invoice?"
-- "Summarize all threads in my project folder from this week."
-- "Draft a polite reply to the latest email saying I will review it by tomorrow."
+## Gates
 
-## Setup with Claude Desktop
+Read tools require all of the following:
 
-To connect Maho Mail to Claude Desktop, you need to edit your `claude_desktop_config.json` file.
+- Mail is enabled for the profile (`maho.mail.enabled`, off by default).
+- The Mail helper has finished starting and is ready.
+- The global tool policy is not set to deny.
+- **Allow AI to read Mail** is enabled in Settings
+  (`maho.ai.mail_read_allowed`, off by default).
 
-1. Open Claude Desktop preferences and navigate to the developer section to find your config file.
-2. Add Maho Mail to the `mcpServers` object:
+A global allow policy never substitutes for Mail-read consent. Write and
+account-changing tools go through the normal typed tool-call approval instead.
 
-```json
-{
-  "mcpServers": {
-    "maho-mail": {
-      "command": "maho-mail",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-*Note: Make sure the `maho-mail` binary is in your system PATH, or provide the absolute path in the `command` field.*
+## Denial reasons
 
-3. Restart Claude Desktop. You should now see a "plug" icon indicating that the `maho-mail` tools are available.
+Discovery and invocation return stable reason codes. The gate rows are
+evaluated in the order shown; completion-time and surface-specific rows apply
+after dispatch. Over MCP they arrive as JSON-RPC error code `-32008` with the
+reason code as the message.
 
-## Available Tools
+| Reason code | Meaning |
+|-------------|---------|
+| `mail_tool_unknown` | The tool name is not a recognized Mail tool. |
+| `mail_feature_disabled` | Mail is off for this profile. Enable it in **Settings > Features > Mail**. |
+| `mail_helper_starting` | The Mail helper is still starting. Retry once it is ready. |
+| `mail_helper_unavailable` | The Mail helper is draining, stopped, or failed. Retry once it is ready. |
+| `mail_helper_generation_changed` | The helper restarted while a read was in flight, so the result was discarded. |
+| `mail_tool_not_available_on_agent` | This Mail tool is not exposed on the current Agent surface. |
+| `mail_global_policy_denied` | The global tool policy is set to deny all. |
+| `mail_read_consent_required` | **Allow AI to read Mail** is off. Grant it in Settings. |
+| `mail_typed_approval_required` | A write or account tool needs the typed per-call approval prompt. |
+| `mail_typed_approval_denied` | The user rejected the typed approval prompt. |
 
-The MCP server exposes the same underlying capabilities as the CLI:
+Denied requests redact Mail arguments and return only the reason code, so a
+denial never returns message content. Mail tools are also hidden from tool
+discovery while the feature is disabled.
 
-- `search_emails(query, limit)`
-- `get_thread(thread_id)`
-- `list_folders(account_id)`
-- `draft_reply(thread_id, content)`
+## Read tools
 
-Because the MCP server connects to the exact same local SQLite database as the GUI, any changes made by the AI will immediately reflect in your Desktop app without syncing delays.
+Read access covers `mail_list_accounts`, `mail_list_folders`,
+`mail_list_emails`, `mail_get_email`, `mail_search_emails`, `mail_list_thread`,
+and `mail_extract_otp`. Per-tool parameters are in the
+[API Reference](/api/).
+
+## Write and account tools
+
+Sending, drafting, flagging, moving, deleting, and account mutation are
+sensitive. Each request shows the typed approval surface before the Browser
+dispatches it to Mail, under every non-deny global policy.
+
+Revoking Mail-read consent cancels pending reads. Consent is rechecked when the
+helper's result comes back, so a late result cannot reach the Agent or MCP
+caller after you turn the permission off.

@@ -10,6 +10,10 @@ export class PageCallbackRouter {
     bindNewPipeAndPassRemote(): unknown;
   };
   removeListener(id: number): void;
+  onLifecycleChanged: {
+    addListener(listener: (state: string, generation: bigint) => void): number;
+    removeListener(id: number): void;
+  };
   onNewMail: {
     addListener(listener: (accountId: string) => void): number;
     removeListener(id: number): void;
@@ -251,7 +255,7 @@ export class PageHandlerRemote {
   updateAccount(requestJson: string): Promise<MailHandlerResult>;
 
   // === [W-C.OpenAttachment] ===
-  openAttachment(path: string): Promise<{ok: boolean, errorMsg: string}>;
+  openAttachment(capabilityToken: string): Promise<{ok: boolean, errorMsg: string}>;
   getDownloadDir(): Promise<{path: string}>;
 
   // === [W-C.Additional.Refresh.Typed] ===

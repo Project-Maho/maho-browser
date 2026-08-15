@@ -17,8 +17,16 @@ const TAB_ITEMS = [
   { id: "settings", label: "Settings", icon: Settings },
 ] satisfies Array<{ id: MobileTab; label: string; icon: typeof Inbox }>;
 
-function formatBadgeCount(count: number) {
+export function formatBadgeCount(count: number) {
   return count > 99 ? "99+" : String(count);
+}
+
+export function resolveMailBadgePresentation(count: number) {
+  const text = formatBadgeCount(count);
+  return {
+    text,
+    accessibleName: `Mail, ${text} unread ${count === 1 ? "message" : "messages"}`,
+  };
 }
 
 export function BottomTabBar({
@@ -41,13 +49,14 @@ export function BottomTabBar({
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
           const showBadge = tab.id === "inbox" && unreadCount > 0;
+          const badge = showBadge ? resolveMailBadgePresentation(unreadCount) : null;
 
           return (
             <button
               key={tab.id}
               type="button"
               aria-current={isActive ? "page" : undefined}
-              aria-label={tab.label}
+              aria-label={badge?.accessibleName ?? tab.label}
               className={cn(
                 "flex min-h-14 w-full flex-col items-center justify-center gap-1 px-2 pt-2 text-[11px] leading-none transition-colors",
                 isActive ? "text-primary" : "text-muted-foreground hover:text-foreground",
@@ -58,7 +67,7 @@ export function BottomTabBar({
                 <Icon className="h-5 w-5" strokeWidth={2} />
                 {showBadge ? (
                   <span className="absolute -right-3 -top-1 inline-flex min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground">
-                    {formatBadgeCount(unreadCount)}
+                    {badge?.text}
                   </span>
                 ) : null}
               </span>

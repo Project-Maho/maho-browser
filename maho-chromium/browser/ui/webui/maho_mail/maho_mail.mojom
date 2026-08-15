@@ -181,8 +181,9 @@ interface PageHandler {
   GetAccount(string account_id) => (bool ok, string result_json);
   UpdateAccount(string request_json) => (bool ok, string result_json);
 
-  // === [W-C.OpenAttachment] ===
-  OpenAttachment(string path) => (bool ok, string error_msg);
+  // Consumes an opaque, one-use capability returned by DownloadAttachment.
+  // Raw filesystem paths are never accepted from the renderer.
+  OpenAttachment(string capability_token) => (bool ok, string error_msg);
   GetDownloadDir() => (string path);
 
   // === [W-C.Additional.Refresh.Typed] ===
@@ -198,6 +199,7 @@ interface PageHandler {
 };
 
 interface Page {
+  OnLifecycleChanged(string state, uint64 generation);
   OnAccountsChanged();
   OnAuthRequired(string account_id, string provider, string reason);
   OnAuthRefreshSucceeded(string account_id);

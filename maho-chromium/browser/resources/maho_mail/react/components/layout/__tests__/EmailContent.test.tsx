@@ -328,6 +328,8 @@ describe("EmailContent", () => {
   });
 
   it("does not show confirmation dialog for safe attachments", async () => {
+    vi.mocked(api.downloadAttachment).mockResolvedValue("opaque-capability");
+    vi.mocked(api.openAttachment).mockResolvedValue(undefined);
     const att = createMockAttachment({
       id: "a1",
       filename: "report.pdf",
@@ -357,6 +359,7 @@ describe("EmailContent", () => {
     await waitFor(() => {
       expect(mockConfirm).not.toHaveBeenCalled();
       expect(api.downloadAttachment).toHaveBeenCalled();
+      expect(api.openAttachment).toHaveBeenCalledWith("opaque-capability");
     });
   });
 

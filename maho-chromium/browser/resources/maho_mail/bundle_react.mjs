@@ -69,11 +69,14 @@ await build({
         path.relative(process.cwd(), absolutePath).split(path.sep).join('/');
     const inputs = Object.keys(result.metafile.inputs);
     const resolvedInputs = inputs
-        .map(input => path.resolve(sourceDir, input))
         // node_modules lives outside the source tree, so siso rejects it as a
         // missing dep. Bundled third-party code is pinned by the lockfile and
-        // never edited in place, so it does not need to trigger rebuilds.
-        .filter(absolutePath => !absolutePath.startsWith(websiteNodeModules))
+        // never edited in place, so it does not need to trigger rebuilds. Filter
+        // on the raw esbuild input path segment: the resolved absolute path can
+        // diverge from websiteNodeModules through the chromium/src/maho build
+        // symlink (lexical vs realpath), which defeats a startsWith() check.
+        .filter(input => !input.split('/').includes('node_modules'))
+        .map(input => path.resolve(sourceDir, input))
         .map(toDepPath);
     const depContent =
         `${toDepPath(outputFile)}: ${resolvedInputs.join(' ')}\n`;

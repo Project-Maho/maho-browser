@@ -1,8 +1,6 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-#include "chrome/browser/platform_util.h"
 #include "base/files/file_util.h"
-#include "base/task/thread_pool.h"
 #include "base/files/file_path.h"
 #include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
@@ -15,6 +13,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/location.h"
+#include "base/notreached.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
@@ -25,11 +24,38 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/mail_helper/maho_mail_service_factory.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/webui/maho_mail/maho_mail_backend_boundary.h"
+#include "maho/browser/ui/webui/maho_mail/maho_mail_attachment_launcher.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_mail/maho_mail_oauth_session.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "base/functional/callback_helpers.h"
 #include "ui/base/page_transition_types.h"
+
+namespace {
+
+const char* EncodeMailLifecycleState(
+    maho::MahoMailService::LifecycleState state) {
+  using LifecycleState = maho::MahoMailService::LifecycleState;
+  switch (state) {
+    case LifecycleState::kDisabled:
+      return "disabled";
+    case LifecycleState::kStarting:
+      return "starting";
+    case LifecycleState::kReady:
+      return "ready";
+    case LifecycleState::kDraining:
+      return "draining";
+    case LifecycleState::kStopped:
+      return "stopped";
+    case LifecycleState::kFailed:
+      return "failed";
+  }
+  NOTREACHED();
+}
+
+}  // namespace
 
 MahoMailPageHandler::MahoMailPageHandler(
     mojo::PendingReceiver<maho_mail::mojom::PageHandler> receiver,
@@ -41,17 +67,33 @@ MahoMailPageHandler::MahoMailPageHandler(
       profile_(profile),
       web_contents_(web_contents) {
   DCHECK(profile_);
-  maho::MahoMailService* service = GetMailService();
+  if (!profile_) {
+    return;
+  }
+
+  pref_registrar_.Init(profile_->GetPrefs());
+  pref_registrar_.Add(
+      maho::sidebar_prefs::kMahoMailEnabled,
+      base::BindRepeating(&MahoMailPageHandler::OnMailEnabledPrefChanged,
+                          weak_factory_.GetWeakPtr()));
+  pref_registrar_.Add(
+      prefs::kBrowserColorScheme,
+      base::BindRepeating(&MahoMailPageHandler::OnBrowserUiPrefChanged,
+                          weak_factory_.GetWeakPtr()));
+
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
   if (service) {
-    service->AddObserver(this);
+    mail_service_observation_.Observe(service);
+    OnLifecycleChanged(service->lifecycle_state(), service->generation());
+  } else {
+    page_->OnLifecycleChanged(
+        maho::sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())
+            ? "stopped"
+            : "disabled",
+        0);
   }
-  if (profile_) {
-    pref_registrar_.Init(profile_->GetPrefs());
-    pref_registrar_.Add(
-        prefs::kBrowserColorScheme,
-        base::BindRepeating(&MahoMailPageHandler::OnBrowserUiPrefChanged,
-                            weak_factory_.GetWeakPtr()));
-  }
+
   // Density (maho-core appearance.density) live-observation: maho-core fires
   // maho_core_register_settings_change_callback on any settings change (incl.
   // density). Route its thunk through MaybePushBrowserUiPrefs() -- the same
@@ -73,10 +115,48 @@ MahoMailPageHandler::MahoMailPageHandler(
 }
 
 MahoMailPageHandler::~MahoMailPageHandler() {
-  maho::MahoMailService* service = GetMailService();
-  if (service) {
-    service->RemoveObserver(this);
+  DisableMailSurface();
+}
+
+MahoMailPageHandler::MahoMailPageHandler(Backend* backend_for_testing)
+    : receiver_(this),
+      profile_(nullptr),
+      web_contents_(nullptr),
+      backend_for_testing_(backend_for_testing) {
+  CHECK(backend_for_testing_);
+}
+
+maho::MahoMailService* MahoMailPageHandler::GetMailService() {
+  if (!profile_ ||
+      !maho::sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())) {
+    return nullptr;
   }
+  return maho::MahoMailServiceFactory::GetForProfile(profile_);
+}
+
+void MahoMailPageHandler::OnMailEnabledPrefChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!profile_) {
+    return;
+  }
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (service && !mail_service_observation_.IsObserving()) {
+    mail_service_observation_.Observe(service);
+  }
+  if (!maho::sidebar_prefs::IsMahoMailEnabled(profile_->GetPrefs())) {
+    page_->OnLifecycleChanged("disabled", service ? service->generation() : 0);
+    return;
+  }
+  if (service) {
+    OnLifecycleChanged(service->lifecycle_state(), service->generation());
+  }
+}
+
+void MahoMailPageHandler::DisableMailSurface() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  pref_registrar_.RemoveAll();
+  mail_service_observation_.Reset();
 
   // Stop new maho-core callbacks first, then cancel the handle so any in-flight
   // thunk that already loaded its shared_ptr copy short-circuits (UAF-safe).
@@ -87,11 +167,12 @@ MahoMailPageHandler::~MahoMailPageHandler() {
   }
   if (settings_change_handle_) {
     settings_change_handle_->Cancel();
+    settings_change_handle_.reset();
   }
-}
 
-maho::MahoMailService* MahoMailPageHandler::GetMailService() {
-  return maho::MahoMailServiceFactory::GetForProfile(profile_);
+  weak_factory_.InvalidateWeakPtrs();
+  receiver_.reset();
+  page_.reset();
 }
 
 void MahoMailPageHandler::ListAccounts(ListAccountsCallback callback) {
@@ -329,6 +410,12 @@ void MahoMailPageHandler::OnAccountsChanged() {
   page_->OnAccountsChanged();
 }
 
+void MahoMailPageHandler::OnLifecycleChanged(
+    maho::MahoMailService::LifecycleState state,
+    uint64_t generation) {
+  page_->OnLifecycleChanged(EncodeMailLifecycleState(state), generation);
+}
+
 void MahoMailPageHandler::OnSyncEvent(const std::string& event_type, const std::string& payload) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   page_->OnSyncEvent(event_type, payload);
@@ -344,7 +431,13 @@ void MahoMailPageHandler::OnStatusChanged(const std::string& account_id, bool co
   page_->OnStatusChanged(account_id, connected);
 }
 
-void MahoMailPageHandler::OnNewMail(const std::string& account_id) {
+void MahoMailPageHandler::OnNewMail(const std::string& account_id,
+                                    const std::string& email_id,
+                                    const std::string& message_id,
+                                    const std::string& sender,
+                                    const std::string& subject,
+                                    uint64_t cursor,
+                                    uint64_t epoch) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   page_->OnNewMail(account_id);
 }
@@ -1825,18 +1918,31 @@ void MahoMailPageHandler::ImportPgpKey(const std::string& request_json, ImportPg
 }
 
 void MahoMailPageHandler::ExportPgpKey(const std::string& key_id, bool include_private, ExportPgpKeyCallback callback) {
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
+  maho::MahoMailService* service =
+      backend_for_testing_ ? nullptr : GetMailService();
+  if (!backend_for_testing_ && !service) {
     std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
-  // Hard constraint: secret materials (private keys) must never be sent to the WebUI.
-  // Force include_private to false to block any private key leak.
-  service->ExportPgpKey(key_id, false, base::BindOnce(
-      [](ExportPgpKeyCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
+  maho::mail::DispatchPublicPgpExport(
+      key_id,
+      base::BindOnce(
+          [](ExportPgpKeyCallback cb, bool ok, std::string result) {
+            std::move(cb).Run(ok, std::move(result));
+          },
+          std::move(callback)),
+      base::BindOnce(
+          [](MahoMailPageHandler::Backend* test_backend,
+             maho::MahoMailService* service, const std::string& safe_key_id,
+             bool include_private, maho::mail::GenericBackendReply reply) {
+            if (test_backend) {
+              test_backend->ExportPgpKey(safe_key_id, include_private,
+                                         std::move(reply));
+              return;
+            }
+            service->ExportPgpKey(safe_key_id, include_private, std::move(reply));
+          },
+          base::Unretained(backend_for_testing_), base::Unretained(service)));
 }
 
 void MahoMailPageHandler::ListPgpKeys(const std::string& account_id, ListPgpKeysCallback callback) {
@@ -2440,39 +2546,38 @@ void MahoMailPageHandler::UpdateAccount(const std::string& request_json, UpdateA
 }
 
   // === [W-C.OpenAttachment] ===
-void MahoMailPageHandler::OpenAttachment(const std::string& path, OpenAttachmentCallback callback) {
+void MahoMailPageHandler::OpenAttachment(
+    const std::string& capability_token,
+    OpenAttachmentCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  base::FilePath file_path = base::FilePath::FromUTF8Unsafe(path);
-  // A renderer must not be able to point this at an arbitrary location: reject
-  // parent references and non-absolute input before touching the filesystem.
-  if (file_path.empty() || file_path.ReferencesParent() ||
-      !file_path.IsAbsolute()) {
-    std::move(callback).Run(false, "File does not exist");
+  maho::MahoMailService* service = GetMailService();
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
-  // base::PathExists is blocking IO and must not run on the UI thread, so the
-  // existence check is posted to the thread pool and the open happens in the
-  // reply once the result is known.
-  base::ThreadPool::PostTaskAndReplyWithResult(
-      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
-      base::BindOnce(&base::PathExists, file_path),
-      base::BindOnce(&MahoMailPageHandler::OnOpenAttachmentPathChecked,
-                     weak_factory_.GetWeakPtr(), file_path,
-                     std::move(callback)));
+  service->OpenAttachment(
+      capability_token,
+      base::BindOnce(&MahoMailPageHandler::OnAttachmentCapabilityConsumed,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-void MahoMailPageHandler::OnOpenAttachmentPathChecked(
-    const base::FilePath& file_path,
+void MahoMailPageHandler::OnAttachmentCapabilityConsumed(
     OpenAttachmentCallback callback,
-    bool exists) {
+    std::unique_ptr<maho::MahoMailAttachmentRegistry::ConsumedAttachment>
+        attachment,
+    std::string error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!exists) {
-    std::move(callback).Run(false, "File does not exist");
+  if (!attachment) {
+    std::move(callback).Run(false, std::move(error));
     return;
   }
-  platform_util::OpenItem(nullptr, file_path, platform_util::OPEN_FILE,
-                          platform_util::OpenOperationCallback());
-  std::move(callback).Run(true, "");
+  maho::mail::LaunchConsumedAttachment(
+      std::move(attachment),
+      base::BindOnce(
+          [](OpenAttachmentCallback callback, bool ok, std::string error) {
+            std::move(callback).Run(ok, std::move(error));
+          },
+          std::move(callback)));
 }
 
 void MahoMailPageHandler::GetDownloadDir(GetDownloadDirCallback callback) {
@@ -2499,14 +2604,30 @@ void MahoMailPageHandler::CallBackend(const std::string& command,
                                       const std::string& args_json,
                                       CallBackendCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::MahoMailService* service = GetMailService();
-  if (!service) {
+  maho::MahoMailService* service =
+      backend_for_testing_ ? nullptr : GetMailService();
+  if (!backend_for_testing_ && !service) {
     std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
-  service->CallBackend(command, args_json, base::BindOnce(
-      [](CallBackendCallback cb, bool ok, std::string result) {
-        std::move(cb).Run(ok, std::move(result));
-      },
-      std::move(callback)));
+  maho::mail::DispatchGenericBackendCall(
+      command, args_json,
+      base::BindOnce(
+          [](CallBackendCallback cb, bool ok, std::string result) {
+            std::move(cb).Run(ok, std::move(result));
+          },
+          std::move(callback)),
+      base::BindOnce(
+          [](MahoMailPageHandler::Backend* test_backend,
+             maho::MahoMailService* service, const std::string& safe_command,
+             const std::string& safe_args,
+             maho::mail::GenericBackendReply reply) {
+            if (test_backend) {
+              test_backend->CallBackend(safe_command, safe_args,
+                                        std::move(reply));
+              return;
+            }
+            service->CallBackend(safe_command, safe_args, std::move(reply));
+          },
+          base::Unretained(backend_for_testing_), base::Unretained(service)));
 }

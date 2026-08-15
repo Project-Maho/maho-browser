@@ -11,7 +11,9 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "base/sequence_checker.h"
+
 #include "components/prefs/pref_change_registrar.h"
 #include "maho/browser/ai/maho_ffi_callback_handle.h"
 #include "maho/browser/ui/webui/maho_mail/maho_mail.mojom.h"
@@ -29,11 +31,25 @@ class WebContents;
 class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
                             public maho::MahoMailService::Observer {
  public:
+  class Backend {
+   public:
+    virtual ~Backend() = default;
+    virtual void ExportPgpKey(
+        const std::string& key_id,
+        bool include_private,
+        base::OnceCallback<void(bool, std::string)> callback) = 0;
+    virtual void CallBackend(
+        const std::string& command,
+        const std::string& args_json,
+        base::OnceCallback<void(bool, std::string)> callback) = 0;
+  };
+
   MahoMailPageHandler(
       mojo::PendingReceiver<maho_mail::mojom::PageHandler> receiver,
       mojo::PendingRemote<maho_mail::mojom::Page> page,
       Profile* profile,
       content::WebContents* web_contents);
+  explicit MahoMailPageHandler(Backend* backend_for_testing);
   MahoMailPageHandler(const MahoMailPageHandler&) = delete;
   MahoMailPageHandler& operator=(const MahoMailPageHandler&) = delete;
   ~MahoMailPageHandler() override;
@@ -44,10 +60,18 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
                       const std::string& reason) override;
   void OnAuthRefreshSucceeded(const std::string& account_id) override;
   void OnAccountsChanged() override;
+  void OnLifecycleChanged(maho::MahoMailService::LifecycleState state,
+                          uint64_t generation) override;
   void OnSyncEvent(const std::string& event_type, const std::string& payload) override;
   void OnBackfillEvent(const std::string& event_type, const std::string& payload) override;
   void OnStatusChanged(const std::string& account_id, bool connected) override;
-  void OnNewMail(const std::string& account_id) override;
+  void OnNewMail(const std::string& account_id,
+                 const std::string& email_id,
+                 const std::string& message_id,
+                 const std::string& sender,
+                 const std::string& subject,
+                 uint64_t cursor,
+                 uint64_t epoch) override;
   void OnMutation(const std::string& account_id, const std::string& payload) override;
   void OnOutbox(const std::string& account_id, const std::string& payload) override;
   void OnScheduler(const std::string& account_id, const std::string& payload) override;
@@ -235,11 +259,12 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
   void UpdateAccount(const std::string& request_json, UpdateAccountCallback callback) override;
 
   // === [W-C.OpenAttachment] ===
-  void OpenAttachment(const std::string& path, OpenAttachmentCallback callback) override;
-  // Reply for the thread-pool existence check posted by OpenAttachment.
-  void OnOpenAttachmentPathChecked(const base::FilePath& file_path,
-                                   OpenAttachmentCallback callback,
-                                   bool exists);
+  void OpenAttachment(const std::string& capability_token,
+                      OpenAttachmentCallback callback) override;
+  void OnAttachmentCapabilityConsumed(OpenAttachmentCallback callback,
+                                      std::unique_ptr<maho::MahoMailAttachmentRegistry::ConsumedAttachment>
+                                          attachment,
+                                      std::string error);
   void GetDownloadDir(GetDownloadDirCallback callback) override;
 
   // === [W-C.Additional.Refresh.Typed] ===
@@ -253,7 +278,14 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
   void GetBrowserUiPrefs(GetBrowserUiPrefsCallback callback) override;
 
  private:
+  // Returns the profile service only while the canonical Mail pref is enabled.
+  // This is the common fail-closed boundary for all backend requests.
   maho::MahoMailService* GetMailService();
+
+  // PrefChangeRegistrar target for the canonical Mail enabled pref. Disabling
+  // tears down all privileged handler state and closes both Mojo endpoints.
+  void OnMailEnabledPrefChanged();
+  void DisableMailSurface();
 
   // Builds the browser UI prefs JSON:
   // {"theme":"system"|"light"|"dark","density":"comfortable"|"compact"}.
@@ -281,8 +313,12 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
   mojo::Remote<maho_mail::mojom::Page> page_;
   raw_ptr<Profile> profile_;
   raw_ptr<content::WebContents> web_contents_;
+  raw_ptr<Backend> backend_for_testing_ = nullptr;
 
   PrefChangeRegistrar pref_registrar_;
+  base::ScopedObservation<maho::MahoMailService,
+                          maho::MahoMailService::Observer>
+      mail_service_observation_{this};
 
   // Last browser UI prefs JSON pushed to the WebUI, used to coalesce/dedupe
   // redundant OnBrowserUiPrefsChanged emits. Empty until the first push.

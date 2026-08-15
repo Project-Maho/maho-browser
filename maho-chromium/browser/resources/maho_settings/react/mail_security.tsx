@@ -6,6 +6,7 @@ import {Button} from '@ui/button';
 import {Input} from '@ui/input';
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@ui/select';
 import {PaneShell, SectionCard} from './domain_panes.js';
+import {classifyMailSettingsFailure, createMailSettingsContentState, type MailSettingsState} from './mail_settings_state.js';
 import type {PaneDefinition} from '../models.js';
 import type {MahoSettingsStore} from './store.js';
 
@@ -32,15 +33,15 @@ interface MailAccountOption {
   email: string;
 }
 
-function parseAccountOptions(resultJson: string): MailAccountOption[] {
+function parseAccountOptions(resultJson: string): MailAccountOption[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(resultJson);
   } catch {
-    return [];
+    return null;
   }
   if (!Array.isArray(parsed)) {
-    return [];
+    return null;
   }
   const options: MailAccountOption[] = [];
   for (const value of parsed) {
@@ -57,16 +58,14 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
   const handler = store.getHandler();
   const router = store.getCallbackRouter();
   const mountedRef = useRef(true);
-  const retryCountRef = useRef(0);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadAccountsRef = useRef<() => void>(() => {});
+
   const [accounts, setAccounts] = useState<MailAccountOption[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
   const [pgpKeys, setPgpKeys] = useState<PgpKeyInfo[]>([]);
   const [smimeIdentities, setSmimeIdentities] = useState<SmimeIdentityInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [modelState, setModelState] = useState<MailSettingsState<MailAccountOption[]>>({status: 'loading'});
   const [error, setError] = useState('');
-  const [loadError, setLoadError] = useState('');
+
   const [success, setSuccess] = useState('');
 
   const [generatingPgp, setGeneratingPgp] = useState(false);
@@ -84,60 +83,34 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
     };
   }, []);
 
-  // Returns true while a bounded retry is pending (≤3), false once the cap is hit.
-  const scheduleRetry = useCallback((): boolean => {
-    if (retryCountRef.current >= 3) {
-      return false;
-    }
-    retryCountRef.current += 1;
-    if (retryTimerRef.current !== null) {
-      clearTimeout(retryTimerRef.current);
-    }
-    retryTimerRef.current = setTimeout(() => {
-      retryTimerRef.current = null;
-      if (mountedRef.current) {
-        loadAccountsRef.current();
-      }
-    }, 800);
-    return true;
-  }, []);
-
   const loadAccounts = useCallback(async () => {
+    setModelState({status: 'loading'});
     try {
       const {ok, resultJson} = await handler.mailListAccounts();
       if (!mountedRef.current) return;
       if (!ok) {
-        if (!scheduleRetry()) {
-          setLoadError('Failed to load mail accounts');
-        }
+        setModelState(classifyMailSettingsFailure(resultJson, 'Failed to load mail accounts'));
         return;
       }
-      setLoadError('');
-      retryCountRef.current = 0;
       const options = parseAccountOptions(resultJson);
+      if (options === null) {
+        setModelState({status: 'error', message: 'The mail service returned invalid account data.'});
+        return;
+      }
       setAccounts(options);
+      setModelState(createMailSettingsContentState(options));
       setSelectedAccountId((prev) =>
         prev && options.some((a) => a.id === prev)
           ? prev
           : (options.length > 0 ? options[0].id : ''));
-    } catch (e) {
+    } catch {
       if (!mountedRef.current) return;
-      if (!scheduleRetry()) {
-        setLoadError('Failed to load mail accounts');
-      }
+      setModelState({status: 'error', message: 'Failed to load mail accounts'});
     }
-  }, [handler, scheduleRetry]);
-
-  useEffect(() => {
-    loadAccountsRef.current = () => { void loadAccounts(); };
-  }, [loadAccounts]);
+  }, [handler]);
 
   useEffect(() => {
     void loadAccounts();
@@ -147,10 +120,8 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
     if (!selectedAccountId) {
       setPgpKeys([]);
       setSmimeIdentities([]);
-      setLoading(false);
       return;
     }
-    setLoading(true);
     try {
       const {ok: okPgp, resultJson: pgpJson} = await handler.mailListPgpKeys(selectedAccountId);
       if (okPgp && pgpJson) {
@@ -165,10 +136,8 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
       } else {
         setError('Failed to load S/MIME identities');
       }
-    } catch (e) {
+    } catch {
       if (mountedRef.current) setError('Failed to load security keys');
-    } finally {
-      if (mountedRef.current) setLoading(false);
     }
   }, [handler, selectedAccountId]);
 
@@ -177,13 +146,17 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
   }, [loadSecurityData]);
 
   useEffect(() => {
-    const listenerId = router.onMailSecurityChanged.addListener(() => {
+    const securityListenerId = router.onMailSecurityChanged.addListener(() => {
       void loadSecurityData();
     });
+    const accountsListenerId = router.onMailAccountsChanged.addListener(() => {
+      void loadAccounts();
+    });
     return () => {
-      router.removeListener(listenerId);
+      router.removeListener(securityListenerId);
+      router.removeListener(accountsListenerId);
     };
-  }, [router, loadSecurityData]);
+  }, [router, loadAccounts, loadSecurityData]);
 
   const generatePgp = async () => {
     if (!genEmail || !selectedAccountId) return;
@@ -248,20 +221,16 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
 
   return (
     <PaneShell pane={pane}>
-      {loading ? (
+      <div data-mail-settings-state={modelState.status}>
+      {modelState.status === 'loading' ? (
         <p className="py-4 text-center text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Loading security settings...</p>
+      ) : modelState.status === 'unavailable' || modelState.status === 'error' ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground"><span>{modelState.message}</span><Button type="button" size="sm" variant="outline" onClick={() => { void loadAccounts(); }}>Retry</Button></div>
       ) : (
         <div className="space-y-6">
           {error && <p className="p-4 text-sm text-destructive">{error}</p>}
           {success && <p className="p-4 text-sm text-success flex items-center gap-1"><Check className="size-4" />{success}</p>}
-          {loadError && (
-            <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
-              <span>{loadError}</span>
-              <Button type="button" size="sm" variant="outline" onClick={() => { retryCountRef.current = 0; setLoadError(''); void loadAccounts(); }}>Retry</Button>
-            </div>
-          )}
-
-          {accounts.length === 0 && !loadError ? (
+          {accounts.length === 0 ? (
             <p className="p-4 text-center text-sm text-muted-foreground">Connect a mail account to manage security keys.</p>
           ) : accounts.length > 0 ? (
             <SectionCard title="Account" description="PGP keys and S/MIME identities are scoped to the selected mail account.">
@@ -403,6 +372,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
           )}
         </div>
       )}
+      </div>
     </PaneShell>
   );
 }

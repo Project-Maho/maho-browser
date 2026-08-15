@@ -5,6 +5,7 @@ import {Plus, Trash2, Edit2, Loader2} from 'lucide-react';
 import {Button} from '@ui/button';
 import {Input} from '@ui/input';
 import {PaneShell, SectionCard} from './domain_panes.js';
+import {classifyMailSettingsFailure, createMailSettingsContentState, type MailSettingsState} from './mail_settings_state.js';
 import type {PaneDefinition} from '../models.js';
 import type {MahoSettingsStore} from './store.js';
 
@@ -20,69 +21,36 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
   const handler = store.getHandler();
   const router = store.getCallbackRouter();
   const mountedRef = useRef(true);
-  const retryCountRef = useRef(0);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadRef = useRef<() => void>(() => {});
   const [signatures, setSignatures] = useState<Signature[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [modelState, setModelState] = useState<MailSettingsState<Signature[]>>({status: 'loading'});
   const [editingSig, setEditingSig] = useState<Partial<Signature> | null>(null);
   const [error, setError] = useState('');
-  const [loadError, setLoadError] = useState('');
+
 
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
+
     };
   }, []);
 
-  // Returns true while a bounded retry is pending (≤3), false once the cap is hit.
-  const scheduleRetry = useCallback((): boolean => {
-    if (retryCountRef.current >= 3) {
-      return false;
-    }
-    retryCountRef.current += 1;
-    if (retryTimerRef.current !== null) {
-      clearTimeout(retryTimerRef.current);
-    }
-    retryTimerRef.current = setTimeout(() => {
-      retryTimerRef.current = null;
-      if (mountedRef.current) {
-        loadRef.current();
-      }
-    }, 800);
-    return true;
-  }, []);
-
   const loadSignatures = useCallback(async () => {
-    setLoading(true);
+    setModelState({status: 'loading'});
     try {
       const {ok, resultJson} = await handler.mailListSignatures(null);
       if (!mountedRef.current) return;
       if (ok) {
-        setSignatures(JSON.parse(resultJson) as Signature[]);
-        setLoadError('');
-        retryCountRef.current = 0;
-        setLoading(false);
-      } else if (!scheduleRetry()) {
-        setLoadError('Failed to load signatures');
-        setLoading(false);
+        const next = JSON.parse(resultJson) as Signature[];
+        setSignatures(next);
+        setModelState(createMailSettingsContentState(next));
+      } else {
+        setModelState(classifyMailSettingsFailure(resultJson, 'Failed to load signatures'));
       }
-    } catch (e) {
+    } catch {
       if (!mountedRef.current) return;
-      if (!scheduleRetry()) {
-        setLoadError('Failed to load signatures');
-        setLoading(false);
-      }
+      setModelState({status: 'error', message: 'Failed to load signatures'});
     }
-  }, [handler, scheduleRetry]);
-
-  useEffect(() => {
-    loadRef.current = () => { void loadSignatures(); };
-  }, [loadSignatures]);
+  }, [handler]);
 
   useEffect(() => {
     void loadSignatures();
@@ -123,8 +91,11 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
 
   return (
     <PaneShell pane={pane}>
-      {loading ? (
+      <div data-mail-settings-state={modelState.status}>
+      {modelState.status === 'loading' ? (
         <p className="py-4 text-center text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Loading signatures...</p>
+      ) : modelState.status === 'unavailable' || modelState.status === 'error' ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground"><span>{modelState.message}</span><Button type="button" size="sm" variant="outline" onClick={() => { void loadSignatures(); }}>Retry</Button></div>
       ) : (
         <div className="space-y-6">
           <SectionCard
@@ -137,12 +108,7 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
             }
           >
             {error && <p className="p-4 text-sm text-destructive">{error}</p>}
-            {loadError && (
-              <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
-                <span>{loadError}</span>
-                <Button type="button" size="sm" variant="outline" onClick={() => { retryCountRef.current = 0; setLoadError(''); void loadSignatures(); }}>Retry</Button>
-              </div>
-            )}
+
             <div className="divide-y divide-border">
               {signatures.map((sig) => (
                 <div key={sig.id} className="flex items-center justify-between p-4">
@@ -190,6 +156,7 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
           )}
         </div>
       )}
+      </div>
     </PaneShell>
   );
 }

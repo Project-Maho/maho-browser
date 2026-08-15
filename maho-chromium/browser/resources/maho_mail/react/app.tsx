@@ -48,7 +48,7 @@ function parseBrowserUiPrefs(prefsJson: string): BrowserUiPrefs {
   return { theme, density };
 }
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "./theme/app.css";
 import { useMailClient } from "./hooks/useMailClient";
@@ -74,7 +74,6 @@ import type { ActionId } from "./types/toolbar";
 import { ShortcutCheatsheet } from "./components/ui/ShortcutCheatsheet";
 import { useTheme } from "./hooks/useTheme";
 import { useSettings } from "./hooks/useSettings";
-import { useAppUpdate } from "./hooks/useAppUpdate";
 import { useTrayBadge } from "./hooks/useTrayBadge";
 import { useNetworkStatus } from "./hooks/useNetworkStatus";
 import {
@@ -89,6 +88,7 @@ import { ComposeWindow } from "./components/compose/ComposeWindow";
 import { useDeepLink } from "./hooks/useDeepLink";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useNotificationSound } from "./hooks/useNotificationSound";
+import { useNotifications } from "./hooks/useNotifications";
 import { OnboardingScreen } from "./components/account/OnboardingScreen";
 import { SnoozePicker } from "./components/common/SnoozePicker";
 import { UndoSendToast } from "./components/common/UndoSendToast";
@@ -105,6 +105,12 @@ import type { PaletteCommand } from "./hooks/useCommandRegistry";
 import { cn } from "./lib/utils";
 import { useIsMobile, isMobile } from "./utils/platform";
 import { parseAddressList } from "./utils/addresses";
+import {
+  acceptMailLifecycle,
+  lifecycleClearsSensitiveState,
+  type MailLifecycleSnapshot,
+} from "./mail_lifecycle";
+import {parseMailRoute} from "./mail_route";
 
 const COLLAPSED_SIDEBAR_WIDTH = 72;
 
@@ -126,11 +132,14 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const mail = useMailClient((message) => toast("error", message));
   const { authErrors, clearAuthError } = useAuthStatus();
   const { enqueueRetry } = useReauthRetryQueue();
-  const appUpdate = useAppUpdate();
+
   const totalUnread = useMemo(() => mail.folders.reduce((sum, f) => sum + f.unread_count, 0), [mail.folders]);
   const accountIds = useMemo(() => new Set(mail.accounts.map((account) => account.id)), [mail.accounts]);
   useTrayBadge(totalUnread);
   const { playSound } = useNotificationSound(settings.soundEnabled);
+  const { notify } = useNotifications({
+    enabled: settings.desktopNotifications,
+  });
   useAppLifecycle({
     onForeground: () => { void mail.syncAllFolders(); },
   });
@@ -162,6 +171,15 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const [showCreateEvent, setShowCreateEvent] = useState(false);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
   const [initialEventSummary, setInitialEventSummary] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const accountId = params.get("accountId");
+    const emailId = params.get("emailId");
+    if (!accountId || !emailId || mail.accountFolders.length === 0) return;
+    mail.changeAccount(accountId);
+    void mail.selectEmail(emailId);
+  }, [mail.accountFolders.length, mail.changeAccount, mail.selectEmail]);
 
   const handleComposeToRecipient = useCallback((email: string) => {
     setComposeReplyTo(undefined);
@@ -485,6 +503,14 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       } else if (id === "snoozed") {
         const emails = await api.listSnoozedEmails(mail.selectedAccountId ?? undefined);
         setSyntheticEmails(emails);
+      } else if (id === "unread") {
+        const result = await api.searchEmails({
+          query: "",
+          is_unread: true,
+          account_id: mail.selectedAccountId ?? undefined,
+          limit: 100,
+        });
+        setSyntheticEmails(result.emails);
       } else if (id === "reminders") {
         const emails = await api.listReminders(mail.selectedAccountId ?? undefined);
         setSyntheticEmails(emails);
@@ -519,6 +545,22 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       toast("error", err instanceof Error ? err.message : t("app.failedToLoadEmails"));
     }
   };
+
+  useEffect(() => {
+    const route = parseMailRoute(window.location.search);
+    if (route.kind === 'none') return;
+    if (route.kind === 'compose') {
+      openCompose();
+    } else if (route.kind === 'search') {
+      openSearch();
+    } else if (route.kind === 'folder') {
+      setSyntheticView(null);
+      mail.selectAggregate(route.folder);
+    } else {
+      void handleSelectSynthetic(route.view);
+    }
+    window.history.replaceState(null, '', window.location.pathname);
+  }, [mail.folders.length]);
 
   const handlePinEmail = async (emailId: string, nextPinned: boolean) => {
     try {
@@ -658,21 +700,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     }
   };
 
-  const handleUpdateClick = async () => {
-    const ok = await confirm({
-      title: t("app.updateAvailable"),
-      message: appUpdate.version
-        ? t("app.updateMessage", { version: appUpdate.version })
-        : t("app.updateMessageNoVersion"),
-      confirmLabel: t("app.restart"),
-    });
-    if (!ok) return;
-    try {
-      await appUpdate.installUpdate();
-    } catch (err) {
-      toast("error", err instanceof Error ? err.message : t("app.updateFailed"));
-    }
-  };
 
   const { config: toolbarConfig } = useToolbarConfig();
 
@@ -1124,9 +1151,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         openSettingsPanel();
       }}
       loading={mail.loading || syncing}
-      updateAvailable={appUpdate.updateAvailable}
-      updateVersion={appUpdate.version}
-      onUpdateClick={() => void handleUpdateClick()}
       onMoveEmail={(emailId, targetFolderId) => void handleMoveEmail(emailId, targetFolderId)}
       collapsed={settings.sidebarCollapsed}
       onToggleCollapsed={() => settings.setSidebarCollapsed(!settings.sidebarCollapsed)}
@@ -1414,8 +1438,23 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
 
 
 
-function App() {
+interface AppProps {
+  readonly renderMailClient?: (props: {
+    readonly accounts: readonly MailAccount[];
+    readonly settings: UseSettingsReturn;
+    readonly density: Density;
+  }) => React.ReactNode;
+}
+
+export function App({renderMailClient}: AppProps = {}) {
   const [accounts, setAccounts] = useState<readonly MailAccount[]>([]);
+  const [lifecycle, setLifecycle] =
+    useState<MailLifecycleSnapshot>({state: 'starting', generation: 0n});
+  const lifecycleRef = useRef(lifecycle);
+  const refreshSequenceRef = useRef(0);
+  const [accountLoadError, setAccountLoadError] = useState(false);
+  const [showOnboardingCommandPalette, setShowOnboardingCommandPalette] =
+    useState(false);
   const [browserUiPrefs, setBrowserUiPrefs] = useState(DEFAULT_BROWSER_UI_PREFS);
   const settings = useSettings();
   const { t } = useTranslation();
@@ -1440,18 +1479,68 @@ function App() {
   }, []);
 
   const refreshAccounts = useCallback(async () => {
+    const expectedGeneration = lifecycleRef.current.generation;
+    const refreshSequence = ++refreshSequenceRef.current;
     const result = await handler.listAccounts();
-    if (result.ok) {
-      const parsed = parseMailAccounts(result.resultJson);
-      if (parsed) {
-        setAccounts(parsed);
-      }
+    const currentLifecycle = lifecycleRef.current;
+    if (
+      refreshSequence !== refreshSequenceRef.current ||
+      currentLifecycle.generation !== expectedGeneration ||
+      lifecycleClearsSensitiveState(currentLifecycle.state)
+    ) {
+      return;
     }
+    if (!result.ok) {
+      setAccountLoadError(true);
+      return;
+    }
+    const parsed = parseMailAccounts(result.resultJson);
+    if (!parsed) {
+      setAccountLoadError(true);
+      return;
+    }
+    setAccountLoadError(false);
+    setAccounts(parsed);
   }, []);
 
   useEffect(() => {
     void refreshAccounts();
   }, [refreshAccounts]);
+
+  useEffect(() => {
+    const listenerId = callbackRouter.onLifecycleChanged.addListener(
+      (state: string, nextGeneration: bigint) => {
+        const next = acceptMailLifecycle(
+          lifecycleRef.current,
+          state,
+          nextGeneration,
+        );
+        if (!next) return;
+        lifecycleRef.current = next;
+        setLifecycle(next);
+        if (lifecycleClearsSensitiveState(next.state)) {
+          ++refreshSequenceRef.current;
+          setAccounts([]);
+          setAccountLoadError(false);
+        }
+        if (next.state === 'ready') {
+          void refreshAccounts();
+        }
+      },
+    );
+    return () => callbackRouter.removeListener(listenerId);
+  }, [refreshAccounts]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setShowOnboardingCommandPalette(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const api_onboarding: MailOnboardingApi = useMemo(() => ({
     listAccounts: () => handler.listAccounts(),
@@ -1481,7 +1570,74 @@ function App() {
       : formatMailOnboardingString(fallback, values);
   }, [t]);
 
+  const onboardingCommands = useMemo<PaletteCommand[]>(() => [
+    {
+      id: 'retry-mail-startup',
+      label: 'Retry Mail startup',
+      category: 'mail',
+      keywords: ['helper', 'reload'],
+      handler: () => {
+        const next = {...lifecycleRef.current, state: 'starting' as const};
+        lifecycleRef.current = next;
+        setLifecycle(next);
+        void refreshAccounts();
+      },
+    },
+    {
+      id: 'open-mail-settings',
+      label: 'Open Mail settings',
+      category: 'settings',
+      keywords: ['features', 'accounts'],
+      handler: () => {
+        window.location.href = 'chrome://maho-settings/mail';
+      },
+    },
+  ], [refreshAccounts]);
+
+  if (lifecycle.state === 'disabled') {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background p-8">
+        <section className="max-w-md space-y-4 text-center" role="status">
+          <h1 className="text-2xl font-semibold">Mail is turned off</h1>
+          <p className="text-muted-foreground">
+            Enable Mail from the Features pane to access your accounts.
+          </p>
+          <a className="text-primary underline" href="chrome://maho-settings/features">
+            Open Features settings
+          </a>
+        </section>
+      </main>
+    );
+  }
+
+  if (lifecycle.state === 'failed' || lifecycle.state === 'stopped') {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-background p-8">
+        <section className="max-w-md space-y-4 text-center" role="alert">
+          <h1 className="text-2xl font-semibold">Mail could not start</h1>
+          <p className="text-muted-foreground">
+            The Mail helper is unavailable. Retry after checking your profile settings.
+          </p>
+          <button
+            className="rounded-md bg-primary px-4 py-2 text-primary-foreground"
+            onClick={() => {
+              const next = {...lifecycleRef.current, state: 'starting' as const};
+              lifecycleRef.current = next;
+              setLifecycle(next);
+              void refreshAccounts();
+            }}
+          >
+            Retry
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   if (accounts.length > 0) {
+    if (renderMailClient) {
+      return renderMailClient({accounts, settings, density: browserUiPrefs.density});
+    }
     return <MailClientShell settings={settings} density={browserUiPrefs.density} />;
   }
 
@@ -1489,6 +1645,17 @@ function App() {
     <div className="flex min-h-screen w-full flex-col items-center overflow-y-auto bg-background">
       <div className="flex w-full max-w-2xl flex-col gap-6 px-8 py-10">
         <MailOnboardingSidebar accounts={accounts} t={onboardingStrings} />
+        {accountLoadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" role="alert">
+            <p>Mail setup could not load your accounts.</p>
+            <button
+              className="mt-2 rounded-md bg-primary px-3 py-1.5 text-primary-foreground"
+              onClick={() => void refreshAccounts()}
+            >
+              Retry setup
+            </button>
+          </div>
+        )}
         <MailOnboardingContent
           api={api_onboarding}
           accounts={accounts}
@@ -1496,13 +1663,21 @@ function App() {
           config={MAIL_APP_ONBOARDING_CONFIG}
           t={onboardingStrings}
         />
+        <button
+          className="self-center text-sm text-muted-foreground underline"
+          onClick={() => handler.closeOnboarding()}
+        >
+          Skip for now
+        </button>
+        <CommandPalette
+          open={showOnboardingCommandPalette}
+          onClose={() => setShowOnboardingCommandPalette(false)}
+          commands={onboardingCommands}
+        />
       </div>
     </div>
   );
 }
-
-const rootElement = document.getElementById('app');
-if (!rootElement) throw new Error('Missing #app root for maho_mail.');
 
 function RootView() {
   if (isPopout()) {
@@ -1518,15 +1693,20 @@ function RootView() {
   return <App />;
 }
 
-createRoot(rootElement).render(
-  <React.StrictMode>
-    <TooltipProvider delayDuration={200}>
-      <ConfirmProvider>
-        <ErrorBoundary>
-          <RootView />
-        </ErrorBoundary>
-      </ConfirmProvider>
-    </TooltipProvider>
-    <Toaster richColors position="bottom-right" />
-  </React.StrictMode>
-);
+const rootElement = document.getElementById('app');
+if (rootElement) {
+  createRoot(rootElement).render(
+    <React.StrictMode>
+      <TooltipProvider delayDuration={200}>
+        <ConfirmProvider>
+          <ErrorBoundary>
+            <RootView />
+          </ErrorBoundary>
+        </ConfirmProvider>
+      </TooltipProvider>
+      <Toaster richColors position="bottom-right" />
+    </React.StrictMode>
+  );
+} else if (!('vi' in globalThis)) {
+  throw new Error('Missing #app root for maho_mail.');
+}

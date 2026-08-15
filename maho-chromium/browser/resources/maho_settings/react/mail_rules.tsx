@@ -5,6 +5,7 @@ import {Plus, Trash2, Loader2, ArrowUp, ArrowDown} from 'lucide-react';
 import {Button} from '@ui/button';
 import {Input} from '@ui/input';
 import {PaneShell, SectionCard} from './domain_panes.js';
+import {classifyMailSettingsFailure, createMailSettingsContentState, type MailSettingsState} from './mail_settings_state.js';
 import type {PaneDefinition} from '../models.js';
 import type {MahoSettingsStore} from './store.js';
 
@@ -22,69 +23,36 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
   const handler = store.getHandler();
   const router = store.getCallbackRouter();
   const mountedRef = useRef(true);
-  const retryCountRef = useRef(0);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadRef = useRef<() => void>(() => {});
   const [rules, setRules] = useState<MailRule[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [modelState, setModelState] = useState<MailSettingsState<MailRule[]>>({status: 'loading'});
   const [editingRule, setEditingRule] = useState<Partial<MailRule> | null>(null);
   const [error, setError] = useState('');
-  const [loadError, setLoadError] = useState('');
+
 
   useEffect(() => {
     return () => {
       mountedRef.current = false;
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current);
-        retryTimerRef.current = null;
-      }
+
     };
   }, []);
 
-  // Returns true while a bounded retry is pending (≤3), false once the cap is hit.
-  const scheduleRetry = useCallback((): boolean => {
-    if (retryCountRef.current >= 3) {
-      return false;
-    }
-    retryCountRef.current += 1;
-    if (retryTimerRef.current !== null) {
-      clearTimeout(retryTimerRef.current);
-    }
-    retryTimerRef.current = setTimeout(() => {
-      retryTimerRef.current = null;
-      if (mountedRef.current) {
-        loadRef.current();
-      }
-    }, 800);
-    return true;
-  }, []);
-
   const loadRules = useCallback(async () => {
-    setLoading(true);
+    setModelState({status: 'loading'});
     try {
       const {ok, resultJson} = await handler.mailListRules('');
       if (!mountedRef.current) return;
       if (ok) {
-        setRules(JSON.parse(resultJson) as MailRule[]);
-        setLoadError('');
-        retryCountRef.current = 0;
-        setLoading(false);
-      } else if (!scheduleRetry()) {
-        setLoadError('Failed to load rules');
-        setLoading(false);
+        const next = JSON.parse(resultJson) as MailRule[];
+        setRules(next);
+        setModelState(createMailSettingsContentState(next));
+      } else {
+        setModelState(classifyMailSettingsFailure(resultJson, 'Failed to load rules'));
       }
-    } catch (e) {
+    } catch {
       if (!mountedRef.current) return;
-      if (!scheduleRetry()) {
-        setLoadError('Failed to load rules');
-        setLoading(false);
-      }
+      setModelState({status: 'error', message: 'Failed to load rules'});
     }
-  }, [handler, scheduleRetry]);
-
-  useEffect(() => {
-    loadRef.current = () => { void loadRules(); };
-  }, [loadRules]);
+  }, [handler]);
 
   useEffect(() => {
     void loadRules();
@@ -141,8 +109,11 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
 
   return (
     <PaneShell pane={pane}>
-      {loading ? (
+      <div data-mail-settings-state={modelState.status}>
+      {modelState.status === 'loading' ? (
         <p className="py-4 text-center text-sm text-muted-foreground"><Loader2 className="mr-2 inline size-4 animate-spin" />Loading rules...</p>
+      ) : modelState.status === 'unavailable' || modelState.status === 'error' ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground"><span>{modelState.message}</span><Button type="button" size="sm" variant="outline" onClick={() => { void loadRules(); }}>Retry</Button></div>
       ) : (
         <div className="space-y-6">
           <SectionCard
@@ -155,12 +126,7 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
             }
           >
             {error && <p className="p-4 text-sm text-destructive">{error}</p>}
-            {loadError && (
-              <div className="flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
-                <span>{loadError}</span>
-                <Button type="button" size="sm" variant="outline" onClick={() => { retryCountRef.current = 0; setLoadError(''); void loadRules(); }}>Retry</Button>
-              </div>
-            )}
+
             <div className="divide-y divide-border">
               {rules.map((rule, idx) => (
                 <div key={rule.id} className="flex items-center justify-between p-4">
@@ -215,6 +181,7 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
           )}
         </div>
       )}
+      </div>
     </PaneShell>
   );
 }

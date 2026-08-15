@@ -10,8 +10,11 @@ mojom("mojo_bindings") {
 
 source_set("maho_mail") {
   sources = [
+    "maho_mail_attachment_launcher.h",
     "maho_mail_ui.cc",
     "maho_mail_ui.h",
+    "maho_mail_backend_boundary.cc",
+    "maho_mail_backend_boundary.h",
     "maho_mail_page_handler.cc",
     "maho_mail_page_handler.h",
     "maho_mail_oauth_session.cc",
@@ -33,6 +36,29 @@ source_set("maho_mail") {
     "//mojo/public/cpp/bindings",
     "//ui/webui",
     "//url",
+  ]
+
+  if (is_mac) {
+    sources += [ "maho_mail_attachment_launcher_mac.mm" ]
+    frameworks = [ "AppKit.framework" ]
+  } else if (is_linux) {
+    sources += [ "maho_mail_attachment_launcher_linux.cc" ]
+    deps += [ "//dbus" ]
+  } else if (is_win) {
+    sources += [ "maho_mail_attachment_launcher_win.cc" ]
+  }
+}
+
+test("maho_mail_page_handler_test") {
+  sources = [
+    "maho_mail_backend_boundary_test_main.cc",
+    "maho_mail_backend_boundary_unittest.cc",
+  ]
+  deps = [
+    ":maho_mail",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
   ]
 }
 

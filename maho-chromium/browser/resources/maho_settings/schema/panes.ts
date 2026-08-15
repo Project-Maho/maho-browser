@@ -91,9 +91,23 @@ export const LIVE_PANE_SECTION_MANIFEST: Record<string, LivePaneSectionDefinitio
   ],
   tabs: [
     {kind: 'live-card', card: {
+      title: 'New tabs',
+      description: '',
+      settingKeys: ['sidebar.new_tab_position'],
+      wide: true,
+    }},
+    {kind: 'live-card', card: {
       title: 'Tab lifecycle',
       description: '',
       settingKeys: ['tabs.archive_timeout', 'tabs.today_tab_timeout', 'tabs.pinned_close_behavior', 'tabs.auto_delete_empty_folders_on_tidy'],
+      wide: true,
+    }},
+  ],
+  'maho-ai': [
+    {kind: 'live-card', card: {
+      title: 'Conversations',
+      description: '',
+      settingKeys: ['conversation.auto_archive_after_days'],
       wide: true,
     }},
   ],
@@ -260,6 +274,19 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     domain: 'productivity',
     contentKind: 'maho-mini',
   },
+  // Mail is a top-level navigation entry, not a row inside a Features pane.
+  // It stays visible while Mail is disabled because it owns the enable toggle.
+  {
+    key: 'mail',
+    scope: 'profile',
+    selectedProfileSupport: 'host-only',
+    symbol: 'M',
+    navTitle: 'Mail',
+    title: 'Mail',
+    kind: 'live',
+    domain: 'productivity',
+    contentKind: 'mail-overview',
+  },
   {
     key: 'maho-ai',
     scope: 'profile',
@@ -397,11 +424,11 @@ const CORE_PANE_DEFINITIONS: PaneDefinition[] = [
   ...PROTECTION_PANES,
 ];
 
-// The "Maho Mail" section only exists when the maho.mail.enabled pref is on -
-// the same gate the sidebar button, chrome://maho-mail, and the helper
-// subprocess read. The C++ handler surfaces that pref as the `mail.enabled`
-// setting, so the nav is computed from live settings rather than a build-time
-// constant. app.tsx skips domains that end up with no panes.
+// The "Maho Mail" settings section of detail panes only exists when the opt-in
+// maho.mail.enabled pref is on. The always-visible top-level Mail pane owns its
+// toggle; the sidebar button, chrome://maho-mail, and helper subprocess read
+// the same pref. app.tsx computes the nav from live settings rather than a
+// build-time constant and skips domains with no panes.
 export function panesForSettings(mailEnabled: boolean): PaneDefinition[] {
   return mailEnabled ? [...CORE_PANE_DEFINITIONS, ...MAIL_PANES] :
                        CORE_PANE_DEFINITIONS;
@@ -424,6 +451,8 @@ export const PANE_DEFINITION_MAP: Record<string, PaneDefinition> =
 const PANE_ALIASES: Readonly<Record<string, string>> = {
   'account-sync': 'account',
   'privacy': 'content-blocker',
+  // Mail used to be buried in the Features pane; keep old deep links working.
+  'features': 'mail',
 };
 
 export function resolveReachablePaneKey(key: string, mailEnabled: boolean): string {

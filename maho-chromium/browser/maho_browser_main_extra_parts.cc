@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,10 +23,12 @@
 #include "base/no_destructor.h"
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
+#include "base/task/bind_post_task.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/uuid.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -50,7 +53,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
-#include "chrome/browser/notifications/notification_display_service_factory.h"
+#include "chrome/browser/notifications/notification_display_service_impl.h"
+#include "chrome/browser/notifications/notification_handler.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -81,6 +85,7 @@
 #include "content/public/common/isolated_world_ids.h"
 #include "maho/browser/ai/maho_ai_settings_migration.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -88,6 +93,8 @@
 #include "maho/browser/maho_tab_id_session_helper.h"
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/mail_helper/maho_mail_helper_version.h"
+#include "maho/browser/mail_helper/maho_mail_notification_coordinator.h"
+#include "maho/browser/mail_helper/maho_mail_notification_permission.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
@@ -101,19 +108,22 @@
 #include "maho/browser/net/maho_atc_state.h"
 #include "maho/browser/net/maho_content_blocker_update_service.h"
 #include "maho/browser/net/maho_content_blocker_update_service_factory.h"
+#include "maho/browser/passwords/maho_password_authorization_service.h"
 #include "maho/browser/sync/maho_sync_relay_client.h"
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
+#include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/browser/updates/maho_config_manager.h"
 #include "maho/browser/updates/maho_update_manager.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "net/base/url_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_enums.mojom-shared.h"
@@ -122,11 +132,11 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/ax_tree_update.h"
+#include "ui/base/base_window.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider_manager.h"
 #include "ui/message_center/public/cpp/notification.h"
-#include "ui/message_center/public/cpp/notification_delegate.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 #include "url/gurl.h"
 
@@ -134,7 +144,9 @@ namespace {
 MahoBrowserMainExtraParts* g_instance = nullptr;
 }  // namespace
 
-MahoBrowserMainExtraParts::MahoBrowserMainExtraParts() {
+MahoBrowserMainExtraParts::MahoBrowserMainExtraParts()
+    : mail_notification_coordinators_(
+          std::make_unique<maho::MahoMailNotificationCoordinatorRegistry>()) {
   DCHECK(!g_instance);
   g_instance = this;
 }
@@ -149,6 +161,13 @@ MahoBrowserMainExtraParts* MahoBrowserMainExtraParts::GetInstance() {
   return g_instance;
 }
 
+size_t
+MahoBrowserMainExtraParts::MailNotificationCoordinatorCountForTesting() const {
+  return mail_notification_coordinators_
+             ? mail_notification_coordinators_->size()
+             : 0;
+}
+
 namespace {
 
 constexpr int kIsolatedWorldIdForMcpAction =
@@ -156,52 +175,208 @@ constexpr int kIsolatedWorldIdForMcpAction =
 
 constexpr char kMahoMailNotificationOrigin[] = "chrome://maho-mail";
 constexpr char kMahoMailNotifierId[] = "maho.mail";
+  static_assert(static_cast<int>(NotificationHandler::Type::MAHO_MAIL) == 12);
 
-void OpenMahoMailFromNotification(base::WeakPtr<Profile> profile,
-                                  std::optional<int> button_index) {
-  if (!profile || button_index.has_value()) {
-    return;
-  }
+void RouteMahoMailNotification(Profile* profile,
+                               const std::string& account_id,
+                               const std::string& email_id);
 
-  NavigateParams params(profile.get(), GURL(kMahoMailNotificationOrigin),
-                        ui::PAGE_TRANSITION_GENERATED);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-  Navigate(&params);
+class MahoMailNotificationHandler final : public NotificationHandler {
+ public:
+  MahoMailNotificationHandler();
+  ~MahoMailNotificationHandler() override;
+
+  void RegisterClick(const std::string& notification_id,
+                     base::RepeatingClosure callback);
+  void Remove(const std::string& notification_id);
+
+  void OnClose(Profile* profile,
+               const GURL& origin,
+               const std::string& notification_id,
+               bool by_user,
+               base::OnceClosure completed_closure) override;
+  void OnClick(Profile* profile,
+               const GURL& origin,
+               const std::string& notification_id,
+               const std::optional<int>& action_index,
+               const std::optional<std::u16string>& reply,
+               base::OnceClosure completed_closure) override;
+
+ private:
+  std::map<std::string, base::RepeatingClosure> callbacks_;
+};
+
+MahoMailNotificationHandler::MahoMailNotificationHandler() = default;
+
+MahoMailNotificationHandler::~MahoMailNotificationHandler() = default;
+
+void MahoMailNotificationHandler::RegisterClick(
+    const std::string& notification_id,
+    base::RepeatingClosure callback) {
+  callbacks_.insert_or_assign(notification_id, std::move(callback));
 }
 
-void ShowMahoMailNotification(Profile* profile,
-                              const std::string& sender,
-                              const std::string& subject,
-                              const std::string& notification_id) {
+void MahoMailNotificationHandler::Remove(
+    const std::string& notification_id) {
+  callbacks_.erase(notification_id);
+}
+
+void MahoMailNotificationHandler::OnClose(
+    Profile* profile,
+    const GURL& origin,
+    const std::string& notification_id,
+    bool by_user,
+    base::OnceClosure completed_closure) {
+  Remove(notification_id);
+  std::move(completed_closure).Run();
+}
+
+void MahoMailNotificationHandler::OnClick(
+    Profile* profile,
+    const GURL& origin,
+    const std::string& notification_id,
+    const std::optional<int>& action_index,
+    const std::optional<std::u16string>& reply,
+    base::OnceClosure completed_closure) {
+  auto it = callbacks_.find(notification_id);
+  if (it != callbacks_.end() && !action_index.has_value()) {
+    base::RepeatingClosure callback = it->second;
+    callbacks_.erase(it);
+    callback.Run();
+  }
+  std::move(completed_closure).Run();
+}
+
+MahoMailNotificationHandler* EnsureMahoMailNotificationHandler(
+    Profile* profile) {
+  NotificationDisplayServiceImpl* service =
+      NotificationDisplayServiceImpl::GetForProfile(profile);
+  if (!service) {
+    return nullptr;
+  }
+  NotificationHandler* existing =
+      service->GetNotificationHandler(NotificationHandler::Type::MAHO_MAIL);
+  if (existing) {
+    return static_cast<MahoMailNotificationHandler*>(existing);
+  }
+  auto handler = std::make_unique<MahoMailNotificationHandler>();
+  MahoMailNotificationHandler* result = handler.get();
+  service->AddNotificationHandler(NotificationHandler::Type::MAHO_MAIL,
+                                  std::move(handler));
+  return result;
+}
+
+GURL BuildMahoMailDeepLink(const std::string& account_id,
+                           const std::string& email_id) {
+  return net::AppendOrReplaceQueryParameter(
+      net::AppendOrReplaceQueryParameter(GURL(kMahoMailNotificationOrigin),
+                                         "accountId", account_id),
+      "emailId", email_id);
+}
+
+void RouteMahoMailNotification(Profile* profile,
+                               const std::string& account_id,
+                               const std::string& email_id) {
   if (!profile || !profile->IsRegularProfile()) {
     return;
   }
+  const GURL target = BuildMahoMailDeepLink(account_id, email_id);
+  bool found = false;
+  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+      [profile, &target, &found](BrowserWindowInterface* browser) {
+        if (browser->GetProfile() != profile) {
+          return true;
+        }
+        TabStripModel* tabs = browser->GetTabStripModel();
+        if (!tabs) {
+          return true;
+        }
+        for (int index = 0; index < tabs->count(); ++index) {
+          content::WebContents* contents = tabs->GetWebContentsAt(index);
+          if (!contents ||
+              contents->GetLastCommittedURL().scheme() !=
+                  GURL(kMahoMailNotificationOrigin).scheme() ||
+              contents->GetLastCommittedURL().host() !=
+                  GURL(kMahoMailNotificationOrigin).host()) {
+            continue;
+          }
+          browser->GetWindow()->Activate();
+          tabs->ActivateTabAt(index);
+          NavigateParams params(browser, target, ui::PAGE_TRANSITION_GENERATED);
+          params.disposition = WindowOpenDisposition::CURRENT_TAB;
+          Navigate(&params);
+          found = true;
+          return false;
+        }
+        return true;
+      });
+  if (!found) {
+    NavigateParams params(profile, target, ui::PAGE_TRANSITION_GENERATED);
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    Navigate(&params);
+  }
+}
 
-  PrefService* prefs = profile->GetPrefs();
-  if (!maho::sidebar_prefs::IsMahoMailEnabled(prefs) ||
-      !prefs->GetBoolean("maho.mail.notifications_enabled")) {
+void WithdrawMahoMailNotification(Profile* profile,
+                                  const std::string& notification_id);
+
+void DisplayMahoMailNotification(
+    Profile* profile,
+    const maho::MahoMailNotificationPayload& payload,
+    base::OnceCallback<void(bool)> completion) {
+  if (!profile || !profile->IsRegularProfile()) {
+    std::move(completion).Run(false);
     return;
   }
 
-  NotificationDisplayService* notification_service =
-      NotificationDisplayServiceFactory::GetForProfile(profile);
-  if (!notification_service) {
+  NotificationDisplayServiceImpl* notification_service =
+      NotificationDisplayServiceImpl::GetForProfile(profile);
+  MahoMailNotificationHandler* handler =
+      EnsureMahoMailNotificationHandler(profile);
+  if (!notification_service || !handler) {
+    std::move(completion).Run(false);
     return;
   }
 
-  auto delegate =
-      base::MakeRefCounted<message_center::HandleNotificationClickDelegate>(
-          base::BindRepeating(&OpenMahoMailFromNotification,
-                              profile->GetWeakPtr()));
   message_center::Notification notification(
-      message_center::NOTIFICATION_TYPE_SIMPLE, notification_id,
-      base::UTF8ToUTF16(sender), base::UTF8ToUTF16(subject), ui::ImageModel(),
-      std::u16string(), GURL(kMahoMailNotificationOrigin),
+      message_center::NOTIFICATION_TYPE_SIMPLE, payload.notification_id,
+      base::UTF8ToUTF16(payload.title), base::UTF8ToUTF16(payload.body),
+      ui::ImageModel(), std::u16string(), GURL(kMahoMailNotificationOrigin),
       message_center::NotifierId(message_center::NotifierType::SYSTEM_COMPONENT,
                                  kMahoMailNotifierId),
-      {}, std::move(delegate));
-  notification_service->Display(NotificationHandler::Type::TRANSIENT,
+      {}, nullptr);
+  notification_service->Display(NotificationHandler::Type::MAHO_MAIL,
                                 notification, nullptr);
+  handler->RegisterClick(payload.notification_id, payload.click_callback);
+  notification_service->GetDisplayed(base::BindOnce(
+      [](std::string notification_id,
+         base::RepeatingCallback<void(const std::string&)> withdraw,
+         base::OnceCallback<void(bool)> completion,
+         std::set<std::string> displayed,
+         bool supports_synchronization) {
+        const bool accepted =
+            supports_synchronization &&
+            displayed.contains(notification_id);
+        if (!accepted) {
+          withdraw.Run(notification_id);
+        }
+        std::move(completion).Run(accepted);
+      },
+      payload.notification_id,
+      base::BindRepeating(&WithdrawMahoMailNotification, profile),
+      std::move(completion)));
+}
+
+void WithdrawMahoMailNotification(Profile* profile,
+                                  const std::string& notification_id) {
+  if (NotificationDisplayServiceImpl* service =
+          NotificationDisplayServiceImpl::GetForProfile(profile)) {
+    if (MahoMailNotificationHandler* handler =
+            EnsureMahoMailNotificationHandler(profile)) {
+      handler->Remove(notification_id);
+    }
+    service->Close(NotificationHandler::Type::MAHO_MAIL, notification_id);
+  }
 }
 
 bool CreateDirectoryOnThreadPool(base::FilePath path) {
@@ -237,6 +412,28 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
     const ui::AXTreeUpdate& update,
     ui::AXNodeID ax_id,
     float device_scale_factor) {
+  // Preferred: ui::AXTree geometry applies each container's scroll offset and
+  // transform, yielding frame-relative (viewport) coordinates. The manual
+  // offset-container walk below is a fallback that ignores scroll/transform and
+  // therefore mislocates targets whenever the page is scrolled or the target
+  // lives inside a scrolled/fixed container such as a modal dialog.
+  {
+    ui::AXTree tree;
+    if (tree.Unserialize(update)) {
+      if (const ui::AXNode* node = tree.GetFromId(ax_id)) {
+        gfx::RectF bounds = tree.GetTreeBounds(node, /*offscreen=*/nullptr,
+                                               /*clip_bounds=*/false);
+        if (!bounds.IsEmpty()) {
+          gfx::PointF center = bounds.CenterPoint();
+          if (device_scale_factor > 0.f) {
+            center.Scale(1.f / device_scale_factor);
+          }
+          return center;
+        }
+      }
+    }
+  }
+
   const ui::AXNodeData* target_node = nullptr;
   for (const auto& node : update.nodes) {
     if (node.id == ax_id) {
@@ -279,6 +476,39 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
     center.Scale(1.f / device_scale_factor);
   }
   return center;
+}
+
+// Find an option node (in an opened dropdown/listbox) whose accessible name
+// matches `value`, preferring an exact case-insensitive match and otherwise a
+// substring match. Excludes the combobox node itself. Used to click custom
+// (non-native) dropdown options that carry no @ref and cannot be selected by
+// assigning a value.
+std::optional<ui::AXNodeID> FindOptionNodeByText(const ui::AXTreeUpdate& update,
+                                                 ui::AXNodeID exclude_id,
+                                                 const std::string& value) {
+  const std::string needle = base::ToLowerASCII(value);
+  if (needle.empty()) {
+    return std::nullopt;
+  }
+  std::optional<ui::AXNodeID> substring_match;
+  for (const auto& node : update.nodes) {
+    if (node.id == exclude_id) {
+      continue;
+    }
+    const std::string& name =
+        node.GetStringAttribute(ax::mojom::StringAttribute::kName);
+    if (name.empty()) {
+      continue;
+    }
+    const std::string hay = base::ToLowerASCII(name);
+    if (hay == needle) {
+      return node.id;
+    }
+    if (!substring_match && hay.find(needle) != std::string::npos) {
+      substring_match = node.id;
+    }
+  }
+  return substring_match;
 }
 
 std::string DecodeActiveSpaceId(char* active_id_cstr) {
@@ -419,7 +649,9 @@ struct BrowserVaultCredentialLease {
   BrowserVaultCredentialLease& operator=(const BrowserVaultCredentialLease&) =
       delete;
   BrowserVaultCredentialLease(BrowserVaultCredentialLease&& other) noexcept
-      : origin(std::move(other.origin)),
+      : profile_key(std::move(other.profile_key)),
+        origin(std::move(other.origin)),
+        expires_at(other.expires_at),
         username_hint(std::move(other.username_hint)),
         password(std::move(other.password)),
         totp(std::move(other.totp)) {}
@@ -428,7 +660,9 @@ struct BrowserVaultCredentialLease {
     if (this != &other) {
       SecureZeroizeString(password);
       SecureZeroizeString(totp);
+      profile_key = std::move(other.profile_key);
       origin = std::move(other.origin);
+      expires_at = other.expires_at;
       username_hint = std::move(other.username_hint);
       password = std::move(other.password);
       totp = std::move(other.totp);
@@ -436,7 +670,9 @@ struct BrowserVaultCredentialLease {
     return *this;
   }
 
+  std::string profile_key;
   std::string origin;
+  base::TimeTicks expires_at;
   std::string username_hint;
   std::string password;
   std::string totp;
@@ -448,6 +684,8 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
   // Keyed-service factories must be registered before Chromium's
   // ChromeBrowserMainExtraPartsProfiles::PreProfileInit() seals the topology.
   maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();
+  maho::ai::EnsureMahoControlActivityServiceFactoryBuilt();
+  maho::InstallMahoMailNotificationPermissionCallbacks();
 
   base::FilePath user_data_dir;
   if (base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
@@ -483,14 +721,16 @@ void MahoBrowserMainExtraParts::MaybeInitializeForBrowser(
     BrowserWindowInterface* browser) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   Profile* profile = browser ? browser->GetProfile() : nullptr;
-  MahoPrivateContextClass cls = profile ? MahoClassifyProfile(profile)
-                                        : MahoPrivateContextClass::kNull;
+  MahoPrivateContextClass cls =
+      profile ? MahoClassifyProfile(profile) : MahoPrivateContextClass::kNull;
 
   if (cls != MahoPrivateContextClass::kRegular) {
     LOG(INFO) << "MAHO_INIT_AUDIT: class=" << ClassToString(cls)
               << ", decision=deny, stage=MaybeInitializeForBrowser";
     return;
   }
+
+  EnsureMailNotificationCoordinator(profile);
 
   if (core_ || regular_services_initializing_) {
     LOG(INFO)
@@ -521,7 +761,11 @@ void OnRoutineRunComplete(void* user_data, const char* result_json) {
       FROM_HERE,
       base::BindOnce(
           [](maho::MahoMcpBrowserDelegate::RunRoutineCallback cb,
-             std::string j) { std::move(cb).Run(true, std::move(j)); },
+             std::string j) {
+            std::move(cb).Run(
+                maho::MahoMcpBrowserDelegate::RoutineRunError::kNone,
+                std::move(j));
+          },
           std::move(ctx->callback), std::move(json)));
   delete ctx;
 }
@@ -533,7 +777,12 @@ void OnRoutineRunError(void* user_data, const char* error) {
       FROM_HERE,
       base::BindOnce(
           [](maho::MahoMcpBrowserDelegate::RunRoutineCallback cb,
-             std::string e) { std::move(cb).Run(false, std::move(e)); },
+             std::string e) {
+            std::move(cb).Run(
+                maho::MahoMcpBrowserDelegate::RoutineRunError::
+                    kExecutionFailed,
+                std::move(e));
+          },
           std::move(ctx->callback), std::move(err)));
   delete ctx;
 }
@@ -605,8 +854,8 @@ maho::MahoMcpSession::TabInfo BuildLiveMcpTabInfo(
     TabStripModel* model,
     int index) {
   maho::MahoMcpSession::TabInfo tab;
-  content::WebContents* web_contents = model ? model->GetWebContentsAt(index)
-                                             : nullptr;
+  content::WebContents* web_contents =
+      model ? model->GetWebContentsAt(index) : nullptr;
   if (!web_contents || !IsWebContentsMcpEligible(browser, web_contents)) {
     return tab;
   }
@@ -624,9 +873,9 @@ maho::MahoMcpSession::TabInfo BuildLiveMcpTabInfo(
   return tab;
 }
 
-std::map<std::string, maho::MahoMcpSession::TabInfo>
-BuildLiveMcpTabsByStableId(BrowserWindowInterface* browser,
-                           TabStripModel* model) {
+std::map<std::string, maho::MahoMcpSession::TabInfo> BuildLiveMcpTabsByStableId(
+    BrowserWindowInterface* browser,
+    TabStripModel* model) {
   std::map<std::string, maho::MahoMcpSession::TabInfo> live_tabs;
   if (!browser || !model) {
     return live_tabs;
@@ -770,8 +1019,242 @@ std::vector<maho::MahoMcpSession::TabInfo> BuildLiveMcpTabStripInventory(
 
 class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
  public:
-  MahoMcpBrowserDelegateImpl() { ui_weak_ptr_ = weak_factory_.GetWeakPtr(); }
+  MahoMcpBrowserDelegateImpl() {
+    ui_weak_ptr_ = weak_factory_.GetWeakPtr();
+    vault_lock_state_subscription_ =
+        maho::AddVaultLockStateChangeCallback(base::BindRepeating(
+            &MahoMcpBrowserDelegateImpl::OnVaultLockStateChanged,
+            base::Unretained(this)));
+  }
   ~MahoMcpBrowserDelegateImpl() override = default;
+
+  void PublishControlActivity(const std::string& activity_id,
+                              const std::string& controller_session_id,
+                              const std::string& controller_label,
+                              const maho::ResolvedMahoMcpTarget& target,
+                              MahoBrowserToolRegistry::Category category,
+                              MahoBrowserToolRegistry::Sensitivity sensitivity,
+                              maho::MahoMcpActivityPhase phase,
+                              uint64_t revision) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::PublishControlActivity,
+                         ui_weak_ptr_, activity_id, controller_session_id,
+                         controller_label, target, category, sensitivity, phase,
+                         revision));
+      return;
+    }
+    auto* service =
+        maho::ai::MahoControlActivityService::GetForProfile(GetProfile());
+    if (!service) {
+      return;
+    }
+    if (phase == maho::MahoMcpActivityPhase::kReading ||
+        phase == maho::MahoMcpActivityPhase::kActing) {
+      maho::ai::StartControlActivityParams params;
+      params.session_id = activity_id;
+      params.controller_session_id = controller_session_id;
+      params.controller_display_name = controller_label;
+      params.controller_type = maho::ai::ControllerType::kRemoteClient;
+      params.control_plane = maho::ai::ControlPlane::kMcp;
+      switch (category) {
+        case MahoBrowserToolRegistry::Category::kInput:
+          params.category = maho::ai::ActivityCategory::kFormEntry;
+          break;
+        case MahoBrowserToolRegistry::Category::kMail:
+        case MahoBrowserToolRegistry::Category::kVault:
+          params.category = maho::ai::ActivityCategory::kAccountChange;
+          break;
+        case MahoBrowserToolRegistry::Category::kUnknown:
+          params.category = maho::ai::ActivityCategory::kOther;
+          break;
+        default:
+          params.category = maho::ai::ActivityCategory::kBrowsing;
+          break;
+      }
+      switch (sensitivity) {
+        case MahoBrowserToolRegistry::Sensitivity::kCredential:
+          params.sensitivity = maho::ai::ActivitySensitivity::kHigh;
+          break;
+        case MahoBrowserToolRegistry::Sensitivity::kSensitive:
+          params.sensitivity = maho::ai::ActivitySensitivity::kMedium;
+          break;
+        case MahoBrowserToolRegistry::Sensitivity::kUnknown:
+        case MahoBrowserToolRegistry::Sensitivity::kLow:
+          params.sensitivity = maho::ai::ActivitySensitivity::kLow;
+          break;
+      }
+      params.start_receipt = {maho::ai::ActivityReceiptKind::kStart, "started",
+                              "[redacted]"};
+      if (target.valid) {
+        ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
+            [&params, &target](BrowserWindowInterface* browser) {
+              if (!browser ||
+                  browser->GetSessionID().id() != target.browser_id ||
+                  !browser->GetTabStripModel()) {
+                return true;
+              }
+              TabStripModel* model = browser->GetTabStripModel();
+              for (int index = 0; index < model->count(); ++index) {
+                content::WebContents* contents = model->GetWebContentsAt(index);
+                auto* helper =
+                    contents
+                        ? sessions::SessionTabHelper::FromWebContents(contents)
+                        : nullptr;
+                if (helper && helper->session_id().id() == target.tab_id) {
+                  params.target =
+                      maho::ai::ControlTarget{target.browser_id, target.tab_id,
+                                              contents->GetPrimaryMainFrame()
+                                                  ->GetLastCommittedOrigin(),
+                                              contents->GetTitle()};
+                  return false;
+                }
+              }
+              return false;
+            });
+      }
+      service->StartActivity(std::move(params));
+      if (phase == maho::MahoMcpActivityPhase::kActing) {
+        maho::ai::ControlActivityUpdate update;
+        update.event_revision = 2;
+        update.state = maho::ai::ControlActivityState::kActing;
+        service->ApplyUpdate(activity_id, std::move(update));
+      }
+      return;
+    }
+    if (phase == maho::MahoMcpActivityPhase::kDisconnected) {
+      service->Disconnect(activity_id, revision);
+      return;
+    }
+    maho::ai::ControlActivityUpdate update;
+    const auto activity = service->GetActivity(activity_id);
+    if (!activity) {
+      return;
+    }
+    update.event_revision = activity->event_revision + 1;
+    update.state = phase == maho::MahoMcpActivityPhase::kCompleted
+                       ? maho::ai::ControlActivityState::kCompleted
+                       : maho::ai::ControlActivityState::kFailed;
+    update.receipt = maho::ai::ActivityReceipt{
+        phase == maho::MahoMcpActivityPhase::kCompleted
+            ? maho::ai::ActivityReceiptKind::kResult
+            : maho::ai::ActivityReceiptKind::kFailure,
+        phase == maho::MahoMcpActivityPhase::kCompleted ? "completed"
+                                                        : "failed",
+        "[redacted]"};
+    service->ApplyUpdate(activity_id, std::move(update));
+  }
+
+  void RevokeVaultCredentialLeases() {
+    vault_credential_expiry_timer_.Stop();
+    vault_credential_handles_.clear();
+    vault_credential_grants_.clear();
+  }
+
+  void AddVaultCredentialLeaseForTesting(base::TimeTicks expires_at,
+                                         bool promoted,
+                                         Profile* lease_profile) {
+    BrowserVaultCredentialLease lease;
+    lease.profile_key =
+        lease_profile ? maho::GetProfileIdentityKey(lease_profile->GetPath(),
+                                                    lease_profile->GetPrefs())
+                      : "test-profile";
+    lease.origin = "https://test.example/";
+    lease.expires_at = expires_at;
+    lease.password = "test-secret";
+    if (promoted) {
+      vault_credential_grants_.emplace("test-grant", std::move(lease));
+    } else {
+      vault_credential_handles_.emplace("test-handle", std::move(lease));
+    }
+    ScheduleVaultCredentialExpiry();
+  }
+
+  void SweepVaultCredentialLeasesForTesting(base::TimeTicks now) {
+    SweepExpiredVaultCredentialLeases(now);
+  }
+
+  bool PromoteVaultCredentialLeaseForTesting(Profile* resolved_profile,
+                                             base::TimeTicks now) {
+    SweepExpiredVaultCredentialLeases(now);
+    auto it = vault_credential_handles_.find("test-handle");
+    if (it == vault_credential_handles_.end() ||
+        !IsVaultCredentialLeaseProfileAllowed(it->second, resolved_profile) ||
+        it->second.expires_at <= now) {
+      return false;
+    }
+    BrowserVaultCredentialLease lease = std::move(it->second);
+    vault_credential_handles_.erase(it);
+    vault_credential_grants_.emplace("test-grant", std::move(lease));
+    ScheduleVaultCredentialExpiry();
+    return true;
+  }
+
+  size_t VaultCredentialLeaseCountForTesting() const {
+    return vault_credential_handles_.size() + vault_credential_grants_.size();
+  }
+
+std::string FormatMailActionDetails(const std::string& action_name,
+                                    const std::string& request_json) {
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(request_json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return request_json;
+  }
+  const base::DictValue& dict = parsed->GetDict();
+  std::string formatted;
+
+  if (action_name == "Add Mail Account") {
+    if (const std::string* email = dict.FindString("email")) {
+      formatted += "• Account: " + *email + "\n";
+    }
+    if (const std::string* name = dict.FindString("display_name")) {
+      formatted += "• Name: " + *name + "\n";
+    }
+    if (const std::string* host = dict.FindString("imap_host")) {
+      formatted += "• IMAP: " + *host;
+      if (std::optional<int> port = dict.FindInt("imap_port")) {
+        formatted += ":" + base::NumberToString(*port);
+      }
+      formatted += "\n";
+    }
+    if (const std::string* host = dict.FindString("smtp_host")) {
+      formatted += "• SMTP: " + *host;
+      if (std::optional<int> port = dict.FindInt("smtp_port")) {
+        formatted += ":" + base::NumberToString(*port);
+      }
+      formatted += "\n";
+    }
+    if (dict.FindString("password")) {
+      formatted += "• Password: ••••••••\n";
+    }
+  } else if (action_name == "Send Email" || action_name == "Save Mail Draft" || action_name == "Queue Email") {
+    if (const std::string* to = dict.FindString("to")) {
+      formatted += "• To: " + *to + "\n";
+    }
+    if (const std::string* subject = dict.FindString("subject")) {
+      formatted += "• Subject: " + *subject + "\n";
+    }
+  }
+
+  if (formatted.empty()) {
+    base::DictValue sanitized = dict.Clone();
+    if (sanitized.FindString("password")) {
+      sanitized.Set("password", "••••••••");
+    }
+    if (sanitized.FindString("oauth2_access_token")) {
+      sanitized.Set("oauth2_access_token", "[REDACTED]");
+    }
+    if (sanitized.FindString("oauth2_refresh_token")) {
+      sanitized.Set("oauth2_refresh_token", "[REDACTED]");
+    }
+    base::JSONWriter::WriteWithOptions(
+        sanitized, base::JSONWriter::OPTIONS_PRETTY_PRINT, &formatted);
+  }
+
+  return formatted;
+}
 
   bool ConfirmMailWriteAction(const std::string& action_name,
                               const std::string& details) {
@@ -785,6 +1268,137 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
         gfx::NativeWindow(), base::UTF8ToUTF16(title),
         base::UTF8ToUTF16(message));
     return result == chrome::MESSAGE_BOX_RESULT_YES;
+  }
+
+  maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
+    maho::ai::MailAuthorizationContext context;
+    Profile* profile = GetProfile();
+    maho::MahoMailService* service = GetMailService();
+    if (!profile) {
+      return context;
+    }
+    PrefService* prefs = profile->GetPrefs();
+    context.feature_enabled = maho::sidebar_prefs::IsMahoMailEnabled(prefs);
+    if (service) {
+      const auto helper_state = service->lifecycle_state();
+      context.helper_ready =
+          helper_state == maho::MahoMailService::LifecycleState::kReady;
+      context.helper_starting =
+          helper_state == maho::MahoMailService::LifecycleState::kStarting;
+      context.helper_generation = service->generation();
+    }
+    context.read_allowed = prefs->GetBoolean(maho::ai_prefs::kMailReadAllowed);
+    const std::string policy =
+        prefs->GetString(maho::ai_prefs::kApprovalPolicy);
+    context.global_policy = policy == "deny" ? maho::ai::MailGlobalPolicy::kDeny
+                            : policy == "allow"
+                                ? maho::ai::MailGlobalPolicy::kAllow
+                                : maho::ai::MailGlobalPolicy::kPrompt;
+    return context;
+  }
+
+  bool ConfirmMailToolApproval(std::string_view tool_name,
+                               std::string_view redacted_arguments) override {
+    return ConfirmMailWriteAction(std::string(tool_name),
+                                  std::string(redacted_arguments));
+  }
+
+  bool ConfirmBrowserActionApproval(
+      std::string_view tool_name,
+      const maho::ResolvedMahoMcpTarget& target) override {
+    return ConfirmMailWriteAction(
+        std::string(tool_name),
+        "Browser " + base::NumberToString(target.browser_id) + ", tab " +
+            base::NumberToString(target.tab_id));
+  }
+
+  maho::MahoMcpFeatureGates GetFeatureGates() override {
+    Profile* profile = GetProfile();
+    PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
+    const int32_t tier =
+        maho::GetCore() ? maho_account_get_tier(maho::GetCore()) : 0;
+    return {
+        .mail_enabled =
+            prefs && maho::sidebar_prefs::IsMahoMailEnabled(prefs),
+        .routines_enabled = tier >= 2,
+        .vault_enabled = maho::GetCore() != nullptr,
+    };
+  }
+
+  std::string ListArtifacts(std::string_view session_id) override {
+    maho::ai::MahoArtifactRegistry* registry =
+        maho::ai::MahoArtifactRegistry::GetForProfile(GetProfile());
+    if (!registry) {
+      return "[]";
+    }
+    base::ListValue list;
+    for (const maho::ai::MahoArtifact& artifact :
+         registry->ListArtifacts(session_id)) {
+      base::DictValue item;
+      item.Set("artifact_id", artifact.artifact_id);
+      item.Set("session_id", artifact.session_id);
+      item.Set("display_name", artifact.display_name);
+      item.Set("mime_type", artifact.mime_type);
+      item.Set("size_bytes", static_cast<double>(artifact.size_bytes));
+      item.Set("created_at_ms", static_cast<double>(artifact.created_at_ms));
+      list.Append(std::move(item));
+    }
+    std::string json;
+    base::JSONWriter::Write(list, &json);
+    return json;
+  }
+
+  void ExportArtifact(
+      std::string artifact_id,
+      base::FilePath destination,
+      maho::MahoMcpBrowserDelegate::ExportArtifactCallback callback) override {
+    maho::ai::MahoArtifactRegistry* registry =
+        maho::ai::MahoArtifactRegistry::GetForProfile(GetProfile());
+    std::optional<maho::ai::MahoArtifact> artifact =
+        registry ? registry->GetArtifact(artifact_id) : std::nullopt;
+    if (!registry || !artifact || !destination.IsAbsolute()) {
+      std::move(callback).Run(false, "Artifact or destination is unavailable");
+      return;
+    }
+    base::FilePath artifact_root = registry->artifact_root();
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(
+            [](base::FilePath artifact_root, std::string storage_rel_path,
+               base::FilePath destination) -> std::string {
+              const base::FilePath parent = destination.DirName();
+              base::FilePath normalized_parent;
+              if (parent.empty() ||
+                  !base::NormalizeFilePath(parent, &normalized_parent) ||
+                  normalized_parent != parent) {
+                return "Artifact export destination parent is unavailable";
+              }
+              if (base::PathExists(destination)) {
+                base::FilePath normalized_destination;
+                if (!base::NormalizeFilePath(destination,
+                                             &normalized_destination) ||
+                    normalized_destination != destination ||
+                    !base::PathIsWritable(destination) ||
+                    base::DirectoryExists(destination)) {
+                  return "Artifact export destination is unsafe";
+                }
+              }
+              std::optional<base::FilePath> source =
+                  maho::ai::MahoArtifactRegistry::ResolveContainedStoragePath(
+                      artifact_root, storage_rel_path);
+              if (!source || !base::CopyFile(*source, destination)) {
+                return "Artifact export failed";
+              }
+              return std::string();
+            },
+            std::move(artifact_root), artifact->storage_rel_path,
+            std::move(destination)),
+        base::BindOnce(
+            [](maho::MahoMcpBrowserDelegate::ExportArtifactCallback callback,
+               std::string error) {
+              std::move(callback).Run(error.empty(), std::move(error));
+            },
+            std::move(callback)));
   }
 
   std::string ListRoutines() override {
@@ -806,12 +1420,17 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       maho::MahoMcpBrowserDelegate::RunRoutineCallback callback) override {
     MahoCore* core = maho::GetCore();
     if (!core) {
-      std::move(callback).Run(false, "Maho core unavailable");
+      std::move(callback).Run(
+          maho::MahoMcpBrowserDelegate::RoutineRunError::kUnavailable,
+          "Maho core unavailable");
       return;
     }
     int32_t tier = maho_account_get_tier(core);
-    if (tier < 0) {
-      tier = 0;
+    if (tier != 2) {
+      std::move(callback).Run(
+          maho::MahoMcpBrowserDelegate::RoutineRunError::kTierLocked,
+          "Routines are available on Max tier only");
+      return;
     }
     auto* ctx = new RunRoutineFfiCtx{
         std::move(callback), base::SequencedTaskRunner::GetCurrentDefault()};
@@ -893,7 +1512,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       const std::string& request_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
     if (!ConfirmMailWriteAction("Add Mail Account",
-                                "Request JSON: " + request_json)) {
+                                FormatMailActionDetails("Add Mail Account", request_json))) {
       std::move(callback).Run(false, "Permission denied by user");
       return;
     }
@@ -1011,7 +1630,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
     if (!already_authorized &&
         !ConfirmMailWriteAction("Send Email",
-                                "Request JSON: " + request_json)) {
+                                FormatMailActionDetails("Send Email", request_json))) {
       std::move(callback).Run(false, "Permission denied by user");
       return;
     }
@@ -1029,7 +1648,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
     if (!already_authorized &&
         !ConfirmMailWriteAction("Save Mail Draft",
-                                "Request JSON: " + request_json)) {
+                                FormatMailActionDetails("Save Mail Draft", request_json))) {
       std::move(callback).Run(false, "Permission denied by user");
       return;
     }
@@ -1065,7 +1684,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       const std::string& request_json,
       maho::MahoMcpBrowserDelegate::MailReadCallback callback) override {
     if (!ConfirmMailWriteAction("Queue Email",
-                                "Request JSON: " + request_json)) {
+                                FormatMailActionDetails("Queue Email", request_json))) {
       std::move(callback).Run(false, "Permission denied by user");
       return;
     }
@@ -1424,7 +2043,8 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     if (!page_url.is_valid() ||
         page_url.DeprecatedGetOriginAsURL() != url.DeprecatedGetOriginAsURL()) {
       maho::MahoMcpBrowserDelegate::SameOriginFetchResult result;
-      result.error = "Same-origin fetch blocked: URL origin does not match target tab";
+      result.error =
+          "Same-origin fetch blocked: URL origin does not match target tab";
       std::move(callback).Run(std::move(result));
       return;
     }
@@ -1435,24 +2055,30 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     const std::string fetch_id_json = base::GetQuotedJSONString(fetch_id);
     const std::string start_script =
         "(()=>{window.__maho_mcp_fetches=window.__maho_mcp_fetches||{};"
-        "const id=" + fetch_id_json +
+        "const id=" +
+        fetch_id_json +
         ";window.__maho_mcp_fetches[id]={done:false};"
         "(async()=>{try{"
         "const response=await fetch(" +
         base::GetQuotedJSONString(url.spec()) +
         ",{method:" + base::GetQuotedJSONString(method) +
         ",credentials:'include',redirect:'error',headers:" + headers_json +
-        (method == "POST"
-             ? ",body:" + base::GetQuotedJSONString(body)
-             : std::string()) +
+        (method == "POST" ? ",body:" + base::GetQuotedJSONString(body)
+                          : std::string()) +
         "});"
-        "if(new URL(response.url).origin!==location.origin)throw new Error('cross-origin response blocked');"
+        "if(new URL(response.url).origin!==location.origin)throw new "
+        "Error('cross-origin response blocked');"
         "const full=await response.text();"
         "const text=full.slice(0," +
         base::NumberToString(kMaxFetchTextBytes) +
         ");"
-        "window.__maho_mcp_fetches[id]={done:true,value:JSON.stringify({success:true,status:response.status,final_url:response.url,content_type:response.headers.get('content-type')||'',text,truncated:text.length<full.length})};"
-        "}catch(error){window.__maho_mcp_fetches[id]={done:true,value:JSON.stringify({success:false,error:String(error&&error.message||error)})};}})();"
+        "window.__maho_mcp_fetches[id]={done:true,value:JSON.stringify({"
+        "success:true,status:response.status,final_url:response.url,content_"
+        "type:response.headers.get('content-type')||'',text,truncated:text."
+        "length<full.length})};"
+        "}catch(error){window.__maho_mcp_fetches[id]={done:true,value:JSON."
+        "stringify({success:false,error:String(error&&error.message||error)})};"
+        "}})();"
         "return 'started';})()";
     if (ExecuteMcpActionJsBlocking(wc, start_script) != "started") {
       maho::MahoMcpBrowserDelegate::SameOriginFetchResult result;
@@ -1462,16 +2088,18 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     }
 
     const std::string poll_script =
-        "(()=>{const entry=window.__maho_mcp_fetches&&window.__maho_mcp_fetches[" +
+        "(()=>{const "
+        "entry=window.__maho_mcp_fetches&&window.__maho_mcp_fetches[" +
         fetch_id_json +
-        "];if(!entry||!entry.done)return '';const value=entry.value||'';delete window.__maho_mcp_fetches[" +
+        "];if(!entry||!entry.done)return '';const value=entry.value||'';delete "
+        "window.__maho_mcp_fetches[" +
         fetch_id_json + "];return value;})()";
-    const base::TimeTicks deadline =
-        base::TimeTicks::Now() + base::Seconds(30);
+    const base::TimeTicks deadline = base::TimeTicks::Now() + base::Seconds(30);
     std::string serialized;
     while (base::TimeTicks::Now() < deadline) {
-      content::WebContents* current =
-          (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+      content::WebContents* current = (tab_id == 0)
+                                          ? GetActiveWebContents()
+                                          : GetWebContentsForTabId(tab_id);
       if (!current) {
         break;
       }
@@ -1514,9 +2142,8 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
           dict.FindString("text") ? *dict.FindString("text") : std::string();
       result.truncated = dict.FindBool("truncated").value_or(false);
       const GURL final_url(result.final_url);
-      if (!final_url.is_valid() ||
-          final_url.DeprecatedGetOriginAsURL() !=
-              url.DeprecatedGetOriginAsURL()) {
+      if (!final_url.is_valid() || final_url.DeprecatedGetOriginAsURL() !=
+                                       url.DeprecatedGetOriginAsURL()) {
         result = {};
         result.error = "Same-origin fetch blocked a cross-origin response";
       } else if (result.text.size() > kMaxFetchTextBytes) {
@@ -2281,35 +2908,20 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
                     view ? view->GetDeviceScaleFactor() : 1.f;
                 std::optional<gfx::PointF> center =
                     ComputeViewportCenterCss(update, ax, device_scale_factor);
-                bool js_clicked = false;
+                bool clicked = false;
                 if (center) {
-                  const std::string x_str =
-                      base::NumberToString(std::lround(center->x()));
-                  const std::string y_str =
-                      base::NumberToString(std::lround(center->y()));
-                  const std::string script =
-                      "(()=>{const el=document.elementFromPoint(" + x_str +
-                      "," + y_str +
-                      ");"
-                      "if(el){"
-                      "el.dispatchEvent(new "
-                      "MouseEvent('mousedown',{bubbles:true,cancelable:true,"
-                      "view:window}));"
-                      "el.dispatchEvent(new "
-                      "MouseEvent('mouseup',{bubbles:true,cancelable:true,view:"
-                      "window}));"
-                      "el.click();"
-                      "return 'ok';"
-                      "}"
-                      "return 'nopoint';})()";
-                  std::string js_res = ExecuteMcpActionJsBlocking(wc, script);
-                  if (js_res == "ok") {
-                    js_clicked = true;
-                  }
-                  maho::MahoMcpInputSynthesizer::HoverAt(
-                      wc, std::lround(center->x()), std::lround(center->y()));
+                  const int cx = std::lround(center->x());
+                  const int cy = std::lround(center->y());
+                  // Trusted input: Blink expands a real mouse press+release
+                  // into the full pointerdown -> mousedown -> pointerup ->
+                  // mouseup -> click sequence. Synthetic JS MouseEvents
+                  // (isTrusted=false) only activate native form controls and
+                  // are ignored by custom (React / pointer-event) widgets such
+                  // as menu buttons and comboboxes.
+                  clicked =
+                      maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {});
                 }
-                if (!js_clicked) {
+                if (!clicked) {
                   PerformAxAction(wc, ax, ax::mojom::Action::kDoDefault);
                 }
               }
@@ -2335,38 +2947,20 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
                     view ? view->GetDeviceScaleFactor() : 1.f;
                 std::optional<gfx::PointF> center =
                     ComputeViewportCenterCss(update, ax, device_scale_factor);
-                bool js_typed = false;
+                bool typed = false;
                 if (center) {
-                  const std::string x_str =
-                      base::NumberToString(std::lround(center->x()));
-                  const std::string y_str =
-                      base::NumberToString(std::lround(center->y()));
-                  const std::string value_json =
-                      base::GetQuotedJSONString(value);
-                  const std::string script =
-                      "(()=>{const el=document.elementFromPoint(" + x_str +
-                      "," + y_str +
-                      ");"
-                      "if(el){"
-                      "el.focus();"
-                      "if('value' in el){"
-                      "el.value=" +
-                      value_json +
-                      ";"
-                      "el.dispatchEvent(new Event('input',{bubbles:true}));"
-                      "el.dispatchEvent(new Event('change',{bubbles:true}));"
-                      "}"
-                      "return 'ok';"
-                      "}"
-                      "return 'nopoint';})()";
-                  std::string js_res = ExecuteMcpActionJsBlocking(wc, script);
-                  if (js_res == "ok") {
-                    js_typed = true;
+                  const int cx = std::lround(center->x());
+                  const int cy = std::lround(center->y());
+                  // Focus the field with a trusted click, select-all + delete
+                  // to clear any existing content, then type via trusted key
+                  // events so framework-controlled inputs fire onChange.
+                  if (maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {})) {
+                    maho::MahoMcpInputSynthesizer::KeyPress(wc, "a", {"meta"});
+                    maho::MahoMcpInputSynthesizer::KeyPress(wc, "Delete", {});
+                    typed = maho::MahoMcpInputSynthesizer::TypeText(wc, value);
                   }
-                  maho::MahoMcpInputSynthesizer::HoverAt(
-                      wc, std::lround(center->x()), std::lround(center->y()));
                 }
-                if (!js_typed) {
+                if (!typed) {
                   PerformAxAction(wc, ax, ax::mojom::Action::kFocus);
                   PerformAxAction(wc, ax, ax::mojom::Action::kSetValue, value);
                   DispatchActiveElementValueEvents(wc, value);
@@ -2420,38 +3014,46 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
                     view ? view->GetDeviceScaleFactor() : 1.f;
                 std::optional<gfx::PointF> center =
                     ComputeViewportCenterCss(update, ax, device_scale_factor);
-                bool js_selected = false;
+                bool selected = false;
                 if (center) {
-                  const std::string x_str =
-                      base::NumberToString(std::lround(center->x()));
-                  const std::string y_str =
-                      base::NumberToString(std::lround(center->y()));
-                  const std::string value_json =
-                      base::GetQuotedJSONString(select_value);
-                  const std::string script =
-                      "(()=>{const el=document.elementFromPoint(" + x_str +
-                      "," + y_str +
-                      ");"
-                      "if(el){"
-                      "el.focus();"
-                      "if('value' in el){"
-                      "el.value=" +
-                      value_json +
-                      ";"
-                      "el.dispatchEvent(new Event('input',{bubbles:true}));"
-                      "el.dispatchEvent(new Event('change',{bubbles:true}));"
-                      "}"
-                      "return 'ok';"
-                      "}"
-                      "return 'nopoint';})()";
-                  std::string js_res = ExecuteMcpActionJsBlocking(wc, script);
-                  if (js_res == "ok") {
-                    js_selected = true;
+                  const int cx = std::lround(center->x());
+                  const int cy = std::lround(center->y());
+                  // Open the (possibly custom) dropdown with a trusted click.
+                  maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {});
+                  // Re-snapshot to locate the option now that the list is
+                  // open, then click it with a trusted click. Custom options
+                  // carry no @ref and are not selectable by value assignment.
+                  ui::AXTreeUpdate opened = delegate->SnapshotAXTree(wc);
+                  std::optional<ui::AXNodeID> option_id =
+                      FindOptionNodeByText(opened, ax, select_value);
+                  if (option_id) {
+                    std::optional<gfx::PointF> option_center =
+                        ComputeViewportCenterCss(opened, *option_id,
+                                                 device_scale_factor);
+                    if (option_center) {
+                      selected = maho::MahoMcpInputSynthesizer::ClickAt(
+                          wc, std::lround(option_center->x()),
+                          std::lround(option_center->y()), {});
+                    }
                   }
-                  maho::MahoMcpInputSynthesizer::HoverAt(
-                      wc, std::lround(center->x()), std::lround(center->y()));
+                  if (!selected) {
+                    // Native <select> fallback: assign value + fire change.
+                    const std::string value_json =
+                        base::GetQuotedJSONString(select_value);
+                    const std::string script =
+                        "(()=>{const el=document.elementFromPoint(" +
+                        base::NumberToString(cx) + "," +
+                        base::NumberToString(cy) +
+                        ");"
+                        "if(el){el.focus();if('value' in el){el.value=" +
+                        value_json +
+                        ";el.dispatchEvent(new Event('input',{bubbles:true}));"
+                        "el.dispatchEvent(new Event('change',{bubbles:true}));"
+                        "}return 'ok';}return 'nopoint';})()";
+                    selected = ExecuteMcpActionJsBlocking(wc, script) == "ok";
+                  }
                 }
-                if (!js_selected) {
+                if (!selected) {
                   PerformAxAction(wc, ax, ax::mojom::Action::kFocus);
                   PerformAxAction(wc, ax, ax::mojom::Action::kSetValue,
                                   select_value);
@@ -2605,6 +3207,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
 
   std::vector<maho::MahoMcpBrowserDelegate::VaultCredentialSummary>
   VaultListCredentialsForActivePage(int tab_id) override {
+    SweepExpiredVaultCredentialLeases(base::TimeTicks::Now());
     std::vector<maho::MahoMcpBrowserDelegate::VaultCredentialSummary> summaries;
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
@@ -2614,8 +3217,19 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       return summaries;
     }
 
+    // Profile isolation: secrets may only be leased for a page owned by the
+    // profile that owns the browser-global core. Secondary regular profiles,
+    // guest/system profiles, and OTR/incognito tabs fail closed here, before
+    // any credential is read.
+    Profile* profile =
+        wc ? Profile::FromBrowserContext(wc->GetBrowserContext()) : nullptr;
+    if (!maho::IsPasswordManagerAllowedForProfile(profile)) {
+      return summaries;
+    }
+    const std::string profile_key =
+        maho::GetProfileIdentityKey(profile->GetPath(), profile->GetPrefs());
     maho::core::VaultBackendSession session =
-        maho::core::CreateVaultBackendSession(core);
+        maho::CreateVaultBackendSessionForProfile(profile);
     if (!session.is_valid()) {
       return summaries;
     }
@@ -2623,6 +3237,23 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     request.Set("origin", page_origin);
     std::string request_json;
     base::JSONWriter::Write(request, &request_json);
+
+    if (!AuthorizeAgentCredentialUse(profile_key, page_origin)) {
+      SecureZeroizeString(request_json);
+      return summaries;
+    }
+
+    // Keep the profile/exact-origin/agent-action grant check immediately next
+    // to the secret-bearing backend execution. Any lifecycle lock or teardown
+    // that lands before this point revokes the shared grant and fails closed.
+    if (!maho::passwords::MahoPasswordAuthorizationService::Get()
+             ->ConsumeAuthorization(
+                 profile_key, page_origin,
+                 maho::passwords::PasswordAuthorizationAction::
+                     kAgentCredentialUse)) {
+      SecureZeroizeString(request_json);
+      return summaries;
+    }
     maho::core::VaultBackendResult result =
         session.ExecuteCredentials(request_json);
     SecureZeroizeString(request_json);
@@ -2656,7 +3287,11 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       const std::string handle =
           "vh_" + base::Uuid::GenerateRandomV4().AsLowercaseString();
       BrowserVaultCredentialLease lease;
+      lease.profile_key = profile_key;
       lease.origin = origin;
+      lease.expires_at = base::TimeTicks::Now() +
+                         maho::passwords::MahoPasswordAuthorizationService::
+                             kAuthorizationLifetime;
       lease.username_hint = UsernameHintFromCredential(dict);
       lease.password = *password;
       if (const std::string* totp = dict.FindString("totp")) {
@@ -2671,6 +3306,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       summaries.push_back(std::move(summary));
     }
     TrimVaultCredentialMaps();
+    ScheduleVaultCredentialExpiry();
     return summaries;
   }
 
@@ -2678,13 +3314,19 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       int tab_id,
       const std::string& handle,
       const std::string& origin) override {
+    const base::TimeTicks now = base::TimeTicks::Now();
+    SweepExpiredVaultCredentialLeases(now);
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    Profile* profile =
+        wc ? Profile::FromBrowserContext(wc->GetBrowserContext()) : nullptr;
     if (OriginForWebContents(wc) != origin) {
       return std::nullopt;
     }
     auto it = vault_credential_handles_.find(handle);
-    if (it == vault_credential_handles_.end() || it->second.origin != origin) {
+    if (it == vault_credential_handles_.end() ||
+        !IsVaultCredentialLeaseProfileAllowed(it->second, profile) ||
+        it->second.origin != origin || it->second.expires_at <= now) {
       return std::nullopt;
     }
     BrowserVaultCredentialLease lease = std::move(it->second);
@@ -2694,6 +3336,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
         "vg_" + base::Uuid::GenerateRandomV4().AsLowercaseString();
     vault_credential_grants_.emplace(grant_handle, std::move(lease));
     TrimVaultCredentialMaps();
+    ScheduleVaultCredentialExpiry();
     return grant_handle;
   }
 
@@ -2711,28 +3354,35 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
 
   void StartNetworkCapture(const std::string& capture_id,
                            int tab_id,
+                           const maho::ResolvedMahoMcpTarget& target,
                            StartNetworkCaptureCallback callback) override {
+    callback = base::BindPostTask(content::GetIOThreadTaskRunner({}),
+                                  std::move(callback));
     if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
       content::GetUIThreadTaskRunner({})->PostTask(
           FROM_HERE,
           base::BindOnce(&MahoMcpBrowserDelegateImpl::StartNetworkCaptureOnUi,
-                         ui_weak_ptr_, capture_id, tab_id,
+                         ui_weak_ptr_, capture_id, tab_id, target,
                          std::move(callback)));
       return;
     }
-    StartNetworkCaptureOnUi(capture_id, tab_id, std::move(callback));
+    StartNetworkCaptureOnUi(capture_id, tab_id, target, std::move(callback));
   }
 
   void StopNetworkCapture(const std::string& capture_id,
+                          const maho::ResolvedMahoMcpTarget& target,
                           StopNetworkCaptureCallback callback) override {
+    callback = base::BindPostTask(content::GetIOThreadTaskRunner({}),
+                                  std::move(callback));
     if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
       content::GetUIThreadTaskRunner({})->PostTask(
           FROM_HERE,
           base::BindOnce(&MahoMcpBrowserDelegateImpl::StopNetworkCaptureOnUi,
-                         ui_weak_ptr_, capture_id, std::move(callback)));
+                         ui_weak_ptr_, capture_id, target,
+                         std::move(callback)));
       return;
     }
-    StopNetworkCaptureOnUi(capture_id, std::move(callback));
+    StopNetworkCaptureOnUi(capture_id, target, std::move(callback));
   }
 
   void CancelNetworkCapture(const std::string& capture_id) override {
@@ -2740,7 +3390,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       content::GetUIThreadTaskRunner({})->PostTask(
           FROM_HERE,
           base::BindOnce(&MahoMcpBrowserDelegateImpl::CancelNetworkCaptureOnUi,
-                         ui_weak_ptr_, capture_id));
+                         ui_weak_ptr_, capture_id, true));
       return;
     }
     CancelNetworkCaptureOnUi(capture_id);
@@ -2749,7 +3399,18 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
  private:
   void StartNetworkCaptureOnUi(const std::string& capture_id,
                                int tab_id,
+                               const maho::ResolvedMahoMcpTarget& target,
                                StartNetworkCaptureCallback callback) {
+    if (canceled_network_capture_ids_.erase(capture_id)) {
+      std::move(callback).Run(StartNetworkCaptureResult{});
+      return;
+    }
+    if (target.valid && !RevalidateTarget(target)) {
+      StartNetworkCaptureResult result;
+      result.target_valid = false;
+      std::move(callback).Run(std::move(result));
+      return;
+    }
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
     if (!wc || capture_id.empty() ||
@@ -2776,29 +3437,130 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
   }
 
   void StopNetworkCaptureOnUi(const std::string& capture_id,
+                              const maho::ResolvedMahoMcpTarget& target,
                               StopNetworkCaptureCallback callback) {
+    if (target.valid && !RevalidateTarget(target)) {
+      CancelNetworkCaptureOnUi(capture_id, false);
+      StopNetworkCaptureResult result;
+      result.target_valid = false;
+      std::move(callback).Run(std::move(result));
+      return;
+    }
+    StopNetworkCaptureResult result;
     auto it = network_observers_.find(capture_id);
     if (it == network_observers_.end()) {
-      std::move(callback).Run(std::nullopt);
+      std::move(callback).Run(std::move(result));
       return;
     }
     std::unique_ptr<maho::MahoMcpNetworkObserver> observer =
         std::move(it->second);
     network_observers_.erase(it);
     observer->StopCapture();
-    auto har = observer->GetHar();
-    std::move(callback).Run(std::move(har));
+    result.har = observer->GetHar();
+    std::move(callback).Run(std::move(result));
   }
 
-  void CancelNetworkCaptureOnUi(const std::string& capture_id) {
+  void CancelNetworkCaptureOnUi(const std::string& capture_id,
+                                bool record_tombstone = true) {
     auto it = network_observers_.find(capture_id);
     if (it == network_observers_.end()) {
+      if (record_tombstone) {
+        canceled_network_capture_ids_.insert(capture_id);
+      }
       return;
     }
     std::unique_ptr<maho::MahoMcpNetworkObserver> observer =
         std::move(it->second);
     network_observers_.erase(it);
     observer->StopCapture();
+  }
+
+  bool IsVaultCredentialLeaseProfileAllowed(
+      const BrowserVaultCredentialLease& lease,
+      Profile* profile) const {
+    return maho::IsPasswordManagerAllowedForProfile(profile) &&
+           lease.profile_key == maho::GetProfileIdentityKey(
+                                    profile->GetPath(), profile->GetPrefs());
+  }
+
+  bool AuthorizeAgentCredentialUse(const std::string& profile_key,
+                                   const std::string& page_origin) {
+    auto* authorization_service =
+        maho::passwords::MahoPasswordAuthorizationService::Get();
+    if (authorization_service->ConsumeAuthorization(
+            profile_key, page_origin,
+            maho::passwords::PasswordAuthorizationAction::
+                kAgentCredentialUse)) {
+      return true;
+    }
+
+    const auto request_key = std::make_pair(profile_key, page_origin);
+    if (!pending_agent_credential_authorizations_.insert(request_key).second) {
+      return false;
+    }
+    authorization_service->AuthorizeForProfile(
+        profile_key, page_origin,
+        maho::passwords::PasswordAuthorizationAction::kAgentCredentialUse,
+        u"Allow the AI agent to use credentials for this site",
+        base::BindOnce(
+            &MahoMcpBrowserDelegateImpl::OnAgentCredentialAuthorizationComplete,
+            weak_factory_.GetWeakPtr(), request_key));
+    return false;
+  }
+
+  void OnAgentCredentialAuthorizationComplete(
+      std::pair<std::string, std::string> request_key,
+      bool) {
+    pending_agent_credential_authorizations_.erase(request_key);
+  }
+
+  void OnVaultLockStateChanged(bool locked) {
+    if (locked) {
+      RevokeVaultCredentialLeases();
+    }
+  }
+
+  void SweepExpiredVaultCredentialLeases(base::TimeTicks now) {
+    auto erase_expired = [now](auto& leases) {
+      for (auto it = leases.begin(); it != leases.end();) {
+        if (it->second.expires_at <= now) {
+          it = leases.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    };
+    erase_expired(vault_credential_handles_);
+    erase_expired(vault_credential_grants_);
+    ScheduleVaultCredentialExpiry();
+  }
+
+  void ScheduleVaultCredentialExpiry() {
+    std::optional<base::TimeTicks> next_expiry;
+    auto include_expiry = [&next_expiry](const auto& leases) {
+      for (const auto& entry : leases) {
+        const BrowserVaultCredentialLease& lease = entry.second;
+        if (!next_expiry || lease.expires_at < *next_expiry) {
+          next_expiry = lease.expires_at;
+        }
+      }
+    };
+    include_expiry(vault_credential_handles_);
+    include_expiry(vault_credential_grants_);
+    if (!next_expiry) {
+      vault_credential_expiry_timer_.Stop();
+      return;
+    }
+    vault_credential_expiry_timer_.Start(
+        FROM_HERE,
+        std::max(base::TimeDelta(), *next_expiry - base::TimeTicks::Now()),
+        base::BindOnce(
+            &MahoMcpBrowserDelegateImpl::OnVaultCredentialExpiryTimer,
+            base::Unretained(this)));
+  }
+
+  void OnVaultCredentialExpiryTimer() {
+    SweepExpiredVaultCredentialLeases(base::TimeTicks::Now());
   }
 
   void TrimVaultCredentialMaps() {
@@ -2814,6 +3576,7 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
                       const std::string& grant_handle,
                       ui::AXNodeID ax_id,
                       bool fill_totp) {
+    SweepExpiredVaultCredentialLeases(base::TimeTicks::Now());
     auto it = vault_credential_grants_.find(grant_handle);
     if (it == vault_credential_grants_.end()) {
       return false;
@@ -2821,24 +3584,40 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
     BrowserVaultCredentialLease lease = std::move(it->second);
     vault_credential_grants_.erase(it);
 
-    std::string value =
-        fill_totp ? std::move(lease.totp) : std::move(lease.password);
-    if (value.empty()) {
-      return false;
-    }
-    bool filled = FillVaultValueIntoAxNode(tab_id, ax_id, value);
-    SecureZeroizeString(value);
-    return filled;
-  }
-
-  bool FillVaultValueIntoAxNode(int tab_id,
-                                ui::AXNodeID ax_id,
-                                const std::string& value) {
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
-    if (!wc) {
+    Profile* profile =
+        wc ? Profile::FromBrowserContext(wc->GetBrowserContext()) : nullptr;
+    const std::string page_origin = OriginForWebContents(wc);
+    if (!maho::IsPasswordManagerAllowedForProfile(profile) ||
+        lease.profile_key != maho::GetProfileIdentityKey(profile->GetPath(),
+                                                         profile->GetPrefs()) ||
+        lease.origin != page_origin ||
+        lease.expires_at <= base::TimeTicks::Now()) {
       return false;
     }
+
+    const std::string& leased_value = fill_totp ? lease.totp : lease.password;
+    if (leased_value.empty()) {
+      return false;
+    }
+
+    // Final fail-closed check against the exact page context immediately
+    // before exposing the one-shot plaintext lease to the fill path.
+    if (!maho::passwords::MahoPasswordAuthorizationService::Get()
+             ->ConsumeAuthorization(
+                 lease.profile_key, page_origin,
+                 maho::passwords::PasswordAuthorizationAction::
+                     kAgentCredentialUse)) {
+      return false;
+    }
+    return FillVaultValueIntoAxNode(wc, ax_id, leased_value);
+  }
+
+  bool FillVaultValueIntoAxNode(content::WebContents* wc,
+                                ui::AXNodeID ax_id,
+                                const std::string& value) {
+    DCHECK(wc);
     ui::AXTreeUpdate update = SnapshotAXTree(wc);
     content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
     const float device_scale_factor = view ? view->GetDeviceScaleFactor() : 1.f;
@@ -2879,11 +3658,16 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
 
   std::unordered_map<std::string, std::unique_ptr<maho::MahoMcpNetworkObserver>>
       network_observers_;
+  std::set<std::string> canceled_network_capture_ids_;
   static constexpr size_t kMaxVaultCredentialHandles = 1024;
   std::unordered_map<std::string, BrowserVaultCredentialLease>
       vault_credential_handles_;
   std::unordered_map<std::string, BrowserVaultCredentialLease>
       vault_credential_grants_;
+  base::CallbackListSubscription vault_lock_state_subscription_;
+  base::OneShotTimer vault_credential_expiry_timer_;
+  std::set<std::pair<std::string, std::string>>
+      pending_agent_credential_authorizations_;
   static constexpr size_t kMaxResolvedTargets = 1024;
   int64_t generation_counter_ = 0;
   // Owned per-generation identity tokens minted by ResolveTab/ProfileTarget and
@@ -2902,6 +3686,31 @@ MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
 
 }  // namespace
 
+void MahoBrowserMainExtraParts::AddMcpVaultCredentialLeaseForTesting(
+    base::TimeTicks expires_at,
+    bool promoted,
+    Profile* lease_profile) {
+  GetMcpBrowserDelegate()->AddVaultCredentialLeaseForTesting(
+      expires_at, promoted, lease_profile);
+}
+
+void MahoBrowserMainExtraParts::SweepMcpVaultCredentialLeasesForTesting(
+    base::TimeTicks now) {
+  GetMcpBrowserDelegate()->SweepVaultCredentialLeasesForTesting(now);
+}
+
+bool MahoBrowserMainExtraParts::PromoteMcpVaultCredentialLeaseForTesting(
+    Profile* resolved_profile,
+    base::TimeTicks now) {
+  return GetMcpBrowserDelegate()->PromoteVaultCredentialLeaseForTesting(
+      resolved_profile, now);
+}
+
+size_t MahoBrowserMainExtraParts::McpVaultCredentialLeaseCountForTesting()
+    const {
+  return GetMcpBrowserDelegate()->VaultCredentialLeaseCountForTesting();
+}
+
 void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
                                                 bool is_initial_profile) {
   const bool is_regular = profile ? profile->IsRegularProfile() : false;
@@ -2914,6 +3723,7 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
     return;
   }
   if (profile && is_regular) {
+    EnsureMailNotificationCoordinator(profile);
     maho::MahoMcpSession::SetBrowserDelegate(GetMcpBrowserDelegate());
     if (auto* artifact_registry =
             maho::ai::MahoArtifactRegistry::GetForProfile(profile)) {
@@ -2977,9 +3787,9 @@ void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
     }
   }
 
+  MahoSpaceThemeState::Clear();
+  ShutdownCoreAndServices();
   if (core_) {
-    MahoSpaceThemeState::Clear();
-    ShutdownCoreAndServices();
     LOG(INFO) << "Maho core destroyed";
   }
 }
@@ -3015,9 +3825,13 @@ void MahoBrowserMainExtraParts::StopObservingPowerSuspend() {
 void MahoBrowserMainExtraParts::LockVaultForLifecycle() {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   maho::core::LockVault(core_);
+  maho::passwords::MahoPasswordAuthorizationService::Get()->RevokeAll();
+  GetMcpBrowserDelegate()->RevokeVaultCredentialLeases();
+  maho::NotifyVaultLockStateChanged(/*locked=*/true);
 }
 
 void MahoBrowserMainExtraParts::ShutdownCoreAndServices() {
+  mail_notification_coordinators_->Clear();
   if (!core_) {
     return;
   }
@@ -3028,6 +3842,8 @@ void MahoBrowserMainExtraParts::ShutdownCoreAndServices() {
   // service); stop routines; save; SetCore(nullptr); destroy; null the core.
   StopObservingPowerSuspend();
   maho::core::LockVault(core_);
+  maho::passwords::MahoPasswordAuthorizationService::Get()->RevokeAll();
+  GetMcpBrowserDelegate()->RevokeVaultCredentialLeases();
   maho::QuiesceBlockerWork();
   maho::MahoContentBlockerUpdateService::SetDesignatedUpdater(nullptr);
   if (g_browser_process) {
@@ -3043,6 +3859,10 @@ void MahoBrowserMainExtraParts::ShutdownCoreAndServices() {
     }
   }
   routines_scheduler_.reset();
+  // The Vault was locked above; tell every lock-state subscriber before the
+  // core goes away. This also restores the fail-closed broadcast baseline so a
+  // later core cannot inherit a stale "unlocked" state.
+  maho::NotifyVaultLockStateChanged(/*locked=*/true);
   maho::core::SaveState(core_);
   maho::QuiesceCoreTasksAndWait();
   maho::SetCore(nullptr);
@@ -3102,8 +3922,10 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   }
   regular_services_initializing_ = true;
   regular_profile_ = profile;
-  maho::SetMahoMailNotificationCallback(
-      base::BindRepeating(&ShowMahoMailNotification));
+  EnsureMailNotificationCoordinator(profile);
+
+  // Core initialization remains one-time; notification ownership is per
+  // regular profile and is established independently above.
 
 #if BUILDFLAG(IS_MAC)
   // Ensure the Mach-port rendezvous server exists before launching the mail
@@ -3122,9 +3944,41 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&CreateDirectoryOnThreadPool, storage_path_),
-      base::BindOnce(
-          &MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady,
-          weak_factory_.GetWeakPtr(), profile));
+      base::BindOnce(&MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady,
+                     weak_factory_.GetWeakPtr(), profile));
+}
+
+void MahoBrowserMainExtraParts::EnsureMailNotificationCoordinator(
+    Profile* profile) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (!profile || !profile->IsRegularProfile() ||
+      mail_notification_coordinators_->Contains(profile)) {
+    return;
+  }
+  if (!EnsureMahoMailNotificationHandler(profile)) {
+    return;
+  }
+  mail_notification_coordinators_->Ensure(
+      profile,
+      base::BindRepeating(
+          [](Profile* profile)
+              -> std::unique_ptr<maho::MahoMailNotificationCoordinator> {
+            maho::MahoMailService* mail_service =
+                maho::MahoMailServiceFactory::GetForProfile(profile);
+            if (!mail_service) {
+              return nullptr;
+            }
+            return std::make_unique<maho::MahoMailNotificationCoordinator>(
+                profile, mail_service,
+                base::BindRepeating(&DisplayMahoMailNotification, profile),
+                base::BindRepeating(&WithdrawMahoMailNotification, profile),
+                base::BindRepeating(&RouteMahoMailNotification, profile),
+                base::BindRepeating(
+                    [](maho::MahoMailService* service) {
+                      return service->behavior_snapshot();
+                    },
+                    mail_service));
+          }));
 }
 
 void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
@@ -3145,7 +3999,14 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
   }
 
   base::FilePath key_path = storage_path_.AppendASCII("maho_storage.key");
-  if (maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe())) {
+  base::FilePath database_path = storage_path_.AppendASCII("maho.db");
+  const maho::core::StorageKeySetupResult storage_key_setup =
+      maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe(),
+                                         database_path.AsUTF8Unsafe());
+  LOG(INFO) << "Maho Vault preflight state: "
+            << maho::core::VaultPreflightStateName(
+                   storage_key_setup.vault_preflight_state);
+  if (storage_key_setup.storage_key_ready) {
     core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
   } else {
     LOG(ERROR) << "Maho storage key derivation/setting failed; password "
@@ -3153,7 +4014,7 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
   }
 
   if (core_) {
-    maho::SetCore(core_);
+    maho::SetCoreForProfile(core_, profile);
     maho::core::InstallLogCallback();
     maho::core::LoadState(core_);
     StartObservingPowerSuspend();
@@ -3215,8 +4076,7 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
   const bool login_gate_bypassed =
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           "maho-disable-login-gate");
-  const bool has_valid_relay_session =
-      maho::auth::HasValidRelaySession(prefs);
+  const bool has_valid_relay_session = maho::auth::HasValidRelaySession(prefs);
   const bool needs_login_gate = maho::welcome::IsLoginGateActive(
       login_gate_bypassed, has_valid_relay_session);
 

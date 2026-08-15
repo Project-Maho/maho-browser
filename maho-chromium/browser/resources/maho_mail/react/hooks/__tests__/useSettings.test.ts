@@ -36,12 +36,12 @@ describe("useSettings", () => {
   it("returns default values when localStorage is empty", () => {
     const { result } = renderHook(() => useSettings());
 
-    expect(result.current.syncInterval).toBe(0);
+    expect(result.current.syncInterval).toBe(15);
     expect(result.current.sidebarWidth).toBe(240);
     expect(result.current.sidebarCollapsed).toBe(true);
     expect(result.current.fontSize).toBe(14);
     expect(result.current.density).toBe("comfortable");
-    expect(result.current.desktopNotifications).toBe(false);
+    expect(result.current.desktopNotifications).toBe(true);
     expect(result.current.soundEnabled).toBe(true);
   });
 
@@ -50,7 +50,7 @@ describe("useSettings", () => {
 
     const { result } = renderHook(() => useSettings());
 
-    expect(result.current.syncInterval).toBe(300);
+    expect(result.current.syncInterval).toBe(5);
   });
 
   it("replaces a conflicting startup cache with backend settings", async () => {
@@ -65,11 +65,11 @@ describe("useSettings", () => {
 
     const { result } = renderHook(() => useSettings());
 
-    expect(result.current.syncInterval).toBe(300);
+    expect(result.current.syncInterval).toBe(5);
     await act(async () => {
       await Promise.resolve();
     });
-    expect(result.current.syncInterval).toBe(900);
+    expect(result.current.syncInterval).toBe(15);
     expect(result.current.blockRemoteImages).toBe(false);
   });
 
@@ -174,8 +174,8 @@ describe("useSettings", () => {
       result.current.setSyncInterval(600);
     });
 
-    expect(result.current.syncInterval).toBe(600);
-    expect(JSON.parse(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1") ?? "{}").sync_interval).toBe(600);
+    expect(result.current.syncInterval).toBe(15);
+    expect(JSON.parse(localStorageMock.getItem("maho-mail-behavior-prefs-cache-v1") ?? "{}").sync_interval).toBe(15);
   });
 
   it("setSidebarWidth updates state and immediately persists to localStorage", () => {

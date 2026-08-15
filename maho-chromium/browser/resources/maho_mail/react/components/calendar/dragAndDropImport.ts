@@ -1,4 +1,6 @@
-export type DragAndDropWrapper = (component: unknown) => unknown;
+import type withDragAndDrop from "react-big-calendar/lib/addons/dragAndDrop";
+
+export type DragAndDropWrapper = typeof withDragAndDrop;
 
 type DragAndDropExport =
   | DragAndDropWrapper

@@ -5,7 +5,11 @@
 **Branch:** main
 
 ## OVERVIEW
-Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells (macOS/iOS/Android). Also includes Maho Mail (Tauri) and Maho Website (Astro). Brave-style architecture — `maho-chromium` patches upstream Chromium, `maho` crates provide backend logic via FFI bridge.
+Maho Browser monorepo: Rust core crates + Chromium overlay fork + native shells
+(macOS/iOS/Android). It includes integrated desktop Mail, a legacy/reference
+Tauri Mail tree, and Maho Website (Astro). Brave-style architecture —
+`maho-chromium` patches upstream Chromium and `maho` crates provide backend
+logic via the FFI bridge.
 
 ## COMMUNICATION (MANDATORY)
 - **한국어로 답할 때는 항상 존댓말로, 공손하게 답한다.** 반말 금지. 사용자를 친구처럼 대하지 말 것.
@@ -34,7 +38,7 @@ maho-workspace/
 │   ├── components/     # Mojo IDL, shared constants
 │   ├── third_party/maho/ # maho-core prebuilt static lib + C++ bridge
 │   └── build/          # GN config + build scripts
-├── mail/               # Maho Mail (Tauri v2 + React 19; separate Cargo workspace)
+├── mail/               # Legacy/reference Tauri Mail workspace
 ├── website/            # Maho Website (Astro 6 + Starlight)
 ├── chromium/           # Upstream Chromium source (gitignored, ~121GB, gclient-managed)
 └── docs/               # Design docs
@@ -48,8 +52,9 @@ maho-workspace/
 | FFI bridge (Rust→C++) | `maho/crates/maho-ffi/` → `maho-chromium/third_party/maho/` | |
 | Chromium UI features | `maho-chromium/browser/ui/` | Views + WebUI surfaces |
 | WebUI resources (TS) | `maho-chromium/browser/resources/` | Per-feature app.ts + HTML |
-| Maho Mail (Frontend) | `mail/src/` | React 19 + Vite |
-| Maho Mail (Rust) | `mail/src-tauri/` | Tauri v2 commands/state |
+| Maho Mail (shipped UI) | `maho-chromium/browser/resources/maho_mail/` | Browser-integrated Mail WebUI at `chrome://maho-mail`. Canonical owner for all Mail product work. |
+| Maho Mail (helper + backend) | `maho-chromium/browser/mail_helper/` + `maho/mail-core/` | Profile-scoped helper process and mail engine |
+| Maho Mail (legacy Tauri reference) | `mail/src/`, `mail/src-tauri/` | Reference-only workspace. No standalone Mail app or `maho-mail` binary ships. See `mail/AGENTS.md`. |
 | Maho Website | `website/src/` | Astro pages & Starlight docs |
 | Upstream overrides | `maho-chromium/chromium_src/` | Brave-style #define + #include |
 | Sync relay server | `maho/relay/` | Standalone workspace; do NOT add to root Cargo.toml. See `maho/relay/AGENTS.md` |
@@ -81,9 +86,11 @@ maho-workspace/
 - Subtree AGENTS.md files take precedence over this root guide
 
 ## CURRENT SHIP STATUS
-- **Maho Mail is deferred from the current ship.** Do not expose or reactivate Mail without explicit user approval and a completed security/integrity remediation pass.
-- **Reactivated on the current working branch under explicit user approval (2026-08-06).** The Mail feature set was implemented and runtime-verified here: (A) Gmail new-mail sync into Inbox, (B) sidebar mail-icon unread badge + macOS Dock badge with a `maho.mail.badge_enabled` toggle, (C) OS new-mail notification gated by `maho.mail.notifications_enabled`, (D) remote image loading via the sanitizing `chrome://image` proxy, and (E) main Maho Agent Mail-broker access. The login profile runs with `maho.mail.enabled=true`. Because this reactivation is intentional and user-approved, do NOT treat the now-visible sidebar Mail entry, the badge, or the enabled state as a defect and do NOT re-hide them. The formal security/integrity remediation sign-off remains the gate before shipping Mail enabled in the public build — enabling it here does not by itself lift that ship-level gate.
-- Runtime defer gates are intentionally left in place while the bundle may still build: sidebar Mail entry hidden in `maho_sidebar_top_bar_view.cc`, `chrome://maho-mail` disabled via `MahoMailUIConfig::IsWebUIEnabled()`, helper launch blocked by `kMahoMailDeferred`, and Maho Mail settings panes hidden by `MAIL_DEFERRED`. (Where the reactivation branch above enables these surfaces via `maho.mail.enabled=true`, that override is deliberate; the gates remain the default-off ship posture.)
+- **Maho Mail is an opt-in Beta.** New profiles default to `maho.mail.enabled=false`; users enable it only from the always-visible Features pane in Maho Settings. Existing profiles that explicitly stored `true` remain enabled.
+- The Mail feature set includes Gmail sync, sidebar and macOS Dock unread badges, OS notifications, sanitized remote images, and Maho Agent Mail-broker access. Disabling the Settings toggle live-hides the sidebar entry, shuts down the helper, rejects agent Mail tools, and closes active Mail WebUI handlers.
+- **Browser-integrated Mail is the only Mail that ships.** `mail/` is a legacy Tauri reference tree. No standalone Mail application, `maho-mail` binary, or `maho-mcp` binary is distributed; Mail lives at `chrome://maho-mail`, CLI access goes through `maho mail <subcommand>`, and MCP access goes through the browser's in-process MCP server.
+- **Mail agent access has three gates and fixed denial reason codes.** `maho.mail.enabled` (feature), helper lifecycle readiness, and `maho.ai.mail_read_allowed` (read consent, default false). Denials return, in evaluation order, `mail_tool_unknown`, `mail_feature_disabled`, `mail_helper_starting` or `mail_helper_unavailable`, `mail_global_policy_denied`, `mail_read_consent_required`. Completion-time and surface-specific denials also include `mail_helper_generation_changed` and `mail_tool_not_available_on_agent`. Writes and account mutations never inherit a global allow; they resolve to `mail_typed_approval_required` and return `mail_typed_approval_denied` when the user rejects the prompt. These strings are a public contract shared by `maho-chromium/browser/ai/maho_mail_tool_authorization.h`, `maho/crates/maho-agent/src/permission.rs`, and the website docs. Do not rename one side alone.
+- Mail WebUI/resources/helper targets remain bundled while runtime-gated by `maho.mail.enabled`. Do not remove those targets as part of feature work; bundle cleanup is separate shared-build infrastructure work.
 - Keeping the WebUI/resources/helper targets in the bundle is acceptable for now; they are unreachable dead weight. Removing them from GN/build scripts is a separate cleanup requiring explicit approval because it touches shared build infrastructure.
 
 ## LOCALIZATION — ENGLISH ONLY (i18n SHELVED)
@@ -92,7 +99,7 @@ maho-workspace/
 - **Do not build new localization infrastructure.** No `.grd`/`.grdp` files, no new `GetLocalizedStrings` mojom seams, no per-surface JSON locale bundles. Adding one requires explicit user approval reversing this decision.
 - Existing localization assets are left in place, not extended:
   - `maho_welcome` has a mojom `GetLocalizedStrings` seam (201 `IDS_MAHO_WELCOME_*` keys). It works; leave it alone. Do not replicate the pattern elsewhere.
-  - `maho_mail` carries `react/i18n/locales/{en,ko}.json` (846 lines each, translated). Mail is deferred, so this is unreachable dead weight. Do not act on it.
+  - `maho_mail` carries `react/i18n/locales/{en,ko}.json` (846 lines each, translated). Maho ships English only; do not extend these assets.
   - The built app bundles 456 upstream Chromium locale `.pak` files including `ko.lproj`. That is inherited upstream behavior, **not** a Maho localization commitment.
 - Shelving record: `plan/settings-i18n-localization-seam-2026-07-30.md` (marked SHELVED) retains the string-surface sizing (~400-500 occurrences) and the two candidate mechanisms, should localization ever be revived.
 
@@ -136,8 +143,9 @@ The lock is **automatically released** when the holding process exits (normal ex
 cd maho && bun run typecheck          # cargo check --workspace
 cd maho && bun run test               # cargo test --workspace
 
-# Maho Mail
-cd mail && bun run tauri dev          # Run Tauri dev
+# Maho Mail (legacy Tauri reference workspace only — NOT the shipped Mail app)
+# Shipped Mail is Browser-integrated: build the browser and open chrome://maho-mail.
+cd mail && bun run tauri dev          # Run the legacy Tauri reference app
 cd mail && bun run test               # vitest (frontend)
 cd mail && cargo test                 # Rust tests (run inside mail/ folder)
 

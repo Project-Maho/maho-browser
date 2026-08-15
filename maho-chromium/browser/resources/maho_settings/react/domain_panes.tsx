@@ -7,6 +7,7 @@ import {ShortcutsPane} from './shortcuts/index.js';
 import {PasswordsPane} from './passwords_settings.js';
 import {SavedPasswordsPane} from './passwords_library.js';
 import {MailAccountsPane} from './mail_accounts.js';
+import {MailPane} from './mail_overview.js';
 import {MailSignaturesPane} from './mail_signatures.js';
 import {MailRulesPane} from './mail_rules.js';
 import {MailCalendarPane} from './mail_calendar.js';
@@ -310,6 +311,8 @@ export function DomainPaneContent(
       return <SavedPasswordsPane pane={pane} settings={settings} store={store} />;
     case 'mail':
       return <MailAccountsPane pane={pane} store={store} />;
+    case 'mail-overview':
+      return <MailPane pane={pane} settings={settings} store={store} />;
     case 'autofill':
       return <AutofillPane pane={pane} store={store} />;
     case 'shortcuts':
@@ -561,7 +564,8 @@ export function ActionButton(
 }
 
 export function Toggle(
-    {disabled, enabled, label, onToggle}: {
+    {ariaDescribedBy, disabled, enabled, label, onToggle}: {
+      ariaDescribedBy?: string;
       disabled?: boolean;
       enabled: boolean;
       label: string;
@@ -576,6 +580,7 @@ export function Toggle(
         checked={enabled}
         disabled={disabled || isBusy}
         aria-label={label}
+        aria-describedby={ariaDescribedBy}
         onCheckedChange={async (checked) => {
           if (isBusy) return;
           if (mountedRef.current) {
@@ -611,6 +616,53 @@ export function ManagedSettingRow(
       </div>
       <div className={cn(SETTING_CONTROL_CLASS, controlClassName)}>{children}</div>
     </section>
+  );
+}
+
+export function AiMailReadConsentSetting(
+    {allowed, onSave}: {
+      allowed: boolean;
+      onSave: (allowed: boolean) => Promise<boolean>;
+    }) {
+  const descriptionId = 'ai-mail-read-consent-description';
+  const [displayedAllowed, setDisplayedAllowed] = useState(allowed);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDisplayedAllowed(allowed);
+  }, [allowed]);
+
+  return (
+    <ManagedSettingRow
+      description={
+        <span id={descriptionId}>
+          Permit AI reads of Mail accounts, folders, message metadata, and message bodies.
+          This permission is off by default and can be revoked at any time.
+        </span>
+      }
+      title="Allow AI to read Mail">
+      <div className="flex flex-col items-end gap-2">
+        <Toggle
+          ariaDescribedBy={descriptionId}
+          enabled={displayedAllowed}
+          label="Allow AI to read Mail"
+          onToggle={async nextAllowed => {
+            setSaveError(null);
+            setDisplayedAllowed(nextAllowed);
+            const saved = await onSave(nextAllowed);
+            if (!saved) {
+              setDisplayedAllowed(allowed);
+              setSaveError('Could not save Mail access. Your previous setting was restored.');
+            }
+          }}
+        />
+        {saveError ? (
+          <p className="max-w-72 text-right text-xs text-destructive" role="alert">
+            {saveError}
+          </p>
+        ) : null}
+      </div>
+    </ManagedSettingRow>
   );
 }
 
@@ -779,6 +831,18 @@ function MahoMiniPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                   label="Command+Option+Click override"
                   onToggle={async nextEnabled => {
                     await store.commitSettingValue('atc.maho_mini_click_override_enabled', nextEnabled ? 'true' : 'false');
+                  }}
+                />
+              </ManagedSettingRow>
+              <ManagedSettingRow
+                description="Open external links in Maho Mini from other applications."
+                title="Open external links in Maho Mini"
+                className="px-6 py-4">
+                <Toggle
+                  enabled={settings.find(s => s.key === 'atc.open_external_links_in_maho_mini')?.value === 'true'}
+                  label="Open external links in Maho Mini"
+                  onToggle={async nextEnabled => {
+                    await store.commitSettingValue('atc.open_external_links_in_maho_mini', nextEnabled ? 'true' : 'false');
                   }}
                 />
               </ManagedSettingRow>
@@ -1457,6 +1521,10 @@ function LocalServerModelPickerRow({
 
 function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
+  const settingsState = useSettingsStoreState(store);
+  const conversationAutoArchiveDays =
+      settingsState.settings.find(
+          setting => setting.key === 'conversation.auto_archive_after_days')?.value ?? '-1';
   const [actionError, setActionError] = useState<string | null>(null);
   const [state, setState] = useState<LoadState<AISettings>>(createLoadingState());
 
@@ -1588,6 +1656,25 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
             </SectionCard>
           </div>
 
+          <div className="mb-6">
+            <SectionCard title="Permissions">
+              <AiMailReadConsentSetting
+                allowed={state.data.mailReadAllowed}
+                onSave={async allowed => {
+                  try {
+                    const {success} = await handler.setAIMailReadAllowed(allowed);
+                    if (success) {
+                      await loadSettings();
+                    }
+                    return success;
+                  } catch {
+                    return false;
+                  }
+                }}
+              />
+            </SectionCard>
+          </div>
+
           <McpAgentGuidanceSettingsSection store={store} />
 
           <div className="mb-6">
@@ -1635,6 +1722,23 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
                   {value: 'deny', label: 'Block all tool calls'},
                 ]}
                 onCommit={async (value) => { await commit(async () => { await handler.setAIApprovalPolicy(value); }); }}
+              />
+            </SectionCard>
+          </div>
+
+          <div className="mb-6">
+            <SectionCard title="Conversations">
+              <AiSelectRow
+                label="Auto-archive inactive conversations after"
+                initialValue={conversationAutoArchiveDays}
+                options={SETTING_METADATA['conversation.auto_archive_after_days']?.options ?? []}
+                onCommit={async value => {
+                  await commit(async () => {
+                    const saved = await store.commitSettingValue(
+                        'conversation.auto_archive_after_days', value);
+                    if (!saved) throw new Error('Failed to save auto-archive policy');
+                  });
+                }}
               />
             </SectionCard>
           </div>

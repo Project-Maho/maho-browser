@@ -14,7 +14,7 @@ hooks/
 ├── useHotkeys.ts           # Keyboard shortcut registration
 ├── useMobileNavigation.ts  # Mobile screen stack
 ├── useTheme.ts / useSettings.ts / useTranslation.ts
-├── useAppLifecycle.ts / useAppUpdate.ts / useAuthStatus.ts
+├── useAppLifecycle.ts / useAuthStatus.ts
 ├── useNetworkStatus.ts / useNotifications.ts / useTrayBadge.ts
 ├── useDeepLink.ts / useEmailSecurity.ts
 └── *.test.ts[x]            # Hook tests, mostly co-located

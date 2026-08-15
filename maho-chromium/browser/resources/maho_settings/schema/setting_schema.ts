@@ -29,6 +29,18 @@ export const TODAY_TAB_TIMEOUT_OPTIONS = [
   {value: '48', label: '48 hours'},
 ];
 
+export const NEW_TAB_POSITION_OPTIONS = [
+  {value: 'top', label: 'Top of the list'},
+  {value: 'bottom', label: 'Bottom of the list'},
+];
+
+export const CONVERSATION_AUTO_ARCHIVE_OPTIONS = [
+  {value: '-1', label: 'Off'},
+  {value: '3', label: '3 days'},
+  {value: '7', label: '7 days'},
+  {value: '30', label: '30 days'},
+];
+
 export const PINNED_CLOSE_BEHAVIOR_OPTIONS = [
   {value: 'switch', label: 'Switch to the next tab'},
   {value: 'reset', label: 'Reset the pinned tab'},
@@ -257,6 +269,29 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'sidebar.new_tab_position',
+    metadata: {
+      scope: 'core-global',
+      selectedProfile: false,
+      label: 'Open new tabs at',
+      description: 'Where a new tab appears in the sidebar tab list. Existing tabs are never reordered.',
+      control: 'select',
+      options: NEW_TAB_POSITION_OPTIONS,
+      segmented: true,
+    },
+  },
+  {
+    key: 'conversation.auto_archive_after_days',
+    metadata: {
+      scope: 'core-global',
+      selectedProfile: false,
+      label: 'Auto-archive inactive conversations after',
+      description: 'Conversations with no recent activity are moved to the archive. Set to Off to disable automatic archiving.',
+      control: 'select',
+      options: CONVERSATION_AUTO_ARCHIVE_OPTIONS,
+    },
+  },
+  {
     key: 'tabs.auto_delete_empty_folders_on_tidy',
     metadata: {
       scope: 'core-global',
@@ -347,12 +382,22 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'ai.mail_read_allowed',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Allow AI to read Mail',
+      description: 'Permit AI reads of Mail accounts, folders, message metadata, and message bodies.',
+      control: 'toggle',
+    },
+  },
+  {
     key: 'mail.enabled',
     metadata: {
       scope: 'profile',
       selectedProfile: false,
-      label: 'Maho Mail enabled',
-      description: 'Internal runtime gate for the deferred Maho Mail surface.',
+      label: 'Enable Maho Mail (Beta)',
+      description: 'Turn on Maho Mail for this profile. You can turn it off at any time.',
       control: 'toggle',
     },
   },

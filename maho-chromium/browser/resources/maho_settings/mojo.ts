@@ -1,5 +1,7 @@
 export {
   BrowserUpdateState,
+  MailBehaviorUpdateStatus,
+  MailNotificationPermission,
   PageCallbackRouter,
   PageHandlerFactory,
   PageHandlerRemote,
@@ -9,6 +11,7 @@ export {
   VaultAgentPolicy,
   VaultItemKind,
   VaultLockState,
+  VaultPreflightState,
 } from './maho_settings.mojom-webui.js';
 export type {
   AISettings,
@@ -17,6 +20,8 @@ export type {
   AutofillPayment,
   BrowserVersionInfo,
   ContentBlockerStats,
+  MailBehaviorSnapshot,
+  MailBehaviorUpdateResult,
   FilterListInfo,
   PasswordImportOperationResult,
   PasswordImportPreview,

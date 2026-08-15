@@ -102,9 +102,13 @@ typedef struct MahoAgentToolResult {
   char *json_ptr;
   char *error_ptr;
   void (*free_fn)(char*);
+  char *error_code_ptr;
+  bool error_retryable;
 } MahoAgentToolResult;
 
 typedef void (*MahoAgentReleaseCallback)(void *user_data);
+
+typedef void (*RoutineStatusCb)(void*, const char*);
 
 /**
  * Progress callback type invoked from the import background thread.
@@ -141,6 +145,27 @@ void *maho_ffi_serialization_scope_enter(void);
  * on the same thread.
  */
 void maho_ffi_serialization_scope_exit(void *scope);
+
+/**
+ * Performs a read-only Vault database preflight.
+ *
+ * Stable return values are defined by `MahoVaultPreflightState`; `-1` means
+ * invalid input, an active import, or a caught panic. When `out_state_json` is
+ * non-null, successful calls also return `{"state": ..., "value": ...}` and
+ * the caller must free that string with `maho_string_free`.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `database_path` must be valid null-terminated UTF-8. When
+ * `key_store_key_available` is true, `database_key` must also be valid
+ * null-terminated UTF-8. `out_state_json` may be null or point to writable
+ * storage for one C string pointer.
+ */
+int32_t maho_core_vault_preflight_state(struct MahoCore *ptr,
+                                        const char *database_path,
+                                        const char *database_key,
+                                        bool key_store_key_available,
+                                        char **out_state_json);
 
 struct MahoCore *maho_core_new(void);
 
@@ -248,6 +273,18 @@ char *maho_core_dispatch_shell_event(struct MahoCore *ptr, const char *event_jso
  * Caller must free the returned string with `maho_string_free`.
  */
 char *maho_core_tick(struct MahoCore *ptr);
+
+/**
+ * Deterministic sibling of `maho_core_tick`: drives `MahoCore::tick_at` with
+ * a caller-supplied timestamp instead of the wall clock. This is the test
+ * seam the native scheduler hook (`MahoRoutinesScheduler::RunTickForTesting`)
+ * uses to exercise Vault inactivity auto-lock without real time.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_tick_at(struct MahoCore *ptr, int64_t now_sec);
 
 /**
  * # Safety
@@ -2034,6 +2071,34 @@ char *maho_core_get_sync_key(struct MahoCore *ptr);
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * Caller must free the returned string with `maho_string_free`.
  */
+char *maho_core_get_sync_room_id(struct MahoCore *ptr);
+
+/**
+ * Generates versioned account-owned Sync bootstrap material as JSON.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_generate_sync_bootstrap(struct MahoCore *ptr);
+
+/**
+ * Configures Sync from account-owned bootstrap seed material.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `server_url` and `bootstrap_seed` must be valid C strings.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_configure_sync_bootstrap(struct MahoCore *ptr,
+                                         const char *server_url,
+                                         const char *bootstrap_seed);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * Caller must free the returned string with `maho_string_free`.
+ */
 char *maho_core_get_sync_auth_token(struct MahoCore *ptr);
 
 /**
@@ -2042,6 +2107,13 @@ char *maho_core_get_sync_auth_token(struct MahoCore *ptr);
  * `message_json` must be a valid C string.
  */
 int32_t maho_core_handle_incoming_websocket_message(struct MahoCore *ptr, const char *message_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `envelope_json` must be a valid C string containing a V2 sync envelope.
+ */
+int32_t maho_core_handle_incoming_sync_envelope(struct MahoCore *ptr, const char *envelope_json);
 
 /**
  * # Safety
@@ -2150,6 +2222,27 @@ void maho_core_ack_sync_entity(struct MahoCore *ptr,
                                uint64_t version);
 
 /**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `delivery_id` must be a valid C string.
+ */
+bool maho_core_ack_sync_delivery(struct MahoCore *ptr, const char *delivery_id, uint64_t relay_seq);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `ack_json` must be a valid C string containing a relay V2 ACK.
+ */
+int32_t maho_core_accept_sync_ack(struct MahoCore *ptr, const char *ack_json);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ * `room_id` must be a valid C string.
+ */
+uint64_t maho_core_get_sync_receive_cursor(struct MahoCore *ptr, const char *room_id);
+
+/**
  * Apply incoming entity batch from server.
  * `entities_json` is a JSON array of SyncEntity objects.
  * Returns JSON array of actually-applied entities.
@@ -2169,6 +2262,13 @@ char *maho_core_apply_remote_entities(struct MahoCore *ptr, const char *entities
  * Caller must free returned string with `maho_string_free`.
  */
 char *maho_core_drain_outgoing(struct MahoCore *ptr);
+
+/**
+ * # Safety
+ * `ptr` must be valid.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_drain_outgoing_envelopes(struct MahoCore *ptr);
 
 /**
  * Get and drain received tabs as a JSON array.
@@ -2403,6 +2503,7 @@ bool maho_core_chat_register_tool(struct ChatSession *ptr,
  */
 void maho_core_chat_set_event_sink(struct ChatSession *ptr,
                                    void (*on_token)(void *user_data, const char *token),
+                                   void (*on_thinking)(void *user_data, const char *thinking),
                                    void (*on_complete)(void *user_data,
                                                        const char *full_text,
                                                        const char *tool_calls_json),
@@ -2511,6 +2612,67 @@ bool maho_core_delete_conversation(struct MahoCore *core, const char *id);
  * must be valid NUL-terminated C strings. Returns `false` on null input or import active.
  */
 bool maho_core_rename_conversation(struct MahoCore *core, const char *id, const char *new_title);
+
+char *maho_core_list_conversations_v2(struct MahoCore *core, const char *query_json);
+
+bool maho_core_archive_conversation(struct MahoCore *core, const char *id);
+
+bool maho_core_unarchive_conversation(struct MahoCore *core, const char *id);
+
+char *maho_core_active_conversation_ids(struct MahoCore *core);
+
+char *maho_core_apply_conversation_bulk_operation(struct MahoCore *core, const char *request_json);
+
+int32_t maho_core_get_conversation_auto_archive_policy(struct MahoCore *core);
+
+bool maho_core_set_conversation_auto_archive_policy(struct MahoCore *core, int32_t days);
+
+int32_t maho_core_auto_archive_conversations(struct MahoCore *core, int64_t now_sec);
+
+char *maho_core_list_conversation_projects(struct MahoCore *core);
+
+char *maho_core_create_conversation_project(struct MahoCore *core, const char *name);
+
+bool maho_core_rename_conversation_project(struct MahoCore *core, const char *id, const char *name);
+
+bool maho_core_delete_conversation_project(struct MahoCore *core, const char *id);
+
+char *maho_core_move_conversations_to_project(struct MahoCore *core, const char *request_json);
+
+/**
+ * Read the composer draft for `scope_json`.
+ *
+ * Returns a JSON string `{"version":1,"text":...,"updatedAt":<RFC3339>}` on success, or
+ * null when the scope is malformed, no draft exists, the stored value is corrupt, or the
+ * scope names a conversation that no longer exists (the orphan row is purged in that case).
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`, or null (returns null);
+ * `scope_json` must be a valid NUL-terminated C string or null (returns null).
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_composer_draft(struct MahoCore *core, const char *scope_json);
+
+/**
+ * Write the composer draft for `scope_json`. Empty `text` deletes the draft.
+ * Text is stored verbatim; the timestamp is assigned natively. Returns true on success,
+ * false on malformed scope, null input, missing storage, or storage error.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `scope_json` and `text`
+ * must be valid NUL-terminated C strings (null returns false).
+ */
+bool maho_core_set_composer_draft(struct MahoCore *core, const char *scope_json, const char *text);
+
+/**
+ * Delete the composer draft for `scope_json`. Deleting an absent draft succeeds.
+ * Returns false on malformed scope, null input, missing storage, or storage error.
+ *
+ * # Safety
+ * `core` must be a valid `*mut MahoCore` produced by `maho_core_new*`; `scope_json` must be a
+ * valid NUL-terminated C string (null returns false).
+ */
+bool maho_core_delete_composer_draft(struct MahoCore *core, const char *scope_json);
 
 /**
  * Set a BYOK API key for the given provider.
@@ -2718,6 +2880,16 @@ bool maho_agent_cancel(struct MahoAgentSession *session);
  * `policy` must be a null-terminated C string (e.g. "prompt", "allow", "deny").
  */
 void maho_agent_set_approval_policy(struct MahoAgentSession *session, const char *policy);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer to a `MahoAgentSession`.
+ */
+void maho_agent_set_mail_authorization_state(struct MahoAgentSession *session,
+                                             bool feature_enabled,
+                                             bool helper_ready,
+                                             bool helper_starting,
+                                             bool read_allowed);
 
 /**
  * # Safety
@@ -2978,6 +3150,32 @@ int32_t maho_routines_run(struct MahoCore *core,
                           void (*on_complete)(void *user_data, const char *result_json),
                           void (*on_error)(void *user_data, const char *error),
                           void *user_data);
+
+/**
+ * Start a manual routine and return its queued status JSON immediately.
+ * Caller owns the returned string and must free it with `maho_string_free`.
+ */
+char *maho_routines_start(struct MahoCore *core,
+                          const char *id,
+                          int32_t user_tier,
+                          const char *source);
+
+/**
+ * Return every routine run known to this browser process, including terminal
+ * runs. This is the initial snapshot paired with status callbacks.
+ */
+bool maho_routines_respond_to_approval(struct MahoCore *core,
+                                       const char *run_id,
+                                       const char *approval_id,
+                                       bool approved);
+
+char *maho_routines_active_runs(struct MahoCore *core);
+
+uint64_t maho_routines_register_status_callback(struct MahoCore *core,
+                                                void *user_data,
+                                                RoutineStatusCb callback);
+
+void maho_routines_unregister_status_callback(struct MahoCore *core, uint64_t token);
 
 /**
  * Returns JSON array of ALL routines (built-in + user-defined custom), each an

@@ -4,8 +4,10 @@
 #define MAHO_BROWSER_MAIL_HELPER_MAHO_MAIL_HELPER_LAUNCHER_H_
 
 #include <string>
+#include <vector>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/process/process.h"
@@ -30,10 +32,17 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
     virtual void OnAuthRefreshSucceeded(const std::string& account_id) = 0;
     virtual void OnAccountsChanged() = 0;
     virtual void OnHelperReady() {}
+    virtual void OnHelperFailed(bool will_retry) {}
     virtual void OnSyncEvent(const std::string& event_type, const std::string& payload) {}
     virtual void OnBackfillEvent(const std::string& event_type, const std::string& payload) {}
     virtual void OnStatusChanged(const std::string& account_id, bool connected) {}
-    virtual void OnNewMail(const std::string& account_id) {}
+    virtual void OnNewMail(const std::string& account_id,
+                           const std::string& email_id,
+                           const std::string& message_id,
+                           const std::string& sender,
+                           const std::string& subject,
+                           uint64_t cursor,
+                           uint64_t epoch) {}
     virtual void OnMutation(const std::string& account_id, const std::string& payload) {}
     virtual void OnOutbox(const std::string& account_id, const std::string& payload) {}
     virtual void OnScheduler(const std::string& account_id, const std::string& payload) {}
@@ -56,7 +65,13 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
                       const std::string& reason) override;
   void OnAuthRefreshSucceeded(const std::string& account_id) override;
   void OnAccountsChanged() override;
-  void OnNewMail(const std::string& account_id) override;
+  void OnNewMail(const std::string& account_id,
+                 const std::string& email_id,
+                 const std::string& message_id,
+                 const std::string& sender,
+                 const std::string& subject,
+                 uint64_t cursor,
+                 uint64_t epoch) override;
   void OnMutation(const std::string& account_id, const std::string& payload) override;
   void OnOutbox(const std::string& account_id, const std::string& payload) override;
   void OnScheduler(const std::string& account_id, const std::string& payload) override;
@@ -71,25 +86,25 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
   // helper reports; a mismatch triggers kill + relaunch (bounded by the cap).
   // `crashpad_database` is forwarded so the helper's Crashpad handler shares the
   // browser's crash database; may be empty.
-  void Launch(const std::string& expected_version,
-              const std::string& profile_path,
-              const base::FilePath& crashpad_database = base::FilePath());
+  virtual void Launch(
+      const std::string& expected_version,
+      const std::string& profile_path,
+      const base::FilePath& crashpad_database = base::FilePath());
 
-  void InjectDatabaseKeys(const std::string& sqlcipher_key,
-                          const std::string& credential_key);
+  virtual void InjectDatabaseKeys(const std::string& sqlcipher_key,
+                                  const std::string& credential_key);
 
   // Graceful drain: PrepareShutdown + Shutdown over Mojo, wait for the ack up to
   // a timeout, then force-terminate.
-  void Shutdown();
+  virtual void Shutdown(
+      base::OnceClosure drained_callback = base::DoNothing());
 
   // Returns the bound helper interface only after the version + Initialize
   // handshake has marked the launcher ready. Before readiness (process spawned
   // but handshake incomplete), during a crash-triggered rebind, or after a
   // disconnect this returns nullptr so callers cannot dispatch reads to a
   // helper that has not yet proven itself. No request queueing is performed.
-  mojom::MahoMailHelper* GetHelper() const {
-    return (ready_ && helper_.is_bound()) ? helper_.get() : nullptr;
-  }
+  virtual mojom::MahoMailHelper* GetHelper() const;
 
   // True once the crash-loop cap was exceeded and the launcher gave up.
   bool has_given_up() const { return gave_up_; }
@@ -101,6 +116,22 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
   void BindHelperForTesting(mojo::PendingRemote<mojom::MahoMailHelper> remote,
                             bool ready);
 
+  void SetShutdownTimeoutForTesting(base::TimeDelta timeout) {
+    shutdown_timeout_ = timeout;
+  }
+  void NotifyReadyForTesting() {
+    ready_ = true;
+    if (observer_) {
+      observer_->OnHelperReady();
+    }
+  }
+  void NotifyFailureForTesting(bool will_retry) {
+    ready_ = false;
+    if (observer_) {
+      observer_->OnHelperFailed(will_retry);
+    }
+  }
+
   private:
    void LaunchInternal();
    void OnVersionReported(const std::string& helper_version);
@@ -109,6 +140,10 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
    void HandleFailureAndMaybeRelaunch();
    void ReinjectKeysIfPresent();
    void OnKeysInjected(bool success);
+   void OnPrepareShutdownComplete();
+   void OnShutdownComplete();
+   void OnShutdownTimeout();
+   void CompleteShutdown();
    void ForceClose();
    base::TimeDelta ComputeBackoff() const;
 
@@ -139,6 +174,9 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
   mojo::Receiver<mojom::MahoMailHelperClient> client_receiver_{this};
 
   base::OneShotTimer relaunch_timer_;
+  base::OneShotTimer shutdown_timer_;
+  base::TimeDelta shutdown_timeout_ = base::Seconds(5);
+  std::vector<base::OnceClosure> drained_callbacks_;
 
   raw_ptr<Observer> observer_ = nullptr;
 
