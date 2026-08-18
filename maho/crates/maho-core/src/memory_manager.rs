@@ -131,9 +131,9 @@ impl MemoryManager {
         self.auth = auth;
     }
 
-    pub fn start_browsing_summary_loop(&self) {
+    pub fn start_browsing_summary_loop(&mut self) {
         let tx = self.result_tx.clone();
-        get_runtime().spawn(async move {
+        self.active_tasks.push(get_runtime().spawn(async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ticker.tick().await; // skip immediate first tick at t=0
@@ -141,7 +141,7 @@ impl MemoryManager {
                 ticker.tick().await;
                 let _ = tx.send(MemoryResult::BrowsingSummaryDue).await;
             }
-        });
+        }));
     }
 
     pub fn note_summary_completed(&mut self, at: chrono::DateTime<chrono::Utc>) {

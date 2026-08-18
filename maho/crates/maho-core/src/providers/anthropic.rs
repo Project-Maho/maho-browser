@@ -92,6 +92,10 @@ impl LLMProvider for AnthropicProvider {
             let mut sse_buffer = String::new();
 
             while let Some(chunk_result) = bytes_stream.next().await {
+                if tx.is_closed() {
+                    break;
+                }
+
                 let chunk = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
@@ -112,6 +116,10 @@ impl LLMProvider for AnthropicProvider {
 
                 // Anthropic SSE format: `event: <type>\ndata: <json>\n\n`
                 while let Some(pos) = sse_buffer.find("\n\n") {
+                    if tx.is_closed() {
+                        break;
+                    }
+
                     let event_block = sse_buffer[..pos].to_string();
                     sse_buffer.drain(..pos + 2);
 
@@ -149,6 +157,9 @@ impl LLMProvider for AnthropicProvider {
                                                 let _ = tx.try_send(Ok(LLMStreamChunk::Token(
                                                     text.to_string(),
                                                 )));
+                                                if tx.is_closed() {
+                                                    break;
+                                                }
                                             }
                                         }
                                     }
@@ -167,6 +178,9 @@ impl LLMProvider for AnthropicProvider {
                                             name: None,
                                             arguments_delta: partial_json,
                                         }));
+                                        if tx.is_closed() {
+                                            break;
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -194,6 +208,9 @@ impl LLMProvider for AnthropicProvider {
                                         name,
                                         arguments_delta: String::new(),
                                     }));
+                                    if tx.is_closed() {
+                                        break;
+                                    }
                                 }
                             }
                         }

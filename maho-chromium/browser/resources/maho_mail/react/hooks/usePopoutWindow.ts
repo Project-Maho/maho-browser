@@ -110,6 +110,14 @@ export async function focusOrCreate(
     throw new Error("Popup blocked by the browser.");
   }
   openWindows.set(label, child);
+  const checkClosedInterval = setInterval(() => {
+    if (child.closed) {
+      clearInterval(checkClosedInterval);
+      if (openWindows.get(label) === child) {
+        openWindows.delete(label);
+      }
+    }
+  }, 1000);
   try {
     child.document.title = options.title;
   } catch {

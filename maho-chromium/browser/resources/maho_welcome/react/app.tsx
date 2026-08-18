@@ -61,6 +61,12 @@ type AnimationPlaybackControls = {
 };
 
 function WelcomeApp({store}: {store: MahoWelcomeStore}) {
+  useEffect(() => {
+    return () => {
+      store.dispose();
+    };
+  }, [store]);
+
   const snapshot = useSyncExternalStore(
       listener => store.subscribe(listener), () => store.getSnapshot());
   const [renderedPage, setRenderedPage] = useState(snapshot.currentPage);

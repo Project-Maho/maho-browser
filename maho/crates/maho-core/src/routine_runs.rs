@@ -85,6 +85,8 @@ impl std::error::Error for RoutineRunTransitionError {}
 
 type StatusObserver = Arc<dyn Fn(&RoutineRunStatus) + Send + Sync>;
 
+const MAX_ROUTINE_RUNS: usize = 50;
+
 #[derive(Default)]
 struct RegistryState {
     runs: HashMap<String, RoutineRunStatus>,
@@ -171,6 +173,19 @@ impl RoutineRunRegistry {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.runs.insert(status.run_id.clone(), status.clone());
+            if state.runs.len() > MAX_ROUTINE_RUNS {
+                let mut terminal_entries: Vec<(String, i64)> = state
+                    .runs
+                    .iter()
+                    .filter(|(_, v)| v.state.is_terminal())
+                    .map(|(k, v)| (k.clone(), v.started_at))
+                    .collect();
+                terminal_entries.sort_by_key(|(_, t)| *t);
+                let remove_count = (state.runs.len() - MAX_ROUTINE_RUNS).min(terminal_entries.len());
+                for (key, _) in terminal_entries.into_iter().take(remove_count) {
+                    state.runs.remove(&key);
+                }
+            }
             state.observers.values().cloned().collect::<Vec<_>>()
         };
         Self::notify(observers, &status);
@@ -657,5 +672,28 @@ mod tests {
         assert_eq!(ids.len(), RUNS);
         assert!(statuses.iter().all(|status| status.revision == 3));
         assert_eq!(registry.snapshot().len(), RUNS);
+    }
+
+    #[test]
+    fn registry_caps_at_max_routine_runs() {
+        let registry = RoutineRunRegistry::default();
+        for i in 0..MAX_ROUTINE_RUNS {
+            let run = registry.begin_at(format!("routine-{i}"), RoutineRunSource::Manual, i as i64);
+            registry.mark_running(&run.run_id).unwrap();
+            registry
+                .mark_succeeded(&run.run_id, "done".to_string())
+                .unwrap();
+        }
+        for i in MAX_ROUTINE_RUNS..MAX_ROUTINE_RUNS + 10 {
+            let run = registry.begin_at(format!("routine-{i}"), RoutineRunSource::Manual, i as i64);
+            registry.mark_running(&run.run_id).unwrap();
+            registry
+                .mark_succeeded(&run.run_id, "done".to_string())
+                .unwrap();
+        }
+        let runs = registry.snapshot();
+        assert_eq!(runs.len(), MAX_ROUTINE_RUNS);
+        let min_started_at = runs.iter().map(|r| r.started_at).min().unwrap();
+        assert_eq!(min_started_at, 10);
     }
 }

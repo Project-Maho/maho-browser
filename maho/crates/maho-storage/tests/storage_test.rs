@@ -213,6 +213,10 @@ fn sqlite_save_and_load_boosts() {
         db.get_active_boost("example.com").unwrap().as_deref(),
         Some("b1")
     );
+    let boosts_with_state = db.load_boosts_with_active_state().unwrap();
+    assert_eq!(boosts_with_state.len(), 1);
+    assert_eq!(boosts_with_state[0].0.id.as_ref(), "b1");
+    assert_eq!(boosts_with_state[0].1.as_deref(), Some("b1"));
 }
 
 #[test]

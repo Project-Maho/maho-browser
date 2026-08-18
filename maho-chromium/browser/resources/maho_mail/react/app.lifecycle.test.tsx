@@ -36,9 +36,11 @@ const mojo = vi.hoisted(() => {
       if (!lifecycleListener) throw new Error('Lifecycle listener is not bound.');
       lifecycleListener(state, generation);
     },
+    closeMojoClient: vi.fn(),
     reset() {
       lifecycleListener = null;
       nextListenerId = 1;
+      mojo.closeMojoClient.mockClear();
     },
   };
 });
@@ -46,6 +48,7 @@ const mojo = vi.hoisted(() => {
 vi.mock('./mojo_client.js', () => ({
   handler: mojo.handler,
   callbackRouter: mojo.callbackRouter,
+  closeMojoClient: mojo.closeMojoClient,
 }));
 vi.mock('./i18n', () => ({}));
 vi.mock('./hooks/useTheme', () => ({useTheme: vi.fn()}));

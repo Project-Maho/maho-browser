@@ -385,7 +385,11 @@ MahoMiniTopBarView::MahoMiniTopBarView(Browser* browser,
   UpdateSpacePill();
 }
 
-MahoMiniTopBarView::~MahoMiniTopBarView() = default;
+MahoMiniTopBarView::~MahoMiniTopBarView() {
+  if (browser_ && browser_->tab_strip_model()) {
+    browser_->tab_strip_model()->RemoveObserver(this);
+  }
+}
 
 void MahoMiniTopBarView::OnPaint(gfx::Canvas* canvas) {
   views::View::OnPaint(canvas);

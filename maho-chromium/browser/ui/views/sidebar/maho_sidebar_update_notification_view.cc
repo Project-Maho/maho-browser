@@ -428,9 +428,9 @@ int MahoSidebarUpdateNotificationView::ExpandedHeight(
 
 void MahoSidebarUpdateNotificationView::RebuildBody(
     const MahoSidebarUpdateNotificationModel &model) {
-  body_->RemoveAllChildViews();
   action_rows_.clear();
   checkbox_ = nullptr;
+  body_->RemoveAllChildViews();
 
   if (model.checkbox.has_value()) {
     const auto &cb = *model.checkbox;

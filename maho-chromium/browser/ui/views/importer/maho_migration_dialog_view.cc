@@ -534,10 +534,10 @@ void MahoMigrationDialogView::StartImport(uint32_t mask) {
 
   // Setup progress rows.
   checkboxes_container_->SetVisible(false);
-  progress_container_->RemoveAllChildViews();
   progress_rows_.clear();
   type_completed_.clear();
   type_succeeded_.clear();
+  progress_container_->RemoveAllChildViews();
 
   for (const auto& info : kDataTypeInfos) {
     if (!(mask & info.flag)) continue;

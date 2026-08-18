@@ -28,7 +28,7 @@ final class VoiceSearchManager {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var speechRecognizer: SFSpeechRecognizer?
     private var activeLocaleIdentifier: String?
-    private var localeChangeObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var localeChangeObserver: NSObjectProtocol?
     private var silenceTimer: Timer?
     private let silenceTimeout: TimeInterval = 5.0
 
@@ -38,6 +38,12 @@ final class VoiceSearchManager {
         )
         speechRecognizer = Self.makeSpeechRecognizer(for: activeLocaleIdentifier)
         observeLocaleChanges()
+    }
+
+    deinit {
+        if let localeChangeObserver {
+            NotificationCenter.default.removeObserver(localeChangeObserver)
+        }
     }
 
     var isAvailable: Bool {

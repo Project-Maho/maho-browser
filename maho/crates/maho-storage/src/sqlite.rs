@@ -4464,7 +4464,7 @@ impl SqliteStorage {
     ) -> Result<Vec<maho_types::chat::ConversationTurn>, StorageError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, role, content, url_context, created_at \
-             FROM conversation_turns WHERE session_id = ?1 ORDER BY created_at ASC",
+             FROM conversation_turns WHERE session_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 100",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id], |row| {
             Ok(maho_types::chat::ConversationTurn {
@@ -4480,6 +4480,7 @@ impl SqliteStorage {
         for row in rows {
             out.push(row?);
         }
+        out.reverse();
         Ok(out)
     }
 

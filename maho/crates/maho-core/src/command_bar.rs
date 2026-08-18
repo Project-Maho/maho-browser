@@ -8,6 +8,7 @@ use maho_types::traits::shell_renderer::{SearchContext, SuggestionType, Suggesti
 
 const MAX_HISTORY_ENTRIES: usize = 10000;
 const MAX_RESULTS: usize = 12;
+const MAX_USAGE_KEYS: usize = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GlobalMailCommand {
@@ -350,7 +351,24 @@ impl CommandBarEngine {
     }
 
     fn register_default_actions(&mut self) {
-        // Actions are registered by MahoCore::new() in maho_core.rs
+        self.add_action_with_aliases(
+            "toggle_split_orientation".into(),
+            "Toggle Split Orientation".into(),
+            "Split View".into(),
+            vec!["split orientation".into(), "rotate split".into()],
+        );
+        self.add_action_with_aliases(
+            "split_side_by_side".into(),
+            "Split Tab: Side-by-Side".into(),
+            "Split View".into(),
+            vec!["side by side split".into(), "vertical split".into()],
+        );
+        self.add_action_with_aliases(
+            "split_top_bottom".into(),
+            "Split Tab: Top/Bottom".into(),
+            "Split View".into(),
+            vec!["top bottom split".into(), "horizontal split".into()],
+        );
     }
 
     pub fn add_action(&mut self, id: String, label: String, category: String) {
@@ -1488,11 +1506,34 @@ impl CommandBarEngine {
             .entry(item_key.to_string())
             .or_insert(0);
         *count += 1;
+
+        if self.usage_frequency.len() > MAX_USAGE_KEYS {
+            if let Some(min_key) = self
+                .usage_frequency
+                .iter()
+                .min_by_key(|(_, &count)| count)
+                .map(|(k, _)| k.clone())
+            {
+                self.usage_frequency.remove(&min_key);
+            }
+        }
     }
 
     pub fn load_usage_frequencies(&mut self, frequencies: Vec<(String, u32)>) {
         for (key, count) in frequencies {
             self.usage_frequency.insert(key, count);
+        }
+        if self.usage_frequency.len() > MAX_USAGE_KEYS {
+            let mut entries: Vec<(String, u32)> = self
+                .usage_frequency
+                .iter()
+                .map(|(k, &v)| (k.clone(), v))
+                .collect();
+            entries.sort_by_key(|(_, count)| *count);
+            let excess = self.usage_frequency.len() - MAX_USAGE_KEYS;
+            for (key, _) in entries.into_iter().take(excess) {
+                self.usage_frequency.remove(&key);
+            }
         }
     }
 

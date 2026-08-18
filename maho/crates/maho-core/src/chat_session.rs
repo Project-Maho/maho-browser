@@ -80,6 +80,8 @@ impl MahoChatEventSink {
     }
 }
 
+const MAX_HISTORY_MESSAGES: usize = 100;
+
 pub struct ChatSession {
     config: ChatConfig,
     tools: Vec<ToolDescriptor>,
@@ -131,6 +133,7 @@ impl ChatSession {
             "role": "user",
             "content": message
         }));
+        self.trim_history();
         self.trigger_completion()
     }
 
@@ -139,6 +142,7 @@ impl ChatSession {
             "role": "user",
             "content": content
         }));
+        self.trim_history();
     }
 
     pub fn append_assistant_message(&mut self, content: &str, tool_calls_json: &str) {
@@ -171,6 +175,7 @@ impl ChatSession {
             }
         }
         self.history.push(msg);
+        self.trim_history();
     }
 
     pub fn send_tool_result(
@@ -186,10 +191,37 @@ impl ChatSession {
             "name": tool_name,
             "content": result
         }));
+        self.trim_history();
         if trigger {
             self.trigger_completion()
         } else {
             true
+        }
+    }
+
+    fn trim_history(&mut self) {
+        if self.history.len() <= MAX_HISTORY_MESSAGES {
+            return;
+        }
+        let has_system = self
+            .history
+            .first()
+            .and_then(|m| m.get("role"))
+            .and_then(|r| r.as_str())
+            == Some("system");
+        let start_idx = if has_system { 1 } else { 0 };
+        let excess = self.history.len() - MAX_HISTORY_MESSAGES;
+
+        let mut cut_idx = (start_idx + excess).min(self.history.len());
+        while cut_idx < self.history.len() {
+            let role = self.history[cut_idx].get("role").and_then(|r| r.as_str());
+            if role != Some("tool") {
+                break;
+            }
+            cut_idx += 1;
+        }
+        if cut_idx > start_idx && cut_idx <= self.history.len() {
+            self.history.drain(start_idx..cut_idx);
         }
     }
 

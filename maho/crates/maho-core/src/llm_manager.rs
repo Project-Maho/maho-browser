@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use maho_types::chat::{ChatRequestContext, ChatRequestMode};
 use maho_types::common::Url;
@@ -13,9 +14,12 @@ struct LLMRequest {
     request_type: LLMRequestType,
     context: LLMRequestContext,
     session_id: Option<String>,
+    created_at: Instant,
 }
 
 const MAX_CHAT_HISTORY: usize = 20;
+const STALE_PENDING_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+const MAX_PREVIEW_CACHE_ENTRIES: usize = 128;
 
 pub struct LLMManager {
     pending_requests: HashMap<String, LLMRequest>,
@@ -43,8 +47,19 @@ impl LLMManager {
     }
 
     fn generate_request_id(&mut self) -> String {
+        self.sweep_stale_pending_requests();
         self.next_id += 1;
         format!("llm_{}", self.next_id)
+    }
+
+    pub fn sweep_stale_pending_requests(&mut self) {
+        let now = Instant::now();
+        self.pending_requests
+            .retain(|_, req| now.duration_since(req.created_at) < STALE_PENDING_REQUEST_TIMEOUT);
+    }
+
+    pub fn trigger_completion(&mut self) {
+        self.sweep_stale_pending_requests();
     }
 
     pub fn request_tidy_title(&mut self, tab_id: &TabId, title: &str, url: &str) -> CoreUpdate {
@@ -73,6 +88,7 @@ impl LLMManager {
                 request_type: LLMRequestType::TidyTabTitle,
                 context: context.clone(),
                 session_id: None,
+                created_at: Instant::now(),
             },
         );
         CoreUpdate::RequestLlmCompletion {
@@ -113,6 +129,7 @@ impl LLMManager {
                 request_type: LLMRequestType::TidyDownload,
                 context: context.clone(),
                 session_id: None,
+                created_at: Instant::now(),
             },
         );
         CoreUpdate::RequestLlmCompletion {
@@ -146,6 +163,7 @@ impl LLMManager {
                 request_type: LLMRequestType::PagePreview,
                 context: context.clone(),
                 session_id: None,
+                created_at: Instant::now(),
             },
         );
         Some(CoreUpdate::RequestLlmCompletion {
@@ -194,6 +212,7 @@ Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
                 request_type: LLMRequestType::TidyTabs,
                 context: context.clone(),
                 session_id: None,
+                created_at: Instant::now(),
             },
         );
         CoreUpdate::RequestLlmCompletion {
@@ -278,6 +297,7 @@ Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
                 request_type: LLMRequestType::ChatCompletion,
                 context: context.clone(),
                 session_id,
+                created_at: Instant::now(),
             },
         );
 
@@ -334,6 +354,11 @@ Use the exact tab ids provided. Do not include prose.\n\nTabs:\n{}",
                 let (title, summary) = parse_page_preview_result(result);
                 self.preview_cache
                     .insert(url.0.clone(), (title.clone(), summary.clone()));
+                if self.preview_cache.len() > MAX_PREVIEW_CACHE_ENTRIES {
+                    if let Some(key) = self.preview_cache.keys().next().cloned() {
+                        self.preview_cache.remove(&key);
+                    }
+                }
                 vec![CoreUpdate::PagePreviewReady {
                     url,
                     title,
@@ -436,6 +461,21 @@ fn parse_tidy_tabs_result(result: &str) -> Option<Vec<TidyTabFolder>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sweep_stale_pending_requests() {
+        let mut manager = LLMManager::new();
+        let tab_id = TabId::generate();
+        let _ = manager.request_tidy_title(&tab_id, "Test", "https://test.com");
+        assert!(manager.has_pending());
+
+        for req in manager.pending_requests.values_mut() {
+            req.created_at = Instant::now() - Duration::from_secs(601);
+        }
+
+        manager.sweep_stale_pending_requests();
+        assert!(!manager.has_pending());
+    }
 
     #[test]
     fn test_request_tidy_title() {

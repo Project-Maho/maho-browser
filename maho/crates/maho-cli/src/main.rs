@@ -14,8 +14,7 @@ use maho_agent::{
 use maho_cli::vault::{self, RecoveryUnlockResult};
 use maho_types::chat::ChatMessage;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Once};
 
 use config::CliConfig;
 
@@ -55,7 +54,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum AgentSubcommands {
-    /// Run an autonomous AI agent session
+    /// Run an autonomous AI agent session. Tool calls are auto-approved.
     Run {
         /// Prompt or command string
         prompt: Option<String>,
@@ -72,18 +71,12 @@ pub enum AgentSubcommands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Auto-approve sensitive non-browser tools (e.g. shell commands).
-        /// Browser exploration and actions are auto-approved by default
-        /// (Aside-parity); the browser capability sandbox still enforces
-        /// exact-origin grants and tab leases, and --yolo does not preseed
-        /// domains or relax that enforcement.
-        #[arg(long)]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, hide = true)]
         yolo: bool,
 
-        /// Allow external MCP-prefixed tools to be invoked. Enables
-        /// tool availability; does not authorize browser origins, tab
-        /// ownership, leases, or sensitive browser operations.
-        #[arg(long, name = "allow-tools")]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, name = "allow-tools", hide = true)]
         allow_tools: bool,
 
         /// Target workspace ID
@@ -184,7 +177,7 @@ pub enum Commands {
     /// Show version info
     Version,
 
-    /// Run an autonomous AI agent session
+    /// Run an autonomous AI agent session. Tool calls are auto-approved.
     Run {
         /// The prompt to execute
         prompt: String,
@@ -197,12 +190,12 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Bypass all tool gating (approve all tools automatically)
-        #[arg(long)]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, hide = true)]
         yolo: bool,
 
-        /// Allow external MCP tools to run (opt-in)
-        #[arg(long, name = "allow-tools")]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, name = "allow-tools", hide = true)]
         allow_tools: bool,
 
         /// Workspace ID to target
@@ -214,7 +207,7 @@ pub enum Commands {
         session: Option<String>,
     },
 
-    /// Run an autonomous AI agent session or routine
+    /// Run an autonomous AI agent session or routine. Tool calls are auto-approved.
     Agent {
         #[command(subcommand)]
         subcommand: Option<AgentSubcommands>,
@@ -235,12 +228,12 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Bypass all tool gating
-        #[arg(long)]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, hide = true)]
         yolo: bool,
 
-        /// Allow external MCP tools to run
-        #[arg(long, name = "allow-tools")]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, name = "allow-tools", hide = true)]
         allow_tools: bool,
 
         /// Workspace ID to target
@@ -482,12 +475,12 @@ pub enum RoutineCommands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Auto-approve all tool calls without confirmation prompt
-        #[arg(long)]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, hide = true)]
         yolo: bool,
 
-        /// Allow all MCP/extension tools
-        #[arg(long, name = "allow-tools")]
+        /// Deprecated no-op. Tool calls are auto-approved by default.
+        #[arg(long, name = "allow-tools", hide = true)]
         allow_tools: bool,
 
         /// Workspace ID or name override
@@ -908,6 +901,18 @@ fn deprecation_warning(old: &str, new: &str) {
     );
 }
 
+static APPROVAL_FLAG_DEPRECATION: Once = Once::new();
+
+fn warn_deprecated_approval_flags(yolo: bool, allow_tools: bool) {
+    if yolo || allow_tools {
+        APPROVAL_FLAG_DEPRECATION.call_once(|| {
+            eprintln!(
+                "[deprecated] --yolo and --allow-tools are no-ops; tool calls are auto-approved by default."
+            );
+        });
+    }
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -1003,11 +1008,10 @@ async fn main() -> Result<()> {
                 allow_tools,
                 workspace,
             } => {
+                warn_deprecated_approval_flags(yolo, allow_tools);
                 let unsupported = unsupported_routine_run_flags(
                     provider.is_some(),
                     model.is_some(),
-                    yolo,
-                    allow_tools,
                     workspace.is_some(),
                 );
                 if !unsupported.is_empty() {
@@ -1054,12 +1058,11 @@ async fn main() -> Result<()> {
             workspace,
             session,
         } => {
+            warn_deprecated_approval_flags(yolo, allow_tools);
             cmd_run(
                 &prompt,
                 provider.as_deref(),
                 model.as_deref(),
-                yolo,
-                allow_tools,
                 workspace.as_deref(),
                 socket_path.as_deref(),
                 session.as_deref(),
@@ -1119,12 +1122,11 @@ async fn main() -> Result<()> {
                 ),
             };
 
+            warn_deprecated_approval_flags(final_yolo, final_allow_tools);
             if let Some(r_path) = final_routine {
                 let unsupported = unsupported_routine_run_flags(
                     final_provider.is_some(),
                     final_model.is_some(),
-                    final_yolo,
-                    final_allow_tools,
                     final_workspace.is_some(),
                 );
                 if !unsupported.is_empty() {
@@ -1143,8 +1145,6 @@ async fn main() -> Result<()> {
                     &p,
                     final_provider.as_deref(),
                     final_model.as_deref(),
-                    final_yolo,
-                    final_allow_tools,
                     final_workspace.as_deref(),
                     socket_path.as_deref(),
                     final_session.as_deref(),
@@ -1480,10 +1480,17 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
         }
         TabCommands::Navigate { tab_id, url } => {
             let client = browser::connect(socket_path).await?;
+            let tab_id_i64 = tab_id.parse::<i64>().unwrap_or(0);
+            let _ = browser::send_tool_call(
+                &client,
+                "browser_acquire_lease",
+                serde_json::json!({ "tab_id": tab_id_i64, "ttl_seconds": 60 }),
+            )
+            .await;
             let result = browser::send_tool_call(
                 &client,
                 "browser_navigate",
-                serde_json::json!({ "tab_id": tab_id.parse::<i64>().unwrap_or(0), "url": url }),
+                serde_json::json!({ "tab_id": tab_id_i64, "url": url }),
             )
             .await?;
 
@@ -2341,8 +2348,6 @@ fn byok_base_url_from_env() -> Option<String> {
 fn unsupported_routine_run_flags(
     provider: bool,
     model: bool,
-    yolo: bool,
-    allow_tools: bool,
     workspace: bool,
 ) -> Vec<&'static str> {
     let mut flags = Vec::new();
@@ -2351,12 +2356,6 @@ fn unsupported_routine_run_flags(
     }
     if model {
         flags.push("--model");
-    }
-    if yolo {
-        flags.push("--yolo");
-    }
-    if allow_tools {
-        flags.push("--allow-tools");
     }
     if workspace {
         flags.push("--workspace");
@@ -2407,7 +2406,12 @@ mod tests {
                     json!({
                         "protocolVersion": "2025-03-26",
                         "serverInfo": {"name": "maho-browser", "version": "1"},
-                        "capabilities": {"tools": {}}
+                        "capabilities": {"tools": {}},
+                        "sessionInfo": {
+                            "id": "mock-session-id",
+                            "displayLabel": "Maho CLI",
+                            "controllerKind": "maho-cli"
+                        }
                     })
                 } else {
                     json!({"content": [{"type": "text", "text": "{\"ok\":true}"}]})
@@ -2507,28 +2511,19 @@ mod tests {
 
     #[test]
     fn routine_run_reports_every_unsupported_flag() {
-        let flags = unsupported_routine_run_flags(true, true, true, true, true);
-        assert_eq!(
-            flags,
-            vec![
-                "--provider",
-                "--model",
-                "--yolo",
-                "--allow-tools",
-                "--workspace"
-            ]
-        );
+        let flags = unsupported_routine_run_flags(true, true, true);
+        assert_eq!(flags, vec!["--provider", "--model", "--workspace"]);
     }
 
     #[test]
     fn routine_run_allows_no_flags() {
-        assert!(unsupported_routine_run_flags(false, false, false, false, false).is_empty());
+        assert!(unsupported_routine_run_flags(false, false, false).is_empty());
     }
 
     #[test]
     fn routine_run_reports_only_the_flags_set() {
         assert_eq!(
-            unsupported_routine_run_flags(true, false, false, false, true),
+            unsupported_routine_run_flags(true, false, true),
             vec!["--provider", "--workspace"]
         );
     }
@@ -2767,8 +2762,6 @@ impl maho_agent::BrowserToolBridge for CliBrowserToolBridge {
 async fn build_cli_backend(
     provider: Option<&str>,
     model: Option<&str>,
-    yolo: bool,
-    allow_tools: bool,
     workspace: Option<&str>,
     socket_path: Option<&str>,
 ) -> Result<SwiftideBackend> {
@@ -2816,18 +2809,10 @@ async fn build_cli_backend(
     // Route `--provider`/`--model` to the correct BYOK client + base URL.
     backend.set_preferred_provider(provider.map(str::to_string));
 
-    // Non-interactive approval policy, injected before any tool call:
-    //   --yolo         => allow-all
-    //   --allow-tools  => allow mcp: prefixed tools (deny other sensitive)
-    //   default        => deny sensitive tools (non-sensitive auto-run)
-    let approval_policy = if yolo {
-        "allow"
-    } else if allow_tools {
-        "allow-mcp"
-    } else {
-        "deny-sensitive"
-    };
-    backend.set_approval_policy(approval_policy.to_string());
+    // CLI agent sessions are non-interactive and always use AllowAll.
+    // Consequential tools and typed approval flows are auto-approved as well;
+    // the browser capability sandbox still enforces its independent boundaries.
+    backend.set_approval_policy("allow".to_string());
 
     // Register the running browser as a tool bridge so the agent can drive
     // page/tab tools over the MCP socket during the loop.
@@ -2839,11 +2824,9 @@ async fn build_cli_backend(
 
     // Browser action tools (click / type / navigate / scroll) are disabled by
     // default in the library so embedders must opt in. The CLI is an explicit
-    // browser-automation surface, so it always exposes them: visibility is not
-    // authority. Each call is still `Sensitive` in the action contract, so the
-    // approval policy above decides whether it actually runs (`deny-sensitive`
-    // blocks it, `--yolo` allows it). Hiding the tools instead would leave the
-    // agent unable to even plan an action it is allowed to request.
+    // browser-automation surface, so it always exposes them and its AllowAll
+    // approval policy auto-approves their sensitive action contracts. The
+    // browser capability sandbox remains the independent enforcement boundary.
     backend.set_browser_action_tools_enabled(true);
 
     // Without a system prompt the model has no answer contract, so it narrates
@@ -2867,18 +2850,10 @@ async fn build_cli_backend(
         );
     }
 
-    // Set permission callback based on yolo and allow_tools flags
+    // Auto-approve all browser tools and actions by default in maho run (Aside-parity)
     backend
-        .set_permission_callback(Box::new(move |req| {
-            let is_mcp = req.tool_name.starts_with("mcp:");
-            let decision = if yolo {
-                PermissionDecision::Allow
-            } else if is_mcp && allow_tools {
-                PermissionDecision::Allow
-            } else {
-                PermissionDecision::Deny
-            };
-            Box::pin(async move { decision })
+        .set_permission_callback(Box::new(move |_req| {
+            Box::pin(async move { PermissionDecision::Allow })
         }))
         .map_err(|e| anyhow::anyhow!("Failed to set permission callback: {:?}", e))?;
 
@@ -2958,14 +2933,11 @@ async fn cmd_run(
     prompt: &str,
     provider: Option<&str>,
     model: Option<&str>,
-    yolo: bool,
-    allow_tools: bool,
     workspace: Option<&str>,
     socket_path: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<()> {
-    let backend =
-        build_cli_backend(provider, model, yolo, allow_tools, workspace, socket_path).await?;
+    let backend = build_cli_backend(provider, model, workspace, socket_path).await?;
 
     // Run the prompt
     println!("Running autonomous agent session...");
@@ -3004,7 +2976,7 @@ async fn cmd_research(
         );
     }
 
-    let backend = build_cli_backend(provider, model, false, true, workspace, socket_path).await?;
+    let backend = build_cli_backend(provider, model, workspace, socket_path).await?;
     let runtime: Arc<dyn maho_agent::AgentRuntime> = Arc::new(backend);
     let session_id = format!("research-{}", uuid::Uuid::new_v4());
     let stepper = maho_agent::AgentResearchStepper::new(runtime, session_id, 0.02);
@@ -4182,37 +4154,37 @@ async fn cmd_headless_batch(args: HeadlessArgs, socket_path: Option<&str>) -> Re
     };
 
     let concurrency = (args.concurrency.max(1)) as usize;
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let extract = std::sync::Arc::new(args.extract.clone());
     let socket_owned: Option<String> = socket_path.map(|s| s.to_string());
 
-    let mut handles = Vec::new();
-    for url in urls {
-        let sem = std::sync::Arc::clone(&sem);
-        let writer = std::sync::Arc::clone(&writer);
-        let extract = std::sync::Arc::clone(&extract);
-        let socket_owned = socket_owned.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
-            let row = match run_batch_url(socket_owned.as_deref(), &url, &extract).await {
-                Ok(mut fields) => {
-                    fields.insert("url".to_string(), serde_json::Value::String(url.clone()));
-                    fields.insert("ok".to_string(), serde_json::Value::Bool(true));
-                    serde_json::Value::Object(fields)
+    for chunk in urls.chunks(concurrency) {
+        let mut handles = Vec::with_capacity(chunk.len());
+        for url in chunk {
+            let writer = std::sync::Arc::clone(&writer);
+            let extract = std::sync::Arc::clone(&extract);
+            let socket_owned = socket_owned.clone();
+            let url = url.clone();
+            handles.push(tokio::spawn(async move {
+                let row = match run_batch_url(socket_owned.as_deref(), &url, &extract).await {
+                    Ok(mut fields) => {
+                        fields.insert("url".to_string(), serde_json::Value::String(url.clone()));
+                        fields.insert("ok".to_string(), serde_json::Value::Bool(true));
+                        serde_json::Value::Object(fields)
+                    }
+                    Err(e) => serde_json::json!({ "url": url, "ok": false, "error": e.to_string() }),
+                };
+                if let Ok(line) = serde_json::to_string(&row) {
+                    if let Ok(mut w) = writer.lock() {
+                        let _ = writeln!(w, "{line}");
+                        let _ = w.flush();
+                    }
                 }
-                Err(e) => serde_json::json!({ "url": url, "ok": false, "error": e.to_string() }),
-            };
-            if let Ok(line) = serde_json::to_string(&row) {
-                if let Ok(mut w) = writer.lock() {
-                    let _ = writeln!(w, "{line}");
-                    let _ = w.flush();
-                }
-            }
-        }));
-    }
+            }));
+        }
 
-    for h in handles {
-        let _ = h.await;
+        for h in handles {
+            let _ = h.await;
+        }
     }
 
     Ok(())

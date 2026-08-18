@@ -106,6 +106,11 @@ export class MahoWelcomeStore {
     };
   }
 
+  dispose(): void {
+    (this.callbackRouter.$ as {close?: () => void}).close?.();
+    (this.pageHandler.$ as {close?: () => void}).close?.();
+  }
+
   async bootstrap(): Promise<void> {
     const [{engines}, {sites}, {browsers}, {strings}] = await Promise.all([
       this.pageHandler.getSearchEngines(),

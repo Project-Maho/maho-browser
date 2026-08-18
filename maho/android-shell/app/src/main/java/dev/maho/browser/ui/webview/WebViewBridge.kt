@@ -12,6 +12,7 @@ import dev.maho.browser.sync.SyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -45,6 +46,20 @@ class WebViewBridge(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val agentSessions = HandleRegistry()
     private val chatSessions = HandleRegistry()
+
+    fun destroy() {
+        scope.cancel()
+        for ((_, ptr) in agentSessions.closeAndDrain()) {
+            try {
+                native.agentFreeSession(ptr)
+            } catch (_: Exception) {}
+        }
+        for ((_, ptr) in chatSessions.closeAndDrain()) {
+            try {
+                native.chatSessionFree(ptr)
+            } catch (_: Exception) {}
+        }
+    }
 
     private companion object {
         const val MAX_BROWSER_TOOL_RESULT_BYTES = 4_000
@@ -107,7 +122,9 @@ class WebViewBridge(
                 "chatSessionResume" -> chatSessionResume(p)
                 "chatSessionFree" -> chatSessionFree(p)
                 "chatSendMessage" -> chatSendMessage(p)
-                "chatCancelTurn" -> native.chatCancel(chatPtr(p))
+                "chatCancelTurn" -> chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.chatCancel(ptr)
+                }
                 "chatPollEvents" -> chatPollEventsArray(p)
                 "chatRegisterTool" -> chatRegisterTool(p)
                 "chatSendToolResult" -> chatSendToolResult(p)
@@ -115,20 +132,26 @@ class WebViewBridge(
                     p.string("name", 0),
                     p.optObject("args", 1) ?: JSONObject(),
                 ))
-                "chatAppendAssistantMessage" -> native.chatAppendAssistantMessage(
-                    chatPtr(p),
-                    p.string("content", 1),
-                    p.optString("toolCallsJson", 2) ?: "[]",
-                )
+                "chatAppendAssistantMessage" -> chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.chatAppendAssistantMessage(
+                        ptr,
+                        p.string("content", 1),
+                        p.optString("toolCallsJson", 2) ?: "[]",
+                    )
+                }
                 "chatGetHistory" -> jsonArrayOrEmpty(native.getConversationMessagesJson(p.optString("handle", 0)?.ifBlank { p.string("sessionId", 0) } ?: p.string("sessionId", 0)))
 
                 // --- Chat (legacy aliases, pointer-positional) ---
-                "chatSessionNew" -> native.chatSessionNew(
-                    p.string("apiKey", 0), p.string("endpoint", 1), p.string("model", 2), p.string("systemInstruction", 3),
-                )
-                "chatSendUserTurn" -> native.chatSendUserTurn(p.long("handle", 0, 0L), p.string("message", 1))
-                "chatCancel" -> native.chatCancel(p.long("handle", 0, 0L))
-                "chatSessionPollEvent" -> native.chatSessionPollEvent(p.long("handle", 0, 0L))
+                "chatSessionNew" -> chatSessionStart(p)
+                "chatSendUserTurn" -> chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.chatSendUserTurn(ptr, p.string("message", 1))
+                }
+                "chatCancel" -> chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.chatCancel(ptr)
+                }
+                "chatSessionPollEvent" -> chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.chatSessionPollEvent(ptr)
+                }
 
                 // --- Conversations (new + legacy) ---
                 "conversationCreate" -> conversationCreate(p)
@@ -235,15 +258,27 @@ class WebViewBridge(
 
                 // --- Agent Session ---
                 "agentCreateSession" -> agentCreateSession(p)
-                "agentSendMessage" -> native.agentSendMessage(agentPtr(p), p.string("message", 1))
-                "agentCancel" -> native.agentCancel(agentPtr(p))
-                "agentPollEvent" -> native.agentPollEvent(agentPtr(p))
-                "agentListTools" -> jsonArrayOrEmpty(native.agentListTools(agentPtr(p)))
-                "agentListArtifacts" -> jsonArrayOrEmpty(native.agentListArtifacts(agentPtr(p)))
-                "artifactShare" -> native.artifactShare(
-                    agentPtr(p),
-                    p.string("artifactId", 1),
-                )
+                "agentSendMessage" -> agentSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.agentSendMessage(ptr, p.string("message", 1))
+                }
+                "agentCancel" -> agentSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.agentCancel(ptr)
+                }
+                "agentPollEvent" -> agentSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.agentPollEvent(ptr)
+                }
+                "agentListTools" -> jsonArrayOrEmpty(agentSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.agentListTools(ptr)
+                })
+                "agentListArtifacts" -> jsonArrayOrEmpty(agentSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.agentListArtifacts(ptr)
+                })
+                "artifactShare" -> agentSessions.withPointer(p.string("handle", 0)) { ptr ->
+                    native.artifactShare(
+                        ptr,
+                        p.string("artifactId", 1),
+                    )
+                }
                 "agentFreeSession" -> agentFreeSession(p)
 
                 // --- Pinch: no Android backing ---
@@ -375,19 +410,16 @@ class WebViewBridge(
     private fun agentCreateSession(p: RpcParams): String {
         val ptr = native.agentCreateSession(p.string("sessionId", 0))
         if (ptr == 0L) throw IllegalStateException("agentCreateSession failed (native returned 0)")
-        return agentSessions.register(ptr)
+        return agentSessions.register(ptr) ?: run {
+            try { native.agentFreeSession(ptr) } catch (_: Exception) {}
+            throw IllegalStateException("WebViewBridge is destroyed")
+        }
     }
 
     private fun agentFreeSession(p: RpcParams): Any? {
         val handle = p.string("handle", 0)
         agentSessions.unregister(handle)?.let { native.agentFreeSession(it) }
         return null
-    }
-
-    private fun agentPtr(p: RpcParams): Long {
-        val handle = p.string("handle", 0)
-        return agentSessions.resolve(handle)
-            ?: throw IllegalArgumentException("Unknown agent handle: $handle")
     }
 
     // ─── Chat handlers ───────────────────────────────────────────────────────
@@ -402,29 +434,41 @@ class WebViewBridge(
     private fun chatSessionStart(p: RpcParams): String {
         val ptr = newChatSession(chatSessionConfig(p, optsIndex = 0))
         if (ptr == 0L) throw IllegalStateException("chatSessionStart failed (native returned 0)")
-        return chatSessions.register(ptr)
+        return chatSessions.register(ptr) ?: run {
+            try { native.chatSessionFree(ptr) } catch (_: Exception) {}
+            throw IllegalStateException("WebViewBridge is destroyed")
+        }
     }
 
     private fun chatSessionResume(p: RpcParams): String {
         val conversationId = p.optString("conversationId", 0)
             ?: p.optString("handle", 0)
             ?: p.string("sessionId", 0)
-        val existingPtr = chatSessions.resolve(conversationId)
-        if (existingPtr != null) {
+        val existing = try {
+            chatSessions.withPointer(conversationId) { conversationId }
+        } catch (_: Exception) {
+            null
+        }
+        if (existing != null) {
             return conversationId
         }
         val ptr = newChatSession(chatSessionConfig(p, optsIndex = 1))
         if (ptr == 0L) throw IllegalStateException("chatSessionResume failed (native returned 0)")
-        val registeredHandle = chatSessions.register(ptr)
+        val registeredHandle = chatSessions.register(ptr) ?: run {
+            try { native.chatSessionFree(ptr) } catch (_: Exception) {}
+            throw IllegalStateException("WebViewBridge is destroyed")
+        }
         val historyJson = native.getConversationMessagesJson(conversationId)
         if (!historyJson.isNullOrEmpty()) {
             val list = JSONArray(historyJson)
-            for (i in 0 until list.length()) {
-                val item = list.optJSONObject(i) ?: continue
-                val content = item.optString("content")
-                when (item.optString("role")) {
-                    "user" -> native.chatAppendUserMessage(ptr, content)
-                    "assistant" -> native.chatAppendAssistantMessage(ptr, content, "[]")
+            chatSessions.withPointer(registeredHandle) { leasedPtr ->
+                for (i in 0 until list.length()) {
+                    val item = list.optJSONObject(i) ?: continue
+                    val content = item.optString("content")
+                    when (item.optString("role")) {
+                        "user" -> native.chatAppendUserMessage(leasedPtr, content)
+                        "assistant" -> native.chatAppendAssistantMessage(leasedPtr, content, "[]")
+                    }
                 }
             }
         }
@@ -484,56 +528,56 @@ class WebViewBridge(
         return null
     }
 
-    private fun chatPtr(p: RpcParams): Long {
-        val handle = p.string("handle", 0)
-        return chatSessions.resolve(handle)
-            ?: throw IllegalArgumentException("Unknown chat handle: $handle")
-    }
-
     private fun chatSendMessage(p: RpcParams): Boolean {
-        val ptr = chatPtr(p)
         val content = p.optObject("content", 1)
             ?: throw IllegalArgumentException("Missing chat 'content'")
         val kind = content.optString("kind")
         val imageObj = content.optJSONObject("image")
-        return if (imageObj != null || kind == "image") {
-            val img = imageObj ?: content
-            val text = content.optString("text")
-            val mime = img.optString("mime")
-            val base64 = img.optString("base64")
-            val bytes = decodeBase64(base64)
-            if (text.isBlank()) {
-                native.chatSendImage(ptr, mime, bytes)
+        return chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+            if (imageObj != null || kind == "image") {
+                val img = imageObj ?: content
+                val text = content.optString("text")
+                val mime = img.optString("mime")
+                val base64 = img.optString("base64")
+                val bytes = decodeBase64(base64)
+                if (text.isBlank()) {
+                    native.chatSendImage(ptr, mime, bytes)
+                } else {
+                    native.chatSendTextWithImage(ptr, text, mime, bytes)
+                }
             } else {
-                native.chatSendTextWithImage(ptr, text, mime, bytes)
+                native.chatSendUserTurn(ptr, content.optString("text"))
             }
-        } else {
-            native.chatSendUserTurn(ptr, content.optString("text"))
         }
     }
 
     private fun chatPollEventsArray(p: RpcParams): JSONArray {
-        val single = native.chatSessionPollEvent(chatPtr(p)) ?: return JSONArray()
+        val single = chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+            native.chatSessionPollEvent(ptr)
+        } ?: return JSONArray()
         return JSONArray().put(JSONObject(single))
     }
 
     private fun chatRegisterTool(p: RpcParams): Boolean {
-        val ptr = chatPtr(p)
         val tool = p.optObject("tool", 1) ?: throw IllegalArgumentException("Missing 'tool'")
         val paramsJson = tool.optJSONObject("parameters")?.toString() ?: "{}"
-        return native.chatRegisterTool(ptr, tool.optString("name"), tool.optString("description"), paramsJson)
+        return chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+            native.chatRegisterTool(ptr, tool.optString("name"), tool.optString("description"), paramsJson)
+        }
     }
 
     private fun chatSendToolResult(p: RpcParams): Boolean {
-        val ptr = chatPtr(p)
         val result = p.optObject("result", 2)?.toString() ?: "{}"
-        return native.chatSendToolResult(
-            ptr,
-            p.string("toolCallId", 1),
-            p.optString("toolName", 3).orEmpty(),
-            result,
-            p.boolean("trigger", 4, true),
-        )
+        val trigger = p.boolean("trigger", 4, true)
+        return chatSessions.withPointer(p.string("handle", 0)) { ptr ->
+            native.chatSendToolResult(
+                ptr,
+                p.string("toolCallId", 1),
+                p.optString("toolName", 3).orEmpty(),
+                result,
+                trigger,
+            )
+        }
     }
 
     // ─── Conversation / space handlers ────────────────────────────────────────

@@ -125,6 +125,12 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 function MahoAiApp({store}: {store: MahoAiStore}) {
+  useEffect(() => {
+    return () => {
+      store.dispose();
+    };
+  }, [store]);
+
   const [compactSurface, setCompactSurface] =
       useState<'chat'|'routines'>('chat');
   const routineSurfaceClient = useMemo(

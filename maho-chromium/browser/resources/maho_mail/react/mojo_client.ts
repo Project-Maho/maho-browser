@@ -10,3 +10,8 @@ factory.createPageHandler(
   callbackRouter.$.bindNewPipeAndPassRemote(),
   handler.$.bindNewPipeAndPassReceiver()
 );
+
+export function closeMojoClient(): void {
+  (handler.$ as {close?: () => void}).close?.();
+  (callbackRouter.$ as {close?: () => void}).close?.();
+}

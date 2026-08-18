@@ -295,10 +295,10 @@ impl BrowserClient {
 
     /// Gracefully shut down the client connection.
     pub async fn shutdown(self) -> Result<()> {
-        let mut writer = self.writer.into_inner();
+        let mut writer = self.writer.lock().await;
         let shutdown_result = writer.shutdown().await.map_err(McpBridgeError::Io);
         self.pending.lock().await.clear();
-        self.read_task.into_inner().abort();
+        self.read_task.lock().await.abort();
         shutdown_result
     }
 
@@ -329,6 +329,12 @@ impl BrowserClient {
         writer.write_all(&buf).await?;
         writer.flush().await?;
         Ok(())
+    }
+}
+
+impl Drop for BrowserClient {
+    fn drop(&mut self) {
+        self.read_task.get_mut().abort();
     }
 }
 

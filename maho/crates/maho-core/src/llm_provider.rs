@@ -121,6 +121,10 @@ impl LLMProvider for OpenAICompatibleProvider {
             let mut sse_buffer = String::new();
 
             while let Some(chunk_result) = bytes_stream.next().await {
+                if tx.is_closed() {
+                    break;
+                }
+
                 let chunk = match chunk_result {
                     Ok(b) => b,
                     Err(e) => {
@@ -140,6 +144,10 @@ impl LLMProvider for OpenAICompatibleProvider {
                 sse_buffer.push_str(chunk_str);
 
                 while let Some(pos) = sse_buffer.find("\n\n") {
+                    if tx.is_closed() {
+                        break;
+                    }
+
                     let event_block = sse_buffer[..pos].to_string();
                     sse_buffer.drain(..pos + 2);
 
@@ -167,6 +175,9 @@ impl LLMProvider for OpenAICompatibleProvider {
                                             let _ = tx.try_send(Ok(LLMStreamChunk::Token(
                                                 content.to_string(),
                                             )));
+                                            if tx.is_closed() {
+                                                break;
+                                            }
                                         }
                                     }
 
@@ -201,6 +212,9 @@ impl LLMProvider for OpenAICompatibleProvider {
                                                     name,
                                                     arguments_delta,
                                                 }));
+                                            if tx.is_closed() {
+                                                break;
+                                            }
                                         }
                                     }
                                 }

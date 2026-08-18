@@ -12,11 +12,14 @@
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
 #include "base/no_destructor.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/unguessable_token.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
@@ -315,6 +318,9 @@ MahoBoostWindowController::MahoBoostWindowController(Browser* browser)
       browser_(browser),
       profile_(browser ? browser->profile() : nullptr) {
   if (browser_) {
+    if (auto* collection = GlobalBrowserCollection::GetInstance()) {
+      browser_collection_observation_.Observe(collection);
+    }
     TabStripModel* tab_strip = browser_->tab_strip_model();
     if (tab_strip) {
       observed_tab_strip_ = tab_strip;
@@ -576,6 +582,24 @@ void MahoBoostWindowController::SetEditorKilledCallback(
   editor_killed_callback_ = std::move(callback);
 }
 
+void MahoBoostWindowController::ScheduleDestroy() {
+  if (removal_posted_) {
+    return;
+  }
+  removal_posted_ = true;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoBoostWindowController::RemoveFromBrowser, browser_));
+}
+
+void MahoBoostWindowController::OnBrowserClosed(
+    BrowserWindowInterface* browser) {
+  if (!browser || browser->GetBrowserForMigrationOnly() != browser_) {
+    return;
+  }
+  ScheduleDestroy();
+}
+
 void MahoBoostWindowController::OnTabStripModelChanged(
     TabStripModel* /*tab_strip_model*/,
     const TabStripModelChange& /*change*/,
@@ -597,6 +621,7 @@ void MahoBoostWindowController::OnTabStripModelDestroyed(
     tab_strip_model->RemoveObserver(this);
   }
   observed_tab_strip_ = nullptr;
+  ScheduleDestroy();
 }
 
 void MahoBoostWindowController::DidFinishNavigation(

@@ -16,6 +16,7 @@
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
@@ -157,7 +158,13 @@ class SidebarCoreStateCache {
             fetch_footer + fetch_tree + fetch_favorites;
         return result;
       }
-      SpaceEntry* entry = space_id.empty() ? nullptr : &spaces_[space_id];
+      SpaceEntry* entry = nullptr;
+      if (!space_id.empty()) {
+        auto it = spaces_.find(space_id);
+        if (it != spaces_.end()) {
+          entry = &it->second;
+        }
+      }
       if (fetch_footer) {
         if (footer_.generation == footer_generation) {
           footer_.value = std::move(fetched_footer);
@@ -186,6 +193,11 @@ class SidebarCoreStateCache {
       }
     }
     return result;
+  }
+
+  void EraseSpace(const std::string& space_id) {
+    base::AutoLock lock(lock_);
+    spaces_.erase(space_id);
   }
 
   void Invalidate(const SidebarCacheInvalidation& invalidation) {
@@ -271,7 +283,7 @@ class SidebarCoreStateCache {
   }
 
   mutable base::Lock lock_;
-  ::MahoCore* core_ = nullptr;
+  RAW_PTR_EXCLUSION ::MahoCore* core_ = nullptr;
   FooterEntry footer_ GUARDED_BY(lock_);
   std::map<std::string, SpaceEntry> spaces_ GUARDED_BY(lock_);
   SidebarCoreCacheCounters counters_ GUARDED_BY(lock_);
@@ -1132,6 +1144,13 @@ void InvalidateSidebarCoreCacheForUpdatesJson(std::string_view updates_json) {
   }
   for (const auto& update : *updates) {
     if (const auto* dict = update.GetIfDict()) {
+      const std::string* kind = dict->FindString("kind");
+      if (kind && *kind == "space_deleted") {
+        std::string space_id = FindSpaceId(*dict);
+        if (!space_id.empty()) {
+          GetSidebarCoreStateCache().EraseSpace(space_id);
+        }
+      }
       GetSidebarCoreStateCache().Invalidate(InvalidationForUpdate(*dict));
     }
   }

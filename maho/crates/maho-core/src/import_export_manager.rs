@@ -87,6 +87,8 @@ pub struct HistoryEntry {
     pub last_visited: Option<DateTime>,
 }
 
+const MAX_IMPORT_HISTORY: usize = 20;
+
 pub struct ImportExportManager {
     import_history: Vec<ImportResult>,
 }
@@ -138,6 +140,10 @@ impl ImportExportManager {
             items_skipped: result.items_skipped,
             errors: result.errors.clone(),
         });
+        if self.import_history.len() > MAX_IMPORT_HISTORY {
+            let excess = self.import_history.len() - MAX_IMPORT_HISTORY;
+            self.import_history.drain(0..excess);
+        }
 
         result
     }
@@ -285,6 +291,10 @@ impl ImportExportManager {
             items_skipped: skipped,
             errors,
         });
+        if self.import_history.len() > MAX_IMPORT_HISTORY {
+            let excess = self.import_history.len() - MAX_IMPORT_HISTORY;
+            self.import_history.drain(0..excess);
+        }
 
         Ok(result)
     }

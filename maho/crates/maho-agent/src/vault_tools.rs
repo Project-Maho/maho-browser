@@ -152,7 +152,18 @@ impl VaultCredentialLeaseManager {
         }
     }
 
+    pub fn sweep_expired_leases(&mut self) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        self.leases
+            .retain(|_, lease| (now - (lease.handle.created_at_ms / 1000)) <= self.ttl_seconds);
+    }
+
     pub fn grant_lease(&mut self, item_id: &str, origin: &str) -> VaultCredentialHandle {
+        self.sweep_expired_leases();
         let handle = VaultCredentialHandle::new_opaque(item_id, origin);
         self.leases.insert(
             handle.handle_id.clone(),
@@ -169,6 +180,7 @@ impl VaultCredentialLeaseManager {
         handle_id: &str,
         target_origin: &str,
     ) -> Result<VaultCredentialLease, LeaseValidationError> {
+        self.sweep_expired_leases();
         use std::time::{SystemTime, UNIX_EPOCH};
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

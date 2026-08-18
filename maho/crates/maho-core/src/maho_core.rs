@@ -2970,6 +2970,7 @@ impl MahoCore {
                         panes: stable_panes,
                         orientation: config.orientation.clone(),
                         ratios: config.ratios.clone(),
+                        layout: config.layout.clone(),
                     },
                 );
             }
@@ -3304,14 +3305,15 @@ impl MahoCore {
                     }
 
                     if !skip_window && resolved_panes.len() >= 2 {
-                        self.split_view_configs.insert(
-                            window_id,
-                            maho_types::split_view::SplitViewConfig {
-                                panes: resolved_panes,
-                                orientation: persist_config.orientation,
-                                ratios: persist_config.ratios,
-                            },
-                        );
+                        let mut config = maho_types::split_view::SplitViewConfig {
+                            panes: resolved_panes,
+                            orientation: persist_config.orientation,
+                            ratios: persist_config.ratios,
+                            layout: persist_config.layout,
+                        };
+                        if config.normalize_layout() {
+                            self.split_view_configs.insert(window_id, config);
+                        }
                     }
                 }
             }
@@ -5300,30 +5302,26 @@ impl MahoCore {
         pane_id: &str,
     ) -> Option<SplitViewConfig> {
         let mut config = self.split_view_configs.get(window_id)?.clone();
-        if let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) {
-            config.panes.remove(pos);
-            if pos < config.ratios.len() {
-                config.ratios.remove(pos);
-            }
-            if config.panes.len() < 2 {
-                self.split_view_configs.remove(window_id);
-                None
-            } else {
-                let sum: f64 = config.ratios.iter().sum();
-                if sum > 0.0 {
-                    for r in &mut config.ratios {
-                        *r /= sum;
-                    }
-                } else {
-                    config.ratios = vec![1.0 / config.panes.len() as f64; config.panes.len()];
-                }
-                self.split_view_configs
-                    .insert(window_id.clone(), config.clone());
-                Some(config)
-            }
-        } else {
-            Some(config)
+        let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) else {
+            return Some(config);
+        };
+        if config.panes.len() <= 2 {
+            self.split_view_configs.remove(window_id);
+            return None;
         }
+        let mut layout = config.layout_tree()?;
+        if !layout.remove_pane(pos) {
+            return Some(config);
+        }
+        config.panes.remove(pos);
+        config.layout = Some(layout);
+        if !config.normalize_layout() {
+            self.split_view_configs.remove(window_id);
+            return None;
+        }
+        self.split_view_configs
+            .insert(window_id.clone(), config.clone());
+        Some(config)
     }
 
     fn resize_split_view_pane(
@@ -5333,37 +5331,20 @@ impl MahoCore {
         ratio: f64,
     ) -> Option<SplitViewConfig> {
         let mut config = self.split_view_configs.get(window_id)?.clone();
-        if let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) {
-            if config.panes.len() > 1 && pos < config.ratios.len() {
-                let old_ratio = config.ratios[pos];
-                config.ratios[pos] = ratio;
-                let remaining_new = 1.0 - ratio;
-                let remaining_old = 1.0 - old_ratio;
-                if remaining_old > 0.0 && remaining_new >= 0.0 {
-                    let scale = remaining_new / remaining_old;
-                    for (i, r) in config.ratios.iter_mut().enumerate() {
-                        if i != pos {
-                            *r *= scale;
-                        }
-                    }
-                } else {
-                    let rest_count = config.panes.len() - 1;
-                    let rest_val = remaining_new / rest_count as f64;
-                    for (i, r) in config.ratios.iter_mut().enumerate() {
-                        if i != pos {
-                            *r = rest_val;
-                        }
-                    }
-                }
-                self.split_view_configs
-                    .insert(window_id.clone(), config.clone());
-                Some(config)
-            } else {
-                Some(config)
-            }
-        } else {
-            Some(config)
+        let Some(pos) = config.panes.iter().position(|p| p.tab_id.0 == pane_id) else {
+            return Some(config);
+        };
+        let mut layout = config.layout_tree()?;
+        if !layout.resize_pane_weight(pos, ratio) {
+            return Some(config);
         }
+        config.layout = Some(layout);
+        if !config.normalize_layout() {
+            return Some(config);
+        }
+        self.split_view_configs
+            .insert(window_id.clone(), config.clone());
+        Some(config)
     }
 
     pub fn handle_event(&mut self, event: ShellEvent) -> Vec<CoreUpdate> {
@@ -5693,12 +5674,14 @@ impl MahoCore {
                 window_id,
                 tab_ids,
                 orientation,
+                layout,
             } => {
                 self.set_split_view_config(
                     window_id.clone(),
                     SplitConfig {
                         tab_ids: tab_ids.clone(),
                         orientation: orientation.clone(),
+                        layout: layout.clone(),
                     },
                 );
                 let config = self.get_split_view_config(window_id);
@@ -12305,37 +12288,53 @@ impl MahoCore {
             .as_mut()
             .map(|manager| manager.drain_outgoing_messages_with_queue_rows())
             .unwrap_or_default();
-        let leased_rows = queued
-            .iter()
-            .filter_map(|queued| queued.queue_row_id)
-            .collect::<Vec<_>>();
-        let leases = match (self.storage.as_ref(), leased_rows.is_empty()) {
-            (Some(storage), false) => storage
-                .lease_sync_entities(&leased_rows)
-                .map_err(|error| error.to_string())?,
-            _ => Vec::new(),
-        };
-        let delivery_ids = leases
-            .into_iter()
-            .map(|lease| (lease.id, lease.delivery_id))
-            .collect::<HashMap<_, _>>();
+        if queued.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        queued
-            .into_iter()
-            .map(|queued| {
-                let payload =
-                    serde_json::to_vec(&queued.message).map_err(|error| error.to_string())?;
-                let mut envelope =
-                    SyncEnvelopeV2::new(payload).map_err(|error| error.to_string())?;
-                if let Some(row_id) = queued.queue_row_id {
-                    envelope.delivery_id = delivery_ids
-                        .get(&row_id)
-                        .cloned()
-                        .ok_or_else(|| format!("sync queue row {row_id} was not leased"))?;
+        let build_result = (|| -> Result<Vec<SyncEnvelopeV2>, String> {
+            let leased_rows = queued
+                .iter()
+                .filter_map(|queued| queued.queue_row_id)
+                .collect::<Vec<_>>();
+            let leases = match (self.storage.as_ref(), leased_rows.is_empty()) {
+                (Some(storage), false) => storage
+                    .lease_sync_entities(&leased_rows)
+                    .map_err(|error| error.to_string())?,
+                _ => Vec::new(),
+            };
+            let delivery_ids = leases
+                .into_iter()
+                .map(|lease| (lease.id, lease.delivery_id))
+                .collect::<HashMap<_, _>>();
+
+            queued
+                .iter()
+                .map(|queued| {
+                    let payload =
+                        serde_json::to_vec(&queued.message).map_err(|error| error.to_string())?;
+                    let mut envelope =
+                        SyncEnvelopeV2::new(payload).map_err(|error| error.to_string())?;
+                    if let Some(row_id) = queued.queue_row_id {
+                        envelope.delivery_id = delivery_ids
+                            .get(&row_id)
+                            .cloned()
+                            .ok_or_else(|| format!("sync queue row {row_id} was not leased"))?;
+                    }
+                    Ok(envelope)
+                })
+                .collect()
+        })();
+
+        match build_result {
+            Ok(envelopes) => Ok(envelopes),
+            Err(error) => {
+                if let Some(manager) = self.sync_manager.as_mut() {
+                    manager.restore_outgoing_messages(queued);
                 }
-                Ok(envelope)
-            })
-            .collect()
+                Err(error)
+            }
+        }
     }
 
     pub fn ack_sync_delivery(&self, delivery_id: &str, relay_seq: u64) -> Result<bool, String> {

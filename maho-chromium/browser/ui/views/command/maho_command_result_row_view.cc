@@ -860,9 +860,9 @@ void MahoCommandResultRowView::SetAskAffordance(bool ask_affordance) {
 }
 
 void MahoCommandResultRowView::RebuildGlyph() {
-  glyph_container_->RemoveAllChildViews();
   glyph_image_ = nullptr;
   favicon_image_ = nullptr;
+  glyph_container_->RemoveAllChildViews();
 
   if (ask_affordance_) {
     uses_fallback_glyph_ = false;

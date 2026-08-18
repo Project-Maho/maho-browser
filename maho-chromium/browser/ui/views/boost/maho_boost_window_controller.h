@@ -10,12 +10,16 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
+#include "base/scoped_observation.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "maho/browser/ui/browser_user_data.h"
 #include "maho/browser/ui/webui/maho_boost/maho_boost.mojom.h"
 
 class Browser;
+class BrowserWindowInterface;
+class GlobalBrowserCollection;
 class Profile;
 class TabStripModel;
 
@@ -53,6 +57,7 @@ inline constexpr int kCodeModeRightAlignOffsetPx = 265;
 // first).
 class MahoBoostWindowController
     : public BrowserUserData<MahoBoostWindowController>,
+      public BrowserCollectionObserver,
       public TabStripModelObserver,
       public content::WebContentsObserver {
  public:
@@ -112,6 +117,9 @@ class MahoBoostWindowController
   bool IsHostClosePendingForTesting() const { return host_close_pending_; }
   void FireHostCloseWatchdogForTesting() { ForceHostClose(); }
 
+  // BrowserCollectionObserver:
+  void OnBrowserClosed(BrowserWindowInterface* browser) override;
+
   // TabStripModelObserver:
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,
@@ -138,6 +146,7 @@ class MahoBoostWindowController
   bool ActivateTarget(content::WebContents* target_tab);
   void StartObservingTab(content::WebContents* target_tab);
   void StopObservingTab();
+  void ScheduleDestroy();
 
   raw_ptr<Browser> browser_;
   raw_ptr<Profile> profile_;
@@ -161,6 +170,11 @@ class MahoBoostWindowController
   // True only when entering Code mode shifted the widget left. Returning to
   // Boost consumes this state to reverse that exact shift.
   bool code_mode_offset_applied_ = false;
+
+  bool removal_posted_ = false;
+
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      browser_collection_observation_{this};
 
   base::RepeatingClosure editor_killed_callback_;
 

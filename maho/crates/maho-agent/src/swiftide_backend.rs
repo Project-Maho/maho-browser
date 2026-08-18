@@ -3362,6 +3362,18 @@ impl SwiftideBackend {
                 None
             };
 
+            // Purge MCP client cache entries for deleted servers.
+            {
+                let mut cache = self.mcp_client_cache.lock_unpoison();
+                cache.retain(|k, _| {
+                    if let Some((id, _)) = k.split_once("::") {
+                        mcp_servers.iter().any(|s| s.id == id)
+                    } else {
+                        false
+                    }
+                });
+            }
+
             for server in mcp_servers {
                 if !should_attempt_mcp_connect(&server) {
                     continue;
@@ -3861,6 +3873,18 @@ impl SwiftideBackend {
 
             None
         };
+
+        // Purge MCP client cache entries for deleted servers.
+        {
+            let mut cache = self.mcp_client_cache.lock_unpoison();
+            cache.retain(|k, _| {
+                if let Some((id, _)) = k.split_once("::") {
+                    mcp_servers.iter().any(|s| s.id == id)
+                } else {
+                    false
+                }
+            });
+        }
 
         for server in mcp_servers {
             if !server.trusted {
@@ -4413,6 +4437,28 @@ impl SwiftideBackend {
     }
 }
 
+struct SessionTurnGuard {
+    active_sessions: Arc<Mutex<std::collections::HashMap<String, tokio::task::AbortHandle>>>,
+    session_id: String,
+    abort_handle: tokio::task::AbortHandle,
+    defused: bool,
+}
+
+impl SessionTurnGuard {
+    fn defuse(mut self) {
+        self.defused = true;
+    }
+}
+
+impl Drop for SessionTurnGuard {
+    fn drop(&mut self) {
+        if !self.defused {
+            self.abort_handle.abort();
+            self.active_sessions.lock_unpoison().remove(&self.session_id);
+        }
+    }
+}
+
 #[async_trait]
 
 impl AgentRuntime for SwiftideBackend {
@@ -4471,8 +4517,16 @@ impl AgentRuntime for SwiftideBackend {
             join_handle
         };
 
+        let guard = SessionTurnGuard {
+            active_sessions: Arc::clone(&self.active_sessions),
+            session_id: session_id.to_string(),
+            abort_handle: join_handle.abort_handle(),
+            defused: false,
+        };
+
         let res = join_handle.await;
 
+        guard.defuse();
         self.active_sessions.lock_unpoison().remove(session_id);
 
         let elapsed = start_time.elapsed();
@@ -4547,8 +4601,16 @@ impl AgentRuntime for SwiftideBackend {
             join_handle
         };
 
+        let guard = SessionTurnGuard {
+            active_sessions: Arc::clone(&self.active_sessions),
+            session_id: session_id.to_string(),
+            abort_handle: join_handle.abort_handle(),
+            defused: false,
+        };
+
         let res = join_handle.await;
 
+        guard.defuse();
         self.active_sessions.lock_unpoison().remove(session_id);
 
         let elapsed = start_time.elapsed();

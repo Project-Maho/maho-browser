@@ -10,6 +10,8 @@ use crate::sync_models::{
 };
 use std::collections::HashMap;
 
+const MAX_RECEIVED_TABS: usize = 500;
+
 #[derive(Clone, Debug)]
 pub(crate) struct QueuedSyncMessage {
     pub message: SyncMessage,
@@ -276,6 +278,9 @@ impl SyncManager {
                         message: SyncMessage::Encrypted { data },
                         queue_row_id: row_id_opt,
                     });
+                    if let Some(row_id) = row_id_opt {
+                        self.sent_entities.push(row_id);
+                    }
                 }
                 Err(err) => self.record_transport_error(err),
             }
@@ -310,10 +315,12 @@ impl SyncManager {
         };
 
         match outcome {
-            Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
-                message: SyncMessage::Encrypted { data },
-                queue_row_id: None,
-            }),
+            Ok(data) => {
+                self.outgoing_messages.push(QueuedSyncMessage {
+                    message: SyncMessage::Encrypted { data },
+                    queue_row_id: None,
+                });
+            }
             Err(err) => self.record_transport_error(err),
         }
     }
@@ -749,6 +756,10 @@ impl SyncManager {
                     sender_device_type: sender_type,
                     received_at: chrono::Utc::now().to_rfc3339(),
                 });
+                if self.received_tabs.len() > MAX_RECEIVED_TABS {
+                    let excess = self.received_tabs.len() - MAX_RECEIVED_TABS;
+                    self.received_tabs.drain(0..excess);
+                }
             }
             SyncMessage::DeviceJoined { device } => {
                 self.devices.insert(device.id.clone(), device);
@@ -792,10 +803,12 @@ impl SyncManager {
         };
 
         match outcome {
-            Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
-                message: SyncMessage::Encrypted { data },
-                queue_row_id: None,
-            }),
+            Ok(data) => {
+                self.outgoing_messages.push(QueuedSyncMessage {
+                    message: SyncMessage::Encrypted { data },
+                    queue_row_id: None,
+                });
+            }
             Err(err) => self.record_transport_error(err),
         }
     }
@@ -810,6 +823,14 @@ impl SyncManager {
 
     pub(crate) fn drain_outgoing_messages_with_queue_rows(&mut self) -> Vec<QueuedSyncMessage> {
         std::mem::take(&mut self.outgoing_messages)
+    }
+
+    pub(crate) fn restore_outgoing_messages(&mut self, mut messages: Vec<QueuedSyncMessage>) {
+        if messages.is_empty() {
+            return;
+        }
+        std::mem::swap(&mut self.outgoing_messages, &mut messages);
+        self.outgoing_messages.extend(messages);
     }
 
     /// Get and drain sent entities' queue row IDs

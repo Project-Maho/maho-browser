@@ -13,11 +13,11 @@
 #include <Carbon/Carbon.h>
 
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #endif
 
 #include "base/functional/callback.h"
 #include "base/json/json_reader.h"
+#include "base/scoped_observation.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
@@ -25,7 +25,9 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "maho/browser/maho_core_holder.h"
@@ -79,7 +81,36 @@ std::map<Profile*, base::WeakPtr<Browser>>& GetActiveMahoMiniWindows() {
   return *active_windows;
 }
 
+std::map<Browser*, std::string>& GetOriginatingSpaceIds();
+
+class MahoMiniBrowserDestructionObserver : public BrowserCollectionObserver {
+ public:
+  MahoMiniBrowserDestructionObserver() {
+    if (auto* collection = GlobalBrowserCollection::GetInstance()) {
+      observation_.Observe(collection);
+    }
+  }
+  ~MahoMiniBrowserDestructionObserver() override = default;
+
+  // BrowserCollectionObserver:
+  void OnBrowserClosed(BrowserWindowInterface* browser) override {
+    if (!browser) {
+      return;
+    }
+    Browser* browser_ptr = browser->GetBrowserForMigrationOnly();
+    if (browser_ptr) {
+      GetOriginatingSpaceIds().erase(browser_ptr);
+    }
+  }
+
+ private:
+  base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
+      observation_{this};
+};
+
 std::map<Browser*, std::string>& GetOriginatingSpaceIds() {
+  static base::NoDestructor<MahoMiniBrowserDestructionObserver>
+      destruction_observer;
   static base::NoDestructor<std::map<Browser*, std::string>> space_ids;
   return *space_ids;
 }

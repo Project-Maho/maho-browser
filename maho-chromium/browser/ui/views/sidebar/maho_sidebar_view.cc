@@ -43,6 +43,8 @@
 #include "chrome/browser/ui/tabs/tab_change_type.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view.h"
+#include "chrome/browser/ui/views/frame/multi_contents_view_drop_target_controller.h"
 #include "components/translate/content/browser/content_translate_driver.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
@@ -235,6 +237,7 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
 
 MahoSidebarView::~MahoSidebarView() {
   FinishSpaceSlide();
+  outgoing_space_layer_owner_.reset();
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->RemoveObserver(this);
   }
@@ -242,6 +245,30 @@ MahoSidebarView::~MahoSidebarView() {
     tab_strip_model()->RemoveObserver(this);
   }
   translate_observation_.Reset();
+  body_host_ = nullptr;
+  content_host_ = nullptr;
+  tabs_surface_ = nullptr;
+  library_container_ = nullptr;
+  library_divider_ = nullptr;
+  library_content_host_ = nullptr;
+  top_region_ = nullptr;
+  archive_view_ = nullptr;
+  downloads_view_ = nullptr;
+  media_view_ = nullptr;
+  spaces_view_ = nullptr;
+  library_rail_view_ = nullptr;
+  top_bar_view_ = nullptr;
+  search_view_ = nullptr;
+  favorites_view_ = nullptr;
+  tab_list_view_ = nullptr;
+  space_header_view_ = nullptr;
+  tab_scroll_view_ = nullptr;
+  footer_view_ = nullptr;
+  now_playing_view_ = nullptr;
+  if (update_notification_view_) update_notification_view_->RemoveObserver(this);
+  update_notification_view_ = nullptr;
+  create_space_view_ = nullptr;
+  grain_overlay_ = nullptr;
 }
 
 MahoSidebarNowPlayingView* MahoSidebarView::AddNowPlayingView(std::unique_ptr<MahoSidebarNowPlayingView> view) {
@@ -2154,6 +2181,12 @@ void MahoSidebarView::OnDragExited() {
 }
 
 void MahoSidebarView::OnDragEnded() {
+  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+      browser_view && browser_view->multi_contents_view()->IsDragAndDropEnabled()) {
+    browser_view->multi_contents_view()
+        ->drop_target_controller()
+        .OnSidebarTabDragEnded();
+  }
   last_over_favorites_ = false;
   if (favorites_view_) {
     favorites_view_->OnDragEnded();
@@ -2165,6 +2198,12 @@ void MahoSidebarView::OnDragEnded() {
 }
 
 void MahoSidebarView::OnDragStarted(const std::string& tab_id) {
+  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+      browser_view && browser_view->multi_contents_view()->IsDragAndDropEnabled()) {
+    browser_view->multi_contents_view()
+        ->drop_target_controller()
+        .OnSidebarTabDragStarted();
+  }
   if (favorites_view_) {
     favorites_view_->OnExternalDragStarted(tab_id);
   }

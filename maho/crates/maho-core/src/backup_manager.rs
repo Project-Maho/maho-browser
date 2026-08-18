@@ -6,6 +6,7 @@ const BACKUP_MAGIC: &[u8; 4] = b"MAHO";
 const BACKUP_VERSION: u32 = 1;
 const ENCRYPTION_NONE: u8 = 0;
 const ENCRYPTION_XCHACHA20: u8 = 1;
+const MAX_BACKUP_HISTORY: usize = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BackupEncryption {
@@ -156,6 +157,10 @@ impl BackupManager {
 
         // Record in history
         self.backup_history.push(data.metadata);
+        if self.backup_history.len() > MAX_BACKUP_HISTORY {
+            let excess = self.backup_history.len() - MAX_BACKUP_HISTORY;
+            self.backup_history.drain(0..excess);
+        }
 
         Ok(output)
     }

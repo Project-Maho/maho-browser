@@ -15,6 +15,8 @@ pub struct Notification {
     pub read: bool,
 }
 
+const MAX_ACTIVE_NOTIFICATIONS: usize = 200;
+
 /// Manages web notifications: queue, dismiss, filter by origin
 pub struct NotificationManager {
     notifications: Vec<Notification>,
@@ -78,6 +80,25 @@ impl NotificationManager {
         };
 
         self.notifications.push(notification);
+        if self.notifications.len() > MAX_ACTIVE_NOTIFICATIONS {
+            let excess = self.notifications.len() - MAX_ACTIVE_NOTIFICATIONS;
+            let mut read_indices: Vec<usize> = self
+                .notifications
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.read)
+                .map(|(i, _)| i)
+                .take(excess)
+                .collect();
+            read_indices.reverse();
+            for idx in read_indices {
+                self.notifications.remove(idx);
+            }
+            if self.notifications.len() > MAX_ACTIVE_NOTIFICATIONS {
+                let remaining_excess = self.notifications.len() - MAX_ACTIVE_NOTIFICATIONS;
+                self.notifications.drain(0..remaining_excess);
+            }
+        }
         Some(view_model)
     }
 

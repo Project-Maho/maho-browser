@@ -233,6 +233,7 @@ export function createMahoAiStore(): MahoAiStore {
 export class MahoAiStore {
   private state = createInitialState();
   private listeners = new Set<Listener>();
+  private listenerIds: number[] = [];
   private readonly acceptedAskMahoSessionIds = new Set<string>();
   private readonly pendingRuntimeEventsBySessionId = new Map<string, RuntimeEvent[]>();
   private selectionRevision = 0;
@@ -294,6 +295,33 @@ export class MahoAiStore {
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  dispose(): void {
+    for (const id of this.listenerIds) {
+      this.callbackRouter.removeListener(id);
+    }
+    this.listenerIds = [];
+    (this.callbackRouter.$ as {close?: () => void}).close?.();
+    (this.pageHandler.$ as {close?: () => void}).close?.();
+    if (this.focusListener) {
+      window.removeEventListener('focus', this.focusListener);
+      this.focusListener = null;
+    }
+    if (this.creditBalanceRefreshTimer !== undefined) {
+      clearTimeout(this.creditBalanceRefreshTimer);
+      this.creditBalanceRefreshTimer = undefined;
+    }
+    if (this.rafHandle !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(this.rafHandle);
+      } else {
+        clearTimeout(this.rafHandle);
+      }
+      this.rafHandle = null;
+    }
+    this.notifyScheduled = false;
+    this.listeners.clear();
   }
 
   async bootstrap(): Promise<void> {
@@ -1315,50 +1343,67 @@ export class MahoAiStore {
     });
   }
 
+  private registerCallbackListener(id: unknown) {
+    if (typeof id === 'number') {
+      this.listenerIds.push(id);
+    }
+  }
+
   private bindCallbacks() {
-    this.callbackRouter.onRuntimeEvent.addListener((event: RuntimeEvent) => {
-      const sessionId = event.sessionId;
-      if (!this.state.sessionsById[sessionId]) {
-        console.warn('[maho-ai] runtime event deferred for unknown session', sessionId);
-        const pendingEvents = this.pendingRuntimeEventsBySessionId.get(sessionId) || [];
-        if (!pendingEvents.some(pendingEvent => pendingEvent.sequence === event.sequence)) {
-          this.pendingRuntimeEventsBySessionId.set(sessionId, [...pendingEvents, event]);
+    this.registerCallbackListener(
+      this.callbackRouter.onRuntimeEvent.addListener((event: RuntimeEvent) => {
+        const sessionId = event.sessionId;
+        if (!this.state.sessionsById[sessionId]) {
+          console.warn('[maho-ai] runtime event deferred for unknown session', sessionId);
+          const pendingEvents = this.pendingRuntimeEventsBySessionId.get(sessionId) || [];
+          if (!pendingEvents.some(pendingEvent => pendingEvent.sequence === event.sequence)) {
+            this.pendingRuntimeEventsBySessionId.set(sessionId, [...pendingEvents, event]);
+          }
+          return;
         }
-        return;
-      }
 
-      this.patch(state => {
-        this.applyRuntimeEvent(state, sessionId, event);
-      });
-    });
-
-    this.callbackRouter.onConnectionStateChanged.addListener((state: RuntimeConnectionState) => {
-      this.patch(snapshot => {
-        snapshot.connectionState = state;
-      });
-    });
-
-    this.callbackRouter.onSessionUpdated.addListener((session: SessionInfo) => {
-      this.patch(state => {
-        state.sessionsById[session.sessionId] = session;
-        state.sessionOrder = sortSessionIds(state.sessionsById);
-      });
-    });
-
-    this.callbackRouter.onAISettingsChanged.addListener(
-        (info: AISettingsInfoPayload) => {
-          this.applyAISettings(info);
+        this.patch(state => {
+          this.applyRuntimeEvent(state, sessionId, event);
         });
+      })
+    );
 
-    this.callbackRouter.onAskMahoSessionAccepted.addListener((requestId: string, session: SessionInfo) => {
-      void this.ingestAskMahoSessionAccepted(requestId, session);
-    });
+    this.registerCallbackListener(
+      this.callbackRouter.onConnectionStateChanged.addListener((state: RuntimeConnectionState) => {
+        this.patch(snapshot => {
+          snapshot.connectionState = state;
+        });
+      })
+    );
+
+    this.registerCallbackListener(
+      this.callbackRouter.onSessionUpdated.addListener((session: SessionInfo) => {
+        this.patch(state => {
+          state.sessionsById[session.sessionId] = session;
+          state.sessionOrder = sortSessionIds(state.sessionsById);
+        });
+      })
+    );
+
+    this.registerCallbackListener(
+      this.callbackRouter.onAISettingsChanged.addListener(
+          (info: AISettingsInfoPayload) => {
+            this.applyAISettings(info);
+          })
+    );
+
+    this.registerCallbackListener(
+      this.callbackRouter.onAskMahoSessionAccepted.addListener((requestId: string, sessionInfo: SessionInfo) => {
+        void this.ingestAskMahoSessionAccepted(requestId, sessionInfo);
+      })
+    );
 
     this.bindCreditBalanceRefresh();
   }
 
   private creditBalanceRefreshTimer: ReturnType<typeof setTimeout> | undefined =
       undefined;
+  private focusListener: (() => void) | null = null;
 
   private bindCreditBalanceRefresh(): void {
     const scheduleRefresh = () => {
@@ -1372,7 +1417,8 @@ export class MahoAiStore {
         });
       }, 500);
     };
-    window.addEventListener('focus', scheduleRefresh);
+    this.focusListener = scheduleRefresh;
+    window.addEventListener('focus', this.focusListener);
   }
 
   async refreshAISettings(): Promise<void> {

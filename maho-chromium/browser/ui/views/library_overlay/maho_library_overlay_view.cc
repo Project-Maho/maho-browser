@@ -68,9 +68,9 @@ void MahoLibraryOverlayView::SetPalette(
 }
 
 void MahoLibraryOverlayView::BuildContent() {
-  card_container_->RemoveAllChildViews();
   archive_view_ = nullptr;
   downloads_view_ = nullptr;
+  card_container_->RemoveAllChildViews();
 
   switch (category_) {
     case Category::kArchivedTabs: {

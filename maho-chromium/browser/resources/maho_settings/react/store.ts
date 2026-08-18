@@ -279,6 +279,8 @@ export class MahoSettingsStore {
     this.callbackRouter.removeListener(this.settingsChangedListenerId);
     this.callbackRouter.removeListener(this.accountStatusChangedListenerId);
     this.callbackRouter.removeListener(this.updateStateChangedListenerId);
+    (this.callbackRouter?.$ as {close?: () => void} | undefined)?.close?.();
+    (this.pageHandler?.$ as {close?: () => void} | undefined)?.close?.();
     window.removeEventListener('popstate', this.popstateListener);
     for (const timer of this.toastTimers.values()) {
       clearTimeout(timer);

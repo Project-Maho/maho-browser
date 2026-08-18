@@ -43,6 +43,10 @@ class BrowserState: ObservableObject {
         }
     }
 
+    deinit {
+        tickTimer?.invalidate()
+    }
+
     func goBack() {
         bridge.sendEvent(name: "navigate_back")
         refreshState()

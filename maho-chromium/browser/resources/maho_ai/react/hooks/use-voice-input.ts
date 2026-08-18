@@ -95,6 +95,11 @@ export interface UseVoiceInputOptions {
 const voiceMojo = bindMojoPageHandler(
     PageCallbackRouter, PageHandlerRemote, PageHandlerFactory);
 
+export function closeVoiceMojo(): void {
+  (voiceMojo.router.$ as {close?: () => void}).close?.();
+  (voiceMojo.handler.$ as {close?: () => void}).close?.();
+}
+
 function hasVoiceCaptureSupport(): boolean {
   return typeof navigator !== 'undefined' &&
       typeof navigator.mediaDevices?.getUserMedia === 'function' &&

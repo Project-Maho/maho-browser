@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use maho_types::events::core_update::{CoreUpdate, LLMRequestContext};
 use maho_types::mcp::{ToolCall, ToolDescriptor, ToolPermission, ToolProvenance, ToolResult};
@@ -63,6 +64,7 @@ struct PendingToolLoop {
     remaining_external: Vec<ToolCall>,
     tool_round: u8,
     _conversation_messages: serde_json::Value,
+    created_at: std::time::Instant,
 }
 
 pub struct ToolRegistry {
@@ -266,6 +268,12 @@ impl ToolRegistry {
         serde_json::Value::Array(tools)
     }
 
+    pub fn sweep_stale_tool_loops(&mut self) {
+        let now = std::time::Instant::now();
+        self.pending_tool_loops
+            .retain(|_, entry| now.duration_since(entry.created_at) <= Duration::from_secs(3600));
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn handle_llm_response_with_tools(
         &mut self,
@@ -277,6 +285,8 @@ impl ToolRegistry {
         history_search_fn: &HistorySearchFn<'_>,
         bookmark_search_fn: &BookmarkSearchFn<'_>,
     ) -> Vec<CoreUpdate> {
+        self.sweep_stale_tool_loops();
+
         let current_round = self.active_tool_rounds.remove(request_id).unwrap_or(0);
         if current_round >= MAX_TOOL_ROUNDS {
             return vec![CoreUpdate::ChatCompletionReady {
@@ -387,6 +397,7 @@ impl ToolRegistry {
                     remaining_external: remaining,
                     tool_round: current_round + 1,
                     _conversation_messages: conversation_messages,
+                    created_at: std::time::Instant::now(),
                 },
             );
         } else if !completed.is_empty() {
@@ -1037,5 +1048,37 @@ mod tests {
         // lookup should resolve to the bare builtin
         let tool = mgr.get_tool("lookup").unwrap();
         assert_eq!(tool.description, "builtin");
+    }
+
+    #[test]
+    fn test_sweep_stale_tool_loops() {
+        let mut mgr = ToolRegistry::new();
+        mgr.pending_tool_loops.insert(
+            "stale_req".to_string(),
+            PendingToolLoop {
+                original_request_id: "stale_req".into(),
+                _tool_calls: vec![],
+                completed_results: vec![],
+                remaining_external: vec![],
+                tool_round: 1,
+                _conversation_messages: serde_json::json!([]),
+                created_at: std::time::Instant::now() - Duration::from_secs(3601),
+            },
+        );
+        mgr.pending_tool_loops.insert(
+            "fresh_req".to_string(),
+            PendingToolLoop {
+                original_request_id: "fresh_req".into(),
+                _tool_calls: vec![],
+                completed_results: vec![],
+                remaining_external: vec![],
+                tool_round: 1,
+                _conversation_messages: serde_json::json!([]),
+                created_at: std::time::Instant::now(),
+            },
+        );
+        mgr.sweep_stale_tool_loops();
+        assert!(!mgr.pending_tool_loops.contains_key("stale_req"));
+        assert!(mgr.pending_tool_loops.contains_key("fresh_req"));
     }
 }
