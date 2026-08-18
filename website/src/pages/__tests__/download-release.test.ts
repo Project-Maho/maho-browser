@@ -45,15 +45,17 @@ test("download page publishes every desktop package format", async () => {
 });
 
 test("download page states mobile availability honestly", async () => {
-  const page = await readFile(downloadPagePath, "utf8");
+globalThis.page = await readFile(downloadPagePath, "utf8");
 
   expect(page).toContain("id: 'ios'");
   expect(page).toContain("id: 'android'");
-  expect(page).toContain("status: 'Coming soon'");
-  expect(page).toContain("downloadUrl: null");
+  expect(page).toContain("status: 'Beta'");
+  expect(page).toContain("https://testflight.apple.com/join/JQf4rVm6");
+  expect(page).toContain("https://play.google.com/apps/internaltest/4699692750515426389");
   expect(page.toLowerCase()).not.toContain("download for iphone");
   expect(page.toLowerCase()).not.toContain("download for android");
 });
+
 
 test("download page gives each platform a dedicated icon card", async () => {
   const [page, icon] = await Promise.all([

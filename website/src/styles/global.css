@@ -148,3 +148,51 @@
   }
 
 }
+/* Maho Nav Star Logo — exact Discord Community block glow animation.
+   Uses the identical 3.2s ease-in-out breathing keyframe rhythm with
+   subtle drop-shadow glow tailored to the star icon. */
+@keyframes maho-star-discord-glow-dark {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(167, 139, 250, 0.22));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(167, 139, 250, 0.55)) drop-shadow(0 0 4px rgba(255, 255, 255, 0.65));
+  }
+}
+
+@keyframes maho-star-discord-glow-light {
+  0%, 100% {
+    filter: drop-shadow(0 0 4px rgba(88, 101, 242, 0.20));
+  }
+  50% {
+    filter: drop-shadow(0 0 14px rgba(88, 101, 242, 0.50)) drop-shadow(0 0 4px rgba(56, 189, 248, 0.60));
+  }
+}
+
+.maho-nav-star-brand {
+  animation: maho-star-discord-glow-dark 3.2s ease-in-out infinite;
+  will-change: filter;
+}
+
+.light .maho-nav-star-brand {
+  animation: maho-star-discord-glow-light 3.2s ease-in-out infinite;
+}
+
+.maho-nav-star-brand:is(:hover, :focus-visible) {
+  animation-play-state: paused;
+  filter: drop-shadow(0 0 18px rgba(167, 139, 250, 0.75)) drop-shadow(0 0 6px rgba(255, 255, 255, 0.9));
+}
+
+.light .maho-nav-star-brand:is(:hover, :focus-visible) {
+  filter: drop-shadow(0 0 18px rgba(88, 101, 242, 0.75)) drop-shadow(0 0 6px rgba(56, 189, 248, 0.9));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maho-nav-star-brand {
+    animation: none !important;
+    filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.28));
+  }
+  .light .maho-nav-star-brand {
+    filter: drop-shadow(0 0 6px rgba(88, 101, 242, 0.28));
+  }
+}
