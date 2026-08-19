@@ -184,7 +184,7 @@ void MahoPasswordAuthorizationService::ResetForTesting() {
   RevokeAll();
   next_request_id_ = 1;
   vault_locked_override_.reset();
-  interactive_authorization_enabled_for_testing_ = true;
+  interactive_authorization_enabled_for_testing_ = false;
 }
 
 void MahoPasswordAuthorizationService::

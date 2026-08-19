@@ -15,6 +15,7 @@ import {
   SelectShell,
   Toggle,
 } from './domain_panes.js';
+import {ImportPasswordsSection} from './passwords_import_flow.js';
 import {
   createPasswordErrorState,
   createPasswordLoadedState,
@@ -137,6 +138,10 @@ export function PasswordsPane(
             setPasswordsEnabledOverride={setPasswordsEnabledOverride}
             store={store}
           />
+          <ImportPasswordsSection
+            store={store}
+            onCommitted={() => loadPasswordSettings(false)}
+          />
         </>
       ) : null}
     </PaneShell>
@@ -160,7 +165,6 @@ function PasswordSettingsCard(
     <SectionCard
       title="Password settings"
       description={`Current provider: ${data.providerStatus.displayName}. Saved logins are managed in the Saved Passwords pane.`}
-      className="mb-6"
     >
       <ManagedSettingRow
         description="Enable password management to show saved passwords."

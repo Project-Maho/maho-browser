@@ -1,19 +1,16 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
-import React, {useState} from 'react';
+import React, {useMemo, useState} from 'react';
 
-import {Button} from '@ui/button';
-import {Database, Download, Loader2, ShieldAlert} from '@icons/lucide';
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@ui/select';
 import type {
   PasswordImportOperationResult,
   PasswordImportPreview,
 } from '../mojo.js';
-import {
-  EmptyDescription,
-  SectionCard,
-} from './domain_panes.js';
+import {SectionCard} from './domain_panes.js';
 import {
   ImportPreviewPanel,
+  ImportProviderPanel,
   ImportStatusMessage,
   ImportSummaryPanel,
   type ImportPreviewState,
@@ -21,10 +18,15 @@ import {
   type ImportSummaryState,
 } from './passwords_import_panels.js';
 import {
-  getPasswordImportSourceCards,
+  getDefaultPasswordImportFormat,
+  getPasswordImportFormat,
+  getPasswordImportProvider,
+  getPasswordImportProviders,
   summarizeImportFilePath,
   type PasswordImportFormatOption,
+  type PasswordImportProviderId,
 } from './passwords_import_model.js';
+import type {PasswordImportFormatId} from './passwords_model.js';
 import type {MahoSettingsStore} from './store.js';
 
 type ImportFlowState =
@@ -32,26 +34,46 @@ type ImportFlowState =
     | {readonly kind: 'preview'; readonly state: ImportPreviewState}
     | {readonly kind: 'summary'; readonly state: ImportSummaryState};
 
-type GuidedPasswordImportFlowProps = {
+type ImportPasswordsSectionProps = {
   readonly onCommitted: () => Promise<void>;
   readonly store: MahoSettingsStore;
 };
 
-const ICON_CLASS = 'size-4 shrink-0';
-const CARD_GRID_CLASS = 'grid gap-4 p-6 md:grid-cols-2';
-const SOURCE_CARD_CLASS = 'flex h-full flex-col gap-4 rounded-xl border border-border/70 bg-background/25 p-4';
-const FORMAT_BUTTON_CLASS = 'justify-start bg-background/70';
+const PROVIDER_SELECT_CLASS = 'w-full sm:max-w-sm';
 
-export function GuidedPasswordImportFlow({onCommitted, store}: GuidedPasswordImportFlowProps) {
+/**
+ * Password import belongs to the general Passwords settings pane rather than
+ * the Saved Passwords Vault browser. Keeping the whole guided flow behind this
+ * section makes that information-architecture boundary explicit at the call
+ * site in passwords_settings.tsx.
+ */
+export function ImportPasswordsSection({onCommitted, store}: ImportPasswordsSectionProps) {
   const handler = store.getHandler();
+  const providers = getPasswordImportProviders();
   const [busyFormatLabel, setBusyFormatLabel] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [flowState, setFlowState] = useState<ImportFlowState>({kind: 'idle'});
+  const [selectedProviderId, setSelectedProviderId] =
+      useState<PasswordImportProviderId>('onepassword');
+  const selectedProvider = useMemo(
+      () => getPasswordImportProvider(selectedProviderId), [selectedProviderId]);
+  const [selectedFormatId, setSelectedFormatId] = useState<PasswordImportFormatId>(
+      () => getDefaultPasswordImportFormat(getPasswordImportProvider('onepassword')).descriptor.formatId);
+  const selectedFormat = useMemo(
+      () => getPasswordImportFormat(selectedProvider, selectedFormatId),
+      [selectedFormatId, selectedProvider]);
   const [status, setStatus] = useState<ImportStatus | null>(null);
 
   const resetPreview = () => {
     setConfirmed(false);
     setFlowState({kind: 'idle'});
+    setStatus(null);
+  };
+
+  const selectProvider = (providerId: PasswordImportProviderId) => {
+    const provider = getPasswordImportProvider(providerId);
+    setSelectedProviderId(providerId);
+    setSelectedFormatId(getDefaultPasswordImportFormat(provider).descriptor.formatId);
     setStatus(null);
   };
 
@@ -126,48 +148,42 @@ export function GuidedPasswordImportFlow({onCommitted, store}: GuidedPasswordImp
   return (
     <SectionCard
       title="Import passwords"
-      description="Choose a user-exported file, preview safe counts first, then confirm before Maho writes anything to the Vault."
-      className="mt-6"
-    >
-      <div className={CARD_GRID_CLASS}>
-        {getPasswordImportSourceCards().map(card => (
-          <article className={SOURCE_CARD_CLASS} key={card.cardId}>
-            <div className="flex items-start gap-3">
-              <div className="mt-1 rounded-lg border border-border bg-background/70 p-2 text-muted-foreground">
-                <Database className={ICON_CLASS} />
-              </div>
-              <div className="min-w-0 space-y-1">
-                <h4 className="text-sm font-semibold text-foreground">{card.displayName}</h4>
-                <p className="text-xs leading-5 text-muted-foreground">{card.description}</p>
-                <p className="text-xs font-medium text-foreground">Accepted: {card.acceptedFormats}</p>
-              </div>
-            </div>
-            <ol className="grid gap-2 pl-4 text-xs leading-5 text-muted-foreground">
-              {card.instructions.map(instruction => <li className="list-decimal" key={instruction}>{instruction}</li>)}
-            </ol>
-            <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
-              <ShieldAlert className={ICON_CLASS} />
-              {card.warning}
-            </p>
-            <div className="mt-auto flex flex-wrap gap-2">
-              {card.formats.map(option => (
-                <Button
-                  className={FORMAT_BUTTON_CLASS}
-                  disabled={busyFormatLabel !== null}
-                  key={option.descriptor.formatId}
-                  type="button"
-                  variant="outline"
-                  onClick={() => void chooseFile(option)}
-                >
-                  {busyFormatLabel === option.descriptor.label ? <Loader2 className={`${ICON_CLASS} animate-spin`} /> : <Download className={ICON_CLASS} />}
-                  Choose {option.descriptor.label}
-                </Button>
-              ))}
-            </div>
-          </article>
-        ))}
-      </div>
-      {flowState.kind === 'idle' ? <EmptyDescription message="No import file selected yet." /> : null}
+      description="Import logins from another password manager here. Maho previews sanitized counts before writing anything to the local Vault."
+      className="mt-6">
+      {flowState.kind === 'idle' ? (
+        <div className="grid gap-4 p-6">
+          <div className="grid gap-1.5">
+            <label className="text-xs font-medium text-foreground" htmlFor="password-import-provider">
+              Password manager
+            </label>
+            <Select
+              disabled={busyFormatLabel !== null}
+              value={selectedProviderId}
+              onValueChange={value => selectProvider(value as PasswordImportProviderId)}>
+              <SelectTrigger
+                aria-label="Password import provider"
+                className={PROVIDER_SELECT_CLASS}
+                id="password-import-provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providers.map(provider => (
+                  <SelectItem key={provider.providerId} value={provider.providerId}>
+                    {provider.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <ImportProviderPanel
+            busy={busyFormatLabel !== null}
+            provider={selectedProvider}
+            selectedFormat={selectedFormat}
+            onChooseFile={chooseFile}
+            onFormatChange={setSelectedFormatId}
+          />
+        </div>
+      ) : null}
       {flowState.kind === 'preview' ? (
         <ImportPreviewPanel
           busy={busyFormatLabel !== null}

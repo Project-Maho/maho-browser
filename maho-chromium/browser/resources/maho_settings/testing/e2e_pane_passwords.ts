@@ -138,8 +138,21 @@ async function unlockVaultIfNeeded(cdp: CDP): Promise<boolean> {
   if (!await setInputByLabel(cdp, 'Vault master passphrase', 'correct passphrase')) {
     return false;
   }
-  if (vaultGate.needsRecovery && !await setInputByLabel(cdp, 'Vault recovery secret', 'recovery key')) {
-    return false;
+  if (vaultGate.needsRecovery) {
+    if (!await setInputByLabel(cdp, 'Confirm Vault master passphrase', 'correct passphrase')) {
+      return false;
+    }
+    if (!await setInputByLabel(cdp, 'Vault recovery secret', 'recovery key')) {
+      return false;
+    }
+    if (!await setInputByLabel(cdp, 'Confirm Vault recovery secret', 'recovery key')) {
+      return false;
+    }
+    await cdp.eval(`(function(){
+      var main = document.querySelector('main');
+      var cb = main ? main.querySelector('input[type="checkbox"][id="vault-recovery-kit-acknowledged"]') : null;
+      if (cb && !cb.checked) { cb.click(); }
+    })()`);
   }
 
   const label = vaultGate.needsRecovery ? 'Initialize Vault' : 'Unlock Vault';

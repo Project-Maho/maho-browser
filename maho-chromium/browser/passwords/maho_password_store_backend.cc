@@ -17,6 +17,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/uuid.h"
+#include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/values.h"
 #include "components/autofill/core/common/form_data.h"
@@ -836,7 +837,11 @@ ToStoredCredential(const MahoPasswordForm &form,
   cred.times_used_in_html_form = form.times_used_in_html_form;
   cred.display_name = form.display_name;
   cred.icon_url = GURL(form.icon_url);
-  cred.match_type = form.match_type;
+  if (form.match_type.has_value()) {
+    cred.match_type = *form.match_type;
+  } else {
+    cred.match_type.reset();
+  }
   cred.skip_zero_click = form.skip_zero_click;
   cred.in_store = form.in_store;
   cred.form_data = DecodeFormData(form.form_data_base64);
@@ -1029,9 +1034,10 @@ bool MahoPasswordStoreBackend::WasSnapshotDiscoveredForContext(
       snapshot_it->second.revision != revision) {
     return false;
   }
-  const GURL discovered_realm(snapshot_it->second.signon_realm);
-  return discovered_realm.is_valid() &&
-         context.requesting_origin.IsSameOriginWith(discovered_realm);
+  const url::Origin discovered_origin =
+      url::Origin::Create(GURL(snapshot_it->second.signon_realm));
+  return !discovered_origin.opaque() &&
+         context.requesting_origin == discovered_origin;
 }
 
 // static
@@ -1200,8 +1206,15 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
               return;
             }
             backend->ObserveIdentities(forms);
-            std::move(cb).Run(
-                ConvertToStoredCredentials(forms, &backend->identity_map_));
+            std::vector<password_manager::StoredCredential> creds =
+                ConvertToStoredCredentials(forms, &backend->identity_map_);
+            for (auto &c : creds) {
+              if (!c.match_type.has_value()) {
+                c.match_type =
+                    password_manager::PasswordForm::MatchType::kExact;
+              }
+            }
+            std::move(cb).Run(std::move(creds));
           },
           weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -1210,18 +1223,25 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
     const password_manager::PasswordFormDigest &form_digest,
     const password_manager::PasswordFillRequestContext &context,
     password_manager::BackendLoginsOrErrorReply callback) {
-  if (!enabled_ || !NativeWriteEnabled() || !IsMahoVaultRoutingActive() ||
-      context.requesting_origin.opaque()) {
+  if (!enabled_ || !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback),
                                   password_manager::BackendLoginsResult()));
     return;
   }
 
-  // The supplied browser-process context is authoritative. Do not infer a
-  // document or origin from the digest URL (or from any renderer/frame ID).
+  const std::string realm = !context.requesting_origin.opaque()
+                                ? context.requesting_origin.Serialize()
+                                : form_digest.signon_realm;
+  if (realm.empty()) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback),
+                                  password_manager::BackendLoginsResult()));
+    return;
+  }
+
   FillMatchingLoginsMahoAsync(
-      context.requesting_origin.Serialize(),
+      realm,
       base::BindOnce(
           [](base::WeakPtr<MahoPasswordStoreBackend> backend,
              password_manager::PasswordFillRequestContext request_context,
@@ -1235,8 +1255,15 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
             }
             backend->ObserveIdentities(forms);
             backend->RecordFillContext(request_context, forms);
-            std::move(cb).Run(
-                ConvertToStoredCredentials(forms, &backend->identity_map_));
+            std::vector<password_manager::StoredCredential> creds =
+                ConvertToStoredCredentials(forms, &backend->identity_map_);
+            for (auto &c : creds) {
+              if (!c.match_type.has_value()) {
+                c.match_type =
+                    password_manager::PasswordForm::MatchType::kExact;
+              }
+            }
+            std::move(cb).Run(std::move(creds));
           },
           weak_ptr_factory_.GetWeakPtr(), context, std::move(callback)));
 }
@@ -1248,6 +1275,12 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!enabled_ || !initialized_ || !NativeWriteEnabled() ||
       !IsMahoVaultRoutingActive() || context.requesting_origin.opaque() ||
       !selection.primary_key || selection.observed_revision == 0) {
+    LOG(INFO) << "ResolvePasswordFill failed check 1: enabled=" << enabled_
+              << " init=" << initialized_ << " nwe=" << NativeWriteEnabled()
+              << " routing=" << IsMahoVaultRoutingActive()
+              << " opaque=" << context.requesting_origin.opaque()
+              << " pk=" << selection.primary_key.has_value()
+              << " rev=" << selection.observed_revision;
     std::move(resolver).Run(std::nullopt);
     return;
   }
@@ -1260,6 +1293,10 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!item_id || !revision || *revision != selection.observed_revision ||
       identity_map_.RevisionForVaultId(*item_id) != revision ||
       !WasSnapshotDiscoveredForContext(context, primary_key, *revision)) {
+    LOG(INFO) << "ResolvePasswordFill failed check 2: item_id=" << item_id.has_value()
+              << " rev_match=" << (revision && *revision == selection.observed_revision)
+              << " rev_vault_match=" << (item_id && revision && identity_map_.RevisionForVaultId(*item_id) == revision)
+              << " was_snapshot=" << (revision && WasSnapshotDiscoveredForContext(context, primary_key, *revision));
     std::move(resolver).Run(std::nullopt);
     return;
   }
@@ -1268,12 +1305,16 @@ void MahoPasswordStoreBackend::ResolvePasswordFill(
   if (!IsPasswordOperationAuthorized(profile_key_, origin,
                                      PasswordAuthorizationAction::kFill) ||
       !NativeWriteEnabled() || !IsMahoVaultRoutingActive()) {
+    LOG(INFO) << "ResolvePasswordFill failed check 3: auth="
+              << IsPasswordOperationAuthorized(profile_key_, origin, PasswordAuthorizationAction::kFill);
     std::move(resolver).Run(std::nullopt);
     return;
   }
 
-  std::move(resolver).Run(ResolveBackendPassword(profile_key_, *item_id,
-                                                 selection.observed_revision));
+  auto resolution = ResolveBackendPassword(profile_key_, *item_id,
+                                           selection.observed_revision);
+  LOG(INFO) << "ResolvePasswordFill resolution success=" << resolution.has_value();
+  std::move(resolver).Run(std::move(resolution));
 }
 
 void MahoPasswordStoreBackend::AddLoginAsync(

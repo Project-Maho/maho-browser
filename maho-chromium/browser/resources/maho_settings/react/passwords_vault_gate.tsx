@@ -57,6 +57,37 @@ export interface VaultSetupValidationFailure {
   readonly message: string;
 }
 
+export interface VaultAccessCopy {
+  readonly actionLabel: 'Initialize Vault'|'Unlock Vault';
+  readonly description: string;
+  readonly mode: 'initialize'|'unlock';
+  readonly title: 'Set up Maho Vault'|'Unlock Maho Vault';
+}
+
+/**
+ * Keeps the never-initialized Vault setup path semantically separate from an
+ * initialized Vault that is merely locked. Callers can use this same copy for
+ * both the gate itself and regression assertions without inspecting secrets.
+ */
+export function getVaultAccessCopy(lockState: VaultLockState): VaultAccessCopy {
+  if (lockState === VaultLockState.kUninitialized) {
+    return {
+      actionLabel: 'Initialize Vault',
+      description:
+          'Create a local Vault before storing native passwords. The recovery secret is used only to recover this Vault.',
+      mode: 'initialize',
+      title: 'Set up Maho Vault',
+    };
+  }
+  return {
+    actionLabel: 'Unlock Vault',
+    description:
+        'Unlock your local Vault before viewing or changing saved native passwords.',
+    mode: 'unlock',
+    title: 'Unlock Maho Vault',
+  };
+}
+
 /**
  * Returns the first blocking failure for Vault initialization, or null when the
  * form may be submitted. Field order matches visual order so refocus lands on
@@ -140,11 +171,8 @@ export function VaultAccessGate(
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const lockState = vaultResult.status?.lockState ?? VaultLockState.kUninitialized;
-  const needsInitialize = lockState === VaultLockState.kUninitialized;
-  const title = needsInitialize ? 'Set up Maho Vault' : 'Unlock Maho Vault';
-  const description = needsInitialize ?
-      'Create a local Vault before storing native passwords. The recovery secret is used only to recover this Vault.' :
-      'Unlock your local Vault before viewing or changing saved native passwords.';
+  const accessCopy = getVaultAccessCopy(lockState);
+  const needsInitialize = accessCopy.mode === 'initialize';
 
   const clearSecrets = () => {
     setMasterPassphrase('');
@@ -223,9 +251,11 @@ export function VaultAccessGate(
   return (
     <ManagedSettingRow
       controlClassName={SETTING_CONTROL_STACKED_CLASS}
-      description={description}
-      title={title}>
-      <div className={SETTING_CONTROL_STACK_CLASS}>
+      description={accessCopy.description}
+      title={accessCopy.title}>
+      <div
+        className={SETTING_CONTROL_STACK_CLASS}
+        data-vault-access-mode={accessCopy.mode}>
         <div className={FIELD_GROUP_CLASS}>
           <label className={FIELD_LABEL_CLASS} htmlFor="vault-master-passphrase">
             Master passphrase
@@ -332,7 +362,7 @@ export function VaultAccessGate(
       </div>
       <div className={SETTING_ACTIONS_CLASS}>
         <ActionButton
-          label={busy ? 'Working…' : needsInitialize ? 'Initialize Vault' : 'Unlock Vault'}
+          label={busy ? 'Working…' : accessCopy.actionLabel}
           onClick={submit}
         />
       </div>

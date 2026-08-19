@@ -77,7 +77,25 @@ function createItem(): VaultItem {
 
 function exactButton(label: string): HTMLButtonElement | null {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-      .find(button => button.textContent?.trim() === label) ?? null;
+      .find(button => button.textContent?.trim() === label || button.getAttribute('aria-label') === label || button.getAttribute('aria-label')?.startsWith(`${label} for `)) ?? null;
+}
+
+async function clickDeleteMenuAction(): Promise<void> {
+  const more = exactButton('More options');
+  if (!more) {
+    throw new Error('missing More options button');
+  }
+  await act(async () => {
+    more.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
+  });
+  const deleteItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find(item => item.textContent?.trim() === 'Delete');
+  if (!deleteItem) {
+    throw new Error('missing Delete menu item');
+  }
+  await act(async () => {
+    deleteItem.click();
+  });
 }
 
 const PROVIDER_STATUS = {
@@ -222,7 +240,7 @@ describe('Saved Passwords lock-state callback', () => {
       await initialStatus.promise;
     });
 
-    expect(container.textContent).toContain('https://example.com');
+    expect(container.textContent).toContain('example.com');
     expect(exactButton('Copy')).not.toBeNull();
     expect(exactButton('Add password')).not.toBeNull();
     expect(exactButton('Fill')).toBeNull();
@@ -334,9 +352,7 @@ describe('Saved Passwords lock-state callback', () => {
          await initialStatus.promise;
        });
 
-       await act(async () => {
-         exactButton('Delete')!.click();
-       });
+       await clickDeleteMenuAction();
        const confirmInput = document.querySelector<HTMLInputElement>(
            '#delete-confirm-input')!;
        expect(confirmInput).not.toBeNull();
@@ -373,8 +389,8 @@ describe('Saved Passwords lock-state callback', () => {
          await unlockedStatus.promise;
        });
 
-       expect(container.textContent).toContain('https://example.com');
-       expect(exactButton('Delete')).not.toBeNull();
+       expect(container.textContent).toContain('example.com');
+       expect(exactButton('More options')).not.toBeNull();
        expect(document.querySelector('#delete-confirm-input')).toBeNull();
        expect(document.querySelector('[data-testid="delete-confirm-origin"]'))
            .toBeNull();

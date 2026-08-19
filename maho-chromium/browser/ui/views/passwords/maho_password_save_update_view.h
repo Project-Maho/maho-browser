@@ -7,12 +7,15 @@
 #include "base/sequence_checker.h"
 #include "chrome/browser/ui/passwords/bubble_controllers/save_update_bubble_controller.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_base.h"
+#include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "maho/browser/passwords/maho_password_provider_utils.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 
 namespace views {
 class Label;
 class MdTextButton;
+class View;
 }  // namespace views
 
 namespace maho::passwords {
@@ -22,9 +25,9 @@ namespace maho::passwords {
 bool ShouldUseMahoPasswordSaveUpdateView(EffectivePasswordProvider provider,
                                          PrefService* local_state);
 
-// Minimal Maho presentation for Chromium's native save/update password path.
-// The existing SaveUpdateBubbleController remains the sole owner of actions and
-// metrics; this class only supplies native Views presentation.
+// Maho's native credential-save surface. SaveUpdateBubbleController remains the
+// sole owner of password actions and metrics; this class owns only presentation
+// and keeps secrets masked unless the user explicitly chooses to reveal them.
 class MahoPasswordSaveUpdateView : public PasswordBubbleViewBase {
   METADATA_HEADER(MahoPasswordSaveUpdateView, PasswordBubbleViewBase)
 
@@ -42,9 +45,14 @@ class MahoPasswordSaveUpdateView : public PasswordBubbleViewBase {
   views::Label* origin_label_for_testing() const { return origin_label_; }
   views::Label* username_label_for_testing() const { return username_label_; }
   views::Label* password_label_for_testing() const { return password_label_; }
+  views::View* credential_card_for_testing() const { return credential_card_; }
+  views::MdTextButton* password_reveal_button_for_testing() const {
+    return password_reveal_button_;
+  }
   views::MdTextButton* never_button_for_testing() const {
     return never_button_;
   }
+  bool password_revealed_for_testing() const { return password_revealed_; }
   bool CancelForTesting() { return views::DialogDelegate::Cancel(); }
   bool HasMahoWindowIconForTesting() { return !GetWindowIcon().IsEmpty(); }
 #endif
@@ -54,17 +62,22 @@ class MahoPasswordSaveUpdateView : public PasswordBubbleViewBase {
   const PasswordBubbleControllerBase* GetController() const override;
   views::View* GetInitiallyFocusedView() override;
   ui::ImageModel GetWindowIcon() override;
+  void AddedToWidget() override;
 
   void SaveOrUpdate();
   void CancelAction();
   void NeverForThisSite();
+  void TogglePasswordVisibility();
 
   SaveUpdateBubbleController controller_;
   const bool is_update_bubble_;
+  raw_ptr<views::View> credential_card_ = nullptr;
   raw_ptr<views::Label> origin_label_ = nullptr;
   raw_ptr<views::Label> username_label_ = nullptr;
   raw_ptr<views::Label> password_label_ = nullptr;
+  raw_ptr<views::MdTextButton> password_reveal_button_ = nullptr;
   raw_ptr<views::MdTextButton> never_button_ = nullptr;
+  bool password_revealed_ = false;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };

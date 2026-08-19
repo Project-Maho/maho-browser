@@ -124,13 +124,33 @@ function setValue(element: HTMLInputElement, value: string): void {
 
 async function clickButton(label: string): Promise<void> {
   const button = Array.from(document.querySelectorAll('button'))
-      .find(node => node.textContent?.includes(label));
-  if (!button) {
-    throw new Error(`missing button ${label}`);
+      .find(node => node.textContent?.includes(label) || node.getAttribute('aria-label') === label);
+  if (button) {
+    await act(async () => {
+      button.click();
+    });
+    return;
   }
-  await act(async () => {
-    button.click();
-  });
+  if (label === 'Delete') {
+    const more = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+        .find(node => node.getAttribute('aria-label')?.startsWith('More options for '));
+    if (!more) {
+      throw new Error('missing More options button');
+    }
+    await act(async () => {
+      more.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true}));
+    });
+    const deleteItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        .find(node => node.textContent?.trim() === 'Delete');
+    if (!deleteItem) {
+      throw new Error('missing Delete menu item');
+    }
+    await act(async () => {
+      deleteItem.click();
+    });
+    return;
+  }
+  throw new Error(`missing button ${label}`);
 }
 
 function errorRegion(testId: string): HTMLElement {

@@ -3,7 +3,8 @@
 import React from 'react';
 
 import {Button} from '@ui/button';
-import {AlertCircle, CheckCircle} from '@icons/lucide';
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@ui/select';
+import {AlertCircle, CheckCircle, Database, Download, Loader2, ShieldAlert} from '@icons/lucide';
 import type {PasswordImportPreview} from '../mojo.js';
 import {
   ManagedSettingRow,
@@ -11,6 +12,11 @@ import {
   SETTING_CONTROL_STACKED_CLASS,
   SETTING_DESCRIPTION_CLASS,
 } from './domain_panes.js';
+import type {
+  PasswordImportFormatOption,
+  PasswordImportProvider,
+} from './passwords_import_model.js';
+import type {PasswordImportFormatId} from './passwords_model.js';
 
 export type ImportPreviewState = {
   readonly fileName: string;
@@ -33,6 +39,82 @@ const ICON_CLASS = 'size-4 shrink-0';
 const COUNT_GRID_CLASS = 'grid gap-3 rounded-xl border border-border/70 bg-background/25 p-4 sm:grid-cols-3';
 const COUNT_VALUE_CLASS = 'text-xl font-semibold tracking-tight text-foreground';
 const COUNT_LABEL_CLASS = 'text-xs leading-5 text-muted-foreground';
+const PROVIDER_PANEL_CLASS = 'grid gap-4 rounded-xl border border-border/70 bg-background/25 p-4';
+const PROVIDER_META_CLASS = 'grid gap-1';
+const PROVIDER_SELECT_CLASS = 'w-full sm:max-w-sm';
+
+export function ImportProviderPanel(
+    {busy, onChooseFile, onFormatChange, provider, selectedFormat}: {
+      readonly busy: boolean;
+      readonly onChooseFile: (option: PasswordImportFormatOption) => Promise<void>;
+      readonly onFormatChange: (formatId: PasswordImportFormatId) => void;
+      readonly provider: PasswordImportProvider;
+      readonly selectedFormat: PasswordImportFormatOption;
+    }) {
+  return (
+    <div className={PROVIDER_PANEL_CLASS} data-testid="password-import-provider-guide">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 rounded-lg border border-border bg-background/70 p-2 text-muted-foreground">
+          <Database className={ICON_CLASS} />
+        </div>
+        <div className={PROVIDER_META_CLASS}>
+          <h4 className="text-sm font-semibold text-foreground">{provider.displayName}</h4>
+          <p className="text-xs leading-5 text-muted-foreground">{provider.description}</p>
+          <p className="text-xs font-medium text-foreground">Accepted: {provider.acceptedFormats}</p>
+        </div>
+      </div>
+
+      <ol className="grid gap-2 pl-4 text-xs leading-5 text-muted-foreground">
+        {provider.instructions.map(instruction => (
+          <li className="list-decimal" key={instruction}>{instruction}</li>
+        ))}
+      </ol>
+
+      <p className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
+        <ShieldAlert className={ICON_CLASS} />
+        {provider.warning}
+      </p>
+
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+        <div className="grid gap-1.5">
+          <label className="text-xs font-medium text-foreground" htmlFor="password-import-format">
+            Export format
+          </label>
+          {provider.formats.length > 1 ? (
+            <Select
+              disabled={busy}
+              value={selectedFormat.descriptor.formatId}
+              onValueChange={value => onFormatChange(value as PasswordImportFormatId)}>
+              <SelectTrigger aria-label="Password export format" className={PROVIDER_SELECT_CLASS} id="password-import-format">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {provider.formats.map(option => (
+                  <SelectItem
+                    key={option.descriptor.formatId}
+                    value={option.descriptor.formatId}>
+                    {option.descriptor.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <p className="flex min-h-9 items-center rounded-md border border-border/70 bg-background/70 px-3 text-sm text-foreground">
+              {selectedFormat.descriptor.label}
+            </p>
+          )}
+        </div>
+        <Button
+          disabled={busy}
+          type="button"
+          onClick={() => void onChooseFile(selectedFormat)}>
+          {busy ? <Loader2 className={`${ICON_CLASS} animate-spin`} /> : <Download className={ICON_CLASS} />}
+          {busy ? 'Opening…' : 'Choose File'}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 export function ImportPreviewPanel(
     {busy, confirmed, onCancel, onCommit, onConfirmChange, state}: {

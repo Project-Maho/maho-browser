@@ -180,7 +180,7 @@ export function SavedPasswordsPane(
     const primaryOrigin = getPrimaryOrigin(item);
     const title = item.title && item.title !== primaryOrigin ? item.title : normalizedOrigin;
     const {result} = await handler.updateVaultLogin(
-        item.id, item.revision, title, [normalizedOrigin], input.username.trim(), null);
+        item.id, item.revision, title, [normalizedOrigin], input.username.trim(), input.password);
     if (operationResetsTransientState(result)) {
       clearTransientState();
       await loadSavedPasswords(true);

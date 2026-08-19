@@ -4,6 +4,10 @@
 
 #include <utility>
 
+#include "base/base_paths.h"
+#include "base/check.h"
+#include "base/files/file_util.h"
+#include "base/path_service.h"
 #include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -20,9 +24,11 @@
 #include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/codec/png_codec.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
+#include "ui/views/test/views_drawing_test_utils.h"
 
 namespace maho::passwords {
 
@@ -30,6 +36,36 @@ namespace {
 
 using ::testing::Return;
 using ::testing::ReturnRef;
+
+base::FilePath PasswordScreenshotPath(const char* filename) {
+  base::FilePath source_root;
+  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &source_root));
+  const base::FilePath maho_root =
+      base::MakeAbsoluteFilePath(source_root.AppendASCII("maho"));
+  CHECK(!maho_root.empty());
+  return maho_root.DirName()
+      .AppendASCII("docs")
+      .AppendASCII("screenshots")
+      .AppendASCII(filename);
+}
+
+void CapturePasswordBubbleScreenshot(MahoPasswordSaveUpdateView* view,
+                                     const char* filename) {
+  ASSERT_TRUE(view);
+  views::Widget* widget = view->GetWidget();
+  ASSERT_TRUE(widget);
+  widget->LayoutRootViewIfNecessary();
+  const gfx::Size size = view->GetPreferredSize();
+  view->SetSize(size);
+  widget->SetSize(size);
+  widget->LayoutRootViewIfNecessary();
+
+  SkBitmap bitmap = views::test::PaintViewToBitmap(widget->GetRootView());
+  auto png_data = gfx::PNGCodec::EncodeBGRASkBitmap(
+      bitmap, /*discard_transparency=*/false);
+  ASSERT_TRUE(png_data.has_value());
+  ASSERT_TRUE(base::WriteFile(PasswordScreenshotPath(filename), *png_data));
+}
 
 class TestManagePasswordsUIController : public ManagePasswordsUIController {
  public:
@@ -179,7 +215,8 @@ TEST_F(MahoPasswordSaveUpdateViewTest, FactoryUsesMahoViewWhenGatedOn) {
   EXPECT_EQ(maho_bubble->origin_label_for_testing()->GetText(),
             u"login.example.test");
   EXPECT_EQ(maho_bubble->username_label_for_testing()->GetText(), u"maho-user");
-  EXPECT_EQ(maho_bubble->password_label_for_testing()->GetText(), u"••••••");
+  EXPECT_EQ(maho_bubble->password_label_for_testing()->GetText(),
+            u"••••••••");
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest,
@@ -333,21 +370,30 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
   EXPECT_EQ(bubble->GetClassName(), PasswordSaveUpdateView::kViewClassName);
 }
 
-TEST_F(MahoPasswordSaveUpdateViewTest,
-       BuildsWithMinimalMahoBrandingAndControls) {
+TEST_F(MahoPasswordSaveUpdateViewTest, BuildsModernCredentialCardAndControls) {
   CreateViewAndShow();
 
   EXPECT_EQ(view_->GetSubtitle(), u"Maho Vault");
   ASSERT_TRUE(view_->GetOkButton());
-  EXPECT_EQ(view_->GetOkButton()->GetText(), u"Save to Maho Vault");
+  EXPECT_EQ(view_->GetOkButton()->GetText(), u"Save password");
+  EXPECT_GE(view_->GetOkButton()->GetMinSize().height(), 40);
   EXPECT_EQ(view_->GetCancelButton()->GetText(), u"Not now");
+  EXPECT_GE(view_->GetCancelButton()->GetMinSize().height(), 40);
+  ASSERT_TRUE(view_->credential_card_for_testing());
+  EXPECT_TRUE(view_->credential_card_for_testing()->background());
+  EXPECT_TRUE(view_->credential_card_for_testing()->GetBorder());
+  ASSERT_TRUE(view_->password_reveal_button_for_testing());
+  EXPECT_EQ(view_->password_reveal_button_for_testing()->GetText(), u"Show");
+  EXPECT_EQ(view_->password_reveal_button_for_testing()
+                ->GetViewAccessibility()
+                .GetCachedName(),
+            u"Show password");
   ASSERT_TRUE(view_->never_button_for_testing());
-  EXPECT_EQ(view_->never_button_for_testing()->GetText(),
-            u"Never for this site");
+  EXPECT_EQ(view_->never_button_for_testing()->GetText(), u"Never on this site");
   EXPECT_EQ(view_->origin_label_for_testing()->GetText(),
             u"login.example.test");
   EXPECT_EQ(view_->username_label_for_testing()->GetText(), u"maho-user");
-  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"••••••");
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"••••••••");
   EXPECT_EQ(view_->username_label_for_testing()
                 ->GetViewAccessibility()
                 .GetCachedName(),
@@ -357,6 +403,52 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
                 .GetCachedName(),
             u"Password, masked");
   EXPECT_TRUE(view_->HasMahoWindowIconForTesting());
+}
+
+TEST_F(MahoPasswordSaveUpdateViewTest, PasswordMaskDoesNotLeakSecretLength) {
+  pending_password_.password_value = u"this-is-a-much-longer-password";
+  CreateViewAndShow();
+
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"••••••••");
+}
+
+TEST_F(MahoPasswordSaveUpdateViewTest,
+       PasswordRevealRequiresExplicitActionAndCanBeHiddenAgain) {
+  CreateViewAndShow();
+
+  ASSERT_TRUE(view_->password_reveal_button_for_testing());
+  EXPECT_FALSE(view_->password_revealed_for_testing());
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"••••••••");
+
+  views::test::InteractionTestUtilSimulatorViews::PressButton(
+      view_->password_reveal_button_for_testing());
+
+  EXPECT_TRUE(view_->password_revealed_for_testing());
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"secret");
+  EXPECT_EQ(view_->password_reveal_button_for_testing()->GetText(), u"Hide");
+  EXPECT_EQ(view_->password_label_for_testing()
+                ->GetViewAccessibility()
+                .GetCachedName(),
+            u"Password, visible");
+
+  views::test::InteractionTestUtilSimulatorViews::PressButton(
+      view_->password_reveal_button_for_testing());
+
+  EXPECT_FALSE(view_->password_revealed_for_testing());
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"••••••••");
+  EXPECT_EQ(view_->password_reveal_button_for_testing()->GetText(), u"Show");
+  EXPECT_EQ(view_->password_label_for_testing()
+                ->GetViewAccessibility()
+                .GetCachedName(),
+            u"Password, masked");
+}
+
+TEST_F(MahoPasswordSaveUpdateViewTest, EmptyPasswordHasNoRevealAction) {
+  pending_password_.password_value.clear();
+  CreateViewAndShow();
+
+  EXPECT_EQ(view_->password_label_for_testing()->GetText(), u"No password");
+  EXPECT_FALSE(view_->password_reveal_button_for_testing());
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest, PreservesUpstreamUpdateWording) {
@@ -416,6 +508,21 @@ TEST_F(MahoPasswordSaveUpdateViewTest, UpdateEscapeRunsNoThanksCallback) {
   EXPECT_CALL(*model_delegate_mock(), OnNotNowClicked()).Times(0);
   EXPECT_CALL(*model_delegate_mock(), OnNopeUpdateClicked());
   EXPECT_TRUE(view_->CancelForTesting());
+}
+
+TEST_F(MahoPasswordSaveUpdateViewTest, CaptureSaveBubbleScreenshot) {
+  CreateViewAndShow();
+  CapturePasswordBubbleScreenshot(
+      view_, "06_maho_password_save_ask_bubble.png");
+}
+
+TEST_F(MahoPasswordSaveUpdateViewTest, CaptureUpdateBubbleScreenshot) {
+  ON_CALL(*model_delegate_mock(), GetState)
+      .WillByDefault(
+          Return(password_manager::ui::PENDING_PASSWORD_UPDATE_STATE));
+  CreateViewAndShow();
+  CapturePasswordBubbleScreenshot(
+      view_, "07_maho_password_update_ask_bubble.png");
 }
 
 }  // namespace

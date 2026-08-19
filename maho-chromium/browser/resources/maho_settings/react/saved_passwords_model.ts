@@ -41,6 +41,8 @@ export type AddSavedPasswordInput = {
 
 export type EditSavedPasswordInput = {
   readonly origin: string;
+  /** null means keep the existing secret unchanged. */
+  readonly password: string | null;
   readonly username: string;
 };
 

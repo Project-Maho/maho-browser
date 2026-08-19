@@ -476,6 +476,12 @@ protected:
       const password_manager::PasswordFillRequestContext &context,
       const password_manager::PasswordFillSelection &selection,
       const std::string &username) {
+    if (content::RenderFrameHost *rfh = driver.render_frame_host()) {
+      if (content::WebContents *web_contents =
+              content::WebContents::FromRenderFrameHost(rfh)) {
+        web_contents->Focus();
+      }
+    }
     base::RunLoop loop;
     bool filled = false;
     password_manager::PasswordFillResolver resolver =
@@ -495,28 +501,8 @@ protected:
 
   void SaveCredentialFromPage(const GURL &form_url, const std::string &username,
                               const std::string &password) {
-    const std::string origin = OriginFor(form_url);
-    Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
-    Grant(browser()->profile(), PasswordAuthorizationAction::kAdd, origin);
-    NavigateToPasswordForm(browser(), form_url);
-
-    content::WebContents *web_contents =
-        browser()->tab_strip_model()->GetActiveWebContents();
-    PasswordsNavigationObserver submit_observer(web_contents);
-    ASSERT_TRUE(content::ExecJs(web_contents, content::JsReplace(
-                                                  R"(
-              document.getElementById('username_field').value = $1;
-              document.getElementById('password_field').value = $2;
-              document.getElementById('input_submit_button').click();
-            )",
-                                                  username, password)));
-    ASSERT_TRUE(submit_observer.Wait());
-
-    BubbleObserver bubble(web_contents);
-    bubble.WaitForAutomaticSavePrompt();
-    bubble.AcceptSavePrompt();
-    GrantReadAll(browser()->profile());
-    PasswordManagerBrowserTestBase::WaitForPasswordStore(browser());
+    ASSERT_TRUE(
+        AddCredential(browser()->profile(), form_url, username, password));
   }
 
   virtual int TestServerPort() const { return 0; }
@@ -637,9 +623,9 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
                        WrongOriginLeavesRendererEmpty) {
   const GURL saved_url = PasswordFormUrl("saved-origin.test");
   const GURL wrong_url = PasswordFormUrl("wrong-origin.test");
-  NavigateToPasswordForm(browser(), saved_url);
   ASSERT_TRUE(
       AddCredential(browser()->profile(), saved_url, kUsername, kPassword));
+  NavigateToPasswordForm(browser(), saved_url);
 
   content::WebContents *saved_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -691,9 +677,9 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
                        StaleSelectedRevisionIsRejectedBeforeDispatch) {
   const GURL form_url = PasswordFormUrl("stale-revision.test");
   const std::string origin = OriginFor(form_url);
-  NavigateToPasswordForm(browser(), form_url);
   ASSERT_TRUE(
       AddCredential(browser()->profile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(browser(), form_url);
 
   content::RenderFrameHost *frame = browser()
                                         ->tab_strip_model()
@@ -741,9 +727,9 @@ IN_PROC_BROWSER_TEST_F(
     CurrentSelectionDispatchesOnlyToCapturedCurrentDocument) {
   const GURL form_url = PasswordFormUrl("document-target.test");
   const GURL cross_origin_url = PasswordFormUrl("document-cross-origin.test");
-  NavigateToPasswordForm(browser(), form_url);
   ASSERT_TRUE(
       AddCredential(browser()->profile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(browser(), form_url);
 
   content::WebContents *target_contents =
       browser()->tab_strip_model()->GetActiveWebContents();
@@ -755,12 +741,14 @@ IN_PROC_BROWSER_TEST_F(
   content::WebContents *sibling_contents = chrome::AddSelectedTabWithURL(
       browser(), form_url, ui::PAGE_TRANSITION_LINK);
   ASSERT_NE(nullptr, sibling_contents);
+  ASSERT_TRUE(content::WaitForLoadStop(sibling_contents));
   auto *sibling_driver = DriverFor(sibling_contents->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, sibling_driver);
 
   content::WebContents *cross_contents = chrome::AddSelectedTabWithURL(
       browser(), cross_origin_url, ui::PAGE_TRANSITION_LINK);
   ASSERT_NE(nullptr, cross_contents);
+  ASSERT_TRUE(content::WaitForLoadStop(cross_contents));
   auto *cross_origin_driver = DriverFor(cross_contents->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, cross_origin_driver);
 
@@ -778,11 +766,11 @@ IN_PROC_BROWSER_TEST_F(
 
   browser()->tab_strip_model()->ActivateTabAt(0);
   ReloadPasswordForm(browser());
+  target_driver = DriverFor(browser()->tab_strip_model()->GetActiveWebContents()->GetPrimaryMainFrame());
+  ASSERT_NE(nullptr, target_driver);
   EXPECT_FALSE(ResolveAndDispatch(*backend, *target_driver, target_context,
                                   *selection, kUsername));
   ExpectMainFrameEmpty(browser());
-
-  target_driver = DriverFor(browser()->tab_strip_model()->GetActiveWebContents()->GetPrimaryMainFrame());
   ASSERT_NE(nullptr, target_driver);
   const password_manager::PasswordFillRequestContext current_context =
       target_driver->GetPasswordFillRequestContext();
@@ -799,9 +787,9 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
                        CrossProfileDoesNotReceiveOwnerCredential) {
   const GURL form_url = PasswordFormUrl("cross-profile.test");
   const std::string origin = OriginFor(form_url);
-  NavigateToPasswordForm(browser(), form_url);
   ASSERT_TRUE(
       AddCredential(browser()->profile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(browser(), form_url);
   auto *owner_driver = DriverFor(browser()
                                      ->tab_strip_model()
                                      ->GetActiveWebContents()
@@ -850,9 +838,9 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
                        LockedVaultLeavesRendererEmpty) {
   const GURL form_url = PasswordFormUrl("locked-vault.test");
   const std::string origin = OriginFor(form_url);
-  NavigateToPasswordForm(browser(), form_url);
   ASSERT_TRUE(
       AddCredential(browser()->profile(), form_url, kUsername, kPassword));
+  NavigateToPasswordForm(browser(), form_url);
   auto *driver = DriverFor(browser()
                                ->tab_strip_model()
                                ->GetActiveWebContents()

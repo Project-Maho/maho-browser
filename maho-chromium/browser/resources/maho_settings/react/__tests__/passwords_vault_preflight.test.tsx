@@ -123,7 +123,7 @@ function notice(): HTMLElement {
 
 function button(label: string): HTMLButtonElement {
   const element = Array.from(container.querySelectorAll('button'))
-      .find(candidate => candidate.textContent?.includes(label));
+      .find(candidate => candidate.textContent?.includes(label) || candidate.getAttribute('aria-label') === label);
   if (!element) {
     throw new Error(`missing button ${label}`);
   }
@@ -193,7 +193,7 @@ describe('Saved Passwords typed Vault preflight states', () => {
     expect(container.querySelector('[data-testid="vault-preflight-notice"]'))
         .toBeNull();
     expect(container.textContent).not.toContain('Maho Vault is locked');
-    expect(container.textContent).toContain('No saved passwords yet.');
+    expect(container.textContent).toContain('No logins in your Vault yet.');
     expect(button('Add password').disabled).toBe(false);
   });
 });

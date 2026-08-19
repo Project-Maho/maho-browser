@@ -9,7 +9,7 @@ import {
   type PasswordImportSourceId,
 } from './passwords_model.js';
 
-export type PasswordImportSourceCardId =
+export type PasswordImportProviderId =
     | 'onepassword'
     | 'bitwarden'
     | 'apple_passwords'
@@ -21,13 +21,13 @@ export type PasswordImportFormatOption = {
   readonly sourceFormat: PasswordImportSourceFormat;
 };
 
-export type PasswordImportSourceCard = {
+export type PasswordImportProvider = {
   readonly acceptedFormats: string;
-  readonly cardId: PasswordImportSourceCardId;
   readonly description: string;
   readonly displayName: string;
   readonly formats: readonly PasswordImportFormatOption[];
   readonly instructions: readonly string[];
+  readonly providerId: PasswordImportProviderId;
   readonly warning: string;
 };
 
@@ -89,10 +89,9 @@ function createFormatOption(
 const PLAINTEXT_WARNING =
     'Exported password files are plaintext. Keep the file local, import it, then delete the export when you are done.';
 
-export const PASSWORD_IMPORT_SOURCE_CARDS = [
+export const PASSWORD_IMPORT_PROVIDERS = [
   {
     acceptedFormats: '1Password CSV or 1PUX',
-    cardId: 'onepassword',
     description: findSourceDescriptor('onepassword').description,
     displayName: findSourceDescriptor('onepassword').displayName,
     formats: [
@@ -105,11 +104,11 @@ export const PASSWORD_IMPORT_SOURCE_CARDS = [
       'Enter your account password, choose 1PUX or CSV, select Export Data, then choose where to save the file.',
       'CSV imports Login and Password items with Title, Website, Username, Password, One-time password, Favorite status, Archived status, Tags, and Notes. 1PUX is a ZIP archive containing export.attributes and export.data.',
     ],
+    providerId: 'onepassword',
     warning: PLAINTEXT_WARNING,
   },
   {
     acceptedFormats: 'Bitwarden CSV or JSON',
-    cardId: 'bitwarden',
     description: findSourceDescriptor('bitwarden').description,
     displayName: findSourceDescriptor('bitwarden').displayName,
     formats: [
@@ -122,11 +121,11 @@ export const PASSWORD_IMPORT_SOURCE_CARDS = [
       'Bitwarden browser extension: open Settings, choose Vault options, choose Export vault, choose My vault or an organization, choose .csv or .json, select Export vault, then confirm.',
       'Maho accepts plaintext individual CSV, organization CSV, and plaintext JSON. Encrypted JSON and ZIP-with-attachments exports are not accepted here.',
     ],
+    providerId: 'bitwarden',
     warning: PLAINTEXT_WARNING,
   },
   {
     acceptedFormats: 'Apple Passwords CSV/file export',
-    cardId: 'apple_passwords',
     description: findSourceDescriptor('apple_passwords').description,
     displayName: findSourceDescriptor('apple_passwords').displayName,
     formats: [createFormatOption('apple_passwords', 'apple_passwords_csv')],
@@ -135,11 +134,11 @@ export const PASSWORD_IMPORT_SOURCE_CARDS = [
       'For one item, select the account, choose File > Export Selected Password to File, click Export Password, then choose where to save the CSV file.',
       'Maho imports the user-selected CSV/file export only. Choose the file you saved from Passwords on Mac; this flow does not promise a Windows-side Apple export path.',
     ],
+    providerId: 'apple_passwords',
     warning: PLAINTEXT_WARNING,
   },
   {
     acceptedFormats: 'KeePass / KeePassXC CSV',
-    cardId: 'keepass',
     description: 'Import a user-exported KeePass or KeePassXC CSV file.',
     displayName: 'KeePass / KeePassXC',
     formats: [
@@ -151,12 +150,43 @@ export const PASSWORD_IMPORT_SOURCE_CARDS = [
       'KeePassXC CSV fields are Group, Title, Username, Password, URL, and Notes.',
       'KeePass classic CSV variants with Account, Login Name, Password, Web Site, and Comments are also accepted.',
     ],
+    providerId: 'keepass',
     warning: PLAINTEXT_WARNING,
   },
-] as const satisfies readonly PasswordImportSourceCard[];
+] as const satisfies readonly PasswordImportProvider[];
 
-export function getPasswordImportSourceCards(): readonly PasswordImportSourceCard[] {
-  return PASSWORD_IMPORT_SOURCE_CARDS;
+export function getPasswordImportProviders(): readonly PasswordImportProvider[] {
+  return PASSWORD_IMPORT_PROVIDERS;
+}
+
+export function getPasswordImportProvider(
+    providerId: PasswordImportProviderId): PasswordImportProvider {
+  const provider = PASSWORD_IMPORT_PROVIDERS.find(item => item.providerId === providerId);
+  if (!provider) {
+    throw new PasswordImportDescriptorError(`Missing password import provider: ${providerId}`);
+  }
+  return provider;
+}
+
+export function getPasswordImportFormat(
+    provider: PasswordImportProvider,
+    formatId: PasswordImportFormatId): PasswordImportFormatOption {
+  const option = provider.formats.find(item => item.descriptor.formatId === formatId);
+  if (!option) {
+    throw new PasswordImportDescriptorError(
+        `Missing password import format ${formatId} for provider ${provider.providerId}`);
+  }
+  return option;
+}
+
+export function getDefaultPasswordImportFormat(
+    provider: PasswordImportProvider): PasswordImportFormatOption {
+  const option = provider.formats[0];
+  if (!option) {
+    throw new PasswordImportDescriptorError(
+        `Password import provider has no formats: ${provider.providerId}`);
+  }
+  return option;
 }
 
 export function summarizeImportFilePath(filePath: string): string {

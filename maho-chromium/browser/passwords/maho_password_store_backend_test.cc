@@ -695,6 +695,7 @@ TEST_F(MahoPasswordStoreBackendTest,
   CreateInitializedVaultCore();
   MahoPasswordAuthorizationService::Get()->ResetForTesting();
   MahoPasswordAuthorizationService::Get()->SetVaultLockedForTesting(false);
+  MahoPasswordAuthorizationService::Get()->SetInteractiveAuthorizationEnabledForTesting(false);
   MahoPasswordStoreBackend backend = CreateBackend();
   backend.InitBackend(base::OnceCallback<void(bool)>());
   task_environment_.RunUntilIdle();

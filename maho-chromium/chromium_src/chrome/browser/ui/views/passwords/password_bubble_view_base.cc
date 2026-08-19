@@ -1,5 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include "components/password_manager/core/browser/password_store/password_store_interface.h"
+#include "components/password_manager/core/browser/password_form.h"
 #define ShowBubble                                                             \
   ShowBubble(content::WebContents *web_contents, DisplayReason reason);        \
   static void ShowBubble_ChromiumImpl
@@ -98,14 +100,18 @@ void PasswordBubbleViewBase::ShowBubble(content::WebContents *web_contents,
       },
       bubble));
 
-  auto *passwords_action_item = actions::ActionManager::Get().FindAction(
-      kActionShowPasswordsBubbleOrPage,
-      browser->GetActions()->root_action_item());
-  CHECK(passwords_action_item);
-  bool should_suppress_next_button_trigger =
-      g_manage_passwords_bubble_->ShouldCloseOnDeactivate();
-  passwords_action_item->SetIsShowingBubble(
-      should_suppress_next_button_trigger);
+  if (browser && browser->GetActions() &&
+      browser->GetActions()->root_action_item()) {
+    auto *passwords_action_item = actions::ActionManager::Get().FindAction(
+        kActionShowPasswordsBubbleOrPage,
+        browser->GetActions()->root_action_item());
+    if (passwords_action_item) {
+      bool should_suppress_next_button_trigger =
+          g_manage_passwords_bubble_->ShouldCloseOnDeactivate();
+      passwords_action_item->SetIsShowingBubble(
+          should_suppress_next_button_trigger);
+    }
+  }
 }
 
 // static
