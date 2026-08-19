@@ -177,6 +177,39 @@ void MahoSplitViewController::AddSplitForExistingTab(int clicked_index) {
   }
 }
 
+bool MahoSplitViewController::AddViewportSplitForExistingTab(
+    int source_index,
+    split_tabs::SplitTabLayout layout,
+    bool source_before_target) {
+  return AddViewportSplitForExistingTab(source_index, 0, layout,
+                                        source_before_target);
+}
+
+bool MahoSplitViewController::AddViewportSplitForExistingTab(
+    int source_index,
+    size_t target_pane_index,
+    split_tabs::SplitTabLayout layout,
+    bool source_before_target) {
+  TabStripModel* model = browser_->tab_strip_model();
+  if (!model || !model->ContainsIndex(source_index)) {
+    return false;
+  }
+
+  int active_index = model->active_index();
+  if (active_index == TabStripModel::kNoTab || source_index == active_index) {
+    return false;
+  }
+
+  if (model->GetSplitForTab(source_index).has_value()) {
+    return false;
+  }
+
+  split_tabs::SplitTabVisualData visual_data(layout, 0.5);
+  model->AddToNewSplit({source_index}, visual_data,
+                       split_tabs::SplitTabCreatedSource::kTabContextMenu);
+  return true;
+}
+
 void MahoSplitViewController::ToggleSplit() {
   if (IsSplitActive()) {
     RemoveSplit();
@@ -316,3 +349,18 @@ void MahoSplitViewController::RestoreForWindow(Browser* /*browser*/) {
 }
 
 
+
+std::optional<split_tabs::SplitTabLayout>
+MahoSplitViewController::GetSplitOrientation() const {
+  return std::nullopt;
+}
+
+bool MahoSplitViewController::SetSplitOrientation(
+    split_tabs::SplitTabLayout orientation) {
+  return false;
+}
+
+std::optional<split_tabs::SplitTabLayout>
+MahoSplitViewController::ToggleSplitOrientation() {
+  return std::nullopt;
+}

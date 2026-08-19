@@ -2765,6 +2765,11 @@ impl SwiftideBackend {
         self.set_browser_action_tools_state(BrowserActionToolsState::from_enabled(enabled));
     }
 
+    async fn get_managed_auth_token(&self) -> Result<Option<crate::ZeroizedString>, AgentError> {
+        let token = self.storage.get_setting("auth:access_token").await?;
+        Ok(token.filter(|tok| !tok.as_str().trim().is_empty()))
+    }
+
     pub fn set_mail_authorization_state(&self, state: crate::MailAuthorizationState) {
         *self.mail_authorization_state.lock_unpoison() = state;
     }
@@ -3106,7 +3111,7 @@ impl SwiftideBackend {
             llm_override_opt
         {
             llm
-        } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
+        } else if let Some(access_token) = self.get_managed_auth_token().await? {
             let api_base = crate::proxy_url();
 
             let model_name = if profile.preferred_model.is_none() {
@@ -3176,12 +3181,12 @@ impl SwiftideBackend {
 
         let mut memories_str = String::new();
 
-        if let Ok(memories) = self.storage.fts_relevant_memories(&content_str, 10).await {
+        if let Ok(memories) = self.storage.retrieve_memories(&content_str, 10).await {
             if !memories.is_empty() {
                 memories_str.push_str("\n\nRetrieved Memories:\n");
 
-                for (_, content, _) in memories {
-                    memories_str.push_str(&format!("- {}\n", content));
+                for mem in memories {
+                    memories_str.push_str(&format!("- {}\n", mem.fact));
                 }
             }
         }
@@ -4195,7 +4200,7 @@ impl SwiftideBackend {
             llm_override_opt
         {
             llm
-        } else if let Some(access_token) = self.storage.get_setting("auth:access_token").await? {
+        } else if let Some(access_token) = self.get_managed_auth_token().await? {
             let api_base = crate::proxy_url();
 
             let model_name = if profile.preferred_model.is_none() {
@@ -4299,12 +4304,12 @@ impl SwiftideBackend {
 
         let mut memories_str = String::new();
 
-        if let Ok(memories) = self.storage.fts_relevant_memories(&content_str, 10).await {
+        if let Ok(memories) = self.storage.retrieve_memories(&content_str, 10).await {
             if !memories.is_empty() {
                 memories_str.push_str("\n\nRetrieved Memories:\n");
 
-                for (_, content, _) in memories {
-                    memories_str.push_str(&format!("- {}\n", content));
+                for mem in memories {
+                    memories_str.push_str(&format!("- {}\n", mem.fact));
                 }
             }
         }

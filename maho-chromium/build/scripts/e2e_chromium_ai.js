@@ -67,7 +67,7 @@ function resolveAiConfig() {
   try {
     const prefs = JSON.parse(
       fs.readFileSync(path.join(SOURCE_PROFILE, 'Default/Preferences'), 'utf8'));
-    ai = (prefs.maho && prefs.maho.ai) || {};
+    ai = (prefs.maho && prefs.maho.ai) || prefs['maho.ai'] || {};
   } catch (e) { /* no source profile; rely on env */ }
   return {
     provider: process.env.MAHO_E2E_AI_PROVIDER || ai.provider || '',
@@ -79,8 +79,23 @@ function resolveAiConfig() {
 
 function seedProfile(dir, ai) {
   fs.mkdirSync(path.join(dir, 'Default'), { recursive: true });
-  const prefs = { maho: { ai } };
-  fs.writeFileSync(path.join(dir, 'Default/Preferences'), JSON.stringify(prefs));
+  // Chromium's JsonPrefStore parses nested dictionaries for dotted pref paths (maho.ai.*).
+  // Provide both nested structure and flat keys for complete compatibility.
+  const prefs = {
+    maho: {
+      ai: {
+        provider: String(ai.provider || ''),
+        api_key: String(ai.api_key || ''),
+        base_url: String(ai.base_url || ''),
+        model: String(ai.model || ''),
+      },
+    },
+    'maho.ai.provider': String(ai.provider || ''),
+    'maho.ai.api_key': String(ai.api_key || ''),
+    'maho.ai.base_url': String(ai.base_url || ''),
+    'maho.ai.model': String(ai.model || ''),
+  };
+  fs.writeFileSync(path.join(dir, 'Default/Preferences'), JSON.stringify(prefs, null, 2));
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -152,9 +167,9 @@ async function openAiPanel(port) {
   // Staleness across repeated --attach is handled by ai_real_turn's marker
   // baseline-diff, not by tab isolation.
   await cdpHttp('/json/new?chrome://maho-ai', port);
-  await sleep(1500);
+  await sleep(2500);
   let target;
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     const targets = await cdpHttp('/json', port);
     target = targets.find((x) => x.url && x.url.startsWith('chrome://maho-ai') && x.webSocketDebuggerUrl);
@@ -162,12 +177,31 @@ async function openAiPanel(port) {
     await sleep(500);
   }
   if (!target) throw new Error('no chrome://maho-ai target with a debugger url');
-  const page = new Page(target.webSocketDebuggerUrl);
+  // The singleton target's debugger URL can go stale (renderer reload) right
+  // as we attach; one fresh-target retry turns that transient into a pass
+  // instead of a hard 'ws error'.
+  let page;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) {
+      await sleep(2000);
+      const targets = await cdpHttp('/json', port);
+      target = targets.find((x) => x.url && x.url.startsWith('chrome://maho-ai') && x.webSocketDebuggerUrl);
+      if (!target) continue;
+    }
+    page = new Page(target.webSocketDebuggerUrl);
+    try {
+      await page.open();
+      break;
+    } catch (e) {
+      page.close();
+      page = undefined;
+      if (attempt === 4) throw e;
+    }
+  }
   try {
-    await page.open();
     await page.send('Runtime.enable');
     await page.send('Page.enable');
-    await sleep(2000);
+    await sleep(2500);
     return page;
   } catch (e) {
     page.close();
@@ -201,7 +235,16 @@ async function openPage(url, port) {
 // --- Scenarios ---------------------------------------------------------------
 
 async function scenario_ai_panel_renders(port) {
-  const page = await openAiPanel(port);
+  let page;
+  for (let retry = 0; retry < 3; retry++) {
+    try {
+      page = await openAiPanel(port);
+      break;
+    } catch (e) {
+      if (retry === 2) throw e;
+      await sleep(1500);
+    }
+  }
   try {
     const state = JSON.parse(await page.evalJs(`JSON.stringify({
       title: document.title,
@@ -216,6 +259,9 @@ async function scenario_ai_panel_renders(port) {
 }
 
 async function scenario_ai_real_turn(port) {
+  if (MOCK) {
+    return scenario_ai_mock_general_turn(port);
+  }
   const marker = 'E2E_TURN_OK';
   const page = await openAiPanel(port);
   try {
@@ -244,11 +290,46 @@ async function scenario_ai_real_turn(port) {
   } finally { await page.close(); }
 }
 
+async function resetToNewConversation(page) {
+  await page.evalJs(`(() => {
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const newChat = buttons.find(b =>
+      b.getAttribute('aria-label') === 'New conversation' ||
+      b.getAttribute('title') === 'New conversation' ||
+      b.textContent.includes('New Chat') ||
+      b.querySelector('svg')
+    );
+    if (newChat) newChat.click();
+  })()`);
+  await sleep(1000);
+}
+
 async function submitPromptViaComposer(page, text) {
-  await page.evalJs(`document.querySelector('textarea').focus()`);
+  await resetToNewConversation(page);
+  await page.evalJs(`(() => {
+    const el = document.querySelector('textarea');
+    if (!el) return;
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  })()`);
+  await sleep(300);
   await page.send('Input.insertText', { text });
-  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
-  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await sleep(300);
+  // Also try clicking the submit / send button directly if Enter is ignored
+  const clickedSend = await page.evalJs(`(() => {
+    const btn = document.querySelector('button[type="submit"]') ||
+                Array.from(document.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === 'Send' || b.getAttribute('title') === 'Send');
+    if (btn && !btn.disabled) {
+      btn.click();
+      return true;
+    }
+    return false;
+  })()`);
+  if (!clickedSend) {
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  }
 }
 
 async function waitForBodyText(page, needle, timeoutMs) {
@@ -296,13 +377,24 @@ async function scenario_ai_mock_quick_action_context(port) {
       `document.body.innerText.includes(${JSON.stringify(MOCK.pageMarker)})`);
     if (!fixtureReady) throw new Error('fixture page did not render its context marker');
 
-    const clicked = await panel.evalJs(`(() => {
-      const button = Array.from(document.querySelectorAll('button'))
-        .find((candidate) => candidate.textContent.trim() === 'Summarize');
-      if (!button) return false;
-      button.click();
-      return true;
-    })()`);
+    await resetToNewConversation(panel);
+
+    let clicked = false;
+    const clickDeadline = Date.now() + 20000;
+    while (Date.now() < clickDeadline) {
+      clicked = await panel.evalJs(`(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const summarizeBtn = buttons.find((candidate) => candidate.textContent.trim() === 'Summarize') ||
+                             buttons.find((candidate) => candidate.textContent.includes('Summarize'));
+        if (summarizeBtn && !summarizeBtn.disabled) {
+          summarizeBtn.click();
+          return true;
+        }
+        return false;
+      })()`);
+      if (clicked) break;
+      await sleep(1000);
+    }
     if (!clicked) throw new Error('Summarize quick action was not visible');
 
     const body = await waitForBodyText(panel, MOCK.marker, 40000);

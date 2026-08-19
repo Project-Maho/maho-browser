@@ -113,6 +113,9 @@ maho-workspace/
 - **빌드 실패 시 GN 파일 강제 수정 금지** — 빌드 (특히 `build_maho.py`) 가 GN regen 단계 또는 그 이후에서 실패하면 즉시 중단하고 사용자에게 보고. `chromium/src/**/BUILD.gn`, `maho-chromium/**/BUILD.gn`, `chromium/src/chrome/test/BUILD.gn` 등의 GN 파일을 우회 fix 목적으로 직접 수정하지 말 것. 다른 세션의 미완 작업이나 working tree dirty state 인 경우가 많고, 임의 cleanup 은 추후 충돌·revert·데이터 손실을 부른다. fix 가 필요해 보여도 **사용자 명시 승인 없이는 GN 편집·삭제 금지**.
 - **Chromium/GN/build feature flags 또는 build flags 추가·변경 전에는 반드시 사용자 명시 승인을 받을 것.**
 - **브랜치 생성/체크아웃, 워크트리 생성 절대 금지** — `git branch`, `git checkout -b`, `git switch -c`, `git switch <other-branch>`, `git worktree add` 등 브랜치를 새로 만들거나 다른 브랜치로 이동하거나 워크트리를 추가하는 작업을 하지 말 것. 항상 사용자가 현재 체크아웃해 둔 브랜치에서 그대로 작업한다. 별도 브랜치나 워크트리가 필요해 보이면 작업을 멈추고 사용자에게 보고할 것.
+- **마호 브라우저 대상 자동화 진행 시 무조건 Maho CLI 사용** — 브라우저 대상 제어/자동화 작업(탭 제어, 웹 콘솔 작업, 폼 입력, 네비게이션 등)을 수행할 때는 반드시 Maho CLI(`maho tab`, `maho tool`, `maho browser repl`, `maho session`, `maho vault` 등)를 사용한다. OS 레벨 스크립팅(AppleScript, System Events, OS 마우스 클릭)이나 Orca/computer-use/기타 데스크톱 GUI 자동화 도구는 엄격히 금지한다. CLI 기능에 제약이나 버그가 발생할 경우 우회 수단(OS 자동화)을 찾지 말고 Maho 브라우저/CLI의 근본 원인을 직접 수정한다.
+- **macOS Desktop E2E/인터랙티브 테스트는 무조건 Tart VM 격리 실행** — 브라우저 UI 인터랙티브 테스트(`interactive_ui_tests`, `interactive-smoke`), AI 패널 E2E(`ai-mock`), 전체 E2E 리그레션 매트릭스 검증은 반드시 Tart macOS 가상 머신(`maho-e2e-golden`, `TART_HOME=/Volumes/maho-build-v2/maho-tart`) 환경에서 `macos_vm_e2e.py` / `macos_vm_live_matrix.py`를 통해 실행한다. 호스트 데스크톱에서 직접 UI 창을 띄워 마우스/키보드/포커스 간섭을 일으키는 테스트 실행은 엄격히 금지한다.
+- **랜딩페이지 Hero 영상/애니메이션 임의 교체 금지** — 랜딩페이지(`website/src/pages/index.astro`, `BrowserHeroSection.astro`)의 메인 Hero 데모 비디오(`public/demo/hero/maho-hero-capture.mp4`, `maho-hero-capture-poster.png`)는 사용자가 직접 캡처한 원본 에셋입니다. 사용자의 명시적인 사전 승인 없이 이를 HyperFrames, 모의(mock) 인터랙티브 컴포넌트, 다른 영상/포스터 등으로 교체하거나 수정하지 말 것.
 
 ## BUILD LOCK — `.build.lock`
 

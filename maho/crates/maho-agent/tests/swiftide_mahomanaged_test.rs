@@ -219,6 +219,72 @@ async fn test_byok_fallback_when_no_access_token() {
 }
 
 #[tokio::test]
+async fn test_byok_fallback_when_empty_access_token() {
+    let _guard = env_lock().lock().await;
+    unsafe { std::env::remove_var("MAHO_PROXY_URL") };
+
+    let storage = Arc::new(MahoManagedStorage {
+        access_token: Some("".to_string()),
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        storage.clone() as Arc<dyn AgentStorage>,
+        Some(Box::new(|_req| {
+            Box::pin(async { maho_agent::PermissionDecision::Allow })
+        })),
+        std::env::temp_dir(),
+        true,
+    );
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let result = backend.run_turn("session-empty-tok", user_msg, None, None).await;
+
+    assert!(
+        result.is_err(),
+        "BYOK with fake key should fail (network/auth error)"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        !err.contains("MahoManaged"),
+        "Error should not mention MahoManaged; got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_byok_fallback_when_whitespace_access_token() {
+    let _guard = env_lock().lock().await;
+    unsafe { std::env::remove_var("MAHO_PROXY_URL") };
+
+    let storage = Arc::new(MahoManagedStorage {
+        access_token: Some("   \t\n  ".to_string()),
+        messages: Arc::new(Mutex::new(Vec::new())),
+    });
+
+    let backend = SwiftideBackend::new(
+        storage.clone() as Arc<dyn AgentStorage>,
+        Some(Box::new(|_req| {
+            Box::pin(async { maho_agent::PermissionDecision::Allow })
+        })),
+        std::env::temp_dir(),
+        true,
+    );
+
+    let user_msg = ChatMessage::user(ChatContent::text("Hello".to_string()));
+    let result = backend.run_turn("session-ws-tok", user_msg, None, None).await;
+
+    assert!(
+        result.is_err(),
+        "BYOK with fake key should fail (network/auth error)"
+    );
+    let err = result.unwrap_err().to_string();
+    assert!(
+        !err.contains("MahoManaged"),
+        "Error should not mention MahoManaged; got: {err}"
+    );
+}
+
+#[tokio::test]
 async fn test_mahomanaged_stores_messages() {
     let _guard = env_lock().lock().await;
 
