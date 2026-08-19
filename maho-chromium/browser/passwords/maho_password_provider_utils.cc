@@ -275,7 +275,7 @@ EffectivePasswordProviderDisabledReason VaultPreflightDisabledReason() {
 }  // namespace
 
 void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
-  registry->RegisterBooleanPref(prefs::kMahoNativePasswordWriteEnabled, false);
+  registry->RegisterBooleanPref(prefs::kMahoNativePasswordWriteEnabled, true);
 }
 
 bool IsNativePasswordWriteEnabled(PrefService* prefs) {

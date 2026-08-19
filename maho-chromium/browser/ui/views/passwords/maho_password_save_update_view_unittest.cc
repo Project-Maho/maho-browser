@@ -14,7 +14,6 @@
 #include "chrome/browser/ui/views/frame/test_with_browser_view.h"
 #include "chrome/browser/ui/views/passwords/manage_passwords_view.h"
 #include "chrome/browser/ui/views/passwords/password_bubble_view_test_base.h"
-#include "chrome/browser/ui/views/passwords/password_save_update_view.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_manager_test_utils.h"
@@ -29,6 +28,7 @@
 #include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/interaction/interaction_test_util_views.h"
 #include "ui/views/test/views_drawing_test_utils.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 namespace maho::passwords {
 
@@ -39,7 +39,7 @@ using ::testing::ReturnRef;
 
 base::FilePath PasswordScreenshotPath(const char* filename) {
   base::FilePath source_root;
-  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &source_root));
+  CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &source_root));
   const base::FilePath maho_root =
       base::MakeAbsoluteFilePath(source_root.AppendASCII("maho"));
   CHECK(!maho_root.empty());
@@ -74,7 +74,6 @@ class TestManagePasswordsUIController : public ManagePasswordsUIController {
       base::WeakPtr<PasswordsModelDelegate> model_delegate)
       : ManagePasswordsUIController(web_contents),
         model_delegate_(std::move(model_delegate)) {
-    EXPECT_FALSE(web_contents->GetUserData(UserDataKey()));
     web_contents->SetUserData(UserDataKey(), base::WrapUnique(this));
   }
 
@@ -159,6 +158,8 @@ class MahoPasswordSaveUpdateViewTest : public PasswordBubbleViewTestBase {
 
  protected:
   password_manager::PasswordForm pending_password_;
+  std::optional<password_manager::PasswordForm>
+      single_credential_details_mode_credential_;
   std::vector<std::unique_ptr<password_manager::PasswordForm>> current_forms_;
   raw_ptr<MahoPasswordSaveUpdateView> view_ = nullptr;
   raw_ptr<MahoCore> core_ = nullptr;
@@ -176,12 +177,14 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
 
   TestingPrefServiceSimple local_state;
   RegisterLocalStatePrefs(local_state.registry());
+  EXPECT_TRUE(ShouldUseMahoPasswordSaveUpdateView(
+      EffectivePasswordProvider::kMahoNative, &local_state));
+
+  local_state.SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
   EXPECT_FALSE(ShouldUseMahoPasswordSaveUpdateView(
       EffectivePasswordProvider::kMahoNative, &local_state));
 
   local_state.SetBoolean(prefs::kMahoNativePasswordWriteEnabled, true);
-  EXPECT_TRUE(ShouldUseMahoPasswordSaveUpdateView(
-      EffectivePasswordProvider::kMahoNative, &local_state));
   EXPECT_FALSE(ShouldUseMahoPasswordSaveUpdateView(
       EffectivePasswordProvider::kBitwarden, &local_state));
   EXPECT_FALSE(ShouldUseMahoPasswordSaveUpdateView(
@@ -190,15 +193,17 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
       EffectivePasswordProvider::kDisabled, &local_state));
 }
 
-TEST_F(MahoPasswordSaveUpdateViewTest, FactoryUsesUpstreamViewWhenGatedOff) {
+TEST_F(MahoPasswordSaveUpdateViewTest, FactorySuppressesBubbleWhenGatedOff) {
   TestingPrefServiceSimple local_state;
   RegisterLocalStatePrefs(local_state.registry());
+  local_state.SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
   ScopedNativePasswordWritePrefsForTesting scoped_prefs(&local_state);
 
   PasswordBubbleViewBase* bubble = CreateFactoryView();
 
-  ASSERT_TRUE(bubble);
-  EXPECT_EQ(bubble->GetClassName(), PasswordSaveUpdateView::kViewClassName);
+  // Kill switch off: no save prompt at all — never the upstream Chromium one.
+  ASSERT_FALSE(bubble);
+  EXPECT_FALSE(PasswordBubbleViewBase::manage_password_bubble());
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest, FactoryUsesMahoViewWhenGatedOn) {
@@ -223,6 +228,9 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
        FactoryUsesDistinctUpstreamFallbackForManageStateWhenAllGatesEnabled) {
   ON_CALL(*model_delegate_mock(), GetState)
       .WillByDefault(Return(password_manager::ui::MANAGE_STATE));
+  ON_CALL(*model_delegate_mock(),
+          GetManagePasswordsSingleCredentialDetailsModeCredential)
+      .WillByDefault(ReturnRef(single_credential_details_mode_credential_));
 
   TestingPrefServiceSimple local_state;
   RegisterLocalStatePrefs(local_state.registry());
@@ -332,7 +340,7 @@ TEST_F(MahoPasswordShowBubbleDispatchTest,
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest,
-       FactoryUsesUpstreamViewForAvailableExternalProvider) {
+       FactorySuppressesBubbleForAvailableExternalProvider) {
   maho_core_set_installed_extensions_for_profile(
       core_, "default",
       R"([{"id":"nngceckbapebfimnlniiiahkandclblb","name":"Bitwarden","version":"1.0","enabled":true}])");
@@ -349,12 +357,13 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
 
   PasswordBubbleViewBase* bubble = CreateFactoryView();
 
-  ASSERT_TRUE(bubble);
-  EXPECT_EQ(bubble->GetClassName(), PasswordSaveUpdateView::kViewClassName);
+  // Bitwarden's own extension UI owns the save; the browser shows nothing.
+  ASSERT_FALSE(bubble);
+  EXPECT_FALSE(PasswordBubbleViewBase::manage_password_bubble());
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest,
-       FactoryUsesUpstreamViewForUnauthorizedNativeProfile) {
+       FactorySuppressesBubbleForUnauthorizedNativeProfile) {
   TestingPrefServiceSimple local_state;
   RegisterLocalStatePrefs(local_state.registry());
   local_state.SetBoolean(prefs::kMahoNativePasswordWriteEnabled, true);
@@ -366,8 +375,9 @@ TEST_F(MahoPasswordSaveUpdateViewTest,
 
   PasswordBubbleViewBase* bubble = CreateFactoryView();
 
-  ASSERT_TRUE(bubble);
-  EXPECT_EQ(bubble->GetClassName(), PasswordSaveUpdateView::kViewClassName);
+  // No authorized Maho surface and never the upstream Chromium prompt.
+  ASSERT_FALSE(bubble);
+  EXPECT_FALSE(PasswordBubbleViewBase::manage_password_bubble());
 }
 
 TEST_F(MahoPasswordSaveUpdateViewTest, BuildsModernCredentialCardAndControls) {

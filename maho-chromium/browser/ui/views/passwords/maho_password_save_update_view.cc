@@ -312,6 +312,26 @@ void MahoPasswordSaveUpdateView::AddedToWidget() {
   }
 }
 
+void MahoPasswordSaveUpdateView::VisibilityChanged(views::View* starting_from,
+                                                   bool is_visible) {
+  PasswordBubbleViewBase::VisibilityChanged(starting_from, is_visible);
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (is_visible) {
+    if (auto* ok_button = GetOkButton()) {
+      ok_button->SetStyle(ui::ButtonStyle::kProminent);
+      ok_button->SetCornerRadius(tokens::kRadiusSm);
+      ok_button->SetMinSize(
+          gfx::Size(kPrimaryButtonMinWidth, kDialogButtonHeight));
+    }
+    if (auto* cancel_button = GetCancelButton()) {
+      cancel_button->SetStyle(ui::ButtonStyle::kText);
+      cancel_button->SetCornerRadius(tokens::kRadiusSm);
+      cancel_button->SetMinSize(
+          gfx::Size(kSecondaryButtonMinWidth, kDialogButtonHeight));
+    }
+  }
+}
+
 void MahoPasswordSaveUpdateView::SaveOrUpdate() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   controller_.OnSaveClicked();

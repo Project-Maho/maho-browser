@@ -612,6 +612,13 @@ protected:
   // write kill switch, and installs it as the process-wide source the backend
   // consults. Returns the raw pointer so tests can flip the pref.
   TestingPrefServiceSimple *CreateKillSwitchPrefs() {
+    // Reset any previously installed override FIRST: assigning over a live
+    // pref_override_ constructs the new scoped guard before destroying the old
+    // one, so the old destructor would restore g_...prefs_for_testing to a
+    // stale previous_ and drop the new override entirely (leaving reads to
+    // fall through to the process local state). Resetting first keeps the
+    // install chain correct across repeat calls within one test.
+    pref_override_.reset();
     pref_service_ = std::make_unique<TestingPrefServiceSimple>();
     RegisterLocalStatePrefs(pref_service_->registry());
     pref_override_ = std::make_unique<ScopedNativePasswordWritePrefsForTesting>(
@@ -619,11 +626,10 @@ protected:
     return pref_service_.get();
   }
 
-  // Turns the Task-0 kill switch ON for tests that exercise the native
-  // write/fill behavior itself. Without this, the switch defaults to false and
-  // every native add/update/fill no-ops (proven by the
-  // NativeWriteDisabledByDefault_* tests below), which would mask the behavior
-  // these tests are actually asserting.
+  // Installs the scoped kill-switch pref override and turns the native write
+  // kill switch ON for tests that exercise the native write/fill behavior
+  // itself. The registry default is also true, but installing the override
+  // makes the test the sole owner of the switch for the fixture's lifetime.
   void EnableNativeWriteForTesting() {
     CreateKillSwitchPrefs()->SetBoolean(prefs::kMahoNativePasswordWriteEnabled,
                                         true);
@@ -1452,12 +1458,14 @@ TEST_F(MahoPasswordStoreBackendTest,
   EXPECT_TRUE(maho_forms[0].password_value.empty());
 }
 
-// Kill switch (Task 0): while `maho.passwords.native_write_enabled` is false —
-// the default — native ADD must not reach the Vault and native FILL must not
-// read secrets. Enabling the pref restores the existing behavior.
-TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabledByDefault_AddIsNoOp) {
+// Kill switch: while `maho.passwords.native_write_enabled` is explicitly
+// false (it defaults to true), native ADD must not reach the Vault and native
+// FILL must not read secrets. Re-enabling the pref restores the native
+// behavior.
+TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_AddIsNoOp) {
   CreateInitializedVaultCore();
   TestingPrefServiceSimple *kill_switch_prefs = CreateKillSwitchPrefs();
+  kill_switch_prefs->SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
   ASSERT_FALSE(IsNativePasswordWriteEnabled(kill_switch_prefs));
 
   MahoPasswordStoreBackend backend = CreateBackend();
@@ -1505,8 +1513,7 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabledByDefault_AddIsNoOp) {
   EXPECT_TRUE(parsed_payload->GetList().empty());
 }
 
-TEST_F(MahoPasswordStoreBackendTest,
-       NativeWriteDisabledByDefault_FillReturnsEmpty) {
+TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_FillReturnsEmpty) {
   CreateInitializedVaultCore();
   MahoPasswordStoreBackend backend = CreateBackend();
   backend.InitBackend(base::OnceCallback<void(bool)>());
@@ -1522,6 +1529,7 @@ TEST_F(MahoPasswordStoreBackendTest,
             CredentialPayloadForOrigin(origin).find(kKillSwitchPassword));
 
   TestingPrefServiceSimple *kill_switch_prefs = CreateKillSwitchPrefs();
+  kill_switch_prefs->SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
   ASSERT_FALSE(IsNativePasswordWriteEnabled(kill_switch_prefs));
 
   password_manager::BackendLoginsResult filled =

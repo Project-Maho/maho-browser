@@ -197,10 +197,12 @@ void MahoCredentialIdentityMap::Clear() {
 
 namespace {
 
-// Task-0 release kill switch. While the local-state pref
-// `maho.passwords.native_write_enabled` is false (the default), every native
-// WRITE (add/update) and FILL path must no-op without touching the Vault FFI.
-// Metadata-only reads (GetAllLogins*) are intentionally not gated.
+// Release kill switch. While the local-state pref
+// `maho.passwords.native_write_enabled` is false, every native WRITE (add/update)
+// and FILL path must no-op without touching the Vault FFI. The pref defaults to
+// true — the native provider is the shipped experience; setting it to false is
+// the emergency shutoff. Metadata-only reads (GetAllLogins*) are intentionally
+// not gated.
 bool NativeWriteEnabled() {
   return IsNativePasswordWriteEnabled(GetNativePasswordWritePrefs());
 }

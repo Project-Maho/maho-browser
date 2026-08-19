@@ -63,6 +63,8 @@ class MahoPasswordSaveUpdateView : public PasswordBubbleViewBase {
   views::View* GetInitiallyFocusedView() override;
   ui::ImageModel GetWindowIcon() override;
   void AddedToWidget() override;
+  void VisibilityChanged(views::View* starting_from,
+                         bool is_visible) override;
 
   void SaveOrUpdate();
   void CancelAction();

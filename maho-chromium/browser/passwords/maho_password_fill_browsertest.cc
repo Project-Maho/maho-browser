@@ -194,8 +194,10 @@ protected:
   void TearDownOnMainThread() override {
     authorization_service()->ResetForTesting();
     if (g_browser_process && g_browser_process->local_state()) {
+      // Restore the shipped default (true). The kill switch is now an
+      // explicit opt-out, not the resting state.
       g_browser_process->local_state()->SetBoolean(
-          prefs::kMahoNativePasswordWriteEnabled, false);
+          prefs::kMahoNativePasswordWriteEnabled, true);
     }
     core_ = nullptr;
     PasswordManagerBrowserTestBase::TearDownOnMainThread();

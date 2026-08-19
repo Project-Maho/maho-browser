@@ -15,9 +15,10 @@ namespace maho::passwords {
 
 namespace prefs {
 
-// Local-state boolean release kill switch. While false (the default), every
-// native password WRITE (add/update) and FILL path no-ops instead of touching
-// the Vault.
+// Local-state boolean release kill switch. Defaults to true: the Maho native
+// provider is the shipped password experience. While false, every native
+// password WRITE (add/update) and FILL path no-ops instead of touching the
+// Vault, and the browser shows no save/update prompt at all.
 inline constexpr char kMahoNativePasswordWriteEnabled[] =
     "maho.passwords.native_write_enabled";
 

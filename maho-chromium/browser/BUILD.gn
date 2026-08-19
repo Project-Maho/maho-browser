@@ -329,6 +329,12 @@ source_set("maho_browser_ai_tools") {
     "ai/maho_browser_tool_executor.h",
     "ai/maho_browser_tool_registry.cc",
     "ai/maho_browser_tool_registry.h",
+    "ai/maho_capability_broker.cc",
+    "ai/maho_capability_broker.h",
+    "ai/maho_capability_principal.cc",
+    "ai/maho_capability_principal.h",
+    "ai/maho_capability_types.cc",
+    "ai/maho_capability_types.h",
     "ai/maho_mail_tool_authorization.h",
   ]
   deps = [
@@ -360,6 +366,7 @@ source_set("maho_browser_tool_executor_unittests") {
   sources = [
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
+    "ai/maho_capability_broker_unittest.cc",
   ]
   deps = [
     ":maho_browser_ai_tools",
@@ -378,6 +385,7 @@ test("maho_browser_tool_executor_test") {
   sources = [
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
+    "ai/maho_capability_broker_unittest.cc",
     "ai/maho_browser_tool_test_main.cc",
   ]
   deps = [
@@ -1269,7 +1277,12 @@ test("maho_password_native_views_test") {
   ]
   sources = [
     "run_all_maho_unittests_main.cc",
+    "ui/views/passwords/maho_password_autofill_row_unittest.cc",
     "ui/views/passwords/maho_password_save_update_view_unittest.cc",
+    "//chrome/browser/ui/views/autofill/popup/mock_accessibility_selection_delegate.cc",
+    "//chrome/browser/ui/views/autofill/popup/mock_accessibility_selection_delegate.h",
+    "//chrome/browser/ui/views/autofill/popup/mock_selection_delegate.cc",
+    "//chrome/browser/ui/views/autofill/popup/mock_selection_delegate.h",
     "../chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.cc",
     "../chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.h",
     "//chrome/browser/ui/views/passwords/password_bubble_view_test_base.cc",

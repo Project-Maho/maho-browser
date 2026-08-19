@@ -77,8 +77,10 @@ void PasswordBubbleViewBase::ShowBubble(content::WebContents *web_contents,
 
   // This public call is intentionally outside the macro-renamed upstream
   // implementation so production ShowBubble() dispatches through Maho's gate.
+  // CreateBubble() returning null is a legitimate suppression path (the
+  // upstream Chromium save/update prompt must never surface in Maho), so a
+  // DCHECK on the bubble pointer would crash debug builds by design.
   PasswordBubbleViewBase *bubble = CreateBubble(web_contents, anchor, reason);
-  DCHECK(bubble);
   DCHECK_EQ(bubble, g_manage_passwords_bubble_);
   if (!g_manage_passwords_bubble_) {
     return;
@@ -119,15 +121,20 @@ PasswordBubbleViewBase *
 PasswordBubbleViewBase::CreateBubble(content::WebContents *web_contents,
                                      views::BubbleAnchor anchor_view,
                                      DisplayReason reason) {
-  if (!ShouldUseMahoPasswordSaveUpdateView(web_contents)) {
-    return CreateBubble_ChromiumImpl(web_contents, anchor_view, reason);
-  }
-
   base::WeakPtr<PasswordsModelDelegate> delegate =
       PasswordsModelDelegateFromWebContents(web_contents);
   const password_manager::ui::State model_state = delegate->GetState();
   if (model_state == password_manager::ui::PENDING_PASSWORD_UPDATE_STATE ||
       model_state == password_manager::ui::PENDING_PASSWORD_STATE) {
+    // Maho never surfaces the upstream save/update prompt. When the effective
+    // provider is Maho Native the Maho bubble owns the save; under an external
+    // provider (Bitwarden/1Password) the extension's own UI owns it, and under
+    // a disabled provider nothing is saved at all — in both latter cases no
+    // browser prompt may appear.
+    if (!ShouldUseMahoPasswordSaveUpdateView(web_contents)) {
+      g_manage_passwords_bubble_ = nullptr;
+      return nullptr;
+    }
     g_manage_passwords_bubble_ =
         new maho::passwords::MahoPasswordSaveUpdateView(web_contents,
                                                         anchor_view, reason);

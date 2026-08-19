@@ -27,6 +27,7 @@
 #include "ui/views/test/views_drawing_test_utils.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
 namespace autofill {
 namespace {
@@ -36,7 +37,7 @@ using ::testing::Return;
 
 base::FilePath PasswordScreenshotPath(const char* filename) {
   base::FilePath source_root;
-  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &source_root));
+  CHECK(base::PathService::Get(base::DIR_SRC_TEST_DATA_ROOT, &source_root));
   const base::FilePath maho_root =
       base::MakeAbsoluteFilePath(source_root.AppendASCII("maho"));
   CHECK(!maho_root.empty());
@@ -113,8 +114,8 @@ TEST_F(MahoPasswordAutofillRowTest, PasswordEntryUsesCredentialCardSurface) {
   ASSERT_TRUE(row_view().GetBackground());
   EXPECT_EQ(row_view().GetBackground()->color(), kMahoColorCardBackground);
   EXPECT_TRUE(row_view().GetBorder());
-  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey).top(), 4);
-  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey).bottom(), 4);
+  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey)->top(), 4);
+  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey)->bottom(), 4);
 }
 
 TEST_F(MahoPasswordAutofillRowTest, PasswordSelectionHighlightsWholeCard) {
@@ -133,8 +134,8 @@ TEST_F(MahoPasswordAutofillRowTest, AddressEntryKeepsChromiumSurfaceAndMargins) 
 
   ASSERT_TRUE(row_view().GetBackground());
   EXPECT_EQ(row_view().GetBackground()->color(), ui::kColorDropdownBackground);
-  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey).top(), 0);
-  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey).bottom(), 0);
+  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey)->top(), 0);
+  EXPECT_EQ(row_view().GetProperty(views::kMarginsKey)->bottom(), 0);
 }
 
 TEST_F(MahoPasswordAutofillRowTest, CaptureCredentialRowScreenshots) {
