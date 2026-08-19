@@ -65,7 +65,8 @@ impl MockBrowser {
                             "result": {
                                 "protocolVersion": "2025-03-26",
                                 "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
-                                "capabilities": {"tools": {}}
+                                "capabilities": {"tools": {}},
+                                "sessionInfo": {"id": "mock-test-session-id", "displayLabel": "Maho CLI", "controllerKind": "maho-cli"}
                             }
                         }),
                         "tools/call" => {
@@ -337,19 +338,11 @@ fn cli_agent_routine_flag_contract_test() {
     );
 }
 
-/// `maho routine run` must NOT silently ignore provider/model/yolo/allow-tools/workspace.
-///
-/// The browser MCP `browser_routines_run` tool accepts only `{id}`; routines
-/// execute server-side with the browser's own provider/model/permissions, so
-/// these CLI flags cannot be honored. The contract is: reject them up front with
-/// exit code 2 BEFORE running anything — never accept the flag and quietly run
-/// the routine as if it were absent.
-///
-/// The mock browser is primed to answer `browser_routines_run` with success. If
-/// the flag were silently ignored, the routine would run and its result content
-/// would print with exit 0. The assertions prove the opposite.
+/// `maho routine run` must reject provider/model/workspace because browser-side
+/// routines cannot honor those CLI overrides. The approval flags are global
+/// deprecated no-ops and must execute the routine normally.
 #[test]
-fn cli_routine_run_rejects_unsupported_flags_instead_of_silently_ignoring() {
+fn cli_routine_run_rejects_only_provider_model_and_workspace() {
     let mut responses = HashMap::new();
     responses.insert(
         "browser_routines_run".to_string(),
@@ -367,8 +360,6 @@ fn cli_routine_run_rejects_unsupported_flags_instead_of_silently_ignoring() {
     for flag in [
         vec!["--provider", "anthropic"],
         vec!["--model", "claude-3-5-sonnet"],
-        vec!["--yolo"],
-        vec!["--allow-tools"],
         vec!["--workspace", "ws1"],
     ] {
         let mut args = vec!["routine", "run", "morning_briefing"];
@@ -396,7 +387,23 @@ fn cli_routine_run_rejects_unsupported_flags_instead_of_silently_ignoring() {
 }
 
 #[test]
-fn cli_agent_routine_rejects_unsupported_flags_instead_of_silently_ignoring() {
+fn cli_routine_run_rejects_removed_approval_flags() {
+    let mock = MockBrowser::spawn(HashMap::new());
+
+    for flag in ["--yolo", "--allow-tools"] {
+        let output =
+            run_cli_with_socket(&["routine", "run", "morning_briefing", flag], mock.socket());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "routine run {flag} must exit 2; stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn cli_agent_routine_rejects_only_provider_model_and_workspace() {
     let mut responses = HashMap::new();
     responses.insert(
         "browser_routines_run".to_string(),
@@ -414,8 +421,6 @@ fn cli_agent_routine_rejects_unsupported_flags_instead_of_silently_ignoring() {
     for flag in [
         vec!["--provider", "anthropic"],
         vec!["--model", "claude-3-5-sonnet"],
-        vec!["--yolo"],
-        vec!["--allow-tools"],
         vec!["--workspace", "ws1"],
     ] {
         let mut args = vec!["agent", "--routine", "morning_briefing"];

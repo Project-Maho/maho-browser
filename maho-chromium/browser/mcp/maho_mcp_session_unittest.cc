@@ -85,6 +85,9 @@ public:
   bool has_eligible_browser = true;
   std::set<int> eligible_tabs = {7, 11};
   int64_t generation = 1;
+  bool issue_unique_generations = false;
+  int64_t next_generation = 1;
+  uint64_t navigation_epoch = 1;
 
   int resolve_tab_calls = 0;
   int resolve_profile_calls = 0;
@@ -93,6 +96,9 @@ public:
   bool approve_browser_actions = true;
   bool advance_generation_on_approval = false;
   int browser_action_approval_calls = 0;
+  int browser_type_call_count = 0;
+  int browser_type_tab_id = 0;
+  ui::AXNodeID browser_type_ax_id = 0;
 
   struct PublishedActivity {
     std::string activity_id;
@@ -144,7 +150,9 @@ public:
       resolution.target.valid = true;
       resolution.target.tab_id = active_tab_id;
       resolution.target.browser_id = 100;
-      resolution.target.generation = generation;
+      resolution.target.generation = issue_unique_generations
+                                         ? ++next_generation
+                                         : generation;
       return resolution;
     }
     if (eligible_tabs.find(requested_tab_id) == eligible_tabs.end()) {
@@ -154,7 +162,9 @@ public:
     resolution.target.valid = true;
     resolution.target.tab_id = requested_tab_id;
     resolution.target.browser_id = 100;
-    resolution.target.generation = generation;
+    resolution.target.generation = issue_unique_generations
+                                       ? ++next_generation
+                                       : generation;
     return resolution;
   }
 
@@ -186,7 +196,7 @@ public:
     if (!target.valid) {
       return false;
     }
-    if (target.generation != generation) {
+    if (!issue_unique_generations && target.generation != generation) {
       return false;
     }
     if (target.tab_id != 0 &&
@@ -251,10 +261,23 @@ public:
     return {};
   }
   std::string GetPageText(int tab_id) override { return std::string(); }
-  base::Value
-  GetAccessibilitySnapshot(int tab_id,
-                           MahoMcpSession::RefTable *out_refs) override {
+  base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      MahoMcpSession::RefTable* out_refs) override {
     return base::Value(base::DictValue());
+  }
+  base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      MahoMcpSession::RefTable* out_refs,
+      uint64_t* out_snapshot_token) override {
+    if (out_snapshot_token) {
+      *out_snapshot_token = navigation_epoch;
+    }
+    return base::Value(base::DictValue());
+  }
+  bool RevalidateRefSnapshot(const ResolvedMahoMcpTarget& target,
+                             uint64_t snapshot_token) override {
+    return target.valid && snapshot_token == navigation_epoch;
   }
   PageContentResult GetPageContent(int tab_id) override {
     PageContentResult result;
@@ -324,7 +347,10 @@ public:
   }
   bool Click(int tab_id, ui::AXNodeID ax_id) override { return false; }
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string &text) override {
-    return false;
+    ++browser_type_call_count;
+    browser_type_tab_id = tab_id;
+    browser_type_ax_id = ax_id;
+    return true;
   }
   bool Select(int tab_id, ui::AXNodeID ax_id,
               const std::string &value) override {
@@ -2400,6 +2426,19 @@ TEST_F(MahoMcpSessionNewFeaturesTest, InteractiveTools_Scroll_Hover_KeyPress) {
   EXPECT_EQ(key_error->FindInt("code").value(), -32602);
 }
 
+TEST_F(MahoMcpSessionNewFeaturesTest,
+       InteractiveTools_KeyPressAcceptsSpaceForCheckboxes) {
+  base::Value response =
+      CallTool(R"({"jsonrpc":"2.0","method":"tools/call","id":4,)"
+               R"("params":{"name":"browser_key_press",)"
+               R"("arguments":{"key":"Space"}}})"
+               "\n");
+  const auto* result = response.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->FindBool("key_pressed").value());
+  EXPECT_EQ(*result->FindString("key"), "Space");
+}
+
 TEST_F(MahoMcpSessionNetworkCaptureTest,
        WaitForSelectorForwardsArgsAndMarshalsFoundTrue) {
   delegate_->set_wait_selector_return(true);
@@ -2584,6 +2623,7 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
       "browser_accessibility_snapshot",
       "browser_click",
       "browser_type",
+      "browser_file_upload_select",
       "browser_select",
       "browser_console_messages",
       "browser_wait_for_navigation",
@@ -2644,6 +2684,7 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
       "browser_accessibility_snapshot",
       "browser_click",
       "browser_type",
+      "browser_file_upload_select",
       "browser_select",
       "browser_console_messages",
       "browser_wait_for_navigation",
@@ -2735,6 +2776,92 @@ TEST_F(MahoMcpSessionTest, MutationRequiresActiveLease) {
           << "held lease must let the mutation past the gate";
     }
   }
+}
+
+// Resolving a target issues a fresh capability token for every operation in
+// production. A ref is bound to its underlying tab and browser, not to the
+// short-lived token minted for the following click/type operation.
+TEST_F(MahoMcpSessionTest,
+       SnapshotRefSurvivesFreshResolutionForSameTabAndBrowser) {
+  InitResolvingSession();
+  delegate_->issue_unique_generations = true;
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 310)
+                .size(),
+            1u);
+  ASSERT_EQ(CallToolRaw("browser_accessibility_snapshot", R"({"tab_id":7})",
+                        311)
+                .size(),
+            1u);
+  session_->ref_table()[1] = 101;
+
+  auto responses = CallToolRaw(
+      "browser_type", R"({"tab_id":7,"ref":1,"text":"Maho Browser"})",
+      312);
+  ASSERT_EQ(responses.size(), 1u);
+  const base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_FALSE(error) << responses[0];
+  EXPECT_EQ(delegate_->browser_type_call_count, 1);
+  EXPECT_EQ(delegate_->browser_type_tab_id, 7);
+  EXPECT_EQ(delegate_->browser_type_ax_id, 101);
+}
+
+TEST_F(MahoMcpSessionTest, SnapshotRefRejectsDocumentChange) {
+  InitResolvingSession();
+  delegate_->issue_unique_generations = true;
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 313)
+                .size(),
+            1u);
+  ASSERT_EQ(CallToolRaw("browser_accessibility_snapshot", R"({"tab_id":7})",
+                        314)
+                .size(),
+            1u);
+  session_->ref_table()[1] = 101;
+  ++delegate_->navigation_epoch;
+
+  auto responses = CallToolRaw(
+      "browser_type", R"({"tab_id":7,"ref":1,"text":"Maho Browser"})",
+      315);
+  ASSERT_EQ(responses.size(), 1u);
+  const base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  EXPECT_EQ(error->FindInt("code").value(), -32009);
+}
+
+TEST_F(MahoMcpSessionTest, AcquireLeaseForceStealsOtherSession) {
+  InitResolvingSession();
+  auto other_session = MakeTrustedCliTestSession(lease_registry_.get());
+  const std::string other_session_id = other_session->session_id();
+  ASSERT_TRUE(lease_registry_
+                  ->Acquire(7, other_session_id, base::Seconds(60), false)
+                  .ok);
+
+  auto responses =
+      CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 319);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  ASSERT_FALSE(response.GetDict().FindDict("error")) << responses[0];
+  const base::DictValue* result = response.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  base::Value payload;
+  if (const std::string* output_json = result->FindString("outputJson")) {
+    auto parsed_output =
+        base::JSONReader::Read(*output_json, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(parsed_output.has_value());
+    payload = std::move(*parsed_output);
+  } else {
+    payload = base::Value(result->Clone());
+  }
+  const base::DictValue* payload_dict = payload.GetIfDict();
+  ASSERT_TRUE(payload_dict);
+  EXPECT_TRUE(payload_dict->FindBool("acquired").value_or(false));
+  const std::string* previous_holder =
+      payload_dict->FindString("previous_holder");
+  ASSERT_TRUE(previous_holder);
+  EXPECT_EQ(*previous_holder, other_session_id);
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, other_session_id));
 }
 
 TEST_F(MahoMcpSessionTest, GrantedExactOriginIsRequiredForNavigation) {

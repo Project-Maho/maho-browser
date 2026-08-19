@@ -6,6 +6,10 @@
 #include <cstddef>
 #include <utility>
 
+#include "maho/browser/ai/maho_capability_broker.h"
+#include "maho/browser/ai/maho_capability_principal.h"
+#include "maho/browser/ai/maho_capability_types.h"
+
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -1318,6 +1322,28 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
     return false;
   }
 
+  // Capability Broker Gate: evaluate against canonical policy broker
+  maho::ai::CapabilityRequestContext req_ctx;
+  req_ctx.surface = maho::ai::CapabilitySurface::kDesktopAgent;
+  req_ctx.principal =
+      maho::ai::CapabilityPrincipal::MakeInternalAgent(browser_action_lease_holder_id_);
+  req_ctx.capability_id = std::string(contract.tool_name);
+  req_ctx.active_tab_id = tab_id;
+  req_ctx.source_origin = *active_origin;
+  req_ctx.lease_token = browser_action_lease_holder_id_;
+
+  const std::string* maybe_approval = arguments.FindString("approval_token");
+  if (maybe_approval) {
+    req_ctx.approval_token = *maybe_approval;
+  }
+
+  maho::ai::MahoCapabilityBroker broker;
+  maho::ai::CapabilityEvaluationResult evaluation = broker.Evaluate(req_ctx);
+  if (evaluation.decision == maho::ai::CapabilityDecisionKind::kDeny) {
+    error = "Capability policy denied action: " + std::string(evaluation.message);
+    return false;
+  }
+
   std::string destination_origin;
   if (contract.domain_policy ==
       maho::ai::BrowserActionDomainPolicy::kActiveTabOriginOrApprovedDestination) {
@@ -1361,12 +1387,12 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
             .value_or(
                 arguments.FindBool("pageDerivedJustification").value_or(false));
 
-    BrowserActionApprovalDecision decision =
+    BrowserActionApprovalDecision approval_decision =
         action_approval_callback_.Run(metadata);
-    if (!decision.approved) {
-      error = decision.error.empty()
+    if (!approval_decision.approved) {
+      error = approval_decision.error.empty()
                   ? "Browser action approval was denied."
-                  : std::move(decision.error);
+                  : std::move(approval_decision.error);
       return false;
     }
   }
@@ -1399,9 +1425,12 @@ bool MahoBrowserToolExecutor::EnsureBrowserActionLease(
     return true;
   }
 
+  // ADR 0016: in-browser acquisition is user-driven, so it always
+  // force-steals an existing holder.
+  constexpr bool kForceStealAlwaysAcquire = true;
   maho::MahoMcpLeaseRegistry::AcquireResult lease = lease_registry->Acquire(
       tab_id, browser_action_lease_holder_id_, base::Seconds(60),
-      false);
+      kForceStealAlwaysAcquire);
   if (!lease.ok) {
     error = "Active tab lease required for browser action";
     if (!lease.previous_holder.empty()) {

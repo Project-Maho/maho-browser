@@ -54,9 +54,10 @@ class MahoMcpLeaseRegistry {
     AcquireResult& operator=(AcquireResult&&);
 
     bool ok = false;
-    std::string previous_holder;  // Only set on !ok or on steal.
-    std::string message;          // Empty on ok.
-    base::TimeTicks expires_at;   // Only meaningful when ok.
+    // Set for both !ok contention and successful force-steal.
+    std::string previous_holder;
+    std::string message;         // Empty on ok.
+    base::TimeTicks expires_at;  // Only meaningful when ok.
   };
 
   MahoMcpLeaseRegistry();
@@ -68,7 +69,8 @@ class MahoMcpLeaseRegistry {
   // Acquire an exclusive lease on |tab_id| for |session_id|. |ttl| is
   // clamped to [10s, 300s]. If another session holds a still-valid lease
   // and |force_steal| is false, returns {ok=false, previous_holder=...}.
-  // If |force_steal| is true, previous holder is audit-logged and evicted.
+  // If |force_steal| is true, the prior holder is audit-logged, evicted, and
+  // returned as {ok=true, previous_holder=...}.
   AcquireResult Acquire(int64_t tab_id,
                         const std::string& session_id,
                         base::TimeDelta ttl,

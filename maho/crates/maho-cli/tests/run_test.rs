@@ -1,342 +1,231 @@
-use std::process::Command;
-use tempfile::NamedTempFile;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
-fn run_cli(
-    args: &[&str],
-    db_path: &std::path::Path,
-    extra_env: &[(&str, &str)],
-) -> std::process::Output {
+use tempfile::{NamedTempFile, TempDir};
+
+fn run_cli(args: &[&str], db_path: &std::path::Path) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_maho");
     let mut cmd = Command::new(bin);
     cmd.args(args);
     cmd.env("MAHO_DB_PATH", db_path);
-    for (k, v) in extra_env {
-        cmd.env(k, v);
-    }
     cmd.output().expect("failed to run CLI binary")
 }
 
 fn setup_db() -> (NamedTempFile, std::path::PathBuf) {
-    let db_file = NamedTempFile::new().unwrap();
+    let db_file = NamedTempFile::new().expect("create test database");
     let db_path = db_file.path().to_path_buf();
-
-    // Initialize default workspace
-    let storage = maho_cli::workspace::open_storage(&db_path).unwrap();
+    let storage = maho_cli::workspace::open_storage(&db_path).expect("open test storage");
     let ws = maho_types::ai::AiWorkspace {
         id: "default".to_string(),
         name: "Default Workspace".to_string(),
         space_id: None,
         profile_id: Some("blank".to_string()),
         workspace_root: None,
-        created_at: "".to_string(),
-        updated_at: "".to_string(),
+        created_at: String::new(),
+        updated_at: String::new(),
     };
-    storage.create_workspace(&ws).unwrap();
-
+    storage
+        .create_workspace(&ws)
+        .expect("create default workspace");
     (db_file, db_path)
 }
 
 #[test]
-fn test_run_command_missing_keys() {
+fn removed_approval_flags_fail_as_unknown_and_are_hidden_from_help() {
     let (_db_file, db_path) = setup_db();
 
-    // Running without keys should fail with "No API key configured" or similar
-    let output = run_cli(&["run", "say hello"], &db_path, &[]);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    for flag in ["--yolo", "--allow-tools"] {
+        let output = run_cli(&["run", flag, "say hello"], &db_path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{flag} must be rejected as an unrecognized argument; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("unexpected argument") || stderr.contains("error:"),
+            "{flag} must emit a clap error; stderr: {stderr}"
+        );
+    }
 
-    assert!(
-        stderr.contains("No BYOK API key configured")
-            || stderr.contains("No API key found")
-            || stdout.contains("Agent loop failed")
-    );
+    for args in [
+        ["run", "--help"].as_slice(),
+        ["agent", "--help"].as_slice(),
+        ["agent", "run", "--help"].as_slice(),
+    ] {
+        let output = run_cli(args, &db_path);
+        assert!(output.status.success(), "help must succeed");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("--yolo"), "help leaked --yolo: {stdout}");
+        assert!(
+            !stdout.contains("--allow-tools"),
+            "help leaked --allow-tools: {stdout}"
+        );
+    }
 }
 
-#[test]
-fn test_run_command_with_mock_key() {
-    let (_db_file, db_path) = setup_db();
-
-    // Set environment variable to bypass key validation on startup, and trigger the agent loop
-    let output = run_cli(
-        &["run", "say hello", "--provider", "openai"],
-        &db_path,
-        &[("OPENAI_API_KEY", "mock-key-123")],
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // It should print "Running autonomous agent session..."
-    assert!(stdout.contains("Running autonomous agent session"));
-    // Since the key is mock, it will fail when hitting OpenAI, which is expected
-    assert!(
-        stderr.contains("OpenAI")
-            || stderr.contains("401")
-            || stderr.contains("Unauthorized")
-            || stderr.contains("Agent loop failed")
-            || stdout.contains("Agent loop failed")
-    );
+fn write_jsonrpc_response(
+    writer: &mut impl Write,
+    id: serde_json::Value,
+    result: serde_json::Value,
+) {
+    let response = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
+    writeln!(writer, "{response}").expect("write mock browser response");
+    writer.flush().expect("flush mock browser response");
 }
 
-mod agent_loop {
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+const MOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const CLI_TIMEOUT: Duration = Duration::from_secs(15);
 
-    use async_trait::async_trait;
-    use maho_agent::{
-        AgentError, AgentRuntime, AgentStorage, BrowserToolBridge, PermissionDecision,
-        SwiftideBackend, ZeroizedString,
-    };
-    use maho_types::chat::ChatMessage;
-    use maho_types::tool::{
-        BrowserToolBridgeError, BrowserToolDescriptor, BrowserToolExecution,
-        BrowserToolExecutionReceipt, BrowserToolPolicy, ToolPermission,
-    };
-    use swiftide_core::chat_completion::{
-        errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
-        ToolCall,
-    };
+fn spawn_mock_browser() -> (TempDir, String, Sender<()>, Receiver<Vec<String>>, std::thread::JoinHandle<()>) {
+    let dir = tempfile::tempdir().expect("create mock browser directory");
+    let socket_path = dir.path().join("mock-browser.sock");
+    let listener = UnixListener::bind(&socket_path).expect("bind mock browser UDS");
+    let socket_path_string = socket_path.to_string_lossy().into_owned();
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (calls_tx, calls_rx) = mpsc::channel();
 
-    #[derive(Clone, Default)]
-    struct MockStorage {
-        messages: Arc<Mutex<Vec<(String, String, String)>>>,
-    }
-
-    #[async_trait]
-    impl AgentStorage for MockStorage {
-        async fn get_byok_key(&self, _p: &str) -> Result<Option<ZeroizedString>, AgentError> {
-            Ok(None)
+    let handle = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("CLI connects to mock browser");
+        if stop_rx.try_recv().is_ok() {
+            calls_tx.send(Vec::new()).expect("report mock browser calls");
+            return;
         }
-        async fn get_setting(&self, _k: &str) -> Result<Option<ZeroizedString>, AgentError> {
-            Ok(None)
-        }
-        async fn save_message(&self, s: &str, r: &str, c: &str) -> Result<(), AgentError> {
-            self.messages
-                .lock()
-                .unwrap()
-                .push((s.to_string(), r.to_string(), c.to_string()));
-            Ok(())
-        }
-        async fn get_history(&self, _s: &str) -> Result<Vec<ChatMessage>, AgentError> {
-            Ok(vec![])
-        }
-    }
-
-    #[derive(Clone, Default)]
-    struct RecordingBridge {
-        calls: Arc<Mutex<Vec<String>>>,
-    }
-
-    #[async_trait]
-    impl BrowserToolBridge for RecordingBridge {
-        async fn list_tool_descriptors(
-            &self,
-        ) -> Result<Vec<BrowserToolDescriptor>, BrowserToolBridgeError> {
-            Ok(["read_current_page", "browser_navigate"]
-                .into_iter()
-                .map(|name| BrowserToolDescriptor {
-                    capability_id: name.to_string(),
-                    name: name.to_string(),
-                    description: name.to_string(),
-                    input_schema: serde_json::json!({
-                        "type": "object",
-                        "additionalProperties": true
-                    }),
-                    schema_version: 1,
-                    policy: BrowserToolPolicy {
-                        sensitive: name == "browser_navigate",
-                        permission: if name == "browser_navigate" {
-                            ToolPermission::AlwaysAsk
-                        } else {
-                            ToolPermission::AutoApprove
-                        },
-                    },
-                })
-                .collect())
-        }
-
-        async fn execute_tool(
-            &self,
-            capability_id: &str,
-            _args_json: &str,
-        ) -> Result<BrowserToolExecution, BrowserToolBridgeError> {
-            self.calls.lock().unwrap().push(capability_id.to_string());
-            Ok(BrowserToolExecution {
-                output_json: "{\"ok\":true}".to_string(),
-                receipt: BrowserToolExecutionReceipt {
-                    capability_id: capability_id.to_string(),
-                    execution_id: "test-execution".to_string(),
-                    metadata: serde_json::json!({
-                        "state": "completed",
-                        "approval": "approved"
-                    }),
-                },
-            })
-        }
-    }
-
-    #[derive(Clone)]
-    struct ScriptedToolLlm {
-        tool: String,
-        args: String,
-        calls: Arc<Mutex<usize>>,
-    }
-
-    #[async_trait]
-    impl ChatCompletion for ScriptedToolLlm {
-        async fn complete(
-            &self,
-            _request: &ChatCompletionRequest,
-        ) -> Result<ChatCompletionResponse, LanguageModelError> {
-            let mut n = self.calls.lock().unwrap();
-            *n += 1;
-            if *n == 1 {
-                let tool_call = ToolCall::builder()
-                    .id("call-1")
-                    .name(self.tool.clone())
-                    .args(self.args.clone())
-                    .build()
-                    .expect("scripted tool call should build");
-                Ok(ChatCompletionResponse::builder()
-                    .tool_calls(vec![tool_call])
-                    .build()
-                    .expect("scripted tool response should build"))
-            } else {
-                Ok(ChatCompletionResponse::builder()
-                    .message("final answer".to_string())
-                    .build()
-                    .expect("scripted final response should build"))
+        stream.set_read_timeout(Some(MOCK_TIMEOUT)).expect("set mock browser read timeout");
+        let mut writer = stream.try_clone().expect("clone mock browser stream");
+        let mut reader = BufReader::new(stream);
+        let mut calls = Vec::new();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).expect("read mock browser request") == 0 {
+                break;
             }
-        }
-    }
-
-    fn recording_permission_callback(
-        yolo: bool,
-        allow_tools: bool,
-        log: Arc<Mutex<Vec<(String, bool)>>>,
-    ) -> Box<
-        dyn Fn(
-                maho_agent::PermissionRequest,
-            )
-                -> std::pin::Pin<Box<dyn std::future::Future<Output = PermissionDecision> + Send>>
-            + Send
-            + Sync,
-    > {
-        Box::new(move |req| {
-            let is_mcp = req.tool_name.starts_with("mcp:");
-            let allow = yolo || (is_mcp && allow_tools);
-            log.lock().unwrap().push((req.tool_name.clone(), allow));
-            Box::pin(async move {
-                if allow {
-                    PermissionDecision::Allow
-                } else {
-                    PermissionDecision::Deny
+            let request: serde_json::Value = serde_json::from_str(line.trim()).expect("mock browser request is JSON");
+            let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+            let method = request.get("method").and_then(serde_json::Value::as_str).unwrap_or_default();
+            let result = match method {
+                "initialize" => serde_json::json!({"protocolVersion": "2025-03-26", "serverInfo": {"name": "maho-browser", "version": "1"}, "capabilities": {"tools": {}}, "sessionInfo": {"id": "approval-test-session", "displayLabel": "Maho CLI", "controllerKind": "maho-cli"}}),
+                "tools/list" => serde_json::json!({"tools": [{"capabilityId": "browser_click", "name": "browser_click", "description": "Click a browser element.", "inputSchema": {"type": "object"}, "schemaVersion": 1, "policy": {"sensitive": true, "permission": "always_ask"}}]}),
+                "tools/call" => {
+                    let name = request.pointer("/params/name").and_then(serde_json::Value::as_str).expect("tools/call includes a tool name");
+                    calls.push(name.to_string());
+                    serde_json::json!({"outputJson": "{\"clicked\":true}", "receipt": {"capabilityId": "browser_click", "executionId": "approval-test-click", "metadata": {"state": "completed"}}})
                 }
-            })
-        })
-    }
-
-    fn make_backend(bridge: Option<RecordingBridge>) -> SwiftideBackend {
-        let backend = SwiftideBackend::new(
-            Arc::new(MockStorage::default()) as Arc<dyn AgentStorage>,
-            None,
-            std::env::temp_dir(),
-            true,
-        );
-        if let Some(b) = bridge {
-            backend
-                .set_browser_tool_bridge(Arc::new(b))
-                .expect("set browser bridge");
+                other => panic!("unexpected mock browser method: {other}"),
+            };
+            write_jsonrpc_response(&mut writer, id, result);
         }
-        backend
+        calls_tx.send(calls).expect("report mock browser calls");
+    });
+
+    (dir, socket_path_string, stop_tx, calls_rx, handle)
+}
+
+fn read_http_request(stream: &mut TcpStream) {
+    let mut request = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !request.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).expect("read mock LLM headers");
+        request.push(byte[0]);
     }
+    let headers = String::from_utf8(request).expect("mock LLM headers are UTF-8");
+    let content_length = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("Content-Length: ").or_else(|| line.strip_prefix("content-length: ")))
+        .expect("mock LLM request has content length")
+        .parse::<usize>()
+        .expect("mock LLM content length is numeric");
+    let mut body = vec![0; content_length];
+    stream.read_exact(&mut body).expect("read mock LLM body");
+}
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_invokes_registered_tool() {
-        let bridge = RecordingBridge::default();
-        let calls = Arc::clone(&bridge.calls);
-        let backend = make_backend(Some(bridge));
-        backend.set_llm_override(Box::new(ScriptedToolLlm {
-            tool: "read_current_page".to_string(),
-            args: "{}".to_string(),
-            calls: Arc::new(Mutex::new(0)),
-        }));
-        backend.set_approval_policy("allow".to_string());
+fn write_openai_response(stream: &mut TcpStream, body: serde_json::Value) {
+    let body = body.to_string();
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    )
+    .expect("write mock LLM response");
+    stream.flush().expect("flush mock LLM response");
+}
 
-        let result = tokio::time::timeout(Duration::from_secs(30), backend.run_prompt("go"))
-            .await
-            .expect("run_prompt must not hang");
-        result.expect("run_prompt should succeed");
+fn spawn_mock_openai() -> (String, String, Sender<()>, Receiver<usize>, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock OpenAI listener");
+    let address = listener.local_addr().expect("mock OpenAI address").to_string();
+    let url = format!("http://{address}");
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let (requests_tx, requests_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut requests = 0;
+        for request_number in 0..2 {
+            let (mut stream, _) = listener.accept().expect("CLI calls mock OpenAI");
+            if stop_rx.try_recv().is_ok() { break; }
+            stream.set_read_timeout(Some(MOCK_TIMEOUT)).expect("set mock OpenAI read timeout");
+            read_http_request(&mut stream);
+            requests += 1;
+            let message = if request_number == 0 {
+                serde_json::json!({"role": "assistant", "content": null, "tool_calls": [{"id": "approval-test-tool-call", "type": "function", "function": {"name": "browser_click", "arguments": "{}"}}]})
+            } else { serde_json::json!({"role": "assistant", "content": "click completed"}) };
+            write_openai_response(&mut stream, serde_json::json!({"choices": [{"message": message}]}));
+        }
+        requests_tx.send(requests).expect("report mock OpenAI requests");
+    });
+    (url, address, stop_tx, requests_rx, handle)
+}
 
-        let invoked = calls.lock().unwrap().clone();
-        assert!(
-            invoked.iter().any(|n| n == "read_current_page"),
-            "the agent loop must actually invoke the registered browser tool; invoked={invoked:?}"
-        );
-    }
+/// Exercises `maho run` with no approval flags. Reverting build_cli_backend's
+/// AllowAll policy to deny-sensitive prevents the sensitive browser_click call
+/// from reaching this UDS harness.
+#[test]
+fn unflagged_run_approval_dispatches_sensitive_browser_tool() {
+    let (_db_file, db_path) = setup_db();
+    let (_browser_dir, socket_path, browser_stop, browser_calls_rx, browser_handle) = spawn_mock_browser();
+    let (openai_url, openai_address, openai_stop, openai_requests_rx, openai_handle) = spawn_mock_openai();
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_new_origin_navigation_requires_approval_without_yolo() {
-        let log = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
-        let bridge = RecordingBridge::default();
-        let calls = Arc::clone(&bridge.calls);
-        let backend = make_backend(Some(bridge));
-        backend.set_browser_action_tools_enabled(true);
-        backend.set_llm_override(Box::new(ScriptedToolLlm {
-            tool: "browser_navigate".to_string(),
-            args: "{\"url\": \"https://example.com\"}".to_string(),
-            calls: Arc::new(Mutex::new(0)),
-        }));
-        // Strict default policy, NO --yolo.
-        backend.set_approval_policy("deny-sensitive".to_string());
-        backend
-            .set_permission_callback(recording_permission_callback(
-                false,
-                false,
-                Arc::clone(&log),
-            ))
-            .expect("set permission callback");
+    let bin = env!("CARGO_BIN_EXE_maho");
+    let child = Command::new(bin)
+        .args(["run", "--provider", "openai", "--model", "approval-test-model", "dispatch the sensitive browser click", "--socket-path", &socket_path])
+        .env("MAHO_DB_PATH", &db_path)
+        .env("OPENAI_API_KEY", "approval-test-key")
+        .env("MAHO_BYOK_BASE_URL", openai_url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start maho CLI against mock services");
+    let pid = child.id();
+    let (output_tx, output_rx) = mpsc::channel();
+    std::thread::spawn(move || { output_tx.send(child.wait_with_output()).expect("report maho CLI output"); });
+    let output = match output_rx.recv_timeout(CLI_TIMEOUT) {
+        Ok(result) => result.expect("wait for maho CLI"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.try_into().expect("CLI pid fits in i32")), nix::sys::signal::Signal::SIGKILL).expect("kill timed out maho CLI");
+            output_rx.recv_timeout(MOCK_TIMEOUT).expect("maho CLI exits after timeout").expect("wait for timed out maho CLI");
+            panic!("maho CLI did not exit within {CLI_TIMEOUT:?}");
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!("maho CLI wait thread disconnected"),
+    };
 
-        let result = tokio::time::timeout(Duration::from_secs(30), backend.run_prompt("go"))
-            .await
-            .expect("run_prompt must terminate without deadlock");
-        result.expect("run_prompt should return normally");
+    let _ = openai_stop.send(());
+    let _ = TcpStream::connect(&openai_address);
+    let _ = browser_stop.send(());
+    let _ = UnixStream::connect(&socket_path);
+    let openai_requests = openai_requests_rx.recv_timeout(MOCK_TIMEOUT).expect("mock OpenAI must report received requests within the timeout");
+    openai_handle.join().expect("mock OpenAI completes");
+    let browser_calls = browser_calls_rx.recv_timeout(MOCK_TIMEOUT).expect("mock browser must report received tool calls within the timeout");
+    browser_handle.join().expect("mock browser completes");
 
-        let dispatched = calls.lock().unwrap().clone();
-        assert!(
-            !dispatched.iter().any(|name| name == "browser_navigate"),
-            "new-origin navigation must require approval without --yolo; dispatched={dispatched:?}"
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn run_yolo_bypasses() {
-        let log = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
-        let bridge = RecordingBridge::default();
-        let calls = Arc::clone(&bridge.calls);
-        let backend = make_backend(Some(bridge));
-        backend.set_browser_action_tools_enabled(true);
-        backend.set_llm_override(Box::new(ScriptedToolLlm {
-            tool: "browser_navigate".to_string(),
-            args: "{\"url\": \"https://example.com\"}".to_string(),
-            calls: Arc::new(Mutex::new(0)),
-        }));
-        backend.set_approval_policy("allow".to_string());
-        backend
-            .set_permission_callback(recording_permission_callback(true, false, Arc::clone(&log)))
-            .expect("set permission callback");
-
-        let result = tokio::time::timeout(Duration::from_secs(30), backend.run_prompt("go"))
-            .await
-            .expect("run_prompt must not hang under --yolo");
-        result.expect("run_prompt should succeed under --yolo");
-
-        // --yolo maps to allow-all: the sensitive browser tool is authorized at
-        // the policy layer and must reach the browser bridge (the shim still
-        // performs grant + lease + dispatch, so Chromium enforcement is intact).
-        let dispatched = calls.lock().unwrap().clone();
-        assert!(
-            dispatched.iter().any(|name| name == "browser_navigate"),
-            "--yolo must let the sensitive browser tool reach the bridge; dispatched={dispatched:?}"
-        );
-    }
+    assert!(
+        browser_calls.iter().any(|tool| tool == "browser_click"),
+        "unflagged maho run must dispatch the sensitive browser tool; calls: {browser_calls:?}; OpenAI requests: {openai_requests}; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "unflagged maho run must succeed; stderr: {}", String::from_utf8_lossy(&output.stderr));
 }

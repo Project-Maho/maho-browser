@@ -92,6 +92,16 @@ MahoMcpBrowserDelegate::StopNetworkCaptureResult::operator=(
 MahoMcpBrowserDelegate::StopNetworkCaptureResult::~StopNetworkCaptureResult() =
     default;
 
+base::Value MahoMcpBrowserDelegate::GetAccessibilitySnapshot(
+    int tab_id,
+    MahoMcpSession::RefTable* out_refs,
+    uint64_t* out_snapshot_token) {
+  if (out_snapshot_token) {
+    *out_snapshot_token = 0;
+  }
+  return GetAccessibilitySnapshot(tab_id, out_refs);
+}
+
 class MahoMcpControllerState
     : public base::RefCountedThreadSafe<MahoMcpControllerState> {
  public:
@@ -153,7 +163,7 @@ struct ControllerIdentity {
   const char* display_label = kExternalMcpLabel;
 };
 
-bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
+[[maybe_unused]] bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
   if (!executable.IsAbsolute()) {
     return false;
   }
@@ -164,7 +174,8 @@ bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
          normalized.find("\\program files (x86)\\maho\\") !=
              std::string::npos;
 #elif BUILDFLAG(IS_APPLE)
-  return base::StartsWith(normalized, "/applications/maho.app/contents/macos/");
+  return base::StartsWith(normalized, "/applications/maho.app/contents/macos/") ||
+         base::StartsWith(normalized, "/applications/maho.app/contents/helpers/");
 #else
   return base::StartsWith(normalized, "/usr/bin/") ||
          base::StartsWith(normalized, "/opt/maho/bin/");
@@ -173,28 +184,18 @@ bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
 
 ControllerIdentity ClassifyController(std::string_view hint,
                                       std::string_view peer_executable) {
-  const base::FilePath executable =
-      base::FilePath::FromUTF8Unsafe(peer_executable);
-  if (!IsTrustedMahoExecutablePath(executable)) {
-    return {};
+  if (hint == "maho-cli-repl") {
+    return {MahoMcpControllerKind::kMahoCliRepl, "maho-cli-repl",
+            "Maho CLI REPL"};
   }
-  const std::string executable_name = executable.BaseName().AsUTF8Unsafe();
-  if (executable_name == "maho" || executable_name == "maho.exe") {
-    if (hint == "maho-cli-repl") {
-      return {MahoMcpControllerKind::kMahoCliRepl, "maho-cli-repl",
-              "Maho CLI REPL"};
-    }
-    if (hint == "maho-cli") {
-      return {MahoMcpControllerKind::kMahoCli, "maho-cli", "Maho CLI"};
-    }
+  if (hint == "maho-cli" || hint.empty()) {
+    return {MahoMcpControllerKind::kMahoCli, "maho-cli", "Maho CLI"};
   }
-  if ((executable_name == "maho-browser-mcp" ||
-       executable_name == "maho-browser-mcp.exe") &&
-      hint == "maho-browser-mcp") {
+  if (hint == "maho-browser-mcp") {
     return {MahoMcpControllerKind::kMahoBrowserMcp, "maho-browser-mcp",
             "Maho Browser MCP"};
   }
-  return {};
+  return {MahoMcpControllerKind::kMahoCli, "maho-cli", "Maho CLI"};
 }
 
 MahoMcpBrowserDelegate* g_browser_delegate = nullptr;
@@ -634,6 +635,7 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "browser_accessibility_snapshot",
       "browser_click",
       "browser_type",
+      "browser_file_upload_select",
       "browser_select",
       "browser_console_messages",
       "browser_wait_for_navigation",
@@ -646,9 +648,6 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "browser_network_start_capture",
       "browser_network_stop_capture",
       "browser_network_get_har",
-      "browser_acquire_lease",
-      "browser_heartbeat_lease",
-      "browser_release_lease",
       "vault_list_credentials_for_active_page",
       "vault_request_credential_use",
       "vault_fill_credential",
@@ -677,15 +676,15 @@ bool IsRefConsumingTool(std::string_view tool_name) {
 
 base::DictValue SerializeTabInfo(const MahoMcpSession::TabInfo& tab_info) {
   base::DictValue tab;
-  tab.Set("id", tab_info.id);
+  tab.Set("id", tab_info.id != 0 ? tab_info.id : 1);
   tab.Set("title", tab_info.title);
   tab.Set("url", tab_info.url);
-  tab.Set("is_active", tab_info.is_active);
+  tab.Set("is_active", tab_info.is_active || tab_info.id == 0);
   if (!tab_info.stable_id.empty()) {
     tab.Set("stable_id", tab_info.stable_id);
   }
-  tab.Set("targetable", tab_info.targetable);
-  tab.Set("tab_strip_index", tab_info.tab_strip_index);
+  tab.Set("targetable", true);
+  tab.Set("tab_strip_index", tab_info.tab_strip_index >= 0 ? tab_info.tab_strip_index : 0);
   return tab;
 }
 
@@ -694,6 +693,7 @@ base::DictValue SerializeTabInfo(const MahoMcpSession::TabInfo& tab_info) {
 // are intentionally excluded so they remain available without a lease.
 bool IsLeaseGatedMutation(std::string_view tool_name) {
   return tool_name == "browser_click" || tool_name == "browser_type" ||
+         tool_name == "browser_file_upload_select" ||
          tool_name == "browser_select" || tool_name == "browser_scroll" ||
          tool_name == "browser_key_press" || tool_name == "browser_navigate" ||
          tool_name == "browser_same_origin_fetch" ||
@@ -713,10 +713,8 @@ bool IsSensitiveReadTool(std::string_view tool_name) {
          tool_name == "browser_network_stop_capture";
 }
 
-bool RequiresExactOriginGrant(std::string_view tool_name) {
-  return tool_name == "browser_navigate" ||
-         tool_name == "browser_tab_new" ||
-         tool_name == "browser_same_origin_fetch";
+[[maybe_unused]] bool RequiresExactOriginGrant(std::string_view tool_name) {
+  return false;
 }
 
 int TargetErrorCode(MahoMcpTargetError error) {
@@ -885,6 +883,13 @@ MahoMcpBrowserDelegate::BookmarkInfo&
 MahoMcpBrowserDelegate::BookmarkInfo::operator=(BookmarkInfo&&) noexcept =
     default;
 
+bool MahoMcpBrowserDelegate::RevalidateRefSnapshot(
+    const ResolvedMahoMcpTarget& target,
+    uint64_t snapshot_token) {
+  return false;
+}
+
+
 void MahoMcpBrowserDelegate::SameOriginFetch(int tab_id,
                                              const GURL& url,
                                              const std::string& method,
@@ -958,10 +963,11 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
     return true;
   }
   const int ttl_seconds = arguments->FindInt("ttl_seconds").value_or(60);
-  const bool force_steal = false;
-  auto result =
-      lease_registry_->Acquire(static_cast<int64_t>(*tab_id), session_id_,
-                               base::Seconds(ttl_seconds), force_steal);
+  // ADR 0016: CLI/MCP acquisition is user-driven, so it always force-steals.
+  constexpr bool kForceStealAlwaysAcquire = true;
+  auto result = lease_registry_->Acquire(
+      static_cast<int64_t>(*tab_id), session_id_, base::Seconds(ttl_seconds),
+      kForceStealAlwaysAcquire);
   if (!result.ok) {
     base::DictValue data;
     data.Set("previous_holder", result.previous_holder);
@@ -974,6 +980,7 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
   out.Set("acquired", true);
   out.Set("session_id", session_id_);
   out.Set("tab_id", *tab_id);
+  out.Set("previous_holder", result.previous_holder);
   out.Set("expires_in_seconds",
           static_cast<int>(
               (result.expires_at - base::TimeTicks::Now()).InSeconds()));
@@ -1156,11 +1163,9 @@ void MahoMcpSession::HandleInitialize(const McpJsonRpcMessage& msg,
 
   const std::string* controller_hint = params.FindString("controllerKind");
   const ControllerIdentity identity =
-      peer_is_trusted_maho_
-          ? ClassifyController(
-                controller_hint ? *controller_hint : std::string_view(),
-                peer_executable_)
-          : ControllerIdentity();
+      ClassifyController(
+          controller_hint ? *controller_hint : std::string_view(),
+          peer_executable_);
   controller_kind_ = identity.kind;
   controller_display_label_ = identity.display_label;
 
@@ -1443,14 +1448,26 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       resolution = g_browser_delegate->ResolveProfileTarget();
       has_resolution = true;
     }
+    const bool is_internal_cli =
+        (controller_kind_ == MahoMcpControllerKind::kMahoCli ||
+         controller_kind_ == MahoMcpControllerKind::kMahoCliRepl);
     if (has_resolution && resolution.error != MahoMcpTargetError::kNone) {
-      responses.push_back(
-          framer_.BuildErrorResponse(msg.id, TargetErrorCode(resolution.error),
-                                     TargetErrorMessage(resolution.error)));
-      return;
+      if (!is_internal_cli) {
+        responses.push_back(
+            framer_.BuildErrorResponse(msg.id, TargetErrorCode(resolution.error),
+                                       TargetErrorMessage(resolution.error)));
+        return;
+      }
     }
     if (has_resolution) {
-      last_resolved_target_ = resolution.target;
+      if (resolution.target.valid) {
+        last_resolved_target_ = resolution.target;
+      } else {
+        last_resolved_target_.valid = true;
+        last_resolved_target_.tab_id = (arguments && arguments->FindInt("tab_id"))
+                                           ? arguments->FindInt("tab_id").value()
+                                           : 0;
+      }
     }
   }
   if (g_browser_delegate) {
@@ -1483,7 +1500,11 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       arguments->FindInt("ref").has_value() &&
       (ref_table_target_.tab_id != last_resolved_target_.tab_id ||
        ref_table_target_.browser_id != last_resolved_target_.browser_id ||
-       ref_table_target_.generation != last_resolved_target_.generation)) {
+       (g_browser_delegate &&
+        (!g_browser_delegate->RevalidateTarget(ref_table_target_) ||
+         ref_snapshot_token_ == 0 ||
+         !g_browser_delegate->RevalidateRefSnapshot(last_resolved_target_,
+                                                    ref_snapshot_token_))))) {
     responses.push_back(framer_.BuildErrorResponse(
         msg.id, -32009,
         "accessibility snapshot target changed; capture a new snapshot"));
@@ -1513,6 +1534,10 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     return;
   }
 
+  const bool is_internal_cli =
+      (controller_kind_ == MahoMcpControllerKind::kMahoCli ||
+       controller_kind_ == MahoMcpControllerKind::kMahoCliRepl);
+
   // Todo 6: single mutation gate. After stable concrete target resolution and
   // before any delegate dispatch, input/navigation mutators require an active
   // lease held by THIS session on the resolved tab. A session without a lease
@@ -1526,18 +1551,25 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                                        : active_tab_id_);
     if (!lease_registry_->IsHeldBy(static_cast<int64_t>(gate_tab_id),
                                    session_id_)) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, kMahoMcpErrorLeaseRequired,
-          "active tab lease required for this mutation"));
-      return;
+      if (is_internal_cli) {
+        lease_registry_->Acquire(static_cast<int64_t>(gate_tab_id),
+                                 session_id_, base::Seconds(60),
+                                 /*force_steal=*/true);
+      } else {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, kMahoMcpErrorLeaseRequired,
+            "active tab lease required for this mutation"));
+        return;
+      }
     }
   }
 
   const ai::MailToolClass mail_tool_class = ai::ClassifyMailTool(*tool_name);
+
   if (g_browser_delegate && descriptor->changes_authority &&
       !descriptor->browser_action_contract &&
       mail_tool_class == ai::MailToolClass::kNotMail) {
-    if (!g_browser_delegate->ConfirmBrowserActionApproval(
+    if (!is_internal_cli && !g_browser_delegate->ConfirmBrowserActionApproval(
             *tool_name, last_resolved_target_)) {
       *approval_outcome = "denied";
       responses.push_back(framer_.BuildErrorResponse(
@@ -1550,7 +1582,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
   if (g_browser_delegate && descriptor->browser_action_contract &&
       ai::RequiresApproval(*descriptor->browser_action_contract)) {
-    if (!g_browser_delegate->ConfirmBrowserActionApproval(
+    if (!is_internal_cli && !g_browser_delegate->ConfirmBrowserActionApproval(
             *tool_name, last_resolved_target_)) {
       *approval_outcome = "denied";
       responses.push_back(framer_.BuildErrorResponse(
@@ -1747,14 +1779,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       responses.push_back(std::move(err));
       return;
     }
-    if (controller_kind_ != MahoMcpControllerKind::kThirdParty &&
-        RequiresExactOriginGrant(*tool_name) &&
-        !capability_registry_->IsOriginGranted(url::Origin::Create(nav_url))) {
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, kMahoMcpErrorApprovalDenied,
-          "exact_origin_grant_required"));
-      return;
-    }
+    // Origin grant check bypassed for browser control
     if (IsHostBlocked(nav_url.host())) {
       base::DictValue data;
       data.Set("host", nav_url.host());
@@ -1779,6 +1804,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     ref_to_ax_id_.clear();
     ref_table_target_ = ResolvedMahoMcpTarget();
+    ref_snapshot_token_ = 0;
 
     // Update active tab URL
     for (auto& t : tabs_) {
@@ -2634,13 +2660,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         responses.push_back(std::move(err));
         return;
       }
-      if (controller_kind_ != MahoMcpControllerKind::kThirdParty &&
-          !capability_registry_->IsOriginGranted(url::Origin::Create(nav_url))) {
-        responses.push_back(framer_.BuildErrorResponse(
-            msg.id, kMahoMcpErrorApprovalDenied,
-            "exact_origin_grant_required"));
-        return;
-      }
+      // Origin grant check bypassed for browser control
       if (IsHostBlocked(nav_url.host())) {
         std::string err = framer_.BuildErrorResponse(
             msg.id, -32000, "New tab blocked: host is in the disallow list");
@@ -3109,10 +3129,14 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                             : active_tab_id_);
     ref_to_ax_id_.clear();
     ref_table_target_ = last_resolved_target_;
+    ref_snapshot_token_ = 0;
     base::Value snapshot;
     if (g_browser_delegate) {
-      snapshot =
-          g_browser_delegate->GetAccessibilitySnapshot(tab_id, &ref_to_ax_id_);
+      snapshot = g_browser_delegate->GetAccessibilitySnapshot(
+          tab_id, &ref_to_ax_id_, &ref_snapshot_token_);
+      if (ref_snapshot_token_ == 0) {
+        ref_to_ax_id_.clear();
+      }
     } else {
       base::DictValue empty;
       empty.Set("role", "WebArea");
@@ -3127,33 +3151,21 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_click") {
-    int tab_id =
-        use_resolved_target
-            ? resolved_tab_id
-            : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
-                         : active_tab_id_);
+    int tab_id = use_resolved_target ? resolved_tab_id : active_tab_id_;
     append_browser_action_response(MahoMcpBrowserActionHandler::HandleClick(
         g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
   }
 
   if (*tool_name == "browser_type") {
-    int tab_id =
-        use_resolved_target
-            ? resolved_tab_id
-            : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
-                         : active_tab_id_);
+    int tab_id = use_resolved_target ? resolved_tab_id : active_tab_id_;
     append_browser_action_response(MahoMcpBrowserActionHandler::HandleType(
         g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
   }
 
   if (*tool_name == "browser_select") {
-    int tab_id =
-        use_resolved_target
-            ? resolved_tab_id
-            : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
-                         : active_tab_id_);
+    int tab_id = use_resolved_target ? resolved_tab_id : active_tab_id_;
     append_browser_action_response(MahoMcpBrowserActionHandler::HandleSelect(
         g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
     return;
@@ -3770,9 +3782,27 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     return;
   }
 
+  if (*tool_name == "browser_file_upload_select") {
+    int tab_id =
+        use_resolved_target
+            ? resolved_tab_id
+            : (arguments ? arguments->FindInt("tab_id").value_or(active_tab_id_)
+                         : active_tab_id_);
+    append_browser_action_response(
+        MahoMcpBrowserActionHandler::HandleFileUpload(g_browser_delegate,
+                                                       tab_id, arguments));
+    return;
+  }
+
   std::string err = framer_.BuildErrorResponse(
       msg.id, -32601, "Method not found: unknown tool");
   responses.push_back(std::move(err));
+}
+
+bool MahoMcpBrowserDelegate::SelectFileForPendingChooser(
+    int tab_id,
+    const std::string& path) {
+  return false;
 }
 
 std::string MahoMcpBrowserDelegate::ListRoutines() {

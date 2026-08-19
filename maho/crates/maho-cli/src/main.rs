@@ -14,7 +14,7 @@ use maho_agent::{
 use maho_cli::vault::{self, RecoveryUnlockResult};
 use maho_types::chat::ChatMessage;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 
 use config::CliConfig;
 
@@ -70,14 +70,6 @@ pub enum AgentSubcommands {
         /// LLM model name override
         #[arg(long)]
         model: Option<String>,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, hide = true)]
-        yolo: bool,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, name = "allow-tools", hide = true)]
-        allow_tools: bool,
 
         /// Target workspace ID
         #[arg(long)]
@@ -190,14 +182,6 @@ pub enum Commands {
         #[arg(long)]
         model: Option<String>,
 
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, hide = true)]
-        yolo: bool,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, name = "allow-tools", hide = true)]
-        allow_tools: bool,
-
         /// Workspace ID to target
         #[arg(long)]
         workspace: Option<String>,
@@ -227,14 +211,6 @@ pub enum Commands {
         /// LLM model name override
         #[arg(long)]
         model: Option<String>,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, hide = true)]
-        yolo: bool,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, name = "allow-tools", hide = true)]
-        allow_tools: bool,
 
         /// Workspace ID to target
         #[arg(long)]
@@ -474,14 +450,6 @@ pub enum RoutineCommands {
         /// LLM model name override
         #[arg(long)]
         model: Option<String>,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, hide = true)]
-        yolo: bool,
-
-        /// Deprecated no-op. Tool calls are auto-approved by default.
-        #[arg(long, name = "allow-tools", hide = true)]
-        allow_tools: bool,
 
         /// Workspace ID or name override
         #[arg(long)]
@@ -901,18 +869,6 @@ fn deprecation_warning(old: &str, new: &str) {
     );
 }
 
-static APPROVAL_FLAG_DEPRECATION: Once = Once::new();
-
-fn warn_deprecated_approval_flags(yolo: bool, allow_tools: bool) {
-    if yolo || allow_tools {
-        APPROVAL_FLAG_DEPRECATION.call_once(|| {
-            eprintln!(
-                "[deprecated] --yolo and --allow-tools are no-ops; tool calls are auto-approved by default."
-            );
-        });
-    }
-}
-
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -1004,11 +960,8 @@ async fn main() -> Result<()> {
                 name,
                 provider,
                 model,
-                yolo,
-                allow_tools,
                 workspace,
             } => {
-                warn_deprecated_approval_flags(yolo, allow_tools);
                 let unsupported = unsupported_routine_run_flags(
                     provider.is_some(),
                     model.is_some(),
@@ -1053,12 +1006,9 @@ async fn main() -> Result<()> {
             prompt,
             provider,
             model,
-            yolo,
-            allow_tools,
             workspace,
             session,
         } => {
-            warn_deprecated_approval_flags(yolo, allow_tools);
             cmd_run(
                 &prompt,
                 provider.as_deref(),
@@ -1076,8 +1026,6 @@ async fn main() -> Result<()> {
             routine,
             provider,
             model,
-            yolo,
-            allow_tools,
             workspace,
             session,
         } => {
@@ -1086,8 +1034,6 @@ async fn main() -> Result<()> {
                 final_routine,
                 final_provider,
                 final_model,
-                final_yolo,
-                final_allow_tools,
                 final_workspace,
                 final_session,
             ) = match subcommand {
@@ -1096,8 +1042,6 @@ async fn main() -> Result<()> {
                     routine: sub_routine,
                     provider: sub_provider,
                     model: sub_model,
-                    yolo: sub_yolo,
-                    allow_tools: sub_allow_tools,
                     workspace: sub_workspace,
                     session: sub_session,
                 }) => (
@@ -1105,8 +1049,6 @@ async fn main() -> Result<()> {
                     sub_routine.or(routine),
                     sub_provider.or(provider),
                     sub_model.or(model),
-                    sub_yolo || yolo,
-                    sub_allow_tools || allow_tools,
                     sub_workspace.or(workspace),
                     sub_session.or(session),
                 ),
@@ -1115,14 +1057,11 @@ async fn main() -> Result<()> {
                     routine,
                     provider,
                     model,
-                    yolo,
-                    allow_tools,
                     workspace,
                     session,
                 ),
             };
 
-            warn_deprecated_approval_flags(final_yolo, final_allow_tools);
             if let Some(r_path) = final_routine {
                 let unsupported = unsupported_routine_run_flags(
                     final_provider.is_some(),
@@ -4202,6 +4141,7 @@ Commands:
   snapshot              Accessibility snapshot (JSON)
   click <ref>|@<name>   Click by ref, or by name (re-resolved live)
   type <ref> <text>     Type text into element (also: type @<name>=<text>)
+  upload <path>         Select an .aab file for the active upload chooser
   select <ref> <value>  Choose an option by value (also: select @<name>=<value>)
   refs [filter]         List interactive elements: <ref> <role> <name>[=<value>]
   key <name> [mods]     Press a key (e.g. Enter, ArrowDown; mods: shift,ctrl,alt,meta)
@@ -4569,6 +4509,20 @@ async fn handle_repl_line(
                 }
                 _ => println!("Usage: type <ref> <text> | type @<name>=<text>"),
             }
+        }
+        "upload" => {
+            let path = line[cmd.len()..].trim_start();
+            if path.is_empty() {
+                println!("Usage: upload <absolute-path-to-.aab>");
+                return Ok(());
+            }
+            mutate(
+                client,
+                "browser_file_upload_select",
+                serde_json::json!({ "path": path }),
+            )
+            .await?;
+            println!("ok");
         }
         "key" => {
             let key_name = parts.get(1).map(|s| s.trim()).unwrap_or("");

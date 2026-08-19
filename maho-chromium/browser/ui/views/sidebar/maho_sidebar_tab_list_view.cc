@@ -203,12 +203,12 @@ class SidebarSplitDropTargetBackground : public views::Background {
  public:
   explicit SidebarSplitDropTargetBackground(
       base::RepeatingCallback<double()> progress_callback,
-      base::RepeatingCallback<bool()> preview_left_callback,
+      base::RepeatingCallback<MahoSplitDropSide()> preview_side_callback,
       SkColor active_color,
       SkColor divider_color,
       SkColor focus_color)
       : progress_callback_(std::move(progress_callback)),
-        preview_left_callback_(std::move(preview_left_callback)),
+        preview_side_callback_(std::move(preview_side_callback)),
         active_color_(active_color),
         divider_color_(divider_color),
         focus_color_(focus_color) {}
@@ -225,21 +225,22 @@ class SidebarSplitDropTargetBackground : public views::Background {
       return;
     }
 
-    const bool preview_left = preview_left_callback_.Run();
+    const bool incoming_first =
+        preview_side_callback_.Run() == MahoSplitDropSide::kLeft;
     const float half_width =
         (bounds.width() - kSplitPreviewDividerWidthDp) / 2.0f;
     const float split_x = bounds.x() + half_width;
     const gfx::RectF incoming_bounds(
-        preview_left ? static_cast<float>(bounds.x()) : split_x,
-        static_cast<float>(bounds.y()),
-        half_width,
+        incoming_first ? static_cast<float>(bounds.x())
+                       : split_x + kSplitPreviewDividerWidthDp,
+        static_cast<float>(bounds.y()), half_width,
         static_cast<float>(bounds.height()));
     const gfx::RectF target_bounds(
-        preview_left ? split_x + kSplitPreviewDividerWidthDp
-                     : static_cast<float>(bounds.x()),
-        static_cast<float>(bounds.y()),
-        half_width,
+        incoming_first ? split_x + kSplitPreviewDividerWidthDp
+                       : static_cast<float>(bounds.x()),
+        static_cast<float>(bounds.y()), half_width,
         static_cast<float>(bounds.height()));
+
     cc::PaintFlags target_flags;
     target_flags.setAntiAlias(true);
     target_flags.setStyle(cc::PaintFlags::kFill_Style);
@@ -291,7 +292,7 @@ class SidebarSplitDropTargetBackground : public views::Background {
   }
 
   base::RepeatingCallback<double()> progress_callback_;
-  base::RepeatingCallback<bool()> preview_left_callback_;
+  base::RepeatingCallback<MahoSplitDropSide()> preview_side_callback_;
   SkColor active_color_;
   SkColor divider_color_;
   SkColor focus_color_;
@@ -434,8 +435,12 @@ class SidebarVirtualLayoutDelegate : public views::LayoutManagerBase {
     return layout;
   }
 
+  ~SidebarVirtualLayoutDelegate() override {
+    visibility_mgr_ = nullptr;
+  }
+
  private:
-  raw_ptr<SidebarVisibilityManager> visibility_mgr_;
+  raw_ptr<SidebarVisibilityManager> visibility_mgr_ = nullptr;
   int row_height_;
 
   mutable std::vector<int> cached_heights_;
@@ -1880,8 +1885,8 @@ double SidebarTabRowView::GetSplitPreviewProgress() const {
   return split_preview_animation_.GetCurrentValue();
 }
 
-bool SidebarTabRowView::IsSplitPreviewLeft() const {
-  return split_preview_visual_side_ == MahoSplitDropSide::kLeft;
+MahoSplitDropSide SidebarTabRowView::GetSplitPreviewSide() const {
+  return split_preview_visual_side_;
 }
 
 void SidebarTabRowView::ShowSplitPreview(MahoSplitDropSide side) {
@@ -1926,7 +1931,12 @@ void SidebarTabRowView::AnimationProgressed(const gfx::Animation* animation) {
 
 void SidebarTabRowView::AnimationEnded(const gfx::Animation* animation) {
   if (animation == &control_pulse_animation_) {
-    SchedulePaint();
+    if (controlled_ && gfx::Animation::ShouldRenderRichAnimation()) {
+      control_pulse_animation_.Reset(0.0);
+      control_pulse_animation_.Show();
+    } else {
+      SchedulePaint();
+    }
     return;
   }
   if (animation != &split_preview_animation_) {
@@ -2449,142 +2459,24 @@ views::View::DropCallback SidebarTabRowView::GetDropCallback(
                 }
                 ExecuteDropPlan(plan);
               }
-              TabStripModel* model =
-                  browser ? browser->tab_strip_model() : nullptr;
-              if (!model) {
+              const bool source_before_target =
+                  split_drop_side == MahoSplitDropSide::kLeft;
+              if (!list_view || single_payload.selected_tab_ids.size() > 1 ||
+                  !list_view->CreateSidebarTwoPaneSplit(
+                      single_payload.node_id, tab_id, source_before_target)) {
                 continue;
               }
-              const std::string drag_source_id = single_payload.node_id;
-              // A Maho "suspended" tab lives only in the Rust core and has NO
-              // TabStripModel entry, so its index resolves to -1. Capture the
-              // WebContents of any already-in-strip tab BEFORE waking (pointers
-              // survive later insertions), materialize any suspended tab via
-              // WakeSuspendedTab (foreground nav, same as click-to-open), then
-              // re-resolve both indices from the stable pointers — waking
-              // inserts tabs and shifts strip indices.
-              const int src_idx0 =
-                  resolve_tab_index ? resolve_tab_index.Run(drag_source_id) : -1;
-              const int tgt_idx0 =
-                  resolve_tab_index ? resolve_tab_index.Run(tab_id) : -1;
-              content::WebContents* src_wc =
-                  (src_idx0 >= 0 && model->ContainsIndex(src_idx0))
-                      ? model->GetWebContentsAt(src_idx0)
-                      : nullptr;
-              content::WebContents* tgt_wc =
-                  (tgt_idx0 >= 0 && model->ContainsIndex(tgt_idx0))
-                      ? model->GetWebContentsAt(tgt_idx0)
-                      : nullptr;
-              if (!src_wc && list_view) {
-                src_wc = list_view->WakeSuspendedTab(drag_source_id);
-              }
-              if (!tgt_wc && list_view) {
-                tgt_wc = list_view->WakeSuspendedTab(tab_id);
-              }
-              // Waking two suspended tabs back-to-back races the scoped wake-id
-              // adoption, so a woken WebContents can end up with the wrong
-              // stable_tab_id. Stamp each with the core id we already hold so
-              // the sidebar's stable-id->strip-index map resolves them and
-              // GroupSplitTabs can render the split (otherwise index stays -1).
-              auto stamp_stable_id = [](content::WebContents* wc,
-                                        const std::string& want) {
-                if (!wc || want.empty()) {
-                  return;
-                }
-                auto* helper = MahoTabIdHelper::FromWebContents(wc);
-                if (helper && helper->stable_tab_id() != want) {
-                  helper->SetRestoredTabId(want);
-                }
-              };
-              stamp_stable_id(src_wc, drag_source_id);
-              stamp_stable_id(tgt_wc, tab_id);
-              int source_tab_strip_index =
-                  src_wc ? model->GetIndexOfWebContents(src_wc) : -1;
-              int target_tab_strip_index =
-                  tgt_wc ? model->GetIndexOfWebContents(tgt_wc) : -1;
-              if (src_wc && tgt_wc && source_tab_strip_index >= 0 &&
-                  target_tab_strip_index >= 0 &&
-                  MahoSplitViewController::IsSplitDropEligible(
-                      single_payload.selected_tab_ids.size() > 1,
-                      src_wc == tgt_wc,
-                      model->GetSplitForTab(source_tab_strip_index).has_value(),
-                      model->GetSplitForTab(target_tab_strip_index)
-                          .has_value())) {
-                  const bool split_drop_on_left =
-                      split_drop_side == MahoSplitDropSide::kLeft;
-                  const int move_destination = split_drop_on_left
-                      ? (source_tab_strip_index < target_tab_strip_index
-                             ? target_tab_strip_index - 1
-                             : target_tab_strip_index)
-                              : (source_tab_strip_index < target_tab_strip_index
-                                     ? target_tab_strip_index
-                                     : target_tab_strip_index + 1);
-                  if (source_tab_strip_index != move_destination) {
-                    model->MoveWebContentsAt(source_tab_strip_index,
-                                             move_destination,
-                                             false);
-                    source_tab_strip_index =
-                        model->GetIndexOfWebContents(src_wc);
-                    target_tab_strip_index =
-                        model->GetIndexOfWebContents(tgt_wc);
-                  }
-                  if (source_tab_strip_index < 0 || target_tab_strip_index < 0 ||
-                      model->GetSplitForTab(source_tab_strip_index).has_value() ||
-                      model->GetSplitForTab(target_tab_strip_index).has_value()) {
-                    continue;
-                  }
-                  auto get_stable_id = [](content::WebContents* contents)
-                      -> std::string {
-                    if (!contents) return "";
-                    auto* helper = MahoTabIdHelper::FromWebContents(contents);
-                    return helper ? helper->stable_tab_id() : "";
-                  };
-                  output_drag_op = ui::mojom::DragOperation::kMove;
-                  split_tabs::SplitTabVisualData visual_data(
-                      split_tabs::SplitTabLayout::kVertical, 0.5);
-                  model->ActivateTabAt(
-                      target_tab_strip_index,
-                          TabStripUserGestureDetails(
-                              TabStripUserGestureDetails::GestureType::kOther));
-                  model->AddToNewSplit(
-                      {source_tab_strip_index}, visual_data,
-                      split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+              output_drag_op = ui::mojom::DragOperation::kMove;
 
-                  // The target pane may have lived inside a folder. GroupSplitTabs
-                  // only groups split members that are siblings at the same tree
-                  // depth, so pull the target out to root now that the split
-                  // exists (the source was already rooted by the drop plan).
-                  // Dispatched only here — after the split is created — so a
-                  // bailed drop never yanks the target out of its folder, and the
-                  // already-split guard above stops duplicate dispatch under
-                  // multi-drag. source_parent_folder_id is the drop target row's
-                  // own containing folder.
-                  if (!source_parent_folder_id.empty()) {
-                    DispatchShellEvent("move_tab_to_root",
-                                       {{"space_id", space_id},
-                                        {"folder_id", source_parent_folder_id},
-                                        {"tab_id", tab_id}});
-                  }
-
-                  // Mirror to Rust for persistence (matches MahoSplitViewController path).
-                  std::string left_id =
-                      get_stable_id(split_drop_on_left ? src_wc : tgt_wc);
-                  std::string right_id =
-                      get_stable_id(split_drop_on_left ? tgt_wc : src_wc);
-                  if (!left_id.empty() && !right_id.empty()) {
-                    std::string event_json = base::StringPrintf(
-                        "{\"kind\":\"create_split\",\"window_id\":\"%s\","
-                        "\"tab_ids\":[\"%s\",\"%s\"],"
-                        "\"orientation\":\"horizontal\"}",
-                        std::to_string(browser->session_id().id()).c_str(),
-                        left_id.c_str(), right_id.c_str());
-                    if (auto* core = maho::GetCore()) {
-                      char* result =
-                          maho_core_handle_event(core, event_json.c_str());
-                      if (result) {
-                        maho_core_free_string(result);
-                      }
-                    }
-                  }
+              // The target pane may have lived inside a folder. GroupSplitTabs
+              // only groups split members that are siblings at the same tree
+              // depth, so pull the target out to root after the model split is
+              // confirmed. The source was already rooted by the drop plan.
+              if (!source_parent_folder_id.empty()) {
+                DispatchShellEvent("move_tab_to_root",
+                                   {{"space_id", space_id},
+                                    {"folder_id", source_parent_folder_id},
+                                    {"tab_id", tab_id}});
               }
               continue;
             }
@@ -2984,7 +2876,7 @@ void SidebarTabRowView::UpdateAppearance() {
       SetBackground(std::make_unique<SidebarSplitDropTargetBackground>(
           base::BindRepeating(&SidebarTabRowView::GetSplitPreviewProgress,
                               base::Unretained(this)),
-          base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
+          base::BindRepeating(&SidebarTabRowView::GetSplitPreviewSide,
                               base::Unretained(this)),
           palette_.row_active,
           ResolveSidebarPaletteColor(palette_, this, palette_.outline,
@@ -3001,7 +2893,7 @@ void SidebarTabRowView::UpdateAppearance() {
                 base::BindRepeating(
                     &SidebarTabRowView::GetSplitPreviewProgress,
                     base::Unretained(this)),
-                base::BindRepeating(&SidebarTabRowView::IsSplitPreviewLeft,
+                base::BindRepeating(&SidebarTabRowView::GetSplitPreviewSide,
                                      base::Unretained(this)),
                 palette_.row_active,
                 ResolveSidebarPaletteColor(palette_, this, palette_.outline,
@@ -3054,6 +2946,13 @@ void SidebarTabRowView::UpdateAppearance() {
     title_button_->SetTextColor(views::Button::STATE_NORMAL, desired_title_color);
     title_button_->SetTextColor(views::Button::STATE_HOVERED, desired_title_color);
     title_button_->SetTextColor(views::Button::STATE_PRESSED, desired_title_color);
+    // macOS renders controls in an inactive (non-key) window as STATE_DISABLED
+    // (kInactiveWidgetControlsAppearDisabled), regardless of the button's real
+    // enabled state. Bind the disabled color to the same resolved palette text
+    // color so the tab title stays readable and its color is invariant to
+    // window focus, instead of falling back to the construction-time
+    // kColorSysOnSurfaceSubtle that is not tied to the space theme.
+    title_button_->SetTextColor(views::Button::STATE_DISABLED, desired_title_color);
   }
   if (favicon_view_ && favicon_view_->layer()) {
     favicon_view_->DestroyLayer();
@@ -3761,6 +3660,17 @@ void SidebarFolderRowView::UpdateAppearance() {
                                     : ResolveSidebarPaletteColor(
                                           palette_, this, palette_.primary_text,
                                           ui::kColorSysOnSurface));
+    // Inactive (non-key) macOS windows render controls as STATE_DISABLED; bind
+    // the disabled color to the resolved palette so folder labels stay readable
+    // and focus-invariant rather than reverting to the default disabled color.
+    label_button_->SetTextColor(views::Button::STATE_DISABLED,
+                                show_drop_target
+                                    ? ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.focus_ring,
+                                          ui::kColorSysPrimary)
+                                    : ResolveSidebarPaletteColor(
+                                          palette_, this, palette_.primary_text,
+                                          ui::kColorSysOnSurface));
   }
   if (name_field_) {
     name_field_->SetVisible(is_editing_name_);
@@ -4320,6 +4230,29 @@ MahoSidebarTabListView::MahoSidebarTabListView(Browser* browser)
 
 MahoSidebarTabListView::~MahoSidebarTabListView() {
   weak_factory_.InvalidateWeakPtrs();
+  new_tab_button_ = nullptr;
+  tidy_button_ = nullptr;
+  clear_button_ = nullptr;
+  action_dividers_.clear();
+  pinned_section_target_ = nullptr;
+  normal_section_target_ = nullptr;
+  pinned_separator_ = nullptr;
+  action_row_ = nullptr;
+  action_buttons_ = nullptr;
+  action_processing_view_ = nullptr;
+  trigger_button_ = nullptr;
+  folder_rows_by_id_.clear();
+  tab_id_to_row_view_.clear();
+  split_id_to_container_.clear();
+  pinned_top_spacer_ = nullptr;
+  pinned_bottom_spacer_ = nullptr;
+  normal_top_spacer_ = nullptr;
+  normal_bottom_spacer_ = nullptr;
+  drag_preserve_holder_ = nullptr;
+  if (tab_rows_) {
+    tab_rows_->SetLayoutManager(nullptr);
+    tab_rows_->RemoveAllChildViews();
+  }
   GetViewAccessibility().RemoveAllVirtualChildViews();
 }
 
@@ -5562,22 +5495,19 @@ void MahoSidebarTabListView::RebuildRows(const MahoSidebarTabListModel& model,
     action_row_holder = CreateActionRow();
   }
 
-  base::ElapsedTimer rr_remove_t;
-  tab_rows_->RemoveAllChildViews();
-  DVLOG(1) << "[MAHO_PERF]     RR.RemoveAllChildViews="
-            << rr_remove_t.Elapsed().InMillisecondsF() << "ms";
   pinned_section_target_ = nullptr;
   normal_section_target_ = nullptr;
   pinned_separator_ = nullptr;
-  // RemoveAllChildViews() freed every realized row; drop the now-dangling
-  // realized-only lookup entries (the drag-preserved row was already erased
-  // above and lives in drag_preserve_holder_). Spacer/window state is reset by
-  // RebuildTreeSection below.
   tab_id_to_row_view_.clear();
   pinned_top_spacer_ = nullptr;
   pinned_bottom_spacer_ = nullptr;
   normal_top_spacer_ = nullptr;
   normal_bottom_spacer_ = nullptr;
+
+  base::ElapsedTimer rr_remove_t;
+  tab_rows_->RemoveAllChildViews();
+  DVLOG(1) << "[MAHO_PERF]     RR.RemoveAllChildViews="
+            << rr_remove_t.Elapsed().InMillisecondsF() << "ms";
 
   const bool has_tree = !model.pinned_tree.empty() ||
                         !model.normal_tree.empty();
@@ -6212,9 +6142,18 @@ std::unique_ptr<views::View> MahoSidebarTabListView::BuildSplitGroupContainer(
   split_container->GetViewAccessibility().SetRole(ax::mojom::Role::kGroup);
   split_container->GetViewAccessibility().SetName(u"Split view");
 
-  const bool has_active_child = std::any_of(
-      group_node.children.begin(), group_node.children.end(),
-      [](const SidebarTreeNode& c) { return c.is_active; });
+  std::function<bool(const SidebarTreeNode&)> has_active_descendant;
+  has_active_descendant = [&](const SidebarTreeNode& node) -> bool {
+    if (node.is_active) {
+      return true;
+    }
+    return std::any_of(
+        node.children.begin(), node.children.end(),
+        [&](const SidebarTreeNode& child) {
+          return has_active_descendant(child);
+        });
+  };
+  const bool has_active_child = has_active_descendant(group_node);
   split_container->SetActiveState(has_active_child);
 
   const bool is_new_split =
@@ -6233,21 +6172,24 @@ std::unique_ptr<views::View> MahoSidebarTabListView::BuildSplitGroupContainer(
     split_id_to_container_[group_node.split_id] = container_ptr;
   }
 
+  const double clamped_ratio =
+      std::clamp(group_node.split_ratio, 0.05, 0.95);
   for (size_t i = 0; i < group_node.children.size(); ++i) {
     const size_t child_start = container_ptr->children().size();
+    const double child_ratio =
+        i == 0 ? clamped_ratio : 1.0 - clamped_ratio;
+    const int child_flex =
+        std::max(1, static_cast<int>(child_ratio * 1000.0));
 
     RebuildTreeNodes(container_ptr, {group_node.children[i]}, section,
                      browser, parent_folder_id);
 
     for (size_t v = child_start; v < container_ptr->children().size(); ++v) {
       views::View* child = container_ptr->children()[v];
-      if (auto* row = views::AsViewClass<SidebarTabRowView>(child)) {
-        container_ptr->SetFlexForView(row, 1);
-        if (effective_side_by_side) {
-          row->SetSplitCompactMode(true);
-        }
-      } else {
-        container_ptr->SetFlexForView(child, 0);
+      container_ptr->SetFlexForView(child, child_flex);
+      if (auto* row = views::AsViewClass<SidebarTabRowView>(child);
+          row && effective_side_by_side) {
+        row->SetSplitCompactMode(true);
       }
     }
 
@@ -6985,6 +6927,151 @@ content::WebContents* MahoSidebarTabListView::WakeSuspendedTab(
             << " navigate=" << navigate_ms << "ms"
             << " total=" << total_ms << "ms";
   return params.navigated_or_inserted_contents;
+}
+
+bool MahoSidebarTabListView::CreateSidebarTwoPaneSplit(
+    const std::string& source_tab_id,
+    const std::string& target_tab_id,
+    bool source_before_target) {
+  if (!browser_ || source_tab_id.empty() || target_tab_id.empty() ||
+      source_tab_id == target_tab_id) {
+    return false;
+  }
+
+  TabStripModel* model = browser_->tab_strip_model();
+  if (!model) {
+    return false;
+  }
+
+  const auto contents_for_id = [this, model](const std::string& tab_id) {
+    const int index = ResolveTabStripIndexForTabId(tab_id);
+    return model->ContainsIndex(index) ? model->GetWebContentsAt(index)
+                                       : nullptr;
+  };
+  content::WebContents* source_contents = contents_for_id(source_tab_id);
+  content::WebContents* target_contents = contents_for_id(target_tab_id);
+
+  if (!source_contents) {
+    source_contents = WakeSuspendedTab(source_tab_id);
+  }
+  if (!target_contents) {
+    target_contents = WakeSuspendedTab(target_tab_id);
+  }
+  if (!source_contents || !target_contents ||
+      source_contents == target_contents) {
+    return false;
+  }
+
+  const auto stamp_stable_id = [](content::WebContents* contents,
+                                  const std::string& stable_id) {
+    auto* helper = MahoTabIdHelper::FromWebContents(contents);
+    if (helper && helper->stable_tab_id() != stable_id) {
+      helper->SetRestoredTabId(stable_id);
+    }
+  };
+  stamp_stable_id(source_contents, source_tab_id);
+  stamp_stable_id(target_contents, target_tab_id);
+
+  int source_index = model->GetIndexOfWebContents(source_contents);
+  int target_index = model->GetIndexOfWebContents(target_contents);
+  if (!model->ContainsIndex(source_index) ||
+      !model->ContainsIndex(target_index) ||
+      !MahoSplitViewController::IsSplitDropEligible(
+          /*is_multi_drag=*/false, /*source_is_target=*/false,
+          model->GetSplitForTab(source_index).has_value(),
+          model->GetSplitForTab(target_index).has_value())) {
+    return false;
+  }
+
+  // Move source directly beside target. MoveWebContentsAt interprets the
+  // destination in the post-removal strip, so account for whether source is
+  // currently before target, then discard both indices immediately.
+  const int move_destination = source_before_target
+                                   ? (source_index < target_index
+                                          ? target_index - 1
+                                          : target_index)
+                                   : (source_index < target_index
+                                          ? target_index
+                                          : target_index + 1);
+  if (source_index != move_destination) {
+    model->MoveWebContentsAt(source_index, move_destination,
+                             /*select_after_move=*/false);
+  }
+
+  source_index = model->GetIndexOfWebContents(source_contents);
+  target_index = model->GetIndexOfWebContents(target_contents);
+  if (!model->ContainsIndex(source_index) ||
+      !model->ContainsIndex(target_index) ||
+      model->GetSplitForTab(source_index).has_value() ||
+      model->GetSplitForTab(target_index).has_value()) {
+    return false;
+  }
+
+  // AddToNewSplit uses the active tab as its implicit pivot. Activate target,
+  // then resolve the partner index one final time after activation observers.
+  model->ActivateTabAt(
+      target_index,
+      TabStripUserGestureDetails(
+          TabStripUserGestureDetails::GestureType::kOther));
+  source_index = model->GetIndexOfWebContents(source_contents);
+  target_index = model->GetIndexOfWebContents(target_contents);
+  if (!model->ContainsIndex(source_index) ||
+      !model->ContainsIndex(target_index) || source_index == target_index ||
+      model->active_index() != target_index) {
+    return false;
+  }
+
+  split_tabs::SplitTabVisualData visual_data(
+      split_tabs::SplitTabLayout::kVertical, 0.5);
+  const split_tabs::SplitTabId split_id = model->AddToNewSplit(
+      {source_index}, visual_data,
+      split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+
+  split_tabs::SplitTabData* split_data = model->GetSplitData(split_id);
+  if (!split_data ||
+      split_data->visual_data()->split_layout() !=
+          split_tabs::SplitTabLayout::kVertical) {
+    return false;
+  }
+
+  std::vector<std::string> split_tab_ids;
+  bool contains_source = false;
+  bool contains_target = false;
+  for (tabs::TabInterface* tab : split_data->ListTabs()) {
+    content::WebContents* contents = tab ? tab->GetContents() : nullptr;
+    if (contents == source_contents) {
+      stamp_stable_id(contents, source_tab_id);
+      contains_source = true;
+    } else if (contents == target_contents) {
+      stamp_stable_id(contents, target_tab_id);
+      contains_target = true;
+    }
+    auto* helper = contents ? MahoTabIdHelper::FromWebContents(contents)
+                            : nullptr;
+    if (!helper || helper->stable_tab_id().empty()) {
+      return false;
+    }
+    split_tab_ids.push_back(helper->stable_tab_id());
+  }
+  if (split_tab_ids.size() != 2u || !contains_source || !contains_target) {
+    return false;
+  }
+
+  if (MahoIsCapabilityAllowed(browser_->profile(),
+                              MahoPrivateCapability::kPersistentSplit)) {
+    std::string event_json = base::StringPrintf(
+        "{\"kind\":\"create_split\",\"window_id\":\"%s\","
+        "\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"vertical\"}",
+        std::to_string(browser_->session_id().id()).c_str(),
+        split_tab_ids[0].c_str(), split_tab_ids[1].c_str());
+    if (auto* core = maho::GetCore()) {
+      char* result = maho_core_handle_event(core, event_json.c_str());
+      if (result) {
+        maho_core_free_string(result);
+      }
+    }
+  }
+  return true;
 }
 
 void MahoSidebarTabListView::CloseTab(int tab_index) {
@@ -8295,7 +8382,7 @@ void MahoSidebarTabListView::OpenSelectedInSplit() {
   if (browser_) {
     std::string event_json = base::StringPrintf(
         "{\"kind\":\"create_split\",\"window_id\":\"%s\","
-        "\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"horizontal\"}",
+        "\"tab_ids\":[\"%s\",\"%s\"],\"orientation\":\"vertical\"}",
         std::to_string(browser_->session_id().id()).c_str(),
         live[0].second.c_str(), live[1].second.c_str());
     if (auto* core = maho::GetCore()) {

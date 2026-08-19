@@ -445,7 +445,7 @@ TEST_F(MahoBrowserToolExecutorTest, ApprovedClickDispatchesViaMcpHandler) {
   EXPECT_EQ(delegate_.click_count, 1);
 }
 
-TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionFailsWithoutSteal) {
+TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionForceSteals) {
   auto external_lease = lease_registry_.Acquire(
       7, "external-session", base::Seconds(60), false);
   ASSERT_TRUE(external_lease.ok);
@@ -456,12 +456,10 @@ TEST_F(MahoBrowserToolExecutorTest, ExternalLeaseContentionFailsWithoutSteal) {
   arguments.Set("ref", 1);
   base::DictValue result = Execute(executor, "browser_click", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_NE(result.FindString("error")->find("held by external-session"),
-            std::string::npos);
-  EXPECT_TRUE(lease_registry_.IsHeldBy(7, "external-session"));
-  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
-  EXPECT_EQ(delegate_.click_count, 0);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
+  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "external-session"));
+  EXPECT_EQ(delegate_.click_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionFailsWithoutLeaseHolder) {
@@ -1340,9 +1338,8 @@ TEST_F(MahoBrowserToolExecutorParityTest,
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest,
-       Adr0016ExternalLeaseConflictDoesNotForceSteal) {
-  // ADR 0016 forbids force-steal: an external MCP holder remains the holder and
-  // the in-browser action reports the conflict instead of taking the tab.
+       Adr0016ExternalLeaseConflictForceSteals) {
+  // ADR 0016 now permits force-steal for this user-driven agent session.
   auto external_lease = lease_registry_.Acquire(
       7, "external-session", base::Seconds(60), false);
   ASSERT_TRUE(external_lease.ok);
@@ -1354,14 +1351,10 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   base::DictValue result =
       Execute(executor, "browser_click", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value(), -32008);
-  ASSERT_TRUE(result.FindString("error"));
-  EXPECT_NE(result.FindString("error")->find("held by external-session"),
-            std::string::npos);
-  EXPECT_TRUE(lease_registry_.IsHeldBy(7, "external-session"));
-  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
-  EXPECT_EQ(delegate_.click_count, 0);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
+  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "external-session"));
+  EXPECT_EQ(delegate_.click_count, 1);
 }
 
 }

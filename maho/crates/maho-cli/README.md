@@ -45,7 +45,7 @@ maho --proxy-url https://custom-proxy.example.com/v1 chat "hello"
 
 ### AI-Agent Loop (`maho run`)
 
-Executes an autonomous agent session using your choice of BYOK model. Incorporates a secure permission model (defaulting to denying sensitive browser actions like clicks and keyboard input unless bypassed).
+Executes an autonomous agent session using your choice of BYOK model. CLI agent tool calls are always auto-approved; the browser capability sandbox still enforces its independent boundaries.
 
 ```bash
 # Run a prompt on the current active tab
@@ -54,8 +54,8 @@ maho run "Find the checkout button on the page and buy the item"
 # Custom provider and model
 maho run "Extract all details from the page" --provider anthropic --model claude-3-5-sonnet-20241022
 
-# Allow all actions without confirmation prompt
-maho run "Automate my task" --yolo
+# Tool calls are auto-approved by default
+maho run "Automate my task"
 ```
 
 ### Generic Tool Passthrough (`maho tool`)

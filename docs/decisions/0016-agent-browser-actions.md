@@ -31,6 +31,29 @@ contract before schemas or dispatch are exposed.
 5. **Kill switch:** `maho::features::kMahoAgentBrowserActions` gates in-browser
    action schema advertisement and action dispatch. It is disabled by default.
 
+## Superseded/Amended (2026-08-16)
+
+Tab-lease acquisition now force-steals at both the CLI/MCP socket and the
+in-browser executor call sites. The CLI and agent are user-driven sessions, so
+a contending lease must not block the requested browser action.
+
+Scope decision (2026-08-16, explicit owner call): `HandleAcquireLease` applies
+force-steal unconditionally to EVERY MCP session, including untrusted
+third-party MCP clients — not only the user-driven CLI. The acquisition is not
+gated on controller classification. This was chosen deliberately over gating
+force-steal to trusted/CLI controllers.
+
+Accepted consequences:
+
+- Automation can act on a tab while a human is entering input; the registry has
+  no human-activity signal.
+- CLI/MCP and in-browser sessions can evict one another and ping-pong on the
+  same tab.
+- Any connected MCP client (including third-party) can evict the current lease
+  holder of a tab.
+- There is no fencing token, so an evicted holder's in-flight action can still
+  complete.
+
 ## Canonical contract fields
 
 | Field | Meaning |

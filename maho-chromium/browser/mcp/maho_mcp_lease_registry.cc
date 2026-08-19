@@ -77,6 +77,7 @@ MahoMcpLeaseRegistry::AcquireResult MahoMcpLeaseRegistry::Acquire(
   const base::TimeDelta clamped = ClampTtl(ttl);
   const base::TimeTicks now = base::TimeTicks::Now();
 
+  std::string previous_holder;
   const bool held = SweepAndCheck(tab_id);
   if (held) {
     LeaseInfo& info = leases_[tab_id];
@@ -94,6 +95,7 @@ MahoMcpLeaseRegistry::AcquireResult MahoMcpLeaseRegistry::Acquire(
       result.message = "tab already leased";
       return result;
     }
+    previous_holder = info.session_id;
     AuditEntry steal_entry;
     steal_entry.session_id = session_id;
     steal_entry.previous = info.session_id;
@@ -118,6 +120,7 @@ MahoMcpLeaseRegistry::AcquireResult MahoMcpLeaseRegistry::Acquire(
 
   AcquireResult result;
   result.ok = true;
+  result.previous_holder = previous_holder;
   result.expires_at = new_info.expires_at;
   return result;
 }

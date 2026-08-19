@@ -83,6 +83,7 @@ TEST_F(MahoMcpLeaseRegistryTest, ForceStealTransfersLeaseAndAudits) {
   registry_.Acquire(1, "sess-A", base::Seconds(60), false);
   auto result = registry_.Acquire(1, "sess-B", base::Seconds(60), true);
   EXPECT_TRUE(result.ok);
+  EXPECT_EQ(result.previous_holder, "sess-A");
   EXPECT_TRUE(registry_.IsHeldBy(1, "sess-B"));
   EXPECT_FALSE(registry_.IsHeldBy(1, "sess-A"));
   auto audit = registry_.GetAuditLog();
