@@ -31,22 +31,7 @@ namespace maho {
 
 bool MahoShortcutInterceptor::g_recording_mode = false;
 
-namespace {
-
-constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";
-
-const char* EventTypeToString(blink::WebInputEvent::Type type) {
-  switch (type) {
-    case blink::WebInputEvent::Type::kRawKeyDown:
-      return "RawKeyDown";
-    case blink::WebInputEvent::Type::kKeyDown:
-      return "KeyDown";
-    case blink::WebInputEvent::Type::kKeyUp:
-      return "KeyUp";
-    default:
-      return "Other";
-  }
-}
+// --- Registry key codec (declared in maho_shortcut_interceptor.h) ----------
 
 std::string VKeyToString(int vk) {
   if (vk >= ui::VKEY_A && vk <= ui::VKEY_Z) {
@@ -78,7 +63,9 @@ std::string VKeyToString(int vk) {
     case ui::VKEY_OEM_4:     return "[";
     case ui::VKEY_OEM_6:     return "]";
     case ui::VKEY_OEM_MINUS: return "-";
-    case ui::VKEY_OEM_PLUS:  return "=";
+    // "+" is the registry spelling of the OEM_PLUS key (unshifted "=").
+    case ui::VKEY_OEM_PLUS:  return "+";
+    case ui::VKEY_OEM_5:     return "\\";
     default:
       if (vk >= ui::VKEY_F1 && vk <= ui::VKEY_F12) {
         return "f" + std::to_string(vk - ui::VKEY_F1 + 1);
@@ -104,7 +91,9 @@ ui::KeyboardCode StringToVKey(const std::string& key) {
       case '[': return ui::VKEY_OEM_4;
       case ']': return ui::VKEY_OEM_6;
       case '-': return ui::VKEY_OEM_MINUS;
-      case '=': return ui::VKEY_OEM_PLUS;
+      case '=':
+      case '+': return ui::VKEY_OEM_PLUS;
+      case '\\': return ui::VKEY_OEM_5;
       default:  return ui::VKEY_UNKNOWN;
     }
   }
@@ -133,6 +122,23 @@ ui::KeyboardCode StringToVKey(const std::string& key) {
   }
 
   return ui::VKEY_UNKNOWN;
+}
+
+namespace {
+
+constexpr char kShortcutTracePrefix[] = "[maho-shortcut-trace]";
+
+const char* EventTypeToString(blink::WebInputEvent::Type type) {
+  switch (type) {
+    case blink::WebInputEvent::Type::kRawKeyDown:
+      return "RawKeyDown";
+    case blink::WebInputEvent::Type::kKeyDown:
+      return "KeyDown";
+    case blink::WebInputEvent::Type::kKeyUp:
+      return "KeyUp";
+    default:
+      return "Other";
+  }
 }
 
 int ModifiersFromList(const base::ListValue& modifiers) {

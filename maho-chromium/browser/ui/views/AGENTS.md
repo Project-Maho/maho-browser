@@ -50,6 +50,7 @@ browser/ui/views/
 - No UI state in `split_view/` that belongs in `maho-core` split view manager
 
 ## NOTES
+- **Shortcut triple-sync contract**: adding/changing a key binding touches three synchronized lists — Rust registry (`shortcut_manager.rs`), C++ dispatch chain (`maho_command_action_handler.cc`), C++ key codec (`maho_shortcut_interceptor.cc`). Follow the checklist in `docs/shortcut-registry-contract.md`. Enforced by `maho_shortcut_contract_unittest.cc` (C++) and `contract_tests` in `shortcut_manager.rs` (Rust). An unhandled registry action is silently swallowed and also suppresses Chromium's native fallback for that key.
 - Design reference: `maho/reference_screenshots/` — always check before claiming visual parity
 - `DESIGN.md` at directory root has architectural notes
 - Sidebar tests: `maho_sidebar_*_test.cc` (interactive) and `maho_sidebar_*_unittest.cc` (unit)

@@ -8,6 +8,7 @@
 
 #include "components/input/native_web_keyboard_event.h"
 #include "ui/base/accelerators/accelerator.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 
 class Browser;
 
@@ -16,6 +17,18 @@ class KeyEvent;
 }
 
 namespace maho {
+
+// --- Registry key codec -----------------------------------------------------
+// C++ side of the shortcut registry's key alphabet. Must round-trip every
+// key string the Rust registry can emit (KeyCombo::key in
+// maho/crates/maho-types/src/keyboard.rs + defaults in
+// maho/crates/maho-core/src/shortcut_manager.rs). Synchronization is
+// enforced by MahoShortcutContractTest in maho_shortcut_contract_unittest.cc;
+// see maho-chromium/docs/shortcut-registry-contract.md.
+std::string VKeyToString(int vk);
+
+// Inverse of VKeyToString(); the two must stay in sync.
+ui::KeyboardCode StringToVKey(const std::string& key);
 
 // Resolves Chromium key events against the Rust ShortcutManager (the single
 // source of truth for shortcut resolution, via maho_core_resolve_shortcut())

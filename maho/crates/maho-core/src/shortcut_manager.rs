@@ -400,7 +400,9 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "add_split_view",
         "Add Split View",
         window.clone(),
-        KeyCombo::new("=", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
+        // Key must use the canonical codec spelling: VKeyToString(OEM_PLUS)
+        // is "+", so "=" would never match a resolved key event.
+        KeyCombo::new("+", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
         "remove_split_view",
@@ -465,12 +467,6 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
             vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
         ),
     ));
-    bindings.push(ShortcutBinding::new(
-        "new_note",
-        "New Note",
-        window.clone(),
-        KeyCombo::new("n", vec![KeyModifier::Ctrl]),
-    ));
 
     // === View ===
     let view = ShortcutCategory::View;
@@ -529,4 +525,83 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
     ));
 
     bindings
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    // Key strings the C++ codec (StringToVKey/VKeyToString in
+    // maho-chromium/browser/ui/views/command/maho_shortcut_interceptor.cc)
+    // can map. A binding outside this alphabet cannot register as a
+    // FocusManager accelerator and cannot be resolved from a key event.
+    // The C++ side enforces the same contract against the live registry in
+    // maho_shortcut_contract_unittest.cc; maho-chromium/docs/shortcut-registry-contract.md
+    // documents the full triple-sync contract.
+    const CODEC_NAMED_KEYS: &[&str] = &[
+        "enter", "escape", "tab", "space", "backspace", "delete", "arrowup",
+        "arrowdown", "arrowleft", "arrowright", "home", "end", "pageup",
+        "pagedown",
+    ];
+    const CODEC_SINGLE_CHARS: &str = "abcdefghijklmnopqrstuvwxyz0123456789,./[]-=+\\";
+
+    fn is_codec_key(key: &str) -> bool {
+        if key.len() == 1 {
+            return CODEC_SINGLE_CHARS.contains(key);
+        }
+        if let Some(num) = key.strip_prefix('f') {
+            if let Ok(n) = num.parse::<u8>() {
+                return (1..=12).contains(&n);
+            }
+        }
+        CODEC_NAMED_KEYS.contains(&key)
+    }
+
+    #[test]
+    fn all_binding_keys_are_in_cpp_codec_alphabet() {
+        let manager = ShortcutManager::new();
+        assert!(
+            manager.bindings.len() > 20,
+            "default registry looks empty"
+        );
+        for binding in &manager.bindings {
+            assert!(
+                is_codec_key(&binding.key_combo.key),
+                "key {:?} (action {:?}) is outside the C++ codec alphabet; \
+                 extend StringToVKey/VKeyToString or change the key spelling",
+                binding.key_combo.key,
+                binding.action,
+            );
+        }
+    }
+
+    #[test]
+    fn no_duplicate_normalized_combos() {
+        let manager = ShortcutManager::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for binding in &manager.bindings {
+            assert!(
+                seen.insert(binding.key_combo.to_normalized_string()),
+                "action {:?} duplicates an existing normalized combo; the \
+                 earlier binding in registration order wins and this one is \
+                 unreachable",
+                binding.action,
+            );
+        }
+    }
+
+    #[test]
+    fn binding_actions_are_unique_and_nonempty() {
+        let manager = ShortcutManager::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for binding in &manager.bindings {
+            assert!(!binding.action.is_empty(), "binding with empty action");
+            assert!(
+                seen.insert(binding.action.as_str()),
+                "duplicate action id {:?}",
+                binding.action,
+            );
+        }
+    }
 }

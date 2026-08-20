@@ -488,6 +488,23 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
         chrome::SelectPreviousTab(browser);
       }
     }
+  } else if (action_id == "mru_tab_switch_next" ||
+             action_id == "mru_tab_switch_prev") {
+    // Ctrl+Tab / Ctrl+Shift+Tab: dispatch through the MRU switcher overlay.
+    // Both the key-event interceptor and the FocusManager accelerator path
+    // resolve these bindings and route here; without this case the event was
+    // swallowed and tab switching dead-ended.
+    const bool forward = (action_id == "mru_tab_switch_next");
+    auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (!browser_view || !browser_view->MaybeHandleMruTabSwitch(forward)) {
+      // Switcher declined (fewer than two MRU tabs, or MRU ordering disabled
+      // in prefs): fall back to positional switching.
+      if (forward) {
+        chrome::SelectNextTab(browser);
+      } else {
+        chrome::SelectPreviousTab(browser);
+      }
+    }
   } else if (action_id == "js_console") {
     auto* web_contents = browser->tab_strip_model()->GetActiveWebContents();
     if (web_contents) {
