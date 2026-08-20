@@ -232,6 +232,16 @@ impl SyncManager {
         }
     }
 
+    pub fn profile_id_for_entity(
+        &self,
+        entity_type: &SyncEntityType,
+        entity_id: &str,
+    ) -> Option<&str> {
+        self.entity_profiles
+            .get(&Self::raw_scope_key(entity_type, entity_id))
+            .map(String::as_str)
+    }
+
     pub fn set_last_pulled_version(&mut self, entity_type: SyncEntityType, version: u64) {
         self.last_pulled_versions.insert(entity_type, version);
     }
@@ -309,6 +319,7 @@ impl SyncManager {
         let Ok(payload_json) = serde_json::to_string(&value) else {
             return false;
         };
+        entity.profile_id = Some(profile_id.to_string());
         entity.payload_json = payload_json;
         if !entity.deleted {
             entity.fields_hlc_json = crate::sync_models::build_fields_hlc(
@@ -328,8 +339,22 @@ impl SyncManager {
         if !entity.entity_type.is_profile_scoped() {
             return true;
         }
-        let resolved = entity
-            .profile_scope()
+        let explicit_profile = entity
+            .profile_id
+            .clone()
+            .filter(|value| !value.is_empty());
+        let payload_profile = SyncEntity::profile_id_from_payload(
+            &entity.entity_type,
+            &entity.payload_json,
+        );
+        if matches!(
+            (explicit_profile.as_deref(), payload_profile.as_deref()),
+            (Some(explicit), Some(payload)) if explicit != payload
+        ) {
+            return false;
+        }
+        let resolved = explicit_profile
+            .or(payload_profile)
             .or_else(|| {
                 Self::tab_space_id(entity)
                     .and_then(|space_id| self.space_profiles.get(&space_id).cloned())
@@ -343,9 +368,7 @@ impl SyncManager {
         let Some(profile_id) = resolved else {
             return false;
         };
-        if entity.profile_scope().as_deref() != Some(profile_id.as_str())
-            && !Self::inject_profile_scope(entity, &profile_id)
-        {
+        if !Self::inject_profile_scope(entity, &profile_id) {
             return false;
         }
         self.remember_scope(entity, &profile_id);
@@ -356,16 +379,35 @@ impl SyncManager {
         if !entity.entity_type.is_profile_scoped() {
             return true;
         }
-        let resolved = entity.profile_scope().or_else(|| {
-            Self::tab_space_id(entity)
-                .and_then(|space_id| self.space_profiles.get(&space_id).cloned())
-        });
+        let explicit_profile = entity
+            .profile_id
+            .clone()
+            .filter(|value| !value.is_empty());
+        let payload_profile = SyncEntity::profile_id_from_payload(
+            &entity.entity_type,
+            &entity.payload_json,
+        );
+        if matches!(
+            (explicit_profile.as_deref(), payload_profile.as_deref()),
+            (Some(explicit), Some(payload)) if explicit != payload
+        ) {
+            return false;
+        }
+        let resolved = explicit_profile
+            .or(payload_profile)
+            .or_else(|| {
+                Self::tab_space_id(entity)
+                    .and_then(|space_id| self.space_profiles.get(&space_id).cloned())
+            })
+            .or_else(|| {
+                self.entity_profiles
+                    .get(&Self::raw_scope_key(&entity.entity_type, &entity.entity_id))
+                    .cloned()
+            });
         let Some(profile_id) = resolved else {
             return false;
         };
-        if entity.profile_scope().as_deref() != Some(profile_id.as_str())
-            && !Self::inject_profile_scope(entity, &profile_id)
-        {
+        if !Self::inject_profile_scope(entity, &profile_id) {
             return false;
         }
         self.remember_scope(entity, &profile_id);
@@ -425,6 +467,20 @@ impl SyncManager {
         entity: &mut SyncEntity,
     ) -> Result<(), SyncTransportError> {
         if self.bind_local_profile_scope(entity) {
+            Ok(())
+        } else {
+            Err(SyncTransportError::MissingProfileScope {
+                entity_type: entity.entity_type.as_str(),
+                entity_id: entity.entity_id.clone(),
+            })
+        }
+    }
+
+    pub fn prepare_remote_entity(
+        &mut self,
+        entity: &mut SyncEntity,
+    ) -> Result<(), SyncTransportError> {
+        if self.bind_remote_profile_scope(entity) {
             Ok(())
         } else {
             Err(SyncTransportError::MissingProfileScope {
@@ -528,14 +584,10 @@ impl SyncManager {
             });
             return false;
         }
-        if !self.bind_remote_profile_scope(entity) {
-            self.record_transport_error(SyncTransportError::MissingProfileScope {
-                entity_type: entity.entity_type.as_str(),
-                entity_id: entity.entity_id.clone(),
-            });
+        if let Err(error) = self.prepare_remote_entity(entity) {
+            self.record_transport_error(error);
             return false;
         }
-
         let entity_type_str = entity.entity_type.as_str();
         let Some(storage_entity_id) = entity.storage_entity_id() else {
             return false;
@@ -1089,6 +1141,7 @@ mod tests {
         SyncEntity {
             entity_type: SyncEntityType::Tab,
             entity_id: id.to_string(),
+            profile_id: None,
             version,
             device_id: 1,
             schema_version: 1,
@@ -1110,6 +1163,7 @@ mod tests {
         SyncEntity {
             entity_type: SyncEntityType::Space,
             entity_id: id.to_string(),
+            profile_id: None,
             version,
             device_id: 1,
             schema_version: 1,

@@ -1230,6 +1230,19 @@ source_set("maho_ai_runtime_router_unittests") {
   ]
 }
 
+source_set("maho_agent_event_replay_buffer_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_agent_event_replay_buffer_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_event_replay_buffer",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 source_set("maho_context_menus_unittests") {
   testonly = true
   sources = [
