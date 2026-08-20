@@ -1,8 +1,9 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { HeroBrowserVisual } from "../HeroBrowserVisual";
 
 type Matcher = {
+  readonly toBe: (expected: unknown) => void;
   readonly toContain: (expected: string) => void;
   readonly toHaveLength: (expected: number) => void;
   readonly not: { readonly toContain: (expected: string) => void };
@@ -34,6 +35,23 @@ describe("HeroBrowserVisual component", () => {
     expect(componentSource).toContain('"/demo/hero/maho-hero-capture-poster.png"');
     expect(componentSource).not.toContain("/demo/hero/dom-hyperframes/");
     expect(componentSource).not.toContain("/demo/hero/hyperframes/");
+  });
+
+  test("leaves no legacy HyperFrames Hero assets", () => {
+    const legacyDirectories = [
+      "../../../../../public/demo/hero/hyperframes",
+      "../../../../../public/demo/hero/dom-hyperframes",
+    ];
+
+    for (const directory of legacyDirectories) {
+      const location = new URL(directory, import.meta.url);
+      if (existsSync(location)) {
+        expect(readdirSync(location)).toHaveLength(0);
+      }
+    }
+
+    expect(existsSync(new URL("../../../../../scripts/render-maho-features.mjs", import.meta.url))).toBe(false);
+    expect(existsSync(new URL("../../../../../scripts/check-maho-features.mjs", import.meta.url))).toBe(false);
   });
 
   test("exposes one labelled recorded Hero image without synthetic scene controls", () => {

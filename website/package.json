@@ -9,9 +9,7 @@
     "preview": "astro preview",
     "typecheck": "astro check",
     "test": "bun test",
-    "test:visual": "node ./node_modules/@playwright/test/cli.js test",
-    "assets:generate": "node scripts/render-maho-features.mjs",
-    "assets:check": "node scripts/check-maho-features.mjs"
+    "test:visual": "node ./node_modules/@playwright/test/cli.js test"
   },
   "dependencies": {
     "@astrojs/react": "^5.0.7",
