@@ -2,49 +2,16 @@ import React, { useEffect, useRef, useState } from "react";
 import { readConnectionTarget, readSaveData } from "./motion/LandingMotionPolicy";
 
 type PlaybackPolicy = "pending" | "motion" | "static";
-type HeroScene = "spaces" | "split-view" | "command-bar-ai";
 type VideoState = "ready" | "unavailable";
 
-type HeroSceneAsset = {
-  readonly label: string;
-  readonly videoSrc: string;
-  readonly posterSrc: string;
-};
-
-const HERO_SCENES = {
-  spaces: {
-    label: "Spaces",
-    videoSrc: "/demo/hero/dom-hyperframes/maho-spaces-dom.mp4",
-    posterSrc: "/demo/hero/dom-hyperframes/maho-spaces-dom-poster.webp",
-  },
-  "split-view": {
-    label: "Split View",
-    videoSrc: "/demo/hero/dom-hyperframes/maho-split-view-dom.mp4",
-    posterSrc: "/demo/hero/dom-hyperframes/maho-split-view-dom-poster.webp",
-  },
-  "command-bar-ai": {
-    label: "Command Bar + AI",
-    videoSrc: "/demo/hero/dom-hyperframes/maho-command-ai-dom.mp4",
-    posterSrc: "/demo/hero/dom-hyperframes/maho-command-ai-dom-poster.webp",
-  },
-} as const satisfies Record<HeroScene, HeroSceneAsset>;
-
-const HERO_SCENE_KEYS = ["spaces", "split-view", "command-bar-ai"] as const satisfies readonly HeroScene[];
-
-function nextScene(scene: HeroScene): HeroScene {
-  switch (scene) {
-    case "spaces": return "split-view";
-    case "split-view": return "command-bar-ai";
-    case "command-bar-ai": return "spaces";
-  }
-}
+const HERO_VIDEO_SRC = "/demo/hero/maho-hero-capture.mp4";
+const HERO_POSTER_SRC = "/demo/hero/maho-hero-capture-poster.png";
 
 export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ className = "" }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const playbackRequestRef = useRef(0);
   const [policy, setPolicy] = useState<PlaybackPolicy>("pending");
-  const [scene, setScene] = useState<HeroScene>("spaces");
   const [isVisible, setIsVisible] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [videoState, setVideoState] = useState<VideoState>("ready");
@@ -86,7 +53,6 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
   }, []);
 
   const shouldMountVideo = policy === "motion" && videoState === "ready";
-  const activeScene = HERO_SCENES[scene];
   const shouldPlay = shouldMountVideo && isVisible && !isPaused;
 
   useEffect(() => {
@@ -110,17 +76,11 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
       playbackRequestRef.current += 1;
       video.pause();
     };
-  }, [scene, shouldPlay, videoState]);
-
-  const selectScene = (next: HeroScene): void => {
-    setScene(next);
-    setVideoState("ready");
-    setIsPaused(false);
-  };
+  }, [shouldPlay, videoState]);
 
   const imageLabel = videoState === "unavailable"
-    ? `Maho Browser hero showing ${activeScene.label} poster; video unavailable`
-    : `Maho Browser hero showing ${activeScene.label}`;
+    ? "Maho Browser product recording poster; video unavailable"
+    : "Maho Browser product recording";
 
   return (
     <div
@@ -130,7 +90,6 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
       data-motion-owner={policy === "motion" && isVisible ? "hero" : "none"}
       data-motion-substate={shouldPlay ? "action" : "idle"}
       data-hero-policy={policy}
-      data-hero-scene={scene}
       data-hero-video-state={videoState}
     >
       <div
@@ -141,7 +100,7 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
         <div aria-hidden="true" className="absolute inset-0">
           <picture>
             <img
-              src={activeScene.posterSrc}
+              src={HERO_POSTER_SRC}
               width={1920}
               height={1080}
               alt=""
@@ -151,37 +110,22 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
           {shouldMountVideo && (
             <video
               ref={videoRef}
-              key={scene}
-              src={activeScene.videoSrc}
+              src={HERO_VIDEO_SRC}
               width={1920}
               height={1080}
-              poster={activeScene.posterSrc}
+              poster={HERO_POSTER_SRC}
               muted
               playsInline
               preload="auto"
-              onEnded={() => selectScene(nextScene(scene))}
+              loop
               onError={() => setVideoState("unavailable")}
               className="absolute inset-0 h-full w-full object-contain opacity-100 transition-opacity duration-[320ms]"
             />
           )}
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-2" aria-label="Hero scenes">
-        {HERO_SCENE_KEYS.map((key) => {
-          const item = HERO_SCENES[key];
-          return (
-          <button
-            key={key}
-            type="button"
-            aria-pressed={scene === key}
-            onClick={() => selectScene(key)}
-            className="min-h-11 rounded-full border border-border px-4 text-sm text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground aria-pressed:border-foreground aria-pressed:bg-foreground aria-pressed:text-background"
-          >
-            {item.label}
-          </button>
-          );
-        })}
-        {shouldMountVideo && (
+      {shouldMountVideo && (
+        <div className="mt-4 flex items-center justify-center">
           <button
             type="button"
             aria-pressed={isPaused}
@@ -190,17 +134,10 @@ export const HeroBrowserVisual: React.FC<{ readonly className?: string }> = ({ c
           >
             {isPaused ? "Resume hero video" : "Pause hero video"}
           </button>
-        )}
-        <button
-          type="button"
-          onClick={() => selectScene("spaces")}
-          className="min-h-11 rounded-full border border-border px-4 text-sm text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
-        >
-          Replay hero sequence
-        </button>
-      </div>
+        </div>
+      )}
       <p className="sr-only" aria-live="polite" aria-atomic="true">
-        {videoState === "unavailable" ? `${activeScene.label} video unavailable; showing poster` : `Showing ${activeScene.label}`}
+        {videoState === "unavailable" ? "Hero video unavailable; showing poster" : "Showing Maho Browser product recording"}
       </p>
     </div>
   );
