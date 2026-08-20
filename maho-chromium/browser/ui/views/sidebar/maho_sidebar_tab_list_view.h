@@ -282,6 +282,13 @@ class MahoSidebarTabListView : public views::View,
   // Public so the sidebar drop path can wake tabs before splitting them.
   content::WebContents* WakeSuspendedTab(const std::string& tab_id);
 
+  // Creates the sidebar's strict two-pane, side-by-side split. Stable tab IDs
+  // and WebContents pointers are authoritative; strip indices are re-resolved
+  // after every mutation that can shift them.
+  bool CreateSidebarTwoPaneSplit(const std::string& source_tab_id,
+                                 const std::string& target_tab_id,
+                                 bool source_before_target);
+
   bool IsTabRowRealizedAt(int strip_index) const;
 
   views::View* FindSectionDropTargetForTesting(MahoSidebarTabSection section);
@@ -922,7 +929,7 @@ class SidebarTabRowView : public views::View,
   void BeginTitleEditing();
   void EndTitleEditing(bool commit);
   double GetSplitPreviewProgress() const;
-  bool IsSplitPreviewLeft() const;
+  MahoSplitDropSide GetSplitPreviewSide() const;
   void ApplySplitPreviewContentLayout(double progress);
   void RefreshSplitPreviewLayout();
   void ShowSplitPreview(MahoSplitDropSide side);

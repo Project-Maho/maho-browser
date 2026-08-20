@@ -50,6 +50,7 @@
 #include "content/public/common/referrer.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/ui/views/frame/maho_tab_controlled_banner_overlay.h"
 #include "url/gurl.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -192,6 +193,8 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   if (!browser_) {
     return;
   }
+
+  maho::MahoTabControlledBannerOverlay::GetOrCreateForBrowser(browser_);
 
   // R-11: OTR (Incognito/Guest/system) sidebar reads only the current
   // window's TabStripModel. Never touch MahoCore, SpaceBridge, favorites
@@ -2181,12 +2184,6 @@ void MahoSidebarView::OnDragExited() {
 }
 
 void MahoSidebarView::OnDragEnded() {
-  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
-      browser_view && browser_view->multi_contents_view()->IsDragAndDropEnabled()) {
-    browser_view->multi_contents_view()
-        ->drop_target_controller()
-        .OnSidebarTabDragEnded();
-  }
   last_over_favorites_ = false;
   if (favorites_view_) {
     favorites_view_->OnDragEnded();
@@ -2198,12 +2195,6 @@ void MahoSidebarView::OnDragEnded() {
 }
 
 void MahoSidebarView::OnDragStarted(const std::string& tab_id) {
-  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
-      browser_view && browser_view->multi_contents_view()->IsDragAndDropEnabled()) {
-    browser_view->multi_contents_view()
-        ->drop_target_controller()
-        .OnSidebarTabDragStarted();
-  }
   if (favorites_view_) {
     favorites_view_->OnExternalDragStarted(tab_id);
   }

@@ -300,6 +300,32 @@ bool MahoControlActivityService::Disconnect(std::string_view session_id,
       it->second.approval_outcome, base::TimeDelta(), std::nullopt);
 }
 
+bool MahoControlActivityService::RequestImmediateStop(int64_t tab_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (tab_id <= 0) {
+    return false;
+  }
+
+  bool stopped = false;
+  const base::TimeTicks now = tick_clock_->NowTicks();
+  for (auto& [session_id, activity] : activities_) {
+    if (IsTerminal(activity.state) || !activity.target ||
+        activity.target->tab_id != tab_id) {
+      continue;
+    }
+    activity.state = ControlActivityState::kDisconnected;
+    ++activity.event_revision;
+    activity.updated_at = now;
+    activity.lease_expires_at = base::TimeTicks();
+    Publish(activity);
+    stopped = true;
+  }
+  if (stopped) {
+    ScheduleNextExpiry();
+  }
+  return stopped;
+}
+
 void MahoControlActivityService::OnTargetClosed(int64_t tab_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (tab_id <= 0) {

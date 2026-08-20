@@ -1,6 +1,7 @@
 #include "maho/browser/maho_browser_main_extra_parts.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -48,10 +49,12 @@
 #include "base/base64.h"
 #include "base/containers/span.h"
 #include "base/run_loop.h"
+#include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/notifications/notification_common.h"
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_impl.h"
@@ -412,7 +415,8 @@ std::string ExecuteMcpActionJsBlocking(content::WebContents* wc,
 std::optional<gfx::PointF> ComputeViewportCenterCss(
     const ui::AXTreeUpdate& update,
     ui::AXNodeID ax_id,
-    float device_scale_factor) {
+    float device_scale_factor,
+    bool prefer_leading_edge = false) {
   // Preferred: ui::AXTree geometry applies each container's scroll offset and
   // transform, yielding frame-relative (viewport) coordinates. The manual
   // offset-container walk below is a fallback that ignores scroll/transform and
@@ -426,6 +430,11 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
                                                /*clip_bounds=*/false);
         if (!bounds.IsEmpty()) {
           gfx::PointF center = bounds.CenterPoint();
+          if (prefer_leading_edge) {
+            center.set_x(bounds.x() +
+                         std::min(bounds.width() / 2.f,
+                                  12.f * device_scale_factor));
+          }
           if (device_scale_factor > 0.f) {
             center.Scale(1.f / device_scale_factor);
           }
@@ -473,6 +482,10 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
   }
 
   gfx::PointF center = bounds.CenterPoint();
+  if (prefer_leading_edge) {
+    center.set_x(bounds.x() +
+                 std::min(bounds.width() / 2.f, 12.f * device_scale_factor));
+  }
   if (device_scale_factor > 0.f) {
     center.Scale(1.f / device_scale_factor);
   }
@@ -809,13 +822,34 @@ bool IsWebContentsMcpEligible(BrowserWindowInterface* browser,
   return token.Revalidate(MahoPrivateCapability::kMCP);
 }
 
-int McpSessionIdOf(content::WebContents* web_contents) {
-  if (!web_contents) {
-    return 0;
+class McpTabIdRegistry {
+ public:
+  int GetIdFor(content::WebContents* web_contents) {
+    if (!web_contents) {
+      return 0;
+    }
+    MahoTabIdHelper::CreateForWebContents(web_contents);
+    MahoTabIdHelper* helper =
+        MahoTabIdHelper::FromWebContents(web_contents);
+    if (!helper || helper->stable_tab_id().empty() ||
+        next_id_ == std::numeric_limits<int>::max()) {
+      return 0;
+    }
+    auto [it, inserted] = ids_.try_emplace(helper->stable_tab_id(), next_id_);
+    if (inserted) {
+      ++next_id_;
+    }
+    return it->second;
   }
-  sessions::SessionTabHelper* helper =
-      sessions::SessionTabHelper::FromWebContents(web_contents);
-  return helper ? helper->session_id().id() : 0;
+
+ private:
+  std::map<std::string, int> ids_;
+  int next_id_ = 1;
+};
+
+int McpSessionIdOf(content::WebContents* web_contents) {
+  static base::NoDestructor<McpTabIdRegistry> registry;
+  return registry->GetIdFor(web_contents);
 }
 
 bool IsMcpSystemSurfaceUrl(const std::string& raw_url) {
@@ -867,8 +901,7 @@ maho::MahoMcpSession::TabInfo BuildLiveMcpTabInfo(
   tab.id = McpSessionIdOf(web_contents);
   tab.title = base::UTF16ToUTF8(web_contents->GetTitle());
   tab.url = web_contents->GetLastCommittedURL().spec();
-  tab.is_active =
-      (web_contents->GetVisibility() == content::Visibility::VISIBLE);
+  tab.is_active = model && model->active_index() == index;
   tab.targetable = tab.id != 0;
   tab.tab_strip_index = index;
   return tab;
@@ -1099,13 +1132,13 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
               TabStripModel* model = browser->GetTabStripModel();
               for (int index = 0; index < model->count(); ++index) {
                 content::WebContents* contents = model->GetWebContentsAt(index);
-                auto* helper =
-                    contents
-                        ? sessions::SessionTabHelper::FromWebContents(contents)
-                        : nullptr;
-                if (helper && helper->session_id().id() == target.tab_id) {
+                if (McpSessionIdOf(contents) == target.tab_id) {
+                  auto* helper =
+                      sessions::SessionTabHelper::FromWebContents(contents);
+                  const int64_t canonical_tab_id =
+                      helper ? helper->session_id().id() : target.tab_id;
                   params.target =
-                      maho::ai::ControlTarget{target.browser_id, target.tab_id,
+                      maho::ai::ControlTarget{target.browser_id, canonical_tab_id,
                                               contents->GetPrimaryMainFrame()
                                                   ->GetLastCommittedOrigin(),
                                               contents->GetTitle()};
@@ -1125,7 +1158,43 @@ class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
       return;
     }
     if (phase == maho::MahoMcpActivityPhase::kDisconnected) {
-      service->Disconnect(activity_id, revision);
+      content::GetUIThreadTaskRunner({})->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+                 std::string act_id, uint64_t rev) {
+                if (!delegate) return;
+                auto* s = maho::ai::MahoControlActivityService::GetForProfile(
+                    delegate->GetProfile());
+                if (s) {
+                  s->Disconnect(act_id, rev);
+                }
+              },
+              ui_weak_ptr_, activity_id, revision),
+          base::Seconds(3));
+      return;
+    }
+    if (phase == maho::MahoMcpActivityPhase::kCompleted) {
+      // Hold the controlled visual state for a brief grace window so the user
+      // can clearly observe which tab was manipulated by the agent.
+      content::GetUIThreadTaskRunner({})->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(
+              [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+                 std::string act_id) {
+                if (!delegate) return;
+                delegate->PublishControlActivity(
+                    act_id, /*controller_session_id=*/"",
+                    /*controller_label=*/"",
+                    /*target=*/maho::ResolvedMahoMcpTarget{},
+                    /*category=*/MahoBrowserToolRegistry::Category::kUnknown,
+                    /*sensitivity=*/
+                    MahoBrowserToolRegistry::Sensitivity::kLow,
+                    /*phase=*/maho::MahoMcpActivityPhase::kDisconnected,
+                    /*revision=*/0);
+              },
+              ui_weak_ptr_, activity_id),
+          base::Seconds(3));
       return;
     }
     maho::ai::ControlActivityUpdate update;
@@ -1704,18 +1773,18 @@ std::string FormatMailActionDetails(const std::string& action_name,
           if (browser && browser->GetTabStripModel() &&
               IsBrowserMcpEligible(browser)) {
             TabStripModel* model = browser->GetTabStripModel();
-            std::vector<maho::MahoMcpSession::TabInfo> sidebar_tabs =
-                BuildMcpSidebarTabInventory(browser, model, maho::GetCore());
-            if (!sidebar_tabs.empty()) {
-              for (auto& tab : sidebar_tabs) {
+            std::vector<maho::MahoMcpSession::TabInfo> live_tabs =
+                BuildLiveMcpTabStripInventory(browser, model);
+            if (!live_tabs.empty()) {
+              for (auto& tab : live_tabs) {
                 list.push_back(std::move(tab));
               }
               return true;
             }
 
-            std::vector<maho::MahoMcpSession::TabInfo> live_tabs =
-                BuildLiveMcpTabStripInventory(browser, model);
-            for (auto& tab : live_tabs) {
+            std::vector<maho::MahoMcpSession::TabInfo> sidebar_tabs =
+                BuildMcpSidebarTabInventory(browser, model, maho::GetCore());
+            for (auto& tab : sidebar_tabs) {
               list.push_back(std::move(tab));
             }
           }
@@ -1759,9 +1828,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
             for (int i = 0; i < model->count(); ++i) {
               content::WebContents* c = model->GetWebContentsAt(i);
               if (c) {
-                sessions::SessionTabHelper* helper =
-                    sessions::SessionTabHelper::FromWebContents(c);
-                if (helper && helper->session_id().id() == tab_id) {
+                if (McpSessionIdOf(c) == tab_id) {
                   if (IsWebContentsMcpEligible(browser, c)) {
                     match = c;
                   }
@@ -2167,12 +2234,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
                 content::WebContents::Create(params);
             if (new_contents) {
               CreateSessionServiceTabHelper(new_contents.get());
-              sessions::SessionTabHelper* helper =
-                  sessions::SessionTabHelper::FromWebContents(
-                      new_contents.get());
-              if (helper) {
-                new_tab_id = helper->session_id().id();
-              }
+              MahoTabIdHelper::CreateForWebContents(new_contents.get());
+              new_tab_id = McpSessionIdOf(new_contents.get());
               if (!url.is_empty() && url.spec() != "about:blank") {
                 content::NavigationController::LoadURLParams nav_params(url);
                 nav_params.transition_type = ui::PageTransitionFromInt(
@@ -2200,9 +2263,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
             for (int i = 0; i < model->count(); ++i) {
               content::WebContents* c = model->GetWebContentsAt(i);
               if (c) {
-                sessions::SessionTabHelper* helper =
-                    sessions::SessionTabHelper::FromWebContents(c);
-                if (helper && helper->session_id().id() == tab_id) {
+                if (McpSessionIdOf(c) == tab_id) {
                   model->CloseWebContentsAt(
                       i, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
                   closed = true;
@@ -2365,9 +2426,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
             for (int i = 0; i < model->count(); ++i) {
               content::WebContents* c = model->GetWebContentsAt(i);
               if (c) {
-                sessions::SessionTabHelper* helper =
-                    sessions::SessionTabHelper::FromWebContents(c);
-                if (helper && helper->session_id().id() == requested_tab_id) {
+                if (McpSessionIdOf(c) == requested_tab_id) {
                   if (IsWebContentsMcpEligible(browser, c)) {
                     result.browser = browser;
                     result.web_contents = c;
@@ -2620,6 +2679,15 @@ std::string FormatMailActionDetails(const std::string& action_name,
   base::Value GetAccessibilitySnapshot(
       int tab_id,
       maho::MahoMcpSession::RefTable* out_refs) override {
+    uint64_t ignored_snapshot_token = 0;
+    return GetAccessibilitySnapshot(tab_id, out_refs,
+                                    &ignored_snapshot_token);
+  }
+
+  base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      maho::MahoMcpSession::RefTable* out_refs,
+      uint64_t* out_snapshot_token) override {
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
     base::DictValue empty;
@@ -2628,7 +2696,18 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (!wc) {
       return base::Value(std::move(empty));
     }
+    maho::MahoMcpNavigationTracker::CreateForWebContents(wc);
+    const uint64_t navigation_epoch = GetNavigationEpoch(tab_id);
+    if (navigation_epoch == 0) {
+      return base::Value(std::move(empty));
+    }
     ui::AXTreeUpdate update = SnapshotAXTree(wc);
+    if (navigation_epoch != GetNavigationEpoch(tab_id)) {
+      if (out_refs) {
+        out_refs->clear();
+      }
+      return base::Value(std::move(empty));
+    }
     if (update.nodes.empty()) {
       return base::Value(std::move(empty));
     }
@@ -2647,7 +2726,31 @@ std::string FormatMailActionDetails(const std::string& action_name,
         out_refs->emplace(pair.first, pair.second);
       }
     }
+    if (out_snapshot_token) {
+      const uint64_t token = ++next_ref_snapshot_token_;
+      if (ref_snapshot_guards_.size() == kMaxRefSnapshotGuards) {
+        ref_snapshot_guards_.erase(ref_snapshot_guards_.begin());
+      }
+      ref_snapshot_guards_[token] = {McpSessionIdOf(wc), navigation_epoch};
+      *out_snapshot_token = token;
+    }
     return snapshot;
+  }
+
+  bool RevalidateRefSnapshot(const maho::ResolvedMahoMcpTarget& target,
+                             uint64_t snapshot_token) override {
+    auto guard = ref_snapshot_guards_.find(snapshot_token);
+    return guard != ref_snapshot_guards_.end() && target.valid &&
+           target.tab_id == guard->second.tab_id &&
+           GetNavigationEpoch(target.tab_id) == guard->second.navigation_epoch;
+  }
+
+  uint64_t GetNavigationEpoch(int tab_id) {
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    auto* tracker =
+        wc ? maho::MahoMcpNavigationTracker::FromWebContents(wc) : nullptr;
+    return tracker ? tracker->navigation_epoch() : 0;
   }
 
   void CaptureFullPagePngBase64(
@@ -2666,11 +2769,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
     int resolved_tab_id = tab_id;
     if (resolved_tab_id == 0) {
-      sessions::SessionTabHelper* helper =
-          sessions::SessionTabHelper::FromWebContents(wc);
-      if (helper) {
-        resolved_tab_id = helper->session_id().id();
-      }
+      resolved_tab_id = McpSessionIdOf(wc);
     }
     // Wake HIDDEN tab so compositor renders before capture.
     const bool was_hidden = wc->GetVisibility() == content::Visibility::HIDDEN;
@@ -2778,11 +2877,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
     int resolved_tab_id = tab_id;
     if (resolved_tab_id == 0) {
-      sessions::SessionTabHelper* helper =
-          sessions::SessionTabHelper::FromWebContents(wc);
-      if (helper) {
-        resolved_tab_id = helper->session_id().id();
-      }
+      resolved_tab_id = McpSessionIdOf(wc);
     }
     const bool was_hidden = wc->GetVisibility() == content::Visibility::HIDDEN;
     if (was_hidden) {
@@ -2894,82 +2989,317 @@ std::string FormatMailActionDetails(const std::string& action_name,
   }
 
   bool Click(int tab_id, ui::AXNodeID ax_id) override {
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](MahoMcpBrowserDelegateImpl* delegate, int id, ui::AXNodeID ax) {
-              content::WebContents* wc =
-                  (id == 0) ? delegate->GetActiveWebContents()
-                            : delegate->GetWebContentsForTabId(id);
-              if (wc) {
-                ui::AXTreeUpdate update = delegate->SnapshotAXTree(wc);
-                content::RenderWidgetHostView* view =
-                    wc->GetRenderWidgetHostView();
-                const float device_scale_factor =
-                    view ? view->GetDeviceScaleFactor() : 1.f;
-                std::optional<gfx::PointF> center =
-                    ComputeViewportCenterCss(update, ax, device_scale_factor);
-                bool clicked = false;
-                if (center) {
-                  const int cx = std::lround(center->x());
-                  const int cy = std::lround(center->y());
-                  // Trusted input: Blink expands a real mouse press+release
-                  // into the full pointerdown -> mousedown -> pointerup ->
-                  // mouseup -> click sequence. Synthetic JS MouseEvents
-                  // (isTrusted=false) only activate native form controls and
-                  // are ignored by custom (React / pointer-event) widgets such
-                  // as menu buttons and comboboxes.
-                  clicked =
-                      maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {});
-                }
-                if (!clicked) {
-                  PerformAxAction(wc, ax, ax::mojom::Action::kDoDefault);
-                }
-              }
-            },
-            base::Unretained(this), tab_id, ax_id));
+    ClickVerified(tab_id, ax_id, base::DoNothing());
     return true;
   }
 
+  void ClickVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      base::OnceCallback<void(maho::InputActionOutcome)> done) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      if (base::SequencedTaskRunner::HasCurrentDefault()) {
+        done = base::BindPostTaskToCurrentDefault(std::move(done));
+      }
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::ClickVerified,
+                         ui_weak_ptr_, tab_id, ax_id, std::move(done)));
+      return;
+    }
+
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.reason = "no_web_contents";
+      outcome.method = "trusted_input";
+      std::move(done).Run(std::move(outcome));
+      return;
+    }
+
+    ui::AXTreeUpdate update = SnapshotAXTree(wc);
+    const ui::AXNodeData* target_node = nullptr;
+    for (const ui::AXNodeData& node : update.nodes) {
+      if (node.id == ax_id) {
+        target_node = &node;
+        break;
+      }
+    }
+
+    if (!target_node) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.reason = "node_gone";
+      outcome.method = "trusted_input";
+      std::move(done).Run(std::move(outcome));
+      return;
+    }
+
+    const bool is_toggleable =
+        (target_node->role == ax::mojom::Role::kCheckBox ||
+         target_node->role == ax::mojom::Role::kRadioButton ||
+         target_node->role == ax::mojom::Role::kSwitch ||
+         target_node->role == ax::mojom::Role::kMenuItemCheckBox ||
+         target_node->role == ax::mojom::Role::kMenuItemRadio);
+    const bool is_checkbox = target_node->role == ax::mojom::Role::kCheckBox;
+    const ax::mojom::CheckedState pre_checked =
+        target_node->HasCheckedState() ? target_node->GetCheckedState()
+                                       : ax::mojom::CheckedState::kNone;
+
+    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+    const float device_scale_factor =
+        view ? view->GetDeviceScaleFactor() : 1.f;
+    std::optional<gfx::PointF> center =
+        ComputeViewportCenterCss(update, ax_id, device_scale_factor,
+                                 is_checkbox);
+
+    bool clicked = false;
+    std::string method = "trusted_input";
+    if (center) {
+      const int cx = std::lround(center->x());
+      const int cy = std::lround(center->y());
+      // Trusted input: Blink expands a real mouse press+release into the
+      // full pointerdown -> mousedown -> pointerup -> mouseup -> click sequence.
+      clicked = maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {});
+    }
+    if (!clicked) {
+      clicked = PerformAxAction(wc, ax_id, ax::mojom::Action::kDoDefault);
+      method = "ax_fallback";
+    }
+
+    if (!clicked) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.reason = "click_failed";
+      outcome.method = method;
+      std::move(done).Run(std::move(outcome));
+      return;
+    }
+
+    if (is_toggleable) {
+      ui::AXTreeUpdate post_tree = SnapshotAXTree(wc);
+      const ui::AXNodeData* post_node = nullptr;
+      for (const ui::AXNodeData& node : post_tree.nodes) {
+        if (node.id == ax_id) {
+          post_node = &node;
+          break;
+        }
+      }
+      const ax::mojom::CheckedState post_checked =
+          (post_node && post_node->HasCheckedState())
+              ? post_node->GetCheckedState()
+              : ax::mojom::CheckedState::kNone;
+
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = true;
+      outcome.method = method;
+      if (post_checked != pre_checked) {
+        outcome.verified = true;
+      } else {
+        outcome.verified = false;
+        outcome.reason = "state_not_toggled";
+      }
+      std::move(done).Run(std::move(outcome));
+      return;
+    }
+
+    // Non-toggleable roles (buttons, links, generic)
+    maho::InputActionOutcome outcome;
+    outcome.dispatched = true;
+    outcome.verified = std::nullopt;
+    outcome.method = method;
+    outcome.reason = "unverifiable_role";
+    std::move(done).Run(std::move(outcome));
+  }
+
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) override {
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE,
-        base::BindOnce(
-            [](MahoMcpBrowserDelegateImpl* delegate, int id, ui::AXNodeID ax,
-               std::string value) {
-              content::WebContents* wc =
-                  (id == 0) ? delegate->GetActiveWebContents()
-                            : delegate->GetWebContentsForTabId(id);
-              if (wc) {
-                ui::AXTreeUpdate update = delegate->SnapshotAXTree(wc);
-                content::RenderWidgetHostView* view =
-                    wc->GetRenderWidgetHostView();
-                const float device_scale_factor =
-                    view ? view->GetDeviceScaleFactor() : 1.f;
-                std::optional<gfx::PointF> center =
-                    ComputeViewportCenterCss(update, ax, device_scale_factor);
-                bool typed = false;
-                if (center) {
-                  const int cx = std::lround(center->x());
-                  const int cy = std::lround(center->y());
-                  // Focus the field with a trusted click, select-all + delete
-                  // to clear any existing content, then type via trusted key
-                  // events so framework-controlled inputs fire onChange.
-                  if (maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {})) {
-                    maho::MahoMcpInputSynthesizer::KeyPress(wc, "a", {"meta"});
-                    maho::MahoMcpInputSynthesizer::KeyPress(wc, "Delete", {});
-                    typed = maho::MahoMcpInputSynthesizer::TypeText(wc, value);
-                  }
-                }
-                if (!typed) {
-                  PerformAxAction(wc, ax, ax::mojom::Action::kFocus);
-                  PerformAxAction(wc, ax, ax::mojom::Action::kSetValue, value);
-                  DispatchActiveElementValueEvents(wc, value);
-                }
-              }
-            },
-            base::Unretained(this), tab_id, ax_id, text));
+    TypeVerified(tab_id, ax_id, text, base::DoNothing());
     return true;
+  }
+
+  void TypeVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      const std::string& text,
+      base::OnceCallback<void(maho::InputActionOutcome)> done) override {
+    if (!content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      if (base::SequencedTaskRunner::HasCurrentDefault()) {
+        done = base::BindPostTaskToCurrentDefault(std::move(done));
+      }
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::TypeVerified,
+                         ui_weak_ptr_, tab_id, ax_id, text, std::move(done)));
+      return;
+    }
+
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.reason = "no_web_contents";
+      outcome.method = "trusted_input";
+      std::move(done).Run(std::move(outcome));
+      return;
+    }
+
+    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+    const bool initial_has_focus = view ? view->HasFocus() : false;
+    const float device_scale_factor =
+        view ? view->GetDeviceScaleFactor() : 1.f;
+
+    ui::AXTreeUpdate update = SnapshotAXTree(wc);
+    std::optional<gfx::PointF> center =
+        ComputeViewportCenterCss(update, ax_id, device_scale_factor);
+
+    auto verify_or_fallback = base::BindOnce(
+        [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+           base::WeakPtr<content::WebContents> wc_weak, ui::AXNodeID ax,
+           std::string target_text, bool initial_focus,
+           base::OnceCallback<void(maho::InputActionOutcome)> done_cb,
+           bool typed_success) {
+          if (!delegate) {
+            maho::InputActionOutcome outcome;
+            outcome.dispatched = false;
+            outcome.reason = "delegate_destroyed";
+            outcome.method = "trusted_input";
+            std::move(done_cb).Run(std::move(outcome));
+            return;
+          }
+          content::WebContents* current_wc = wc_weak.get();
+          if (!current_wc) {
+            maho::InputActionOutcome outcome;
+            outcome.dispatched = false;
+            outcome.reason = "no_web_contents";
+            outcome.method = "trusted_input";
+            std::move(done_cb).Run(std::move(outcome));
+            return;
+          }
+
+          auto read_node_value = [](const ui::AXTreeUpdate& tree_update,
+                                    ui::AXNodeID node_id,
+                                    std::string* out_value, bool* out_found,
+                                    bool* out_editable) {
+            *out_found = false;
+            *out_editable = false;
+            out_value->clear();
+            for (const ui::AXNodeData& node : tree_update.nodes) {
+              if (node.id == node_id) {
+                *out_found = true;
+                *out_editable =
+                    (node.role == ax::mojom::Role::kTextField ||
+                     node.role == ax::mojom::Role::kTextFieldWithComboBox ||
+                     node.role == ax::mojom::Role::kSearchBox ||
+                     node.role == ax::mojom::Role::kComboBoxMenuButton ||
+                     node.role == ax::mojom::Role::kComboBoxGrouping ||
+                     node.role == ax::mojom::Role::kListBox ||
+                     node.role == ax::mojom::Role::kSpinButton ||
+                     node.HasState(ax::mojom::State::kEditable));
+                if (node.HasStringAttribute(
+                        ax::mojom::StringAttribute::kValue)) {
+                  *out_value = node.GetStringAttribute(
+                      ax::mojom::StringAttribute::kValue);
+                }
+                break;
+              }
+            }
+          };
+
+          if (typed_success) {
+            ui::AXTreeUpdate post_tree = delegate->SnapshotAXTree(current_wc);
+            std::string observed_val;
+            bool node_found = false;
+            bool node_editable = false;
+            read_node_value(post_tree, ax, &observed_val, &node_found,
+                            &node_editable);
+            if (node_found &&
+                (observed_val == target_text ||
+                 (!target_text.empty() &&
+                  observed_val.find(target_text) != std::string::npos))) {
+              maho::InputActionOutcome outcome;
+              outcome.dispatched = true;
+              outcome.verified = true;
+              outcome.method = "trusted_input";
+              outcome.observed_value = std::move(observed_val);
+              std::move(done_cb).Run(std::move(outcome));
+              return;
+            }
+          }
+
+          // Trigger AX fallback
+          PerformAxAction(current_wc, ax, ax::mojom::Action::kFocus);
+          PerformAxAction(current_wc, ax, ax::mojom::Action::kSetValue,
+                          target_text);
+          DispatchActiveElementValueEvents(current_wc, target_text);
+
+          // Re-snapshot after AX fallback
+          ui::AXTreeUpdate post_ax_tree = delegate->SnapshotAXTree(current_wc);
+          std::string post_ax_val;
+          bool post_ax_found = false;
+          bool post_ax_editable = false;
+          read_node_value(post_ax_tree, ax, &post_ax_val, &post_ax_found,
+                          &post_ax_editable);
+
+          maho::InputActionOutcome outcome;
+          outcome.dispatched = true;
+          outcome.method = "ax_fallback";
+          outcome.observed_value = post_ax_val;
+
+          if (post_ax_found &&
+              (post_ax_val == target_text ||
+               (!target_text.empty() &&
+                post_ax_val.find(target_text) != std::string::npos))) {
+            outcome.verified = true;
+          } else {
+            outcome.verified = false;
+            if (!initial_focus) {
+              outcome.reason = "window_not_focused";
+            } else if (!post_ax_found) {
+              outcome.reason = "node_gone";
+            } else if (!post_ax_editable) {
+              outcome.reason = "element_not_editable";
+            } else {
+              outcome.reason = "value_mismatch";
+            }
+          }
+          std::move(done_cb).Run(std::move(outcome));
+        },
+        ui_weak_ptr_, wc->GetWeakPtr(), ax_id, text, initial_has_focus,
+        std::move(done));
+
+    if (center) {
+      const int cx = std::lround(center->x());
+      const int cy = std::lround(center->y());
+      // Focus the field with a trusted click, select-all + delete
+      // to clear any existing content, then type via trusted key
+      // events so framework-controlled inputs fire onChange.
+      if (maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {})) {
+        maho::MahoMcpInputSynthesizer::KeyPress(wc, "a", {"meta"});
+        maho::MahoMcpInputSynthesizer::KeyPress(wc, "Delete", {});
+        maho::MahoMcpInputSynthesizer::TypeTextAsync(
+            wc, text, maho::TypingOptions{}, std::move(verify_or_fallback));
+        return;
+      }
+    }
+
+    // If no center found or click failed, immediately execute AX fallback path.
+    std::move(verify_or_fallback).Run(/*typed_success=*/false);
+  }
+
+  bool SelectFileForPendingChooser(int tab_id,
+                                   const std::string& path) override {
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    const base::FilePath supplied = base::FilePath::FromUTF8Unsafe(path);
+    if (!wc || !supplied.IsAbsolute() || supplied.ReferencesParent() ||
+        !base::EndsWith(supplied.FinalExtension(), FILE_PATH_LITERAL(".aab"),
+                        base::CompareCase::INSENSITIVE_ASCII)) {
+      return false;
+    }
+    return FileSelectHelper::SelectFileForPendingChooser(wc, supplied);
   }
 
   maho::MahoMcpFieldMetadata GetFieldMetadata(int tab_id,
@@ -3149,10 +3479,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                       for (int i = 0; i < model->count(); ++i) {
                         content::WebContents* c = model->GetWebContentsAt(i);
                         if (c) {
-                          sessions::SessionTabHelper* helper =
-                              sessions::SessionTabHelper::FromWebContents(c);
-                          if (helper &&
-                              helper->session_id().id() == target_id) {
+                          if (McpSessionIdOf(c) == target_id) {
                             model->ActivateTabAt(
                                 i, TabStripUserGestureDetails(
                                        TabStripUserGestureDetails::GestureType::
@@ -3423,10 +3750,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
     // fixed to this tab even if the active tab later changes.
     int resolved_tab_id = tab_id;
     if (resolved_tab_id == 0) {
-      if (sessions::SessionTabHelper* helper =
-              sessions::SessionTabHelper::FromWebContents(wc)) {
-        resolved_tab_id = helper->session_id().id();
-      }
+      resolved_tab_id = McpSessionIdOf(wc);
     }
     auto observer = std::make_unique<maho::MahoMcpNetworkObserver>();
     observer->StartCapture(wc);
@@ -3669,6 +3993,13 @@ std::string FormatMailActionDetails(const std::string& action_name,
   base::OneShotTimer vault_credential_expiry_timer_;
   std::set<std::pair<std::string, std::string>>
       pending_agent_credential_authorizations_;
+  struct RefSnapshotGuard {
+    int tab_id = 0;
+    uint64_t navigation_epoch = 0;
+  };
+  static constexpr size_t kMaxRefSnapshotGuards = 64;
+  uint64_t next_ref_snapshot_token_ = 0;
+  std::map<uint64_t, RefSnapshotGuard> ref_snapshot_guards_;
   static constexpr size_t kMaxResolvedTargets = 1024;
   int64_t generation_counter_ = 0;
   // Owned per-generation identity tokens minted by ResolveTab/ProfileTarget and
@@ -4002,17 +4333,36 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
 
   base::FilePath key_path = storage_path_.AppendASCII("maho_storage.key");
   base::FilePath database_path = storage_path_.AppendASCII("maho.db");
-  maho::core::StorageKeySetupResult storage_key_setup;
-  {
-    TRACE_EVENT0("browser", "Maho::DeriveAndSetStorageKey");
-    storage_key_setup =
-        maho::core::DeriveAndSetStorageKey(key_path.AsUTF8Unsafe(),
-                                           database_path.AsUTF8Unsafe());
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](base::FilePath key_path, base::FilePath database_path) {
+            TRACE_EVENT0("browser", "Maho::DeriveAndSetStorageKey");
+            const auto storage_key_setup =
+                maho::core::DeriveAndSetStorageKey(
+                    key_path.AsUTF8Unsafe(), database_path.AsUTF8Unsafe());
+            LOG(INFO) << "Maho Vault preflight state: "
+                      << maho::core::VaultPreflightStateName(
+                             storage_key_setup.vault_preflight_state);
+            return storage_key_setup.storage_key_ready;
+          },
+          std::move(key_path), std::move(database_path)),
+      base::BindOnce(
+          &MahoBrowserMainExtraParts::OnStorageKeySetupComplete,
+          weak_factory_.GetWeakPtr(), profile));
+}
+
+void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
+    Profile* profile,
+    bool storage_key_ready) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  if (!regular_services_initializing_) {
+    return;
   }
-  LOG(INFO) << "Maho Vault preflight state: "
-            << maho::core::VaultPreflightStateName(
-                   storage_key_setup.vault_preflight_state);
-  if (storage_key_setup.storage_key_ready) {
+
+  if (storage_key_ready) {
     TRACE_EVENT0("browser", "Maho::CreateWithStorage");
     core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
   } else {

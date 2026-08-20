@@ -86,9 +86,6 @@ class MahoSidebarTopBarView
   views::ImageButton* ai_button_for_testing() { return ai_button_; }
   views::ImageButton* mail_button_for_testing() { return mail_button_; }
   views::Label* mail_unread_badge_for_testing() { return mail_unread_badge_; }
-  MahoControlActivityIndicatorView* control_activity_indicator_for_testing() {
-    return control_activity_indicator_;
-  }
   const MahoSidebarPalette& sidebar_palette_for_testing() const {
     return palette_;
   }
@@ -107,10 +104,6 @@ class MahoSidebarTopBarView
   // invalidates layout on inset change, so does not loop with
   // OnBoundsChanged.
   void MaybeUpdateDynamicTopInset();
-  // Switches the control-activity chip to its compact form once the top bar is
-  // narrower than the shared compact-navigation threshold, so the chip's Stop
-  // affordance survives a 320dp window.
-  void MaybeUpdateControlActivityCompact();
   void UpdateButtonState(views::ImageButton* button,
                          bool enabled,
                          const gfx::VectorIcon& icon,
@@ -145,8 +138,6 @@ class MahoSidebarTopBarView
   raw_ptr<views::ImageButton> ai_button_ = nullptr;
   raw_ptr<views::ImageButton> mail_button_ = nullptr;
   raw_ptr<views::Label> mail_unread_badge_ = nullptr;
-  raw_ptr<MahoControlActivityIndicatorView> control_activity_indicator_ =
-      nullptr;
   PrefChangeRegistrar mail_pref_registrar_;
   MahoSidebarPalette palette_;
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)

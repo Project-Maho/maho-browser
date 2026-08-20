@@ -187,6 +187,7 @@ class MahoControlActivityService : public KeyedService {
   bool BindTarget(std::string_view session_id, uint64_t event_revision,
                   ControlTarget target, base::TimeDelta lease_duration);
   bool Disconnect(std::string_view session_id, uint64_t event_revision);
+  bool RequestImmediateStop(int64_t tab_id);
   void OnTargetClosed(int64_t tab_id);
 
   std::optional<ControlActivity> GetActivity(std::string_view session_id) const;

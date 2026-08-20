@@ -77,7 +77,9 @@
 #include "ui/views/controls/highlight_path_generator.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_runner.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/layout/box_layout.h"
+#include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -218,42 +220,6 @@ MahoSidebarTopBarView::MahoSidebarTopBarView(Browser* browser)
       views::kMarginsKey,
       gfx::Insets::TLBR(0, kSidebarToggleLeftMarginDp, 0, 0));
 
-  // Control-activity chip sits between the leading actions and the trailing
-  // nav cluster. It starts idle (and therefore hidden); a live activity
-  // source pushes state in through SetControlActivity().
-  control_activity_indicator_ =
-      AddChildView(std::make_unique<MahoControlActivityIndicatorView>());
-  control_activity_indicator_->SetDetailsCallback(base::BindRepeating(
-      [](base::WeakPtr<MahoSidebarTopBarView> view) {
-        if (!view || !view->browser_) {
-          return;
-        }
-        view->browser_->GetFeatures().side_panel_ui()->Show(
-            SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel),
-            SidePanelOpenTrigger::kToolbarButton);
-      },
-      weak_factory_.GetWeakPtr()));
-  control_activity_indicator_->SetStopCallback(base::BindRepeating(
-      [](base::WeakPtr<MahoSidebarTopBarView> view) {
-        if (!view || !view->control_activity_service_ ||
-            view->control_activity_id_.empty()) {
-          return;
-        }
-        const auto activity = view->control_activity_service_->GetActivity(
-            view->control_activity_id_);
-        if (activity) {
-          if (activity->control_plane == maho::ai::ControlPlane::kMcp) {
-            maho::MahoMcpSession::RevokeControllerSession(
-                activity->controller_session_id);
-          }
-          MahoAIPageHandler::CancelActiveControllerSession(
-              activity->controller_session_id);
-          view->control_activity_service_->Disconnect(
-              view->control_activity_id_, activity->event_revision + 1);
-        }
-      },
-      weak_factory_.GetWeakPtr()));
-
   // Flexible spacer pushes the nav cluster to the trailing edge.
   flex_spacer_ = AddChildView(std::make_unique<views::View>());
   layout->SetFlexForView(flex_spacer_, 1);
@@ -350,9 +316,21 @@ void MahoSidebarTopBarView::OnControlActivityChanged(
   control_activity_id_ = activity.session_id;
   MahoControlActivityIndicatorModel model;
   model.controller_name = base::UTF8ToUTF16(activity.controller_display_name);
-  model.plane = activity.control_plane == maho::ai::ControlPlane::kMcp
-                    ? MahoControlPlane::kExternalMcp
-                    : MahoControlPlane::kEmbedded;
+  switch (activity.control_plane) {
+    case maho::ai::ControlPlane::kLocalAgent:
+      model.plane = MahoControlPlane::kEmbedded;
+      break;
+    case maho::ai::ControlPlane::kMcp:
+      model.plane = MahoControlPlane::kExternalMcp;
+      break;
+    case maho::ai::ControlPlane::kEnterprise:
+      model.plane = MahoControlPlane::kCli;
+      break;
+  }
+  if (!activity.receipts.empty()) {
+    model.current_step =
+        base::UTF8ToUTF16(activity.receipts.back().summary);
+  }
   switch (activity.state) {
     case maho::ai::ControlActivityState::kReading:
       model.state = MahoControlActivityState::kReading;
@@ -411,7 +389,6 @@ void MahoSidebarTopBarView::OnControlActivityChanged(
     controlled_tab_changed_callback_.Run(
         controls_target ? std::move(stable_target_tab_id) : std::string());
   }
-  SetControlActivity(model);
 }
 
 void MahoSidebarTopBarView::SetNavClusterVisible(bool visible) {
@@ -431,19 +408,6 @@ void MahoSidebarTopBarView::OnSidebarPaletteChanged(
     const MahoSidebarPalette& palette) {
   palette_ = palette;
   UpdateButtonImages();
-  if (control_activity_indicator_) {
-    control_activity_indicator_->OnSidebarPaletteChanged(palette);
-  }
-}
-
-void MahoSidebarTopBarView::SetControlActivity(
-    const MahoControlActivityIndicatorModel& model) {
-  if (!control_activity_indicator_) {
-    return;
-  }
-  control_activity_indicator_->SetModel(model);
-  MaybeUpdateControlActivityCompact();
-  PreferredSizeChanged();
 }
 
 void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
@@ -455,19 +419,7 @@ void MahoSidebarTopBarView::Update(const MahoSidebarTopBarModel& model) {
 void MahoSidebarTopBarView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
   views::View::OnBoundsChanged(previous_bounds);
   MaybeUpdateDynamicTopInset();
-  MaybeUpdateControlActivityCompact();
   ApplyChromeSpacing();
-}
-
-void MahoSidebarTopBarView::MaybeUpdateControlActivityCompact() {
-  if (!control_activity_indicator_) {
-    return;
-  }
-  // Reuse the shared compact-navigation threshold rather than inventing a
-  // second narrow-width constant for the same physical condition.
-  const bool compact =
-      width() > 0 && width() < sidebar_layout::kCompactNavigationThresholdDp;
-  control_activity_indicator_->SetCompact(compact);
 }
 
 void MahoSidebarTopBarView::AddedToWidget() {

@@ -1956,30 +1956,49 @@ void SidebarTabRowView::OnPaint(gfx::Canvas* canvas) {
     return;
   }
 
-  const SkColor control_color = ResolveSidebarPaletteColor(
-      palette_, this, palette_.focus_ring, ui::kColorSysPrimary);
   const double progress = control_pulse_animation_.is_animating()
                               ? control_pulse_animation_.GetCurrentValue()
-                              : 0.0;
+                              : 0.5;
   const double pulse = 4.0 * progress * (1.0 - progress);
-  const int alpha = std::clamp(static_cast<int>(170 + 70 * pulse), 0, 255);
 
-  cc::PaintFlags outline;
-  outline.setAntiAlias(true);
-  outline.setStyle(cc::PaintFlags::kStroke_Style);
-  outline.setStrokeWidth(kDropIndicatorOutlineThicknessDp);
-  outline.setColor(SkColorSetA(control_color, alpha));
-  gfx::RectF outline_bounds(GetLocalBounds());
-  outline_bounds.Inset(0.5f);
-  canvas->DrawRoundRect(outline_bounds, kRowCornerRadiusDp, outline);
+  constexpr SkColor kAgentViolet = SkColorSetRGB(168, 85, 247);
+  constexpr SkColor kAgentGlow = SkColorSetRGB(192, 132, 252);
 
-  cc::PaintFlags badge;
-  badge.setAntiAlias(true);
-  badge.setStyle(cc::PaintFlags::kFill_Style);
-  badge.setColor(control_color);
-  canvas->DrawCircle(
-      gfx::PointF(outline_bounds.right() - 5.0f, outline_bounds.y() + 5.0f),
-      2.5f, badge);
+  gfx::RectF bounds(GetLocalBounds());
+  bounds.Inset(1.0f);
+
+  cc::PaintFlags bg_tint;
+  bg_tint.setAntiAlias(true);
+  bg_tint.setStyle(cc::PaintFlags::kFill_Style);
+  bg_tint.setColor(SkColorSetA(kAgentViolet, static_cast<int>(35 + 25 * pulse)));
+  canvas->DrawRoundRect(bounds, kRowCornerRadiusDp, bg_tint);
+
+  cc::PaintFlags glow_outline;
+  glow_outline.setAntiAlias(true);
+  glow_outline.setStyle(cc::PaintFlags::kStroke_Style);
+  glow_outline.setStrokeWidth(4.5f);
+  glow_outline.setColor(SkColorSetA(kAgentGlow, static_cast<int>(80 + 100 * pulse)));
+  canvas->DrawRoundRect(bounds, kRowCornerRadiusDp, glow_outline);
+
+  cc::PaintFlags neon_outline;
+  neon_outline.setAntiAlias(true);
+  neon_outline.setStyle(cc::PaintFlags::kStroke_Style);
+  neon_outline.setStrokeWidth(2.5f);
+  neon_outline.setColor(SkColorSetA(kAgentViolet, static_cast<int>(210 + 45 * pulse)));
+  canvas->DrawRoundRect(bounds, kRowCornerRadiusDp, neon_outline);
+
+  cc::PaintFlags dot_halo;
+  dot_halo.setAntiAlias(true);
+  dot_halo.setStyle(cc::PaintFlags::kFill_Style);
+  dot_halo.setColor(SkColorSetA(kAgentGlow, static_cast<int>(100 + 80 * pulse)));
+  const gfx::PointF dot_center(bounds.right() - 12.0f, bounds.CenterPoint().y());
+  canvas->DrawCircle(dot_center, 6.0f, dot_halo);
+
+  cc::PaintFlags dot_core;
+  dot_core.setAntiAlias(true);
+  dot_core.setStyle(cc::PaintFlags::kFill_Style);
+  dot_core.setColor(kAgentViolet);
+  canvas->DrawCircle(dot_center, 3.5f, dot_core);
 }
 
 void SidebarTabRowView::SetSplitCompactMode(bool compact) {

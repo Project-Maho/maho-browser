@@ -775,6 +775,10 @@ source_set("maho_theme_support") {
     "ui/notifications/maho_toast_vibrancy.h",
     "ui/tab_preview/maho_tab_preview_controller.cc",
     "ui/tab_preview/maho_tab_preview_controller.h",
+    "ui/views/frame/maho_tab_controlled_banner_view.cc",
+    "ui/views/frame/maho_tab_controlled_banner_view.h",
+    "ui/views/frame/maho_tab_controlled_banner_overlay.cc",
+    "ui/views/frame/maho_tab_controlled_banner_overlay.h",
   ]
   if (is_mac) {
     sources += [ "ui/notifications/maho_toast_vibrancy_mac.mm" ]
@@ -1107,6 +1111,36 @@ source_set("maho_unified_agent_adapter") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//services/network/public/cpp",
     "//third_party/crashpad/crashpad/client",
+  ]
+}
+
+source_set("maho_agent_event_replay_buffer") {
+  sources = [
+    "ai/maho_agent_event_replay_buffer.cc",
+    "ai/maho_agent_event_replay_buffer.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_authenticated_service_api_broker") {
+  sources = [
+    "ai/maho_authenticated_service_api_broker.cc",
+    "ai/maho_authenticated_service_api_broker.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_agent_channel_gateway") {
+  sources = [
+    "ai/maho_agent_channel_gateway.cc",
+    "ai/maho_agent_channel_gateway.h",
+  ]
+  public_deps = [
+    "//base",
   ]
 }
 

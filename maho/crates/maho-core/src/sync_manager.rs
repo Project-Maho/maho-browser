@@ -1,8 +1,7 @@
 //! SyncManager — orchestrates cross-device synchronization.
 //!
-//! Architecture: The SyncManager is synchronous. The shell layer (macOS/iOS/Android)
-//! manages the WebSocket connection and feeds messages here. The SyncManager
-//! processes LWW (Last-Writer-Wins) entity sync and produces outgoing messages.
+//! The shell owns the transport. SyncManager owns entity ordering, E2EE
+//! message preparation, durable-version coordination, and profile partitioning.
 
 use crate::sync_models::{
     DeviceId, DeviceInfo, ReceivedTab, SyncConfig, SyncEntity, SyncEntityType, SyncMessage,
@@ -18,7 +17,6 @@ pub(crate) struct QueuedSyncMessage {
     pub queue_row_id: Option<i64>,
 }
 
-/// Outbound sync operation whose keyless (no E2EE key) transport was denied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncTransportOp {
     Push,
@@ -29,15 +27,13 @@ pub enum SyncTransportOp {
 impl std::fmt::Display for SyncTransportOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            SyncTransportOp::Push => "push",
-            SyncTransportOp::Pull => "pull",
-            SyncTransportOp::SendTab => "send_tab",
+            Self::Push => "push",
+            Self::Pull => "pull",
+            Self::SendTab => "send_tab",
         })
     }
 }
 
-/// Category of plaintext payload rejected because it arrived outside the
-/// authenticated E2EE envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncPayloadKind {
     EntityPush,
@@ -48,73 +44,60 @@ pub enum SyncPayloadKind {
 impl std::fmt::Display for SyncPayloadKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            SyncPayloadKind::EntityPush => "entity push",
-            SyncPayloadKind::EntityBatch => "entity batch",
-            SyncPayloadKind::SendTab => "tab transfer",
+            Self::EntityPush => "entity push",
+            Self::EntityBatch => "entity batch",
+            Self::SendTab => "tab transfer",
         })
     }
 }
 
-/// Typed, matchable transport-layer sync errors.
-///
-/// Fail-closed denials and envelope failures are reported as typed variants so
-/// callers (FFI, shell, tests) can branch on a stable variant or [`code`] rather
-/// than parsing the human-facing string. The `Display` rendering is the only
-/// user-facing text and is produced at the boundary from this same value.
-///
-/// [`code`]: SyncTransportError::code
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SyncTransportError {
     #[error("keyless {operation} denied: E2EE key required")]
     KeylessTransportDenied { operation: SyncTransportOp },
-
     #[error("rejected plaintext {payload}: E2EE envelope required")]
     PlaintextPayloadRejected { payload: SyncPayloadKind },
-
     #[error("encrypted sync message received without key")]
     MissingEncryptionKey,
-
     #[error("decrypt error: {detail}")]
     Decrypt { detail: String },
-
     #[error("decrypt error: invalid nested message: {detail}")]
     MalformedEnvelopeContents { detail: String },
-
     #[error("rejected entity {entity_id} due to unsupported schema version {schema_version}")]
     UnsupportedSchemaVersion {
         entity_id: String,
         schema_version: u8,
     },
-
+    #[error("rejected profile-scoped {entity_type} entity {entity_id}: profileId is required")]
+    MissingProfileScope {
+        entity_type: &'static str,
+        entity_id: String,
+    },
     #[error("database read error in apply: {detail}")]
     DatabaseRead { detail: String },
-
     #[error("encrypt error: {detail}")]
     Encrypt { detail: String },
-
     #[error("serialize error: {detail}")]
     Serialize { detail: String },
 }
 
 impl SyncTransportError {
-    /// Stable machine-readable code for callers that prefer matching a string
-    /// code over the enum (e.g. across the C FFI boundary).
     pub fn code(&self) -> &'static str {
         match self {
-            SyncTransportError::KeylessTransportDenied { .. } => "keyless_transport_denied",
-            SyncTransportError::PlaintextPayloadRejected { .. } => "plaintext_payload_rejected",
-            SyncTransportError::MissingEncryptionKey => "missing_encryption_key",
-            SyncTransportError::Decrypt { .. } => "decrypt_failed",
-            SyncTransportError::MalformedEnvelopeContents { .. } => "malformed_envelope_contents",
-            SyncTransportError::UnsupportedSchemaVersion { .. } => "unsupported_schema_version",
-            SyncTransportError::DatabaseRead { .. } => "database_read_error",
-            SyncTransportError::Encrypt { .. } => "encrypt_failed",
-            SyncTransportError::Serialize { .. } => "serialize_failed",
+            Self::KeylessTransportDenied { .. } => "keyless_transport_denied",
+            Self::PlaintextPayloadRejected { .. } => "plaintext_payload_rejected",
+            Self::MissingEncryptionKey => "missing_encryption_key",
+            Self::Decrypt { .. } => "decrypt_failed",
+            Self::MalformedEnvelopeContents { .. } => "malformed_envelope_contents",
+            Self::UnsupportedSchemaVersion { .. } => "unsupported_schema_version",
+            Self::MissingProfileScope { .. } => "missing_profile_scope",
+            Self::DatabaseRead { .. } => "database_read_error",
+            Self::Encrypt { .. } => "encrypt_failed",
+            Self::Serialize { .. } => "serialize_failed",
         }
     }
 }
 
-/// SyncManager manages LWW entity sync, device tracking, and message queuing.
 pub struct SyncManager {
     config: SyncConfig,
     status: SyncStatus,
@@ -126,12 +109,16 @@ pub struct SyncManager {
     outgoing_messages: Vec<QueuedSyncMessage>,
     pub(crate) encryption_key: Option<crate::sync_crypto::EncryptionKey>,
     pending_pushes: Vec<SyncEntity>,
-    // Audit finding H12: bounded LRU cap prevents unbounded growth over
-    // long-running sync sessions. Capacity chosen as 10k — large enough that
-    // even high-churn workspaces won't see eviction pressure under normal
-    // operation; small enough to bound memory.
     entity_versions: lru::LruCache<String, (u64, u32, Option<String>, Option<String>)>,
     pub(crate) last_pulled_versions: HashMap<SyncEntityType, u64>,
+    profile_last_pulled_versions: HashMap<(SyncEntityType, String), u64>,
+    active_profile_id: Option<String>,
+    /// Raw SpaceId -> ProfileId. This lets local Tab payloads that only carry a
+    /// spaceId acquire an explicit profileId before encryption.
+    space_profiles: HashMap<String, String>,
+    /// Raw type/id -> last known ProfileId. Used to retain the partition for
+    /// local tombstones whose domain payload has already been removed.
+    entity_profiles: HashMap<String, String>,
     sent_entities: Vec<i64>,
 }
 
@@ -150,11 +137,14 @@ impl SyncManager {
             pending_pushes: Vec::new(),
             entity_versions: lru::LruCache::new(std::num::NonZeroUsize::new(10_000).unwrap()),
             last_pulled_versions: HashMap::new(),
+            profile_last_pulled_versions: HashMap::new(),
+            active_profile_id: None,
+            space_profiles: HashMap::new(),
+            entity_profiles: HashMap::new(),
             sent_entities: Vec::new(),
         }
     }
 
-    /// Get current sync status
     pub fn status(&self) -> &SyncStatus {
         &self.status
     }
@@ -171,16 +161,10 @@ impl SyncManager {
         self.last_error.as_deref()
     }
 
-    /// Typed, matchable view of the most recent transport error. Callers should
-    /// branch on this (or its [`SyncTransportError::code`]) rather than parsing
-    /// [`last_error`](Self::last_error), which is the boundary string rendering.
     pub fn last_transport_error(&self) -> Option<&SyncTransportError> {
         self.last_transport_error.as_ref()
     }
 
-    /// Record a typed transport error (fail-closed rejection, no silent
-    /// downgrade). The boundary string is derived from the typed value so the
-    /// two channels never drift.
     pub fn set_last_transport_error(&mut self, error: SyncTransportError) {
         self.record_transport_error(error);
     }
@@ -190,17 +174,14 @@ impl SyncManager {
         self.last_transport_error = Some(error);
     }
 
-    /// Set the E2E encryption key (derived from sync seed)
     pub fn set_encryption_key(&mut self, key: crate::sync_crypto::EncryptionKey) {
         self.encryption_key = Some(key);
     }
 
-    /// Check if encryption is configured
     pub fn has_encryption_key(&self) -> bool {
         self.encryption_key.is_some()
     }
 
-    /// Set sync status (called by shell when connection state changes)
     pub fn set_status(&mut self, status: SyncStatus) {
         if status == SyncStatus::Synced {
             self.last_success_at = Some(chrono::Utc::now().timestamp());
@@ -217,18 +198,52 @@ impl SyncManager {
         }
     }
 
-    /// Get current config
     pub fn config(&self) -> &SyncConfig {
         &self.config
     }
 
-    /// Update config
     pub fn update_config(&mut self, config: SyncConfig) {
         self.config = config;
     }
 
+    pub fn set_active_profile_id(&mut self, profile_id: Option<String>) {
+        self.active_profile_id = profile_id.filter(|value| !value.is_empty());
+    }
+
+    pub fn active_profile_id(&self) -> Option<&str> {
+        self.active_profile_id.as_deref()
+    }
+
+    pub fn register_profile_scope(
+        &mut self,
+        entity_type: SyncEntityType,
+        entity_id: String,
+        profile_id: String,
+    ) {
+        if !entity_type.is_profile_scoped() || profile_id.is_empty() {
+            return;
+        }
+        self.entity_profiles.insert(
+            Self::raw_scope_key(&entity_type, &entity_id),
+            profile_id.clone(),
+        );
+        if entity_type == SyncEntityType::Space {
+            self.space_profiles.insert(entity_id, profile_id);
+        }
+    }
+
     pub fn set_last_pulled_version(&mut self, entity_type: SyncEntityType, version: u64) {
         self.last_pulled_versions.insert(entity_type, version);
+    }
+
+    pub fn set_last_pulled_version_for_profile(
+        &mut self,
+        entity_type: SyncEntityType,
+        profile_id: String,
+        version: u64,
+    ) {
+        self.profile_last_pulled_versions
+            .insert((entity_type, profile_id), version);
     }
 
     pub fn set_entity_version_in_cache(
@@ -249,84 +264,258 @@ impl SyncManager {
         self.entity_versions.pop(key);
     }
 
-    // === LWW Entity Sync ===
+    fn raw_scope_key(entity_type: &SyncEntityType, entity_id: &str) -> String {
+        format!("{}:{}", entity_type.as_str(), entity_id)
+    }
 
-    /// Queue an outgoing entity push. If syncing/synced, add EntityPush to
-    /// outgoing_messages (encrypt if key set). Otherwise add to pending_pushes.
-    pub fn push_entity(&mut self, entity: SyncEntity) {
-        if self.status == SyncStatus::Synced || self.status == SyncStatus::Syncing {
-            let row_id_opt = entity.queue_row_id;
-            let message = SyncMessage::EntityPush { entity };
+    fn remember_scope(&mut self, entity: &SyncEntity, profile_id: &str) {
+        self.entity_profiles.insert(
+            Self::raw_scope_key(&entity.entity_type, &entity.entity_id),
+            profile_id.to_string(),
+        );
+        if entity.entity_type == SyncEntityType::Space {
+            self.space_profiles
+                .insert(entity.entity_id.clone(), profile_id.to_string());
+        }
+    }
 
-            let outcome: Result<Vec<u8>, SyncTransportError> = match &self.encryption_key {
-                Some(key) => serde_json::to_vec(&message)
-                    .map_err(|e| SyncTransportError::Serialize {
-                        detail: e.to_string(),
-                    })
-                    .and_then(|plaintext| {
-                        crate::sync_crypto::encrypt_update(&plaintext, key)
-                            .map_err(|detail| SyncTransportError::Encrypt { detail })
-                    }),
-                None => Err(SyncTransportError::KeylessTransportDenied {
-                    operation: SyncTransportOp::Push,
-                }),
+    fn tab_space_id(entity: &SyncEntity) -> Option<String> {
+        if entity.entity_type != SyncEntityType::Tab {
+            return None;
+        }
+        let value = serde_json::from_str::<serde_json::Value>(&entity.payload_json).ok()?;
+        let space_id = value
+            .get("spaceId")
+            .or_else(|| value.get("space_id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.is_empty())?;
+        Some(space_id.to_string())
+    }
+
+    fn inject_profile_scope(entity: &mut SyncEntity, profile_id: &str) -> bool {
+        if !entity.entity_type.is_profile_scoped() {
+            return true;
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) else {
+            return false;
+        };
+        let Some(object) = value.as_object_mut() else {
+            return false;
+        };
+        object.insert(
+            "profileId".to_string(),
+            serde_json::Value::String(profile_id.to_string()),
+        );
+        let Ok(payload_json) = serde_json::to_string(&value) else {
+            return false;
+        };
+        entity.payload_json = payload_json;
+        if !entity.deleted {
+            entity.fields_hlc_json = crate::sync_models::build_fields_hlc(
+                &entity.payload_json,
+                entity.version,
+                entity.device_id,
+            );
+        }
+        true
+    }
+
+    /// Bind a local Tab/Space to a profile before it enters an encrypted wire
+    /// envelope. Domain Space payloads already contain profileId. Tab payloads
+    /// are resolved by spaceId, previously-observed entity scope, then the
+    /// explicitly bound active profile. Tombstones reuse the remembered scope.
+    fn bind_local_profile_scope(&mut self, entity: &mut SyncEntity) -> bool {
+        if !entity.entity_type.is_profile_scoped() {
+            return true;
+        }
+        let resolved = entity
+            .profile_scope()
+            .or_else(|| {
+                Self::tab_space_id(entity)
+                    .and_then(|space_id| self.space_profiles.get(&space_id).cloned())
+            })
+            .or_else(|| {
+                self.entity_profiles
+                    .get(&Self::raw_scope_key(&entity.entity_type, &entity.entity_id))
+                    .cloned()
+            })
+            .or_else(|| self.active_profile_id.clone());
+        let Some(profile_id) = resolved else {
+            return false;
+        };
+        if entity.profile_scope().as_deref() != Some(profile_id.as_str())
+            && !Self::inject_profile_scope(entity, &profile_id)
+        {
+            return false;
+        }
+        self.remember_scope(entity, &profile_id);
+        true
+    }
+
+    fn bind_remote_profile_scope(&mut self, entity: &mut SyncEntity) -> bool {
+        if !entity.entity_type.is_profile_scoped() {
+            return true;
+        }
+        let resolved = entity.profile_scope().or_else(|| {
+            Self::tab_space_id(entity)
+                .and_then(|space_id| self.space_profiles.get(&space_id).cloned())
+        });
+        let Some(profile_id) = resolved else {
+            return false;
+        };
+        if entity.profile_scope().as_deref() != Some(profile_id.as_str())
+            && !Self::inject_profile_scope(entity, &profile_id)
+        {
+            return false;
+        }
+        self.remember_scope(entity, &profile_id);
+        true
+    }
+
+    fn profile_for_pull(&self, entity_type: &Option<SyncEntityType>) -> Option<String> {
+        entity_type
+            .as_ref()
+            .filter(|entity_type| entity_type.is_profile_scoped())
+            .and(self.active_profile_id.clone())
+    }
+
+    fn record_last_pulled(
+        &mut self,
+        entity: &SyncEntity,
+        storage: &Option<maho_storage::sqlite::SqliteStorage>,
+    ) {
+        let entity_type = entity.entity_type.clone();
+        if entity_type.is_profile_scoped() {
+            let Some(profile_id) = entity.profile_scope() else {
+                return;
             };
+            let last_pulled = self
+                .profile_last_pulled_versions
+                .entry((entity_type.clone(), profile_id.clone()))
+                .or_insert(0);
+            *last_pulled = (*last_pulled).max(entity.version);
+            if let Some(storage) = storage {
+                let key = entity_type.cursor_storage_key(Some(&profile_id));
+                if let Err(error) = storage.set_sync_last_pulled_version(&key, *last_pulled) {
+                    eprintln!("[sync] Failed to persist cursor {key}: {error}");
+                }
+            }
+        } else {
+            let last_pulled = self
+                .last_pulled_versions
+                .entry(entity_type.clone())
+                .or_insert(0);
+            *last_pulled = (*last_pulled).max(entity.version);
+            if let Some(storage) = storage {
+                if let Err(error) =
+                    storage.set_sync_last_pulled_version(entity_type.as_str(), *last_pulled)
+                {
+                    eprintln!(
+                        "[sync] Failed to persist cursor {}: {}",
+                        entity_type.as_str(),
+                        error
+                    );
+                }
+            }
+        }
+    }
 
-            match outcome {
+    pub fn prepare_local_entity(
+        &mut self,
+        entity: &mut SyncEntity,
+    ) -> Result<(), SyncTransportError> {
+        if self.bind_local_profile_scope(entity) {
+            Ok(())
+        } else {
+            Err(SyncTransportError::MissingProfileScope {
+                entity_type: entity.entity_type.as_str(),
+                entity_id: entity.entity_id.clone(),
+            })
+        }
+    }
+
+    pub fn push_entity(&mut self, mut entity: SyncEntity) {
+        if let Err(error) = self.prepare_local_entity(&mut entity) {
+            self.record_transport_error(error);
+            return;
+        }
+
+        if let Some(cache_key) = entity.cache_key() {
+            self.entity_versions.put(
+                cache_key,
+                (
+                    entity.version,
+                    entity.device_id,
+                    entity.fields_hlc_json.clone(),
+                    Some(entity.payload_json.clone()),
+                ),
+            );
+        }
+
+        if matches!(self.status, SyncStatus::Synced | SyncStatus::Syncing) {
+            let queue_row_id = entity.queue_row_id;
+            let message = SyncMessage::EntityPush { entity };
+            match self.encrypt_message(&message, SyncTransportOp::Push) {
                 Ok(data) => {
                     self.outgoing_messages.push(QueuedSyncMessage {
                         message: SyncMessage::Encrypted { data },
-                        queue_row_id: row_id_opt,
+                        queue_row_id,
                     });
-                    if let Some(row_id) = row_id_opt {
+                    if let Some(row_id) = queue_row_id {
                         self.sent_entities.push(row_id);
                     }
                 }
-                Err(err) => self.record_transport_error(err),
+                Err(error) => self.record_transport_error(error),
             }
         } else {
             self.pending_pushes.push(entity);
         }
     }
 
-    /// Send an EntityPull message to request entities newer than given version
+    fn encrypt_message(
+        &self,
+        message: &SyncMessage,
+        operation: SyncTransportOp,
+    ) -> Result<Vec<u8>, SyncTransportError> {
+        let key = self
+            .encryption_key
+            .as_ref()
+            .ok_or(SyncTransportError::KeylessTransportDenied { operation })?;
+        let plaintext = serde_json::to_vec(message).map_err(|error| SyncTransportError::Serialize {
+            detail: error.to_string(),
+        })?;
+        crate::sync_crypto::encrypt_update(&plaintext, key)
+            .map_err(|detail| SyncTransportError::Encrypt { detail })
+    }
+
     pub fn pull_entities(&mut self, entity_type: Option<SyncEntityType>) {
-        let since_version = match &entity_type {
-            Some(t) => self.last_pulled_versions.get(t).copied().unwrap_or(0),
-            None => 0,
+        let profile_id = self.profile_for_pull(&entity_type);
+        let since_version = match (&entity_type, profile_id.as_deref()) {
+            (Some(entity_type), Some(profile_id)) => self
+                .profile_last_pulled_versions
+                .get(&(entity_type.clone(), profile_id.to_string()))
+                .copied()
+                .unwrap_or(0),
+            (Some(entity_type), None) => self
+                .last_pulled_versions
+                .get(entity_type)
+                .copied()
+                .unwrap_or(0),
+            (None, _) => 0,
         };
         let message = SyncMessage::EntityPull {
             entity_type,
             since_version,
         };
-
-        let outcome: Result<Vec<u8>, SyncTransportError> = match &self.encryption_key {
-            Some(key) => serde_json::to_vec(&message)
-                .map_err(|e| SyncTransportError::Serialize {
-                    detail: e.to_string(),
-                })
-                .and_then(|plaintext| {
-                    crate::sync_crypto::encrypt_update(&plaintext, key)
-                        .map_err(|detail| SyncTransportError::Encrypt { detail })
-                }),
-            None => Err(SyncTransportError::KeylessTransportDenied {
-                operation: SyncTransportOp::Pull,
+        match self.encrypt_message(&message, SyncTransportOp::Pull) {
+            Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::Encrypted { data },
+                queue_row_id: None,
             }),
-        };
-
-        match outcome {
-            Ok(data) => {
-                self.outgoing_messages.push(QueuedSyncMessage {
-                    message: SyncMessage::Encrypted { data },
-                    queue_row_id: None,
-                });
-            }
-            Err(err) => self.record_transport_error(err),
+            Err(error) => self.record_transport_error(error),
         }
     }
 
-    /// Apply a remote entity if its version is newer than the locally tracked version.
-    /// Returns true if the entity was applied.
     pub fn apply_remote_entity(
         &mut self,
         entity: &mut SyncEntity,
@@ -339,11 +528,24 @@ impl SyncManager {
             });
             return false;
         }
+        if !self.bind_remote_profile_scope(entity) {
+            self.record_transport_error(SyncTransportError::MissingProfileScope {
+                entity_type: entity.entity_type.as_str(),
+                entity_id: entity.entity_id.clone(),
+            });
+            return false;
+        }
+
         let entity_type_str = entity.entity_type.as_str();
-        let cache_key = format!("{}:{}", entity_type_str, entity.entity_id);
+        let Some(storage_entity_id) = entity.storage_entity_id() else {
+            return false;
+        };
+        let Some(cache_key) = entity.cache_key() else {
+            return false;
+        };
 
         if let Some(storage) = storage {
-            match storage.get_sync_tombstone(entity_type_str, &entity.entity_id) {
+            match storage.get_sync_tombstone(entity_type_str, &storage_entity_id) {
                 Ok(Some(tombstone))
                     if !entity.deleted && tombstone >= (entity.version, entity.device_id) =>
                 {
@@ -359,26 +561,19 @@ impl SyncManager {
             }
         }
 
-        let local_version = if let Some(version_pair) = self.entity_versions.get(&cache_key) {
-            Some(version_pair.clone())
-        } else if let Some(ref s) = storage {
-            match s.get_entity_version(entity_type_str, &entity.entity_id) {
+        let local_version = if let Some(version) = self.entity_versions.get(&cache_key) {
+            Some(version.clone())
+        } else if let Some(storage) = storage {
+            match storage.get_entity_version(entity_type_str, &storage_entity_id) {
                 Ok(Some((hlc_ts, device_id, fields_hlc_json, payload_json))) => {
-                    self.entity_versions.put(
-                        cache_key.clone(),
-                        (
-                            hlc_ts,
-                            device_id,
-                            fields_hlc_json.clone(),
-                            payload_json.clone(),
-                        ),
-                    );
-                    Some((hlc_ts, device_id, fields_hlc_json, payload_json))
+                    let value = (hlc_ts, device_id, fields_hlc_json, payload_json);
+                    self.entity_versions.put(cache_key.clone(), value.clone());
+                    Some(value)
                 }
                 Ok(None) => None,
-                Err(e) => {
+                Err(error) => {
                     self.record_transport_error(SyncTransportError::DatabaseRead {
-                        detail: e.to_string(),
+                        detail: error.to_string(),
                     });
                     return false;
                 }
@@ -396,220 +591,189 @@ impl SyncManager {
             if !should_apply {
                 return false;
             }
-
-            self.entity_versions
-                .put(cache_key, (entity.version, entity.device_id, None, None));
-            if let Some(storage) = storage {
-                if let Err(error) = storage.save_entity_version(
-                    entity_type_str,
-                    &entity.entity_id,
-                    entity.version,
-                    entity.device_id,
-                    None,
-                    None,
-                ) {
-                    eprintln!(
-                        "[sync] Failed to persist deleted entity_version for {}:{}: {}",
-                        entity_type_str, entity.entity_id, error
-                    );
-                    return false;
-                }
-                if let Err(error) = storage.save_sync_tombstone(
-                    entity_type_str,
-                    &entity.entity_id,
-                    entity.version,
-                    entity.device_id,
-                ) {
-                    eprintln!(
-                        "[sync] Failed to persist sync tombstone for {}:{}: {}",
-                        entity_type_str, entity.entity_id, error
-                    );
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        let mut should_apply = false;
-        let mut final_payload = entity.payload_json.clone();
-        let mut final_fields_hlc = entity.fields_hlc_json.clone();
-
-        if let Some((local_hlc_ts, local_device_id, local_fields_hlc_json, local_payload_json)) =
-            local_version
-        {
-            // Field-level LWW Conflict Resolution
-            type FieldsHlc = std::collections::HashMap<String, (u64, u32)>;
-            let local_fields: FieldsHlc = local_fields_hlc_json
-                .as_deref()
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default();
-            let remote_fields: FieldsHlc = entity
-                .fields_hlc_json
-                .as_ref()
-                .as_deref()
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or_default();
-
-            let local_val: serde_json::Value = local_payload_json
-                .as_deref()
-                .and_then(|j| serde_json::from_str(j).ok())
-                .unwrap_or(serde_json::Value::Null);
-            let remote_val: serde_json::Value = serde_json::from_str(entity.payload_json.as_str())
-                .unwrap_or(serde_json::Value::Null);
-
-            if let (serde_json::Value::Object(local_map), serde_json::Value::Object(remote_map)) =
-                (local_val, remote_val)
-            {
-                let mut merged_map = serde_json::Map::new();
-                let mut merged_fields = std::collections::HashMap::new();
-
-                let all_keys: std::collections::HashSet<&String> =
-                    local_map.keys().chain(remote_map.keys()).collect();
-
-                let remote_wins_overall =
-                    (entity.version, entity.device_id) > (local_hlc_ts, local_device_id);
-                if remote_wins_overall {
-                    should_apply = true;
-                }
-
-                for key in all_keys {
-                    let local_has = local_map.contains_key(key);
-                    let remote_has = remote_map.contains_key(key);
-
-                    if local_has && remote_has {
-                        let local_f_ver = local_fields
-                            .get(key)
-                            .copied()
-                            .unwrap_or((local_hlc_ts, local_device_id));
-                        let remote_f_ver = remote_fields
-                            .get(key)
-                            .copied()
-                            .unwrap_or((entity.version, entity.device_id));
-
-                        if remote_f_ver > local_f_ver {
-                            if let Some(val) = remote_map.get(key) {
-                                merged_map.insert(key.clone(), val.clone());
-                                merged_fields.insert(key.clone(), remote_f_ver);
-                                if local_map.get(key) != Some(val) {
-                                    should_apply = true;
-                                }
-                            }
-                        } else {
-                            if let Some(val) = local_map.get(key) {
-                                merged_map.insert(key.clone(), val.clone());
-                                merged_fields.insert(key.clone(), local_f_ver);
-                            }
-                        }
-                    } else if local_has {
-                        let local_f_ver = local_fields
-                            .get(key)
-                            .copied()
-                            .unwrap_or((local_hlc_ts, local_device_id));
-                        if let Some(val) = local_map.get(key) {
-                            merged_map.insert(key.clone(), val.clone());
-                            merged_fields.insert(key.clone(), local_f_ver);
-                        }
-                    } else {
-                        let remote_f_ver = remote_fields
-                            .get(key)
-                            .copied()
-                            .unwrap_or((entity.version, entity.device_id));
-                        if let Some(val) = remote_map.get(key) {
-                            merged_map.insert(key.clone(), val.clone());
-                            merged_fields.insert(key.clone(), remote_f_ver);
-                            should_apply = true;
-                        }
-                    }
-                }
-
-                if should_apply {
-                    if let Ok(json) = serde_json::to_string(&merged_map) {
-                        final_payload = json;
-                    }
-                    if let Ok(json) = serde_json::to_string(&merged_fields) {
-                        final_fields_hlc = Some(json);
-                    }
-                }
-            } else {
-                // Fall back to whole-entity tie breaking
-                should_apply = (entity.version, entity.device_id) > (local_hlc_ts, local_device_id);
-            }
-
-            if should_apply {
-                let final_version = entity.version.max(local_hlc_ts);
-                let final_device_id = if final_version == entity.version {
-                    entity.device_id
-                } else {
-                    local_device_id
-                };
-                entity.version = final_version;
-                entity.device_id = final_device_id;
-            }
-        } else {
-            // First time seeing this entity
-            should_apply = true;
-        }
-
-        if should_apply {
-            entity.payload_json = final_payload.clone();
-            entity.fields_hlc_json = final_fields_hlc.clone();
-
             self.entity_versions.put(
-                cache_key.clone(),
+                cache_key,
                 (
                     entity.version,
                     entity.device_id,
-                    final_fields_hlc.clone(),
-                    Some(final_payload.clone()),
+                    None,
+                    Some(entity.payload_json.clone()),
                 ),
             );
-            if let Some(ref s) = storage {
-                if let Err(e) = s.save_entity_version(
+            if let Some(storage) = storage {
+                if storage
+                    .save_entity_version(
+                        entity_type_str,
+                        &storage_entity_id,
+                        entity.version,
+                        entity.device_id,
+                        None,
+                        Some(&entity.payload_json),
+                    )
+                    .is_err()
+                {
+                    return false;
+                }
+                if storage
+                    .save_sync_tombstone(
+                        entity_type_str,
+                        &storage_entity_id,
+                        entity.version,
+                        entity.device_id,
+                    )
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+            self.record_last_pulled(entity, storage);
+            return true;
+        }
+
+        let mut should_apply = local_version.is_none();
+        let mut final_payload = entity.payload_json.clone();
+        let mut final_fields_hlc = entity.fields_hlc_json.clone();
+
+        if let Some((local_hlc, local_device, local_fields_json, local_payload_json)) = local_version
+        {
+            type FieldsHlc = HashMap<String, (u64, u32)>;
+            let local_fields: FieldsHlc = local_fields_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            let remote_fields: FieldsHlc = entity
+                .fields_hlc_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+            let local_value = local_payload_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .unwrap_or(serde_json::Value::Null);
+            let remote_value = serde_json::from_str::<serde_json::Value>(&entity.payload_json)
+                .unwrap_or(serde_json::Value::Null);
+
+            if let (serde_json::Value::Object(local), serde_json::Value::Object(remote)) =
+                (local_value, remote_value)
+            {
+                let mut merged = serde_json::Map::new();
+                let mut merged_fields = FieldsHlc::new();
+                let keys: std::collections::HashSet<&String> =
+                    local.keys().chain(remote.keys()).collect();
+                if (entity.version, entity.device_id) > (local_hlc, local_device) {
+                    should_apply = true;
+                }
+                for key in keys {
+                    match (local.get(key), remote.get(key)) {
+                        (Some(local_value), Some(remote_value)) => {
+                            let local_version = local_fields
+                                .get(key)
+                                .copied()
+                                .unwrap_or((local_hlc, local_device));
+                            let remote_version = remote_fields
+                                .get(key)
+                                .copied()
+                                .unwrap_or((entity.version, entity.device_id));
+                            if remote_version > local_version {
+                                merged.insert(key.clone(), remote_value.clone());
+                                merged_fields.insert(key.clone(), remote_version);
+                                if local_value != remote_value {
+                                    should_apply = true;
+                                }
+                            } else {
+                                merged.insert(key.clone(), local_value.clone());
+                                merged_fields.insert(key.clone(), local_version);
+                            }
+                        }
+                        (Some(local_value), None) => {
+                            let version = local_fields
+                                .get(key)
+                                .copied()
+                                .unwrap_or((local_hlc, local_device));
+                            merged.insert(key.clone(), local_value.clone());
+                            merged_fields.insert(key.clone(), version);
+                        }
+                        (None, Some(remote_value)) => {
+                            let version = remote_fields
+                                .get(key)
+                                .copied()
+                                .unwrap_or((entity.version, entity.device_id));
+                            merged.insert(key.clone(), remote_value.clone());
+                            merged_fields.insert(key.clone(), version);
+                            should_apply = true;
+                        }
+                        (None, None) => {}
+                    }
+                }
+                if should_apply {
+                    if let Ok(payload) = serde_json::to_string(&merged) {
+                        final_payload = payload;
+                    }
+                    if let Ok(fields) = serde_json::to_string(&merged_fields) {
+                        final_fields_hlc = Some(fields);
+                    }
+                }
+            } else {
+                should_apply =
+                    (entity.version, entity.device_id) > (local_hlc, local_device);
+            }
+
+            if should_apply {
+                let final_version = entity.version.max(local_hlc);
+                entity.device_id = if final_version == entity.version {
+                    entity.device_id
+                } else {
+                    local_device
+                };
+                entity.version = final_version;
+            }
+        }
+
+        if !should_apply {
+            return false;
+        }
+
+        entity.payload_json = final_payload.clone();
+        entity.fields_hlc_json = final_fields_hlc.clone();
+        self.entity_versions.put(
+            cache_key,
+            (
+                entity.version,
+                entity.device_id,
+                final_fields_hlc.clone(),
+                Some(final_payload.clone()),
+            ),
+        );
+        if let Some(storage) = storage {
+            if storage
+                .save_entity_version(
                     entity_type_str,
-                    &entity.entity_id,
+                    &storage_entity_id,
                     entity.version,
                     entity.device_id,
                     final_fields_hlc.as_deref(),
                     Some(&final_payload),
-                ) {
-                    eprintln!(
-                        "[sync] Failed to persist entity_version for {}:{}: {}",
-                        entity_type_str, entity.entity_id, e
-                    );
-                }
-                if let Err(e) = s.remove_sync_tombstone(
+                )
+                .is_err()
+            {
+                return false;
+            }
+            if storage
+                .remove_sync_tombstone(
                     entity_type_str,
-                    &entity.entity_id,
+                    &storage_entity_id,
                     entity.version,
                     entity.device_id,
-                ) {
-                    eprintln!(
-                        "[sync] Failed to clear sync tombstone for {}:{}: {}",
-                        entity_type_str, entity.entity_id, e
-                    );
-                    return false;
-                }
+                )
+                .is_err()
+            {
+                return false;
             }
-
-            let last_pulled = self
-                .last_pulled_versions
-                .entry(entity.entity_type.clone())
-                .or_insert(0);
-            *last_pulled = (*last_pulled).max(entity.version);
-            if let Some(ref s) = storage {
-                if let Err(e) = s.set_sync_last_pulled_version(entity_type_str, *last_pulled) {
-                    eprintln!(
-                        "[sync] Failed to persist last_pulled_version for {}: {}",
-                        entity_type_str, e
-                    );
-                }
-            }
-            return true;
         }
-        false
+        self.record_last_pulled(entity, storage);
+        true
     }
 
-    /// Apply a batch of remote entities. Returns the list of actually-applied entities.
     pub fn apply_remote_batch(
         &mut self,
         entities: Vec<SyncEntity>,
@@ -624,50 +788,42 @@ impl SyncManager {
         applied
     }
 
-    /// Get a view of pending entity pushes
     pub fn get_pending_pushes(&self) -> &[SyncEntity] {
         &self.pending_pushes
     }
 
-    /// Take all pending entity pushes
     pub fn drain_pending_pushes(&mut self) -> Vec<SyncEntity> {
         std::mem::take(&mut self.pending_pushes)
     }
 
-    // === Incoming Message Handling ===
-
-    /// Process an incoming sync message that arrived as raw transport (top-level,
-    /// unauthenticated). Entity payloads and tab transfers are rejected unless
-    /// they arrive inside the authenticated E2EE envelope.
-    pub fn handle_incoming_message(&mut self, msg: SyncMessage) {
-        self.handle_incoming_message_impl(msg, false);
+    pub fn handle_incoming_message(&mut self, message: SyncMessage) {
+        self.handle_incoming_message_impl(message, false);
     }
 
-    /// Process a message that was successfully decrypted from the E2EE envelope,
-    /// i.e. authenticated. Only this path may apply entity payloads / record tabs.
-    pub fn handle_authenticated_message(&mut self, msg: SyncMessage) {
-        self.handle_incoming_message_impl(msg, true);
+    pub fn handle_authenticated_message(&mut self, message: SyncMessage) {
+        self.handle_incoming_message_impl(message, true);
     }
 
-    fn handle_incoming_message_impl(&mut self, msg: SyncMessage, authenticated: bool) {
-        match msg {
+    fn handle_incoming_message_impl(&mut self, message: SyncMessage, authenticated: bool) {
+        match message {
             SyncMessage::Encrypted { data } => {
-                let outcome: Result<SyncMessage, SyncTransportError> =
-                    match &self.encryption_key {
-                        Some(key) => match crate::sync_crypto::decrypt_update(&data, key) {
-                            Ok(decrypted) => serde_json::from_slice::<SyncMessage>(&decrypted)
-                                .map_err(|e| SyncTransportError::MalformedEnvelopeContents {
-                                    detail: e.to_string(),
-                                }),
-                            Err(detail) => Err(SyncTransportError::Decrypt { detail }),
-                        },
-                        None => Err(SyncTransportError::MissingEncryptionKey),
-                    };
+                let outcome = match self.encryption_key.as_ref() {
+                    Some(key) => crate::sync_crypto::decrypt_update(&data, key)
+                        .map_err(|detail| SyncTransportError::Decrypt { detail })
+                        .and_then(|plaintext| {
+                            serde_json::from_slice::<SyncMessage>(&plaintext).map_err(|error| {
+                                SyncTransportError::MalformedEnvelopeContents {
+                                    detail: error.to_string(),
+                                }
+                            })
+                        }),
+                    None => Err(SyncTransportError::MissingEncryptionKey),
+                };
                 match outcome {
                     Ok(inner) => self.handle_incoming_message_impl(inner, true),
-                    Err(err) => {
+                    Err(error) => {
                         self.status = SyncStatus::Error;
-                        self.record_transport_error(err);
+                        self.record_transport_error(error);
                     }
                 }
             }
@@ -678,19 +834,18 @@ impl SyncManager {
                     });
                     return;
                 }
-                #[cfg(not(test))]
-                {
-                    let _ = entity;
-                    self.last_error = Some(
-                        "EntityPush must be applied via MahoCore::apply_sync_remote_entities \
-                         (which threads storage); handle_incoming_message path is test-only"
-                            .to_string(),
-                    );
-                }
                 #[cfg(test)]
                 {
                     let mut entity = entity;
                     self.apply_remote_entity(&mut entity, &None);
+                }
+                #[cfg(not(test))]
+                {
+                    let _ = entity;
+                    self.last_error = Some(
+                        "EntityPush must be applied via MahoCore::apply_sync_remote_entities"
+                            .to_string(),
+                    );
                 }
             }
             SyncMessage::EntityBatch { entities } => {
@@ -700,18 +855,15 @@ impl SyncManager {
                     });
                     return;
                 }
+                #[cfg(test)]
+                self.apply_remote_batch(entities, &None);
                 #[cfg(not(test))]
                 {
                     let _ = entities;
                     self.last_error = Some(
-                        "EntityBatch must be applied via MahoCore::apply_sync_remote_entities \
-                         (which threads storage); handle_incoming_message path is test-only"
+                        "EntityBatch must be applied via MahoCore::apply_sync_remote_entities"
                             .to_string(),
                     );
-                }
-                #[cfg(test)]
-                {
-                    self.apply_remote_batch(entities, &None);
                 }
             }
             SyncMessage::Ack {
@@ -720,13 +872,16 @@ impl SyncManager {
                 version,
                 device_id,
             } => {
-                let key = format!("{}:{}", entity_type.as_str(), entity_id);
-                self.entity_versions
-                    .put(key, (version, device_id, None, None));
+                // The legacy ACK frame does not carry a profile partition. Never
+                // let it overwrite a profile-local LWW cache entry. Durable relay
+                // delivery ACKs use RelayAckV2 and queue row delivery IDs instead.
+                if !entity_type.is_profile_scoped() {
+                    let key = Self::raw_scope_key(&entity_type, &entity_id);
+                    self.entity_versions
+                        .put(key, (version, device_id, None, None));
+                }
             }
-            SyncMessage::EntityPull { .. } => {
-                // EntityPull is handled by the server/peer — we don't process it here
-            }
+            SyncMessage::EntityPull { .. } => {}
             SyncMessage::SendTab {
                 url,
                 title,
@@ -742,18 +897,18 @@ impl SyncManager {
                 let sender_name = self
                     .devices
                     .get(&sender_device)
-                    .map(|d| d.name.clone())
+                    .map(|device| device.name.clone())
                     .unwrap_or_else(|| "Unknown".to_string());
-                let sender_type = self
+                let sender_device_type = self
                     .devices
                     .get(&sender_device)
-                    .map(|d| d.device_type.clone())
+                    .map(|device| device.device_type.clone())
                     .unwrap_or(crate::sync_models::DeviceType::Unknown);
                 self.received_tabs.push(ReceivedTab {
                     url,
                     title,
                     sender_name,
-                    sender_device_type: sender_type,
+                    sender_device_type,
                     received_at: chrono::Utc::now().to_rfc3339(),
                 });
                 if self.received_tabs.len() > MAX_RECEIVED_TABS {
@@ -767,19 +922,14 @@ impl SyncManager {
             SyncMessage::DeviceLeft { device_id } => {
                 self.devices.remove(&device_id);
             }
-            SyncMessage::Ping => {
-                self.outgoing_messages.push(QueuedSyncMessage {
-                    message: SyncMessage::Pong,
-                    queue_row_id: None,
-                });
-            }
+            SyncMessage::Ping => self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::Pong,
+                queue_row_id: None,
+            }),
             SyncMessage::Pong => {}
         }
     }
 
-    // === Outgoing ===
-
-    /// Send a tab to a specific device
     pub fn send_tab(&mut self, url: &str, title: &str, target_device_id: &str) {
         let message = SyncMessage::SendTab {
             url: url.to_string(),
@@ -787,33 +937,15 @@ impl SyncManager {
             sender_device: self.config.device_id.clone(),
             target_device: target_device_id.to_string(),
         };
-
-        let outcome: Result<Vec<u8>, SyncTransportError> = match &self.encryption_key {
-            Some(key) => serde_json::to_vec(&message)
-                .map_err(|e| SyncTransportError::Serialize {
-                    detail: e.to_string(),
-                })
-                .and_then(|plaintext| {
-                    crate::sync_crypto::encrypt_update(&plaintext, key)
-                        .map_err(|detail| SyncTransportError::Encrypt { detail })
-                }),
-            None => Err(SyncTransportError::KeylessTransportDenied {
-                operation: SyncTransportOp::SendTab,
+        match self.encrypt_message(&message, SyncTransportOp::SendTab) {
+            Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
+                message: SyncMessage::Encrypted { data },
+                queue_row_id: None,
             }),
-        };
-
-        match outcome {
-            Ok(data) => {
-                self.outgoing_messages.push(QueuedSyncMessage {
-                    message: SyncMessage::Encrypted { data },
-                    queue_row_id: None,
-                });
-            }
-            Err(err) => self.record_transport_error(err),
+            Err(error) => self.record_transport_error(error),
         }
     }
 
-    /// Get and drain outgoing messages (shell sends these via WebSocket)
     pub fn drain_outgoing_messages(&mut self) -> Vec<SyncMessage> {
         self.drain_outgoing_messages_with_queue_rows()
             .into_iter()
@@ -833,24 +965,18 @@ impl SyncManager {
         self.outgoing_messages.extend(messages);
     }
 
-    /// Get and drain sent entities' queue row IDs
     pub fn drain_sent_entities(&mut self) -> Vec<i64> {
         std::mem::take(&mut self.sent_entities)
     }
 
-    /// Get and drain received tabs (UI polls this)
     pub fn drain_received_tabs(&mut self) -> Vec<ReceivedTab> {
         std::mem::take(&mut self.received_tabs)
     }
 
-    // === Device Management ===
-
-    /// Get all known connected devices
     pub fn get_devices(&self) -> Vec<&DeviceInfo> {
         self.devices.values().collect()
     }
 
-    /// Remove a device from the sync group
     pub fn remove_device(&mut self, device_id: &str) {
         self.devices.remove(device_id);
         self.outgoing_messages.push(QueuedSyncMessage {
@@ -861,62 +987,81 @@ impl SyncManager {
         });
     }
 
-    /// Disconnect a remote sync device (returns false if not found or if it's the current device)
     pub fn disconnect_device(&mut self, device_id: &str) -> bool {
         if device_id == self.config.device_id {
             return false;
         }
-        if self.devices.remove(device_id).is_some() {
-            self.outgoing_messages.push(QueuedSyncMessage {
-                message: SyncMessage::DeviceLeft {
-                    device_id: device_id.to_string(),
-                },
-                queue_row_id: None,
-            });
-            true
-        } else {
-            false
+        if self.devices.remove(device_id).is_none() {
+            return false;
         }
+        self.outgoing_messages.push(QueuedSyncMessage {
+            message: SyncMessage::DeviceLeft {
+                device_id: device_id.to_string(),
+            },
+            queue_row_id: None,
+        });
+        true
     }
 
-    /// Rename a remote connected device (best-effort)
     pub fn rename_device(&mut self, device_id: &str, new_name: String) -> bool {
         if device_id == self.config.device_id {
             return false;
         }
-        if let Some(device) = self.devices.get_mut(device_id) {
-            device.name = new_name;
-            let updated_device = device.clone();
-            self.outgoing_messages.push(QueuedSyncMessage {
-                message: SyncMessage::DeviceJoined {
-                    device: updated_device,
-                },
-                queue_row_id: None,
-            });
-            true
-        } else {
-            false
-        }
+        let Some(device) = self.devices.get_mut(device_id) else {
+            return false;
+        };
+        device.name = new_name;
+        self.outgoing_messages.push(QueuedSyncMessage {
+            message: SyncMessage::DeviceJoined {
+                device: device.clone(),
+            },
+            queue_row_id: None,
+        });
+        true
     }
 
-    // === Sync Handshake ===
-
-    /// Flush pending pushes (when reconnecting after offline)
     pub fn flush_offline_queue(&mut self) {
         let pending = self.drain_pending_pushes();
         for entity in pending {
             self.push_entity(entity);
         }
     }
+
+    pub fn set_entity_sync_enabled(&mut self, entity_type: SyncEntityType, enabled: bool) {
+        if enabled {
+            self.config.disabled_entity_types.remove(&entity_type);
+        } else {
+            self.config.disabled_entity_types.insert(entity_type);
+        }
+    }
+
+    pub fn is_leader(&self) -> bool {
+        if !matches!(self.status, SyncStatus::Synced | SyncStatus::Syncing) {
+            return false;
+        }
+        let local_hash = hash_device_id(&self.config.device_id);
+        self.devices
+            .values()
+            .map(|device| hash_device_id(&device.id))
+            .fold(local_hash, u32::min)
+            == local_hash
+    }
+}
+
+fn hash_device_id(device_id: &str) -> u32 {
+    let bytes = uuid::Uuid::parse_str(device_id)
+        .map(|uuid| uuid.into_bytes().to_vec())
+        .unwrap_or_else(|_| device_id.as_bytes().to_vec());
+    crate::account_manager::fnv1a_bytes(&bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync_crypto;
-    use crate::sync_models::{DeviceType, SyncEntityType, SyncMessage, SyncStatus};
+    use crate::sync_models::DeviceType;
 
-    fn default_config() -> SyncConfig {
+    fn config() -> SyncConfig {
         SyncConfig {
             server_url: "wss://test.example.com".to_string(),
             sync_key: None,
@@ -928,526 +1073,187 @@ mod tests {
         }
     }
 
-    fn make_entity(id: &str, version: u64) -> SyncEntity {
-        SyncEntity {
-            entity_type: SyncEntityType::Tab,
-            entity_id: id.to_string(),
-            version,
-            device_id: 0,
-            schema_version: 1,
-            modified_at: 1000,
-            payload_json: r#"{"url":"https://example.com"}"#.to_string(),
-            deleted: false,
-            queue_row_id: None,
-            fields_hlc_json: None,
-        }
-    }
-
-    fn make_device(id: &str, name: &str) -> DeviceInfo {
-        DeviceInfo {
-            id: id.to_string(),
-            name: name.to_string(),
-            device_type: DeviceType::Mac,
-            last_seen: "2026-01-01T00:00:00Z".to_string(),
-            is_online: true,
-        }
-    }
-
-    fn test_encryption_key() -> sync_crypto::EncryptionKey {
+    fn key() -> sync_crypto::EncryptionKey {
         let seed = sync_crypto::generate_sync_seed();
         sync_crypto::derive_encryption_key(&seed).unwrap()
     }
 
-    // CM-01
-    #[test]
-    fn test_push_entity_synced_state() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.set_encryption_key(test_encryption_key());
-        let entity = make_entity("tab-1", 1);
-        mgr.push_entity(entity);
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::Encrypted { data } => {
-                let plaintext =
-                    sync_crypto::decrypt_update(data, mgr.encryption_key.as_ref().unwrap())
-                        .unwrap();
-                match serde_json::from_slice::<SyncMessage>(&plaintext).unwrap() {
-                    SyncMessage::EntityPush { entity } => assert_eq!(entity.entity_id, "tab-1"),
-                    other => panic!("Expected inner EntityPush, got {:?}", other),
-                }
-            }
-            other => panic!("Expected Encrypted, got {:?}", other),
+    fn tab(id: &str, profile: &str, version: u64) -> SyncEntity {
+        let payload_json = serde_json::json!({
+            "id": id,
+            "spaceId": format!("space-{profile}"),
+            "profileId": profile,
+            "url": "https://example.com"
+        })
+        .to_string();
+        SyncEntity {
+            entity_type: SyncEntityType::Tab,
+            entity_id: id.to_string(),
+            version,
+            device_id: 1,
+            schema_version: 1,
+            modified_at: 1,
+            fields_hlc_json: crate::sync_models::build_fields_hlc(&payload_json, version, 1),
+            payload_json,
+            deleted: false,
+            queue_row_id: None,
         }
     }
 
-    // CM-02
-    #[test]
-    fn test_push_entity_idle_state() {
-        let mut mgr = SyncManager::new(default_config());
-        // status defaults to Idle
-        let entity = make_entity("tab-2", 1);
-        mgr.push_entity(entity);
-        let msgs = mgr.drain_outgoing_messages();
-        assert!(msgs.is_empty());
-        assert_eq!(mgr.get_pending_pushes().len(), 1);
-        assert_eq!(mgr.get_pending_pushes()[0].entity_id, "tab-2");
-    }
-
-    // CM-03
-    #[test]
-    fn test_push_entity_with_encryption() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.set_encryption_key(test_encryption_key());
-        let entity = make_entity("tab-3", 1);
-        mgr.push_entity(entity);
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::Encrypted { data } => {
-                assert!(!data.is_empty());
-            }
-            other => panic!("Expected Encrypted, got {:?}", other),
+    fn space(id: &str, profile: &str, version: u64) -> SyncEntity {
+        let payload_json = serde_json::json!({
+            "id": id,
+            "profileId": profile,
+            "name": profile
+        })
+        .to_string();
+        SyncEntity {
+            entity_type: SyncEntityType::Space,
+            entity_id: id.to_string(),
+            version,
+            device_id: 1,
+            schema_version: 1,
+            modified_at: 1,
+            fields_hlc_json: crate::sync_models::build_fields_hlc(&payload_json, version, 1),
+            payload_json,
+            deleted: false,
+            queue_row_id: None,
         }
     }
 
-    // CM-04
     #[test]
-    fn test_pull_entities() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_encryption_key(test_encryption_key());
-        mgr.pull_entities(Some(SyncEntityType::Tab));
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::Encrypted { data } => {
-                let plaintext =
-                    sync_crypto::decrypt_update(data, mgr.encryption_key.as_ref().unwrap())
-                        .unwrap();
-                match serde_json::from_slice::<SyncMessage>(&plaintext).unwrap() {
-                    SyncMessage::EntityPull {
-                        entity_type,
-                        since_version,
-                    } => {
-                        assert_eq!(entity_type, Some(SyncEntityType::Tab));
-                        assert_eq!(since_version, 0);
-                    }
-                    other => panic!("Expected inner EntityPull, got {:?}", other),
-                }
-            }
-            other => panic!("Expected Encrypted, got {:?}", other),
-        }
-    }
-
-    // CM-05
-    #[test]
-    fn test_apply_remote_entity_newer() {
-        let mut mgr = SyncManager::new(default_config());
-        let mut entity = make_entity("tab-5", 10);
-        assert!(mgr.apply_remote_entity(&mut entity, &None));
-        // Version should be stored
-        assert_eq!(
-            mgr.entity_versions
-                .peek(&"tab:tab-5".to_string())
-                .unwrap()
-                .0,
-            10
-        );
-    }
-
-    // CM-06
-    #[test]
-    fn test_apply_remote_entity_older() {
-        let mut mgr = SyncManager::new(default_config());
-        // Insert a version first
-        let mut newer = make_entity("tab-6", 10);
-        mgr.apply_remote_entity(&mut newer, &None);
-        // Now try an older version
-        let mut older = make_entity("tab-6", 5);
-        assert!(!mgr.apply_remote_entity(&mut older, &None));
-        // Version should remain 10
-        assert_eq!(
-            mgr.entity_versions
-                .peek(&"tab:tab-6".to_string())
-                .unwrap()
-                .0,
-            10
-        );
-    }
-
-    // CM-07
-    #[test]
-    fn test_apply_remote_batch() {
-        let mut mgr = SyncManager::new(default_config());
-        // Pre-populate some versions
-        mgr.entity_versions
-            .put("tab:e-1".to_string(), (5, 0, None, None));
-        mgr.entity_versions
-            .put("tab:e-2".to_string(), (5, 0, None, None));
-
-        let batch = vec![
-            make_entity("e-1", 10), // newer → apply
-            make_entity("e-2", 3),  // older → skip
-            make_entity("e-3", 1),  // new → apply
-            make_entity("e-4", 7),  // new → apply
-            make_entity("e-1", 4),  // older than updated → skip
-        ];
-        let applied = mgr.apply_remote_batch(batch, &None);
-        assert_eq!(applied.len(), 3);
-    }
-
-    // CM-08
-    #[test]
-    fn test_handle_incoming_entity_push() {
-        let mut mgr = SyncManager::new(default_config());
-        let msg = SyncMessage::EntityPush {
-            entity: make_entity("tab-8", 5),
-        };
-        mgr.handle_authenticated_message(msg);
-        assert_eq!(
-            mgr.entity_versions
-                .peek(&"tab:tab-8".to_string())
-                .unwrap()
-                .0,
-            5
-        );
-    }
-
-    // CM-09
-    #[test]
-    fn test_handle_incoming_encrypted() {
-        let key = test_encryption_key();
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_encryption_key(key);
-
-        // Build an encrypted EntityPush message using the same key
-        let inner = SyncMessage::EntityPush {
-            entity: make_entity("tab-9", 3),
-        };
-        let plaintext = serde_json::to_vec(&inner).unwrap();
-        let encrypted_data =
-            sync_crypto::encrypt_update(&plaintext, mgr.encryption_key.as_ref().unwrap()).unwrap();
-
-        mgr.handle_incoming_message(SyncMessage::Encrypted {
-            data: encrypted_data,
-        });
-        assert_eq!(
-            mgr.entity_versions
-                .peek(&"tab:tab-9".to_string())
-                .unwrap()
-                .0,
-            3
-        );
-        assert_ne!(mgr.status(), &SyncStatus::Error);
-    }
-
-    // CM-10
-    #[test]
-    fn test_handle_incoming_encrypted_no_key() {
-        let mut mgr = SyncManager::new(default_config());
-        // No encryption key set
-        mgr.handle_incoming_message(SyncMessage::Encrypted {
-            data: vec![0u8; 64],
-        });
-        assert_eq!(mgr.status(), &SyncStatus::Error);
-        assert!(mgr.last_error().unwrap().contains("without key"));
-    }
-
-    // CM-11
-    #[test]
-    fn test_handle_incoming_send_tab() {
-        let mut mgr = SyncManager::new(default_config());
-        // Register sender device so name is known
-        let device = make_device("sender-1", "MacBook Pro");
-        mgr.devices.insert(device.id.clone(), device);
-
-        mgr.handle_authenticated_message(SyncMessage::SendTab {
-            url: "https://example.com".to_string(),
-            title: "Example".to_string(),
-            sender_device: "sender-1".to_string(),
-            target_device: "test-device-1".to_string(),
-        });
-
-        let tabs = mgr.drain_received_tabs();
-        assert_eq!(tabs.len(), 1);
-        assert_eq!(tabs[0].url, "https://example.com");
-        assert_eq!(tabs[0].title, "Example");
-        assert_eq!(tabs[0].sender_name, "MacBook Pro");
-    }
-
-    // CM-12
-    #[test]
-    fn test_handle_incoming_device_joined() {
-        let mut mgr = SyncManager::new(default_config());
-        let device = make_device("dev-2", "iPhone");
-        mgr.handle_incoming_message(SyncMessage::DeviceJoined {
-            device: device.clone(),
-        });
-        let devices = mgr.get_devices();
-        assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].id, "dev-2");
-        assert_eq!(devices[0].name, "iPhone");
-    }
-
-    // CM-13
-    #[test]
-    fn test_handle_incoming_ping() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_incoming_message(SyncMessage::Ping);
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::Pong => {}
-            other => panic!("Expected Pong, got {:?}", other),
-        }
-    }
-
-    // CM-14
-    #[test]
-    fn test_send_tab_with_encryption() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_encryption_key(test_encryption_key());
-        mgr.send_tab("https://example.com", "Example", "target-dev");
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::Encrypted { data } => {
-                assert!(!data.is_empty());
-            }
-            other => panic!("Expected Encrypted, got {:?}", other),
-        }
-    }
-
-    // CM-15
-    #[test]
-    fn test_flush_offline_queue() {
-        let mut mgr = SyncManager::new(default_config());
-        // Push while idle → goes to pending
-        mgr.push_entity(make_entity("p-1", 1));
-        mgr.push_entity(make_entity("p-2", 2));
-        assert_eq!(mgr.get_pending_pushes().len(), 2);
-        assert!(mgr.drain_outgoing_messages().is_empty());
-
-        // Now go online and flush
-        mgr.set_status(SyncStatus::Synced);
-        mgr.set_encryption_key(test_encryption_key());
-        mgr.flush_offline_queue();
-        assert!(mgr.get_pending_pushes().is_empty());
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 2);
-    }
-
-    // CM-16
-    #[test]
-    fn test_drain_outgoing_messages() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_incoming_message(SyncMessage::Ping);
-        mgr.handle_incoming_message(SyncMessage::Ping);
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 2);
-        // After drain, outgoing should be empty
-        assert!(mgr.drain_outgoing_messages().is_empty());
-    }
-
-    // CM-17
-    #[test]
-    fn test_drain_received_tabs() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_authenticated_message(SyncMessage::SendTab {
-            url: "https://a.com".to_string(),
-            title: "A".to_string(),
-            sender_device: "s1".to_string(),
-            target_device: "test-device-1".to_string(),
-        });
-        mgr.handle_authenticated_message(SyncMessage::SendTab {
-            url: "https://b.com".to_string(),
-            title: "B".to_string(),
-            sender_device: "s2".to_string(),
-            target_device: "test-device-1".to_string(),
-        });
-        let tabs = mgr.drain_received_tabs();
-        assert_eq!(tabs.len(), 2);
-        // After drain, received_tabs should be empty
-        assert!(mgr.drain_received_tabs().is_empty());
-    }
-
-    // === Todo 3: fail-closed E2EE ===
-
-    #[test]
-    fn keyless_pull_emits_nothing_and_records_error() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.pull_entities(Some(SyncEntityType::Tab));
-        assert!(
-            mgr.drain_outgoing_messages().is_empty(),
-            "keyless pull must not emit"
-        );
-        assert!(
-            mgr.last_error().is_some(),
-            "keyless pull must record a typed error"
-        );
+    fn same_raw_tab_id_is_independent_across_profiles() {
+        let mut manager = SyncManager::new(config());
+        let mut a = tab("same", "a", 10);
+        let mut b = tab("same", "b", 1);
+        assert!(manager.apply_remote_entity(&mut a, &None));
+        assert!(manager.apply_remote_entity(&mut b, &None));
+        assert!(manager.entity_versions.peek(&a.cache_key().unwrap()).is_some());
+        assert!(manager.entity_versions.peek(&b.cache_key().unwrap()).is_some());
     }
 
     #[test]
-    fn keyless_send_tab_emits_nothing_and_records_error() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.send_tab("https://example.com", "Example", "target-dev");
-        assert!(
-            mgr.drain_outgoing_messages().is_empty(),
-            "keyless send_tab must not emit"
-        );
-        assert!(
-            mgr.last_error().is_some(),
-            "keyless send_tab must record a typed error"
-        );
+    fn same_raw_space_id_is_independent_across_profiles() {
+        let mut manager = SyncManager::new(config());
+        let mut a = space("same", "a", 10);
+        let mut b = space("same", "b", 1);
+        assert!(manager.apply_remote_entity(&mut a, &None));
+        assert!(manager.apply_remote_entity(&mut b, &None));
     }
 
     #[test]
-    fn unauthenticated_plaintext_send_tab_is_rejected() {
-        let mut mgr = SyncManager::new(default_config());
-        let device = make_device("sender-1", "MacBook Pro");
-        mgr.devices.insert(device.id.clone(), device);
-
-        mgr.handle_incoming_message(SyncMessage::SendTab {
-            url: "https://attacker.example.com".to_string(),
-            title: "Injected".to_string(),
-            sender_device: "sender-1".to_string(),
-            target_device: "test-device-1".to_string(),
-        });
-
-        assert!(
-            mgr.drain_received_tabs().is_empty(),
-            "unauthenticated plaintext SendTab must NOT be recorded"
-        );
-        assert!(
-            mgr.last_error().is_some(),
-            "rejection must record a typed error"
-        );
-    }
-
-    #[test]
-    fn unauthenticated_plaintext_entity_push_is_rejected() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_incoming_message(SyncMessage::EntityPush {
-            entity: make_entity("tab-unauth", 5),
-        });
-        assert!(
-            mgr.entity_versions
-                .peek(&"tab:tab-unauth".to_string())
-                .is_none(),
-            "unauthenticated plaintext EntityPush must NOT be applied"
-        );
-        assert!(
-            mgr.last_error().is_some(),
-            "rejection must record a typed error"
-        );
-    }
-
-    #[test]
-    fn authenticated_send_tab_is_recorded() {
-        let mut mgr = SyncManager::new(default_config());
-        let device = make_device("sender-1", "MacBook Pro");
-        mgr.devices.insert(device.id.clone(), device);
-
-        mgr.handle_authenticated_message(SyncMessage::SendTab {
-            url: "https://trusted.example.com".to_string(),
-            title: "Trusted".to_string(),
-            sender_device: "sender-1".to_string(),
-            target_device: "test-device-1".to_string(),
-        });
-
-        let tabs = mgr.drain_received_tabs();
-        assert_eq!(tabs.len(), 1, "authenticated SendTab must be recorded");
-        assert_eq!(tabs[0].url, "https://trusted.example.com");
-    }
-
-    #[test]
-    fn authenticated_entity_push_is_applied() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_authenticated_message(SyncMessage::EntityPush {
-            entity: make_entity("tab-auth", 7),
-        });
-        assert_eq!(
-            mgr.entity_versions
-                .peek(&"tab:tab-auth".to_string())
-                .unwrap()
-                .0,
-            7,
-            "authenticated EntityPush must be applied"
-        );
-    }
-
-    #[test]
-    fn encrypted_envelope_inner_is_treated_as_authenticated() {
-        let key = test_encryption_key();
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_encryption_key(key);
-
-        let inner = SyncMessage::SendTab {
-            url: "https://enc.example.com".to_string(),
-            title: "Enc".to_string(),
-            sender_device: "peer".to_string(),
-            target_device: "test-device-1".to_string(),
-        };
-        let plaintext = serde_json::to_vec(&inner).unwrap();
-        let data =
-            sync_crypto::encrypt_update(&plaintext, mgr.encryption_key.as_ref().unwrap()).unwrap();
-
-        mgr.handle_incoming_message(SyncMessage::Encrypted { data });
-
-        let tabs = mgr.drain_received_tabs();
-        assert_eq!(tabs.len(), 1, "decrypted inner SendTab must be recorded");
-        assert_ne!(mgr.status(), &SyncStatus::Error);
-    }
-
-    // === Todo 3: typed transport-error contract ===
-
-    #[test]
-    fn keyless_push_records_typed_keyless_denied() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.push_entity(make_entity("tab-keyless", 1));
+    fn remote_profile_scoped_entity_without_scope_is_rejected() {
+        let mut manager = SyncManager::new(config());
+        let mut entity = tab("missing", "a", 1);
+        entity.payload_json = serde_json::json!({"id":"missing","spaceId":"unknown"}).to_string();
+        assert!(!manager.apply_remote_entity(&mut entity, &None));
         assert!(matches!(
-            mgr.last_transport_error(),
+            manager.last_transport_error(),
+            Some(SyncTransportError::MissingProfileScope { .. })
+        ));
+    }
+
+    #[test]
+    fn local_tab_is_enriched_from_active_profile_before_encryption() {
+        let mut manager = SyncManager::new(config());
+        manager.set_active_profile_id(Some("work".to_string()));
+        manager.set_status(SyncStatus::Synced);
+        manager.set_encryption_key(key());
+        let mut entity = tab("local", "work", 1);
+        entity.payload_json = serde_json::json!({"id":"local","spaceId":"s"}).to_string();
+        manager.push_entity(entity);
+        let SyncMessage::Encrypted { data } = manager.drain_outgoing_messages().remove(0) else {
+            panic!("expected encrypted push");
+        };
+        let plaintext = sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
+        let SyncMessage::EntityPush { entity } = serde_json::from_slice(&plaintext).unwrap() else {
+            panic!("expected entity push");
+        };
+        assert_eq!(entity.profile_scope().as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn local_tab_is_enriched_from_space_profile() {
+        let mut manager = SyncManager::new(config());
+        let mut remote_space = space("work-space", "work", 1);
+        assert!(manager.apply_remote_entity(&mut remote_space, &None));
+        manager.set_status(SyncStatus::Synced);
+        manager.set_encryption_key(key());
+        let mut entity = tab("local", "work", 2);
+        entity.payload_json = serde_json::json!({"id":"local","spaceId":"work-space"}).to_string();
+        manager.push_entity(entity);
+        let SyncMessage::Encrypted { data } = manager.drain_outgoing_messages().remove(0) else {
+            panic!("expected encrypted push");
+        };
+        let plaintext = sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
+        let SyncMessage::EntityPush { entity } = serde_json::from_slice(&plaintext).unwrap() else {
+            panic!("expected entity push");
+        };
+        assert_eq!(entity.profile_scope().as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn local_tombstone_reuses_remembered_profile() {
+        let mut manager = SyncManager::new(config());
+        manager.set_active_profile_id(Some("work".to_string()));
+        manager.push_entity(tab("gone", "work", 1));
+        manager.set_active_profile_id(Some("personal".to_string()));
+        let mut tombstone = tab("gone", "work", 2);
+        tombstone.deleted = true;
+        tombstone.payload_json = "{}".to_string();
+        manager.push_entity(tombstone);
+        let pending = manager.get_pending_pushes();
+        assert_eq!(pending.last().unwrap().profile_scope().as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn profile_cursor_is_selected_without_changing_pull_wire_shape() {
+        let mut manager = SyncManager::new(config());
+        manager.set_active_profile_id(Some("b".to_string()));
+        manager.set_last_pulled_version_for_profile(SyncEntityType::Tab, "b".to_string(), 42);
+        manager.set_encryption_key(key());
+        manager.pull_entities(Some(SyncEntityType::Tab));
+        let SyncMessage::Encrypted { data } = manager.drain_outgoing_messages().remove(0) else {
+            panic!("expected encrypted pull");
+        };
+        let plaintext = sync_crypto::decrypt_update(&data, manager.encryption_key.as_ref().unwrap()).unwrap();
+        match serde_json::from_slice::<SyncMessage>(&plaintext).unwrap() {
+            SyncMessage::EntityPull { entity_type, since_version } => {
+                assert_eq!(entity_type, Some(SyncEntityType::Tab));
+                assert_eq!(since_version, 42);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn profile_scoped_legacy_ack_does_not_create_raw_lww_entry() {
+        let mut manager = SyncManager::new(config());
+        manager.handle_incoming_message(SyncMessage::Ack {
+            entity_id: "same".to_string(),
+            entity_type: SyncEntityType::Tab,
+            version: 9,
+            device_id: 4,
+        });
+        assert!(manager.entity_versions.peek("tab:same").is_none());
+    }
+
+    #[test]
+    fn push_and_send_tab_fail_closed_without_e2ee_key() {
+        let mut manager = SyncManager::new(config());
+        manager.set_active_profile_id(Some("a".to_string()));
+        manager.set_status(SyncStatus::Synced);
+        manager.push_entity(tab("x", "a", 1));
+        assert!(manager.drain_outgoing_messages().is_empty());
+        assert!(matches!(
+            manager.last_transport_error(),
             Some(SyncTransportError::KeylessTransportDenied {
                 operation: SyncTransportOp::Push
             })
         ));
-        assert_eq!(
-            mgr.last_transport_error().map(SyncTransportError::code),
-            Some("keyless_transport_denied")
-        );
-        // The boundary string rendering stays available and derives from Display.
-        assert_eq!(
-            mgr.last_error().map(str::to_string),
-            mgr.last_transport_error()
-                .map(SyncTransportError::to_string)
-        );
-    }
-
-    #[test]
-    fn keyless_pull_records_typed_keyless_denied() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.pull_entities(Some(SyncEntityType::Tab));
+        manager.send_tab("https://example.com", "Example", "peer");
         assert!(matches!(
-            mgr.last_transport_error(),
-            Some(SyncTransportError::KeylessTransportDenied {
-                operation: SyncTransportOp::Pull
-            })
-        ));
-    }
-
-    #[test]
-    fn keyless_send_tab_records_typed_keyless_denied() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.set_status(SyncStatus::Synced);
-        mgr.send_tab("https://example.com", "Example", "target-dev");
-        assert!(matches!(
-            mgr.last_transport_error(),
+            manager.last_transport_error(),
             Some(SyncTransportError::KeylessTransportDenied {
                 operation: SyncTransportOp::SendTab
             })
@@ -1455,212 +1261,74 @@ mod tests {
     }
 
     #[test]
-    fn unauthenticated_plaintext_entity_push_records_typed_rejection() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_incoming_message(SyncMessage::EntityPush {
-            entity: make_entity("tab-unauth-typed", 5),
+    fn plaintext_entity_push_is_rejected() {
+        let mut manager = SyncManager::new(config());
+        manager.handle_incoming_message(SyncMessage::EntityPush {
+            entity: tab("plain", "a", 1),
         });
         assert!(matches!(
-            mgr.last_transport_error(),
+            manager.last_transport_error(),
             Some(SyncTransportError::PlaintextPayloadRejected { .. })
         ));
-        assert_eq!(
-            mgr.last_transport_error().map(SyncTransportError::code),
-            Some("plaintext_payload_rejected")
+    }
+
+    #[test]
+    fn encrypted_send_tab_is_authenticated() {
+        let mut manager = SyncManager::new(config());
+        manager.set_encryption_key(key());
+        manager.devices.insert(
+            "peer".to_string(),
+            DeviceInfo {
+                id: "peer".to_string(),
+                name: "Peer".to_string(),
+                device_type: DeviceType::Mac,
+                last_seen: "now".to_string(),
+                is_online: true,
+            },
         );
+        let inner = SyncMessage::SendTab {
+            url: "https://example.com".to_string(),
+            title: "Example".to_string(),
+            sender_device: "peer".to_string(),
+            target_device: "test-device-1".to_string(),
+        };
+        let plaintext = serde_json::to_vec(&inner).unwrap();
+        let data = sync_crypto::encrypt_update(&plaintext, manager.encryption_key.as_ref().unwrap()).unwrap();
+        manager.handle_incoming_message(SyncMessage::Encrypted { data });
+        assert_eq!(manager.drain_received_tabs().len(), 1);
     }
 
     #[test]
-    fn missing_key_for_encrypted_records_typed_error() {
-        let mut mgr = SyncManager::new(default_config());
-        mgr.handle_incoming_message(SyncMessage::Encrypted {
-            data: vec![0u8; 64],
-        });
-        assert!(matches!(
-            mgr.last_transport_error(),
-            Some(SyncTransportError::MissingEncryptionKey)
-        ));
-    }
-
-    // H12: LRU eviction at cap
-    #[test]
-    fn entity_versions_lru_evicts_at_cap() {
-        let mut sm = SyncManager::new(default_config());
-        for i in 0u64..10_001 {
-            let mut entity = make_entity(&format!("entity_{}", i), i + 1);
-            sm.apply_remote_entity(&mut entity, &None);
+    fn received_tabs_are_bounded() {
+        let mut manager = SyncManager::new(config());
+        for index in 0..(MAX_RECEIVED_TABS + 5) {
+            manager.handle_authenticated_message(SyncMessage::SendTab {
+                url: format!("https://example.com/{index}"),
+                title: index.to_string(),
+                sender_device: "peer".to_string(),
+                target_device: "local".to_string(),
+            });
         }
-        assert!(sm
-            .entity_versions
-            .peek(&"tab:entity_0".to_string())
-            .is_none());
-        assert!(sm
-            .entity_versions
-            .peek(&"tab:entity_10000".to_string())
-            .is_some());
+        assert_eq!(manager.drain_received_tabs().len(), MAX_RECEIVED_TABS);
     }
 
     #[test]
-    fn test_hlc_and_persistent_tiebreaking_and_queue_lifecycle() {
-        let mut sm = SyncManager::new(default_config());
-
-        let mut entity1 = make_entity("tab-10", 100);
-        entity1.device_id = 1;
-
-        let mut entity2 = make_entity("tab-10", 100);
-        entity2.device_id = 2;
-
-        assert!(sm.apply_remote_entity(&mut entity1, &None));
-        assert!(sm.apply_remote_entity(&mut entity2, &None));
-
-        let mut entity3 = make_entity("tab-10", 100);
-        entity3.device_id = 1;
-        assert!(!sm.apply_remote_entity(&mut entity3, &None));
-
-        let mut entity4 = make_entity("tab-11", 101);
-        entity4.queue_row_id = Some(42);
-
-        sm.set_status(SyncStatus::Synced);
-        sm.set_encryption_key(test_encryption_key());
-        sm.push_entity(entity4);
-
-        let sent_ids = sm.drain_sent_entities();
-        assert_eq!(sent_ids, vec![42]);
+    fn offline_queue_flushes_after_sync_connects() {
+        let mut manager = SyncManager::new(config());
+        manager.set_active_profile_id(Some("a".to_string()));
+        manager.push_entity(tab("queued", "a", 1));
+        assert_eq!(manager.get_pending_pushes().len(), 1);
+        manager.set_encryption_key(key());
+        manager.report_transport_state(SyncStatus::Synced, None);
+        assert!(manager.get_pending_pushes().is_empty());
+        assert_eq!(manager.drain_outgoing_messages().len(), 1);
     }
 
     #[test]
-    fn test_is_leader() {
-        let mut sm = SyncManager::new(default_config());
-        assert!(!sm.is_leader());
-        sm.set_status(SyncStatus::Synced);
-        assert!(sm.is_leader());
+    fn leader_requires_active_sync_state() {
+        let mut manager = SyncManager::new(config());
+        assert!(!manager.is_leader());
+        manager.set_status(SyncStatus::Synced);
+        assert!(manager.is_leader());
     }
-
-    #[test]
-    fn test_disconnect_remote_device() {
-        let mut mgr = SyncManager::new(default_config());
-        let remote_device = make_device("remote-device-1", "Remote Device");
-        mgr.handle_incoming_message(SyncMessage::DeviceJoined {
-            device: remote_device.clone(),
-        });
-        assert_eq!(mgr.get_devices().len(), 1);
-
-        // Disconnecting current device should fail
-        assert!(!mgr.disconnect_device("test-device-1"));
-        // Disconnecting nonexistent device should fail
-        assert!(!mgr.disconnect_device("nonexistent"));
-
-        // Disconnecting remote device should succeed
-        assert!(mgr.disconnect_device("remote-device-1"));
-        assert_eq!(mgr.get_devices().len(), 0);
-
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::DeviceLeft { device_id } => {
-                assert_eq!(device_id, "remote-device-1");
-            }
-            other => panic!("Expected DeviceLeft, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_rename_remote_device() {
-        let mut mgr = SyncManager::new(default_config());
-        let remote_device = make_device("remote-device-1", "Old Name");
-        mgr.handle_incoming_message(SyncMessage::DeviceJoined {
-            device: remote_device.clone(),
-        });
-
-        // Renaming current device should fail
-        assert!(!mgr.rename_device("test-device-1", "New Local".to_string()));
-        // Renaming nonexistent device should fail
-        assert!(!mgr.rename_device("nonexistent", "New Name".to_string()));
-
-        // Renaming remote device should succeed
-        assert!(mgr.rename_device("remote-device-1", "New Name".to_string()));
-        assert_eq!(mgr.devices.get("remote-device-1").unwrap().name, "New Name");
-
-        let msgs = mgr.drain_outgoing_messages();
-        assert_eq!(msgs.len(), 1);
-        match &msgs[0] {
-            SyncMessage::DeviceJoined { device } => {
-                assert_eq!(device.id, "remote-device-1");
-                assert_eq!(device.name, "New Name");
-            }
-            other => panic!("Expected DeviceJoined, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_rename_propagates_to_second_manager() {
-        let mut a = SyncManager::new(default_config());
-        a.handle_incoming_message(SyncMessage::DeviceJoined {
-            device: make_device("remote-1", "Old Name"),
-        });
-
-        assert!(a.rename_device("remote-1", "New Name".to_string()));
-
-        let outgoing = a.drain_outgoing_messages();
-        let renamed = outgoing
-            .into_iter()
-            .find(|msg| {
-                matches!(
-                    msg,
-                    SyncMessage::DeviceJoined { device }
-                        if device.id == "remote-1" && device.name == "New Name"
-                )
-            })
-            .expect("Expected outbound DeviceJoined for remote-1 with the new name");
-
-        // B uses a different device_id so "remote-1" is remote to it as well.
-        let mut config_b = default_config();
-        config_b.device_id = "test-device-2".to_string();
-        config_b.device_name = "Test Device B".to_string();
-        let mut b = SyncManager::new(config_b);
-
-        b.handle_incoming_message(renamed);
-
-        assert_eq!(b.get_devices().len(), 1);
-        assert_eq!(b.devices.get("remote-1").unwrap().name, "New Name");
-    }
-}
-
-impl SyncManager {
-    /// Enable or disable syncing of a specific entity type.
-    pub fn set_entity_sync_enabled(
-        &mut self,
-        entity_type: crate::sync_models::SyncEntityType,
-        enabled: bool,
-    ) {
-        if enabled {
-            self.config.disabled_entity_types.remove(&entity_type);
-        } else {
-            self.config.disabled_entity_types.insert(entity_type);
-        }
-    }
-
-    pub fn is_leader(&self) -> bool {
-        if self.status != SyncStatus::Synced && self.status != SyncStatus::Syncing {
-            return false;
-        }
-        let local_hash = hash_device_id(&self.config.device_id);
-        let mut min_hash = local_hash;
-        for dev in self.devices.values() {
-            let dev_hash = hash_device_id(&dev.id);
-            if dev_hash < min_hash {
-                min_hash = dev_hash;
-            }
-        }
-        min_hash == local_hash
-    }
-}
-
-fn hash_device_id(device_id: &str) -> u32 {
-    let bytes = if let Ok(uuid) = uuid::Uuid::parse_str(device_id) {
-        uuid.into_bytes().to_vec()
-    } else {
-        device_id.as_bytes().to_vec()
-    };
-    crate::account_manager::fnv1a_bytes(&bytes)
 }
