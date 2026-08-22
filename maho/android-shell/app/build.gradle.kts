@@ -11,14 +11,14 @@ val googleOauthServerClientId = providers.gradleProperty("MAHO_GOOGLE_OAUTH_SERV
 
 android {
     namespace = "dev.maho.browser"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "dev.maho.browser"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
-        versionName = "0.1.0"
+        versionName = "1.0.0"
         buildConfigField(
             "String",
             "GOOGLE_OAUTH_SERVER_CLIENT_ID",

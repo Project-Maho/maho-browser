@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.0.0</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -32,7 +32,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>20260822</string>
 	<key>MahoGoogleClientID</key>
 	<string>650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com</string>
 	<key>MahoGoogleRedirectScheme</key>
@@ -48,8 +48,10 @@
 		<key>UISceneConfigurations</key>
 		<dict/>
 	</dict>
-	<key>UILaunchStoryboardName</key>
-	<string></string>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -4,21 +4,40 @@ use maho_types::chat::ChatMessage;
 pub mod approval;
 pub mod approval_audit;
 pub mod browser_action_contract;
+pub mod channels;
 pub mod cli_tool_executor;
+pub mod context_compaction;
+pub mod context_gatherer;
 pub mod deep_research;
+pub mod direct_api;
+pub mod event_wait;
 pub mod fallback_ladder;
 pub mod fallback_ladder_browser;
+pub mod image_search;
+pub mod interaction;
+pub mod introspection;
 pub mod maho_reasoning_openai;
 #[cfg(not(target_os = "ios"))]
 pub mod mcp_client;
 #[cfg(target_os = "ios")]
 #[path = "mcp_client_ios_stub.rs"]
 pub mod mcp_client;
+pub mod model_routing;
+pub mod page_adapters;
 pub mod permission;
+pub mod retry_policy;
+pub mod run_journal;
 pub mod runtime_isolation;
+pub mod skill_creator;
+pub mod subagents;
+pub mod suggestions;
 pub mod swiftide_backend;
+pub mod system_prompt;
 pub mod tool_registry;
+pub mod turn_control;
 pub mod vault_tools;
+pub mod web_search;
+
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod web_fetch;
 
@@ -46,7 +65,38 @@ pub use permission::{
 };
 pub use runtime_isolation::SessionRuntime;
 pub use swiftide_backend::{BrowserActionToolsState, SwiftideBackend};
-pub use vault_tools::register_vault_agent_tools;
+pub use image_search::{
+    FreeImageSearchBackend, ImageSearchClient, ImageSearchEntitlementRouter, ImageSearchError,
+    ImageSearchProvenance, ImageSearchQuery, ImageSearchResponse, ImageSearchResult,
+};
+pub use introspection::{
+    collect_introspection, execute_introspection_tool, ActiveRunSummary,
+    ModelRoutingSummary, SessionIntrospectionReport,
+};
+pub use subagents::ActiveSubagentSummary;
+pub use skill_creator::{
+    activate_skill_proposal, propose_skill_from_journal, request_skill_approval_interaction,
+    update_skill, SkillActivationStatus, SkillCreatorError, SkillProposal, SkillProposalOutcome,
+};
+pub use subagents::{
+    execute_subagent_wait_tool, merge_subagent_summary_to_parent, SubagentChildRun, SubagentError,
+    SubagentResult, SubagentSpec, SubagentStatus, SubagentSupervisor, MAX_ACTIVE_SUBAGENTS,
+    MAX_SUBAGENT_BUDGET_TURNS,
+};
+pub use suggestions::{
+    generate_suggestions_from_journal, install_routine, suggest_routine, suggest_routine_proposal,
+    RoutineManifest, RoutineValidationError, Suggestion, SuggestionSettings, validate_routine_manifest,
+    MAX_PASSIVE_SUGGESTIONS,
+};
+pub use context_gatherer::{
+    AccountContextEntry, AccountContextSlot, ContextBlock, ContextBlockProvenance, ContextBlockSource,
+    ContextGatherRequest, ContextGatherResponse,
+};
+pub use web_search::{
+    FreeWebSearchBackend, PremiumWebSearchBackend, SearchEntitlement, SearchTier, WebSearchClient,
+    WebSearchEntitlementRouter, WebSearchError, WebSearchProvenance, WebSearchQuery,
+    WebSearchResponse, WebSearchResult, DEFAULT_MAX_RESULTS, MAX_RESULTS_HARD_CAP,
+};
 
 pub use maho_types::tool::{
     BrowserToolBridgeError, BrowserToolDescriptor, BrowserToolExecution,
@@ -100,7 +150,7 @@ pub enum AgentError {
     Credential(#[from] CredentialError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentStreamEvent {
     Token(String),
     Thinking(String),
@@ -117,6 +167,14 @@ pub enum AgentStreamEvent {
     },
     ArtifactCreated {
         artifact: maho_types::artifact::ArtifactInfo,
+    },
+    Status {
+        elapsed_secs: u64,
+        message: String,
+    },
+    ProofOrReason {
+        proof_locator: Option<String>,
+        reason: Option<String>,
     },
 }
 
@@ -201,6 +259,10 @@ impl std::fmt::Display for ZeroizedString {
     }
 }
 
+pub struct RetrievedMemory {
+    pub fact: String,
+}
+
 #[async_trait]
 pub trait AgentStorage: Send + Sync {
     async fn get_byok_key(&self, provider: &str) -> Result<Option<ZeroizedString>, AgentError>;
@@ -273,6 +335,19 @@ pub trait AgentStorage: Send + Sync {
         _conversation_id: &str,
     ) -> Result<Option<String>, AgentError> {
         Ok(None)
+    }
+    async fn get_memory_block(
+        &self,
+        _label: &str,
+    ) -> Result<Option<String>, AgentError> {
+        Ok(None)
+    }
+    async fn retrieve_memories(
+        &self,
+        _query: &str,
+        _top_k: usize,
+    ) -> Result<Vec<RetrievedMemory>, AgentError> {
+        Ok(Vec::new())
     }
     async fn fts_relevant_memories(
         &self,
@@ -570,6 +645,20 @@ impl AgentStorage for MutexAgentStorage {
                 out.push((id, content, score));
             }
             Ok(out)
+        })
+        .await
+        .map_err(|e| AgentError::ExecutionError(e.to_string()))?
+    }
+
+    async fn get_memory_block(&self, label: &str) -> Result<Option<String>, AgentError> {
+        let storage = std::sync::Arc::clone(&self.0);
+        let label = label.to_string();
+        tokio::task::spawn_blocking(move || {
+            let lock = storage
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            lock.get_memory_block(&label)
+                .map_err(|e| AgentError::ExecutionError(e.to_string()))
         })
         .await
         .map_err(|e| AgentError::ExecutionError(e.to_string()))?

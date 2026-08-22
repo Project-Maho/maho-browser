@@ -57,7 +57,9 @@ targets:
     info:
       path: Info.plist
       properties:
-        UILaunchStoryboardName: ""
+        UILaunchScreen: {}
+        CFBundleVersion: "20260822"
+        CFBundleShortVersionString: "1.0.0"
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}
@@ -65,6 +67,7 @@ targets:
           - dev.maho.browser.sync.refresh
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        UIRequiresFullScreen: true
         NSSpeechRecognitionUsageDescription: "Maho uses speech recognition to let you search by voice."
         NSMicrophoneUsageDescription: "Maho uses the microphone for voice search."
         MahoGoogleClientID: "650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
