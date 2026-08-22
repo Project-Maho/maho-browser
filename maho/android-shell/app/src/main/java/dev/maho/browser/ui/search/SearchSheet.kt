@@ -118,7 +118,11 @@ fun SearchSheet(
     val focusRequester = remember { FocusRequester() }
     val isDarkMode = isSystemInDarkTheme()
 
-    var query by remember { mutableStateOf(initialQuery) }
+    var query by remember(initialQuery) { mutableStateOf(initialQuery) }
+
+    LaunchedEffect(initialQuery) {
+        query = initialQuery
+    }
     var suggestions by remember { mutableStateOf<List<SuggestionViewModel>>(emptyList()) }
     var requestSerial by remember { mutableIntStateOf(0) }
     var voiceRefocusSerial by remember { mutableIntStateOf(0) }

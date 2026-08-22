@@ -71,12 +71,19 @@ protocol SyncCoreClient: AnyObject {
         deviceId: String?
     )
     func signOut()
+    func setSyncEnabled(_ enabled: Bool) throws
+    func generateSyncBootstrap() throws -> RelaySyncBootstrap
+    func configureSyncBootstrap(serverURL: String, seed: String) throws
     func syncState() throws -> SyncStateResponse
     func syncRoomID() throws -> String
     func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2]
     func acknowledge(_ ack: RelayAckV2) throws
     func receiveCursor(roomID: String) throws -> Int
     func apply(_ envelope: SyncEnvelopeV2, roomID: String) throws
+}
+
+private struct SyncBootstrapConfiguration: Decodable {
+    let success: Bool
 }
 
 private enum DynamicSyncFFI {
@@ -111,6 +118,39 @@ extension MahoBridge: SyncCoreClient {
             userId: userId,
             deviceId: deviceId
         )
+    }
+
+    func setSyncEnabled(_ enabled: Bool) throws {
+        guard let json = withCore({ ptr in FFIString.consume(maho_core_get_account_state(ptr)) }) ?? nil else {
+            throw SyncCoreError.operationFailed("read account Sync state")
+        }
+        guard let data = json.data(using: .utf8),
+              let account = try? RelayCoding.decoder.decode(AccountInfo.self, from: data)
+        else {
+            throw SyncCoreError.operationFailed("read signed-in account Sync state")
+        }
+        guard account.syncEnabled != enabled else { return }
+        toggleSync()
+    }
+
+    func generateSyncBootstrap() throws -> RelaySyncBootstrap {
+        guard let json = generateSyncBootstrapJSON(),
+              let data = json.data(using: .utf8),
+              let bootstrap = try? RelayCoding.decoder.decode(RelaySyncBootstrap.self, from: data)
+        else {
+            throw SyncCoreError.operationFailed("generate account Sync bootstrap")
+        }
+        return bootstrap
+    }
+
+    func configureSyncBootstrap(serverURL: String, seed: String) throws {
+        guard let json = configureSyncBootstrapJSON(serverURL: serverURL, seed: seed),
+              let data = json.data(using: .utf8),
+              let response = try? RelayCoding.decoder.decode(SyncBootstrapConfiguration.self, from: data),
+              response.success
+        else {
+            throw SyncCoreError.operationFailed("configure account Sync bootstrap")
+        }
     }
 
     func syncState() throws -> SyncStateResponse {
@@ -193,7 +233,7 @@ extension MahoBridge: SyncCoreClient {
         } ?? nil
     }
 
-    func generateSyncBootstrap() -> String? {
+    private func generateSyncBootstrapJSON() -> String? {
         withCore { ptr in
             guard let function = DynamicSyncFFI.symbol(
                 "maho_core_generate_sync_bootstrap",
@@ -205,7 +245,7 @@ extension MahoBridge: SyncCoreClient {
         } ?? nil
     }
 
-    func configureSyncBootstrap(serverURL: String, seed: String) -> String? {
+    private func configureSyncBootstrapJSON(serverURL: String, seed: String) -> String? {
         withCore { ptr in
             guard let function = DynamicSyncFFI.symbol(
                 "maho_core_configure_sync_bootstrap",

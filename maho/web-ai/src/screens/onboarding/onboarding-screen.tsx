@@ -6,22 +6,30 @@ import { Icon } from '../../ui/icon';
 import { MahoLogo } from '../../ui/maho-logo';
 import './onboarding.css';
 
-type OnboardingStep = 'splash' | 'auth' | 'default_browser' | 'byok' | 'completion';
+type OnboardingStep = 'splash' | 'auth' | 'theme' | 'default_browser' | 'completion';
+type OnboardingTheme = 'system' | 'dark' | 'light';
 
 function initialStep(step: string | undefined): OnboardingStep {
   return step === 'auth' ? 'auth' : 'splash';
+}
+
+function notifyNativeTheme(theme: OnboardingTheme) {
+  const signal = document.createElement('iframe');
+  signal.setAttribute('aria-hidden', 'true');
+  signal.style.display = 'none';
+  signal.src = `maho-theme://${theme}`;
+  document.body.appendChild(signal);
+  queueMicrotask(() => signal.remove());
 }
 
 export function OnboardingScreen() {
   const bridge = useBridge();
   const route = useHashRoute();
   const [step, setStep] = useState<OnboardingStep>(() => initialStep(route.params.step));
-  
-  // Safe area insets from native shell parameters or properties
+
   const safeAreaTop = route.params.safeAreaTop ? parseFloat(route.params.safeAreaTop) : 0;
   const safeAreaBottom = route.params.safeAreaBottom ? parseFloat(route.params.safeAreaBottom) : 0;
 
-  // Apply safe-area values directly to HTML style context for CSS var access
   useEffect(() => {
     if (safeAreaTop > 0) {
       document.documentElement.style.setProperty('--safe-area-top', `${safeAreaTop}px`);
@@ -49,44 +57,23 @@ export function OnboardingScreen() {
     };
   }, []);
 
-  // Auth pane states
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [selectedTheme, setSelectedTheme] = useState<OnboardingTheme>('system');
 
-  // BYOK pane states
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [anthropicKey, setAnthropicKey] = useState('');
-  const [byokSaving, setByokSaving] = useState(false);
-  const [byokError, setByokError] = useState<string | null>(null);
-
-  // Load existing BYOK keys if present
-  useEffect(() => {
-    void (async () => {
-      try {
-        const ok = await bridge.byokGetKey('openai');
-        if (ok) setOpenaiKey(ok);
-        const ak = await bridge.byokGetKey('anthropic');
-        if (ak) setAnthropicKey(ak);
-      } catch (e) {
-        console.error('Failed to load BYOK keys', e);
-      }
-    })();
-  }, [bridge]);
-
-  // Page entry/exit animation and copy stagger animation
   const containerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (containerRef.current && typeof containerRef.current.animate === 'function') {
       containerRef.current.animate(
         [
           { opacity: 0, transform: 'translateY(10px)' },
-          { opacity: 1, transform: 'translateY(0)' }
+          { opacity: 1, transform: 'translateY(0)' },
         ],
-        { duration: 400, easing: 'ease-out', fill: 'forwards' }
+        { duration: 400, easing: 'ease-out', fill: 'forwards' },
       );
     }
 
@@ -99,21 +86,20 @@ export function OnboardingScreen() {
           element.animate(
             [
               { opacity: 0, transform: 'translateY(15px)' },
-              { opacity: 1, transform: 'translateY(0)' }
+              { opacity: 1, transform: 'translateY(0)' },
             ],
             {
               duration: 800,
               delay: 200 + i * 600,
               easing: 'cubic-bezier(0.22, 1.18, 0.36, 1)',
-              fill: 'forwards'
-            }
+              fill: 'forwards',
+            },
           );
         }
       });
     }
   }, [step]);
 
-  // Handler functions
   const handleAuthSubmit = async (e: JSX.TargetedEvent<HTMLFormElement, Event>) => {
     e.preventDefault();
     if (!email.trim() || !password.trim()) {
@@ -127,14 +113,14 @@ export function OnboardingScreen() {
       if (authMode === 'login') {
         const res = await bridge.relaySignIn(email, password);
         if (res.ok) {
-          setStep('default_browser');
+          setStep('theme');
         } else {
           setAuthError(res.error || 'Failed to sign in.');
         }
       } else {
         const res = await bridge.relaySignUp(email, password, displayName);
         if (res.ok) {
-          setStep('default_browser');
+          setStep('theme');
         } else {
           setAuthError(res.error || 'Failed to sign up.');
         }
@@ -153,7 +139,7 @@ export function OnboardingScreen() {
     try {
       const res = await bridge.relaySignInWithGoogle();
       if (res.ok) {
-        setStep('default_browser');
+        setStep('theme');
       } else if (!res.cancelled) {
         setAuthError(res.error || 'Failed to sign in with Google.');
       }
@@ -164,54 +150,27 @@ export function OnboardingScreen() {
     }
   };
 
-  const handleSaveByok = async () => {
-    setByokSaving(true);
-    setByokError(null);
-    try {
-      // Validate and save OpenAI key if modified/present
-      if (openaiKey.trim()) {
-        const isValid = await bridge.byokValidateKey('openai', openaiKey);
-        if (!isValid) {
-          setByokError('Invalid OpenAI API key.');
-          setByokSaving(false);
-          return;
-        }
-        await bridge.byokSetKey('openai', openaiKey);
-      } else {
-        await bridge.byokDeleteKey('openai');
-      }
-
-      // Validate and save Anthropic key if modified/present
-      if (anthropicKey.trim()) {
-        const isValid = await bridge.byokValidateKey('anthropic', anthropicKey);
-        if (!isValid) {
-          setByokError('Invalid Anthropic API key.');
-          setByokSaving(false);
-          return;
-        }
-        await bridge.byokSetKey('anthropic', anthropicKey);
-      } else {
-        await bridge.byokDeleteKey('anthropic');
-      }
-
-      setStep('completion');
-    } catch (err: any) {
-      setByokError(err.message || 'Failed to save keys.');
-    } finally {
-      setByokSaving(false);
-    }
+  const handleThemeSelect = (theme: OnboardingTheme) => {
+    setSelectedTheme(theme);
+    notifyNativeTheme(theme);
   };
 
-  // Dots indicator: 4 steps for Auth → Completion
   const renderDots = () => {
     if (step === 'splash') return null;
-    const steps: OnboardingStep[] = ['auth', 'default_browser', 'byok', 'completion'];
+    const steps: OnboardingStep[] = ['auth', 'theme', 'default_browser', 'completion'];
     const activeIndex = steps.indexOf(step);
     return (
-      <div class="onboarding-dots" role="progressbar" aria-valuenow={activeIndex + 1} aria-valuemin={1} aria-valuemax={4} aria-label="Onboarding progress">
-        {steps.map((s, idx) => (
-          <span 
-            key={s} 
+      <div
+        class="onboarding-dots"
+        role="progressbar"
+        aria-valuenow={activeIndex + 1}
+        aria-valuemin={1}
+        aria-valuemax={4}
+        aria-label="Onboarding progress"
+      >
+        {steps.map((currentStep, idx) => (
+          <span
+            key={currentStep}
             class={`onboarding-dot ${idx === activeIndex ? 'active' : ''}`}
             aria-hidden="true"
           />
@@ -221,12 +180,11 @@ export function OnboardingScreen() {
   };
 
   return (
-    <div 
+    <div
       ref={containerRef}
-      class={`onboarding-container onboarding-step-${step}`} 
+      class={`onboarding-container onboarding-step-${step}`}
       data-testid="onboarding-screen"
     >
-      {/* Main Content Area */}
       <main class="onboarding-main-content">
         {step === 'splash' && (
           <div class="onboarding-pane-splash">
@@ -243,22 +201,32 @@ export function OnboardingScreen() {
         {step === 'auth' && (
           <div class="onboarding-pane-card">
             <div class="onboarding-pane-header">
-              <h2>{authMode === 'login' ? 'Sign in to Maho' : 'Create your account'}</h2>
-              <p>{authMode === 'login' ? 'Sign in to continue setting up Maho.' : 'Set up a Maho account to continue.'}</p>
+              <h2>{authMode === 'login' ? 'Sign in to Maho' : 'Create your Maho AI account'}</h2>
+              <p>
+                {authMode === 'login'
+                  ? 'Sign in to Maho AI to continue setting up your browser.'
+                  : 'Create a Maho AI account to continue.'}
+              </p>
             </div>
 
             <div class="onboarding-tabs">
-              <button 
-                type="button" 
+              <button
+                type="button"
                 class={`onboarding-tab ${authMode === 'login' ? 'active' : ''}`}
-                onClick={() => { setAuthMode('login'); setAuthError(null); }}
+                onClick={() => {
+                  setAuthMode('login');
+                  setAuthError(null);
+                }}
               >
                 Sign In
               </button>
-              <button 
-                type="button" 
+              <button
+                type="button"
                 class={`onboarding-tab ${authMode === 'signup' ? 'active' : ''}`}
-                onClick={() => { setAuthMode('signup'); setAuthError(null); }}
+                onClick={() => {
+                  setAuthMode('signup');
+                  setAuthError(null);
+                }}
               >
                 Create Account
               </button>
@@ -312,11 +280,7 @@ export function OnboardingScreen() {
                 />
               </div>
 
-              <button 
-                type="submit" 
-                class="onboarding-btn-primary" 
-                disabled={authLoading}
-              >
+              <button type="submit" class="onboarding-btn-primary" disabled={authLoading}>
                 {authLoading ? (
                   <Icon name="loader" class="animate-spin" size={18} />
                 ) : authMode === 'login' ? (
@@ -339,13 +303,34 @@ export function OnboardingScreen() {
               disabled={authLoading}
               onClick={handleGoogleSignIn}
             >
-              {authLoading ? (
-                <Icon name="loader" class="animate-spin" size={18} />
-              ) : (
-                <GoogleMark />
-              )}
+              {authLoading ? <Icon name="loader" class="animate-spin" size={18} /> : <GoogleMark />}
               <span>Continue with Google</span>
             </button>
+          </div>
+        )}
+
+        {step === 'theme' && (
+          <div class="onboarding-pane-card text-center flex-center">
+            <div class="onboarding-icon-card">
+              <Icon name="settings" size={44} class="onboarding-step-icon" aria-label="Theme" />
+            </div>
+            <div class="onboarding-pane-header">
+              <h2>Choose your theme</h2>
+              <p>Pick how Maho looks. You can change this later in Appearance settings.</p>
+            </div>
+            <div class="onboarding-tabs" aria-label="Theme selection">
+              {(['system', 'dark', 'light'] as OnboardingTheme[]).map((theme) => (
+                <button
+                  key={theme}
+                  type="button"
+                  class={`onboarding-tab ${selectedTheme === theme ? 'active' : ''}`}
+                  aria-pressed={selectedTheme === theme}
+                  onClick={() => handleThemeSelect(theme)}
+                >
+                  {theme === 'system' ? 'System' : theme === 'dark' ? 'Dark' : 'Light'}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -361,77 +346,37 @@ export function OnboardingScreen() {
           </div>
         )}
 
-        {step === 'byok' && (
-          <div class="onboarding-pane-card">
-            <div class="onboarding-pane-header">
-              <h2>Bring your own key</h2>
-              <p>Securely configure your OpenAI, Anthropic, or local model keys. Your credentials stay local in your device's keychain.</p>
-            </div>
-
-            {byokError && (
-              <div class="onboarding-error-banner" role="alert">
-                <Icon name="circle-alert" size={16} />
-                <span>{byokError}</span>
-              </div>
-            )}
-
-            <div class="onboarding-form">
-              <div class="onboarding-input-group">
-                <label for="byok-openai">OpenAI API Key</label>
-                <input
-                  id="byok-openai"
-                  type="password"
-                  placeholder="sk-..."
-                  value={openaiKey}
-                  disabled={byokSaving}
-                  onInput={(e) => setOpenaiKey(e.currentTarget.value)}
-                />
-              </div>
-
-              <div class="onboarding-input-group">
-                <label for="byok-anthropic">Anthropic API Key</label>
-                <input
-                  id="byok-anthropic"
-                  type="password"
-                  placeholder="sk-ant-..."
-                  value={anthropicKey}
-                  disabled={byokSaving}
-                  onInput={(e) => setAnthropicKey(e.currentTarget.value)}
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
         {step === 'completion' && (
           <div class="onboarding-pane-card text-center flex-center">
             <div class="onboarding-icon-card onboarding-check-pulse">
-              <Icon name="circle-check" size={44} class="onboarding-step-icon onboarding-step-icon-success" aria-label="Circle check" />
+              <Icon
+                name="circle-check"
+                size={44}
+                class="onboarding-step-icon onboarding-step-icon-success"
+                aria-label="Circle check"
+              />
             </div>
             <div class="onboarding-pane-header">
               <h2>You're all set</h2>
-              <p>The browser tools you liked, on a stack that isn't going anywhere.</p>
+              <p>Maho AI, your theme, and browser setup are ready.</p>
             </div>
           </div>
         )}
       </main>
 
-      {/* Bottom CTA Bar */}
       <footer class="onboarding-footer">
         <div class="onboarding-footer-inner">
-          {/* Steps indicators */}
           {renderDots()}
 
           {step !== 'auth' && (
             <div class="onboarding-footer-actions">
-              {/* Back Action button */}
-              {['default_browser', 'byok'].includes(step) && (
-                <button 
+              {['theme', 'default_browser'].includes(step) && (
+                <button
                   type="button"
                   class="onboarding-btn-text"
                   onClick={() => {
-                    if (step === 'default_browser') setStep('auth');
-                    if (step === 'byok') setStep('default_browser');
+                    if (step === 'theme') setStep('auth');
+                    if (step === 'default_browser') setStep('theme');
                   }}
                 >
                   <Icon name="chevron-left" size={16} />
@@ -440,8 +385,8 @@ export function OnboardingScreen() {
               )}
 
               {step === 'splash' && (
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   class="onboarding-btn-primary rounded-pill"
                   onClick={() => setStep('auth')}
                 >
@@ -450,21 +395,23 @@ export function OnboardingScreen() {
                 </button>
               )}
 
+              {step === 'theme' && (
+                <button type="button" class="onboarding-btn-primary" onClick={() => setStep('default_browser')}>
+                  Continue
+                </button>
+              )}
+
               {step === 'default_browser' && (
                 <div class="onboarding-btn-group">
-                  <button 
-                    type="button"
-                    class="onboarding-btn-text"
-                    onClick={() => setStep('byok')}
-                  >
+                  <button type="button" class="onboarding-btn-text" onClick={() => setStep('completion')}>
                     Maybe later
                   </button>
-                  <button 
+                  <button
                     type="button"
                     class="onboarding-btn-primary"
                     onClick={async () => {
                       await bridge.openDefaultBrowserSettings();
-                      setStep('byok');
+                      setStep('completion');
                     }}
                   >
                     Set as default
@@ -472,29 +419,8 @@ export function OnboardingScreen() {
                 </div>
               )}
 
-              {step === 'byok' && (
-                <div class="onboarding-btn-group">
-                  <button 
-                    type="button"
-                    class="onboarding-btn-text"
-                    disabled={byokSaving}
-                    onClick={() => setStep('completion')}
-                  >
-                    Skip
-                  </button>
-                  <button 
-                    type="button"
-                    class="onboarding-btn-primary"
-                    disabled={byokSaving}
-                    onClick={handleSaveByok}
-                  >
-                    {byokSaving ? <Icon name="loader" class="animate-spin" size={16} /> : 'Save'}
-                  </button>
-                </div>
-              )}
-
               {step === 'completion' && (
-                <button 
+                <button
                   type="button"
                   class="onboarding-btn-primary onboarding-btn-completion"
                   onClick={async () => {

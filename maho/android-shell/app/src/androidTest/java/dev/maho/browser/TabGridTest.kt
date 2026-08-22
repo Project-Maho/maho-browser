@@ -57,7 +57,7 @@ class TabGridTest {
                 )
             }
         }
-        composeTestRule.onNodeWithText("Example").assertIsDisplayed()
+        composeTestRule.onNodeWithText("example.com").assertIsDisplayed()
     }
 
     @Test
@@ -89,8 +89,8 @@ class TabGridTest {
             }
         }
 
-        composeTestRule.onNodeWithText("One").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Two").assertIsDisplayed()
+        composeTestRule.onNodeWithText("one.example").assertIsDisplayed()
+        composeTestRule.onNodeWithText("two.example").assertIsDisplayed()
     }
 
     @Composable

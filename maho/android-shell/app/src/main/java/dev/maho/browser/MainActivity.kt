@@ -16,8 +16,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
+import dev.maho.browser.bridge.BridgeSettings
 import dev.maho.browser.ui.MainBrowserScreen
 import dev.maho.browser.ui.OnboardingScreen
+import dev.maho.browser.ui.theme.BrowserThemeController
 import dev.maho.browser.ui.theme.ProvideBrowserShellTheme
 import dev.maho.browser.ui.theme.brandColorScheme
 
@@ -45,6 +47,8 @@ class MainActivity : ComponentActivity() {
         appUpdateManager = MahoAppUpdateManager(this)
         appUpdateManager.register()
 
+        BridgeSettings.getSettingsTyped()?.appearance?.theme?.let(BrowserThemeController::setTheme)
+
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
@@ -52,7 +56,8 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            MaterialTheme(colorScheme = brandColorScheme()) {
+            val darkTheme = BrowserThemeController.isDarkTheme()
+            MaterialTheme(colorScheme = brandColorScheme(darkTheme)) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -61,7 +66,7 @@ class MainActivity : ComponentActivity() {
                         }
                         .testTag("androidShellRoot"),
                 ) {
-                    ProvideBrowserShellTheme {
+                    ProvideBrowserShellTheme(darkTheme = darkTheme) {
                         var showOnboarding by remember { mutableStateOf(!onboardingCompleted) }
 
                         if (showOnboarding) {

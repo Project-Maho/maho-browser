@@ -76,6 +76,16 @@ struct SqlCipherKeychain {
         }
         return updateStatus == errSecSuccess
     }
+
+    static func delete() -> Bool {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
 }
 
 // MahoCore FFI pointer: *mut MahoCore in Rust, opaque to Swift.

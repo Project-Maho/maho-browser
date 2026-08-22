@@ -57,6 +57,7 @@ fn entity_with_field_hlc(
         deleted: false,
         queue_row_id: None,
         fields_hlc_json,
+        profile_id: None,
     }
 }
 
@@ -107,6 +108,7 @@ fn desktop_space_payload(name: &str) -> String {
 fn tab_payload(id: &str, title: &str, role: serde_json::Value) -> String {
     serde_json::json!({
         "id": id,
+        "profileId": "default",
         "parentId": null,
         "spaceId": "space-1",
         "url": "https://example.com",
@@ -344,7 +346,7 @@ fn tab_role_preserved_under_partial_space_write() {
         "tab-pinned",
         base + 100,
         device_mobile,
-        serde_json::json!({"title": "Docs (mobile)"}).to_string(),
+        serde_json::json!({"profileId": "default", "title": "Docs (mobile)"}).to_string(),
     );
     let merged =
         parse_tab(&apply_one(&mut core, pinned_partial).expect("partial title write must apply"));

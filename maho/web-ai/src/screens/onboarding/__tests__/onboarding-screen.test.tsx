@@ -9,10 +9,6 @@ const mockBridge = {
   relayAccountStatus: vi.fn(),
   openDefaultBrowserSettings: vi.fn(),
   completeOnboarding: vi.fn(),
-  byokGetKey: vi.fn(),
-  byokSetKey: vi.fn(),
-  byokDeleteKey: vi.fn(),
-  byokValidateKey: vi.fn(),
 };
 
 const { mockRouteParams } = vi.hoisted(() => ({
@@ -26,7 +22,6 @@ vi.mock('../../../hooks/use-bridge', () => ({
   useBridge: () => mockBridge,
 }));
 
-// Mock useHashRoute to return mock route parameters
 vi.mock('../../../hooks/use-hash-route', () => ({
   useHashRoute: () => ({
     name: 'onboarding',
@@ -44,10 +39,6 @@ beforeEach(() => {
   mockBridge.relayAccountStatus.mockResolvedValue({ hasValidSession: false, isReauth: false });
   mockBridge.openDefaultBrowserSettings.mockResolvedValue(undefined);
   mockBridge.completeOnboarding.mockResolvedValue(undefined);
-  mockBridge.byokGetKey.mockResolvedValue(null);
-  mockBridge.byokSetKey.mockResolvedValue(true);
-  mockBridge.byokDeleteKey.mockResolvedValue(true);
-  mockBridge.byokValidateKey.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -56,6 +47,16 @@ afterEach(() => {
   document.documentElement.style.removeProperty('--safe-area-top');
   document.documentElement.style.removeProperty('--safe-area-bottom');
 });
+
+async function advanceThroughLogin() {
+  fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+  const emailInput = await screen.findByLabelText(/email address/i);
+  const passwordInput = screen.getByLabelText(/password/i);
+  fireEvent.input(emailInput, { target: { value: 'user@test.com' } });
+  fireEvent.input(passwordInput, { target: { value: 'password123' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+  await screen.findByRole('heading', { name: /choose your theme/i });
+}
 
 describe('OnboardingScreen', () => {
   it('opens directly at authentication for account recovery', () => {
@@ -68,25 +69,20 @@ describe('OnboardingScreen', () => {
   });
 
   it('preserves native safe-area variables when route insets are zero', () => {
-    // Given
     document.documentElement.style.setProperty('--safe-area-top', '62px');
     document.documentElement.style.setProperty('--safe-area-bottom', '34px');
     mockRouteParams.safeAreaTop = '0';
     mockRouteParams.safeAreaBottom = '0';
 
-    // When
     render(<OnboardingScreen />);
 
-    // Then
     expect(document.documentElement.style.getPropertyValue('--safe-area-top')).toBe('62px');
     expect(document.documentElement.style.getPropertyValue('--safe-area-bottom')).toBe('34px');
   });
 
   it('renders the canonical star-only Maho raster on the splash step', () => {
-    // Given / When
     render(<OnboardingScreen />);
 
-    // Then
     const logo = screen.getByTestId('maho-logo');
     expect(logo.tagName).toBe('IMG');
     expect(logo).toHaveAttribute('src', expect.stringMatching(/maho-star.*\.png/));
@@ -98,14 +94,13 @@ describe('OnboardingScreen', () => {
     expect(screen.getByText('Built for people who')).toBeTruthy();
     expect(screen.getByText('took browsers seriously.')).toBeTruthy();
 
-    const continueBtn = screen.getByRole('button', { name: /continue/i });
-    fireEvent.click(continueBtn);
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
     expect(await screen.findByRole('heading', { name: /sign in to maho/i })).toBeTruthy();
     expect(screen.queryByTestId('maho-logo')).toBeNull();
   });
 
-  it('continues onboarding after Google Relay sign-in', async () => {
+  it('continues to theme selection after Google Maho AI sign-in', async () => {
     render(<OnboardingScreen />);
 
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
@@ -114,7 +109,7 @@ describe('OnboardingScreen', () => {
     await waitFor(() => {
       expect(mockBridge.relaySignInWithGoogle).toHaveBeenCalledOnce();
     });
-    expect(await screen.findByRole('heading', { name: /set as default browser/i })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: /choose your theme/i })).toBeTruthy();
   });
 
   it('displays validation error if email or password is empty in auth step', async () => {
@@ -122,30 +117,18 @@ describe('OnboardingScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
     const submitBtn = await screen.findByRole('button', { name: 'Sign in' });
-    const form = submitBtn.closest('form');
-    if (form) {
-      fireEvent.submit(form);
-    }
+    fireEvent.submit(submitBtn.closest('form')!);
 
     expect(await screen.findByText('Please fill in all fields.')).toBeTruthy();
     expect(mockBridge.relaySignIn).not.toHaveBeenCalled();
   });
 
-  it('handles successful login and transitions to default browser page', async () => {
+  it('handles successful login and transitions to theme selection', async () => {
     render(<OnboardingScreen />);
-    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    await advanceThroughLogin();
 
-    const emailInput = await screen.findByLabelText(/email address/i);
-    const passwordInput = screen.getByLabelText(/password/i);
-    const submitBtn = screen.getByRole('button', { name: 'Sign in' });
-
-    fireEvent.input(emailInput, { target: { value: 'user@test.com' } });
-    fireEvent.input(passwordInput, { target: { value: 'password123' } });
-    fireEvent.click(submitBtn);
-
-    expect(await screen.findByRole('heading', { name: /set as default browser/i })).toBeTruthy();
     expect(mockBridge.relaySignIn).toHaveBeenCalledWith('user@test.com', 'password123');
-    expect(screen.getByRole('img', { name: 'Globe' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Theme' })).toBeTruthy();
     expect(screen.queryByTestId('maho-logo')).toBeNull();
   });
 
@@ -156,68 +139,46 @@ describe('OnboardingScreen', () => {
 
     const emailInput = await screen.findByLabelText(/email address/i);
     const passwordInput = screen.getByLabelText(/password/i);
-    const submitBtn = screen.getByRole('button', { name: 'Sign in' });
-
     fireEvent.input(emailInput, { target: { value: 'user@test.com' } });
     fireEvent.input(passwordInput, { target: { value: 'wrongpass' } });
-    fireEvent.click(submitBtn);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     expect(await screen.findByText('Invalid credentials')).toBeTruthy();
   });
 
-  it('navigates from default browser step to BYOK step', async () => {
+  it('selects a theme and advances to default-browser setup', async () => {
     render(<OnboardingScreen />);
-    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    await advanceThroughLogin();
 
-    const emailInput = await screen.findByLabelText(/email address/i);
-    const passwordInput = screen.getByLabelText(/password/i);
-    fireEvent.input(emailInput, { target: { value: 'user@test.com' } });
-    fireEvent.input(passwordInput, { target: { value: 'pass123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dark' }));
+    expect(screen.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true');
 
-    // On default browser screen, click 'Maybe later'
-    const maybeLaterBtn = await screen.findByRole('button', { name: /maybe later/i });
-    fireEvent.click(maybeLaterBtn);
-
-    expect(await screen.findByRole('heading', { name: /bring your own key/i })).toBeTruthy();
-    expect(screen.queryByTestId('maho-logo')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: /set as default browser/i })).toBeTruthy();
   });
 
-  it('submits BYOK keys and finishes onboarding successfully', async () => {
+  it('can skip default-browser setup and finish onboarding', async () => {
     render(<OnboardingScreen />);
-    // Navigate past splash, auth, and default browser
-    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    await advanceThroughLogin();
 
-    const emailInput = await screen.findByLabelText(/email address/i);
-    const passwordInput = screen.getByLabelText(/password/i);
-    fireEvent.input(emailInput, { target: { value: 'user@test.com' } });
-    fireEvent.input(passwordInput, { target: { value: 'pass123' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     fireEvent.click(await screen.findByRole('button', { name: /maybe later/i }));
-
-    const openaiInput = await screen.findByLabelText(/openai api key/i);
-    const anthropicInput = screen.getByLabelText(/anthropic api key/i);
-    const saveBtn = screen.getByRole('button', { name: /save/i });
-
-    fireEvent.input(openaiInput, { target: { value: 'sk-openai-key' } });
-    fireEvent.input(anthropicInput, { target: { value: 'sk-anthropic-key' } });
-    fireEvent.click(saveBtn);
-
-    await waitFor(() => {
-      expect(mockBridge.byokValidateKey).toHaveBeenCalledWith('openai', 'sk-openai-key');
-      expect(mockBridge.byokValidateKey).toHaveBeenCalledWith('anthropic', 'sk-anthropic-key');
-      expect(mockBridge.byokSetKey).toHaveBeenCalledWith('openai', 'sk-openai-key');
-      expect(mockBridge.byokSetKey).toHaveBeenCalledWith('anthropic', 'sk-anthropic-key');
-    });
 
     expect(await screen.findByRole('heading', { name: /you're all set/i })).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Circle check' })).toBeTruthy();
-    expect(screen.queryByTestId('maho-logo')).toBeNull();
 
-    const diveInBtn = screen.getByRole('button', { name: /dive in!/i });
-    fireEvent.click(diveInBtn);
-
+    fireEvent.click(screen.getByRole('button', { name: /dive in!/i }));
     expect(mockBridge.completeOnboarding).toHaveBeenCalledOnce();
+  });
+
+  it('opens native default-browser settings before finishing', async () => {
+    render(<OnboardingScreen />);
+    await advanceThroughLogin();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(await screen.findByRole('button', { name: /set as default/i }));
+
+    await waitFor(() => expect(mockBridge.openDefaultBrowserSettings).toHaveBeenCalledOnce());
+    expect(await screen.findByRole('heading', { name: /you're all set/i })).toBeTruthy();
   });
 });

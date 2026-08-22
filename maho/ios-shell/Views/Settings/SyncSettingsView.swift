@@ -4,10 +4,6 @@ import LucideIcons
 import UIKit
 #endif
 
-private struct SyncBootstrapConfiguration: Decodable {
-    let success: Bool
-}
-
 @MainActor
 struct SyncSettingsView: View {
     private enum AuthMode: String, CaseIterable, Identifiable {
@@ -32,6 +28,7 @@ struct SyncSettingsView: View {
     @State private var syncStatus: SyncStatus = .idle
     @State private var account: AccountInfo?
     @State private var relaySession: RelayAuthSession?
+    @State private var activeProfileName: String?
     @State private var syncEnabled = false
     @State private var devices: [ConnectedDevice] = []
     @State private var authMode: AuthMode = .login
@@ -74,6 +71,9 @@ struct SyncSettingsView: View {
         .navigationTitle("Sync")
         .onAppear(perform: configureView)
         .onReceive(NotificationCenter.default.publisher(for: .syncStatusChanged)) { _ in
+            refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("MahoActiveProfileChanged"))) { _ in
             refresh()
         }
         .alert("Sync Key", isPresented: $showSyncKeyAlert) {
@@ -123,6 +123,11 @@ struct SyncSettingsView: View {
                        let coreDisplayName = account.displayName,
                        coreDisplayName != relaySession.account.displayName {
                         Text(coreDisplayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let activeProfileName, !activeProfileName.isEmpty {
+                        Text("Active profile: \(activeProfileName)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -196,16 +201,13 @@ struct SyncSettingsView: View {
     private var syncToggleSection: some View {
         if relaySession != nil {
             Section {
-                Toggle("Enable Polling Sync", isOn: $syncEnabled)
-                    .onChange(of: syncEnabled) { _, newValue in
-                        if newValue {
-                            bridge.toggleSync()
-                            SyncManager.shared.startSync()
-                        } else {
-                            SyncManager.shared.stopSync()
-                            bridge.toggleSync()
-                        }
-                    }
+                Toggle(
+                    "Enable Polling Sync",
+                    isOn: Binding(
+                        get: { syncEnabled },
+                        set: { setPollingSyncEnabled($0) }
+                    )
+                )
 
                 Text("When enabled, Maho periodically pushes local changes and pulls relay updates while the app is active.")
                     .font(.caption)
@@ -233,14 +235,12 @@ struct SyncSettingsView: View {
                     }
                 }
 
-                if relaySession != nil {
-                    Button("Poll Now") {
-                        SyncManager.shared.syncNow()
-                    }
-                    .disabled(!syncEnabled)
+                Button("Poll Now") {
+                    SyncManager.shared.syncNow()
                 }
+                .disabled(!syncEnabled)
             } header: {
-                Text("Status")
+                Text(activeProfileName.map { "Status · \($0)" } ?? "Status")
             }
         }
     }
@@ -393,6 +393,23 @@ struct SyncSettingsView: View {
         isSubmittingAuth || emailInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || passwordInput.isEmpty
     }
 
+    private func setPollingSyncEnabled(_ enabled: Bool) {
+        guard relaySession != nil, enabled != syncEnabled else { return }
+        syncEnabled = enabled
+        do {
+            try bridge.setSyncEnabled(enabled)
+            if enabled {
+                SyncManager.shared.startSync()
+            } else {
+                SyncManager.shared.stopSync()
+            }
+        } catch {
+            syncEnabled = SyncManager.shared.isSyncEnabled
+            authMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        refresh()
+    }
+
     private func configureView() {
         refresh()
         SyncManager.shared.configureForCurrentSession()
@@ -401,6 +418,12 @@ struct SyncSettingsView: View {
     private func refresh() {
         relaySession = authStore.loadSession()
         syncEnabled = SyncManager.shared.isSyncEnabled && relaySession != nil
+
+        if let activeProfileId = bridge.getActiveProfileId() {
+            activeProfileName = bridge.getProfiles().first(where: { $0.id == activeProfileId })?.name ?? activeProfileId
+        } else {
+            activeProfileName = nil
+        }
 
         if let status = bridge.getSyncStatus() {
             syncStatus = status
@@ -440,9 +463,7 @@ struct SyncSettingsView: View {
                 password: password,
                 displayName: displayName.isEmpty ? nil : displayName
             )
-            try authStore.saveSession(session)
-            try await configureAccountSync(session)
-            applyAuthenticatedSession(session)
+            try await prepareAuthenticatedSession(session)
             authMessage = mode == .login ? "Logged in to relay." : "Relay account created."
             passwordInput = ""
             displayNameInput = ""
@@ -461,11 +482,11 @@ struct SyncSettingsView: View {
             let flow = GoogleRelaySignInFlow(
                 coordinatorProvider: googleCoordinatorProvider,
                 apiClient: apiClient,
-                authStore: authStore
+                authStore: authStore,
+                persistSession: false
             )
             let session = try await flow.signIn()
-            try await configureAccountSync(session)
-            applyAuthenticatedSession(session)
+            try await prepareAuthenticatedSession(session)
             authMessage = "Logged in with Google."
             refresh()
         } catch {
@@ -474,8 +495,7 @@ struct SyncSettingsView: View {
         }
     }
 
-    private func applyAuthenticatedSession(_ session: RelayAuthSession) {
-        relaySession = session
+    private func prepareAuthenticatedSession(_ session: RelayAuthSession) async throws {
         bridge.signIn(
             email: session.account.email,
             displayName: session.account.displayName,
@@ -484,7 +504,16 @@ struct SyncSettingsView: View {
             userId: session.account.id,
             deviceId: session.device?.id,
         )
-        SyncManager.shared.relayAuthenticationSucceeded()
+        do {
+            try await configureAccountSync(session)
+            try bridge.setSyncEnabled(true)
+            try authStore.saveSession(session)
+            relaySession = session
+            SyncManager.shared.relayAuthenticationSucceeded()
+        } catch {
+            bridge.signOut()
+            throw error
+        }
     }
 
     private func configureAccountSync(_ session: RelayAuthSession) async throws {
@@ -497,29 +526,18 @@ struct SyncSettingsView: View {
                     "Enter your Recovery Phrase to migrate existing Sync."
                 )
             }
-            guard let generated = bridge.generateSyncBootstrap(),
-                  let data = generated.data(using: .utf8),
-                  let created = try? JSONDecoder().decode(RelaySyncBootstrap.self, from: data)
-            else {
-                throw SyncCoreError.operationFailed("generate account Sync bootstrap")
-            }
+            let generated = try bridge.generateSyncBootstrap()
             do {
-                bootstrap = try await apiClient.putSyncBootstrap(created, session: session)
+                bootstrap = try await apiClient.putSyncBootstrap(generated, session: session)
             } catch RelayAPIError.http(let statusCode, _) where statusCode == 409 {
                 bootstrap = try await apiClient.getSyncBootstrap(session: session)
             }
         }
 
-        guard let result = bridge.configureSyncBootstrap(
+        try bridge.configureSyncBootstrap(
             serverURL: RelayAPIClient.currentBaseURLString(),
             seed: bootstrap.seed
-        ),
-        let data = result.data(using: .utf8),
-        let response = try? JSONDecoder().decode(SyncBootstrapConfiguration.self, from: data),
-        response.success
-        else {
-            throw SyncCoreError.operationFailed("configure account Sync bootstrap")
-        }
+        )
     }
 
     private func signOut() async {
@@ -528,7 +546,8 @@ struct SyncSettingsView: View {
         do {
             try await RelaySignOutFlow(apiClient: apiClient, authStore: authStore)
                 .signOut(session: relaySession) {
-                    SyncManager.shared.relayAuthenticationEnded()
+                    try? bridge.setSyncEnabled(false)
+                    SyncManager.shared.stopSync(persistPreference: true)
                     bridge.signOut()
                     SyncTransport.shared.clearRelaySession()
                     self.relaySession = nil

@@ -128,7 +128,7 @@ protocol RelayAPIClientProtocol: AnyObject {
 
 final class RelayAPIClient: RelayAPIClientProtocol {
     static let serverURLDefaultsKey = "maho_sync_server_url"
-    static let defaultBaseURLString = "http://192.168.0.39:8787"
+    static let defaultBaseURLString = "https://relay.mahobrowser.com"
 
     private enum Endpoint: String {
         case signup = "/auth/signup"
@@ -319,6 +319,10 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         body: Body?,
         authorizedSession: RelayAuthSession?
     ) async throws -> Response {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" else {
+            throw RelayAPIError.invalidBaseURL(url.absoluteString)
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -364,7 +368,9 @@ final class RelayAPIClient: RelayAPIClientProtocol {
         let rawBaseURL = baseURLProvider().trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedBaseURL = Self.normalizedBaseURLString(from: rawBaseURL)
 
-        guard let url = URL(string: normalizedBaseURL) else {
+        guard let url = URL(string: normalizedBaseURL),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "https" else {
             throw RelayAPIError.invalidBaseURL(rawBaseURL)
         }
 

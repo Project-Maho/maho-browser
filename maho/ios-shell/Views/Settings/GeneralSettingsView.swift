@@ -34,7 +34,7 @@ struct GeneralSettingsView: View {
     var body: some View {
         Form {
             Section {
-                
+
                 Picker("Search Engine", selection: $selectedSearchEngine) {
                     ForEach(Self.searchEngineOptions) { option in
                         Text(option.name).tag(option.name)
@@ -187,6 +187,7 @@ struct GeneralSettingsView: View {
     }
 
     private func clearBrowsingData() {
+        bridge.sendEvent(.clearHistory)
         let dataStore = WKWebsiteDataStore.default()
         let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
 

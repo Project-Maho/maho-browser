@@ -24,12 +24,19 @@ internal fun workDisposition(outcome: SyncCycleOutcome): SyncWorkDisposition = w
     -> SyncWorkDisposition.FAILURE
 }
 
+internal inline fun runEnabledSyncWork(
+    enabled: Boolean,
+    runCycle: () -> SyncCycleOutcome,
+): SyncWorkDisposition = if (enabled) workDisposition(runCycle()) else SyncWorkDisposition.SUCCESS
+
 class ReliableSyncWorker(
     appContext: Context,
     params: WorkerParameters,
 ) : CoroutineWorker(appContext, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        when (workDisposition(SyncTransport.shared.runBoundedCycle().outcome)) {
+        when (runEnabledSyncWork(RelaySessionStore.isSyncEnabled()) {
+            SyncTransport.shared.runBoundedCycle().outcome
+        }) {
             SyncWorkDisposition.SUCCESS -> Result.success()
             SyncWorkDisposition.RETRY -> Result.retry()
             SyncWorkDisposition.FAILURE -> Result.failure()
@@ -48,6 +55,10 @@ class ReliableSyncWorker(
                 ExistingWorkPolicy.REPLACE,
                 request,
             )
+        }
+
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
         }
     }
 }

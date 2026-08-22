@@ -1,6 +1,5 @@
 package dev.maho.browser.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -89,7 +88,7 @@ object BrowserShellTheme {
 }
 
 @Composable
-fun brandColorScheme(darkTheme: Boolean = isSystemInDarkTheme()): ColorScheme {
+fun brandColorScheme(darkTheme: Boolean = BrowserThemeController.isDarkTheme()): ColorScheme {
     val accent = colorResource(R.color.shell_accent)
     return if (darkTheme) {
         val windowBackground = colorResource(R.color.shell_window_background)
@@ -151,8 +150,11 @@ fun brandColorScheme(darkTheme: Boolean = isSystemInDarkTheme()): ColorScheme {
 }
 
 @Composable
-fun ProvideBrowserShellTheme(content: @Composable () -> Unit) {
-    val isDark = isSystemInDarkTheme()
+fun ProvideBrowserShellTheme(
+    darkTheme: Boolean = BrowserThemeController.isDarkTheme(),
+    content: @Composable () -> Unit,
+) {
+    val isDark = darkTheme
     val windowBackground = colorResource(R.color.shell_window_background)
     val browsingBackground = colorResource(R.color.shell_browsing_background)
     val homeBackgroundStart = colorResource(R.color.shell_home_background_start)

@@ -1,6 +1,57 @@
 import SwiftUI
 
+enum SearchPresentationOrigin: Equatable {
+    case home
+    case browsing(TabId)
+
+    var isBrowsing: Bool {
+        if case .browsing = self { return true }
+        return false
+    }
+
+    var tabId: TabId? {
+        guard case .browsing(let tabId) = self else { return nil }
+        return tabId
+    }
+}
+
+enum SearchSubmissionPlan: Equatable {
+    case reuseActiveTab(tabId: TabId, url: String)
+    case createNewTab(url: String)
+}
+
 enum MainBrowserPresentation {
+    static func searchPrefillQuery(for origin: SearchPresentationOrigin, currentUrl: String) -> String {
+        guard case .browsing = origin else { return "" }
+        let trimmed = currentUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "about:blank" else { return "" }
+        return trimmed
+    }
+
+    static func searchSubmissionPlan(
+        for origin: SearchPresentationOrigin?,
+        query: String,
+        activeTabId: TabId?
+    ) -> SearchSubmissionPlan? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let destination = normalizedURL(from: trimmed)
+
+        guard let origin else {
+            return .createNewTab(url: destination)
+        }
+
+        switch origin {
+        case .home:
+            return .createNewTab(url: destination)
+        case .browsing(let tabId):
+            guard !tabId.isEmpty, let activeTabId, !activeTabId.isEmpty else {
+                return .createNewTab(url: destination)
+            }
+            return .reuseActiveTab(tabId: activeTabId, url: destination)
+        }
+    }
+
     static func desktopUserAgent(from userAgent: String) -> String {
         userAgent
             .replacingOccurrences(of: #"\s+Mobile/[^ ]+"#, with: "", options: .regularExpression)

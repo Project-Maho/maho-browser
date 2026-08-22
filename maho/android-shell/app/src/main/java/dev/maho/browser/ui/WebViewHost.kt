@@ -21,6 +21,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import dev.maho.browser.models.TabId
+import dev.maho.browser.ui.theme.BrowserThemeController
+import dev.maho.browser.ui.webview.AgenticBrowsingWebViewRegistry
 
 @Composable
 fun WebViewHost(
@@ -100,6 +102,7 @@ fun WebViewHost(
                         .getWhitelist(applicationContext)
                         .contains(host)
                 },
+                onPageThemeApply = { view -> BrowserThemeController.applyToWebView(view) },
             )
             webChromeClient = MahoWebChromeClient(
                 tabIdProvider = { currentTabId.value },
@@ -117,6 +120,7 @@ fun WebViewHost(
                 false
             }
 
+            BrowserThemeController.registerWebView(this)
             if (initialUrl.isNotBlank()) {
                 loadUrl(initialUrl)
             }
@@ -154,15 +158,19 @@ fun WebViewHost(
                     WebStorage.getInstance().deleteAllData()
                     CookieManager.getInstance().removeAllCookies(null)
                     CookieManager.getInstance().flush()
-                } catch (e: Exception) {}
+                } catch (_: Exception) {}
             }
+            BrowserThemeController.unregisterWebView(webView)
             webView.destroy()
         }
     }
 
     DisposableEffect(webView) {
+        AgenticBrowsingWebViewRegistry.attach(webView)
         onWebViewReady(webView)
-        onDispose { }
+        onDispose {
+            AgenticBrowsingWebViewRegistry.detach(webView)
+        }
     }
 
     LaunchedEffect(isDesktopMode) {

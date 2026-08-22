@@ -1,72 +1,72 @@
 {
   "schemaVersion": 1,
   "bundleVersion": "0.1.0",
-  "buildTimestamp": 1786799527,
+  "buildTimestamp": 1787238675,
   "files": {
     "web-ai/index.html": {
       "size": 432,
       "sha256": "2dddcda400b720c72f6780597f2ccb02b030720f3a48fe706dd43f0f44d16f46",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/chunks/conversation-list-screen-D4LhtEPX.js": {
       "size": 17139,
       "sha256": "43c1c46db865e3239f91ba2da0efdaacd605f6d33812eb6b40820a784dba45e2",
-      "modifiedTimestamp": 1786799527
-    },
-    "web-ai/chunks/onboarding-screen-CyEMAzKx.js": {
-      "size": 10227,
-      "sha256": "4daec7250d2d747b96e8f65be35d7363d62aac2ebb4e2380685bc91f2a28e2a6",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/chunks/agent-screen-CKbIdq77.js": {
       "size": 22487,
       "sha256": "e29d9b6aa0112ec7c4f4cfd29432ee540b68f81911b24b9f702b60108b750111",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/chunks/byok-screen-BqvIsY2g.js": {
       "size": 12230,
       "sha256": "d4c72c574dc2467d0ca0caaaa6227119010ffd18b3feb5c3cc24a60880333b09",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
+    },
+    "web-ai/chunks/onboarding-screen-B_6i2Kf8.js": {
+      "size": 9324,
+      "sha256": "1647c0e19bbe7599b8eedacec12f328fe6578f98631f8f374d1d6114d67d7196",
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/maho-star-CjLTuYkB.png": {
       "size": 110357,
       "sha256": "31eb010a72798377f5bb80b59e296aafb0d0158f1dc81bcbd2e87a94c82b3146",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/index-Cqfq2zWL.css": {
       "size": 19015,
       "sha256": "fb999b2056951742a75b6518abe3fd9723baba89e5924eb2520ac5e5db5a2554",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/maho-logo-BtD8zpUc.png": {
       "size": 17462,
       "sha256": "845a0e5195a9b8b5adc44dde22dc700da0c3cc91a2005b0ee1e378bbd4ecdf37",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/conversation-list-screen-BRhYgtxU.css": {
       "size": 8758,
       "sha256": "4d9dc53e600f60cd42c7a55e0ab28ebadf6328a125bf46e97ed4ad4053a84551",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/byok-screen-DAdoM5fb.css": {
       "size": 3720,
       "sha256": "01f3d441c61c57690227022c9cdc4923d1c35aaf347958dc40c0c222b771ad7b",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/onboarding-screen-Dbx8HB5B.css": {
       "size": 8207,
       "sha256": "a3691651edd9d3e69f132a883937be1fcf2447e70a1d25613f5d7423e07cc866",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/assets/agent-screen-CvFzZWx-.css": {
       "size": 12545,
       "sha256": "91bb51575baba6c382744a151266beb61b46ae97797b7ff41deaf41d9b1b42ec",
-      "modifiedTimestamp": 1786799527
+      "modifiedTimestamp": 1787238675
     },
     "web-ai/ai-bundle.js": {
       "size": 73352,
-      "sha256": "398bf16473a0705746126d7e8149998e69f7eaaac4a901a6818ab85a76c8cb40",
-      "modifiedTimestamp": 1786799527
+      "sha256": "8308de7b9abc1c1a5ed074f237fea2569686aa920b005b2e56211bbd50c1c73d",
+      "modifiedTimestamp": 1787238675
     }
   }
 }

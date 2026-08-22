@@ -13,6 +13,7 @@ fn entity(version: u64, device_id: u32, deleted: bool) -> SyncEntity {
         deleted,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     }
 }
 

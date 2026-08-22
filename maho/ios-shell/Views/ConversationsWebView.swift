@@ -14,13 +14,17 @@ struct ConversationsWebView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> WKWebView {
-        let (webView, controller) = WebViewBridgeController.makeWebView(
+        let (webView, controller) = WebViewBridgeController.makeAgenticWebView(
             onBack: { dismiss() }
         )
         context.coordinator.controller = controller
+        AppThemeStore.installWebColorSchemeBootstrap(on: webView.configuration.userContentController)
+        AppThemeStore.apply(AppThemeStore.persistedTheme(), to: webView)
         WebViewBridgeController.loadBundle(into: webView, screen: "conversations")
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {}
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        AppThemeStore.apply(AppThemeStore.persistedTheme(), to: webView)
+    }
 }

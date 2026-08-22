@@ -219,6 +219,78 @@ final class WebViewBridgeAgentTests: XCTestCase {
         }
     }
 
+    func testRelayAuthenticationRPCsActivateSessionBeforePolling() throws {
+        let session = RelayAuthSession(
+            accessToken: "access-token",
+            refreshToken: "refresh-token",
+            tokenType: "Bearer",
+            expiresAt: Date(timeIntervalSince1970: 2_000_000_000),
+            refreshExpiresAt: Date(timeIntervalSince1970: 2_100_000_000),
+            account: RelayAccount(id: "account", email: "user@example.com", displayName: "User"),
+            device: RelayDevice(id: "device", name: "Test iPhone", deviceType: "ios"),
+            session: RelaySessionInfo(id: "session")
+        )
+        let lock = NSLock()
+        var events: [String] = []
+        func append(_ event: String) {
+            lock.lock()
+            events.append(event)
+            lock.unlock()
+        }
+        func snapshot() -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return events
+        }
+        let relayAuth = RelayAuthRPCDependencies(
+            authenticate: { mode, _, _, displayName in
+                let name: String
+                switch mode {
+                case .login:
+                    name = "login"
+                case .signup:
+                    name = "signup"
+                }
+                append("authenticate:\(name):\(displayName ?? "nil")")
+                return session
+            },
+            googleSignIn: {
+                append("google")
+                return session
+            },
+            activateSession: { activatedSession in
+                XCTAssertEqual(activatedSession, session)
+                append("activate")
+            },
+            startPolling: {
+                append("poll")
+            }
+        )
+        let controller = WebViewBridgeController(bridge: .shared, relayAuthRPC: relayAuth)
+
+        let requests = [
+            (#"{"jsonrpc":"2.0","id":81,"method":"relaySignIn","params":["user@example.com","password"]}"#, "authenticate:login:nil"),
+            (#"{"jsonrpc":"2.0","id":82,"method":"relaySignUp","params":["user@example.com","password","User"]}"#, "authenticate:signup:User"),
+            (#"{"jsonrpc":"2.0","id":83,"method":"relaySignInWithGoogle","params":[]}"#, "google"),
+        ]
+
+        for (request, authenticationEvent) in requests {
+            lock.lock()
+            events.removeAll()
+            lock.unlock()
+            let completed = expectation(description: "relay RPC completed")
+            var responseJSON: String?
+            DispatchQueue.global(qos: .userInitiated).async {
+                responseJSON = controller.dispatchRPCForTesting(request)
+                completed.fulfill()
+            }
+            wait(for: [completed], timeout: 2)
+            let response = try rpcObject(try XCTUnwrap(responseJSON))
+            XCTAssertEqual((response["result"] as? [String: Bool])?["ok"], true)
+            XCTAssertEqual(snapshot(), [authenticationEvent, "activate", "poll"])
+        }
+    }
+
     func testConversationListPreservesLegitimateEmptyList() throws {
         var received: (String, Int)?
         let controller = WebViewBridgeController(

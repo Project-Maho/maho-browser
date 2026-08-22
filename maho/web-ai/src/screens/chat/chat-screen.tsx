@@ -109,6 +109,63 @@ const DEFAULT_TOOLS: ToolDefinition[] = [
       required: ['url', 'title'],
     },
   },
+  {
+    name: 'get_page_elements',
+    description: 'List visible interactive page elements with numeric refs, labels, and bounding boxes',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: 'get_page_snapshot',
+    description: 'Get the current viewport and visible interactive elements with numeric refs',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+  },
+  {
+    name: 'click_element',
+    description: 'Click a page element by numeric ref from a page snapshot or by CSS selector',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'integer', minimum: 1, description: 'Numeric element ref from get_page_elements/get_page_snapshot' },
+        selector: { type: 'string', minLength: 1, description: 'CSS selector fallback' },
+      },
+    },
+  },
+  {
+    name: 'fill_input',
+    description: 'Fill an input, textarea, or contenteditable element and fire input/change events',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'integer', minimum: 1, description: 'Numeric element ref from get_page_elements/get_page_snapshot' },
+        selector: { type: 'string', minLength: 1, description: 'CSS selector fallback' },
+        text: { type: 'string', description: 'Text to enter' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    name: 'scroll_page',
+    description: 'Smoothly scroll the current page up, down, left, or right',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+        amount: { type: 'number', minimum: 1, maximum: 10000, description: 'Optional scroll distance in CSS pixels' },
+      },
+      required: ['direction'],
+    },
+  },
 ];
 
 interface ChatScreenProps {
@@ -939,7 +996,10 @@ function isReadTool(toolName: string): boolean {
     toolName === 'search_bookmarks' ||
     toolName === 'list_tabs' ||
     toolName === 'get_page_info' ||
-    toolName === 'search_history'
+    toolName === 'search_history' ||
+    toolName === 'get_page_elements' ||
+    toolName === 'get_page_snapshot' ||
+    toolName === 'scroll_page'
   );
 }
 

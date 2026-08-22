@@ -48,6 +48,7 @@ extension MahoBridge {
 
     func setTheme(_ theme: Theme) {
         updateAppearanceSettings(AppearanceSettingsUpdate(theme: theme))
+        NotificationCenter.default.post(name: .mahoThemeChanged, object: theme)
     }
 
     func setDensity(_ density: Density) {

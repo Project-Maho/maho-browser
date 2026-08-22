@@ -39,4 +39,43 @@ class SyncManagerLogoutTest {
         assertTrue(signedOut)
         assertEquals(listOf("clear", "stop-sync", "sign-out-core"), events)
     }
+
+    @Test
+    fun `legacy retired relay migration with invalidated session clears stale core auth and stops sync`() {
+        val events = mutableListOf<String>()
+
+        handleLegacyRelayMigration(
+            migrationOutcome = LegacyRelayMigrationOutcome.INVALIDATED_SESSION,
+            stopSync = { events += "stop-sync" },
+            signOutCore = { events += "sign-out-core" },
+        )
+
+        assertEquals(listOf("stop-sync", "sign-out-core"), events)
+    }
+
+    @Test
+    fun `legacy retired relay setting migration without credentials does not sign out core`() {
+        val events = mutableListOf<String>()
+
+        handleLegacyRelayMigration(
+            migrationOutcome = LegacyRelayMigrationOutcome.ENDPOINT_UPDATED_NO_CREDENTIALS,
+            stopSync = { events += "stop-sync" },
+            signOutCore = { events += "sign-out-core" },
+        )
+
+        assertTrue(events.isEmpty())
+    }
+
+    @Test
+    fun `no migration needed does not sign out core or stop sync`() {
+        val events = mutableListOf<String>()
+
+        handleLegacyRelayMigration(
+            migrationOutcome = LegacyRelayMigrationOutcome.NONE,
+            stopSync = { events += "stop-sync" },
+            signOutCore = { events += "sign-out-core" },
+        )
+
+        assertTrue(events.isEmpty())
+    }
 }

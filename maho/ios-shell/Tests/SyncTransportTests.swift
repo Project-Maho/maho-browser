@@ -1,5 +1,7 @@
 import XCTest
+#if canImport(Maho)
 @testable import Maho
+#endif
 
 private final class InMemoryRelayAuthStore: RelayAuthStoreProtocol {
     var session: RelayAuthSession?
@@ -9,6 +11,20 @@ private final class InMemoryRelayAuthStore: RelayAuthStoreProtocol {
     func clearSession() throws { session = nil }
 }
 
+private enum RelayAuthStoreTestError: Error {
+    case persistenceFailed
+}
+
+private final class FailingRelayAuthStore: RelayAuthStoreProtocol {
+    func loadSession() -> RelayAuthSession? { nil }
+
+    func saveSession(_ session: RelayAuthSession) throws {
+        throw RelayAuthStoreTestError.persistenceFailed
+    }
+
+    func clearSession() throws {}
+}
+
 private final class FakeSyncCore: SyncCoreClient {
     var roomID = "0123456789abcdef0123456789abcdef"
     var outgoing = [SyncEnvelopeV2]()
@@ -16,6 +32,9 @@ private final class FakeSyncCore: SyncCoreClient {
     var acknowledged = [RelayAckV2]()
     var applied = [SyncEnvelopeV2]()
     var applyError: Error?
+    var syncEnabled = false
+    var configuredBootstrap: (serverURL: String, seed: String)?
+    var calls = [String]()
 
     func signIn(
         email: String,
@@ -23,9 +42,27 @@ private final class FakeSyncCore: SyncCoreClient {
         accessToken: String?,
         userId: String?,
         deviceId: String?
-    ) {}
+    ) {
+        calls.append("signIn")
+    }
 
-    func signOut() {}
+    func signOut() {
+        calls.append("signOut")
+    }
+
+    func setSyncEnabled(_ enabled: Bool) throws {
+        calls.append("setSyncEnabled:\(enabled)")
+        syncEnabled = enabled
+    }
+
+    func generateSyncBootstrap() throws -> RelaySyncBootstrap {
+        throw SyncCoreError.operationFailed("unexpected bootstrap generation")
+    }
+
+    func configureSyncBootstrap(serverURL: String, seed: String) throws {
+        calls.append("configureBootstrap")
+        configuredBootstrap = (serverURL, seed)
+    }
 
     func syncState() throws -> SyncStateResponse {
         SyncStateResponse(
@@ -36,8 +73,14 @@ private final class FakeSyncCore: SyncCoreClient {
         )
     }
 
-    func syncRoomID() throws -> String { roomID }
-    func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2] { outgoing }
+    func syncRoomID() throws -> String {
+        calls.append("roomID")
+        return roomID
+    }
+    func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2] {
+        calls.append("lease")
+        return outgoing
+    }
 
     func acknowledge(_ ack: RelayAckV2) throws {
         acknowledged.append(ack)
@@ -61,6 +104,13 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
     var pushRequests = [(roomID: String, envelopes: [SyncEnvelopeV2])]()
     var pullAfterSequences = [Int]()
     var refreshCount = 0
+    var bootstrap = RelaySyncBootstrap(
+        version: 1,
+        roomId: "0123456789abcdef0123456789abcdef",
+        seed: "restart-bootstrap-seed",
+        createdAt: nil
+    )
+    var bootstrapRequestCount = 0
 
     func authenticate(
         mode: RelayAuthMode,
@@ -83,7 +133,8 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
     func logout(session: RelayAuthSession) async throws {}
 
     func getSyncBootstrap(session: RelayAuthSession) async throws -> RelaySyncBootstrap {
-        throw RelayAPIError.http(statusCode: 404, message: "not found")
+        bootstrapRequestCount += 1
+        return bootstrap
     }
 
     func putSyncBootstrap(
@@ -153,6 +204,7 @@ final class SyncTransportTests: XCTestCase {
     }
 
     func testSharedV2FixtureUsesIOSRelaySchema() throws {
+        #if targetEnvironment(simulator) || os(macOS)
         let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -168,6 +220,64 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertEqual(push.roomId, "0123456789abcdef0123456789abcdef")
         XCTAssertEqual(push.messages.count, 1)
         XCTAssertEqual(push.messages.first?.deliveryId, ack.deliveryId)
+        #endif
+    }
+
+    func testRestartRestoresCoreAccountBootstrapAndEnabledStateBeforeUsingRoom() async {
+        core.syncEnabled = false
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertEqual(core.configuredBootstrap?.seed, api.bootstrap.seed)
+        XCTAssertTrue(core.syncEnabled)
+        XCTAssertEqual(
+            Array(core.calls.prefix(5)),
+            ["signIn", "configureBootstrap", "setSyncEnabled:true", "roomID", "lease"]
+        )
+    }
+
+    func testAuthenticatedActivationConfiguresCoreBeforePersistingSession() async throws {
+        authStore.session = nil
+        let session = makeSession(accessToken: "fresh-access")
+
+        try await transport.activateAuthenticatedSession(session)
+
+        XCTAssertEqual(authStore.loadSession(), session)
+        XCTAssertTrue(core.syncEnabled)
+        XCTAssertEqual(api.bootstrapRequestCount, 1)
+        XCTAssertEqual(
+            Array(core.calls.prefix(3)),
+            ["signIn", "configureBootstrap", "setSyncEnabled:true"]
+        )
+    }
+
+    func testAuthenticatedActivationRollsBackCoreWhenSessionPersistenceFails() async {
+        let failingStore = FailingRelayAuthStore()
+        let failingTransport = SyncTransport(authStore: failingStore, apiClient: api, core: core)
+
+        do {
+            try await failingTransport.activateAuthenticatedSession(makeSession(accessToken: "fresh-access"))
+            XCTFail("Expected session persistence to fail")
+        } catch RelayAuthStoreTestError.persistenceFailed {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertNil(failingStore.loadSession())
+        XCTAssertEqual(
+            core.calls,
+            ["signIn", "configureBootstrap", "setSyncEnabled:true", "signOut"]
+        )
+    }
+
+    func testRepeatedEnabledPreparationDoesNotInvertCoreState() async {
+        _ = await transport.runCycle()
+        _ = await transport.runCycle()
+
+        XCTAssertTrue(core.syncEnabled)
+        XCTAssertEqual(core.calls.filter { $0 == "setSyncEnabled:true" }.count, 2)
     }
 
     func testV2CycleUsesSharedRoomExactAcksAndPaginatedCursor() async {

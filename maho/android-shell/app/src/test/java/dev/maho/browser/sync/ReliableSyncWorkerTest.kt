@@ -5,6 +5,24 @@ import org.junit.Test
 
 class ReliableSyncWorkerTest {
     @Test
+    fun disabledSyncSkipsStaleQueuedWorker() {
+        assertEquals(
+            SyncWorkDisposition.SUCCESS,
+            runEnabledSyncWork(enabled = false) {
+                error("transport must not run")
+            },
+        )
+    }
+
+    @Test
+    fun enabledSyncRunsQueuedWorker() {
+        assertEquals(
+            SyncWorkDisposition.RETRY,
+            runEnabledSyncWork(enabled = true) { SyncCycleOutcome.TRANSIENT_FAILURE },
+        )
+    }
+
+    @Test
     fun mapsTransportOutcomesToBoundedWorkManagerResults() {
         assertEquals(
             SyncWorkDisposition.SUCCESS,

@@ -24,6 +24,7 @@ fn sync_entity(
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
         payload_json,
     }
 }
@@ -84,6 +85,7 @@ fn sync_upserts_existing_metadata_and_projects() {
         entity_id: "c".into(),
         version: core.next_hlc_ts().unwrap(), device_id: 9, schema_version: 1,
         modified_at: 1, deleted: false, queue_row_id: None, fields_hlc_json: None,
+        profile_id: None,
         payload_json: serde_json::json!({"id":"c","title":"new","spaceId":null,"model":"m","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-02T00:00:00Z","archivedAt":"2026-01-03T00:00:00Z","projectId":null}).to_string(),
     };
     assert_eq!(core.apply_sync_remote_entities(vec![entity]).len(), 1);

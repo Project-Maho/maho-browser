@@ -185,4 +185,157 @@ final class RelayAuthResponseDecodingTests: XCTestCase {
         XCTAssertEqual(payload?["seed"] as? String, request.seed)
         XCTAssertNil(payload?["created_at"])
     }
+
+    // MARK: - Cleartext Rejection Tests
+
+    private func makeDummySession() -> RelayAuthSession {
+        RelayAuthSession(
+            accessToken: "access-token",
+            refreshToken: "refresh-token",
+            tokenType: "Bearer",
+            expiresAt: Date(timeIntervalSince1970: 2_000_000_000),
+            refreshExpiresAt: Date(timeIntervalSince1970: 2_100_000_000),
+            account: RelayAccount(id: "42", email: "user@example.com", displayName: "User"),
+            device: RelayDevice(id: "7", name: "Test iPhone", deviceType: "ios"),
+            session: RelaySessionInfo(id: "3")
+        )
+    }
+
+    private func makeDummyBootstrap() -> RelaySyncBootstrap {
+        RelaySyncBootstrap(
+            version: 1,
+            roomId: "0123456789abcdef0123456789abcdef",
+            seed: "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+            createdAt: 42
+        )
+    }
+
+    func testRelayClientRejectsCleartextHttpAndWsBaseURLsBeforeRequestConstruction() async {
+        let cleartextURLs = [
+            "http://relay.mahobrowser.com",
+            "http://localhost:8080",
+            "ws://relay.mahobrowser.com",
+            "ws://127.0.0.1:8080",
+            "HTTP://relay.mahobrowser.com",
+            "WS://relay.mahobrowser.com",
+            "   http://relay.mahobrowser.com   ",
+            "   ws://relay.mahobrowser.com   ",
+        ]
+
+        let session = makeDummySession()
+        let bootstrap = makeDummyBootstrap()
+
+        for baseURL in cleartextURLs {
+            let client = RelayAPIClient(baseURLProvider: { baseURL })
+
+            // 1. authenticate (login)
+            do {
+                _ = try await client.authenticate(mode: .login, email: "user@example.com", password: "password", displayName: nil)
+                XCTFail("Expected cleartext rejection for login with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for login with \(baseURL): \(error)")
+            }
+
+            // 2. authenticate (signup)
+            do {
+                _ = try await client.authenticate(mode: .signup, email: "user@example.com", password: "password", displayName: "User")
+                XCTFail("Expected cleartext rejection for signup with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for signup with \(baseURL): \(error)")
+            }
+
+            // 3. authenticateWithGoogle
+            do {
+                _ = try await client.authenticateWithGoogle(idToken: "google-id-token", nonce: "nonce-value")
+                XCTFail("Expected cleartext rejection for google auth with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for google auth with \(baseURL): \(error)")
+            }
+
+            // 4. refresh
+            do {
+                _ = try await client.refresh(using: "refresh-token")
+                XCTFail("Expected cleartext rejection for refresh with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for refresh with \(baseURL): \(error)")
+            }
+
+            // 5. logout
+            do {
+                try await client.logout(session: session)
+                XCTFail("Expected cleartext rejection for logout with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for logout with \(baseURL): \(error)")
+            }
+
+            // 6. getSyncBootstrap
+            do {
+                _ = try await client.getSyncBootstrap(session: session)
+                XCTFail("Expected cleartext rejection for getSyncBootstrap with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for getSyncBootstrap with \(baseURL): \(error)")
+            }
+
+            // 7. putSyncBootstrap
+            do {
+                _ = try await client.putSyncBootstrap(bootstrap, session: session)
+                XCTFail("Expected cleartext rejection for putSyncBootstrap with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for putSyncBootstrap with \(baseURL): \(error)")
+            }
+
+            // 8. push
+            do {
+                _ = try await client.push(roomID: "0123456789abcdef0123456789abcdef", envelopes: [], session: session)
+                XCTFail("Expected cleartext rejection for push with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for push with \(baseURL): \(error)")
+            }
+
+            // 9. pull
+            do {
+                _ = try await client.pull(roomID: "0123456789abcdef0123456789abcdef", afterSeq: 0, limit: 100, session: session)
+                XCTFail("Expected cleartext rejection for pull with base URL: \(baseURL)")
+            } catch RelayAPIError.invalidBaseURL {
+                // Expected
+            } catch {
+                XCTFail("Unexpected error for pull with \(baseURL): \(error)")
+            }
+        }
+    }
+
+    func testRelayClientNormalizesWssAndHttpsSafely() {
+        XCTAssertEqual(
+            RelayAPIClient.normalizedBaseURLString(from: "wss://relay.mahobrowser.com"),
+            "https://relay.mahobrowser.com"
+        )
+        XCTAssertEqual(
+            RelayAPIClient.normalizedBaseURLString(from: "WSS://relay.mahobrowser.com/sync/"),
+            "https://relay.mahobrowser.com/sync/"
+        )
+        XCTAssertEqual(
+            RelayAPIClient.normalizedBaseURLString(from: "https://relay.mahobrowser.com"),
+            "https://relay.mahobrowser.com"
+        )
+        XCTAssertEqual(
+            RelayAPIClient.normalizedBaseURLString(from: "   https://relay.mahobrowser.com   "),
+            "https://relay.mahobrowser.com"
+        )
+    }
 }

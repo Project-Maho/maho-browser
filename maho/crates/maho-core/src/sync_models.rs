@@ -237,6 +237,28 @@ pub enum SyncEntityType {
 }
 
 impl SyncEntityType {
+    pub fn is_profile_scoped(&self) -> bool {
+        matches!(
+            self,
+            SyncEntityType::Space
+                | SyncEntityType::Tab
+                | SyncEntityType::Bookmark
+                | SyncEntityType::BookmarkFolder
+                | SyncEntityType::Note
+                | SyncEntityType::Boost
+                | SyncEntityType::ReadingListItem
+                | SyncEntityType::CssMod
+                | SyncEntityType::Easel
+        )
+    }
+
+    pub fn cursor_storage_key(&self, profile_id: Option<&str>) -> String {
+        match profile_id.filter(|id| !id.is_empty() && self.is_profile_scoped()) {
+            Some(pid) => format!("sync:cursor:{}:{}", self.as_str(), pid),
+            None => format!("sync:cursor:{}", self.as_str()),
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             SyncEntityType::Space => "space",
@@ -282,6 +304,74 @@ pub struct SyncEntity {
     pub queue_row_id: Option<i64>,
     #[serde(default)]
     pub fields_hlc_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+}
+
+impl SyncEntity {
+    pub fn new(
+        entity_type: SyncEntityType,
+        entity_id: String,
+        version: u64,
+        modified_at: i64,
+        payload_json: String,
+        deleted: bool,
+    ) -> Self {
+        Self {
+            entity_type,
+            entity_id,
+            version,
+            device_id: 0,
+            schema_version: 1,
+            modified_at,
+            payload_json,
+            deleted,
+            queue_row_id: None,
+            fields_hlc_json: None,
+            profile_id: None,
+        }
+    }
+    pub fn cache_key(&self) -> Option<String> {
+        let storage_id = self.storage_entity_id()?;
+        Some(format!("{}:{}", self.entity_type.as_str(), storage_id))
+    }
+
+    pub fn profile_scope(&self) -> Option<String> {
+        if !self.entity_type.is_profile_scoped() {
+            return None;
+        }
+        if let Some(profile_id) = self.profile_id.as_deref().filter(|s| !s.is_empty()) {
+            return Some(profile_id.to_string());
+        }
+        Self::profile_id_from_payload(&self.entity_type, &self.payload_json)
+    }
+
+    pub fn storage_entity_id(&self) -> Option<String> {
+        if self.entity_type.is_profile_scoped() {
+            let profile_id = self.profile_scope()?;
+            Some(format!("{}:{}", profile_id, self.entity_id))
+        } else {
+            Some(self.entity_id.clone())
+        }
+    }
+
+    pub fn profile_id_from_payload(
+        _entity_type: &SyncEntityType,
+        payload_json: &str,
+    ) -> Option<String> {
+        if payload_json.trim().is_empty() {
+            return None;
+        }
+        let parsed: serde_json::Value = serde_json::from_str(payload_json).ok()?;
+        for field in ["profileId", "profile_id"] {
+            if let Some(id) = parsed.get(field).and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    return Some(id.to_string());
+                }
+            }
+        }
+        None
+    }
 }
 
 fn default_schema_version() -> u8 {

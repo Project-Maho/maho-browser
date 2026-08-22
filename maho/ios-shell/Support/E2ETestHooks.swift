@@ -9,12 +9,14 @@ enum E2ETestHooks {
     static let uiTestModeEnvKey = "MAHO_UITEST_MODE"
     static let seedEnvKey = "MAHO_E2E_SEED_CONVERSATION"
     static let archivedTabSeedEnvKey = "MAHO_E2E_SEED_ARCHIVED_TAB"
+    static let addressBarFixtureEnvKey = "MAHO_E2E_SEED_ADDRESS_BAR_TAB"
     static let verifyEnvKey = "MAHO_E2E_VERIFY_CONVERSATION_TITLE"
     static let resultOutputEnvKey = "MAHO_E2E_VERIFY_RESULT"
 
     static var seededTitle: String?
     static var archiveFixtureStatus: ArchiveFixtureStatus?
     static var archiveFixtureReady = false
+    static var addressBarFixtureStatus: AddressBarFixtureStatus?
     static var verifyResult: VerifyResult = .notRun
 
     enum ArchiveFixtureStatus: String {
@@ -26,6 +28,17 @@ enum E2ETestHooks {
         case archivedTabsDecodeFailed
         case fixtureNotArchived
         case wrongActiveTab
+        case ready
+    }
+
+    enum AddressBarFixtureStatus: String {
+        case started
+        case bridgeUnavailable
+        case noActiveSpace
+        case fixtureTabMissing
+        case wrongTabCount
+        case wrongActiveTab
+        case wrongFixtureUrl
         case ready
     }
 
@@ -55,9 +68,16 @@ enum E2ETestHooks {
             archiveFixtureReady = archiveFixtureStatus == .ready
         }
 
+        if isUITest, let url = env[addressBarFixtureEnvKey], !url.isEmpty {
+            addressBarFixtureStatus = .started
+            seedAddressBarTab(url: url)
+        }
+
         if let expected = env[verifyEnvKey], !expected.isEmpty {
             verifyResult = verify(expectedTitle: expected)
         }
+
+        E2EAgenticJourney.shared.armAndStartIfRequested()
     }
 
     private static func seedConversation(title: String) {
@@ -98,7 +118,7 @@ enum E2ETestHooks {
                 bridge.closeTab(id: tab.id)
             }
         }
-        for tab in bridge.getTabViewModels() where tab.spaceId == spaceId && !tab.isPrivate {
+        for tab in bridge.getTabViewModels() where tab.spaceId == spaceId {
             bridge.closeTab(id: tab.id)
         }
 
@@ -143,6 +163,51 @@ enum E2ETestHooks {
             return
         }
         archiveFixtureStatus = .ready
+    }
+
+    private static func seedAddressBarTab(url: String) {
+        let bridge = MahoBridge.shared
+        guard bridge.isInitialized else {
+            addressBarFixtureStatus = .bridgeUnavailable
+            return
+        }
+        guard let spaceId = bridge.getActiveSpaceId() else {
+            addressBarFixtureStatus = .noActiveSpace
+            return
+        }
+
+        for tab in bridge.getTabViewModels() where tab.spaceId == spaceId && !tab.isPrivate {
+            bridge.closeTab(id: tab.id)
+        }
+
+        let existingTabIds = Set(bridge.getTabViewModels().map(\.id))
+        let fixtureURL = Url(url)
+        bridge.createTab(url: fixtureURL, inSpace: spaceId)
+        guard let tabId = bridge.getTabViewModels().first(where: {
+            !existingTabIds.contains($0.id)
+        })?.id else {
+            addressBarFixtureStatus = .fixtureTabMissing
+            return
+        }
+
+        bridge.sendEvent(.tabTitleUpdated(tabId: tabId, title: "Address Bar Fixture"))
+        bridge.sendEvent(.tabUrlUpdated(tabId: tabId, url: fixtureURL))
+        bridge.activateTab(id: tabId)
+
+        let spaceTabs = bridge.getTabViewModels().filter { $0.spaceId == spaceId }
+        guard spaceTabs.count == 1 else {
+            addressBarFixtureStatus = .wrongTabCount
+            return
+        }
+        guard bridge.getActiveTabId() == tabId else {
+            addressBarFixtureStatus = .wrongActiveTab
+            return
+        }
+        guard spaceTabs.first?.url == url else {
+            addressBarFixtureStatus = .wrongFixtureUrl
+            return
+        }
+        addressBarFixtureStatus = .ready
     }
 
     private static func verify(expectedTitle: String) -> VerifyResult {

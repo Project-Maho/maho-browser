@@ -109,4 +109,89 @@ final class BridgeTabsTests: XCTestCase {
         XCTAssertEqual(decoded.lifecycleState, original.lifecycleState)
         XCTAssertEqual(decoded.children, original.children)
     }
+
+    // MARK: - Address-bar prefill and active-tab submission regression tests
+
+    func testHomeOriginDoesNotPrefillActiveUrl() {
+        let prefill = MainBrowserPresentation.searchPrefillQuery(for: .home, currentUrl: "https://example.com/page")
+        XCTAssertEqual(prefill, "", "Home/new-tab search presentation must remain empty")
+    }
+
+    func testBrowsingOriginPrefillsActiveUrl() {
+        let prefill = MainBrowserPresentation.searchPrefillQuery(for: .browsing("tab-1"), currentUrl: "https://example.com/page")
+        XCTAssertEqual(prefill, "https://example.com/page", "Browsing address-bar presentation must prefill the active tab URL")
+    }
+
+    func testBrowsingOriginWithBlankUrlDoesNotPrefill() {
+        let prefillBlank = MainBrowserPresentation.searchPrefillQuery(for: .browsing("tab-1"), currentUrl: "about:blank")
+        XCTAssertEqual(prefillBlank, "", "Blank URL should not be prefilled")
+
+        let prefillEmpty = MainBrowserPresentation.searchPrefillQuery(for: .browsing("tab-1"), currentUrl: "")
+        XCTAssertEqual(prefillEmpty, "", "Empty URL should not be prefilled")
+    }
+
+    func testBrowsingOriginSubmissionReusesActiveTab() {
+        let plan = MainBrowserPresentation.searchSubmissionPlan(
+            for: .browsing("tab-1"),
+            query: "example.org",
+            activeTabId: "tab-1"
+        )
+        XCTAssertEqual(
+            plan,
+            .reuseActiveTab(tabId: "tab-1", url: "https://example.org"),
+            "Browsing-origin submission must reuse the active tab rather than create a duplicate tab"
+        )
+    }
+
+    func testHomeOriginSubmissionCreatesNewTab() {
+        let plan = MainBrowserPresentation.searchSubmissionPlan(
+            for: .home,
+            query: "example.org",
+            activeTabId: "tab-1"
+        )
+        XCTAssertEqual(
+            plan,
+            .createNewTab(url: "https://example.org"),
+            "Home-origin submission must create a new tab"
+        )
+    }
+
+    func testBrowsingOriginSubmissionNormalizesSearchTermsAndReusesActiveTab() {
+        let plan = MainBrowserPresentation.searchSubmissionPlan(
+            for: .browsing("tab-42"),
+            query: "swiftui navigation",
+            activeTabId: "tab-42"
+        )
+        XCTAssertEqual(
+            plan,
+            .reuseActiveTab(tabId: "tab-42", url: "https://www.google.com/search?q=swiftui%20navigation"),
+            "Search queries from browsing origin must normalize to search URL and reuse the active tab"
+        )
+    }
+
+    func testBrowsingOriginWithChangedActiveTabTargetsCurrentActiveTab() {
+        let plan = MainBrowserPresentation.searchSubmissionPlan(
+            for: .browsing("tab-normal-1"),
+            query: "example.org",
+            activeTabId: "tab-private-1"
+        )
+        XCTAssertEqual(
+            plan,
+            .reuseActiveTab(tabId: "tab-private-1", url: "https://example.org"),
+            "Browsing origin whose active tab changed (e.g. private overlay transition) must target current active tab rather than stale captured tab"
+        )
+    }
+
+    func testBrowsingOriginWithNoActiveTabCreatesNewTab() {
+        let plan = MainBrowserPresentation.searchSubmissionPlan(
+            for: .browsing("tab-normal-1"),
+            query: "example.org",
+            activeTabId: nil
+        )
+        XCTAssertEqual(
+            plan,
+            .createNewTab(url: "https://example.org"),
+            "Browsing origin with no remaining active tab must create a new tab instead of reusing stale captured tab"
+        )
+    }
 }

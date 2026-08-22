@@ -42,6 +42,7 @@ struct MainBrowserView: View {
     @State private var chromeVisibilityProgress: CGFloat = 1
     @State private var bottomBarTabSwipeOffset: CGFloat = 0
     @State private var pendingNavigationUrl: String?
+    @ObservedObject private var agenticJourney = E2EAgenticJourney.shared
     @State private var isReaderMode = false
     @State private var zoomLevel = 1.0
     @State private var isDesktopMode = false
@@ -56,6 +57,7 @@ struct MainBrowserView: View {
     @StateObject private var pinchSummarizer = PageSummarizer()
     @State private var browseForMeSeed = UUID()
     @State private var isSearchFocused = false
+    @State private var searchOrigin: SearchPresentationOrigin?
     @StateObject private var commandBarVM = CommandBarViewModel()
     @State private var showVoiceAssistant = false
     @State private var voiceSearchManager = VoiceSearchManager()
@@ -157,7 +159,14 @@ struct MainBrowserView: View {
                         showTabGrid = true
                     },
                     onAddressTapped: {
-                        presentSearchOverlay()
+                        if let tabId = browsingTabId {
+                            presentSearchOverlay(origin: .browsing(tabId))
+                        } else {
+                            presentSearchOverlay(origin: .home)
+                        }
+                    },
+                    onNewTabTapped: {
+                        presentSearchOverlay(origin: .home)
                     },
                     onGoBack: goBack,
                     onGoForward: goForward,
@@ -292,8 +301,7 @@ struct MainBrowserView: View {
                     viewModel: commandBarVM,
                     isIncognito: effectiveIsPrivate,
                     onSubmit: { query in
-                        dismissSearchOverlay()
-                        createTabAndNavigate(query)
+                        handleSearchSubmission(query)
                     },
                     onSelectSuggestion: { suggestion in
                         handleSearchSuggestionSelection(suggestion)
@@ -338,6 +346,7 @@ struct MainBrowserView: View {
         )
         .onAppear {
             loadBrowserState()
+            navigateAddressBarFixtureIfNeeded()
             setupDeepLinkHandler()
         }
         .onReceive(tickTimer) { _ in
@@ -394,7 +403,7 @@ struct MainBrowserView: View {
         DeepLinkHandler.shared.onNewTab = { [self] in
             activeTabId = nil
             transitionToHome()
-            presentSearchOverlay()
+            presentSearchOverlay(origin: .home)
         }
         HandoffManager.shared.onReceiveURL = { [self] url in
             createTabAndNavigate(url.absoluteString)
@@ -404,7 +413,7 @@ struct MainBrowserView: View {
             DeepLinkHandler.shared.pendingNewTabSearch = false
             activeTabId = nil
             transitionToHome()
-            presentSearchOverlay()
+            presentSearchOverlay(origin: .home)
         }
     }
 
@@ -501,6 +510,29 @@ struct MainBrowserView: View {
                     .allowsHitTesting(false)
                     .accessibilityIdentifier("archiveFixtureReady")
                     .accessibilityLabel("Archive fixture ready")
+            }
+            if let status = E2ETestHooks.addressBarFixtureStatus {
+                Text(status.rawValue)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("addressBarFixtureStatus")
+                    .accessibilityLabel(status.rawValue)
+            }
+            if E2EAgenticJourney.isArmed {
+                Text(agenticJourney.status)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("agenticJourneyStatus")
+                    .accessibilityLabel(agenticJourney.status)
+                Text(agenticJourney.steps.joined(separator: "|"))
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("agenticJourneySteps")
+                    .accessibilityLabel(agenticJourney.steps.joined(separator: "|"))
             }
         }
     }
@@ -630,6 +662,14 @@ struct MainBrowserView: View {
             isBottomBarVisible = true
             chromeVisibilityProgress = 1
         }
+    }
+
+    private func navigateAddressBarFixtureIfNeeded() {
+        guard case .ready? = E2ETestHooks.addressBarFixtureStatus,
+              let tab = currentActiveTab else {
+            return
+        }
+        pendingNavigationUrl = tab.url
     }
 
     private func refreshState() {
@@ -764,10 +804,19 @@ struct MainBrowserView: View {
         activateTab(id)
     }
 
-    private func presentSearchOverlay() {
-        homeQuery = ""
+    private func presentSearchOverlay(origin: SearchPresentationOrigin) {
+        searchOrigin = origin
+        homeQuery = MainBrowserPresentation.searchPrefillQuery(for: origin, currentUrl: browserVM.currentUrl)
         withAnimation(.spring(response: 0.32, dampingFraction: 0.88)) {
             isSearchFocused = true
+        }
+    }
+
+    private func presentSearchOverlay(prefillCurrentUrl: Bool = true) {
+        if prefillCurrentUrl, let tabId = browsingTabId {
+            presentSearchOverlay(origin: .browsing(tabId))
+        } else {
+            presentSearchOverlay(origin: .home)
         }
     }
 
@@ -779,6 +828,36 @@ struct MainBrowserView: View {
         if clearQuery {
             homeQuery = ""
             commandBarVM.suggestions = []
+        }
+        searchOrigin = nil
+    }
+
+    private func handleSearchSubmission(_ rawQuery: String) {
+        guard let plan = MainBrowserPresentation.searchSubmissionPlan(
+            for: searchOrigin,
+            query: rawQuery,
+            activeTabId: activeTabId
+        ) else {
+            dismissSearchOverlay()
+            return
+        }
+
+        dismissSearchOverlay()
+
+        switch plan {
+        case .reuseActiveTab(let tabId, let destination):
+            pendingNavigationUrl = nil
+            browserVM.currentUrl = destination
+            browserVM.currentTitle = ""
+            if browserVM.tabId != tabId {
+                browserVM.tabId = tabId
+            }
+            browserVM.navigate(to: destination)
+            shellRoute = .browsing(tabId)
+            isBottomBarVisible = true
+            chromeVisibilityProgress = 1
+        case .createNewTab(let destination):
+            createTabAndNavigate(destination)
         }
     }
 
@@ -813,19 +892,23 @@ struct MainBrowserView: View {
     private func toggleSearchOverlayPrivateMode() {
         let targetPrivateState = !effectiveIsPrivate
         setPrivate(targetPrivateState)
+        if let activeTabId {
+            searchOrigin = .browsing(activeTabId)
+        } else {
+            searchOrigin = .home
+        }
         commandBarVM.query(homeQuery, isIncognito: targetPrivateState)
     }
 
     private func handleSearchSuggestionSelection(_ suggestion: SuggestionViewModel) {
-        dismissSearchOverlay()
-
         if suggestion.kind == .aiAnswer {
+            dismissSearchOverlay()
             presentAiChat(query: aiSearchQueryText(for: suggestion))
             return
         }
 
         let targetUrl = suggestion.executionPayload ?? suggestion.key
-        createTabAndNavigate(targetUrl)
+        handleSearchSubmission(targetUrl)
     }
 
     private func aiSearchQueryText(for suggestion: SuggestionViewModel) -> String {

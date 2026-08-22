@@ -2,25 +2,77 @@ import Foundation
 import BackgroundTasks
 import os.log
 
+protocol SyncKeyValueStore: AnyObject {
+    func bool(forKey defaultName: String) -> Bool
+    func set(_ value: Bool, forKey defaultName: String)
+}
+
+extension UserDefaults: SyncKeyValueStore {}
+
+@MainActor
+protocol SyncTransportManaging: AnyObject {
+    func currentRelaySession() -> RelayAuthSession?
+    func connect()
+    func disconnect()
+    @discardableResult
+    func runCycle() async -> SyncCycleOutcome
+    func cancelCurrentCycle()
+}
+
+extension SyncTransport: SyncTransportManaging {}
+
+@MainActor
+protocol SyncBackgroundScheduling: AnyObject {
+    func scheduleBackgroundRefresh()
+}
+
+final class SystemSyncBackgroundScheduler: SyncBackgroundScheduling {
+    private let log = Logger(subsystem: "dev.maho.browser", category: "SyncScheduler")
+
+    func scheduleBackgroundRefresh() {
+        let request = BGAppRefreshTaskRequest(identifier: SyncManager.backgroundRefreshIdentifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            log.error("Unable to schedule sync background refresh: \(error.localizedDescription)")
+        }
+    }
+}
+
 @MainActor
 final class SyncManager {
     static let shared = SyncManager()
     static let syncEnabledKey = "maho_sync_polling_enabled"
-    static let backgroundRefreshIdentifier = "dev.maho.browser.sync.refresh"
+    nonisolated static let backgroundRefreshIdentifier = "dev.maho.browser.sync.refresh"
 
     private(set) var isSyncing = false
     private(set) var lastSyncDate: Date?
     private(set) var currentState: SyncState = .idle
+    private let userDefaults: SyncKeyValueStore
+    private let transport: SyncTransportManaging
+    private let backgroundScheduler: SyncBackgroundScheduling
+    private let notificationCenter: NotificationCenter
     private let log = Logger(subsystem: "dev.maho.browser", category: "SyncManager")
 
-    private init() {}
+    init(
+        userDefaults: SyncKeyValueStore? = nil,
+        transport: SyncTransportManaging? = nil,
+        backgroundScheduler: SyncBackgroundScheduling? = nil,
+        notificationCenter: NotificationCenter = .default
+    ) {
+        self.userDefaults = userDefaults ?? UserDefaults.standard
+        self.transport = transport ?? SyncTransport.shared
+        self.backgroundScheduler = backgroundScheduler ?? SystemSyncBackgroundScheduler()
+        self.notificationCenter = notificationCenter
+    }
 
     var isSyncEnabled: Bool {
-        UserDefaults.standard.bool(forKey: Self.syncEnabledKey)
+        userDefaults.bool(forKey: Self.syncEnabledKey)
     }
 
     func configureForCurrentSession() {
-        guard SyncTransport.shared.currentRelaySession() != nil else {
+        guard transport.currentRelaySession() != nil else {
             stopSync(persistPreference: false)
             return
         }
@@ -32,49 +84,45 @@ final class SyncManager {
 
     func startSync(persistPreference: Bool = true) {
         if persistPreference {
-            UserDefaults.standard.set(true, forKey: Self.syncEnabledKey)
+            userDefaults.set(true, forKey: Self.syncEnabledKey)
         }
 
         isSyncing = true
-        SyncTransport.shared.connect()
+        transport.connect()
         scheduleBackgroundRefresh()
         syncNow()
-        NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
+        notificationCenter.post(name: .syncStatusChanged, object: nil)
         log.info("Relay polling started")
     }
 
     func stopSync(persistPreference: Bool = true) {
         if persistPreference {
-            UserDefaults.standard.set(false, forKey: Self.syncEnabledKey)
+            userDefaults.set(false, forKey: Self.syncEnabledKey)
         }
 
         isSyncing = false
         currentState = .idle
-        SyncTransport.shared.disconnect()
-        NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
+        transport.disconnect()
+        notificationCenter.post(name: .syncStatusChanged, object: nil)
         log.info("Relay polling stopped")
     }
 
     func syncNow() {
         Task { @MainActor in
-            _ = await SyncTransport.shared.runCycle()
+            _ = await transport.runCycle()
             self.scheduleBackgroundRefresh()
         }
         isSyncing = true
-        NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
+        notificationCenter.post(name: .syncStatusChanged, object: nil)
     }
 
     func relayAuthenticationSucceeded() {
-        if isSyncEnabled {
-            startSync(persistPreference: false)
-        } else {
-            NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
-        }
+        startSync(persistPreference: true)
     }
 
     func relayAuthenticationEnded() {
         stopSync(persistPreference: false)
-        NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
+        notificationCenter.post(name: .syncStatusChanged, object: nil)
     }
 
     func appDidEnterBackground() {
@@ -97,26 +145,20 @@ final class SyncManager {
     }
 
     private func scheduleBackgroundRefresh() {
-        guard isSyncEnabled, SyncTransport.shared.currentRelaySession() != nil else { return }
-        let request = BGAppRefreshTaskRequest(identifier: Self.backgroundRefreshIdentifier)
-        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
-        do {
-            try BGTaskScheduler.shared.submit(request)
-        } catch {
-            log.error("Unable to schedule sync background refresh: \(error.localizedDescription)")
-        }
+        guard isSyncEnabled, transport.currentRelaySession() != nil else { return }
+        backgroundScheduler.scheduleBackgroundRefresh()
     }
 
     private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
-        var completion = SyncBackgroundCompletionGate()
-        task.expirationHandler = {
+        let completion = SyncBackgroundCompletionGate()
+        task.expirationHandler = { [weak self] in
             Task { @MainActor in
-                SyncTransport.shared.cancelCurrentCycle()
+                self?.transport.cancelCurrentCycle()
             }
             completion.complete(success: false) { task.setTaskCompleted(success: $0) }
         }
         Task { @MainActor in
-            let outcome = await SyncTransport.shared.runCycle()
+            let outcome = await transport.runCycle()
             completion.complete(success: outcome.isSuccess) { task.setTaskCompleted(success: $0) }
             self.scheduleBackgroundRefresh()
         }
@@ -125,7 +167,7 @@ final class SyncManager {
     func handleSyncUpdate(_ update: CoreUpdate) {
         switch update {
         case .syncStateChanged:
-            NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
+            notificationCenter.post(name: .syncStatusChanged, object: nil)
         case .accountSyncStateChanged(let state):
             currentState = state
             switch state {
@@ -137,7 +179,7 @@ final class SyncManager {
             case .idle, .offline, .error:
                 isSyncing = false
             }
-            NotificationCenter.default.post(name: .syncStatusChanged, object: nil)
+            notificationCenter.post(name: .syncStatusChanged, object: nil)
         default:
             break
         }

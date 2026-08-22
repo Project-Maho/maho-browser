@@ -28,6 +28,66 @@ class RelaySessionStoreTest {
     }
 
     @Test
+    fun `exact retired relay session is invalidated without retargeting credentials`() {
+        prefs.edit()
+            .putString("email", "legacy@example.com")
+            .putString("access_token", "legacy-access")
+            .putString("refresh_token", "legacy-refresh")
+            .putString("server_url", "http://192.168.0.39:8787")
+            .putString("sync_bootstrap_seed", "legacy-bootstrap-seed")
+            .commit()
+
+        val outcome = store.migrateRetiredRelay()
+        assertEquals(LegacyRelayMigrationOutcome.INVALIDATED_SESSION, outcome)
+        assertNull(store.load())
+        assertEquals("https://relay.mahobrowser.com", store.getServerUrl("unused"))
+        assertEquals(mapOf("server_url" to "https://relay.mahobrowser.com"), prefs.all)
+    }
+
+    @Test
+    fun `exact retired relay setting without credentials migrates to production`() {
+        prefs.edit()
+            .putString("server_url", "http://192.168.0.39:8787")
+            .commit()
+
+        val outcome = store.migrateRetiredRelay()
+        assertEquals(LegacyRelayMigrationOutcome.ENDPOINT_UPDATED_NO_CREDENTIALS, outcome)
+        assertEquals("https://relay.mahobrowser.com", store.getServerUrl("unused"))
+        assertEquals(mapOf("server_url" to "https://relay.mahobrowser.com"), prefs.all)
+    }
+
+    @Test
+    fun `exact retired relay bootstrap seed is invalidated without credentials`() {
+        prefs.edit()
+            .putString("server_url", "http://192.168.0.39:8787")
+            .putString("sync_bootstrap_seed", "legacy-bootstrap-seed")
+            .commit()
+
+        val outcome = store.migrateRetiredRelay()
+
+        assertEquals(LegacyRelayMigrationOutcome.INVALIDATED_SESSION, outcome)
+        assertEquals(mapOf("server_url" to "https://relay.mahobrowser.com"), prefs.all)
+    }
+
+    @Test
+    fun `custom relay endpoint and credentials are preserved`() {
+        prefs.edit()
+            .putString("email", "custom@example.com")
+            .putString("access_token", "custom-access")
+            .putString("refresh_token", "custom-refresh")
+            .putString("server_url", "https://relay.example")
+            .commit()
+
+        val outcome = store.migrateRetiredRelay()
+        assertEquals(LegacyRelayMigrationOutcome.NONE, outcome)
+        val loaded = store.load()
+
+        assertEquals("https://relay.example", loaded?.serverUrl)
+        assertEquals("custom-access", loaded?.accessToken)
+        assertEquals("https://relay.example", store.getServerUrl("unused"))
+    }
+
+    @Test
     fun `save persists encrypted tokens without plaintext copies`() {
         val session = relaySession("access-secret", "refresh-secret")
 
@@ -140,6 +200,17 @@ class RelaySessionStoreTest {
     }
 
     @Test
+    fun `sync enabled intent persists independently of runtime state`() {
+        assertFalse(store.isSyncEnabled())
+
+        assertTrue(store.setSyncEnabled(true))
+        assertTrue(store.isSyncEnabled())
+
+        assertTrue(store.setSyncEnabled(false))
+        assertFalse(store.isSyncEnabled())
+    }
+
+    @Test
     fun `logout clearing removes oauth metadata repeatedly`() {
         assertTrue(store.save(relaySession("access", "refresh")))
 
@@ -173,6 +244,39 @@ class RelaySessionStoreTest {
 
         assertEquals("old-access", store.load()?.accessToken)
         assertEquals("old-refresh", store.load()?.refreshToken)
+    }
+
+    @Test
+    fun `failed retired relay migration commit reports none and does not invalidate`() {
+        prefs.edit()
+            .putString("email", "legacy@example.com")
+            .putString("access_token", "legacy-access")
+            .putString("refresh_token", "legacy-refresh")
+            .putString("server_url", "http://192.168.0.39:8787")
+            .commit()
+
+        val failingPrefs = CommitFailingPreferences(prefs)
+        val failingStore = RelaySessionStore.SessionStore(failingPrefs, crypto)
+
+        val outcome = failingStore.migrateRetiredRelay()
+        assertEquals(LegacyRelayMigrationOutcome.NONE, outcome)
+        assertEquals("http://192.168.0.39:8787", prefs.getString("server_url", null))
+        assertEquals("legacy-access", prefs.getString("access_token", null))
+        assertEquals("legacy-refresh", prefs.getString("refresh_token", null))
+    }
+
+    @Test
+    fun `failed retired relay migration without credentials reports none`() {
+        prefs.edit()
+            .putString("server_url", "http://192.168.0.39:8787")
+            .commit()
+
+        val failingPrefs = CommitFailingPreferences(prefs)
+        val failingStore = RelaySessionStore.SessionStore(failingPrefs, crypto)
+
+        val outcome = failingStore.migrateRetiredRelay()
+        assertEquals(LegacyRelayMigrationOutcome.NONE, outcome)
+        assertEquals("http://192.168.0.39:8787", prefs.getString("server_url", null))
     }
 
     private fun relaySession(accessToken: String, refreshToken: String) = RelaySession(

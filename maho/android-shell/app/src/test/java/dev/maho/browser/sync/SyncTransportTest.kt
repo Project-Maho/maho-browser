@@ -2,6 +2,7 @@ package dev.maho.browser.sync
 
 import dev.maho.browser.support.MahoJson
 import kotlinx.serialization.json.jsonObject
+import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -60,17 +61,30 @@ class SyncTransportTest {
         server = MockWebServer()
         server.start()
         bridge = FakeV2BridgeAdapter()
+        val authClient = RelayAuthClient(
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val request = chain.request()
+                    val localUrl = request.url.newBuilder()
+                        .scheme("http")
+                        .host(server.hostName)
+                        .port(server.port)
+                        .build()
+                    chain.proceed(request.newBuilder().url(localUrl).build())
+                }
+                .build(),
+        )
         persistence = InMemoryV2SessionPersistence(
             RelaySession(
                 email = "sync@example.com",
                 accessToken = "access",
                 refreshToken = "refresh",
-                serverUrl = server.url("/").toString(),
+                serverUrl = server.url("/").newBuilder().scheme("https").build().toString(),
             ),
         )
         transport = SyncTransport(
             bridgeAdapter = bridge,
-            authClient = RelayAuthClient(),
+            authClient = authClient,
             sessionPersistence = persistence,
         )
     }

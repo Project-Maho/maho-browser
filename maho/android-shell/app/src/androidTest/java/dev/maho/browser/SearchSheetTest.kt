@@ -1,6 +1,8 @@
 package dev.maho.browser
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -138,6 +140,58 @@ class SearchSheetTest {
         waitForText("Search maho")
 
         composeTestRule.onAllNodesWithTag("searchSheetBrowseForMeButton").assertCountEquals(2)
+    }
+
+    @Test
+    fun queryResetsWhenInitialQueryChanges() {
+        var queryState by androidx.compose.runtime.mutableStateOf("https://first.example.com")
+        composeTestRule.setContent {
+            MaterialTheme {
+                ProvideBrowserShellTheme {
+                    SearchSheet(
+                        initialQuery = queryState,
+                        isIncognito = false,
+                        onDismiss = {},
+                        onSubmit = {},
+                        onToggleIncognito = {},
+                        onSelectSuggestion = {},
+                        onBrowseForMe = {},
+                        suggestionProvider = StaticSuggestionProvider(emptyList()),
+                        requestKeyboardOnAppear = false,
+                    )
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithText("https://first.example.com").assertIsDisplayed()
+        queryState = "https://second.example.com"
+        composeTestRule.onNodeWithText("https://second.example.com").assertIsDisplayed()
+    }
+
+    @Test
+    fun queryClearsWhenInitialQueryBecomesEmpty() {
+        var queryState by androidx.compose.runtime.mutableStateOf("https://existing.example.com")
+        composeTestRule.setContent {
+            MaterialTheme {
+                ProvideBrowserShellTheme {
+                    SearchSheet(
+                        initialQuery = queryState,
+                        isIncognito = false,
+                        onDismiss = {},
+                        onSubmit = {},
+                        onToggleIncognito = {},
+                        onSelectSuggestion = {},
+                        onBrowseForMe = {},
+                        suggestionProvider = StaticSuggestionProvider(emptyList()),
+                        requestKeyboardOnAppear = false,
+                    )
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithText("https://existing.example.com").assertIsDisplayed()
+        queryState = ""
+        composeTestRule.onNodeWithText("Search or enter a website", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test

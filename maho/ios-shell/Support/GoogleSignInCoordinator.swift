@@ -268,15 +268,18 @@ struct GoogleRelaySignInFlow {
     private let coordinatorProvider: () throws -> any GoogleSignInCoordinating
     private let apiClient: RelayAPIClientProtocol
     private let authStore: RelayAuthStoreProtocol
+    private let persistSession: Bool
 
     init(
         coordinatorProvider: @escaping () throws -> any GoogleSignInCoordinating,
         apiClient: RelayAPIClientProtocol,
-        authStore: RelayAuthStoreProtocol
+        authStore: RelayAuthStoreProtocol,
+        persistSession: Bool = true
     ) {
         self.coordinatorProvider = coordinatorProvider
         self.apiClient = apiClient
         self.authStore = authStore
+        self.persistSession = persistSession
     }
 
     func signIn() async throws -> RelayAuthSession {
@@ -285,7 +288,9 @@ struct GoogleRelaySignInFlow {
             idToken: identity.idToken,
             nonce: identity.nonce
         )
-        try authStore.saveSession(relaySession)
+        if persistSession {
+            try authStore.saveSession(relaySession)
+        }
         return relaySession
     }
 }

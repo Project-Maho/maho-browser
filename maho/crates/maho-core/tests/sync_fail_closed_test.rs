@@ -38,6 +38,7 @@ fn shortcut_entity(id: &str, version: u64) -> SyncEntity {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     }
 }
 
@@ -428,6 +429,7 @@ fn keyless_inbound_plaintext_vault_item_sync_is_rejected() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
     let msg = SyncMessage::EntityPush {
         entity: vault_entity,

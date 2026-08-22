@@ -116,6 +116,28 @@ final class GoogleRelaySignInFlowTests: XCTestCase {
         XCTAssertEqual(authStore.loadSession(), relaySession)
     }
 
+    func testSuccessCanDeferRelaySessionPersistence() async throws {
+        let relaySession = makeSession(email: "google@example.com")
+        let coordinator = StubGoogleSignInCoordinator(
+            result: .success(GoogleIdentityToken(idToken: "google-id-token", nonce: "nonce"))
+        )
+        let apiClient = GoogleFlowAPIClient(googleResult: .success(relaySession))
+        let authStore = GoogleFlowAuthStore()
+        let flow = GoogleRelaySignInFlow(
+            coordinatorProvider: { coordinator },
+            apiClient: apiClient,
+            authStore: authStore,
+            persistSession: false
+        )
+
+        let result = try await flow.signIn()
+
+        XCTAssertEqual(result, relaySession)
+        XCTAssertEqual(apiClient.googleRequests.count, 1)
+        XCTAssertTrue(authStore.savedSessions.isEmpty)
+        XCTAssertNil(authStore.loadSession())
+    }
+
     func testCancellationPreservesExistingSessionAndDoesNotCallRelay() async {
         let existingSession = makeSession(email: "existing@example.com")
         let coordinator = StubGoogleSignInCoordinator(result: .failure(GoogleSignInError.cancelled))

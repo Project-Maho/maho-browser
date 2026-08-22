@@ -27,6 +27,7 @@ struct ArcBottomBar: View {
     @Binding var homeQuery: String
     let onTabsTapped: () -> Void
     let onAddressTapped: () -> Void
+    var onNewTabTapped: (() -> Void)? = nil
     let onGoBack: () -> Void
     let onGoForward: () -> Void
     let onTabSwipeLeft: () -> Void
@@ -193,7 +194,7 @@ struct ArcBottomBar: View {
     }
 
     private func homeNewTabButton(width: CGFloat = 112) -> some View {
-        Button(action: onAddressTapped) {
+        Button(action: onNewTabTapped ?? onAddressTapped) {
             Image(lucide: Lucide.plus)
                 .font(.body.weight(.semibold))
                 .foregroundStyle(foregroundColor)

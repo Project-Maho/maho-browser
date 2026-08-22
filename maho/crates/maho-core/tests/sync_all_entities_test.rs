@@ -28,6 +28,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
     let applied = core.apply_sync_remote_entities(vec![e_shortcut]);
     assert_eq!(applied.len(), 1);
@@ -50,6 +51,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
     let applied = core.apply_sync_remote_entities(vec![e_extension]);
     assert_eq!(applied.len(), 1);
@@ -82,6 +84,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("default".to_string()),
     };
     let applied = core.apply_sync_remote_entities(vec![e_tab]);
     assert_eq!(applied.len(), 1);
@@ -118,6 +121,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("default".to_string()),
     };
     let applied = core.apply_sync_remote_entities(vec![e_space]);
     assert_eq!(applied.len(), 1);
@@ -147,6 +151,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("default".to_string()),
     };
     let applied = core.apply_sync_remote_entities(vec![e_bookmark]);
     assert_eq!(applied.len(), 1);
@@ -176,6 +181,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("default".to_string()),
     };
     let applied = core.apply_sync_remote_entities(vec![e_note]);
     assert_eq!(applied.len(), 1);
@@ -225,6 +231,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("default".to_string()),
     };
     let applied = core.apply_sync_remote_entities(vec![e_boost]);
     assert_eq!(applied.len(), 1);
@@ -260,6 +267,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("default".to_string()),
     };
     let applied = core.apply_sync_remote_entities(vec![e_item]);
     assert_eq!(applied.len(), 1);
@@ -286,6 +294,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
     let applied = core.apply_sync_remote_entities(vec![e_engine]);
     assert_eq!(applied.len(), 1);
@@ -315,6 +324,7 @@ fn test_sync_all_entities_round_trip() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
     let applied = core.apply_sync_remote_entities(vec![e_memory]);
     assert_eq!(applied.len(), 1);

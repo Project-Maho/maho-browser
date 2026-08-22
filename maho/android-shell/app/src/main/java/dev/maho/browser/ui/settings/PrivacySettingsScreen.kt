@@ -144,7 +144,7 @@ fun PrivacySettingsScreen(
                         }
                     }
                 }
-                
+
                 TextButton(
                     onClick = { showAddWhitelistDialog = true },
                     modifier = Modifier.padding(horizontal = 16.dp),
@@ -200,6 +200,15 @@ fun PrivacySettingsScreen(
                     label = { Text("DNS Provider") },
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
+                TextButton(
+                    onClick = {
+                        BridgeSettings.updatePrivacySettings(
+                            PrivacySettingsUpdate(secureDnsProvider = secureDnsProvider.trim())
+                        )
+                    },
+                    enabled = secureDnsProvider.isNotBlank(),
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                ) { Text("Save DNS Provider") }
             }
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
@@ -236,4 +245,3 @@ object WhitelistManager {
         prefs.edit().putStringSet("whitelist", set).apply()
     }
 }
-

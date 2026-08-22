@@ -245,7 +245,9 @@ class RelayAuthClient(
         return json.decodeFromString(RelaySyncPullResponse.serializer(), jsonBody)
     }
 
-    private fun buildUrl(serverUrl: String, path: String) = normalizeRelayBaseUrl(serverUrl).toHttpUrl().newBuilder()
+    private fun buildUrl(serverUrl: String, path: String) = normalizeRelayBaseUrl(serverUrl).toHttpUrl().also {
+        require(it.isHttps) { "Relay endpoints must use HTTPS" }
+    }.newBuilder()
         .addPathSegments(path.trimStart('/'))
         .build()
 

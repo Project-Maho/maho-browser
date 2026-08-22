@@ -4,8 +4,11 @@ import android.content.ClipData
 import android.content.Intent
 import androidx.core.content.FileProvider
 import dev.maho.browser.MahoBridge
+import dev.maho.browser.ui.webview.BrowserToolExecutor
+import dev.maho.browser.ui.webview.agenticBrowsingToolDescriptorsJson
 import java.io.File
 import org.json.JSONArray
+import org.json.JSONObject
 
 object BridgeAgent {
     private fun artifactRoot(): String? {
@@ -16,7 +19,13 @@ object BridgeAgent {
     fun agentCreateSession(sessionId: String): Long {
         val artifactRoot = artifactRoot()
         if (!MahoBridge.isInitialized || sessionId.isBlank() || artifactRoot == null) return 0L
-        return MahoBridge.invokeAgentCreateSession(MahoBridge.corePtr, sessionId, artifactRoot)
+        val handle = MahoBridge.invokeAgentCreateSession(MahoBridge.corePtr, sessionId, artifactRoot)
+        if (handle == 0L) return 0L
+        if (!nativeEnableAgenticBrowsing(handle)) {
+            MahoBridge.invokeAgentFreeSession(handle)
+            return 0L
+        }
+        return handle
     }
 
     fun agentFreeSession(sessionPtr: Long) {
@@ -41,6 +50,17 @@ object BridgeAgent {
     fun agentReadArtifact(sessionHandle: Long, artifactId: String): ByteArray? {
         if (sessionHandle == 0L || !isOpaqueArtifactId(artifactId)) return null
         return MahoBridge.invokeAgentReadArtifact(sessionHandle, artifactId)
+    }
+
+    @JvmStatic
+    private external fun nativeEnableAgenticBrowsing(sessionHandle: Long): Boolean
+
+    /** Entry point called from the Rust agent browser-tool bridge. */
+    @JvmStatic
+    fun invokeAgentBrowserTool(toolName: String, argumentsJson: String): String? {
+        if (toolName == "tools/list") return agenticBrowsingToolDescriptorsJson()
+        val args = runCatching { JSONObject(argumentsJson) }.getOrNull() ?: return null
+        return BrowserToolExecutor().invoke(toolName, args).toString()
     }
 
     internal fun agentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean =

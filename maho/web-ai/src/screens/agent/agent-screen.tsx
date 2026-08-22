@@ -15,6 +15,15 @@ import { useAgentAutoScroll } from './use-agent-auto-scroll';
 
 const AGENT_DRAFT_SCOPE: ComposerDraftScope = { kind: 'new_task' };
 
+// Mirrors the native maho-agent browser-tool descriptor policy. Read/viewport
+// tools can run automatically; DOM mutations remain approval-gated.
+export const AGENT_BROWSER_AUTORUN_TOOLS = new Set([
+  'get_page_elements',
+  'get_page_snapshot',
+  'scroll_page',
+]);
+export const AGENT_BROWSER_APPROVAL_TOOLS = new Set(['click_element', 'fill_input']);
+
 export interface AgentScreenProps {
   onBack?: () => void;
   goal?: string;

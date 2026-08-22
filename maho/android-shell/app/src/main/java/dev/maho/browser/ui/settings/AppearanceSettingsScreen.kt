@@ -24,35 +24,35 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSettings
-import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.AppearanceSettingsUpdate
 import dev.maho.browser.models.Density
 import dev.maho.browser.models.Theme
 import dev.maho.browser.support.Patchable
 import dev.maho.browser.ui.icons.MahoIcon
-import androidx.compose.ui.res.painterResource
+import dev.maho.browser.ui.theme.BrowserThemeController
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppearanceSettingsScreen(
     onBack: () -> Unit = {},
 ) {
-    var themeIndex by remember { mutableIntStateOf(2) }
+    var themeIndex by remember { mutableIntStateOf(0) }
     var densityIndex by remember { mutableIntStateOf(1) }
     var showTabBar by remember { mutableStateOf(true) }
     var windowTransparency by remember { mutableStateOf(false) }
     var customCss by remember { mutableStateOf("") }
 
-    val themes = listOf("Light", "Dark", "System")
-    val themeValues = listOf(Theme.Light, Theme.Dark, Theme.System)
+    val themes = listOf("System", "Dark", "Light")
+    val themeValues = listOf(Theme.System, Theme.Dark, Theme.Light)
     val densities = listOf("Compact", "Comfortable")
     val densityValues = listOf(Density.Compact, Density.Comfortable)
 
@@ -63,6 +63,7 @@ fun AppearanceSettingsScreen(
         showTabBar = settings.appearance.showTabBar
         windowTransparency = settings.appearance.windowTransparency
         customCss = settings.appearance.customChromeCss ?: ""
+        BrowserThemeController.setTheme(settings.appearance.theme)
     }
 
     Scaffold(
@@ -89,10 +90,12 @@ fun AppearanceSettingsScreen(
                     SegmentedButton(
                         selected = themeIndex == index,
                         onClick = {
+                            val theme = themeValues[index]
                             themeIndex = index
                             BridgeSettings.updateAppearanceSettings(
-                                AppearanceSettingsUpdate(theme = themeValues[index])
+                                AppearanceSettingsUpdate(theme = theme)
                             )
+                            BrowserThemeController.setTheme(theme)
                         },
                         shape = SegmentedButtonDefaults.itemShape(index, themes.size),
                     ) { Text(label) }

@@ -13,6 +13,12 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+enum class LegacyRelayMigrationOutcome {
+    NONE,
+    ENDPOINT_UPDATED_NO_CREDENTIALS,
+    INVALIDATED_SESSION,
+}
+
 object RelaySessionStore {
     private const val PREFS_NAME = "maho_relay_session"
     private var store: SessionStore? = null
@@ -27,10 +33,14 @@ object RelaySessionStore {
 
     fun save(session: RelaySession): Boolean = store?.save(session) ?: false
     fun load(): RelaySession? = store?.load()
+    fun migrateRetiredRelaySession(): LegacyRelayMigrationOutcome =
+        store?.migrateRetiredRelay() ?: LegacyRelayMigrationOutcome.NONE
     fun updateServerUrl(serverUrl: String) = store?.updateServerUrl(serverUrl) ?: Unit
     fun getServerUrl(defaultUrl: String): String = store?.getServerUrl(defaultUrl) ?: defaultUrl
     fun clear(): Boolean = store?.clear() ?: false
     fun hasSession(): Boolean = load() != null
+    fun isSyncEnabled(): Boolean = store?.isSyncEnabled() ?: false
+    fun setSyncEnabled(enabled: Boolean): Boolean = store?.setSyncEnabled(enabled) ?: false
 
     interface TokenCrypto {
         @Throws(GeneralSecurityException::class)
@@ -73,6 +83,7 @@ object RelaySessionStore {
         }
 
         fun load(): RelaySession? {
+            migrateRetiredRelay()
             val email = prefs.getString(KEY_EMAIL, null)?.takeIf { it.isNotBlank() }
             val encryptedAccess = prefs.getString(KEY_ACCESS_TOKEN_ENCRYPTED, null)?.takeIf { it.isNotBlank() }
             val encryptedRefresh = prefs.getString(KEY_REFRESH_TOKEN_ENCRYPTED, null)?.takeIf { it.isNotBlank() }
@@ -136,10 +147,40 @@ object RelaySessionStore {
             prefs.edit().putString(KEY_SERVER_URL, serverUrl.ifBlank { null }).apply()
         }
 
-        fun getServerUrl(defaultUrl: String): String =
-            prefs.getString(KEY_SERVER_URL, defaultUrl)?.takeIf { it.isNotBlank() } ?: defaultUrl
+        fun getServerUrl(defaultUrl: String): String {
+            migrateRetiredRelay()
+            return prefs.getString(KEY_SERVER_URL, defaultUrl)?.takeIf { it.isNotBlank() } ?: defaultUrl
+        }
+
+        fun isSyncEnabled(): Boolean = prefs.getBoolean(KEY_SYNC_ENABLED, false)
+
+        fun setSyncEnabled(enabled: Boolean): Boolean =
+            prefs.edit().putBoolean(KEY_SYNC_ENABLED, enabled).commit()
 
         fun clear(): Boolean = prefs.edit().clear().commit()
+
+        fun migrateRetiredRelay(): LegacyRelayMigrationOutcome {
+            if (prefs.getString(KEY_SERVER_URL, null) != RETIRED_SERVER_URL) {
+                return LegacyRelayMigrationOutcome.NONE
+            }
+            val hasSessionMaterial = listOf(
+                KEY_ACCESS_TOKEN,
+                KEY_REFRESH_TOKEN,
+                KEY_ACCESS_TOKEN_ENCRYPTED,
+                KEY_REFRESH_TOKEN_ENCRYPTED,
+                KEY_SYNC_BOOTSTRAP_SEED,
+            ).any { !prefs.getString(it, null).isNullOrBlank() }
+            val editor = prefs.edit()
+            if (hasSessionMaterial) editor.clear()
+            if (!editor.putString(KEY_SERVER_URL, PRODUCTION_SERVER_URL).commit()) {
+                return LegacyRelayMigrationOutcome.NONE
+            }
+            return if (hasSessionMaterial) {
+                LegacyRelayMigrationOutcome.INVALIDATED_SESSION
+            } else {
+                LegacyRelayMigrationOutcome.ENDPOINT_UPDATED_NO_CREDENTIALS
+            }
+        }
 
         private fun decryptTokens(access: String, refresh: String): Pair<String, String>? = try {
             crypto.decrypt(access) to crypto.decrypt(refresh)
@@ -253,4 +294,8 @@ object RelaySessionStore {
     private const val KEY_DEVICE_NAME = "device_name"
     private const val KEY_DEVICE_TYPE = "device_type"
     private const val KEY_SESSION_ID = "session_id"
+    private const val KEY_SYNC_ENABLED = "sync_enabled"
+    private const val KEY_SYNC_BOOTSTRAP_SEED = "sync_bootstrap_seed"
+    private const val RETIRED_SERVER_URL = "http://192.168.0.39:8787"
+    private const val PRODUCTION_SERVER_URL = "https://relay.mahobrowser.com"
 }

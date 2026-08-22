@@ -14,7 +14,11 @@ import android.webkit.WebView
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
 import dev.maho.browser.BuildConfig
+import dev.maho.browser.bridge.BridgeSettings
+import dev.maho.browser.models.AppearanceSettingsUpdate
+import dev.maho.browser.models.Theme
 import dev.maho.browser.sync.CredentialManagerGoogleSource
+import dev.maho.browser.ui.theme.BrowserThemeController
 
 /**
  * Handle to a configured web-ai [WebView] plus its RPC bridge, so hosts (the
@@ -24,7 +28,10 @@ class AiWebViewHost internal constructor(
     val webView: WebView,
     private val rpcBridge: WebViewBridge,
 ) {
-    fun destroy() = webView.destroy()
+    fun destroy() {
+        BrowserThemeController.unregisterWebView(webView)
+        webView.destroy()
+    }
 }
 
 /**
@@ -72,9 +79,29 @@ object AiWebViewFactory {
             }
             webViewClient = object : WebViewClientCompat() {
                 override fun shouldInterceptRequest(
-                     view: WebView,
-                     request: WebResourceRequest,
+                    view: WebView,
+                    request: WebResourceRequest,
                 ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (request.url.scheme == "maho-theme") {
+                        val theme = when (request.url.host?.lowercase()) {
+                            "dark" -> Theme.Dark
+                            "light" -> Theme.Light
+                            "system" -> Theme.System
+                            else -> return true
+                        }
+                        BridgeSettings.updateAppearanceSettings(AppearanceSettingsUpdate(theme = theme))
+                        BrowserThemeController.setTheme(theme)
+                        return true
+                    }
+                    return false
+                }
+
+                override fun onPageFinished(view: WebView, url: String?) {
+                    super.onPageFinished(view, url)
+                    BrowserThemeController.applyToWebView(view)
+                }
 
                 @Deprecated("Deprecated in Java")
                 override fun onReceivedError(
@@ -112,6 +139,7 @@ object AiWebViewFactory {
             "MahoBridgeNative",
         )
 
+        BrowserThemeController.registerWebView(wv)
         val hash = if (params.isNotEmpty()) "#$screen?$params" else "#$screen"
         wv.loadUrl(buildUrl(context, hash))
         return AiWebViewHost(wv, rpcBridge)

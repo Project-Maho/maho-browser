@@ -107,6 +107,7 @@ fn entity(core: &mut MahoCore, id: &str, device_id: u32, deleted: bool) -> SyncE
         deleted,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     }
 }
 

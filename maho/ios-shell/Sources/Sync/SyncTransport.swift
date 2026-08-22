@@ -72,6 +72,7 @@ final class SyncTransport {
     private let log = Logger(subsystem: "dev.maho.browser", category: "SyncTransport")
 
     private var isStarted = false
+    private var shouldEnableCoreSync = false
     private var runningCycle: Task<SyncCycleOutcome, Never>?
 
     private(set) var lastCycleOutcome: SyncCycleOutcome?
@@ -93,12 +94,14 @@ final class SyncTransport {
     /// and `BGAppRefreshTask`).
     func connect() {
         isStarted = true
+        shouldEnableCoreSync = true
     }
 
     /// Stops accepting new cycles and cancels any in-flight cycle. Unleased and
     /// unacknowledged outbox rows stay durable in core and are retried later.
     func disconnect() {
         isStarted = false
+        shouldEnableCoreSync = false
         cancelCurrentCycle()
         postStatusChanged()
     }
@@ -136,7 +139,29 @@ final class SyncTransport {
             userId: session.account.id,
             deviceId: session.device?.id
         )
+        try core.setSyncEnabled(shouldEnableCoreSync)
         postStatusChanged()
+    }
+
+    internal func activateAuthenticatedSession(_ session: RelayAuthSession) async throws {
+        core.signIn(
+            email: session.account.email,
+            displayName: session.account.displayName,
+            accessToken: session.accessToken,
+            userId: session.account.id,
+            deviceId: session.device?.id
+        )
+
+        do {
+            try await configureCoreBootstrap(session: session)
+            try core.setSyncEnabled(true)
+            try authStore.saveSession(session)
+            shouldEnableCoreSync = true
+            postStatusChanged()
+        } catch {
+            core.signOut()
+            throw error
+        }
     }
 
     @discardableResult
@@ -187,13 +212,6 @@ final class SyncTransport {
     private func performCycle() async -> SyncCycleOutcome {
         postStatusChanged()
 
-        let roomID: String
-        do {
-            roomID = try core.syncRoomID()
-        } catch {
-            return finish(.failed(message: message(for: error)))
-        }
-
         guard var session = authStore.loadSession() else {
             return finish(.skipped(reason: SyncTransportError.notAuthenticated.localizedDescription))
         }
@@ -207,7 +225,23 @@ final class SyncTransport {
             if session.isAccessTokenExpired {
                 session = try await refreshSession(session)
             }
+            try await prepareCore(session: session)
+        } catch {
+            return finish(.failed(message: message(for: error)))
+        }
 
+        let roomID: String
+        do {
+            roomID = try core.syncRoomID()
+        } catch {
+            return finish(.failed(message: message(for: error)))
+        }
+
+        guard authStore.loadSession() != nil else {
+            return finish(.skipped(reason: SyncTransportError.notAuthenticated.localizedDescription))
+        }
+
+        do {
             let pushed = try await withOneRefreshRetry(session: session) { activeSession in
                 try await self.pushOutbox(roomID: roomID, session: activeSession)
             }
@@ -224,6 +258,38 @@ final class SyncTransport {
             log.error("Sync cycle failed: \(text, privacy: .public)")
             return finish(.failed(message: text))
         }
+    }
+
+    private func prepareCore(session: RelayAuthSession) async throws {
+        core.signIn(
+            email: session.account.email,
+            displayName: session.account.displayName,
+            accessToken: session.accessToken,
+            userId: session.account.id,
+            deviceId: session.device?.id
+        )
+
+        try await configureCoreBootstrap(session: session)
+        try core.setSyncEnabled(shouldEnableCoreSync)
+    }
+
+    private func configureCoreBootstrap(session: RelayAuthSession) async throws {
+        let bootstrap: RelaySyncBootstrap
+        do {
+            bootstrap = try await apiClient.getSyncBootstrap(session: session)
+        } catch RelayAPIError.http(let statusCode, _) where statusCode == 404 {
+            let generated = try core.generateSyncBootstrap()
+            do {
+                bootstrap = try await apiClient.putSyncBootstrap(generated, session: session)
+            } catch RelayAPIError.http(let statusCode, _) where statusCode == 409 {
+                bootstrap = try await apiClient.getSyncBootstrap(session: session)
+            }
+        }
+
+        try core.configureSyncBootstrap(
+            serverURL: RelayAPIClient.currentBaseURLString(),
+            seed: bootstrap.seed
+        )
     }
 
     /// Runs `operation`; on relay 401 refreshes the session exactly once,

@@ -72,7 +72,6 @@ private typealias MahoAgentPermissionCallback = @convention(c) (
     UnsafePointer<CChar>?
 ) -> Int32
 
-
 private typealias MahoAgentSecureStorageCallback = @convention(c) (
     UnsafeMutableRawPointer?,
     UnsafePointer<CChar>?
@@ -396,7 +395,7 @@ private func agentPermissionCallback(
 ) -> Int32 {
     guard let toolName = toolName else { return 1 }
     let tool = String(cString: toolName)
-    if tool == "fs_read" || tool == "web_search" {
+    if tool == "fs_read" || tool == "web_search" || tool == "click_element" || tool == "fill_input" {
         return 0
     }
     return 1
@@ -412,6 +411,71 @@ private let freeSecureKey: @convention(c) (UnsafeMutablePointer<CChar>?, UInt) -
 
 private let freeCString: @convention(c) (UnsafeMutablePointer<CChar>?) -> Void = { ptr in
     if let ptr = ptr { free(ptr) }
+}
+
+private func makeAgentBrowserToolResult(
+    json: String? = nil,
+    error: String? = nil,
+    code: String? = nil,
+    retryable: Bool = false
+) -> MahoAgentToolResult {
+    MahoAgentToolResult(
+        json_ptr: json.map { strdup($0) },
+        error_ptr: error.map { strdup($0) },
+        free_fn: freeCString,
+        error_code_ptr: code.map { strdup($0) },
+        error_retryable: retryable
+    )
+}
+
+private func agentBrowserToolCallback(
+    _ userData: UnsafeMutableRawPointer?,
+    _ toolName: UnsafePointer<CChar>?,
+    _ arguments: UnsafePointer<CChar>?
+) -> MahoAgentToolResult {
+    guard let toolName else {
+        return makeAgentBrowserToolResult(error: "Missing browser tool name", code: "invalid_request")
+    }
+    let name = String(cString: toolName)
+    if name == "tools/list" {
+        let payload: [String: Any] = ["tools": AgenticBrowsingDOM.toolDescriptors]
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return makeAgentBrowserToolResult(error: "Failed to encode browser tool descriptors", code: "malformed_discovery")
+        }
+        return makeAgentBrowserToolResult(json: json)
+    }
+
+    guard AgenticBrowsingDOM.toolNames.contains(name) else {
+        return makeAgentBrowserToolResult(error: "Unknown browser tool", code: "unknown_tool")
+    }
+
+    let args: [String: Any]
+    if let arguments {
+        let raw = String(cString: arguments)
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return makeAgentBrowserToolResult(error: "Browser tool arguments are not valid JSON", code: "invalid_arguments")
+        }
+        args = object
+    } else {
+        args = [:]
+    }
+
+    let result = AgenticBrowsingDOM.invoke(name: name, args: args)
+    if result["ok"] as? Bool == false {
+        let code = result["error"] as? String ?? "browser_tool_failed"
+        let message = result["message"] as? String ?? code
+        let retryable = ["page_script_timeout", "page_script_failed", "no_active_page"].contains(code)
+        return makeAgentBrowserToolResult(error: message, code: code, retryable: retryable)
+    }
+
+    guard let data = try? JSONSerialization.data(withJSONObject: result),
+          let json = String(data: data, encoding: .utf8) else {
+        return makeAgentBrowserToolResult(error: "Failed to encode browser tool result", code: "malformed_execution")
+    }
+    return makeAgentBrowserToolResult(json: json)
 }
 
 enum AiSettingsKeys {
@@ -599,7 +663,7 @@ extension MahoBridge {
                 return FFIString.withCString(workspaceURL.path) { workspacePathPointer -> OpaquePointer? in
                     let context = AgentSessionContext(artifactRoot: artifactRoot)
                     let contextPointer = Unmanaged.passRetained(context).toOpaque()
-                    
+
                     guard let sessionPtr = ffiAgentCreateSessionLeased(
                         corePtr,
                         sessionIdPointer,
@@ -609,8 +673,8 @@ extension MahoBridge {
                         contextPointer,
                         agentSecureStorageCallback,
                         contextPointer,
-                        nil,  // browser_tool_cb: iOS has no browser tools
-                        nil,  // browser_tool_user_data
+                        agentBrowserToolCallback,
+                        contextPointer,
                         nil,  // space_id: mobile agent has no space context
                         releaseAgentSessionContext,
                         contextPointer
@@ -618,7 +682,7 @@ extension MahoBridge {
                         Unmanaged<AgentSessionContext>.fromOpaque(contextPointer).release()
                         return nil
                     }
-                    
+
                     FFIString.withCString(artifactRoot.path) { artifactRootPointer in
                         ffiAgentSetArtifactRoot(sessionPtr, artifactRootPointer)
                     }
@@ -636,7 +700,7 @@ extension MahoBridge {
             }
         } ?? nil
     }
-    
+
     func agentFreeSession(_ ptr: OpaquePointer) {
         AgentSessionRegistry.shared.close(ptr: ptr, nativeFree: ffiAgentSessionFree)
     }

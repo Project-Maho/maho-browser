@@ -4,7 +4,6 @@ import android.app.Activity
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,9 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -52,13 +49,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.maho.browser.BuildConfig
+import dev.maho.browser.bridge.BridgeProfiles
 import dev.maho.browser.bridge.BridgeSync
 import dev.maho.browser.models.ConnectedDevice
 import dev.maho.browser.sync.CredentialManagerGoogleSource
-import dev.maho.browser.sync.GoogleSignInOutcome
 import dev.maho.browser.sync.RelaySessionStore
 import dev.maho.browser.sync.SyncManager
+import dev.maho.browser.sync.SyncStateKind
+import dev.maho.browser.sync.SyncStateResult
 import dev.maho.browser.ui.components.ConfirmDialog
 import dev.maho.browser.ui.components.MahoGroupedRow
 import dev.maho.browser.ui.components.MahoGroupedSection
@@ -86,17 +84,18 @@ fun SyncSettingsScreen(
     onBack: () -> Unit = {},
 ) {
     val shellColors = BrowserShellTheme.colors
-    val shellMetrics = BrowserShellTheme.metrics
     val clipboardManager = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     val activity = LocalContext.current as Activity
-    val googleCredentialSource = remember(activity) { CredentialManagerGoogleSource(activity) }
+    remember(activity) { CredentialManagerGoogleSource(activity) }
     var relaySessionEmail by remember { mutableStateOf(RelaySessionStore.load()?.email) }
     var serverUrlInput by remember { mutableStateOf(SyncManager.getServerUrl()) }
     var emailInput by remember { mutableStateOf(relaySessionEmail ?: "") }
     var passwordInput by remember { mutableStateOf("") }
-    var syncEnabled by remember { mutableStateOf(SyncManager.isSyncing) }
+    var syncEnabled by remember { mutableStateOf(SyncManager.isSyncEnabled) }
     var syncStatus by remember { mutableStateOf(if (relaySessionEmail == null) SyncUiStatus.Offline else SyncUiStatus.Idle) }
+    var syncStatusDetail by remember { mutableStateOf<String?>(null) }
+    var activeProfileName by remember { mutableStateOf<String?>(null) }
     val devices = remember { mutableStateListOf<ConnectedDevice>() }
     var recoveryPhraseInput by remember { mutableStateOf("") }
     var generatedSyncKey by remember { mutableStateOf<String?>(null) }
@@ -125,12 +124,44 @@ fun SyncSettingsScreen(
         if (session != null) {
             serverUrlInput = session.serverUrl ?: serverUrlInput
         }
-        syncEnabled = SyncManager.isSyncing
-        syncStatus = when {
-            relaySessionEmail == null -> SyncUiStatus.Offline
-            !syncEnabled -> SyncUiStatus.Idle
-            else -> SyncUiStatus.Synced
+        syncEnabled = SyncManager.isSyncEnabled
+
+        val activeProfileId = BridgeProfiles.getActiveProfile()
+        activeProfileName = activeProfileId?.let { id ->
+            BridgeProfiles.getAllProfiles().firstOrNull { it.id == id }?.name ?: id
         }
+
+        when (val stateResult = BridgeSync.getSyncState()) {
+            is SyncStateResult.Available -> {
+                val state = stateResult.state
+                syncStatus = when (state.kind) {
+                    SyncStateKind.CONNECTING, SyncStateKind.SYNCING -> SyncUiStatus.Syncing
+                    SyncStateKind.SYNCED -> SyncUiStatus.Synced
+                    SyncStateKind.ERROR -> SyncUiStatus.Error
+                    SyncStateKind.OFFLINE -> SyncUiStatus.Offline
+                    SyncStateKind.IDLE -> SyncUiStatus.Idle
+                }
+                syncStatusDetail = when {
+                    !state.lastError.isNullOrBlank() -> state.lastError
+                    state.pendingOutboxCount > 0 -> "${state.pendingOutboxCount} pending change${if (state.pendingOutboxCount == 1) "" else "s"} in this profile"
+                    state.lastSuccessAt != null -> "Core sync state is up to date for the active profile"
+                    else -> null
+                }
+            }
+            is SyncStateResult.Invalid -> {
+                syncStatus = SyncUiStatus.Error
+                syncStatusDetail = stateResult.reason
+            }
+            SyncStateResult.Unavailable -> {
+                syncStatus = when {
+                    relaySessionEmail == null -> SyncUiStatus.Offline
+                    syncEnabled -> SyncUiStatus.Syncing
+                    else -> SyncUiStatus.Idle
+                }
+                syncStatusDetail = null
+            }
+        }
+
         val currentDevices = BridgeSync.getConnectedDevices()
         devices.clear()
         devices.addAll(currentDevices)
@@ -187,7 +218,8 @@ fun SyncSettingsScreen(
                 MahoGroupedSection(title = "Account") {
                     MahoGroupedRow(
                         title = relaySessionEmail ?: "",
-                        subtitle = "Relay account connected",
+                        subtitle = activeProfileName?.let { "Relay account connected · Active profile: $it" }
+                            ?: "Relay account connected",
                         icon = painterResource(id = MahoIcon.Profiles.drawableRes),
                         iconTint = Color(0xFF0A84FF),
                     )
@@ -214,7 +246,7 @@ fun SyncSettingsScreen(
                 MahoGroupedSection(title = "Synchronization") {
                     MahoGroupedToggle(
                         title = "Sync Data",
-                        subtitle = "Automatically sync tabs, spaces, and bookmarks",
+                        subtitle = "Automatically sync tabs, spaces, and bookmarks for the active profile",
                         icon = painterResource(id = MahoIcon.SyncIcon.drawableRes),
                         iconTint = Color(0xFF30D158),
                         checked = syncEnabled,
@@ -233,7 +265,8 @@ fun SyncSettingsScreen(
                     )
                     MahoRowDivider()
                     MahoGroupedRow(
-                        title = "Status",
+                        title = activeProfileName?.let { "Status · $it" } ?: "Status",
+                        subtitle = syncStatusDetail,
                         trailingContent = {
                             val (statusText, statusColor) = when (syncStatus) {
                                 SyncUiStatus.Synced -> "Synced" to shellColors.success
@@ -254,6 +287,19 @@ fun SyncSettingsScreen(
                                     fontWeight = FontWeight.Medium,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
                                 )
+                            }
+                        },
+                    )
+                    MahoRowDivider()
+                    MahoGroupedRow(
+                        title = "Sync Now",
+                        subtitle = if (syncEnabled) "Push and pull this profile immediately" else "Enable Sync Data first",
+                        icon = painterResource(id = MahoIcon.SyncIcon.drawableRes),
+                        iconTint = Color(0xFF0A84FF),
+                        onClick = {
+                            if (syncEnabled) {
+                                syncStatus = SyncUiStatus.Syncing
+                                SyncManager.syncNow()
                             }
                         },
                     )
@@ -306,7 +352,7 @@ fun SyncSettingsScreen(
                                 SyncManager.updateServerUrl(it)
                             },
                             label = "Relay Server",
-                            placeholder = "http://192.168.0.39:8787",
+                            placeholder = "https://relay.mahobrowser.com",
                         )
 
                         MahoTextField(
@@ -497,6 +543,15 @@ fun SyncSettingsScreen(
                         Text("Join with Phrase", fontSize = 14.sp)
                     }
                 }
+            }
+
+            if (joinResult != null) {
+                Text(
+                    text = joinResult ?: "",
+                    color = shellColors.textSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                )
             }
 
             Spacer(modifier = Modifier.height(32.dp))

@@ -2,6 +2,41 @@ import Foundation
 import UIKit
 import WebKit
 
+struct RelayAuthRPCDependencies {
+    let authenticate: (RelayAuthMode, String, String, String?) async throws -> RelayAuthSession
+    let googleSignIn: @MainActor () async throws -> RelayAuthSession
+    let activateSession: (RelayAuthSession) async throws -> Void
+    let startPolling: @MainActor () -> Void
+
+    static let live = RelayAuthRPCDependencies(
+        authenticate: { mode, email, password, displayName in
+            try await RelayAPIClient().authenticate(
+                mode: mode,
+                email: email,
+                password: password,
+                displayName: displayName
+            )
+        },
+        googleSignIn: {
+            guard let configuration = GoogleSignInConfiguration.fromBundle() else {
+                throw GoogleSignInError.missingClientID
+            }
+            return try await GoogleRelaySignInFlow(
+                coordinatorProvider: { GoogleSignInCoordinator(configuration: configuration) },
+                apiClient: RelayAPIClient(),
+                authStore: RelayAuthStore.shared,
+                persistSession: false
+            ).signIn()
+        },
+        activateSession: { session in
+            try await SyncTransport.shared.activateAuthenticatedSession(session)
+        },
+        startPolling: {
+            SyncManager.shared.relayAuthenticationSucceeded()
+        }
+    )
+}
+
 /**
  * WebViewBridgeController
  *
@@ -52,6 +87,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     private let chatRPC: ChatSessionRPCDependencies
     private let conversationRPC: ConversationRPCDependencies
     private let browserToolExecutor: BrowserToolExecutor
+    private let relayAuthRPC: RelayAuthRPCDependencies
     private let maxBrowserToolResultBytes = 4_000
     private let dispatchQueue = DispatchQueue(
         label: "dev.maho.browser.WebViewBridgeController",
@@ -74,7 +110,8 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         artifactShareCoordinator: ArtifactShareCoordinator = .shared,
         chatRPC: ChatSessionRPCDependencies? = nil,
         conversationRPC: ConversationRPCDependencies? = nil,
-        browserToolExecutor: BrowserToolExecutor? = nil
+        browserToolExecutor: BrowserToolExecutor? = nil,
+        relayAuthRPC: RelayAuthRPCDependencies = .live
     ) {
         self.bridge = bridge
         self.onBack = onBack
@@ -87,6 +124,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         self.chatRPC = chatRPC ?? .live(bridge: bridge)
         self.conversationRPC = conversationRPC ?? .live(bridge: bridge)
         self.browserToolExecutor = browserToolExecutor ?? .live(bridge: bridge)
+        self.relayAuthRPC = relayAuthRPC
         super.init()
     }
 
@@ -704,9 +742,9 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             let semaphore = DispatchSemaphore(value: 0)
             Task {
                 do {
-                    let client = RelayAPIClient()
-                    let session = try await client.authenticate(mode: .login, email: email, password: password, displayName: nil)
-                    try await SyncTransport.shared.replaceRelaySession(session)
+                    let session = try await relayAuthRPC.authenticate(.login, email, password, nil)
+                    try await relayAuthRPC.activateSession(session)
+                    await relayAuthRPC.startPolling()
                     apiResult = ["ok": true]
                 } catch {
                     apiResult = ["ok": false, "error": error.localizedDescription]
@@ -724,9 +762,9 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             let semaphore = DispatchSemaphore(value: 0)
             Task {
                 do {
-                    let client = RelayAPIClient()
-                    let session = try await client.authenticate(mode: .signup, email: email, password: password, displayName: displayName)
-                    try await SyncTransport.shared.replaceRelaySession(session)
+                    let session = try await relayAuthRPC.authenticate(.signup, email, password, displayName)
+                    try await relayAuthRPC.activateSession(session)
+                    await relayAuthRPC.startPolling()
                     apiResult = ["ok": true]
                 } catch {
                     apiResult = ["ok": false, "error": error.localizedDescription]
@@ -742,16 +780,9 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             Task { @MainActor in
                 defer { semaphore.signal() }
                 do {
-                    guard let configuration = GoogleSignInConfiguration.fromBundle() else {
-                        throw GoogleSignInError.missingClientID
-                    }
-                    let flow = GoogleRelaySignInFlow(
-                        coordinatorProvider: { GoogleSignInCoordinator(configuration: configuration) },
-                        apiClient: RelayAPIClient(),
-                        authStore: RelayAuthStore.shared
-                    )
-                    let session = try await flow.signIn()
-                    try await SyncTransport.shared.replaceRelaySession(session)
+                    let session = try await relayAuthRPC.googleSignIn()
+                    try await relayAuthRPC.activateSession(session)
+                    relayAuthRPC.startPolling()
                     apiResult = ["ok": true]
                 } catch {
                     if GoogleSignInError.isCancellation(error) {

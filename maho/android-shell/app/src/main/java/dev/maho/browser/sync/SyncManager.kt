@@ -18,22 +18,78 @@ internal fun completeLocalLogout(
     return true
 }
 
+internal fun handleLegacyRelayMigration(
+    migrationOutcome: LegacyRelayMigrationOutcome,
+    stopSync: () -> Unit,
+    signOutCore: () -> Unit,
+) {
+    if (migrationOutcome == LegacyRelayMigrationOutcome.INVALIDATED_SESSION) {
+        stopSync()
+        signOutCore()
+    }
+}
+
+
+
+internal fun restorePersistedCoreSession(
+    loadSession: () -> RelaySession?,
+    signInCore: (RelaySession) -> Unit,
+) {
+    loadSession()?.let(signInCore)
+}
+
+internal fun signInCore(session: RelaySession) {
+    BridgeSync.signIn(
+        email = session.account?.email ?: session.email,
+        displayName = session.account?.displayName,
+        accessToken = session.accessToken,
+        userId = session.account?.id,
+        deviceId = session.device?.id,
+    )
+}
+
 object SyncManager : DefaultLifecycleObserver {
     private const val TAG = "SyncManager"
-    private const val DEFAULT_SERVER_URL = "http://192.168.0.39:8787"
+    private const val DEFAULT_SERVER_URL = "https://relay.mahobrowser.com"
 
-    var isSyncing = false
-        private set
+    val isSyncing: Boolean
+        get() = lifecycleController?.isRunning == true
+    val isSyncEnabled: Boolean
+        get() = RelaySessionStore.isSyncEnabled()
     var lastSyncTimestamp: Long? = null
         private set
 
     private var appContext: Context? = null
+    private var lifecycleController: SyncLifecycleController? = null
     private val authClient = RelayAuthClient()
     var syncErrorListener: ((String) -> Unit)? = null
 
-    fun initialize(context: Context) {
+    fun initialize(
+        context: Context,
+        stopSync: () -> Unit = { SyncManager.stopSync() },
+        signOutCore: () -> Unit = { BridgeSync.signOut() },
+    ) {
         appContext = context.applicationContext
         RelaySessionStore.init(context)
+        val migrationOutcome = RelaySessionStore.migrateRetiredRelaySession()
+        handleLegacyRelayMigration(
+            migrationOutcome = migrationOutcome,
+            stopSync = stopSync,
+            signOutCore = signOutCore,
+        )
+        lifecycleController = SyncLifecycleController(
+            hasSession = RelaySessionStore::hasSession,
+            isEnabled = RelaySessionStore::isSyncEnabled,
+            persistEnabled = RelaySessionStore::setSyncEnabled,
+            restoreCoreAuth = { restorePersistedCoreSession(RelaySessionStore::load, ::signInCore) },
+            configureBootstrap = { RelaySessionStore.load()?.let(::configureAccountBootstrap) == true },
+            toggleCoreSync = BridgeSync::toggleSync,
+            runCycle = { SyncTransport.shared.runBoundedCycle() },
+            enqueueWork = { ReliableSyncWorker.enqueue(context.applicationContext) },
+            cancelTransport = SyncTransport.shared::cancel,
+            cancelWork = { ReliableSyncWorker.cancel(context.applicationContext) },
+        )
+        lifecycleController?.restore()
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
@@ -80,13 +136,10 @@ object SyncManager : DefaultLifecycleObserver {
     private fun activateSession(session: RelaySession) {
         check(RelaySessionStore.save(session)) { "Unable to securely save relay session" }
         updateServerUrl(session.serverUrl ?: getServerUrl())
-        BridgeSync.signIn(
-            email = session.account?.email ?: session.email,
-            displayName = session.account?.displayName,
-            accessToken = session.accessToken,
-            userId = session.account?.id,
-            deviceId = session.device?.id,
-        )
+        signInCore(session)
+        if (lifecycleController?.onAuthenticated() != true) {
+            syncErrorListener?.invoke("Unable to configure account Sync")
+        }
     }
 
     fun logout() {
@@ -108,20 +161,15 @@ object SyncManager : DefaultLifecycleObserver {
     }
 
     fun startSync() {
-        val session = RelaySessionStore.load()
-        if (session == null) {
+        if (!RelaySessionStore.hasSession()) {
             syncErrorListener?.invoke("Sign in to enable background sync")
             return
         }
         if (isSyncing) return
-        if (!configureAccountBootstrap(session)) {
+        if (lifecycleController?.onAuthenticated() != true) {
             syncErrorListener?.invoke("Unable to configure account Sync")
             return
         }
-        BridgeSync.toggleSync()
-        isSyncing = true
-        SyncTransport.shared.runBoundedCycle()
-        appContext?.let(ReliableSyncWorker::enqueue)
         Log.i(TAG, "Background sync started")
     }
 
@@ -169,14 +217,12 @@ object SyncManager : DefaultLifecycleObserver {
     }
 
     fun stopSync() {
-        if (!isSyncing) return
-        BridgeSync.toggleSync()
-        isSyncing = false
-        SyncTransport.shared.cancel()
+        lifecycleController?.disable()
         Log.i(TAG, "Background sync stopped")
     }
 
     fun syncNow() {
+        if (!isSyncing) return
         SyncTransport.shared.runBoundedCycle()
         appContext?.let(ReliableSyncWorker::enqueue)
     }
@@ -186,15 +232,10 @@ object SyncManager : DefaultLifecycleObserver {
     }
 
     override fun onStart(owner: LifecycleOwner) {
-        if (isSyncing) {
-            SyncTransport.shared.runBoundedCycle()
-        }
+        lifecycleController?.onForeground()
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        if (isSyncing) {
-            SyncTransport.shared.cancel()
-            appContext?.let(ReliableSyncWorker::enqueue)
-        }
+        lifecycleController?.onBackground()
     }
 }

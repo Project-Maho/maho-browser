@@ -1925,6 +1925,7 @@ fn split_view_create_via_event() {
         window_id,
         tab_ids: vec![tab1, tab2],
         orientation: Orientation::Horizontal,
+        layout: None,
     });
 }
 

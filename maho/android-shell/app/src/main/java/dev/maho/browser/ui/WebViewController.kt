@@ -71,6 +71,7 @@ class MahoWebViewClient(
     private val onNavigationStateChanged: (canGoBack: Boolean, canGoForward: Boolean) -> Unit,
     private val onError: (errorCode: Int, description: String, failingUrl: String) -> Unit,
     private val isSourceWhitelisted: (String) -> Boolean,
+    private val onPageThemeApply: (WebView) -> Unit = {},
 ) : WebViewClient() {
     private val mainDocumentUrlState = MainDocumentUrlState()
 
@@ -85,6 +86,7 @@ class MahoWebViewClient(
 
     override fun onPageFinished(view: WebView, url: String) {
         mainDocumentUrlState.onPageFinished(url)
+        onPageThemeApply(view)
         onLoadingChanged(false)
         onNavigationStateChanged(view.canGoBack(), view.canGoForward())
         val tabId = tabIdProvider()
@@ -124,7 +126,7 @@ class MahoWebViewClient(
                 204,
                 "No Content",
                 mapOf("Access-Control-Allow-Origin" to "*"),
-                java.io.ByteArrayInputStream(ByteArray(0))
+                ByteArrayInputStream(ByteArray(0))
             )
         }
         return super.shouldInterceptRequest(view, request)

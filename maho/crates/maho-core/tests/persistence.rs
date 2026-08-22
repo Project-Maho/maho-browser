@@ -27,19 +27,15 @@ fn lmdb_persists_tab_create_immediately() {
             is_private: false,
         });
 
-        // Extract tab ID
         let tab_id = core
             .get_tab_view_models()
             .first()
             .expect("tab should be created")
             .id
             .clone();
-
-        // Dropping core without explicit save_state()
         tab_id
     };
 
-    // Load in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("state should restore");
 
@@ -73,7 +69,6 @@ fn lmdb_persists_close_tab_immediately() {
             .id
             .clone();
 
-        // Close the tab
         core.handle_event(ShellEvent::CloseTab {
             tab_id,
             expected_space_id: Some(space_id.clone()),
@@ -83,7 +78,6 @@ fn lmdb_persists_close_tab_immediately() {
         space_id
     };
 
-    // Load in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("state should restore");
 
@@ -111,12 +105,10 @@ fn lmdb_persists_space_create_immediately() {
         space.id
     };
 
-    // Load in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("state should restore");
 
     let spaces = restored.get_space_view_models();
-    // Default space + new space
     assert!(spaces.iter().any(|s| s.id == space_id));
 }
 
@@ -146,7 +138,6 @@ fn lmdb_persists_active_space_change_immediately() {
         space.id
     };
 
-    // Load in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("state should restore");
 
@@ -198,7 +189,6 @@ fn lmdb_persists_move_tab_immediately() {
         (tab_id, target_space.id)
     };
 
-    // Load in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("state should restore");
 
@@ -212,7 +202,6 @@ fn lmdb_persists_move_tab_immediately() {
 
 #[test]
 fn no_lmdb_io_when_storage_absent() {
-    // When no LMDB path is initialized, operations should run without panic or error.
     let mut core = MahoCore::new();
     let space_id = core.get_active_space_id();
     let updates = core.handle_event(ShellEvent::CreateTab {
@@ -226,7 +215,6 @@ fn no_lmdb_io_when_storage_absent() {
     assert!(!updates.is_empty());
 }
 
-/// Granular save: a tabs-only event must not rewrite the spaces LMDB key.
 #[test]
 fn tabs_only_event_does_not_rewrite_spaces_key() {
     use std::fs;
@@ -248,9 +236,7 @@ fn tabs_only_event_does_not_rewrite_spaces_key() {
     });
 
     sleep(Duration::from_millis(80));
-
     let tab_id = core.get_tab_view_models().first().expect("tab").id.clone();
-
     let mdb_path = storage_path.join("data.mdb");
     let baseline = fs::metadata(&mdb_path).expect("mdb").len();
 
@@ -261,21 +247,18 @@ fn tabs_only_event_does_not_rewrite_spaces_key() {
     });
 
     let _after = fs::metadata(&mdb_path).expect("mdb").len();
-
     let restored = MahoCore::new().with_lmdb_storage(&storage_path);
     let _ = restored.get_space_view_models();
     assert_eq!(restored.get_space_view_models().len(), 1);
     assert!(baseline > 0);
 }
 
-/// Throttle: 100 rapid mutations must complete in well under 100×single-mutation time.
 #[test]
 fn throttle_coalesces_rapid_mutations() {
     use std::time::Instant;
 
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
     let space_id = core.get_active_space_id();
 
@@ -291,12 +274,7 @@ fn throttle_coalesces_rapid_mutations() {
         });
     }
     let elapsed_ms = start.elapsed().as_millis();
-
-    assert!(
-        elapsed_ms < 1000,
-        "throttle ineffective: 100 rapid mutations took {}ms (expected < 1000ms)",
-        elapsed_ms
-    );
+    assert!(elapsed_ms < 1000, "throttle ineffective: 100 rapid mutations took {}ms (expected < 1000ms)", elapsed_ms);
 
     core.handle_event(ShellEvent::AppWillTerminate);
     drop(core);
@@ -304,19 +282,13 @@ fn throttle_coalesces_rapid_mutations() {
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("reload");
     let restored_count = restored.get_tab_view_models().len();
-    assert_eq!(
-        restored_count, 100,
-        "AppWillTerminate must drain all pending mutations: got {}",
-        restored_count
-    );
+    assert_eq!(restored_count, 100, "AppWillTerminate must drain all pending mutations: got {}", restored_count);
 }
 
-/// AppWillTerminate must force-flush pending dirty bits (bypass throttle).
 #[test]
 fn app_will_terminate_force_flushes_pending() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
     let space_id = core.get_active_space_id();
 
@@ -328,7 +300,6 @@ fn app_will_terminate_force_flushes_pending() {
         window_id: None,
         is_private: false,
     });
-
     core.handle_event(ShellEvent::CreateTab {
         space_id: space_id.clone(),
         url: Some(Url::new("https://second.com")),
@@ -350,12 +321,7 @@ fn app_will_terminate_force_flushes_pending() {
     assert!(urls.contains(&"https://second.com"));
 }
 
-fn create_tab_for_test(
-    core: &mut MahoCore,
-    space_id: SpaceId,
-    url: &str,
-    is_private: bool,
-) -> TabId {
+fn create_tab_for_test(core: &mut MahoCore, space_id: SpaceId, url: &str, is_private: bool) -> TabId {
     let updates = core.handle_event(ShellEvent::CreateTab {
         space_id,
         url: Some(Url::new(url)),
@@ -373,11 +339,7 @@ fn create_tab_for_test(
         .expect("tab should be created")
 }
 
-fn create_folder_for_test(
-    core: &mut MahoCore,
-    space_id: SpaceId,
-    name: &str,
-) -> maho_types::identifiers::FolderId {
+fn create_folder_for_test(core: &mut MahoCore, space_id: SpaceId, name: &str) -> maho_types::identifiers::FolderId {
     let updates = core.handle_event(ShellEvent::CreateFolder {
         space_id,
         name: name.to_string(),
@@ -431,67 +393,36 @@ fn private_tabs_and_space_refs_are_not_persisted_to_lmdb() {
     let (normal_id, private_folder_id, private_root_id, space_id) = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
-        let normal_id = create_tab_for_test(
-            &mut core,
-            space_id.clone(),
-            "https://normal.example.com",
-            false,
-        );
-        let private_folder_id = create_tab_for_test(
-            &mut core,
-            space_id.clone(),
-            "https://private-folder.example.com",
-            true,
-        );
+        let normal_id = create_tab_for_test(&mut core, space_id.clone(), "https://normal.example.com", false);
+        let private_folder_id = create_tab_for_test(&mut core, space_id.clone(), "https://private-folder.example.com", true);
         let folder_id = create_folder_for_test(&mut core, space_id.clone(), "Private Folder");
         core.handle_event(ShellEvent::MoveTabToFolder {
             space_id: space_id.clone(),
             folder_id,
             tab_id: private_folder_id.clone(),
         });
-        let private_root_id = create_tab_for_test(
-            &mut core,
-            space_id.clone(),
-            "https://private-root.example.com",
-            true,
-        );
-
+        let private_root_id = create_tab_for_test(&mut core, space_id.clone(), "https://private-root.example.com", true);
         core.save_state().expect("save state");
 
         let live_tabs = core.get_tab_view_models();
         assert!(live_tabs.iter().any(|tab| tab.id == private_folder_id));
         assert!(live_tabs.iter().any(|tab| tab.id == private_root_id));
-
         (normal_id, private_folder_id, private_root_id, space_id)
     };
 
     let lmdb = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("open lmdb");
-    let persisted_tabs: Vec<Tab> =
-        serde_json::from_slice(&lmdb.get("tabs").unwrap().unwrap()).unwrap();
+    let persisted_tabs: Vec<Tab> = serde_json::from_slice(&lmdb.get("tabs").unwrap().unwrap()).unwrap();
     assert!(persisted_tabs.iter().any(|tab| tab.id == normal_id));
     assert!(!persisted_tabs.iter().any(|tab| tab.id == private_folder_id));
     assert!(!persisted_tabs.iter().any(|tab| tab.id == private_root_id));
 
-    let persisted_spaces: Vec<Space> =
-        serde_json::from_slice(&lmdb.get("spaces").unwrap().unwrap()).unwrap();
-    let persisted_space = persisted_spaces
-        .iter()
-        .find(|space| space.id == space_id)
-        .unwrap();
+    let persisted_spaces: Vec<Space> = serde_json::from_slice(&lmdb.get("spaces").unwrap().unwrap()).unwrap();
+    let persisted_space = persisted_spaces.iter().find(|space| space.id == space_id).unwrap();
     for private_id in [&private_folder_id, &private_root_id] {
         assert!(!persisted_space.tab_order.contains(private_id));
-        assert!(!persisted_space
-            .folders
-            .iter()
-            .any(|folder| folder.tab_ids.contains(private_id)));
-        assert!(!persisted_space
-            .root_order
-            .iter()
-            .any(|item| matches!(item, RootItem::Tab(tab_id) if tab_id == private_id)));
-        assert_ne!(
-            persisted_space.last_active_tab_id.as_ref(),
-            Some(private_id)
-        );
+        assert!(!persisted_space.folders.iter().any(|folder| folder.tab_ids.contains(private_id)));
+        assert!(!persisted_space.root_order.iter().any(|item| matches!(item, RootItem::Tab(tab_id) if tab_id == private_id)));
+        assert_ne!(persisted_space.last_active_tab_id.as_ref(), Some(private_id));
     }
 
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
@@ -506,43 +437,24 @@ fn private_tabs_and_space_refs_are_not_persisted_to_lmdb() {
 fn private_tabs_are_not_pushed_or_snapshotted_for_sync() {
     let mut source = MahoCore::new();
     let space_id = source.get_active_space_id();
-    let normal_id = create_tab_for_test(
-        &mut source,
-        space_id.clone(),
-        "https://normal-sync.example.com",
-        false,
-    );
-    let private_id = create_tab_for_test(
-        &mut source,
-        space_id,
-        "https://private-sync.example.com",
-        true,
-    );
+    let normal_id = create_tab_for_test(&mut source, space_id.clone(), "https://normal-sync.example.com", false);
+    let private_id = create_tab_for_test(&mut source, space_id, "https://private-sync.example.com", true);
     let phrase = recovery_phrase(&source);
-    source
-        .configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
-        .unwrap();
+    source.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase).unwrap();
     source.set_sync_status(SyncStatus::Syncing);
 
     source.push_tab_sync(&private_id);
     assert!(source.drain_sync_outgoing().is_empty());
-
     source.push_tab_sync(&normal_id);
     assert!(!source.drain_sync_outgoing().is_empty());
 
     let encrypted_snapshot = source.build_snapshot().expect("snapshot");
     let mut dest = MahoCore::new();
-    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
-        .unwrap();
-    dest.apply_snapshot(&encrypted_snapshot)
-        .expect("apply snapshot");
+    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase).unwrap();
+    dest.apply_snapshot(&encrypted_snapshot).expect("apply snapshot");
     let dest_tabs = dest.get_tab_view_models();
-    assert!(dest_tabs
-        .iter()
-        .any(|tab| tab.url == "https://normal-sync.example.com"));
-    assert!(!dest_tabs
-        .iter()
-        .any(|tab| tab.url == "https://private-sync.example.com"));
+    assert!(dest_tabs.iter().any(|tab| tab.url == "https://normal-sync.example.com"));
+    assert!(!dest_tabs.iter().any(|tab| tab.url == "https://private-sync.example.com"));
 }
 
 #[test]
@@ -558,12 +470,7 @@ fn incoming_private_tab_sync_entity_is_ignored_and_space_refs_sanitized() {
         id: space_id.clone(),
         profile_id: maho_types::identifiers::ProfileId::new("profile"),
         name: "Leaked".to_string(),
-        color: SpaceColor {
-            hue: 1.0,
-            saturation: 1.0,
-            brightness: 1.0,
-            grain: 0.0,
-        },
+        color: SpaceColor { hue: 1.0, saturation: 1.0, brightness: 1.0, grain: 0.0 },
         theme: None,
         icon: None,
         tab_order: vec![private_id.clone()],
@@ -597,6 +504,7 @@ fn incoming_private_tab_sync_entity_is_ignored_and_space_refs_sanitized() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("profile".to_string()),
     };
     let space_entity = SyncEntity {
         entity_type: SyncEntityType::Space,
@@ -609,13 +517,11 @@ fn incoming_private_tab_sync_entity_is_ignored_and_space_refs_sanitized() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: Some("profile".to_string()),
     };
 
     core.apply_sync_remote_entities(vec![tab_entity, space_entity]);
-    assert!(!core
-        .get_tab_view_models()
-        .iter()
-        .any(|tab| tab.id == private_id));
+    assert!(!core.get_tab_view_models().iter().any(|tab| tab.id == private_id));
     let tabs = core.get_space_tabs(&space_id);
     assert!(!tabs.iter().any(|tab| tab.id == private_id));
 }
@@ -624,8 +530,6 @@ fn incoming_private_tab_sync_entity_is_ignored_and_space_refs_sanitized() {
 fn test_lmdb_schema_migration_v1_to_v2() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
-    // Pre-populate old schema version 1 tabs JSON
     let old_tabs_json = r#"[
         {
             "id": "tab-1",
@@ -650,36 +554,23 @@ fn test_lmdb_schema_migration_v1_to_v2() {
     ]"#;
 
     {
-        // Set up the old state manually
         let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("init storage");
         storage.put("tabs", old_tabs_json.as_bytes()).unwrap();
-        // Do not write "schema_version", which implies version 0 or 1.
     }
 
-    // Now initialize MahoCore and load
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
-    core.load_state()
-        .expect("should load and migrate state successfully");
-
-    // Check tabs got migrated
+    core.load_state().expect("should load and migrate state successfully");
     let tabs = core.get_tab_view_models();
     assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0].id.to_string(), "tab-1");
     assert!(tabs[0].is_favorite);
     assert_eq!(tabs[0].favorite_order, Some(3));
-    assert_eq!(
-        tabs[0].role,
-        maho_types::tab::TabRole::Favorite { order: 3 }
-    );
+    assert_eq!(tabs[0].role, maho_types::tab::TabRole::Favorite { order: 3 });
 
-    // schema_version reaches 4 after load: the v1->v2 tab migration runs, then
-    // the ghost-favorite/pinned dedup migration bumps it to 4 (schema v4).
     let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("re-init storage");
     let schema_version_data = storage.get("schema_version").unwrap().unwrap();
     let schema_version: u32 = serde_json::from_slice(&schema_version_data).unwrap();
     assert_eq!(schema_version, 4);
-
-    // Verify backup exists
     let backup_data = storage.get("tabs.pre_migration_backup").unwrap().unwrap();
     let backup_str = std::str::from_utf8(&backup_data).unwrap();
     assert!(backup_str.contains("isFavorite"));
@@ -697,48 +588,33 @@ fn test_lmdb_schema_migration_v3_dedups_duplicate_favorites() {
             window_id: None,
             is_private: false,
         });
-        let id = updates
-            .iter()
-            .find_map(|u| match u {
-                CoreUpdate::TabCreated { tab } => Some(tab.id.clone()),
-                _ => None,
-            })
-            .expect("TabCreated");
+        let id = updates.iter().find_map(|u| match u {
+            CoreUpdate::TabCreated { tab } => Some(tab.id.clone()),
+            _ => None,
+        }).expect("TabCreated");
         core.handle_event(ShellEvent::FavoriteTab { tab_id: id.clone() });
         id
     }
 
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
     let space_id = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id().clone();
         let a = create_fav(&mut core, "https://example.com");
         let b = create_fav(&mut core, "https://example.com");
-        assert_ne!(
-            a, b,
-            "duplicate-url favorites must have distinct ids (ghost scenario)"
-        );
-        // Flush throttled writes; no load_state here, so schema_version stays
-        // absent (0) and the v2->v3 dedup migration runs on the next fresh load.
+        assert_ne!(a, b, "duplicate-url favorites must have distinct ids (ghost scenario)");
         core.save_state().expect("save");
         space_id
     };
 
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("restore + migrate");
-
     let favorites = restored.get_favorite_tabs(&space_id);
-    assert_eq!(
-        favorites.len(),
-        1,
-        "dedup migration must reduce duplicate same-url favorites to a single tile"
-    );
+    assert_eq!(favorites.len(), 1, "dedup migration must reduce duplicate same-url favorites to a single tile");
 
     let storage = maho_storage::lmdb::LmdbStorage::open(&storage_path).expect("re-init storage");
-    let schema_version: u32 =
-        serde_json::from_slice(&storage.get("schema_version").unwrap().unwrap()).unwrap();
+    let schema_version: u32 = serde_json::from_slice(&storage.get("schema_version").unwrap().unwrap()).unwrap();
     assert_eq!(schema_version, 4);
 }
 
@@ -746,17 +622,11 @@ fn test_lmdb_schema_migration_v3_dedups_duplicate_favorites() {
 fn lmdb_persists_set_folder_pinned_true_and_false() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
     let (space_id, folder_id) = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
         let folder_id = create_folder_for_test(&mut core, space_id.clone(), "Pinnable");
-
-        core.handle_event(ShellEvent::SetFolderPinned {
-            space_id: space_id.clone(),
-            folder_id: folder_id.clone(),
-            is_pinned: true,
-        });
+        core.handle_event(ShellEvent::SetFolderPinned { space_id: space_id.clone(), folder_id: folder_id.clone(), is_pinned: true });
         core.handle_event(ShellEvent::AppWillTerminate);
         (space_id, folder_id)
     };
@@ -765,32 +635,20 @@ fn lmdb_persists_set_folder_pinned_true_and_false() {
         let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
         restored.load_state().expect("state should restore");
         let folders = restored.space_manager().get_folder_view_models(&space_id);
-        let folder = folders
-            .iter()
-            .find(|f| f.id == folder_id)
-            .expect("folder should exist after reload");
+        let folder = folders.iter().find(|f| f.id == folder_id).expect("folder should exist after reload");
         assert!(folder.is_pinned, "is_pinned=true must survive reload");
     }
-
     {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         core.load_state().expect("state should restore");
-        core.handle_event(ShellEvent::SetFolderPinned {
-            space_id: space_id.clone(),
-            folder_id: folder_id.clone(),
-            is_pinned: false,
-        });
+        core.handle_event(ShellEvent::SetFolderPinned { space_id: space_id.clone(), folder_id: folder_id.clone(), is_pinned: false });
         core.handle_event(ShellEvent::AppWillTerminate);
     }
-
     {
         let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
         restored.load_state().expect("state should restore");
         let folders = restored.space_manager().get_folder_view_models(&space_id);
-        let folder = folders
-            .iter()
-            .find(|f| f.id == folder_id)
-            .expect("folder should exist after reload");
+        let folder = folders.iter().find(|f| f.id == folder_id).expect("folder should exist after reload");
         assert!(!folder.is_pinned, "is_pinned=false must survive reload");
     }
 }
@@ -799,79 +657,39 @@ fn lmdb_persists_set_folder_pinned_true_and_false() {
 fn keyless_outgoing_emits_nothing_and_preserves_pending() {
     let mut source = MahoCore::new().with_storage(":memory:");
     let space_id = source.get_active_space_id();
-    let normal_id = create_tab_for_test(
-        &mut source,
-        space_id.clone(),
-        "https://normal-sync.example.com",
-        false,
-    );
-    // Active session with NO encryption key installed (the old/broken keyless way).
+    let normal_id = create_tab_for_test(&mut source, space_id.clone(), "https://normal-sync.example.com", false);
     source.start_sync("ws://127.0.0.1:9", "0123456789abcdef0123456789abcdef");
     source.set_sync_status(SyncStatus::Syncing);
     source.push_tab_sync(&normal_id);
 
-    // Fail-closed: keyless push must emit nothing and must not mark the queue row
-    // sent; the entity stays pending for retry after a key is installed.
     let outgoing = source.drain_sync_outgoing();
-    assert!(
-        outgoing.is_empty(),
-        "keyless session must not emit any outgoing sync message"
-    );
-    let pending = source
-        .storage_ref()
-        .unwrap()
-        .load_pending_sync_entities()
-        .unwrap();
-    assert!(
-        !pending.is_empty(),
-        "keyless push must leave the queue row pending for later encrypted retry"
-    );
+    assert!(outgoing.is_empty(), "keyless session must not emit any outgoing sync message");
+    let pending = source.storage_ref().unwrap().load_pending_sync_entities().unwrap();
+    assert!(!pending.is_empty(), "keyless push must leave the queue row pending for later encrypted retry");
 }
 
 #[test]
 fn test_configure_sync_encryption_roundtrip() {
     let mut source = MahoCore::new();
     let space_id = source.get_active_space_id();
-    let normal_id = create_tab_for_test(
-        &mut source,
-        space_id.clone(),
-        "https://normal-sync.example.com",
-        false,
-    );
+    let normal_id = create_tab_for_test(&mut source, space_id.clone(), "https://normal-sync.example.com", false);
     let phrase = recovery_phrase(&source);
-
-    // Configure encryption (creates and configures key)
-    source
-        .configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
-        .unwrap();
+    source.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase).unwrap();
     source.set_sync_status(SyncStatus::Syncing);
     source.push_tab_sync(&normal_id);
 
     let outgoing = source.drain_sync_outgoing();
     assert!(!outgoing.is_empty());
-
-    // Outgoing messages must only be Encrypted
     for msg in &outgoing {
-        assert!(matches!(
-            msg,
-            maho_core::sync_models::SyncMessage::Encrypted { .. }
-        ));
+        assert!(matches!(msg, maho_core::sync_models::SyncMessage::Encrypted { .. }));
     }
 
-    // Now decode and verify with destination
     let mut dest = MahoCore::new();
-    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase)
-        .unwrap();
-
-    // Build snapshot from source and apply to destination
+    dest.configure_sync_encryption_for_recovery_phrase("ws://127.0.0.1:9", &phrase).unwrap();
     let encrypted_snapshot = source.build_snapshot().expect("snapshot");
-    dest.apply_snapshot(&encrypted_snapshot)
-        .expect("apply snapshot");
-
+    dest.apply_snapshot(&encrypted_snapshot).expect("apply snapshot");
     let dest_tabs = dest.get_tab_view_models();
-    assert!(dest_tabs
-        .iter()
-        .any(|tab| tab.url == "https://normal-sync.example.com"));
+    assert!(dest_tabs.iter().any(|tab| tab.url == "https://normal-sync.example.com"));
 }
 
 #[test]
@@ -881,31 +699,18 @@ fn test_room_id_and_key_derivation_parity() {
     let key_info: serde_json::Value = serde_json::from_str(&key_info_json).unwrap();
     let phrase = key_info["recoveryPhrase"].as_str().unwrap();
     let room_id = key_info["roomId"].as_str().unwrap();
-
-    // Let's decode recovery phrase
     let seed = maho_core::sync_crypto::decode_recovery_phrase(phrase).unwrap();
     let derived_room_id = maho_core::sync_crypto::derive_room_id(&seed).unwrap();
-
-    // Assert room_id matches derived_room_id
     assert_eq!(room_id, derived_room_id);
     assert_eq!(room_id.len(), 32);
 }
 
-// Regression (ATC routing dead after restart): a settings-created glob traffic
-// rule must keep its match type across persist → restart → load. Before the
-// atc_rules.match_type column existed, the rule came back as Contains and the
-// literal "*.github.com" substring never matched any URL.
 #[test]
 fn sqlite_traffic_rule_glob_match_type_survives_restart() {
     use maho_types::air_traffic::{LinkDestination, MatchType, TrafficRule};
-
     let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    let db_path = temp_dir
-        .path()
-        .join("atc-roundtrip.db")
-        .to_string_lossy()
-        .to_string();
+    let db_path = temp_dir.path().join("atc-roundtrip.db").to_string_lossy().to_string();
     let work = SpaceId::new("space-work");
 
     {
@@ -917,69 +722,33 @@ fn sqlite_traffic_rule_glob_match_type_survives_restart() {
             target_space_id: work.clone(),
             enabled: true,
         });
-        assert_eq!(
-            core.decide_link_destination("https://github.com/signup", false, &[]),
-            LinkDestination::Space(work.clone()),
-            "freshly created glob rule must route"
-        );
+        assert_eq!(core.decide_link_destination("https://github.com/signup", false, &[]), LinkDestination::Space(work.clone()), "freshly created glob rule must route");
     }
 
     let mut restored = MahoCore::new().with_storage(&db_path);
-    // ATC rules persist to SQLite, so restore goes through load_persisted_data()
-    // (the SQLite path), not load_state() (which is the LMDB path).
-    restored
-        .load_persisted_data()
-        .expect("state should restore");
-    assert_eq!(
-        restored.decide_link_destination("https://github.com/signup", false, &[]),
-        LinkDestination::Space(work.clone()),
-        "restored glob rule must still route after restart"
-    );
-    assert_eq!(
-        restored.decide_link_destination("https://api.github.com/x", false, &[]),
-        LinkDestination::Space(work),
-        "subdomain must still match after restart"
-    );
-    assert_eq!(
-        restored.decide_link_destination("https://evilgithub.com", false, &[]),
-        LinkDestination::Normal,
-        "boundary guard must survive restart"
-    );
+    restored.load_persisted_data().expect("state should restore");
+    assert_eq!(restored.decide_link_destination("https://github.com/signup", false, &[]), LinkDestination::Space(work.clone()), "restored glob rule must still route after restart");
+    assert_eq!(restored.decide_link_destination("https://api.github.com/x", false, &[]), LinkDestination::Space(work), "subdomain must still match after restart");
+    assert_eq!(restored.decide_link_destination("https://evilgithub.com", false, &[]), LinkDestination::Normal, "boundary guard must survive restart");
 }
 
 #[test]
 fn archive_tab_by_id_persists_archived_state_after_reload() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
     let (tab_id, space_id) = {
         let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
         let space_id = core.get_active_space_id();
-        let tab_id = create_tab_for_test(
-            &mut core,
-            space_id.clone(),
-            "https://archive-persist.example.com",
-            false,
-        );
-
-        // Dispatch ArchiveTabById ShellEvent
-        core.handle_event(ShellEvent::ArchiveTabById {
-            tab_id: tab_id.clone(),
-        });
-
+        let tab_id = create_tab_for_test(&mut core, space_id.clone(), "https://archive-persist.example.com", false);
+        core.handle_event(ShellEvent::ArchiveTabById { tab_id: tab_id.clone() });
         core.handle_event(ShellEvent::AppWillTerminate);
         (tab_id, space_id)
     };
 
-    // Load in a fresh instance
     let mut restored = MahoCore::new().with_lmdb_storage(&storage_path);
     restored.load_state().expect("state should restore");
-
-    // The tab must NOT appear in normal sidebar view models
     let tabs = restored.get_tab_view_models();
     assert!(!tabs.iter().any(|t| t.id == tab_id));
-
-    // The tab MUST appear in archived tabs results
     let archived_tabs = restored.get_archived_tabs(&space_id);
     assert!(archived_tabs.iter().any(|t| t.id == tab_id));
     assert_eq!(archived_tabs[0].space_id, space_id);
@@ -989,62 +758,31 @@ fn archive_tab_by_id_persists_archived_state_after_reload() {
 fn restore_archived_tab_transitions_back_to_active_and_is_idempotent() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let storage_path = temp_dir.path().join("maho-core.lmdb");
-
     let mut core = MahoCore::new().with_lmdb_storage(&storage_path);
     let space_id = core.get_active_space_id();
-    let tab_id = create_tab_for_test(
-        &mut core,
-        space_id.clone(),
-        "https://archive-persist.example.com",
-        false,
-    );
-
-    // Archive the tab
-    core.handle_event(ShellEvent::ArchiveTabById {
-        tab_id: tab_id.clone(),
-    });
-
-    // Verify it is archived
-    let archived_tabs = core.get_archived_tabs(&space_id);
-    assert!(archived_tabs.iter().any(|t| t.id == tab_id));
-
-    // Restore the tab
-    core.handle_event(ShellEvent::RestoreArchivedTab {
-        tab_id: tab_id.clone(),
-    });
-
-    // Verify it is no longer returned by get_archived_tabs
-    let archived_tabs_after = core.get_archived_tabs(&space_id);
-    assert!(!archived_tabs_after.iter().any(|t| t.id == tab_id));
-
-    // Verify it is in the normal view models again
-    let tabs = core.get_tab_view_models();
-    assert!(tabs.iter().any(|t| t.id == tab_id));
-
-    // Idempotency check: Restore again on already active tab is a no-op
-    core.handle_event(ShellEvent::RestoreArchivedTab {
-        tab_id: tab_id.clone(),
-    });
-    let tabs_after_second = core.get_tab_view_models();
-    assert!(tabs_after_second.iter().any(|t| t.id == tab_id));
-
-    // Check that restoring a non-existent or non-archived tab doesn't crash / is a no-op
+    let tab_id = create_tab_for_test(&mut core, space_id.clone(), "https://archive-persist.example.com", false);
+    core.handle_event(ShellEvent::ArchiveTabById { tab_id: tab_id.clone() });
+    assert!(core.get_archived_tabs(&space_id).iter().any(|t| t.id == tab_id));
+    core.handle_event(ShellEvent::RestoreArchivedTab { tab_id: tab_id.clone() });
+    assert!(!core.get_archived_tabs(&space_id).iter().any(|t| t.id == tab_id));
+    assert!(core.get_tab_view_models().iter().any(|t| t.id == tab_id));
+    core.handle_event(ShellEvent::RestoreArchivedTab { tab_id: tab_id.clone() });
+    assert!(core.get_tab_view_models().iter().any(|t| t.id == tab_id));
     let random_id = maho_types::identifiers::TabId::new("random-id");
     core.handle_event(ShellEvent::RestoreArchivedTab { tab_id: random_id });
 }
 
 #[test]
 fn credential_sync_refuses_keyless_transport() {
-    let mut manager =
-        maho_core::sync_manager::SyncManager::new(maho_core::sync_models::SyncConfig {
-            device_id: "test-device".to_string(),
-            server_url: "wss://relay.example.com".to_string(),
-            sync_key: None,
-            device_name: "test-device".to_string(),
-            auto_sync: true,
-            sync_interval_secs: 30,
-            disabled_entity_types: std::collections::HashSet::new(),
-        });
+    let mut manager = maho_core::sync_manager::SyncManager::new(maho_core::sync_models::SyncConfig {
+        device_id: "test-device".to_string(),
+        server_url: "wss://relay.example.com".to_string(),
+        sync_key: None,
+        device_name: "test-device".to_string(),
+        auto_sync: true,
+        sync_interval_secs: 30,
+        disabled_entity_types: std::collections::HashSet::new(),
+    });
     manager.set_status(SyncStatus::Synced);
 
     let entity = SyncEntity {
@@ -1058,24 +796,15 @@ fn credential_sync_refuses_keyless_transport() {
         fields_hlc_json: None,
         deleted: false,
         queue_row_id: Some(42),
+        profile_id: None,
     };
 
     manager.push_entity(entity);
-
-    assert!(
-        manager.drain_outgoing_messages().is_empty(),
-        "Outgoing messages must be empty when keyless"
-    );
-    assert!(
-        manager.last_error().is_some(),
-        "last_error must be populated on keyless push"
-    );
+    assert!(manager.drain_outgoing_messages().is_empty(), "Outgoing messages must be empty when keyless");
+    assert!(manager.last_error().is_some(), "last_error must be populated on keyless push");
 }
 
-// ===== Content-blocking L3+L4 lifecycle persistence (owned by the core repair lane) =====
-
 const CB_KEY: &str = "test_key";
-
 fn cb_db_path(dir: &tempfile::TempDir, name: &str) -> String {
     dir.path().join(name).to_string_lossy().to_string()
 }
@@ -1085,69 +814,29 @@ fn content_blocker_custom_list_metadata_and_exception_created_at_survive_restart
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let dir = tempfile::tempdir().expect("temp dir");
     let db = cb_db_path(&dir, "cb-meta.db");
-
     let persisted_created_at;
     {
         let mut core = MahoCore::new().with_storage(&db);
-        assert!(core.add_filter_list(
-            "custom".into(),
-            "Custom List".into(),
-            "https://filters.example/custom.txt".into(),
-        ));
+        assert!(core.add_filter_list("custom".into(), "Custom List".into(), "https://filters.example/custom.txt".into()));
         core.update_filter_list_content("custom", "||tracker.example^\n! a comment\n".into());
-        assert!(
-            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
-                core.create_content_blocker_compile_snapshot(),
-            ))
-        );
+        assert!(core.install_content_blocker_compiled_engine(compile_engine_snapshot(core.create_content_blocker_compile_snapshot())));
         core.add_content_blocker_site_exception("https://www.paused.example:8443");
         core.set_content_blocking_mode(ContentBlockingMode::Native);
-        assert!(core.should_block_request(
-            "https://tracker.example/x",
-            "https://site.test",
-            "script"
-        ));
-        persisted_created_at = core
-            .get_content_blocker_site_exceptions()
-            .into_iter()
-            .find(|e| e.key == "paused.example")
-            .expect("exception exists in first session")
-            .created_at;
+        assert!(core.should_block_request("https://tracker.example/x", "https://site.test", "script"));
+        persisted_created_at = core.get_content_blocker_site_exceptions().into_iter().find(|e| e.key == "paused.example").expect("exception exists in first session").created_at;
     }
 
     let core = MahoCore::new().with_storage(&db);
     let dto = core.get_content_blocker_state_dto();
-    let custom = dto
-        .lists
-        .iter()
-        .find(|l| l.id == "custom")
-        .expect("custom list must survive restart");
+    let custom = dto.lists.iter().find(|l| l.id == "custom").expect("custom list must survive restart");
     assert_eq!(custom.name, "Custom List");
     assert_eq!(custom.url, "https://filters.example/custom.txt");
     assert!(custom.enabled);
-    assert_eq!(
-        custom.rule_count, 1,
-        "rule-count metadata must survive restart"
-    );
-    assert!(
-        custom.last_success_timestamp.is_some(),
-        "validator timestamps must survive restart"
-    );
-
-    assert!(
-        core.should_block_request("https://tracker.example/x", "https://site.test", "script"),
-        "last-known-good raw content must survive restart and still block"
-    );
-
-    let exc = core
-        .get_content_blocker_site_exceptions()
-        .into_iter()
-        .find(|e| e.key == "paused.example")
-        .expect("canonical exception key must survive restart");
-    assert_eq!(
-        exc.created_at, persisted_created_at,
-        "original created_at must survive unchanged, not be regenerated at restart"
-    );
+    assert_eq!(custom.rule_count, 1, "rule-count metadata must survive restart");
+    assert!(custom.last_success_timestamp.is_some(), "validator timestamps must survive restart");
+    assert!(core.should_block_request("https://tracker.example/x", "https://site.test", "script"), "last-known-good raw content must survive restart and still block");
+    let exc = core.get_content_blocker_site_exceptions().into_iter().find(|e| e.key == "paused.example").expect("canonical exception key must survive restart");
+    assert_eq!(exc.created_at, persisted_created_at, "original created_at must survive unchanged, not be regenerated at restart");
     assert_eq!(core.get_content_blocker_mode(), ContentBlockingMode::Native);
 }
 
@@ -1156,31 +845,17 @@ fn content_blocker_deleted_seed_does_not_reappear_and_seeds_only_when_empty() {
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let dir = tempfile::tempdir().expect("temp dir");
     let db = cb_db_path(&dir, "cb-seed.db");
-
     {
         let mut core = MahoCore::new().with_storage(&db);
         let dto = core.get_content_blocker_state_dto();
-        assert!(
-            dto.lists.iter().any(|l| l.id == "easylist"),
-            "fresh DB seeds EasyList"
-        );
-        assert!(
-            dto.lists.iter().any(|l| l.id == "easyprivacy"),
-            "fresh DB seeds EasyPrivacy"
-        );
+        assert!(dto.lists.iter().any(|l| l.id == "easylist"), "fresh DB seeds EasyList");
+        assert!(dto.lists.iter().any(|l| l.id == "easyprivacy"), "fresh DB seeds EasyPrivacy");
         core.remove_filter_list("easyprivacy");
     }
-
     let core = MahoCore::new().with_storage(&db);
     let dto = core.get_content_blocker_state_dto();
-    assert!(
-        dto.lists.iter().any(|l| l.id == "easylist"),
-        "surviving seed must remain"
-    );
-    assert!(
-        dto.lists.iter().all(|l| l.id != "easyprivacy"),
-        "a deleted seed must not reappear after restart (seeding happens only when no persisted rows exist)"
-    );
+    assert!(dto.lists.iter().any(|l| l.id == "easylist"), "surviving seed must remain");
+    assert!(dto.lists.iter().all(|l| l.id != "easyprivacy"), "a deleted seed must not reappear after restart (seeding happens only when no persisted rows exist)");
 }
 
 #[test]
@@ -1188,124 +863,63 @@ fn content_blocker_valid_cache_reopen_and_invalid_version_rebuilds_from_raw() {
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let dir = tempfile::tempdir().expect("temp dir");
     let db = cb_db_path(&dir, "cb-cache.db");
-
     let (generation, hash) = {
         let mut core = MahoCore::new().with_storage(&db);
         core.update_filter_list_content("easylist", "||adcache.example^\n".into());
-        assert!(
-            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
-                core.create_content_blocker_compile_snapshot(),
-            ))
-        );
+        assert!(core.install_content_blocker_compiled_engine(compile_engine_snapshot(core.create_content_blocker_compile_snapshot())));
         core.set_content_blocking_mode(ContentBlockingMode::Native);
         let dto = core.get_content_blocker_state_dto();
         (dto.engine_generation, dto.engine_hash.clone())
     };
-    assert!(
-        hash.is_some(),
-        "a valid session must persist an engine hash"
-    );
+    assert!(hash.is_some(), "a valid session must persist an engine hash");
 
     {
         let core = MahoCore::new().with_storage(&db);
         let dto = core.get_content_blocker_state_dto();
-        assert_eq!(
-            dto.engine_generation, generation,
-            "valid cache reopen keeps persisted generation"
-        );
-        assert_eq!(
-            dto.engine_hash, hash,
-            "valid cache reopen keeps persisted hash"
-        );
+        assert_eq!(dto.engine_generation, generation, "valid cache reopen keeps persisted generation");
+        assert_eq!(dto.engine_hash, hash, "valid cache reopen keeps persisted hash");
         assert!(core.should_block_request("https://adcache.example/x", "https://s.test", "script"));
     }
 
     {
         let core = MahoCore::new().with_storage(&db);
         let storage = core.storage_ref().expect("storage handle");
-        let (mode, g, cache, _ver, h) = storage
-            .load_content_blocker_state()
-            .unwrap()
-            .expect("state row present");
-        storage
-            .save_content_blocker_state(
-                mode,
-                g,
-                cache.as_deref(),
-                Some("adblock-WRONG-VERSION"),
-                h.as_deref(),
-            )
-            .expect("poison engine version");
+        let (mode, g, cache, _ver, h) = storage.load_content_blocker_state().unwrap().expect("state row present");
+        storage.save_content_blocker_state(mode, g, cache.as_deref(), Some("adblock-WRONG-VERSION"), h.as_deref()).expect("poison engine version");
     }
 
     let core = MahoCore::new().with_storage(&db);
-    assert!(
-        core.should_block_request("https://adcache.example/x", "https://s.test", "script"),
-        "an invalid engine cache must rebuild from persisted raw content and still block"
-    );
+    assert!(core.should_block_request("https://adcache.example/x", "https://s.test", "script"), "an invalid engine cache must rebuild from persisted raw content and still block");
     let dto = core.get_content_blocker_state_dto();
-    assert_eq!(
-        core.get_content_blocker_mode(),
-        ContentBlockingMode::Native,
-        "mode config preserved on rebuild"
-    );
-    assert!(
-        dto.lists.iter().any(|l| l.id == "easylist"),
-        "lists config preserved on rebuild"
-    );
+    assert_eq!(core.get_content_blocker_mode(), ContentBlockingMode::Native, "mode config preserved on rebuild");
+    assert!(dto.lists.iter().any(|l| l.id == "easylist"), "lists config preserved on rebuild");
 }
 
 #[test]
 fn content_blocker_mode_converges_across_settings_shellevent_and_direct_api() {
     let mut core = MahoCore::new().with_storage(":memory:");
-
     core.set_content_blocking_mode(ContentBlockingMode::Disabled);
-    assert_eq!(
-        core.get_content_blocker_mode(),
-        ContentBlockingMode::Disabled
-    );
-    assert_eq!(
-        core.get_settings().privacy.content_blocking_mode,
-        ContentBlockingMode::Disabled
-    );
+    assert_eq!(core.get_content_blocker_mode(), ContentBlockingMode::Disabled);
+    assert_eq!(core.get_settings().privacy.content_blocking_mode, ContentBlockingMode::Disabled);
 
-    core.handle_event(ShellEvent::SetContentBlockingMode {
-        mode: ContentBlockingMode::Extension,
-    });
-    assert_eq!(
-        core.get_content_blocker_mode(),
-        ContentBlockingMode::Extension
-    );
-    assert_eq!(
-        core.get_settings().privacy.content_blocking_mode,
-        ContentBlockingMode::Extension
-    );
+    core.handle_event(ShellEvent::SetContentBlockingMode { mode: ContentBlockingMode::Extension });
+    assert_eq!(core.get_content_blocker_mode(), ContentBlockingMode::Extension);
+    assert_eq!(core.get_settings().privacy.content_blocking_mode, ContentBlockingMode::Extension);
 
     core.handle_event(ShellEvent::UpdateSettings {
         changes: SettingsUpdate {
-            privacy: Some(PrivacySettingsUpdate {
-                content_blocking_mode: Some(ContentBlockingMode::Native),
-                ..Default::default()
-            }),
+            privacy: Some(PrivacySettingsUpdate { content_blocking_mode: Some(ContentBlockingMode::Native), ..Default::default() }),
             ..Default::default()
         },
     });
-    assert_eq!(
-        core.get_content_blocker_mode(),
-        ContentBlockingMode::Native,
-        "a settings-driven mode change must converge onto the authoritative blocker mode"
-    );
-    assert_eq!(
-        core.get_settings().privacy.content_blocking_mode,
-        ContentBlockingMode::Native
-    );
+    assert_eq!(core.get_content_blocker_mode(), ContentBlockingMode::Native, "a settings-driven mode change must converge onto the authoritative blocker mode");
+    assert_eq!(core.get_settings().privacy.content_blocking_mode, ContentBlockingMode::Native);
 }
 
 #[test]
 fn content_blocker_state_change_payload_carries_authoritative_mode_and_popup() {
     use std::cell::RefCell;
     use std::rc::Rc;
-
     let mut core = MahoCore::new().with_storage(":memory:");
     let captured: Rc<RefCell<Vec<(ContentBlockingMode, bool)>>> = Rc::new(RefCell::new(Vec::new()));
     let sink = captured.clone();
@@ -1314,18 +928,9 @@ fn content_blocker_state_change_payload_carries_authoritative_mode_and_popup() {
             sink.borrow_mut().push((state.mode, state.popup_blocking));
         }
     }));
-
     core.set_content_blocking_mode(ContentBlockingMode::Extension);
-    let last = captured
-        .borrow()
-        .last()
-        .copied()
-        .expect("a content-blocker state change must be emitted");
-    assert_eq!(
-        last.0,
-        ContentBlockingMode::Extension,
-        "payload carries the authoritative mode"
-    );
+    let last = captured.borrow().last().copied().expect("a content-blocker state change must be emitted");
+    assert_eq!(last.0, ContentBlockingMode::Extension, "payload carries the authoritative mode");
     assert!(last.1, "payload carries popup_blocking state");
 }
 
@@ -1334,69 +939,32 @@ fn content_blocker_effective_block_behavior_identical_across_restart() {
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let dir = tempfile::tempdir().expect("temp dir");
     let db = cb_db_path(&dir, "cb-e2e.db");
-
     let before_blocked;
     let before_excepted;
     {
         let mut core = MahoCore::new().with_storage(&db);
-        assert!(core.add_filter_list(
-            "custom".into(),
-            "Custom".into(),
-            "https://f.example/c.txt".into(),
-        ));
+        assert!(core.add_filter_list("custom".into(), "Custom".into(), "https://f.example/c.txt".into()));
         let outcome = core.apply_filter_list_update_response(FilterListUpdateResponse {
-            list_id: "custom".into(),
-            status_code: 200,
-            body: Some("||ads.evil.example^\n".into()),
-            etag: Some("\"e1\"".into()),
-            last_modified: None,
-            sha256: None,
+            list_id: "custom".into(), status_code: 200, body: Some("||ads.evil.example^\n".into()), etag: Some("\"e1\"".into()), last_modified: None, sha256: None,
         });
         assert_eq!(outcome, Ok(true), "a 200 candidate signals rebuild-needed");
-        // Real sequence: compile the candidate-aware snapshot once, then install to promote.
         let snapshot = core.create_content_blocker_compile_snapshot();
         let compiled = compile_engine_snapshot(snapshot);
-        assert!(
-            core.install_content_blocker_compiled_engine(compiled),
-            "install must promote the candidate"
-        );
+        assert!(core.install_content_blocker_compiled_engine(compiled), "install must promote the candidate");
         core.add_content_blocker_site_exception("https://trusted.example");
         core.set_content_blocking_mode(ContentBlockingMode::Native);
-
-        before_blocked =
-            core.should_block_request("https://ads.evil.example/x", "https://news.test", "script");
-        before_excepted = core.should_block_request(
-            "https://ads.evil.example/x",
-            "https://trusted.example",
-            "script",
-        );
+        before_blocked = core.should_block_request("https://ads.evil.example/x", "https://news.test", "script");
+        before_excepted = core.should_block_request("https://ads.evil.example/x", "https://trusted.example", "script");
         assert!(before_blocked, "installed candidate rule must block");
-        assert!(
-            !before_excepted,
-            "exception must suppress blocking on the trusted site"
-        );
+        assert!(!before_excepted, "exception must suppress blocking on the trusted site");
     }
 
     let core = MahoCore::new().with_storage(&db);
-    let after_blocked =
-        core.should_block_request("https://ads.evil.example/x", "https://news.test", "script");
-    let after_excepted = core.should_block_request(
-        "https://ads.evil.example/x",
-        "https://trusted.example",
-        "script",
-    );
-    assert_eq!(
-        after_blocked, before_blocked,
-        "effective block behavior must be identical after restart"
-    );
-    assert_eq!(
-        after_excepted, before_excepted,
-        "exception behavior must be identical after restart"
-    );
-    assert!(
-        after_blocked && !after_excepted,
-        "restart must preserve the full effective policy"
-    );
+    let after_blocked = core.should_block_request("https://ads.evil.example/x", "https://news.test", "script");
+    let after_excepted = core.should_block_request("https://ads.evil.example/x", "https://trusted.example", "script");
+    assert_eq!(after_blocked, before_blocked, "effective block behavior must be identical after restart");
+    assert_eq!(after_excepted, before_excepted, "exception behavior must be identical after restart");
+    assert!(after_blocked && !after_excepted, "restart must preserve the full effective policy");
 }
 
 #[test]
@@ -1404,38 +972,16 @@ fn content_blocker_apply_update_records_candidate_without_synchronous_engine_cha
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let mut core = MahoCore::new().with_storage(":memory:");
     core.update_filter_list_content("easylist", "||good.example^\n".into());
-    assert!(
-        core.install_content_blocker_compiled_engine(compile_engine_snapshot(
-            core.create_content_blocker_compile_snapshot(),
-        ))
-    );
+    assert!(core.install_content_blocker_compiled_engine(compile_engine_snapshot(core.create_content_blocker_compile_snapshot())));
     core.set_content_blocking_mode(ContentBlockingMode::Native);
     assert!(core.should_block_request("https://good.example/x", "https://s.test", "script"));
 
     let outcome = core.apply_filter_list_update_response(FilterListUpdateResponse {
-        list_id: "easylist".into(),
-        status_code: 200,
-        body: Some("||candidate.example^\n".into()),
-        etag: None,
-        last_modified: None,
-        sha256: None,
+        list_id: "easylist".into(), status_code: 200, body: Some("||candidate.example^\n".into()), etag: None, last_modified: None, sha256: None,
     });
-    assert_eq!(
-        outcome,
-        Ok(true),
-        "a 200 must return the existing rebuild-needed outcome"
-    );
-
-    // No synchronous engine change: the candidate must NOT be active after apply alone;
-    // promotion happens only on the off-thread compile + UI install.
-    assert!(
-        core.should_block_request("https://good.example/x", "https://s.test", "script"),
-        "the last-known-good rule must stay active until compile+install"
-    );
-    assert!(
-        !core.should_block_request("https://candidate.example/x", "https://s.test", "script"),
-        "apply alone must not compile/install the candidate rule"
-    );
+    assert_eq!(outcome, Ok(true), "a 200 must return the existing rebuild-needed outcome");
+    assert!(core.should_block_request("https://good.example/x", "https://s.test", "script"), "the last-known-good rule must stay active until compile+install");
+    assert!(!core.should_block_request("https://candidate.example/x", "https://s.test", "script"), "apply alone must not compile/install the candidate rule");
 }
 
 #[test]
@@ -1443,88 +989,31 @@ fn content_blocker_offthread_compile_install_promotes_and_persists_candidate_onc
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let dir = tempfile::tempdir().expect("temp dir");
     let db = cb_db_path(&dir, "cb-offthread.db");
-
     {
         let mut core = MahoCore::new().with_storage(&db);
         core.update_filter_list_content("easylist", "||good.example^\n".into());
-        assert!(
-            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
-                core.create_content_blocker_compile_snapshot(),
-            ))
-        );
+        assert!(core.install_content_blocker_compiled_engine(compile_engine_snapshot(core.create_content_blocker_compile_snapshot())));
         core.set_content_blocking_mode(ContentBlockingMode::Native);
-
-        // 1. apply 200 -> records candidate only.
-        assert_eq!(
-            core.apply_filter_list_update_response(FilterListUpdateResponse {
-                list_id: "easylist".into(),
-                status_code: 200,
-                body: Some("||candidate.example^\n".into()),
-                etag: None,
-                last_modified: None,
-                sha256: None,
-            }),
-            Ok(true)
-        );
-        assert!(!core.should_block_request(
-            "https://candidate.example/x",
-            "https://s.test",
-            "script"
-        ));
-
-        // 2. off-thread compile input must contain the pending candidate body.
+        assert_eq!(core.apply_filter_list_update_response(FilterListUpdateResponse {
+            list_id: "easylist".into(), status_code: 200, body: Some("||candidate.example^\n".into()), etag: None, last_modified: None, sha256: None,
+        }), Ok(true));
+        assert!(!core.should_block_request("https://candidate.example/x", "https://s.test", "script"));
         let snapshot = core.create_content_blocker_compile_snapshot();
-        assert!(
-            snapshot
-                .raw_contents
-                .iter()
-                .any(|c| c.contains("candidate.example")),
-            "the compile snapshot must include the pending candidate body"
-        );
+        assert!(snapshot.raw_contents.iter().any(|c| c.contains("candidate.example")), "the compile snapshot must include the pending candidate body");
         let compiled = compile_engine_snapshot(snapshot);
-
-        // 3. UI install promotes + persists exactly the matching candidate.
-        assert!(
-            core.install_content_blocker_compiled_engine(compiled),
-            "install must promote the candidate"
-        );
-        assert!(core.should_block_request(
-            "https://candidate.example/x",
-            "https://s.test",
-            "script"
-        ));
+        assert!(core.install_content_blocker_compiled_engine(compiled), "install must promote the candidate");
+        assert!(core.should_block_request("https://candidate.example/x", "https://s.test", "script"));
         assert!(!core.should_block_request("https://good.example/x", "https://s.test", "script"));
-
-        // 4. a second active snapshot is unchanged; recompile+install => no duplicate promotion.
         let snap2 = core.create_content_blocker_compile_snapshot();
-        assert!(snap2
-            .raw_contents
-            .iter()
-            .any(|c| c.contains("candidate.example")));
-        assert!(
-            !snap2
-                .raw_contents
-                .iter()
-                .any(|c| c.contains("good.example")),
-            "the promoted body replaced the old one; no stale duplication remains"
-        );
+        assert!(snap2.raw_contents.iter().any(|c| c.contains("candidate.example")));
+        assert!(!snap2.raw_contents.iter().any(|c| c.contains("good.example")), "the promoted body replaced the old one; no stale duplication remains");
         let compiled2 = compile_engine_snapshot(snap2);
         assert!(core.install_content_blocker_compiled_engine(compiled2));
-        assert!(
-            core.should_block_request("https://candidate.example/x", "https://s.test", "script"),
-            "a second compile+install keeps the same active policy (no duplicate promotion)"
-        );
+        assert!(core.should_block_request("https://candidate.example/x", "https://s.test", "script"), "a second compile+install keeps the same active policy (no duplicate promotion)");
     }
-
     let core = MahoCore::new().with_storage(&db);
-    assert!(
-        core.should_block_request("https://candidate.example/x", "https://s.test", "script"),
-        "the promoted candidate must survive restart"
-    );
-    assert!(
-        !core.should_block_request("https://good.example/x", "https://s.test", "script"),
-        "the superseded body must not survive restart"
-    );
+    assert!(core.should_block_request("https://candidate.example/x", "https://s.test", "script"), "the promoted candidate must survive restart");
+    assert!(!core.should_block_request("https://good.example/x", "https://s.test", "script"), "the superseded body must not survive restart");
 }
 
 #[test]
@@ -1532,34 +1021,13 @@ fn content_blocker_first_candidate_install_is_durable_after_exactly_one_install(
     let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
     let dir = tempfile::tempdir().expect("temp dir");
     let db = cb_db_path(&dir, "cb-first-install.db");
-
     {
         let mut core = MahoCore::new().with_storage(&db);
-        assert_eq!(
-            core.apply_filter_list_update_response(FilterListUpdateResponse {
-                list_id: "easylist".into(),
-                status_code: 200,
-                body: Some("||first-install.example^\n".into()),
-                etag: None,
-                last_modified: None,
-                sha256: None,
-            }),
-            Ok(true)
-        );
-        assert!(
-            core.install_content_blocker_compiled_engine(compile_engine_snapshot(
-                core.create_content_blocker_compile_snapshot(),
-            ))
-        );
+        assert_eq!(core.apply_filter_list_update_response(FilterListUpdateResponse {
+            list_id: "easylist".into(), status_code: 200, body: Some("||first-install.example^\n".into()), etag: None, last_modified: None, sha256: None,
+        }), Ok(true));
+        assert!(core.install_content_blocker_compiled_engine(compile_engine_snapshot(core.create_content_blocker_compile_snapshot())));
     }
-
     let restored = MahoCore::new().with_storage(&db);
-    assert!(
-        restored.should_block_request(
-            "https://first-install.example/x",
-            "https://site.test",
-            "script"
-        ),
-        "the first successful candidate promotion must be the durable snapshot"
-    );
+    assert!(restored.should_block_request("https://first-install.example/x", "https://site.test", "script"), "the first successful candidate promotion must be the durable snapshot");
 }

@@ -31,6 +31,7 @@ fn test_sync_sqlite_integration_flow() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     };
 
     core.set_sync_status(SyncStatus::Synced);
@@ -103,6 +104,7 @@ fn test_sync_survives_restart_sqlite() {
             deleted: false,
             queue_row_id: None,
             fields_hlc_json: None,
+            profile_id: None,
         };
         let applied = core.apply_sync_remote_entities(vec![entity]);
         assert_eq!(applied.len(), 1, "first apply should accept the entity");
@@ -132,6 +134,7 @@ fn test_sync_survives_restart_sqlite() {
             deleted: false,
             queue_row_id: None,
             fields_hlc_json: None,
+            profile_id: None,
         };
         let applied = core2.apply_sync_remote_entities(vec![replay_entity]);
         assert!(
@@ -150,6 +153,7 @@ fn test_sync_survives_restart_sqlite() {
             deleted: false,
             queue_row_id: None,
             fields_hlc_json: None,
+            profile_id: None,
         };
         let applied_older = core2.apply_sync_remote_entities(vec![older_replay]);
         assert!(
@@ -168,6 +172,7 @@ fn test_sync_survives_restart_sqlite() {
             deleted: false,
             queue_row_id: None,
             fields_hlc_json: None,
+            profile_id: None,
         };
         let applied_newer = core2.apply_sync_remote_entities(vec![newer]);
         assert_eq!(
@@ -202,6 +207,7 @@ fn test_sync_queue_survives_restart_and_flushes() {
             deleted: false,
             queue_row_id: None,
             fields_hlc_json: None,
+            profile_id: None,
         };
         core.sync_push_entity_persisted(entity);
 

@@ -419,7 +419,13 @@ fun MainBrowserScreen(externalUrl: String? = null) {
 
         val target = suggestionNavigationTarget(suggestion)
         if (target.isNotBlank()) {
-            submitSearch(target, reuseActiveTab = false)
+            submitSearch(
+                target,
+                reuseActiveTab = shouldReuseActiveTab(
+                    isBrowsingRoute = shellRoute == ShellRoute.Browsing,
+                    hasActiveTab = activeTabId != null,
+                ),
+            )
         }
     }
 
@@ -648,7 +654,13 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                 tintColor = chromeTheme.tintColor,
                                 onHomeQueryChange = { homeQuery = it },
                                 onHomeSubmit = {
-                                    submitSearch(homeQuery, reuseActiveTab = false)
+                                    submitSearch(
+                                        homeQuery,
+                                        reuseActiveTab = shouldReuseActiveTab(
+                                            isBrowsingRoute = true,
+                                            hasActiveTab = activeTabId != null,
+                                        ),
+                                    )
                                 },
                                 onTabsClick = {
                                     showTabGrid = true
@@ -665,6 +677,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     }
                                 },
                                 onSearchClick = {
+                                    homeQuery = resolveAddressBarPrefill(currentUrl, isHomeMode = false)
                                     showSearchSheet = true
                                 },
                                 onGoBack = {
@@ -805,6 +818,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                 }
                             },
                             onSearchClick = {
+                                homeQuery = resolveAddressBarPrefill(currentUrl, isHomeMode = true)
                                 showSearchSheet = true
                             },
                             onGoBack = {},
@@ -968,11 +982,20 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                 reduceMotion = reduceMotion,
                 initialQuery = homeQuery,
                 isIncognito = isIncognito,
-                onDismiss = { showSearchSheet = false },
+                onDismiss = {
+                    showSearchSheet = false
+                    homeQuery = ""
+                },
                 onSubmit = { entered ->
                     showSearchSheet = false
-                    homeQuery = entered
-                    submitSearch(entered, reuseActiveTab = false)
+                    homeQuery = ""
+                    submitSearch(
+                        entered,
+                        reuseActiveTab = shouldReuseActiveTab(
+                            isBrowsingRoute = isBrowsingRoute,
+                            hasActiveTab = activeTabId != null,
+                        ),
+                    )
                 },
                 onToggleIncognito = { isIncognito = !isIncognito },
                 onSelectSuggestion = ::handleSearchSuggestionSelection,

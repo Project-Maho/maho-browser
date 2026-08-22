@@ -32,11 +32,19 @@ import dev.maho.browser.bridge.BridgeSettings
 import dev.maho.browser.models.AutoplayPolicy
 import dev.maho.browser.models.GeneralSettingsUpdate
 import dev.maho.browser.models.RestorePolicy
+import dev.maho.browser.models.SettingsSearchEngine
 import dev.maho.browser.ui.components.MahoGroupedRow
 import dev.maho.browser.ui.components.MahoGroupedSection
 import dev.maho.browser.ui.components.MahoRowDivider
 import dev.maho.browser.ui.icons.MahoIcon
 import dev.maho.browser.ui.theme.BrowserShellTheme
+
+private val searchEngineOptions = listOf(
+    SettingsSearchEngine("Google", "https://www.google.com/search?q={query}", true),
+    SettingsSearchEngine("DuckDuckGo", "https://duckduckgo.com/?q={query}", true),
+    SettingsSearchEngine("Bing", "https://www.bing.com/search?q={query}", true),
+    SettingsSearchEngine("Brave", "https://search.brave.com/search?q={query}", true),
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,12 +102,31 @@ fun GeneralSettingsScreen(
                 .verticalScroll(rememberScrollState()),
         ) {
             MahoGroupedSection(title = "Search") {
-                MahoGroupedRow(
-                    title = "Default Search Engine",
-                    subtitle = searchEngineName,
-                    icon = painterResource(id = MahoIcon.Search.drawableRes),
-                    iconTint = Color(0xFF5E5CE6),
-                )
+                searchEngineOptions.forEachIndexed { index, engine ->
+                    if (index > 0) MahoRowDivider()
+                    MahoGroupedRow(
+                        title = engine.name,
+                        subtitle = if (searchEngineName == engine.name) "Default search engine" else null,
+                        icon = painterResource(id = MahoIcon.Search.drawableRes),
+                        iconTint = Color(0xFF5E5CE6),
+                        trailingContent = {
+                            if (searchEngineName == engine.name) {
+                                Text(
+                                    text = "✓",
+                                    color = shellColors.accent,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        },
+                        onClick = {
+                            searchEngineName = engine.name
+                            BridgeSettings.updateGeneralSettings(
+                                GeneralSettingsUpdate(defaultSearchEngine = engine)
+                            )
+                        },
+                    )
+                }
             }
 
             MahoGroupedSection(title = "Startup") {

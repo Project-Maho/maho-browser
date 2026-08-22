@@ -29,6 +29,7 @@ fn outbox_row_stays_retryable_until_the_exact_ack_arrives() {
         deleted: false,
         queue_row_id: None,
         fields_hlc_json: None,
+        profile_id: None,
     });
 
     let delivery_id = core
