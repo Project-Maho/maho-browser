@@ -52,12 +52,18 @@ inline constexpr int kMahoMcpErrorNoEligibleActiveBrowser = -32006;
 // lease held by this session. Uniform, non-revealing.
 inline constexpr int kMahoMcpErrorLeaseRequired = -32007;
 inline constexpr int kMahoMcpErrorApprovalDenied = -32008;
+inline constexpr int kMahoMcpErrorStaleReference = -32009;
+inline constexpr int kMahoMcpErrorActionNotApplied = -32010;
 
 inline constexpr char kMahoMcpMessageTabNotFound[] = "tab not found";
 inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
     "no eligible active tab";
 inline constexpr char kMahoMcpMessageNoEligibleActiveBrowser[] =
     "no eligible active browser";
+inline constexpr char kMahoMcpMessageStaleReference[] =
+    "accessibility snapshot target changed; capture a new snapshot";
+inline constexpr char kMahoMcpMessageActionNotApplied[] =
+    "action dispatched but not applied";
 
 // Outcome of resolving a tool's target through the private-context policy.
 enum class MahoMcpTargetError {
@@ -106,6 +112,17 @@ struct MahoMcpFieldMetadata {
   std::string autocomplete;
   // AX accessible name/label, lowercased; supplementary OTP/recovery signal.
   std::string accessible_name;
+};
+
+// The browser-side input implementation reports whether a mutation reached
+// the renderer and whether its AX postcondition proves the requested result.
+// `verified` is absent only for inherently unverifiable actions (for example,
+// a generic button click); it is never inferred from dispatch alone.
+struct InputActionOutcome {
+  bool dispatched = false;
+  std::optional<bool> verified;
+  std::string method;
+  std::string reason;
 };
 
 class MahoMcpNetworkCaptureState
@@ -287,12 +304,15 @@ class MahoMcpSession {
 
   bool HandleAcquireLease(const McpJsonRpcMessage& msg,
                           const base::DictValue* arguments,
+                          int target_tab_id,
                           std::vector<std::string>& responses);
   bool HandleHeartbeatLease(const McpJsonRpcMessage& msg,
                             const base::DictValue* arguments,
+                            int target_tab_id,
                             std::vector<std::string>& responses);
   bool HandleReleaseLease(const McpJsonRpcMessage& msg,
                           const base::DictValue* arguments,
+                          int target_tab_id,
                           std::vector<std::string>& responses);
 
   State state_ = State::kAwaitingInitialize;
@@ -316,6 +336,7 @@ class MahoMcpSession {
   // Per-session ref table for accessibility interactions.
   RefTable ref_to_ax_id_;
   ResolvedMahoMcpTarget ref_table_target_;
+  uint64_t ref_snapshot_token_ = 0;
 
   // Per-session network capture observer (Wave 4.4).
   std::unique_ptr<MahoMcpNetworkObserver> network_observer_;
@@ -375,6 +396,10 @@ class MahoMcpBrowserDelegate {
   virtual base::Value GetAccessibilitySnapshot(
       int tab_id,
       MahoMcpSession::RefTable* out_refs) = 0;
+  virtual base::Value GetAccessibilitySnapshot(
+      int tab_id,
+      MahoMcpSession::RefTable* out_refs,
+      uint64_t* out_snapshot_token);
 
   struct PageContentResult {
     std::string text;
@@ -485,6 +510,20 @@ class MahoMcpBrowserDelegate {
   virtual bool Type(int tab_id,
                     ui::AXNodeID ax_id,
                     const std::string& text) = 0;
+  // Supplies one .aab file to a chooser the target page has already opened.
+  // Production performs path policy validation at the WebContents boundary.
+  virtual bool SelectFileForPendingChooser(int tab_id,
+                                           const std::string& path);
+  virtual void ClickVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      base::OnceCallback<void(InputActionOutcome)> callback);
+  virtual void TypeVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      const std::string& text,
+      base::OnceCallback<void(InputActionOutcome)> callback);
+  virtual bool RequiresDeferredVerifiedInputResponses() const;
   virtual bool Select(int tab_id,
                       ui::AXNodeID ax_id,
                       const std::string& value) = 0;
@@ -652,6 +691,8 @@ class MahoMcpBrowserDelegate {
   // a synchronous or deferred success. Returns false when the bound
   // browser/tab/generation no longer authorizes MCP.
   virtual bool RevalidateTarget(const ResolvedMahoMcpTarget& target);
+  virtual bool RevalidateRefSnapshot(const ResolvedMahoMcpTarget& target,
+                                     uint64_t snapshot_token);
 
   // Returns trusted AX-derived classification metadata for the field bound to
   // |ax_id| in |tab_id|. The default returns empty (non-sensitive) metadata so

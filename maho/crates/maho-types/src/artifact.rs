@@ -22,6 +22,9 @@ pub struct ArtifactInfo {
     pub storage_rel_path: String,
     /// Creation time as milliseconds since the Unix epoch.
     pub created_at_ms: i64,
+    /// Format-typed artifact kind (e.g. "xlsx", "pdf", "html", "generic").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// Generator for opaque artifact identifiers.
@@ -51,6 +54,7 @@ mod tests {
             size_bytes: 1024,
             storage_rel_path: "session-1/report.pdf".to_string(),
             created_at_ms: 1_754_000_000_000,
+            kind: None,
         }
     }
 

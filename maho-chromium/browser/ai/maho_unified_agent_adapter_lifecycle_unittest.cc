@@ -89,7 +89,65 @@ struct FakeAgentState {
   std::vector<std::string> artifact_roots;
   std::vector<std::string> lifecycle_calls;
 
+  void (*unified_event_cb)(void*,
+                           const MahoUnifiedAgentEventEnvelope*) = nullptr;
+  raw_ptr<void> unified_event_user_data = nullptr;
+  MahoAgentReleaseCallback unified_release_cb = nullptr;
+  raw_ptr<void> unified_release_user_data = nullptr;
+
+  std::vector<std::string> resolved_interactions;
+  std::vector<std::string> interaction_answers;
+  std::vector<std::string> timed_out_interactions;
+  std::vector<std::string> cancelled_interactions;
+
+  std::string get_events_after_response;
+  bool get_events_after_retention_gap = false;
+  std::string last_get_events_after_run_id;
+  uint64_t last_get_events_after_seq = 0;
+
+  struct TurnSubmission {
+    std::string run_ctx;
+    std::string message_json;
+    std::string intent;
+  };
+  std::vector<TurnSubmission> turn_submissions;
+  uint32_t turn_queue_depth = 0;
+  bool turn_submit_result = true;
+  bool turn_queue_depth_result = true;
+
+  struct WaitRegistration {
+    std::string run_id;
+    std::string filter_json;
+    uint64_t timeout_ms = 0;
+    std::string handle;
+  };
+  std::vector<WaitRegistration> wait_registrations;
+  std::string next_wait_handle = "wait-handle-1";
+  bool wait_register_result = true;
+
+  struct WaitWakeCall {
+    std::string run_id;
+    std::string event_json;
+  };
+  std::vector<WaitWakeCall> wait_wakes;
+  bool wait_wake_result = true;
+
+  struct ModelResolutionCall {
+    std::string category;
+    std::optional<std::string> preference_json;
+    std::optional<std::string> available_json;
+  };
+  std::vector<ModelResolutionCall> model_resolution_calls;
+  std::string resolve_model_response;
+  bool resolve_model_result = true;
+
   std::vector<Send> sends;
+
+  void DeliverUnifiedEvent(const MahoUnifiedAgentEventEnvelope& envelope) {
+    if (unified_event_cb) {
+      unified_event_cb(unified_event_user_data, &envelope);
+    }
+  }
 
   void DeliverToken(const std::string& token) {
     if (!sends.empty()) {
@@ -213,10 +271,247 @@ void FakeSetArtifactCreatedCallback(MahoAgentSession*,
                                     void (*)(void*, const char*),
                                     void*) {}
 
+bool FakeRegisterUnifiedEventCallbackLeased(
+    MahoAgentSession*,
+    void (*cb)(void*, const MahoUnifiedAgentEventEnvelope*),
+    void* user_data,
+    MahoAgentReleaseCallback on_release,
+    void* release_user_data) {
+  if (g_fake_agent) {
+    g_fake_agent->unified_event_cb = cb;
+    g_fake_agent->unified_event_user_data = user_data;
+    g_fake_agent->unified_release_cb = on_release;
+    g_fake_agent->unified_release_user_data = release_user_data;
+  }
+  return true;
+}
+
+bool FakeUnregisterUnifiedEventCallback(MahoAgentSession*) {
+  if (g_fake_agent) {
+    g_fake_agent->unified_event_cb = nullptr;
+    g_fake_agent->unified_event_user_data = nullptr;
+  }
+  return true;
+}
+
+bool FakeInteractionResolve(MahoAgentSession*,
+                            const char* request_id,
+                            const char* answer_json) {
+  if (g_fake_agent) {
+    g_fake_agent->resolved_interactions.push_back(
+        request_id ? request_id : "");
+    g_fake_agent->interaction_answers.push_back(
+        answer_json ? answer_json : "");
+  }
+  return true;
+}
+
+bool FakeInteractionTimeout(MahoAgentSession*, const char* request_id) {
+  if (g_fake_agent) {
+    g_fake_agent->timed_out_interactions.push_back(
+        request_id ? request_id : "");
+  }
+  return true;
+}
+
+bool FakeInteractionCancel(MahoAgentSession*, const char* request_id) {
+  if (g_fake_agent) {
+    g_fake_agent->cancelled_interactions.push_back(
+        request_id ? request_id : "");
+  }
+  return true;
+}
+
+bool FakeGetEventsAfter(MahoAgentSession*,
+                        const char* run_id,
+                        uint64_t after_seq,
+                        char** out_json) {
+  if (!g_fake_agent || !out_json) {
+    return false;
+  }
+  g_fake_agent->last_get_events_after_run_id = run_id ? run_id : "";
+  g_fake_agent->last_get_events_after_seq = after_seq;
+
+  std::string response;
+  if (!g_fake_agent->get_events_after_response.empty()) {
+    response = g_fake_agent->get_events_after_response;
+  } else if (g_fake_agent->get_events_after_retention_gap) {
+    response = "{\"run_id\":\"" + (run_id ? std::string(run_id) : "") +
+               "\",\"gap\":true,\"events\":[]}";
+  } else {
+    response = "{\"run_id\":\"" + (run_id ? std::string(run_id) : "") +
+               "\",\"gap\":false,\"events\":[]}";
+  }
+  *out_json = strdup(response.c_str());
+  return true;
+}
+
+bool FakeTurnSubmit(MahoAgentSession*,
+                    const char* run_ctx,
+                    const char* message_json,
+                    const char* intent) {
+  if (!g_fake_agent) {
+    return false;
+  }
+  g_fake_agent->turn_submissions.push_back({
+      run_ctx ? run_ctx : "",
+      message_json ? message_json : "",
+      intent ? intent : "",
+  });
+  if (g_fake_agent->turn_submit_result) {
+    std::string intent_str = intent ? intent : "queue";
+    if (intent_str == "queue" || intent_str == "queued") {
+      g_fake_agent->turn_queue_depth++;
+      if (g_fake_agent->unified_event_cb) {
+        MahoUnifiedAgentEventEnvelope envelope;
+        envelope.abi_version = 2;
+        envelope.run_id = run_ctx ? run_ctx : "session";
+        envelope.event_seq = 100 + g_fake_agent->turn_queue_depth;
+        envelope.kind = MahoAgentEventKindV2::kStatus;
+        std::string payload =
+            "{\"event\":\"turn_queued\",\"position\":" +
+            std::to_string(g_fake_agent->turn_queue_depth) +
+            ",\"message\":\"" + (message_json ? message_json : "") +
+            "\",\"intent\":\"queue\"}";
+        envelope.payload_json = payload.c_str();
+        g_fake_agent->DeliverUnifiedEvent(envelope);
+      }
+    } else if (intent_str == "steer" || intent_str == "steering") {
+      if (g_fake_agent->unified_event_cb) {
+        MahoUnifiedAgentEventEnvelope envelope;
+        envelope.abi_version = 2;
+        envelope.run_id = run_ctx ? run_ctx : "session";
+        envelope.event_seq = 200;
+        envelope.kind = MahoAgentEventKindV2::kStatus;
+        std::string payload =
+            "{\"event\":\"turn_steered\",\"guidance\":\"" +
+            std::string(message_json ? message_json : "") +
+            "\",\"intent\":\"steer\"}";
+        envelope.payload_json = payload.c_str();
+        g_fake_agent->DeliverUnifiedEvent(envelope);
+      }
+    }
+  }
+  return g_fake_agent->turn_submit_result;
+}
+
+bool FakeTurnQueueDepth(MahoAgentSession*, uint32_t* out_u32) {
+  if (!g_fake_agent || !out_u32) {
+    return false;
+  }
+  *out_u32 = g_fake_agent->turn_queue_depth;
+  return g_fake_agent->turn_queue_depth_result;
+}
+
+char* FakeWaitRegister(MahoAgentSession*,
+                       const char* run_id,
+                       const char* filter_json,
+                       uint64_t timeout_ms) {
+  if (!g_fake_agent || !g_fake_agent->wait_register_result) {
+    return nullptr;
+  }
+  std::string handle = g_fake_agent->next_wait_handle;
+  g_fake_agent->wait_registrations.push_back({
+      run_id ? run_id : "",
+      filter_json ? filter_json : "",
+      timeout_ms,
+      handle,
+  });
+  if (g_fake_agent->unified_event_cb) {
+    MahoUnifiedAgentEventEnvelope envelope;
+    envelope.abi_version = 2;
+    envelope.run_id = run_id ? run_id : "";
+    envelope.event_seq = 300;
+    envelope.kind = MahoAgentEventKindV2::kStatus;
+    std::string payload =
+        "{\"event\":\"wait_registered\",\"run_id\":\"" +
+        std::string(run_id ? run_id : "") + "\",\"handle\":\"" + handle +
+        "\",\"timeout_ms\":" + std::to_string(timeout_ms) + "}";
+    envelope.payload_json = payload.c_str();
+    g_fake_agent->DeliverUnifiedEvent(envelope);
+  }
+  return strdup(handle.c_str());
+}
+
+bool FakeWaitWake(MahoAgentSession*,
+                  const char* run_id,
+                  const char* event_json) {
+  if (!g_fake_agent || !g_fake_agent->wait_wake_result) {
+    return false;
+  }
+  g_fake_agent->wait_wakes.push_back({
+      run_id ? run_id : "",
+      event_json ? event_json : "",
+  });
+  if (g_fake_agent->unified_event_cb) {
+    MahoUnifiedAgentEventEnvelope envelope;
+    envelope.abi_version = 2;
+    envelope.run_id = run_id ? run_id : "";
+    envelope.event_seq = 301;
+    envelope.kind = MahoAgentEventKindV2::kStatus;
+    std::string payload =
+        "{\"event\":\"wait_woken\",\"run_id\":\"" +
+        std::string(run_id ? run_id : "") + "\",\"handle\":\"" +
+        (g_fake_agent->wait_registrations.empty()
+             ? "wait-handle-1"
+             : g_fake_agent->wait_registrations.back().handle) +
+        "\"}";
+    envelope.payload_json = payload.c_str();
+    g_fake_agent->DeliverUnifiedEvent(envelope);
+  }
+  return true;
+}
+
+bool FakeResolveModel(MahoAgentSession*,
+                      const char* category,
+                      const char* preference_opt_json,
+                      const char* available_opt_json,
+                      char** out_json) {
+  if (!g_fake_agent || !out_json) {
+    return false;
+  }
+  g_fake_agent->model_resolution_calls.push_back({
+      category ? category : "",
+      preference_opt_json ? std::optional<std::string>(preference_opt_json)
+                          : std::nullopt,
+      available_opt_json ? std::optional<std::string>(available_opt_json)
+                         : std::nullopt,
+  });
+  if (!g_fake_agent->resolve_model_result) {
+    *out_json = strdup("{\"error\":\"Resolution failed\"}");
+    return false;
+  }
+  std::string response =
+      !g_fake_agent->resolve_model_response.empty()
+          ? g_fake_agent->resolve_model_response
+          : "{\"model\":\"google/gemini-3-flash-lite:free\",\"selected_model\":"
+            "\"google/gemini-3-flash-lite:free\",\"reason\":\"Default "
+            "model\",\"category\":\"general\",\"is_fallback\":false}";
+  *out_json = strdup(response.c_str());
+  return true;
+}
+
 const MahoAgentFfi kFakeFfi = {
-    &FakeCreateSession, &FakeSetApprovalPolicy, &FakeSetMailAuthorizationState,
-    &FakeSetPreferredProvider, &FakeSendMessage, &FakeCancel, &FakeSessionFree,
-    &FakeSetArtifactRoot, &FakeSetArtifactCreatedCallback,
+    &FakeCreateSession,
+    &FakeSetApprovalPolicy,
+    &FakeSetMailAuthorizationState,
+    &FakeSetPreferredProvider,
+    &FakeSendMessage,
+    &FakeCancel,
+    &FakeSessionFree,
+    &FakeSetArtifactRoot,
+    &FakeSetArtifactCreatedCallback,
+    &FakeRegisterUnifiedEventCallbackLeased,
+    &FakeUnregisterUnifiedEventCallback,
+    &FakeInteractionResolve,
+    &FakeInteractionTimeout,
+    &FakeInteractionCancel,
+    &FakeGetEventsAfter,
+    &FakeTurnSubmit,
+    &FakeTurnQueueDepth,
+    &FakeWaitRegister,
+    &FakeWaitWake,
+    &FakeResolveModel,
 };
 
 }  // namespace
@@ -336,6 +631,10 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
 
   size_t PendingApprovalCount(MahoUnifiedAgentAdapter* adapter) {
     return adapter->PendingApprovalCountForTesting();
+  }
+
+  size_t PendingInteractionCount(MahoUnifiedAgentAdapter* adapter) {
+    return adapter->PendingInteractionCountForTesting();
   }
 
   std::string FirstApprovalId() const {
@@ -1737,3 +2036,363 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
 
   secure_adapter.reset();
 }
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       EnvelopeMonotonicSequenceDeduplicationDeliversToUIOnce) {
+  adapter_->SubmitMessage("start run", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(fake_agent_->unified_event_cb);
+
+  // Deliver sequence 1 twice.
+  MahoUnifiedAgentEventEnvelope envelope1;
+  envelope1.abi_version = 2;
+  envelope1.run_id = "run-dedupe-1";
+  envelope1.event_seq = 1;
+  envelope1.kind = MahoAgentEventKindV2::kStatus;
+  envelope1.payload_json = "{\"message\":\"Analyzing workspace state...\"}";
+
+  fake_agent_->DeliverUnifiedEvent(envelope1);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kStatus), 1u);
+  const MahoAiRuntimeEvent* first_status =
+      LastEventOfType(MahoAiRuntimeEventType::kStatus);
+  ASSERT_TRUE(first_status);
+  EXPECT_EQ(first_status->text, "Analyzing workspace state...");
+  EXPECT_EQ(first_status->run_id, "run-dedupe-1");
+  ASSERT_TRUE(first_status->event_seq.has_value());
+  EXPECT_EQ(first_status->event_seq.value(), 1u);
+
+  // Redelivery of sequence 1 must be deduplicated and not emitted to UI.
+  fake_agent_->DeliverUnifiedEvent(envelope1);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kStatus), 1u);
+  EXPECT_EQ(adapter_->GetLastConsumedEventSeq("run-dedupe-1"), 1u);
+
+  // Sequence 2 arrives -> delivered.
+  MahoUnifiedAgentEventEnvelope envelope2;
+  envelope2.abi_version = 2;
+  envelope2.run_id = "run-dedupe-1";
+  envelope2.event_seq = 2;
+  envelope2.kind = MahoAgentEventKindV2::kStatus;
+  envelope2.payload_json = "{\"message\":\"Executing tool plan...\"}";
+
+  fake_agent_->DeliverUnifiedEvent(envelope2);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kStatus), 2u);
+  EXPECT_EQ(adapter_->GetLastConsumedEventSeq("run-dedupe-1"), 2u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ReplayAfterQueriesFFIAndEmitsOrderedEventsWithSeqDedupe) {
+  adapter_->SubmitMessage("start run", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  fake_agent_->get_events_after_response =
+      "{\"run_id\":\"run-replay-test\",\"gap\":false,\"is_terminal\":false,"
+      "\"events\":["
+      "{\"run_id\":\"run-replay-test\",\"event_seq\":2,\"event_name\":\"status\","
+      "\"payload_json\":\"{\\\"message\\\":\\\"step 2\\\"}\"},"
+      "{\"run_id\":\"run-replay-test\",\"event_seq\":3,\"event_name\":\"status\","
+      "\"payload_json\":\"{\\\"message\\\":\\\"step 3\\\"}\"}"
+      "]}";
+
+  bool ok = adapter_->ReplayAfter("run-replay-test", 1, callback());
+  EXPECT_TRUE(ok);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(fake_agent_->last_get_events_after_run_id, "run-replay-test");
+  EXPECT_EQ(fake_agent_->last_get_events_after_seq, 1u);
+
+  std::vector<const MahoAiRuntimeEvent*> status_events;
+  for (const auto& ev : events_) {
+    if (ev.type == MahoAiRuntimeEventType::kStatus) {
+      status_events.push_back(&ev);
+    }
+  }
+  ASSERT_EQ(status_events.size(), 2u);
+  EXPECT_EQ(status_events[0]->run_id, "run-replay-test");
+  ASSERT_TRUE(status_events[0]->event_seq.has_value());
+  EXPECT_EQ(status_events[0]->event_seq.value(), 2u);
+  EXPECT_EQ(status_events[0]->text, "{\"message\":\"step 2\"}");
+
+  EXPECT_EQ(status_events[1]->run_id, "run-replay-test");
+  ASSERT_TRUE(status_events[1]->event_seq.has_value());
+  EXPECT_EQ(status_events[1]->event_seq.value(), 3u);
+  EXPECT_EQ(status_events[1]->text, "{\"message\":\"step 3\"}");
+
+  EXPECT_EQ(adapter_->GetLastConsumedEventSeq("run-replay-test"), 3u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ReplayBeyondRetentionWindowSurfacesExplicitReplayGap) {
+  adapter_->SubmitMessage("start run", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  fake_agent_->get_events_after_retention_gap = true;
+
+  bool ok = adapter_->ReplayAfter("run-pruned", 0, callback());
+  EXPECT_TRUE(ok);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kReplayGap), 1u);
+  const MahoAiRuntimeEvent* gap_event =
+      LastEventOfType(MahoAiRuntimeEventType::kReplayGap);
+  ASSERT_TRUE(gap_event);
+  EXPECT_EQ(gap_event->run_id, "run-pruned");
+  EXPECT_TRUE(gap_event->payload.FindBool("gap").value_or(false));
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       InteractionRequestReachesDelegateAndResolveInvokesFFI) {
+  adapter_->SubmitMessage("start run", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(fake_agent_->unified_event_cb);
+
+  // Deliver interaction request envelope.
+  MahoUnifiedAgentEventEnvelope req_envelope;
+  req_envelope.abi_version = 2;
+  req_envelope.run_id = "run-interaction-1";
+  req_envelope.event_seq = 10;
+  req_envelope.kind = MahoAgentEventKindV2::kInteractionRequest;
+  req_envelope.payload_json =
+      "{\"id\":\"interact-prompt-1\",\"question\":\"Which target do you want to "
+      "open?\",\"options\":[{\"id\":\"opt-a\",\"label\":\"Tab A\"}]}";
+
+  fake_agent_->DeliverUnifiedEvent(req_envelope);
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(PendingInteractionCount(adapter_.get()), 1u);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kInteractionRequest), 1u);
+  const MahoAiRuntimeEvent* req_event =
+      LastEventOfType(MahoAiRuntimeEventType::kInteractionRequest);
+  ASSERT_TRUE(req_event);
+  EXPECT_EQ(req_event->text, "Which target do you want to open?");
+  EXPECT_EQ(req_event->run_id, "run-interaction-1");
+  ASSERT_TRUE(req_event->event_seq.has_value());
+  EXPECT_EQ(req_event->event_seq.value(), 10u);
+
+  // UI responds to the interaction.
+  adapter_->RespondToInteraction("interact-prompt-1",
+                                 "{\"selected_option\":\"opt-a\"}");
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(PendingInteractionCount(adapter_.get()), 0u);
+  ASSERT_EQ(fake_agent_->resolved_interactions.size(), 1u);
+  EXPECT_EQ(fake_agent_->resolved_interactions[0], "interact-prompt-1");
+  ASSERT_EQ(fake_agent_->interaction_answers.size(), 1u);
+  EXPECT_EQ(fake_agent_->interaction_answers[0],
+            "{\"selected_option\":\"opt-a\"}");
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kInteractionResult), 1u);
+  const MahoAiRuntimeEvent* res_event =
+      LastEventOfType(MahoAiRuntimeEventType::kInteractionResult);
+  ASSERT_TRUE(res_event);
+  const std::string* id_in_payload =
+      res_event->payload.FindString("interaction_id");
+  ASSERT_TRUE(id_in_payload);
+  EXPECT_EQ(*id_in_payload, "interact-prompt-1");
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       FollowUpDuringActiveRunQueuesAndExecutesAfter) {
+  adapter_->SubmitMessage("first turn", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(fake_agent_->created);
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // Submit follow-up while turn 1 is still active
+  bool queued = adapter_->SubmitFollowUp("second turn", "queue");
+  EXPECT_TRUE(queued);
+  task_environment_.RunUntilIdle();
+
+  ASSERT_EQ(fake_agent_->turn_submissions.size(), 1u);
+  EXPECT_EQ(fake_agent_->turn_submissions[0].intent, "queue");
+  EXPECT_EQ(fake_agent_->turn_queue_depth, 1u);
+  EXPECT_EQ(adapter_->GetTurnQueueDepth(), 1u);
+
+  // Verify kTurnQueued event was dispatched to UI
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnQueued), 1u);
+  const MahoAiRuntimeEvent* queued_event =
+      LastEventOfType(MahoAiRuntimeEventType::kTurnQueued);
+  ASSERT_TRUE(queued_event);
+  EXPECT_TRUE(queued_event->queue_depth.has_value());
+  EXPECT_EQ(queued_event->queue_depth.value(), 1u);
+
+  // Complete first turn
+  fake_agent_->DeliverComplete("turn 1 complete");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnComplete), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       TurnQueueDepthReportedForUiBadge) {
+  adapter_->SubmitMessage("start", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(adapter_->GetTurnQueueDepth(), 0u);
+
+  adapter_->SubmitFollowUp("queued question 1", "queue");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(adapter_->GetTurnQueueDepth(), 1u);
+
+  adapter_->SubmitFollowUp("queued question 2", "queue");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(adapter_->GetTurnQueueDepth(), 2u);
+  EXPECT_EQ(fake_agent_->turn_submissions.size(), 2u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       WaitRegisterAndExternalWakeResumesTurn) {
+  adapter_->SubmitMessage("start wait run",
+                          maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  // Register wait for notification
+  std::string handle = adapter_->RegisterWait(
+      "run-wait-123", "{\"kind\":\"notification\",\"topic\":\"build\"}", 5000);
+  EXPECT_EQ(handle, "wait-handle-1");
+  task_environment_.RunUntilIdle();
+
+  ASSERT_EQ(fake_agent_->wait_registrations.size(), 1u);
+  EXPECT_EQ(fake_agent_->wait_registrations[0].run_id, "run-wait-123");
+  EXPECT_EQ(fake_agent_->wait_registrations[0].timeout_ms, 5000u);
+
+  // Verify kWaitSuspended event emitted
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kWaitSuspended), 1u);
+  const MahoAiRuntimeEvent* susp_event =
+      LastEventOfType(MahoAiRuntimeEventType::kWaitSuspended);
+  ASSERT_TRUE(susp_event);
+  EXPECT_EQ(susp_event->text, "wait-handle-1");
+  EXPECT_EQ(susp_event->run_id, "run-wait-123");
+
+  // External notification arrives and wakes the suspended run
+  bool woke = adapter_->WakeForNotification(
+      "run-wait-123",
+      "{\"kind\":\"notification\",\"topic\":\"build\",\"payload\":{\"status\":"
+      "\"success\"}}");
+  EXPECT_TRUE(woke);
+  task_environment_.RunUntilIdle();
+
+  ASSERT_EQ(fake_agent_->wait_wakes.size(), 1u);
+  EXPECT_EQ(fake_agent_->wait_wakes[0].run_id, "run-wait-123");
+
+  // Verify kWaitWoken event emitted
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kWaitWoken), 1u);
+  const MahoAiRuntimeEvent* wake_event =
+      LastEventOfType(MahoAiRuntimeEventType::kWaitWoken);
+  ASSERT_TRUE(wake_event);
+  EXPECT_EQ(wake_event->run_id, "run-wait-123");
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       WaitTimeoutExpiresFailClosed) {
+  adapter_->SubmitMessage("start wait timeout run",
+                          maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  std::string handle = adapter_->RegisterWait(
+      "run-timeout-1", "{\"kind\":\"notification\"}", 100);
+  EXPECT_EQ(handle, "wait-handle-1");
+  task_environment_.RunUntilIdle();
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kWaitSuspended), 1u);
+
+  // Fail wake on mismatched run_id / invalid state
+  fake_agent_->wait_wake_result = false;
+  bool woke = adapter_->WakeForNotification("run-timeout-1", "{}");
+  EXPECT_FALSE(woke);
+  task_environment_.RunUntilIdle();
+
+  // Ensure no unauthorized complete or wake events occurred
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kWaitWoken), 0u);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnComplete), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       ResolveModelSurfacesFallbackReasonOnUnavailableModel) {
+  fake_agent_->resolve_model_response =
+      "{\"model\":\"google/gemini-3-flash-lite:free\",\"selected_model\":"
+      "\"google/gemini-3-flash-lite:free\",\"fallback_model\":\"google/"
+      "gemini-3-flash-lite:free\",\"reason\":\"Selected default model due to "
+      "unconfigured key\",\"category\":\"general\",\"confidence\":0.9,\"is_"
+      "fallback\":true}";
+
+  adapter_->SubmitMessage("test model routing",
+                          maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+
+  ASSERT_EQ(fake_agent_->model_resolution_calls.size(), 1u);
+  EXPECT_EQ(fake_agent_->model_resolution_calls[0].category, "general");
+
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kModelResolved), 1u);
+  const MahoAiRuntimeEvent* model_event =
+      LastEventOfType(MahoAiRuntimeEventType::kModelResolved);
+  ASSERT_TRUE(model_event);
+  ASSERT_TRUE(model_event->resolved_model.has_value());
+  EXPECT_EQ(*model_event->resolved_model, "google/gemini-3-flash-lite:free");
+  ASSERT_TRUE(model_event->model_fallback_reason.has_value());
+  EXPECT_EQ(*model_event->model_fallback_reason,
+            "Selected default model due to unconfigured key");
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       SteerCancelsCurrentTurnAndStartsNewWithoutEventBleed) {
+  adapter_->SubmitMessage("turn 1 initial prompt",
+                          maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // Deliver token for turn 1 before steer
+  fake_agent_->DeliverToken("early token ");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kAssistantToken), 1u);
+
+  // UI submits a steer follow-up
+  bool steered = adapter_->SubmitFollowUp(
+      "redirect conversation to quantum computing", "steer");
+  EXPECT_TRUE(steered);
+  task_environment_.RunUntilIdle();
+
+  ASSERT_EQ(fake_agent_->turn_submissions.size(), 1u);
+  EXPECT_EQ(fake_agent_->turn_submissions[0].intent, "steer");
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnSteered), 1u);
+  const MahoAiRuntimeEvent* steer_event =
+      LastEventOfType(MahoAiRuntimeEventType::kTurnSteered);
+  ASSERT_TRUE(steer_event);
+  EXPECT_NE(
+      std::string::npos,
+      steer_event->text.find("redirect conversation to quantum computing"));
+
+  // Late token from cancelled turn 1 is delivered: MUST NOT BLEED into events
+  fake_agent_->sends[0].DeliverToken("late bleed token");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kAssistantToken), 1u);
+
+  // Late complete from cancelled turn 1: MUST NOT trigger kTurnComplete
+  fake_agent_->sends[0].DeliverComplete("late full text");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnComplete), 0u);
+}
+

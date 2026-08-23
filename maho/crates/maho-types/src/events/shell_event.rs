@@ -97,6 +97,8 @@ pub enum ShellEvent {
         window_id: WindowId,
         tab_ids: Vec<TabId>,
         orientation: crate::common::Orientation,
+        #[serde(default)]
+        layout: Option<crate::split_view::SplitLayoutNode>,
     },
     ClearSplitView {
         window_id: WindowId,

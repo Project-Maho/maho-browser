@@ -32,8 +32,9 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"         // nogncheck
 #include "chrome/browser/ui/browser_finder.h"  // nogncheck
-#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "maho/browser/ai/maho_agent_channel_gateway.h"
+#include "maho/browser/ai/maho_authenticated_service_api_broker.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
@@ -268,6 +269,73 @@ std::optional<std::string> PreferredProviderForRuntime(PrefService* prefs) {
 
 }  // namespace
 
+extern "C" {
+bool maho_agent_register_unified_event_callback_leased(
+    MahoAgentSession* session,
+    void (*cb)(void*, const MahoUnifiedAgentEventEnvelope*),
+    void* user_data,
+    MahoAgentReleaseCallback on_release,
+    void* release_user_data) {
+  return false;
+}
+bool maho_agent_unregister_unified_event_callback(MahoAgentSession* session) {
+  return false;
+}
+bool maho_agent_interaction_resolve(MahoAgentSession* session,
+                                    const char* request_id,
+                                    const char* answer_json) {
+  return false;
+}
+bool maho_agent_interaction_timeout(MahoAgentSession* session,
+                                    const char* request_id) {
+  return false;
+}
+bool maho_agent_interaction_cancel(MahoAgentSession* session,
+                                   const char* request_id) {
+  return false;
+}
+bool maho_agent_get_events_after(MahoAgentSession* session,
+                                 const char* run_id,
+                                 uint64_t after_seq,
+                                 char** out_json) {
+  if (out_json) {
+    *out_json = nullptr;
+  }
+  return false;
+}
+bool maho_agent_turn_submit(MahoAgentSession* session,
+                            const char* run_ctx,
+                            const char* message_json,
+                            const char* intent) {
+  return false;
+}
+bool maho_agent_turn_queue_depth(MahoAgentSession* session,
+                                 uint32_t* out_u32) {
+  return false;
+}
+char* maho_agent_wait_register(MahoAgentSession* session,
+                               const char* run_id,
+                               const char* filter_json,
+                               uint64_t timeout_ms) {
+  return nullptr;
+}
+bool maho_agent_wait_wake(MahoAgentSession* session,
+                          const char* run_id,
+                          const char* event_json) {
+  return false;
+}
+bool maho_agent_resolve_model(MahoAgentSession* session,
+                              const char* category,
+                              const char* preference_opt_json,
+                              const char* available_opt_json,
+                              char** out_json) {
+  if (out_json) {
+    *out_json = nullptr;
+  }
+  return false;
+}
+}
+
 namespace {
 const MahoAgentFfi kProductionFfi = {
     &maho_agent_create_session_leased,
@@ -279,6 +347,17 @@ const MahoAgentFfi kProductionFfi = {
     &maho_agent_session_free,
     &maho_agent_set_artifact_root,
     &maho_agent_set_artifact_created_callback,
+    &maho_agent_register_unified_event_callback_leased,
+    &maho_agent_unregister_unified_event_callback,
+    &maho_agent_interaction_resolve,
+    &maho_agent_interaction_timeout,
+    &maho_agent_interaction_cancel,
+    &maho_agent_get_events_after,
+    &maho_agent_turn_submit,
+    &maho_agent_turn_queue_depth,
+    &maho_agent_wait_register,
+    &maho_agent_wait_wake,
+    &maho_agent_resolve_model,
 };
 }  // namespace
 
@@ -440,6 +519,9 @@ MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
   artifact_created_handle_ =
       std::make_unique<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>(
           owning_task_runner_, weak_factory_.GetWeakPtr());
+  unified_event_handle_ =
+      std::make_unique<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>(
+          owning_task_runner_, weak_factory_.GetWeakPtr());
   {
     base::AutoLock lock(GetActiveAdaptersLock());
     GetActiveAdapters().insert(this);
@@ -456,6 +538,12 @@ MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
             core, tool_availability_handle_->user_data(),
             &MahoUnifiedAgentAdapter::OnToolAvailabilityFfi);
   }
+  Browser* bound_browser = ResolveBoundBrowser();
+  Profile* profile = bound_browser ? bound_browser->profile() : nullptr;
+  api_broker_ =
+      std::make_unique<maho::ai::MahoAuthenticatedServiceApiBroker>(profile);
+  channel_gateway_ =
+      std::make_unique<maho::ai::MahoAgentChannelGateway>(nullptr, api_broker_.get());
 }
 
 bool MahoUnifiedAgentAdapter::IsAiAllowed() {
@@ -477,6 +565,11 @@ MahoUnifiedAgentAdapter::~MahoUnifiedAgentAdapter() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   DenyAllPendingApprovals();
+  CancelAllPendingInteractions();
+
+  if (channel_gateway_) {
+    channel_gateway_->StopAll();
+  }
 
   if (active_turn_ && !active_turn_->cancelled) {
     active_turn_->conversation_task->Cancel();
@@ -503,6 +596,9 @@ MahoUnifiedAgentAdapter::~MahoUnifiedAgentAdapter() {
   }
   if (artifact_created_handle_) {
     artifact_created_handle_->Cancel();
+  }
+  if (unified_event_handle_) {
+    unified_event_handle_->Cancel();
   }
 }
 
@@ -567,7 +663,14 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     RuntimeEventCallback on_event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  last_event_callback_ = on_event;
+
   if (active_turn_) {
+    if (agent_session_ && agent_ffi_->turn_submit) {
+      if (SubmitFollowUp(message, "queue")) {
+        return;
+      }
+    }
     MahoAiRuntimeEvent event;
     event.type = MahoAiRuntimeEventType::kError;
     event.text = "A turn is already in progress.";
@@ -719,6 +822,16 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
         agent_session_, &MahoUnifiedAgentAdapter::OnAgentArtifactCreated,
         artifact_created_handle_->user_data());
 
+    if (agent_ffi_->register_unified_event_callback_leased) {
+      agent_ffi_->register_unified_event_callback_leased(
+          agent_session_, &MahoUnifiedAgentAdapter::OnAgentUnifiedEvent,
+          unified_event_handle_->user_data(), nullptr, nullptr);
+    }
+
+    if (channel_gateway_ && !channel_gateway_->GetChannels().empty()) {
+      channel_gateway_->StartAll();
+    }
+
     EmitConnectionState("connected");
   }
 
@@ -760,6 +873,41 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
                                              mail_read_allowed_);
   }
 
+  if (agent_ffi_->resolve_model) {
+    const char* category = "general";
+    if (chat_intent == maho_ai::mojom::ChatIntent::kSummarizeCurrentPage) {
+      category = "research";
+    } else if (chat_intent == maho_ai::mojom::ChatIntent::kQuizCurrentPage) {
+      category = "reasoning";
+    }
+    char* out_json = nullptr;
+    bool ok = agent_ffi_->resolve_model(
+        agent_session_, category, nullptr, nullptr, &out_json);
+    if (ok && out_json) {
+      std::string res_json(out_json);
+      maho_core_free_string(out_json);
+      std::optional<base::DictValue> parsed =
+          base::JSONReader::ReadDict(res_json, base::JSON_PARSE_RFC);
+      if (parsed) {
+        MahoAiRuntimeEvent model_event;
+        model_event.type = MahoAiRuntimeEventType::kModelResolved;
+        if (const std::string* model = parsed->FindString("model")) {
+          model_event.resolved_model = *model;
+          model_event.text = *model;
+        } else if (const std::string* sel_model =
+                       parsed->FindString("selected_model")) {
+          model_event.resolved_model = *sel_model;
+          model_event.text = *sel_model;
+        }
+        if (const std::string* reason = parsed->FindString("reason")) {
+          model_event.model_fallback_reason = *reason;
+        }
+        model_event.payload = std::move(*parsed);
+        EmitEvent(std::move(model_event));
+      }
+    }
+  }
+
   std::shared_ptr<TurnFfiResources> resources = active_turn_->ffi_resources;
   auto* turn_release_data = new std::shared_ptr<TurnFfiResources>(resources);
   resources->callback_handle->HandOffToProducer();
@@ -788,6 +936,7 @@ void MahoUnifiedAgentAdapter::CancelCurrentTurn() {
     agent_ffi_->cancel(agent_session_);
   }
   DenyAllPendingApprovals();
+  CancelAllPendingInteractions();
   if (active_turn_ && !active_turn_->cancelled) {
     active_turn_->conversation_task->Cancel();
     active_turn_->cancelled = true;
@@ -864,6 +1013,11 @@ void MahoUnifiedAgentAdapter::Reset() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   DenyAllPendingApprovals();
+  CancelAllPendingInteractions();
+  if (channel_gateway_) {
+    channel_gateway_->StopAll();
+  }
+  last_consumed_seq_per_run_.clear();
 
   if (active_turn_ && !active_turn_->cancelled) {
     active_turn_->conversation_task->Cancel();
@@ -2235,10 +2389,15 @@ void MahoUnifiedAgentAdapter::OnArtifactCreatedOnSequence(
   if (!registry) {
     return;
   }
+  const std::string* kind_str = d.FindString("kind");
+  std::optional<maho::ai::MahoArtifactKind> explicit_kind;
+  if (kind_str) {
+    explicit_kind = maho::ai::MahoArtifactKindFromString(*kind_str);
+  }
   auto registered = registry->RegisterArtifact(
       *session_id, *display_name, *mime_type,
       static_cast<uint64_t>(read_num("size_bytes")), *storage_rel_path,
-      static_cast<int64_t>(read_num("created_at_ms")));
+      static_cast<int64_t>(read_num("created_at_ms")), explicit_kind);
   if (!registered.has_value()) {
     return;
   }
@@ -2251,6 +2410,10 @@ void MahoUnifiedAgentAdapter::OnArtifactCreatedOnSequence(
     info.Set("session_id", *session_id);
     info.Set("display_name", *display_name);
     info.Set("mime_type", *mime_type);
+    auto artifact_meta = registry->GetArtifact(registered.value());
+    if (artifact_meta) {
+      info.Set("kind", maho::ai::MahoArtifactKindToString(artifact_meta->kind));
+    }
     info.Set("size_bytes", read_num("size_bytes"));
     info.Set("created_at", read_num("created_at_ms") / 1000.0);
     std::string info_json;
@@ -2287,8 +2450,10 @@ void MahoUnifiedAgentAdapter::OnErrorOnSequence(uint64_t generation,
 }
 
 void MahoUnifiedAgentAdapter::EmitEvent(MahoAiRuntimeEvent event) {
-  if (active_turn_) {
+  if (active_turn_ && active_turn_->on_event) {
     active_turn_->on_event.Run(std::move(event));
+  } else if (last_event_callback_) {
+    last_event_callback_.Run(std::move(event));
   }
 }
 
@@ -2428,3 +2593,446 @@ void MahoUnifiedAgentAdapter::OnToolAvailabilityOnSequence(
   event.text = std::move(json_utf8);
   EmitEvent(std::move(event));
 }
+
+// static
+void MahoUnifiedAgentAdapter::OnAgentUnifiedEvent(
+    void* user_data,
+    const MahoUnifiedAgentEventEnvelope* event) {
+  if (!user_data || !event) {
+    return;
+  }
+  auto pointee =
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+  if (pointee->cancelled.load(std::memory_order_acquire)) {
+    return;
+  }
+  std::string run_id = event->run_id ? event->run_id : "";
+  uint64_t event_seq = event->event_seq;
+  MahoAgentEventKindV2 kind = event->kind;
+  std::string payload_json = event->payload_json ? event->payload_json : "";
+
+  pointee->task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&MahoUnifiedAgentAdapter::OnUnifiedEventOnSequence,
+                     pointee->owner, pointee->generation, std::move(run_id),
+                     event_seq, kind, std::move(payload_json)));
+}
+
+void MahoUnifiedAgentAdapter::OnUnifiedEventOnSequence(
+    uint64_t generation,
+    std::string run_id,
+    uint64_t event_seq,
+    MahoAgentEventKindV2 kind,
+    std::string payload_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!IsAiAllowed()) {
+    return;
+  }
+
+  // Live deduplication by monotonic sequence per run.
+  if (event_seq > 0 && !run_id.empty()) {
+    auto it = last_consumed_seq_per_run_.find(run_id);
+    if (it != last_consumed_seq_per_run_.end() && event_seq <= it->second) {
+      return;
+    }
+    last_consumed_seq_per_run_[run_id] = event_seq;
+  }
+
+  MahoAiRuntimeEvent event;
+  event.run_id = run_id;
+  if (event_seq > 0) {
+    event.event_seq = event_seq;
+  }
+
+  std::optional<base::DictValue> parsed_dict =
+      base::JSONReader::ReadDict(payload_json, base::JSON_PARSE_RFC);
+  if (parsed_dict) {
+    event.payload = std::move(*parsed_dict);
+  }
+
+  switch (kind) {
+    case MahoAgentEventKindV2::kStatus: {
+      const std::string* ev_type = event.payload.FindString("event");
+      if (ev_type && *ev_type == "turn_queued") {
+        event.type = MahoAiRuntimeEventType::kTurnQueued;
+        if (const std::string* msg = event.payload.FindString("message")) {
+          event.text = *msg;
+        }
+        if (std::optional<int> pos = event.payload.FindInt("position")) {
+          event.queue_depth = static_cast<uint32_t>(*pos);
+        }
+      } else if (ev_type && *ev_type == "turn_steered") {
+        event.type = MahoAiRuntimeEventType::kTurnSteered;
+        if (const std::string* guidance =
+                event.payload.FindString("guidance")) {
+          event.text = *guidance;
+        }
+      } else if (ev_type && *ev_type == "turn_interrupted") {
+        event.type = MahoAiRuntimeEventType::kTurnInterrupted;
+        if (const std::string* cancelled_id =
+                event.payload.FindString("cancelled_turn_id")) {
+          event.text = *cancelled_id;
+        }
+      } else if (ev_type && *ev_type == "turn_started") {
+        event.type = MahoAiRuntimeEventType::kTurnStarted;
+        if (const std::string* msg = event.payload.FindString("message")) {
+          event.text = *msg;
+        }
+      } else if (ev_type && (*ev_type == "wait_registered" ||
+                             *ev_type == "wait_suspended")) {
+        event.type = MahoAiRuntimeEventType::kWaitSuspended;
+        if (const std::string* handle = event.payload.FindString("handle")) {
+          event.text = *handle;
+        }
+      } else if (ev_type && *ev_type == "wait_woken") {
+        event.type = MahoAiRuntimeEventType::kWaitWoken;
+        if (const std::string* handle = event.payload.FindString("handle")) {
+          event.text = *handle;
+        }
+      } else {
+        event.type = MahoAiRuntimeEventType::kStatus;
+        if (const std::string* msg = event.payload.FindString("message")) {
+          event.text = *msg;
+        } else if (const std::string* st =
+                       event.payload.FindString("status")) {
+          event.text = *st;
+        } else if (const std::string* text =
+                       event.payload.FindString("text")) {
+          event.text = *text;
+        } else {
+          event.text = payload_json;
+        }
+      }
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kInteractionRequest: {
+      event.type = MahoAiRuntimeEventType::kInteractionRequest;
+      std::string interaction_id;
+      if (const std::string* id = event.payload.FindString("id")) {
+        interaction_id = *id;
+      } else if (const std::string* req_id =
+                     event.payload.FindString("request_id")) {
+        interaction_id = *req_id;
+      } else if (const std::string* int_id =
+                     event.payload.FindString("interaction_id")) {
+        interaction_id = *int_id;
+      } else {
+        interaction_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+        event.payload.Set("id", interaction_id);
+      }
+
+      std::string prompt_text;
+      if (const std::string* q = event.payload.FindString("question")) {
+        prompt_text = *q;
+      } else if (const std::string* ed =
+                     event.payload.FindString("effect_description")) {
+        prompt_text = *ed;
+      } else if (const base::DictValue* kind_dict =
+                     event.payload.FindDict("kind")) {
+        if (const std::string* kq = kind_dict->FindString("question")) {
+          prompt_text = *kq;
+        } else if (const std::string* ked =
+                       kind_dict->FindString("effect_description")) {
+          prompt_text = *ked;
+        }
+      } else if (const std::string* t = event.payload.FindString("text")) {
+        prompt_text = *t;
+      } else {
+        prompt_text = payload_json;
+      }
+      event.text = prompt_text;
+
+      pending_interactions_[interaction_id] = prompt_text;
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kToken: {
+      event.type = MahoAiRuntimeEventType::kAssistantToken;
+      if (const std::string* t = event.payload.FindString("token")) {
+        event.text = *t;
+      } else {
+        event.text = payload_json;
+      }
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kThinking: {
+      event.type = MahoAiRuntimeEventType::kAssistantThinking;
+      if (const std::string* t = event.payload.FindString("thinking")) {
+        event.text = *t;
+      } else {
+        event.text = payload_json;
+      }
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kToolCall: {
+      event.type = MahoAiRuntimeEventType::kToolRequest;
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kToolResult: {
+      event.type = MahoAiRuntimeEventType::kToolResult;
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kArtifactCreated: {
+      event.type = MahoAiRuntimeEventType::kArtifactCreated;
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kCompleted: {
+      event.type = MahoAiRuntimeEventType::kTurnComplete;
+      if (const std::string* t = event.payload.FindString("full_text")) {
+        event.text = *t;
+      } else {
+        event.text = payload_json;
+      }
+      EmitEvent(std::move(event));
+      break;
+    }
+    case MahoAgentEventKindV2::kError: {
+      event.type = MahoAiRuntimeEventType::kError;
+      if (const std::string* e = event.payload.FindString("error")) {
+        event.text = *e;
+      } else {
+        event.text = payload_json;
+      }
+      EmitEvent(std::move(event));
+      break;
+    }
+  }
+}
+
+void MahoUnifiedAgentAdapter::RespondToInteraction(
+    const std::string& interaction_id,
+    const std::string& answer_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  auto it = pending_interactions_.find(interaction_id);
+  if (it == pending_interactions_.end()) {
+    return;
+  }
+  pending_interactions_.erase(it);
+
+  if (agent_session_ && agent_ffi_->interaction_resolve) {
+    agent_ffi_->interaction_resolve(agent_session_, interaction_id.c_str(),
+                                    answer_json.c_str());
+  }
+
+  MahoAiRuntimeEvent event;
+  event.type = MahoAiRuntimeEventType::kInteractionResult;
+  event.payload.Set("interaction_id", interaction_id);
+  event.payload.Set("answer", answer_json);
+  EmitEvent(std::move(event));
+}
+
+void MahoUnifiedAgentAdapter::CancelAllPendingInteractions() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pending_interactions_.empty()) {
+    return;
+  }
+  if (agent_session_ && agent_ffi_->interaction_cancel) {
+    for (const auto& [id, _] : pending_interactions_) {
+      agent_ffi_->interaction_cancel(agent_session_, id.c_str());
+    }
+  }
+  pending_interactions_.clear();
+}
+
+bool MahoUnifiedAgentAdapter::ReplayAfter(const std::string& run_id,
+                                          uint64_t after_seq,
+                                          RuntimeEventCallback on_event) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!agent_session_ || !agent_ffi_->get_events_after) {
+    return false;
+  }
+
+  char* out_json = nullptr;
+  bool ok = agent_ffi_->get_events_after(agent_session_, run_id.c_str(),
+                                         after_seq, &out_json);
+  if (!ok || !out_json) {
+    return false;
+  }
+
+  std::string json_str(out_json);
+  maho_core_free_string(out_json);
+
+  std::optional<base::DictValue> parsed =
+      base::JSONReader::ReadDict(json_str, base::JSON_PARSE_RFC);
+  if (!parsed) {
+    return false;
+  }
+
+  bool is_gap = parsed->FindBool("gap").value_or(false);
+  if (is_gap) {
+    MahoAiRuntimeEvent gap_event;
+    gap_event.type = MahoAiRuntimeEventType::kReplayGap;
+    gap_event.run_id = run_id;
+    gap_event.payload.Set("gap", true);
+    gap_event.payload.Set("run_id", run_id);
+    gap_event.payload.Set("requested_after_seq",
+                          static_cast<double>(after_seq));
+    if (on_event) {
+      on_event.Run(std::move(gap_event));
+    } else {
+      EmitEvent(std::move(gap_event));
+    }
+    return true;
+  }
+
+  const base::ListValue* events = parsed->FindList("events");
+  if (!events) {
+    return true;
+  }
+
+  for (const auto& entry_val : *events) {
+    if (!entry_val.is_dict()) {
+      continue;
+    }
+    const auto& dict = entry_val.GetDict();
+    std::string entry_run_id =
+        dict.FindString("run_id") ? *dict.FindString("run_id") : run_id;
+    uint64_t seq = static_cast<uint64_t>(dict.FindDouble("event_seq").value_or(
+        dict.FindInt("event_seq").value_or(0)));
+    std::string event_name =
+        dict.FindString("event_name") ? *dict.FindString("event_name") : "";
+    std::string payload_str =
+        dict.FindString("payload_json") ? *dict.FindString("payload_json") : "";
+
+    // Dedupe check
+    if (seq > 0 && !entry_run_id.empty()) {
+      auto it = last_consumed_seq_per_run_.find(entry_run_id);
+      if (it != last_consumed_seq_per_run_.end() && seq <= it->second) {
+        continue;
+      }
+      last_consumed_seq_per_run_[entry_run_id] = seq;
+    }
+
+    MahoAiRuntimeEvent replayed_event;
+    replayed_event.run_id = entry_run_id;
+    if (seq > 0) {
+      replayed_event.event_seq = seq;
+    }
+    if (event_name == "status") {
+      replayed_event.type = MahoAiRuntimeEventType::kStatus;
+      replayed_event.text = payload_str;
+    } else if (event_name == "interaction_request") {
+      replayed_event.type = MahoAiRuntimeEventType::kInteractionRequest;
+      replayed_event.text = payload_str;
+    } else if (event_name == "token" || event_name == "assistant_token") {
+      replayed_event.type = MahoAiRuntimeEventType::kAssistantToken;
+      replayed_event.text = payload_str;
+    } else if (event_name == "completed" || event_name == "turn_complete") {
+      replayed_event.type = MahoAiRuntimeEventType::kTurnComplete;
+      replayed_event.text = payload_str;
+    } else if (event_name == "error") {
+      replayed_event.type = MahoAiRuntimeEventType::kError;
+      replayed_event.text = payload_str;
+    } else {
+      replayed_event.type = MahoAiRuntimeEventType::kStatus;
+      replayed_event.text = payload_str;
+    }
+
+    std::optional<base::DictValue> payload_dict =
+        base::JSONReader::ReadDict(payload_str, base::JSON_PARSE_RFC);
+    if (payload_dict) {
+      replayed_event.payload = std::move(*payload_dict);
+    }
+
+    if (on_event) {
+      on_event.Run(std::move(replayed_event));
+    } else {
+      EmitEvent(std::move(replayed_event));
+    }
+  }
+
+  return true;
+}
+
+uint64_t MahoUnifiedAgentAdapter::GetLastConsumedEventSeq(
+    const std::string& run_id) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto it = last_consumed_seq_per_run_.find(run_id);
+  if (it != last_consumed_seq_per_run_.end()) {
+    return it->second;
+  }
+  return 0;
+}
+
+bool MahoUnifiedAgentAdapter::IsTurnActive() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return active_turn_ != nullptr;
+}
+
+bool MahoUnifiedAgentAdapter::SubmitFollowUp(const std::string& message,
+                                            const std::string& intent) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!agent_session_ || !agent_ffi_->turn_submit) {
+    return false;
+  }
+  std::string run_ctx =
+      active_turn_ ? active_turn_->conversation_task->task_id() : session_id_;
+  base::DictValue msg_obj;
+  msg_obj.Set("message", message);
+  std::string msg_json;
+  base::JSONWriter::Write(msg_obj, &msg_json);
+
+  const char* intent_c = intent.empty() ? "queue" : intent.c_str();
+  bool ok = agent_ffi_->turn_submit(agent_session_, run_ctx.c_str(),
+                                    msg_json.c_str(), intent_c);
+  if (ok && (intent == "steer" || intent == "interrupt")) {
+    if (active_turn_ && !active_turn_->cancelled) {
+      active_turn_->cancelled = true;
+      active_turn_->conversation_task->Cancel();
+      active_turn_->ffi_resources->callback_handle->Cancel();
+    }
+  }
+  return ok;
+}
+
+uint32_t MahoUnifiedAgentAdapter::GetTurnQueueDepth() const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!agent_session_ || !agent_ffi_->turn_queue_depth) {
+    return 0;
+  }
+  uint32_t depth = 0;
+  if (agent_ffi_->turn_queue_depth(agent_session_, &depth)) {
+    return depth;
+  }
+  return 0;
+}
+
+bool MahoUnifiedAgentAdapter::WakeForNotification(
+    const std::string& run_id,
+    const std::string& event_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!agent_session_ || !agent_ffi_->wait_wake) {
+    return false;
+  }
+  return agent_ffi_->wait_wake(
+      agent_session_,
+      run_id.empty() ? nullptr : run_id.c_str(),
+      event_json.empty() ? nullptr : event_json.c_str());
+}
+
+std::string MahoUnifiedAgentAdapter::RegisterWait(
+    const std::string& run_id,
+    const std::string& filter_json,
+    uint64_t timeout_ms) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!agent_session_ || !agent_ffi_->wait_register) {
+    return "";
+  }
+  char* handle_c = agent_ffi_->wait_register(
+      agent_session_, run_id.c_str(),
+      filter_json.empty() ? nullptr : filter_json.c_str(), timeout_ms);
+  if (!handle_c) {
+    return "";
+  }
+  std::string handle(handle_c);
+  maho_core_free_string(handle_c);
+  return handle;
+}
+

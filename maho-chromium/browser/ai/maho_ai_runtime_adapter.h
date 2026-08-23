@@ -56,6 +56,24 @@ enum class MahoAiRuntimeEventType {
   // An output artifact was created by the agent (fs_write path). text carries
   // the JSON ArtifactInfo; the page handler maps it to the Mojo ArtifactInfo.
   kArtifactCreated,
+  // Intermediate status report for long tasks (~30s status cadence).
+  kStatus,
+  // The agent is requesting interactive input/choice or action confirmation.
+  kInteractionRequest,
+  // An interaction resolution was recorded.
+  kInteractionResult,
+  // Replay gap marker when requested events are outside the journal retention window.
+  kReplayGap,
+  // Turn lifecycle events (turn queued, steered, interrupted, started).
+  kTurnQueued,
+  kTurnStarted,
+  kTurnSteered,
+  kTurnInterrupted,
+  // Event wait / notification suspend and wake events.
+  kWaitSuspended,
+  kWaitWoken,
+  // Model category routing resolution event.
+  kModelResolved,
 };
 
 // Closed, non-secret credential failure codes produced by the Rust agent
@@ -84,7 +102,15 @@ struct MahoAiRuntimeEvent {
   // For kAssistantToken: the token text.
   // For kTurnComplete: the full accumulated text.
   // For kError: the error message.
+  // For kStatus: the status message.
+  // For kInteractionRequest: the prompt / question.
   std::string text;
+
+  // Run ID from the unified agent event envelope.
+  std::string run_id;
+
+  // Monotonic sequence number from the unified agent event envelope.
+  std::optional<uint64_t> event_seq;
 
   // Set only for a strict, allowlisted credential-error envelope from Rust.
   // This never contains provider input, credentials, ciphertext, endpoints,
@@ -95,6 +121,15 @@ struct MahoAiRuntimeEvent {
   // For kToolResult: the tool execution result.
   // Empty for other event types for now.
   base::DictValue payload;
+
+  // Resolved model from model category routing.
+  std::optional<std::string> resolved_model;
+
+  // Fallback reason if model routing fell back.
+  std::optional<std::string> model_fallback_reason;
+
+  // Current queue depth for turn lifecycle badges.
+  std::optional<uint32_t> queue_depth;
 };
 
 // Abstract runtime adapter interface. Each concrete adapter owns its own
@@ -139,6 +174,37 @@ class MahoAiRuntimeAdapter {
 
   virtual void RespondToApproval(const std::string& approval_id,
                                  bool approved) = 0;
+
+  virtual void RespondToInteraction(const std::string& interaction_id,
+                                    const std::string& answer_json);
+
+  virtual bool ReplayAfter(const std::string& run_id,
+                           uint64_t after_seq,
+                           RuntimeEventCallback on_event);
+
+  virtual uint64_t GetLastConsumedEventSeq(const std::string& run_id) const;
+
+  // Returns true if a turn is currently in progress.
+  virtual bool IsTurnActive() const;
+
+  // Submits a follow-up message when a turn is already active.
+  // |intent| can be "queue" (default), "steer", "interrupt", or "continue".
+  // Returns true if successfully submitted to the turn controller / queue.
+  virtual bool SubmitFollowUp(const std::string& message,
+                              const std::string& intent);
+
+  // Returns the current queued follow-up turns count.
+  virtual uint32_t GetTurnQueueDepth() const;
+
+  // Wakes a suspended run waiting on external notifications.
+  // Wave 3 consumers and notification services invoke this hook.
+  virtual bool WakeForNotification(const std::string& run_id,
+                                   const std::string& event_json);
+
+  // Registers a wait filter on external notifications with a timeout.
+  virtual std::string RegisterWait(const std::string& run_id,
+                                   const std::string& filter_json,
+                                   uint64_t timeout_ms);
 
   // Returns the runtime-owned session ID, if one exists. Empty string if
   // no session is active or the adapter does not use external session

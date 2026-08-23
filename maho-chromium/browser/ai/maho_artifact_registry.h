@@ -35,6 +35,19 @@ void EnsureMahoArtifactRegistryFactoryBuilt();
 
 using ArtifactId = std::string;
 
+enum class MahoArtifactKind {
+  kGeneric = 0,
+  kHtml = 1,
+  kPdf = 2,
+  kXlsx = 3,
+};
+
+const char* MahoArtifactKindToString(MahoArtifactKind kind);
+MahoArtifactKind MahoArtifactKindFromString(std::string_view str);
+MahoArtifactKind DeduceMahoArtifactKind(std::string_view mime_type,
+                                       std::string_view display_name,
+                                       std::string_view storage_rel_path);
+
 struct MahoArtifact {
   MahoArtifact();
   MahoArtifact(const MahoArtifact&);
@@ -50,6 +63,7 @@ struct MahoArtifact {
   uint64_t size_bytes = 0;
   std::string storage_rel_path;
   int64_t created_at_ms = 0;
+  MahoArtifactKind kind = MahoArtifactKind::kGeneric;
 
   bool operator==(const MahoArtifact &) const = default;
 };
@@ -74,7 +88,8 @@ public:
   base::expected<ArtifactId, std::string>
   RegisterArtifact(std::string session_id, std::string display_name,
                    std::string mime_type, uint64_t size_bytes,
-                   std::string storage_rel_path, int64_t created_at_ms);
+                   std::string storage_rel_path, int64_t created_at_ms,
+                   std::optional<MahoArtifactKind> kind = std::nullopt);
   std::vector<MahoArtifact> ListArtifacts(std::string_view session_id);
   std::optional<MahoArtifact> GetArtifact(std::string_view artifact_id);
   base::expected<MahoArtifact, std::string>

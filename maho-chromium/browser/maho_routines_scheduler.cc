@@ -20,7 +20,7 @@ MahoRoutinesScheduler::~MahoRoutinesScheduler() {
 }
 
 void MahoRoutinesScheduler::Start() {
-  timer_.Start(FROM_HERE, base::Minutes(1),
+  timer_.Start(FROM_HERE, kStatusTickInterval,
                base::BindRepeating(&MahoRoutinesScheduler::OnTick,
                                    base::Unretained(this)));
 }

@@ -174,3 +174,41 @@ fn fallback_ladder_audit_records_reason_without_sentinels() {
     assert!(!json.contains(sentinel));
     assert_eq!(record.decision, Option::<PermissionDecision>::None);
 }
+
+#[test]
+fn fallback_ladder_page_adapter_tier_precedes_dom_tier() {
+    let mut ladder = FallbackLadderState::new("session-fallback-adapter");
+
+    // ExactOriginPageAdapter tier is selected when requested
+    let decision = ladder
+        .decide(request(
+            "browser_type",
+            FallbackTier::ExactOriginPageAdapter,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect("adapter tier decision succeeds");
+
+    assert_eq!(decision.attempted_tier, FallbackTier::TypedDomainApi);
+    assert_eq!(decision.selected_tier, FallbackTier::ExactOriginPageAdapter);
+    assert_eq!(
+        decision.reason,
+        FallbackDecisionReason::TypedDomainUnavailable
+    );
+    assert_eq!(decision.safety_state, FallbackSafetyState::Downgraded);
+
+    // Later downgrade to DOM tier is blocked
+    let err = ladder
+        .decide(request(
+            "browser_type",
+            FallbackTier::DomRefLocator,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect_err("unsafe downgrade from page adapter to dom is blocked");
+
+    assert_eq!(
+        err.decision().reason,
+        FallbackDecisionReason::PageAdapterAlreadySucceeded
+    );
+    assert_eq!(err.decision().safety_state, FallbackSafetyState::Blocked);
+}
+

@@ -62,6 +62,8 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     void EnsureMailNotificationCoordinator(Profile* profile);
     void OnRegularStorageDirectoryReady(Profile* profile,
                                         bool storage_directory_ready);
+    void OnStorageKeySetupComplete(Profile* profile,
+                                   bool storage_key_ready);
     void MaybeLaunchMailHelper(Profile* profile);
     void OnMailHelperCrashpadReady(Profile* profile,
                                    const base::FilePath& crashpad_database,

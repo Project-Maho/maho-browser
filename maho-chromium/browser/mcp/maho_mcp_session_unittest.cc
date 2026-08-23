@@ -62,6 +62,16 @@ MakeTrustedCliTestSession(MahoMcpLeaseRegistry* lease_registry = nullptr) {
 #endif
 }
 
+std::string TrustedBrowserMcpExecutableForTesting() {
+#if BUILDFLAG(IS_WIN)
+  return "C:\\Program Files\\Maho\\maho-browser-mcp.exe";
+#elif BUILDFLAG(IS_APPLE)
+  return "/Applications/Maho.app/Contents/Helpers/maho-browser-mcp";
+#else
+  return "/usr/bin/maho-browser-mcp";
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // R-8: non-revealing, generation-bound target resolution (task-8-mcp-session).
 // ---------------------------------------------------------------------------
@@ -95,10 +105,15 @@ public:
   std::string last_navigated_url;
   bool approve_browser_actions = true;
   bool advance_generation_on_approval = false;
+  bool advance_navigation_epoch_on_approval = false;
   int browser_action_approval_calls = 0;
   int browser_type_call_count = 0;
   int browser_type_tab_id = 0;
   ui::AXNodeID browser_type_ax_id = 0;
+  int file_upload_call_count = 0;
+  int file_upload_tab_id = 0;
+  std::string file_upload_path;
+  bool file_upload_succeeds = true;
 
   struct PublishedActivity {
     std::string activity_id;
@@ -174,6 +189,9 @@ public:
     ++browser_action_approval_calls;
     if (advance_generation_on_approval) {
       ++generation;
+    }
+    if (advance_navigation_epoch_on_approval) {
+      ++navigation_epoch;
     }
     return approve_browser_actions;
   }
@@ -352,6 +370,13 @@ public:
     browser_type_ax_id = ax_id;
     return true;
   }
+  bool SelectFileForPendingChooser(int tab_id,
+                                   const std::string& path) override {
+    ++file_upload_call_count;
+    file_upload_tab_id = tab_id;
+    file_upload_path = path;
+    return file_upload_succeeds;
+  }
   bool Select(int tab_id, ui::AXNodeID ax_id,
               const std::string &value) override {
     return false;
@@ -392,20 +417,33 @@ protected:
 
   // Installs a ResolvingFakeDelegate + lease registry and initializes a fresh
   // session for the R-8 target-resolution tests.
-  void InitResolvingSession() {
+  void InitResolvingSession(bool browser_mcp = false) {
     session_.reset();
     delegate_ = std::make_unique<ResolvingFakeDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
     lease_registry_ = std::make_unique<MahoMcpLeaseRegistry>();
-    session_ = MakeTrustedCliTestSession(lease_registry_.get());
+#if BUILDFLAG(IS_WIN)
+    session_ = browser_mcp
+                   ? std::make_unique<MahoMcpSession>(
+                         static_cast<MahoMcpSessionToken*>(nullptr),
+                         lease_registry_.get(),
+                         TrustedBrowserMcpExecutableForTesting(), true)
+                   : MakeTrustedCliTestSession(lease_registry_.get());
+#else
+    session_ = browser_mcp
+                   ? std::make_unique<MahoMcpSession>(
+                         getuid(), lease_registry_.get(),
+                         TrustedBrowserMcpExecutableForTesting(), true)
+                   : MakeTrustedCliTestSession(lease_registry_.get());
+#endif
     session_->SetDeferredResponseSender(base::BindRepeating(
         &MahoMcpSessionTest::CaptureDeferred, base::Unretained(this)));
-    auto responses = session_->ProcessData(
+    auto responses = session_->ProcessData(base::StringPrintf(
         R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
         R"("params":{"protocolVersion":"2025-03-26",)"
-        R"("controllerKind":"maho-cli",)"
+        R"("controllerKind":"%s",)"
         R"("clientInfo":{"name":"t","version":"0.1.0"}}})"
-        "\n");
+        "\n", browser_mcp ? "maho-browser-mcp" : "maho-cli"));
     EXPECT_EQ(responses.size(), 1u);
     EXPECT_EQ(session_->state(), MahoMcpSession::State::kActive);
   }
@@ -512,12 +550,22 @@ TEST_F(MahoMcpSessionTest, KnownControllersRequireMatchingPeerExecutable) {
     const char *expected_label;
     const char *expected_kind;
   };
+  const std::string cli_executable =
+#if BUILDFLAG(IS_WIN)
+      "C:\\Program Files\\Maho\\maho.exe";
+#elif BUILDFLAG(IS_APPLE)
+      "/Applications/Maho.app/Contents/Helpers/maho";
+#else
+      "/usr/bin/maho";
+#endif
+  const std::string browser_mcp_executable =
+      TrustedBrowserMcpExecutableForTesting();
   const Case cases[] = {
-      {"/Applications/Maho.app/Contents/Helpers/maho", "maho-cli", "Maho CLI",
+      {cli_executable.c_str(), "maho-cli", "Maho CLI",
        "maho-cli"},
-      {"/Applications/Maho.app/Contents/Helpers/maho", "maho-cli-repl",
+      {cli_executable.c_str(), "maho-cli-repl",
        "Maho CLI REPL", "maho-cli-repl"},
-      {"/Applications/Maho.app/Contents/Helpers/maho-browser-mcp",
+      {browser_mcp_executable.c_str(),
        "maho-browser-mcp", "Maho Browser MCP", "maho-browser-mcp"},
       {"/usr/local/bin/arbitrary-host", "third-party", "External MCP",
        "third-party"},
@@ -551,6 +599,28 @@ TEST_F(MahoMcpSessionTest, KnownControllersRequireMatchingPeerExecutable) {
     EXPECT_EQ(*info->FindString("controllerKind"), test.expected_kind);
     EXPECT_EQ(*info->FindString("id"), candidate->session_id());
   }
+}
+
+TEST_F(MahoMcpSessionTest, DevelopmentBundleCliIsTrusted) {
+#if BUILDFLAG(IS_APPLE)
+  auto development_cli = std::make_unique<MahoMcpSession>(
+      getuid(), nullptr,
+      "/Users/developer/maho/out/Default/Maho.app/Contents/Helpers/maho",
+      true);
+  const auto responses = development_cli->ProcessData(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+      R"("params":{"protocolVersion":"2025-03-26",)"
+      R"("controllerKind":"maho-cli",)"
+      R"("clientInfo":{"name":"Maho CLI","version":"1"}}})"
+      "\n");
+  ASSERT_EQ(responses.size(), 1u);
+  const base::Value response = ParseLine(responses[0]);
+  const base::DictValue* info =
+      response.GetDict().FindDict("result")->FindDict("sessionInfo");
+  ASSERT_TRUE(info);
+  ASSERT_TRUE(info->FindString("controllerKind"));
+  EXPECT_EQ(*info->FindString("controllerKind"), "maho-cli");
+#endif
 }
 
 TEST_F(MahoMcpSessionTest, MatchingPathWithoutAuthenticatedPeerIsRejected) {
@@ -610,10 +680,10 @@ TEST_F(MahoMcpSessionTest, TrustedBasenameOutsideInstallLocationIsRejected) {
 #if BUILDFLAG(IS_WIN)
   auto untrusted = std::make_unique<MahoMcpSession>(
       static_cast<MahoMcpSessionToken*>(nullptr), nullptr,
-      "C:\\Users\\Public\\maho.exe");
+      "C:\\Users\\Public\\maho.exe", true);
 #else
   auto untrusted = std::make_unique<MahoMcpSession>(
-      getuid(), nullptr, "/tmp/maho");
+      getuid(), nullptr, "/tmp/maho", true);
 #endif
   const auto responses = untrusted->ProcessData(
       R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
@@ -2562,13 +2632,13 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
   EXPECT_EQ(diagnostics->FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics->FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics->FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics->FindInt("canonicalCount"), 75);
+  EXPECT_EQ(diagnostics->FindInt("canonicalCount"), 80);
   const auto *surfaces = diagnostics->FindDict("surfaces");
   ASSERT_TRUE(surfaces);
   const auto *public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 49);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 49u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 50);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 50u);
 
   const auto *tools = result->FindList("tools");
   ASSERT_TRUE(tools);
@@ -2742,7 +2812,7 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
 // session. Without a lease the mutation is denied (-32007) before any delegate
 // dispatch; after acquiring the lease the gate no longer blocks it.
 TEST_F(MahoMcpSessionTest, MutationRequiresActiveLease) {
-  InitResolvingSession();
+  InitResolvingSession(true);
 
   {
     auto responses =
@@ -2776,6 +2846,100 @@ TEST_F(MahoMcpSessionTest, MutationRequiresActiveLease) {
           << "held lease must let the mutation past the gate";
     }
   }
+}
+
+TEST_F(MahoMcpSessionTest, LeaseControlsRejectIneligibleTabsBeforeRegistry) {
+  InitResolvingSession(true);
+  delegate_->eligible_tabs.erase(11);
+
+  const auto rejected =
+      CallControlRaw("browser_acquire_lease", R"({"tab_id":11})", 303);
+  ASSERT_EQ(rejected.size(), 1u);
+  const base::Value response = ParseLine(rejected[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorTabNotFound);
+  EXPECT_FALSE(lease_registry_->IsHeldBy(11, session_->session_id()));
+}
+
+TEST_F(MahoMcpSessionTest,
+       LeaseHeartbeatRejectsIneligibleTabWithoutExtendingLease) {
+  InitResolvingSession(true);
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease",
+                           R"({"tab_id":7,"ttl_seconds":10})", 304)
+                .size(),
+            1u);
+  ASSERT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
+  delegate_->eligible_tabs.erase(7);
+
+  const auto rejected = CallControlRaw(
+      "browser_heartbeat_lease", R"({"tab_id":7,"ttl_seconds":300})", 305);
+  ASSERT_EQ(rejected.size(), 1u);
+  const base::Value response = ParseLine(rejected[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorTabNotFound);
+
+  task_environment_.FastForwardBy(base::Seconds(11));
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_->session_id()));
+}
+
+TEST_F(MahoMcpSessionTest, LeaseReleaseRejectsIneligibleTabWithoutReleasing) {
+  InitResolvingSession(true);
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 306)
+                .size(),
+            1u);
+  ASSERT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
+  delegate_->eligible_tabs.erase(7);
+
+  const auto rejected =
+      CallControlRaw("browser_release_lease", R"({"tab_id":7})", 307);
+  ASSERT_EQ(rejected.size(), 1u);
+  const base::Value response = ParseLine(rejected[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorTabNotFound);
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
+}
+
+TEST_F(MahoMcpSessionTest, FileUploadRequiresPathAndUsesResolvedTab) {
+  InitResolvingSession();
+
+  auto missing_path =
+      CallToolRaw("browser_file_upload_select", R"({"tab_id":7})", 303);
+  ASSERT_EQ(missing_path.size(), 1u);
+  const base::Value missing_path_response = ParseLine(missing_path[0]);
+  const base::DictValue* missing_path_error =
+      missing_path_response.GetDict().FindDict("error");
+  ASSERT_TRUE(missing_path_error);
+  EXPECT_EQ(missing_path_error->FindInt("code"), -32602);
+  EXPECT_EQ(delegate_->file_upload_call_count, 0);
+
+  auto uploaded = CallToolRaw("browser_file_upload_select",
+                              R"({"path":"/tmp/build.aab"})", 304);
+  ASSERT_EQ(uploaded.size(), 1u);
+  const base::Value uploaded_response = ParseLine(uploaded[0]);
+  ASSERT_FALSE(uploaded_response.GetDict().FindDict("error"))
+      << uploaded[0];
+  EXPECT_EQ(delegate_->file_upload_call_count, 1);
+  EXPECT_EQ(delegate_->file_upload_tab_id, 7);
+  EXPECT_EQ(delegate_->file_upload_path, "/tmp/build.aab");
+  base::Value uploaded_output = ParseExecutionOutput(uploaded[0]);
+  const base::DictValue* result = uploaded_output.GetIfDict();
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->FindBool("file_selected").value_or(false));
+
+  delegate_->file_upload_succeeds = false;
+  auto failed = CallToolRaw("browser_file_upload_select",
+                            R"({"tab_id":7,"path":"/tmp/build.aab"})",
+                            305);
+  ASSERT_EQ(failed.size(), 1u);
+  const base::Value failed_response = ParseLine(failed[0]);
+  const base::DictValue* failed_error =
+      failed_response.GetDict().FindDict("error");
+  ASSERT_TRUE(failed_error);
+  EXPECT_EQ(failed_error->FindInt("code"), -32000);
+  EXPECT_EQ(delegate_->file_upload_call_count, 2);
 }
 
 // Resolving a target issues a fresh capability token for every operation in
@@ -2827,6 +2991,30 @@ TEST_F(MahoMcpSessionTest, SnapshotRefRejectsDocumentChange) {
   const base::DictValue* error = response.GetDict().FindDict("error");
   ASSERT_TRUE(error) << responses[0];
   EXPECT_EQ(error->FindInt("code").value(), -32009);
+}
+
+TEST_F(MahoMcpSessionTest,
+       SnapshotRefRejectsDocumentChangeDuringApproval) {
+  InitResolvingSession(true);
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 316)
+                .size(),
+            1u);
+  ASSERT_EQ(CallToolRaw("browser_accessibility_snapshot", R"({"tab_id":7})",
+                        317)
+                .size(),
+            1u);
+  session_->ref_table()[1] = 101;
+  delegate_->advance_navigation_epoch_on_approval = true;
+
+  auto responses = CallToolRaw(
+      "browser_type", R"({"tab_id":7,"ref":1,"text":"Maho Browser"})",
+      318);
+  ASSERT_EQ(responses.size(), 1u);
+  const base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorStaleReference);
+  EXPECT_EQ(delegate_->browser_type_call_count, 0);
 }
 
 TEST_F(MahoMcpSessionTest, AcquireLeaseForceStealsOtherSession) {
@@ -3249,11 +3437,59 @@ public:
   std::string last_vault_grant_handle;
   std::vector<VaultCredentialSummary> vault_credentials;
   std::unordered_map<std::string, std::string> grant_by_handle;
+  bool verified_type_result = true;
+  bool verified_type_dispatched = true;
+  bool requires_deferred_verified_input_responses = false;
+  std::string verified_type_reason;
+  base::OnceCallback<void(InputActionOutcome)> pending_verified_type;
+  bool verified_click_result = true;
+  bool verified_click_dispatched = true;
+  std::string verified_click_reason;
 
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string &text) override {
     ++type_call_count;
     last_typed_text = text;
     return true;
+  }
+
+  void TypeVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      const std::string& text,
+      base::OnceCallback<void(InputActionOutcome)> callback) override {
+    ++type_call_count;
+    last_typed_text = text;
+    if (requires_deferred_verified_input_responses) {
+      pending_verified_type = std::move(callback);
+      return;
+    }
+    InputActionOutcome outcome;
+    outcome.dispatched = verified_type_dispatched;
+    outcome.verified = verified_type_result;
+    outcome.method = "test";
+    outcome.reason = verified_type_reason;
+    std::move(callback).Run(std::move(outcome));
+  }
+
+  void ClickVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      base::OnceCallback<void(InputActionOutcome)> callback) override {
+    InputActionOutcome outcome;
+    outcome.dispatched = verified_click_dispatched;
+    outcome.verified = verified_click_result;
+    outcome.method = "test";
+    outcome.reason = verified_click_reason;
+    std::move(callback).Run(std::move(outcome));
+  }
+
+  bool RequiresDeferredVerifiedInputResponses() const override {
+    return requires_deferred_verified_input_responses;
+  }
+
+  void CompleteVerifiedType(InputActionOutcome outcome) {
+    ASSERT_TRUE(pending_verified_type);
+    std::move(pending_verified_type).Run(std::move(outcome));
   }
 
   MahoMcpFieldMetadata GetFieldMetadata(int tab_id,
@@ -3348,6 +3584,19 @@ protected:
     return parsed.has_value() ? std::move(*parsed) : base::Value();
   }
 
+  base::Value CallClick(int ref, int id) {
+    auto responses = session_->ProcessData(
+        base::StringPrintf(
+            R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+            R"("params":{"name":"browser_click","arguments":{"tab_id":7,"ref":%d}}})"
+            "\n",
+            id, ref));
+    EXPECT_EQ(responses.size(), 1u);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(responses.front(), base::JSON_PARSE_RFC);
+    return parsed.has_value() ? std::move(*parsed) : base::Value();
+  }
+
   base::Value CallTool(const std::string &name, const std::string &arguments,
                        int id) {
     auto responses = session_->ProcessData(
@@ -3404,10 +3653,26 @@ protected:
         << snapshot.DebugString();
   }
 
+  std::vector<std::string> CallTypeRaw(int ref,
+                                       const std::string& text,
+                                       int id) {
+    return session_->ProcessData(
+        base::StringPrintf(R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+                           R"("params":{"name":"browser_type","arguments":)"
+                           R"({"ref":%d,"text":%s}}})"
+                           "\n",
+                           id, ref, base::GetQuotedJSONString(text).c_str()));
+  }
+
+  void CaptureDeferredResponse(std::string response) {
+    deferred_responses_.push_back(std::move(response));
+  }
+
   base::test::TaskEnvironment task_environment_;
   std::unique_ptr<MahoMcpLeaseRegistry> lease_registry_;
   std::unique_ptr<TypeGuardFakeDelegate> delegate_;
   std::unique_ptr<MahoMcpSession> session_;
+  std::vector<std::string> deferred_responses_;
 };
 
 TEST_F(MahoMcpSessionTypeGuardTest, OrdinaryTextFieldTypesThroughWithoutEcho) {
@@ -3428,6 +3693,28 @@ TEST_F(MahoMcpSessionTypeGuardTest, OrdinaryTextFieldTypesThroughWithoutEcho) {
   // Response must confirm the action without echoing the typed text back.
   EXPECT_FALSE(result->FindString("text"));
   EXPECT_EQ(resp.DebugString().find("hello world"), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       VerifiedTypeSuccessReturnsMachineConsumedOutcomeFields) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[101] = ordinary;
+  CaptureAccessibilitySnapshot(20);
+  session_->ref_table()[1] = 101;
+
+  base::Value response = CallType(1, "verified value", 21);
+  base::Value output = ParseExecutionOutput(response.Clone());
+  const base::DictValue& result = output.GetDict();
+  EXPECT_EQ(response.DebugString().find("verified value"),
+            std::string::npos);
+  EXPECT_TRUE(result.FindBool("typed").value_or(false));
+  EXPECT_EQ(result.FindInt("ref"), 1);
+  EXPECT_TRUE(result.FindBool("verified").value_or(false));
+  const std::string* method = result.FindString("method");
+  ASSERT_TRUE(method);
+  EXPECT_EQ(*method, "test");
+  EXPECT_FALSE(result.FindString("text"));
 }
 
 TEST_F(MahoMcpSessionTypeGuardTest,
@@ -3501,6 +3788,21 @@ TEST_F(MahoMcpSessionTypeGuardTest,
   EXPECT_EQ(fill.DebugString().find(kSentinel), std::string::npos);
 }
 
+TEST_F(MahoMcpSessionTypeGuardTest,
+       VaultFillRejectsReferenceAfterDocumentChange) {
+  CaptureAccessibilitySnapshot(24);
+  session_->ref_table()[9] = 909;
+  ++delegate_->navigation_epoch;
+
+  base::Value response = CallControl(
+      "vault_fill_credential",
+      R"({"tab_id":7,"grant_handle":"vg_sentinel_grant","ref":9})", 25);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorStaleReference);
+  EXPECT_EQ(delegate_->vault_fill_count, 0);
+}
+
 TEST_F(MahoMcpSessionTypeGuardTest, PasswordFieldRejectsBeforeType) {
   MahoMcpFieldMetadata pw;
   pw.classified = true;
@@ -3514,6 +3816,193 @@ TEST_F(MahoMcpSessionTypeGuardTest, PasswordFieldRejectsBeforeType) {
   EXPECT_FALSE(resp.GetDict().FindDict("result"));
   EXPECT_EQ(delegate_->type_call_count, 0);
   EXPECT_EQ(resp.DebugString().find(kSentinel), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, TypePostconditionFailureIsNotSuccess) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[202] = ordinary;
+  delegate_->verified_type_result = false;
+  delegate_->verified_type_reason = "value_mismatch";
+  CaptureAccessibilitySnapshot(12);
+  session_->ref_table()[2] = 202;
+
+  base::Value response = CallType(2, "expected", 12);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  ASSERT_TRUE(error->FindInt("code"));
+  EXPECT_EQ(error->FindInt("code").value(),
+            kMahoMcpErrorActionNotApplied);
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  const std::string* reason = data->FindString("reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "value_mismatch");
+  const std::string* remedy = data->FindString("remedy");
+  ASSERT_TRUE(remedy);
+  EXPECT_EQ(*remedy, "capture a new accessibility snapshot and retry");
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       TypePostconditionErrorDataIsRedactedAtEgress) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[202] = ordinary;
+  delegate_->verified_type_result = false;
+  delegate_->verified_type_reason = "password=S3NTINEL-error-data-secret";
+  CaptureAccessibilitySnapshot(22);
+  session_->ref_table()[2] = 202;
+
+  base::Value response = CallType(2, "expected", 23);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(response.DebugString().find("S3NTINEL-error-data-secret"),
+            std::string::npos);
+  const std::string* reason = error->FindStringByDottedPath("data.reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "password=[REDACTED]");
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, TypeDispatchFailureUsesGenericError) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[202] = ordinary;
+  delegate_->verified_type_dispatched = false;
+  CaptureAccessibilitySnapshot(13);
+  session_->ref_table()[2] = 202;
+
+  base::Value response = CallType(2, "expected", 13);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  ASSERT_TRUE(error->FindInt("code"));
+  EXPECT_EQ(error->FindInt("code").value(), -32000);
+  EXPECT_FALSE(error->FindDict("data"));
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       DeferredInputDelegateDoesNotDispatchWithoutTransport) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[202] = ordinary;
+  delegate_->requires_deferred_verified_input_responses = true;
+  CaptureAccessibilitySnapshot(14);
+  session_->ref_table()[2] = 202;
+
+  base::Value response = CallType(2, "expected", 14);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  ASSERT_TRUE(error->FindInt("code"));
+  EXPECT_EQ(error->FindInt("code").value(), -32000);
+  EXPECT_EQ(delegate_->type_call_count, 0);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       DeferredVerifiedTypePublishesOneReceiptWrappedTerminalSuccess) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[202] = ordinary;
+  delegate_->requires_deferred_verified_input_responses = true;
+  session_->SetDeferredResponseSender(base::BindRepeating(
+      [](std::vector<std::string>* responses, std::string response) {
+        responses->push_back(std::move(response));
+      },
+      base::Unretained(&deferred_responses_)));
+  CaptureAccessibilitySnapshot(16);
+  session_->ref_table()[2] = 202;
+
+  const auto immediate = CallTypeRaw(2, "expected", 17);
+  EXPECT_TRUE(immediate.empty());
+  EXPECT_EQ(delegate_->type_call_count, 1);
+  EXPECT_TRUE(delegate_->pending_verified_type);
+  EXPECT_TRUE(deferred_responses_.empty());
+
+  InputActionOutcome outcome;
+  outcome.dispatched = true;
+  outcome.verified = true;
+  outcome.method = "test";
+  delegate_->CompleteVerifiedType(std::move(outcome));
+
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  std::optional<base::Value> response =
+      base::JSONReader::Read(deferred_responses_.front(),
+                             base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response.has_value());
+  const base::DictValue* result = response->GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  ASSERT_TRUE(result->FindDict("receipt"));
+  const std::string* output_json = result->FindString("outputJson");
+  ASSERT_TRUE(output_json);
+  std::optional<base::Value> output =
+      base::JSONReader::Read(*output_json, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(output.has_value());
+  const base::DictValue& output_dict = output->GetDict();
+  EXPECT_TRUE(output_dict.FindBool("typed").value_or(false));
+  EXPECT_EQ(output_dict.FindInt("ref"), 2);
+  EXPECT_TRUE(output_dict.FindBool("verified").value_or(false));
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       DeferredVerifiedTypePublishesOneRedactedTerminalError) {
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  delegate_->field_metadata[202] = ordinary;
+  delegate_->requires_deferred_verified_input_responses = true;
+  session_->SetDeferredResponseSender(base::BindRepeating(
+      [](std::vector<std::string>* responses, std::string response) {
+        responses->push_back(std::move(response));
+      },
+      base::Unretained(&deferred_responses_)));
+  CaptureAccessibilitySnapshot(16);
+  session_->ref_table()[2] = 202;
+
+  const auto immediate = CallTypeRaw(2, "expected", 17);
+  EXPECT_TRUE(immediate.empty());
+  EXPECT_EQ(delegate_->type_call_count, 1);
+  EXPECT_TRUE(delegate_->pending_verified_type);
+  EXPECT_TRUE(deferred_responses_.empty());
+
+  InputActionOutcome outcome;
+  outcome.dispatched = true;
+  outcome.verified = false;
+  outcome.method = "test";
+  outcome.reason = "password=S3NTINEL-deferred-error-data";
+  delegate_->CompleteVerifiedType(std::move(outcome));
+
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  std::optional<base::Value> response =
+      base::JSONReader::Read(deferred_responses_.front(),
+                             base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response.has_value());
+  const base::DictValue* error = response->GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorActionNotApplied);
+  EXPECT_EQ(deferred_responses_.front().find("S3NTINEL-deferred-error-data"),
+            std::string::npos);
+  const std::string* reason = error->FindStringByDottedPath("data.reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "password=[REDACTED]");
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest, ClickPostconditionFailureIsNotSuccess) {
+  delegate_->verified_click_result = false;
+  delegate_->verified_click_reason = "state_not_toggled";
+  CaptureAccessibilitySnapshot(15);
+  session_->ref_table()[1] = 101;
+
+  base::Value response = CallClick(1, 14);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  ASSERT_TRUE(error->FindInt("code"));
+  EXPECT_EQ(error->FindInt("code").value(),
+            kMahoMcpErrorActionNotApplied);
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  const std::string* action = data->FindString("action");
+  ASSERT_TRUE(action);
+  EXPECT_EQ(*action, "click");
+  const std::string* reason = data->FindString("reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "state_not_toggled");
 }
 
 TEST_F(MahoMcpSessionTypeGuardTest, CurrentPasswordAutocompleteRejects) {
@@ -3703,6 +4192,156 @@ TEST(MahoMcpCapabilityRegistryTest, ClearResetsEverything) {
   EXPECT_EQ(reg.ListOwnedTabs().size(), 0u);
   EXPECT_FALSE(reg.IsOriginGranted(a));
   EXPECT_FALSE(reg.IsTabOwned(99));
+}
+
+// ======================================================================
+// Truthful Input Remediation Tests
+// ======================================================================
+
+class LegacyContractTestDelegate : public MahoMcpBrowserDelegate {
+ public:
+  int click_count = 0;
+  int type_count = 0;
+  ui::AXNodeID last_clicked_ax_id = 0;
+  ui::AXNodeID last_typed_ax_id = 0;
+  std::string last_typed_text;
+
+  std::vector<MahoMcpSession::TabInfo> GetTabList() override {
+    MahoMcpSession::TabInfo tab;
+    tab.id = 1;
+    tab.is_active = true;
+    tab.targetable = true;
+    tab.url = "https://example.com";
+    return {tab};
+  }
+  std::vector<MahoMcpSession::ConsoleMessage> GetConsoleMessages(int tab_id) override { return {}; }
+  std::vector<MahoMcpSession::NavigationEvent> GetNavigationEvents(int tab_id, int64_t since_ms) override { return {}; }
+  std::string GetPageText(int tab_id) override { return ""; }
+
+  // Legacy 2-argument GetAccessibilitySnapshot implementation (no snapshot token override)
+  base::Value GetAccessibilitySnapshot(int tab_id, MahoMcpSession::RefTable* out_refs) override {
+    if (out_refs) {
+      (*out_refs)[1] = 101;
+      (*out_refs)[2] = 202;
+    }
+    base::DictValue snapshot;
+    snapshot.Set("role", "WebArea");
+    return base::Value(std::move(snapshot));
+  }
+
+  PageContentResult GetPageContent(int tab_id) override { return {}; }
+  PageContextResult GetPageContext(int tab_id) override { return {}; }
+  SearchResult SearchInPage(int tab_id, const std::string& query) override { return {}; }
+  QuerySelectorResult QuerySelector(int tab_id, const std::string& selector) override { return {}; }
+  std::string GetElementText(int tab_id, const std::string& ref_id) override { return ""; }
+  std::string GetElementAttribute(int tab_id, const std::string& ref_id, const std::string& attribute) override { return ""; }
+  bool WaitForSelector(int tab_id, const std::string& selector, int timeout_ms) override { return false; }
+  int CreateNewTab(const GURL& url) override { return 0; }
+  bool CloseTab(int tab_id) override { return false; }
+  std::vector<BookmarkInfo> SearchBookmarks(const std::string& query) override { return {}; }
+  BookmarkInfo CreateBookmark(const std::string& title, const GURL& url, const std::string& folder) override { return {}; }
+  std::vector<HistoryEntry> SearchHistory(const std::string& query, size_t max_results) override { return {}; }
+  void CaptureFullPagePngBase64(int tab_id, base::OnceCallback<void(std::string)> callback) override { std::move(callback).Run(""); }
+  void CaptureElementPngBase64(int tab_id, ui::AXNodeID ax_id, base::OnceCallback<void(std::string)> callback) override { std::move(callback).Run(""); }
+  bool Scroll(int tab_id, const std::string& direction, int pixels, std::optional<ui::AXNodeID> ax_id) override { return false; }
+  bool Click(int tab_id, ui::AXNodeID ax_id) override {
+    ++click_count;
+    last_clicked_ax_id = ax_id;
+    return true;
+  }
+  bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) override {
+    ++type_count;
+    last_typed_ax_id = ax_id;
+    last_typed_text = text;
+    return true;
+  }
+  bool Select(int tab_id, ui::AXNodeID ax_id, const std::string& value) override { return false; }
+  bool Hover(int tab_id, ui::AXNodeID ax_id) override { return false; }
+  bool KeyPress(int tab_id, const std::string& key, const std::vector<std::string>& modifiers) override { return false; }
+  bool ActivateTab(int tab_id) override { return false; }
+  bool Navigate(int tab_id, const GURL& url) override { return false; }
+  bool SetViewportSize(int tab_id, int width, int height) override { return false; }
+  void StartNetworkCapture(const std::string& capture_id, int tab_id, const ResolvedMahoMcpTarget& target, StartNetworkCaptureCallback callback) override {}
+  void StopNetworkCapture(const std::string& capture_id, const ResolvedMahoMcpTarget& target, StopNetworkCaptureCallback callback) override {}
+  void CancelNetworkCapture(const std::string& capture_id) override {}
+};
+
+TEST_F(MahoMcpSessionTest, LegacyDelegateWithoutSnapshotTokensPreservesRefsAndAllowsMutations) {
+  auto legacy_delegate = std::make_unique<LegacyContractTestDelegate>();
+  MahoMcpSession::SetBrowserDelegate(legacy_delegate.get());
+
+  // Call browser_accessibility_snapshot
+  auto snapshot_res = CallToolRaw("browser_accessibility_snapshot", R"({"tab_id":1})", 401);
+  ASSERT_EQ(snapshot_res.size(), 1u);
+  base::Value parsed_snapshot = ParseLine(snapshot_res[0]);
+  EXPECT_FALSE(parsed_snapshot.GetDict().FindDict("error")) << snapshot_res[0];
+
+  // Ref table should be preserved, not cleared
+  EXPECT_EQ(session_->ref_table().size(), 2u);
+  EXPECT_EQ(session_->ref_table()[1], 101);
+  EXPECT_EQ(session_->ref_table()[2], 202);
+
+  // Call browser_click on ref 1
+  auto click_res = CallToolRaw("browser_click", R"({"tab_id":1,"ref":1})", 402);
+  ASSERT_EQ(click_res.size(), 1u);
+  base::Value parsed_click = ParseLine(click_res[0]);
+  EXPECT_FALSE(parsed_click.GetDict().FindDict("error")) << click_res[0];
+  EXPECT_EQ(legacy_delegate->click_count, 1);
+  EXPECT_EQ(legacy_delegate->last_clicked_ax_id, 101);
+
+  // Call browser_type on ref 2
+  auto type_res = CallToolRaw("browser_type", R"({"tab_id":1,"ref":2,"text":"sample"})", 403);
+  ASSERT_EQ(type_res.size(), 1u);
+  base::Value parsed_type = ParseLine(type_res[0]);
+  EXPECT_FALSE(parsed_type.GetDict().FindDict("error")) << type_res[0];
+  EXPECT_EQ(legacy_delegate->type_count, 1);
+  EXPECT_EQ(legacy_delegate->last_typed_ax_id, 202);
+  EXPECT_EQ(legacy_delegate->last_typed_text, "sample");
+
+  MahoMcpSession::SetBrowserDelegate(nullptr);
+}
+
+TEST(MahoMcpTruthfulInputTest, StaleReferenceErrorCodeContract) {
+  EXPECT_EQ(kMahoMcpErrorStaleReference, -32009);
+  EXPECT_STREQ(kMahoMcpMessageStaleReference,
+               "accessibility snapshot target changed; capture a new snapshot");
+}
+
+TEST(MahoMcpTruthfulInputTest, CredentialFieldClassificationProtection) {
+  // 1. Unclassified fails closed
+  MahoMcpFieldMetadata unclassified;
+  unclassified.classified = false;
+  EXPECT_TRUE(MahoMcpSession::IsCredentialField(unclassified));
+
+  // 2. Protected bit (password)
+  MahoMcpFieldMetadata protected_input;
+  protected_input.classified = true;
+  protected_input.is_protected = true;
+  EXPECT_TRUE(MahoMcpSession::IsCredentialField(protected_input));
+
+  // 3. Sensitive autocomplete attributes
+  for (const std::string& ac : {"current-password", "new-password", "one-time-code", "otp", "totp", "recovery"}) {
+    MahoMcpFieldMetadata meta;
+    meta.classified = true;
+    meta.autocomplete = ac;
+    EXPECT_TRUE(MahoMcpSession::IsCredentialField(meta)) << "Failed for autocomplete: " << ac;
+  }
+
+  // 4. Sensitive accessible names
+  for (const std::string& name : {"Password", "Enter 2fa token", "Passcode", "One-time code", "Recovery key", "Backup code"}) {
+    MahoMcpFieldMetadata meta;
+    meta.classified = true;
+    meta.accessible_name = base::ToLowerASCII(name);
+    EXPECT_TRUE(MahoMcpSession::IsCredentialField(meta)) << "Failed for name: " << name;
+  }
+
+  // 5. Ordinary non-credential field
+  MahoMcpFieldMetadata ordinary;
+  ordinary.classified = true;
+  ordinary.is_protected = false;
+  ordinary.autocomplete = "username";
+  ordinary.accessible_name = "search query";
+  EXPECT_FALSE(MahoMcpSession::IsCredentialField(ordinary));
 }
 
 } // namespace

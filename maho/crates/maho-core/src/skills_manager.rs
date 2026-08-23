@@ -1,7 +1,7 @@
 use ed25519_dalek::Verifier;
 use maho_types::events::core_update::SkillInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 const SKILL_PUBLIC_KEY: [u8; 32] = [
@@ -16,7 +16,7 @@ const SKILL_PUBLIC_KEY: [u8; 32] = [
 /// without passing through the C++ capability check.
 const COMPILED_BRAIN_CAPABILITY_VERSION: i64 = 1;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Skill {
     pub id: String,
     pub name: String,
@@ -31,6 +31,25 @@ pub struct Skill {
     pub url_patterns: Vec<String>,
     #[serde(default)]
     pub auto_inject: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_capability_id: Option<String>,
+    #[serde(default)]
+    pub user_handoff: bool,
+}
+
+impl Skill {
+    /// Determines if this skill is discoverable given the currently available capabilities.
+    ///
+    /// A skill is discoverable IFF:
+    /// 1. It declares a `required_capability_id` and that capability is present in `available_capabilities`, OR
+    /// 2. It requires no capability (`required_capability_id: None`) and declares `user_handoff: true`.
+    pub fn is_discoverable(&self, available_capabilities: &[&str]) -> bool {
+        if let Some(ref req) = self.required_capability_id {
+            available_capabilities.iter().any(|cap| *cap == req.as_str())
+        } else {
+            self.user_handoff
+        }
+    }
 }
 
 impl From<&Skill> for SkillInfo {
@@ -45,8 +64,592 @@ impl From<&Skill> for SkillInfo {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SkillManifestEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub slash_command: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub is_builtin: Option<bool>,
+    #[serde(default)]
+    pub is_first_party: Option<bool>,
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    #[serde(default)]
+    pub url_patterns: Vec<String>,
+    #[serde(default)]
+    pub auto_inject: bool,
+    #[serde(default)]
+    pub required_capability_id: Option<String>,
+    #[serde(default)]
+    pub user_handoff: bool,
+    #[serde(flatten)]
+    pub extra_fields: HashMap<String, serde_json::Value>,
+}
+
+impl SkillManifestEntry {
+    pub fn into_skill(self) -> Skill {
+        let slash_command = self
+            .slash_command
+            .unwrap_or_else(|| format!("/{}", self.id));
+        let icon = self.icon.unwrap_or_else(|| "doc.text".to_string());
+        Skill {
+            id: self.id,
+            name: self.name,
+            slash_command,
+            description: self.description,
+            system_prompt: self.system_prompt,
+            icon,
+            is_builtin: self.is_builtin.unwrap_or(true),
+            is_first_party: self.is_first_party.unwrap_or(true),
+            allowed_tools: self.allowed_tools,
+            url_patterns: self.url_patterns,
+            auto_inject: self.auto_inject,
+            required_capability_id: self.required_capability_id,
+            user_handoff: self.user_handoff,
+        }
+    }
+}
+
+/// Parses a skill manifest in JSON array or line-by-line JSON format.
+///
+/// Unknown fields are ignored without errors. Malformed lines are skipped
+/// and counted in the returned warnings count.
+pub fn parse_skill_manifest(content: &str) -> (Vec<Skill>, usize) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return (Vec::new(), 0);
+    }
+
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        if let Ok(entries) = serde_json::from_str::<Vec<SkillManifestEntry>>(trimmed) {
+            let skills = entries.into_iter().map(|e| e.into_skill()).collect();
+            return (skills, 0);
+        }
+        if let Ok(raw_items) = serde_json::from_str::<Vec<serde_json::Value>>(trimmed) {
+            let mut skills = Vec::new();
+            let mut warnings = 0;
+            for item in raw_items {
+                match serde_json::from_value::<SkillManifestEntry>(item) {
+                    Ok(entry) => skills.push(entry.into_skill()),
+                    Err(_) => warnings += 1,
+                }
+            }
+            return (skills, warnings);
+        }
+    }
+
+    let mut skills = Vec::new();
+    let mut warnings = 0;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+            continue;
+        }
+        match serde_json::from_str::<SkillManifestEntry>(line) {
+            Ok(entry) => skills.push(entry.into_skill()),
+            Err(_) => {
+                warnings += 1;
+            }
+        }
+    }
+
+    (skills, warnings)
+}
+
+/// Returns the 31 launch target builtin skills for the agent catalog.
+///
+/// Each skill declares either a concrete `required_capability_id` or an explicit `user_handoff: true`
+/// policy to prevent unbacked capability claims.
+pub fn builtin_manifest() -> Vec<Skill> {
+    vec![
+        // 1. Credentials & Password Managers
+        Skill {
+            id: "password-manager".into(),
+            name: "Password Manager".into(),
+            slash_command: "/password-manager".into(),
+            description: "Manage and autofill saved passwords and credentials".into(),
+            system_prompt: "Manage and autofill credentials securely using the Maho native vault. Never expose plaintext credentials in reasoning or output.".into(),
+            icon: "key.fill".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("vault_management".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "apple-passwords".into(),
+            name: "Apple Passwords".into(),
+            slash_command: "/apple-passwords".into(),
+            description: "Bridge to Apple Passwords and iCloud Keychain".into(),
+            system_prompt: "Interface with Apple Passwords and iCloud Keychain. Always notify the user prior to biometric authentication prompts.".into(),
+            icon: "lock.shield".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("apple_passwords_bridge".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "1password".into(),
+            name: "1Password".into(),
+            slash_command: "/1password".into(),
+            description: "Guidance for 1Password extension unlock and autofill".into(),
+            system_prompt: "Provide guidance for unlocking the 1Password extension and managing autofill. Request user assistance to complete vault unlock.".into(),
+            icon: "lock.circle".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+        Skill {
+            id: "bitwarden".into(),
+            name: "Bitwarden".into(),
+            slash_command: "/bitwarden".into(),
+            description: "Guidance for Bitwarden inline autofill and extension unlock".into(),
+            system_prompt: "Provide guidance for unlocking Bitwarden and managing autofill forms. Request user assistance for master password verification.".into(),
+            icon: "shield.lefthalf.filled".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+        Skill {
+            id: "dashlane".into(),
+            name: "Dashlane".into(),
+            slash_command: "/dashlane".into(),
+            description: "Guidance for Dashlane extension unlock and autofill".into(),
+            system_prompt: "Provide guidance for Dashlane extension operations. Request user assistance to authenticate.".into(),
+            icon: "shield.slash".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+        Skill {
+            id: "lastpass".into(),
+            name: "LastPass".into(),
+            slash_command: "/lastpass".into(),
+            description: "Guidance for LastPass extension unlock and autofill".into(),
+            system_prompt: "Provide guidance for LastPass extension operations. Request user assistance to authenticate.".into(),
+            icon: "asterisk.circle".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+
+        // 2. Google Workspace Suite
+        Skill {
+            id: "google-accounts".into(),
+            name: "Google Accounts".into(),
+            slash_command: "/google-accounts".into(),
+            description: "Discover and route signed-in Google profiles".into(),
+            system_prompt: "Discover signed-in Google account profiles and construct multi-account URL paths.".into(),
+            icon: "person.crop.circle".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["accounts.google.com/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("google_accounts_read".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "google-gmail".into(),
+            name: "Gmail".into(),
+            slash_command: "/gmail".into(),
+            description: "Zero-tab direct Gmail search, read, and draft composer".into(),
+            system_prompt: "Access Gmail messages, search threads, and compose email drafts directly without opening tabs.".into(),
+            icon: "envelope.fill".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["mail.google.com/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("gmail_direct_api".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "google-docs".into(),
+            name: "Google Docs".into(),
+            slash_command: "/google-docs".into(),
+            description: "Read and manipulate Google Docs content".into(),
+            system_prompt: "Read and edit Google Docs documents with tab-attached or zero-tab access.".into(),
+            icon: "doc.richtext".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["docs.google.com/document/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("google_docs_adapter".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "google-sheets".into(),
+            name: "Google Sheets".into(),
+            slash_command: "/google-sheets".into(),
+            description: "Read grid matrix and manipulate Google Sheets spreadsheets".into(),
+            system_prompt: "Inspect metadata, read sheet matrices, and edit Google Sheets spreadsheets.".into(),
+            icon: "tablecells".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["docs.google.com/spreadsheets/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("google_sheets_adapter".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "google-calendar".into(),
+            name: "Google Calendar".into(),
+            slash_command: "/calendar".into(),
+            description: "Guidance for Google Calendar event management and scheduling".into(),
+            system_prompt: "Help create and review Google Calendar events. Request user confirmation before finalizing schedule modifications.".into(),
+            icon: "calendar".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["calendar.google.com/*".into()],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+        Skill {
+            id: "google-drive".into(),
+            name: "Google Drive".into(),
+            slash_command: "/drive".into(),
+            description: "Guidance for Google Drive navigation and file management".into(),
+            system_prompt: "Navigate and organize files in Google Drive. Hand off bulk deletions or permission sharing to user confirmation.".into(),
+            icon: "externaldrive.fill".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["drive.google.com/*".into()],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+        Skill {
+            id: "google-search".into(),
+            name: "Google Search".into(),
+            slash_command: "/google-search".into(),
+            description: "Search the web using authenticated Google Search queries".into(),
+            system_prompt: "Perform authenticated Google Search queries and extract structured search results with provenance citations.".into(),
+            icon: "magnifyingglass".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("browser_history_search".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "image-search".into(),
+            name: "Image Search".into(),
+            slash_command: "/image-search".into(),
+            description: "Search for images with parameter filtering".into(),
+            system_prompt: "Search for images using structured query filters. Return image URLs and metadata without injecting raw image binaries.".into(),
+            icon: "photo.on.rectangle".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("image_search_query".into()),
+            user_handoff: false,
+        },
+
+        // 3. Collaboration & Communication
+        Skill {
+            id: "slack".into(),
+            name: "Slack".into(),
+            slash_command: "/slack".into(),
+            description: "Slack workspace message reading, channel history, and drafting".into(),
+            system_prompt: "Access Slack conversations, list channels, and draft messages. Always require action confirmation before sending.".into(),
+            icon: "bubble.left.and.bubble.right".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["app.slack.com/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("slack_client_api".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "x-twitter".into(),
+            name: "X / Twitter".into(),
+            slash_command: "/twitter".into(),
+            description: "X/Twitter timeline, search, and tweet drafting".into(),
+            system_prompt: "Interact with X/Twitter for reading timelines, searching tweets, and preparing drafts. Require confirmation for posts.".into(),
+            icon: "bird".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["x.com/*".into(), "twitter.com/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("twitter_direct_api".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "notion".into(),
+            name: "Notion".into(),
+            slash_command: "/notion".into(),
+            description: "Notion workspace search and block-level page manipulation".into(),
+            system_prompt: "Search Notion workspace and manipulate block-level documents directly.".into(),
+            icon: "note.text".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["*.notion.so/*".into(), "*.notion.site/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("notion_direct_api".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "channel".into(),
+            name: "Channel Gateway".into(),
+            slash_command: "/channel".into(),
+            description: "Inbound and outbound channel bridge for messaging platforms".into(),
+            system_prompt: "Bridge agent interactions across messaging channels with cursor deduplication and action confirmation.".into(),
+            icon: "antenna.radiowaves.left.and.right".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("channel_gateway".into()),
+            user_handoff: false,
+        },
+
+        // 4. Document & Office Processing
+        Skill {
+            id: "docx".into(),
+            name: "Word Document (DOCX)".into(),
+            slash_command: "/docx".into(),
+            description: "Parse, create, and modify DOCX word documents".into(),
+            system_prompt: "Programmatically inspect, parse, and edit Word (.docx) documents, preserving formatting and styles.".into(),
+            icon: "doc.text.fill".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("docx_processor".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "pptx".into(),
+            name: "PowerPoint Presentation (PPTX)".into(),
+            slash_command: "/pptx".into(),
+            description: "Extract slides, create, and edit PPTX presentations".into(),
+            system_prompt: "Parse and manipulate PowerPoint (.pptx) presentation slides and shape structures.".into(),
+            icon: "play.rectangle".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("pptx_processor".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "xlsx".into(),
+            name: "Excel Spreadsheet (XLSX)".into(),
+            slash_command: "/xlsx".into(),
+            description: "Parse, analyze, and format Excel (.xlsx) spreadsheets".into(),
+            system_prompt: "Read, validate formulas, and construct Excel (.xlsx) spreadsheet workbooks.".into(),
+            icon: "tablecells.badge.ellipsis".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("xlsx_processor".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "pdf".into(),
+            name: "PDF Document".into(),
+            slash_command: "/pdf".into(),
+            description: "Render, extract text, merge, and fill PDF documents".into(),
+            system_prompt: "Inspect, extract text, render pages, and fill interactive AcroForms in PDF documents.".into(),
+            icon: "doc.viewfinder".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("pdf_processor".into()),
+            user_handoff: false,
+        },
+
+        // 5. Browser Automation, Fallback Controls & Runtime Features
+        Skill {
+            id: "chrome".into(),
+            name: "Chrome Extension API".into(),
+            slash_command: "/chrome".into(),
+            description: "Access browser extension APIs for tabs, history, and bookmarks".into(),
+            system_prompt: "Interact with browser MV3 extension APIs for tabs, bookmarks, and history management.".into(),
+            icon: "puzzlepiece.extension".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("browser_extension_api".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "visual-browse".into(),
+            name: "Visual Browse".into(),
+            slash_command: "/visual-browse".into(),
+            description: "Coordinate-based visual browsing and proof screenshot capture".into(),
+            system_prompt: "Perform coordinate-based visual browsing fallback and capture screenshot proof for verification.".into(),
+            icon: "eye".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("screenshot_proof".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "captcha-solver".into(),
+            name: "Challenge Detection & Handoff".into(),
+            slash_command: "/captcha-solver".into(),
+            description: "Detect anti-bot challenges and safely hand off to the user".into(),
+            system_prompt: "Detect CAPTCHA or anti-bot challenge screens, suspend agent execution, hand off resolution to the user, and resume upon completion.".into(),
+            icon: "shield.lefthalf.filled.badge.checkmark".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+        Skill {
+            id: "notification-activation".into(),
+            name: "Notification Activation".into(),
+            slash_command: "/notification-activation".into(),
+            description: "Activate browser notifications and register event-wait triggers".into(),
+            system_prompt: "Check and request notification permissions, guide site notification toggles, and register event waits.".into(),
+            icon: "bell.badge".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("notification_activation".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "aside".into(),
+            name: "Maho System Management".into(),
+            slash_command: "/aside".into(),
+            description: "Manage routines, sessions, and daemon configuration".into(),
+            system_prompt: "Inspect and manage agent routines, sessions, settings, and introspection logs safely.".into(),
+            icon: "slider.horizontal.3".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("routine_management".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "draft-preview".into(),
+            name: "Draft Preview".into(),
+            slash_command: "/draft-preview".into(),
+            description: "Render structured interactive draft cards in chat".into(),
+            system_prompt: "Format email, message, tweet, and calendar drafts using structured JSON code blocks for chat UI preview.".into(),
+            icon: "rectangle.and.pencil.and.ellipsis".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("draft_preview_render".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "skill-creator".into(),
+            name: "Skill Creator".into(),
+            slash_command: "/skill-creator".into(),
+            description: "Author and validate new user-defined skills".into(),
+            system_prompt: "Draft, validate frontmatter schemas, and install new user-defined skills with user confirmation.".into(),
+            icon: "hammer".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec![],
+            auto_inject: false,
+            required_capability_id: Some("skill_authoring".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "youtube".into(),
+            name: "YouTube".into(),
+            slash_command: "/youtube".into(),
+            description: "Search videos, retrieve transcripts, and inspect comments".into(),
+            system_prompt: "Search YouTube videos, retrieve timed transcripts, and summarize video content.".into(),
+            icon: "play.tv".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["youtube.com/*".into(), "youtu.be/*".into()],
+            auto_inject: false,
+            required_capability_id: Some("youtube_direct_api".into()),
+            user_handoff: false,
+        },
+        Skill {
+            id: "github".into(),
+            name: "GitHub".into(),
+            slash_command: "/github".into(),
+            description: "Guidance for GitHub repositories, pull requests, and issues".into(),
+            system_prompt: "Navigate GitHub repositories, review PR files, and inspect issues. Require user confirmation for mutations.".into(),
+            icon: "chevron.left.forwardslash.chevron.right".into(),
+            is_builtin: true,
+            is_first_party: true,
+            allowed_tools: vec![],
+            url_patterns: vec!["github.com/*".into()],
+            auto_inject: false,
+            required_capability_id: None,
+            user_handoff: true,
+        },
+    ]
+}
+
 pub struct SkillsManager {
     skills: HashMap<String, Skill>,
+    available_capabilities: std::collections::HashSet<String>,
     auto_inject_enabled: bool,
 }
 
@@ -72,6 +675,10 @@ struct ConfigSkill {
     auto_inject: bool,
     #[serde(default)]
     allowed_tools: Vec<String>,
+    #[serde(default)]
+    required_capability_id: Option<String>,
+    #[serde(default)]
+    user_handoff: bool,
     system_prompt: String,
 }
 
@@ -95,6 +702,8 @@ impl ConfigSkill {
             allowed_tools: self.allowed_tools,
             url_patterns: self.url_patterns,
             auto_inject: self.auto_inject,
+            required_capability_id: self.required_capability_id,
+            user_handoff: self.user_handoff,
         }
     }
 }
@@ -114,194 +723,55 @@ impl Default for SkillsManager {
 impl SkillsManager {
     pub fn new() -> Self {
         let mut skills = HashMap::new();
-
-        let builtins = vec![
-            Skill {
-                id: "summarize".into(),
-                name: "Summarize".into(),
-                slash_command: "/summarize".into(),
-                description: "Summarize the current page".into(),
-                system_prompt: "Summarize this page concisely. Focus on key points.\n\nPage content:\n{page_content}".into(),
-                icon: "doc.text".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "translate".into(),
-                name: "Translate".into(),
-                slash_command: "/translate".into(),
-                description: "Translate text to another language".into(),
-                system_prompt: "Translate the following text to {user_input}. If no language specified, translate to English.\n\nPage content:\n{page_content}".into(),
-                icon: "globe".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "explain".into(),
-                name: "Explain".into(),
-                slash_command: "/explain".into(),
-                description: "Explain this page in simple terms".into(),
-                system_prompt: "Explain this page's content in simple terms, as if to someone unfamiliar with the topic.\n\nPage content:\n{page_content}".into(),
-                icon: "lightbulb".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "rewrite".into(),
-                name: "Rewrite".into(),
-                slash_command: "/rewrite".into(),
-                description: "Rewrite text with improved clarity".into(),
-                system_prompt: "Rewrite the following text: {user_input}. Improve clarity, grammar, and flow.\n\nPage content:\n{page_content}".into(),
-                icon: "pencil.line".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "fact-check".into(),
-                name: "Fact Check".into(),
-                slash_command: "/fact-check".into(),
-                description: "Analyze claims for accuracy".into(),
-                system_prompt: "Analyze the claims in this page. Identify key claims, assess their likely accuracy, and note any that seem questionable.\n\nPage content:\n{page_content}".into(),
-                icon: "checkmark.shield".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "code-review".into(),
-                name: "Code Review".into(),
-                slash_command: "/code-review".into(),
-                description: "Review code for bugs and improvements".into(),
-                system_prompt: "Review the code on this page. Identify bugs, suggest improvements, and note best practices.\n\nPage content:\n{page_content}".into(),
-                icon: "chevron.left.forwardslash.chevron.right".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "maho-browser-operations".into(),
-                name: "Maho Browser Operations".into(),
-                slash_command: "/maho-browser".into(),
-                description: "Guide safe Maho browser page operations".into(),
-                system_prompt: concat!(
-                    "Use Maho browser operation guidance for page tasks. Prefer reading the ",
-                    "active tab and accessibility snapshot before suggesting an operation. For ",
-                    "navigation, click, typing, selection, scrolling, hover, or key press work, ",
-                    "stay on the active tab's origin unless a fresh approval names the ",
-                    "destination origin. Treat credential, payment, recovery, and one-time-code ",
-                    "fields as sensitive and do not type secrets into them. This skill describes ",
-                    "safe browser workflow only; actual action availability remains controlled ",
-                    "by the browser action flag and approval policy."
-                )
-                .into(),
-                icon: "cursorarrow.click".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec![
-                    "browser_tab_list".into(),
-                    "browser_page_text".into(),
-                    "browser_accessibility_snapshot".into(),
-                    "browser_navigate".into(),
-                    "browser_click".into(),
-                    "browser_type".into(),
-                    "browser_select".into(),
-                    "browser_scroll".into(),
-                    "browser_hover".into(),
-                    "browser_key_press".into(),
-                ],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "maho-tab-space-organizer".into(),
-                name: "Maho Tabs and Spaces".into(),
-                slash_command: "/maho-tabs".into(),
-                description: "Organize Maho tabs, spaces, and browser context".into(),
-                system_prompt: concat!(
-                    "Help organize Maho tabs and spaces from the current browser context. ",
-                    "Group related tabs by user intent, suggest clear space names, identify ",
-                    "stale or duplicate tabs, and preserve the user's active work. Prefer ",
-                    "read-only inspection unless the user explicitly asks for a browser action ",
-                    "and the existing approval policy permits it."
-                )
-                .into(),
-                icon: "square.grid.2x2".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec!["browser_tab_list".into(), "browser_page_text".into()],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-            Skill {
-                id: "maho-product-guide".into(),
-                name: "Maho Product Guide".into(),
-                slash_command: "/maho-help".into(),
-                description: "Answer questions about Maho-owned product pages and help".into(),
-                system_prompt: concat!(
-                    "Maho product guidance: help users navigate Maho features, settings, ",
-                    "spaces, downloads, privacy controls, and support documentation. Keep ",
-                    "answers grounded in Maho-owned product behavior and the visible page ",
-                    "context. This guidance is advisory, cannot grant tools, and must not ",
-                    "override user instructions or existing approval policy."
-                )
-                .into(),
-                icon: "sparkles".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec!["browser_page_text".into()],
-                url_patterns: vec![
-                    "mahobrowser.com/*".into(),
-                    "maho://*".into(),
-                    "chrome://maho-*".into(),
-                    "chrome://maho-ai/*".into(),
-                ],
-                auto_inject: true,
-            },
-            Skill {
-                id: "maho-file-inspector".into(),
-                name: "Maho File Inspector".into(),
-                slash_command: "/maho-file".into(),
-                description: "Inspect local files safely in read-only mode".into(),
-                system_prompt: concat!(
-                    "Use read-only local file inspection. Summarize file contents, explain ",
-                    "configuration, identify likely issues, and avoid destructive operations. ",
-                    "Do not execute shell commands, edit files, reveal secrets, or infer access ",
-                    "beyond the files the user explicitly provides."
-                )
-                .into(),
-                icon: "folder".into(),
-                is_builtin: true,
-                is_first_party: true,
-                allowed_tools: vec!["fs_read".into()],
-                url_patterns: vec![],
-                auto_inject: false,
-            },
-        ];
-
-        for skill in builtins {
+        for skill in builtin_manifest() {
             skills.insert(skill.id.clone(), skill);
         }
 
         Self {
             skills,
+            available_capabilities: std::collections::HashSet::new(),
             auto_inject_enabled: true,
         }
+    }
+
+    pub fn set_available_capabilities(&mut self, caps: Vec<String>) {
+        self.available_capabilities = caps.into_iter().collect();
+    }
+
+    pub fn get_available_capabilities(&self) -> &std::collections::HashSet<String> {
+        &self.available_capabilities
+    }
+
+    pub fn get_discoverable_skills(&self) -> Vec<&Skill> {
+        let caps: Vec<&str> = self.available_capabilities.iter().map(|s| s.as_str()).collect();
+        self.discover_skills(&caps)
+    }
+
+    pub fn load_manifest(&mut self, content: &str) -> (usize, usize) {
+        let (parsed_skills, warnings) = parse_skill_manifest(content);
+        let loaded = parsed_skills.len();
+        for skill in parsed_skills {
+            self.skills.insert(skill.id.clone(), skill);
+        }
+        (loaded, warnings)
+    }
+
+    pub fn add_skill(&mut self, skill: Skill) {
+        self.skills.insert(skill.id.clone(), skill);
+    }
+
+    pub fn contains_skill(&self, id: &str) -> bool {
+        self.skills.contains_key(id)
+    }
+
+    pub fn discover_skills(&self, available_capabilities: &[&str]) -> Vec<&Skill> {
+        let mut discovered: Vec<&Skill> = self
+            .skills
+            .values()
+            .filter(|skill| skill.is_discoverable(available_capabilities))
+            .collect();
+        discovered.sort_by(|a, b| a.name.cmp(&b.name));
+        discovered
     }
 
     pub fn get_all_skills(&self) -> Vec<&Skill> {
@@ -532,6 +1002,12 @@ impl SkillsManager {
                             .or_else(|| metadata.get("allowed_tools")),
                     );
 
+                    let required_capability_id = metadata
+                        .get("required_capability_id")
+                        .or_else(|| metadata.get("capability"))
+                        .cloned();
+                    let user_handoff = metadata_bool(&metadata, "user_handoff");
+
                     if is_first_party {
                         if let Err(e) = verify_first_party_signature(
                             SkillSigningFields {
@@ -564,6 +1040,8 @@ impl SkillsManager {
                             allowed_tools,
                             url_patterns,
                             auto_inject,
+                            required_capability_id,
+                            user_handoff,
                         },
                     );
                 }
@@ -928,33 +1406,33 @@ mod tests {
         let manager = SkillsManager::new();
 
         for id in [
-            "maho-browser-operations",
-            "maho-tab-space-organizer",
-            "maho-product-guide",
-            "maho-file-inspector",
+            "password-manager",
+            "google-gmail",
+            "visual-browse",
+            "captcha-solver",
+            "github",
         ] {
             let skill = manager.get_skill(id).expect("first-party builtin exists");
             assert!(skill.is_builtin);
             assert!(skill.is_first_party);
         }
 
-        let browser = manager.get_skill("maho-browser-operations").unwrap();
-        assert!(browser
-            .allowed_tools
-            .iter()
-            .any(|tool| tool == "browser_click"));
-        assert!(!browser.auto_inject);
+        let vault = manager.get_skill("password-manager").unwrap();
+        assert_eq!(
+            vault.required_capability_id.as_deref(),
+            Some("vault_management")
+        );
+        assert!(!vault.user_handoff);
 
-        let product = manager.get_skill("maho-product-guide").unwrap();
-        assert!(product.auto_inject);
-        assert!(product
-            .url_patterns
-            .iter()
-            .any(|pattern| pattern == "mahobrowser.com/*"));
+        let gmail = manager.get_skill("google-gmail").unwrap();
+        assert_eq!(
+            gmail.required_capability_id.as_deref(),
+            Some("gmail_direct_api")
+        );
 
-        let file = manager.get_skill("maho-file-inspector").unwrap();
-        assert_eq!(file.allowed_tools, vec!["fs_read".to_string()]);
-        assert!(!file.auto_inject);
+        let captcha = manager.get_skill("captcha-solver").unwrap();
+        assert!(captcha.user_handoff);
+        assert!(captcha.required_capability_id.is_none());
     }
 
     #[test]
@@ -1022,6 +1500,7 @@ mod tests {
 
         let mut manager = SkillsManager {
             skills: HashMap::new(),
+            available_capabilities: HashSet::new(),
             auto_inject_enabled: true,
         };
         let loaded = manager.apply_config_from_path(&config_path).unwrap();
@@ -1078,6 +1557,7 @@ mod tests {
 
         let mut manager = SkillsManager {
             skills: HashMap::new(),
+            available_capabilities: HashSet::new(),
             auto_inject_enabled: true,
         };
         let result = manager.apply_config_from_path(&config_path);
@@ -1089,6 +1569,15 @@ mod tests {
     #[test]
     fn test_first_party_product_auto_inject_kill_switch_disables_builtin_context() {
         let mut manager = SkillsManager::new();
+        let mut custom_skill = test_skill(
+            "test-product-guide",
+            "Product Guide",
+            true,
+            vec!["mahobrowser.com/*"],
+            "Maho product guidance.",
+        );
+        custom_skill.user_handoff = true;
+        manager.skills.insert("test-product-guide".to_string(), custom_skill);
 
         let context = manager.build_injected_context("https://mahobrowser.com/docs", 10_000);
         assert!(context.contains("Maho product guidance"));
@@ -1105,7 +1594,16 @@ mod tests {
 
     #[test]
     fn test_builtin_injected_context_has_no_tool_authority_or_allowed_tools() {
-        let manager = SkillsManager::new();
+        let mut manager = SkillsManager::new();
+        let mut custom_skill = test_skill(
+            "test-product-guide",
+            "Product Guide",
+            true,
+            vec!["mahobrowser.com/*"],
+            "Maho product guidance.",
+        );
+        custom_skill.allowed_tools = vec!["browser_page_text".into(), "browser_click".into(), "fs_read".into()];
+        manager.skills.insert("test-product-guide".to_string(), custom_skill);
 
         let context = manager.build_injected_context("https://mahobrowser.com/docs", 10_000);
 
@@ -1118,38 +1616,17 @@ mod tests {
     }
 
     #[test]
-    fn test_first_party_builtin_catalog_has_no_third_party_domain_api_entries() {
+    fn test_builtin_catalog_entries_have_valid_capability_or_handoff() {
         let manager = SkillsManager::new();
-        let forbidden_terms = [
-            "gmail",
-            "notion",
-            "linkedin",
-            "slack",
-            "jira",
-            "salesforce",
-            "twitter",
-            "google docs",
-        ];
+        let skills = manager.get_all_skills();
+        assert_eq!(skills.len(), 31);
 
-        for skill in manager.get_all_skills() {
-            let searchable = format!(
-                "{}\n{}\n{}\n{}\n{}\n{}\n{}",
-                skill.id,
-                skill.name,
-                skill.slash_command,
-                skill.description,
-                skill.system_prompt,
-                skill.allowed_tools.join(","),
-                skill.url_patterns.join(",")
-            )
-            .to_ascii_lowercase();
-            for forbidden in forbidden_terms {
-                assert!(
-                    !searchable.contains(forbidden),
-                    "builtin skill {} must not contain third-party/domain API catalog term {forbidden}",
-                    skill.id
-                );
-            }
+        for skill in skills {
+            assert!(
+                skill.required_capability_id.is_some() || skill.user_handoff,
+                "builtin skill {} must declare required_capability_id or explicit user_handoff=true",
+                skill.id
+            );
         }
     }
 
@@ -1406,6 +1883,8 @@ signature: {}
             allowed_tools: vec!["browser_privileged_tool".to_string()],
             url_patterns: url_patterns.into_iter().map(String::from).collect(),
             auto_inject: true,
+            required_capability_id: None,
+            user_handoff: false,
         }
     }
 
@@ -1684,6 +2163,7 @@ Use site guidance.
 
         let mut manager = SkillsManager {
             skills: HashMap::new(),
+            available_capabilities: HashSet::new(),
             auto_inject_enabled: true,
         };
         let result = manager.apply_config_from_path(&config_path);
@@ -1740,5 +2220,233 @@ Use site guidance.
         assert!(manager.get_skill("tampered-skill").is_none());
 
         clear_test_public_key();
+    }
+
+    #[test]
+    fn test_capability_discovery_filtering_absent_and_present() {
+        let manifest_json = r#"[
+            {
+                "id": "vault-skill",
+                "name": "Vault Skill",
+                "slash_command": "/vault",
+                "description": "Vault management",
+                "system_prompt": "Vault prompt",
+                "icon": "key.fill",
+                "required_capability_id": "vault_management",
+                "user_handoff": false
+            }
+        ]"#;
+
+        let mut manager = SkillsManager {
+            skills: HashMap::new(),
+            available_capabilities: HashSet::new(),
+            auto_inject_enabled: true,
+        };
+        let (loaded, warnings) = manager.load_manifest(manifest_json);
+        assert_eq!(loaded, 1);
+        assert_eq!(warnings, 0);
+
+        // Capability absent: skill must NOT be discoverable (assert both directions)
+        let discovered_absent = manager.discover_skills(&[]);
+        assert!(
+            discovered_absent.is_empty(),
+            "Skill requiring capability must NOT be discoverable when capability is absent"
+        );
+
+        let discovered_other = manager.discover_skills(&["other_capability"]);
+        assert!(
+            discovered_other.is_empty(),
+            "Skill requiring capability must NOT be discoverable when only unrelated capability is present"
+        );
+
+        // Capability present: skill MUST be discoverable
+        let discovered_present = manager.discover_skills(&["vault_management"]);
+        assert_eq!(
+            discovered_present.len(),
+            1,
+            "Skill requiring capability MUST be discoverable when capability is present"
+        );
+        assert_eq!(discovered_present[0].id, "vault-skill");
+        assert_eq!(
+            discovered_present[0].required_capability_id.as_deref(),
+            Some("vault_management")
+        );
+    }
+
+    #[test]
+    fn test_manifest_user_handoff_without_capability_is_discoverable() {
+        let manifest_json = r#"[
+            {
+                "id": "captcha-handoff",
+                "name": "Challenge Handoff",
+                "slash_command": "/captcha",
+                "description": "Challenge user handoff",
+                "system_prompt": "Handoff prompt",
+                "icon": "shield",
+                "required_capability_id": null,
+                "user_handoff": true
+            }
+        ]"#;
+
+        let mut manager = SkillsManager {
+            skills: HashMap::new(),
+            available_capabilities: HashSet::new(),
+            auto_inject_enabled: true,
+        };
+        let (loaded, warnings) = manager.load_manifest(manifest_json);
+        assert_eq!(loaded, 1);
+        assert_eq!(warnings, 0);
+
+        // With no capabilities available, user_handoff=true skill MUST be discoverable
+        let discovered = manager.discover_skills(&[]);
+        assert_eq!(
+            discovered.len(),
+            1,
+            "Skill with user_handoff=true must be discoverable even with no capabilities"
+        );
+        assert_eq!(discovered[0].id, "captcha-handoff");
+        assert!(
+            discovered[0].user_handoff,
+            "Discovered skill must carry user_handoff marker"
+        );
+        assert!(discovered[0].required_capability_id.is_none());
+    }
+
+    #[test]
+    fn test_31_entry_builtin_manifest_roundtrip_and_filtering() {
+        let builtins = builtin_manifest();
+        assert_eq!(
+            builtins.len(),
+            31,
+            "Builtin manifest must define exactly 31 launch target skills"
+        );
+
+        // Verify uniqueness of IDs and slash commands
+        let mut id_set = std::collections::HashSet::new();
+        let mut slash_set = std::collections::HashSet::new();
+        for skill in &builtins {
+            assert!(
+                id_set.insert(&skill.id),
+                "Duplicate skill id found in builtin manifest: {}",
+                skill.id
+            );
+            assert!(
+                slash_set.insert(&skill.slash_command),
+                "Duplicate slash_command found in builtin manifest: {}",
+                skill.slash_command
+            );
+            assert!(
+                skill.required_capability_id.is_some() || skill.user_handoff,
+                "Skill {} must declare required_capability_id OR explicit user_handoff=true",
+                skill.id
+            );
+        }
+
+        // Round-trip through serialization and parse_skill_manifest
+        let manifest_json = serde_json::to_string_pretty(&builtins).unwrap();
+        let (parsed_skills, warnings) = parse_skill_manifest(&manifest_json);
+        assert_eq!(warnings, 0);
+        assert_eq!(parsed_skills.len(), 31);
+
+        // Registry population
+        let mut manager = SkillsManager {
+            skills: HashMap::new(),
+            available_capabilities: HashSet::new(),
+            auto_inject_enabled: true,
+        };
+        let (loaded, _) = manager.load_manifest(&manifest_json);
+        assert_eq!(loaded, 31);
+        assert_eq!(manager.get_all_skills().len(), 31);
+
+        // Filter test: with NO capabilities, only user_handoff skills are discoverable
+        let handoff_discovered = manager.discover_skills(&[]);
+        let handoff_count = builtins.iter().filter(|s| s.user_handoff).count();
+        assert_eq!(
+            handoff_discovered.len(),
+            handoff_count,
+            "Zero capabilities should only discover user_handoff skills"
+        );
+        for skill in &handoff_discovered {
+            assert!(
+                skill.user_handoff,
+                "Skill {} discovered without capabilities must have user_handoff=true",
+                skill.id
+            );
+        }
+
+        // Filter test: with all required capabilities available, all 31 skills must be discoverable
+        let all_capabilities: Vec<&str> = builtins
+            .iter()
+            .filter_map(|s| s.required_capability_id.as_deref())
+            .collect();
+        let all_discovered = manager.discover_skills(&all_capabilities);
+        assert_eq!(
+            all_discovered.len(),
+            31,
+            "All 31 skills should be discoverable when all capabilities are available"
+        );
+    }
+
+    #[test]
+    fn test_manifest_parsing_ignores_unknown_fields_and_counts_malformed_lines() {
+        // Line-based manifest with unknown fields, comments, and malformed lines
+        let manifest_data = concat!(
+            "# Builtin skill manifest\n",
+            "{\"id\": \"skill-1\", \"name\": \"Skill 1\", \"unknown_extension_meta\": {\"foo\": \"bar\"}, \"future_field\": 123, \"user_handoff\": true}\n",
+            "// Malformed line below\n",
+            "NOT_JSON_AT_ALL_BROKEN_SYNTAX\n",
+            "{\"id\": \"skill-2\", \"name\": \"Skill 2\", \"extra_flag\": true, \"required_capability_id\": \"cap_x\"}\n",
+            "{\"broken_json\": \n",
+            "{\"id\": \"skill-3\", \"name\": \"Skill 3\", \"slash_command\": \"/custom\", \"user_handoff\": true}\n"
+        );
+
+        let (skills, warnings) = parse_skill_manifest(manifest_data);
+        assert_eq!(skills.len(), 3, "Should parse the 3 valid skill entries");
+        assert_eq!(
+            warnings, 2,
+            "Should count exactly 2 warnings for the 2 malformed lines"
+        );
+
+        assert_eq!(skills[0].id, "skill-1");
+        assert!(skills[0].user_handoff);
+        assert_eq!(skills[1].id, "skill-2");
+        assert_eq!(
+            skills[1].required_capability_id.as_deref(),
+            Some("cap_x")
+        );
+        assert_eq!(skills[2].id, "skill-3");
+        assert_eq!(skills[2].slash_command, "/custom");
+    }
+
+    #[test]
+    fn test_skills_manager_set_available_capabilities_activates_backed_skills_only() {
+        let mut manager = SkillsManager::new();
+        // Default with empty capabilities: only user_handoff skills are discoverable
+        let default_discoverable = manager.get_discoverable_skills();
+        let handoff_count = default_discoverable.len();
+        assert!(handoff_count > 0);
+        for s in &default_discoverable {
+            assert!(s.user_handoff);
+        }
+
+        // Set capabilities: "web_search", "browser_history_search_desktop"
+        manager.set_available_capabilities(vec![
+            "web_search".to_string(),
+            "browser_history_search_desktop".to_string(),
+        ]);
+        let discoverable_with_caps = manager.get_discoverable_skills();
+        assert!(discoverable_with_caps.len() >= handoff_count);
+
+        // Capabilities audit: Every non-handoff discoverable skill must match a provided capability
+        for skill in &discoverable_with_caps {
+            if !skill.user_handoff {
+                let req = skill.required_capability_id.as_ref().unwrap();
+                assert!(
+                    req == "web_search" || req == "browser_history_search_desktop",
+                    "Discovered skill {} must have matching capability",
+                    skill.id
+                );
+            }
+        }
     }
 }

@@ -25,6 +25,7 @@
 #include "maho/browser/ai/maho_ai_page_context_extractor.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
+#include "maho/browser/ai/maho_page_adapter_registry.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 #include "maho/browser/mail_helper/maho_mail_service_factory.h"
 #include "maho/browser/mcp/maho_mcp_browser_action_handler.h"
@@ -235,6 +236,11 @@ void MahoBrowserToolExecutor::Execute(const std::string& tool_name,
   if (schema->browser_action_contract) {
     ExecuteBrowserAction(*schema->browser_action_contract, arguments,
                          std::move(callback));
+    return;
+  }
+
+  if (tool_name == "screenshot_proof" || tool_name == "browser_screenshot_full") {
+    ExecuteScreenshotProof(tool_name, arguments, std::move(callback));
     return;
   }
 
@@ -706,6 +712,19 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
         "Browser action target changed before dispatch."));
     return;
   }
+
+  // Seam lookup for specialized exact-origin page adapter before generic DOM fallback
+  const std::optional<std::string> active_origin_opt =
+      GetActiveTabOrigin(delegate, tab_id);
+  if (active_origin_opt.has_value()) {
+    if (auto page_adapter = maho::ai::LookupPageAdapterForSeam(
+            *active_origin_opt, tool_name)) {
+      // Specialized page adapter matched: log presence and continue falling through
+      // to DOM execution tier so actual browser operations are executed and verified.
+      LOG(INFO) << "Matched page adapter " << page_adapter->id() << " for origin "
+                << *active_origin_opt << "; proceeding with real browser action dispatch.";
+    }
+  }
   const bool consumes_ref =
       tool_name == "browser_click" || tool_name == "browser_type" ||
       tool_name == "browser_select" ||
@@ -717,8 +736,8 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     if (browser_action_refs_tab_id_ != tab_id || !origin.has_value() ||
         browser_action_refs_origin_ != *origin) {
       std::move(callback).Run(BuildBrowserActionErrorResult(
-          tool_name, kActionDeniedError,
-          "Accessibility snapshot target changed; capture a new snapshot."));
+          tool_name, maho::kMahoMcpErrorStaleReference,
+          maho::kMahoMcpMessageStaleReference));
       return;
     }
   }
@@ -937,6 +956,99 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
   AttachFallbackDecision(success, fallback_decision);
   RecordBrowserActionFallbackSuccess(contract, fallback_decision);
   std::move(callback).Run(std::move(success));
+}
+
+void MahoBrowserToolExecutor::ExecuteScreenshotProof(
+    const std::string& tool_name,
+    const base::DictValue& arguments,
+    ToolResultCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMcpBrowserDelegate* delegate = GetBrowserActionDelegate();
+  if (!delegate) {
+    std::move(callback).Run(
+        BuildErrorResult(tool_name, "Browser delegate unavailable."));
+    return;
+  }
+
+  std::string resolve_error;
+  std::optional<int> maybe_tab_id =
+      ResolveBrowserActionTabId(delegate, arguments, resolve_error);
+  if (!maybe_tab_id.has_value()) {
+    std::move(callback).Run(BuildBrowserActionErrorResult(
+        tool_name, kActionDeniedError,
+        resolve_error.empty() ? "No eligible active tab" : resolve_error));
+    return;
+  }
+  const int tab_id = *maybe_tab_id;
+
+  std::optional<std::string> active_origin =
+      GetActiveTabOrigin(delegate, tab_id);
+  if (!active_origin.has_value()) {
+    std::move(callback).Run(BuildBrowserActionErrorResult(
+        tool_name, kActionDeniedError,
+        "Active tab origin is unavailable; browser action failed closed."));
+    return;
+  }
+
+  // Capability Broker Gate: evaluate against canonical policy broker
+  maho::ai::CapabilityRequestContext req_ctx;
+  req_ctx.surface = maho::ai::CapabilitySurface::kDesktopAgent;
+  req_ctx.principal =
+      maho::ai::CapabilityPrincipal::MakeInternalAgent(browser_action_lease_holder_id_);
+  req_ctx.capability_id = tool_name;
+  req_ctx.active_tab_id = tab_id;
+  req_ctx.source_origin = *active_origin;
+  req_ctx.lease_token = browser_action_lease_holder_id_;
+
+  const std::string* maybe_approval = arguments.FindString("approval_token");
+  if (maybe_approval) {
+    req_ctx.approval_token = *maybe_approval;
+  }
+
+  maho::ai::MahoCapabilityBroker broker;
+  maho::ai::CapabilityEvaluationResult evaluation = broker.Evaluate(req_ctx);
+  if (evaluation.decision == maho::ai::CapabilityDecisionKind::kDeny) {
+    std::move(callback).Run(BuildBrowserActionErrorResult(
+        tool_name, kActionDeniedError,
+        "Capability policy denied action: " + std::string(evaluation.message)));
+    return;
+  }
+
+  // Lease acquisition
+  maho::MahoMcpLeaseRegistry* lease_registry =
+      browser_action_lease_registry_for_testing_
+          ? browser_action_lease_registry_for_testing_.get()
+          : maho::MahoMcpSession::GetLeaseRegistryForBrowserActions();
+  if (lease_registry && !browser_action_lease_holder_id_.empty()) {
+    if (!lease_registry->IsHeldBy(tab_id, browser_action_lease_holder_id_)) {
+      constexpr bool kForceStealAlwaysAcquire = true;
+      maho::MahoMcpLeaseRegistry::AcquireResult lease = lease_registry->Acquire(
+          tab_id, browser_action_lease_holder_id_, base::Seconds(60),
+          kForceStealAlwaysAcquire);
+      if (!lease.ok) {
+        std::string error = "Active tab lease required for browser action";
+        if (!lease.previous_holder.empty()) {
+          error += "; held by " + lease.previous_holder;
+        }
+        std::move(callback).Run(BuildBrowserActionErrorResult(
+            tool_name, kActionDeniedError, error));
+        return;
+      }
+    }
+  }
+
+  delegate->CaptureFullPagePngBase64(
+      tab_id,
+      base::BindOnce(
+          [](std::string tool_name, ToolResultCallback cb, std::string b64) {
+            base::DictValue result;
+            result.Set("content_type", "image/png");
+            result.Set("data", std::move(b64));
+            base::DictValue success =
+                BuildBrowserActionSuccessResult(tool_name, std::move(result));
+            std::move(cb).Run(std::move(success));
+          },
+          tool_name, std::move(callback)));
 }
 
 void MahoBrowserToolExecutor::OnReadCurrentPageContext(

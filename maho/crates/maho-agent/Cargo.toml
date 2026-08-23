@@ -13,6 +13,7 @@ maho-storage = { path = "../maho-storage" }
 maho-core = { path = "../maho-core" }
 maho-browser-mcp = { path = "../maho-browser-mcp", default-features = false }
 async-trait = "0.1"
+base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -27,6 +28,7 @@ dyn-clone = "1"
 swiftide-core = "0.32"
 async-anthropic = "0.6"
 uuid = { workspace = true }
+chrono = { workspace = true }
 libc = "0.2"
 zeroize = { version = "1", features = ["zeroize_derive"] }
 secrecy = "0.10.3"

@@ -255,5 +255,93 @@ TEST_F(MahoArtifactRegistryTest, ProfileScopedFactoryReturnsStableInstance) {
             MahoArtifactRegistry::GetForProfile(profile()));
 }
 
+TEST_F(MahoArtifactRegistryTest, DeducesFormatTypedArtifactKinds) {
+  auto html_id = registry_->RegisterArtifact(
+      "session", "page.html", "text/html", 10, "page.html", 1);
+  ASSERT_TRUE(html_id.has_value());
+  auto html_art = registry_->GetArtifact(*html_id);
+  ASSERT_TRUE(html_art.has_value());
+  EXPECT_EQ(html_art->kind, MahoArtifactKind::kHtml);
+
+  auto pdf_id = registry_->RegisterArtifact(
+      "session", "document.pdf", "application/pdf", 20, "document.pdf", 2);
+  ASSERT_TRUE(pdf_id.has_value());
+  auto pdf_art = registry_->GetArtifact(*pdf_id);
+  ASSERT_TRUE(pdf_art.has_value());
+  EXPECT_EQ(pdf_art->kind, MahoArtifactKind::kPdf);
+
+  auto xlsx_id = registry_->RegisterArtifact(
+      "session", "sheet.xlsx",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 30,
+      "sheet.xlsx", 3);
+  ASSERT_TRUE(xlsx_id.has_value());
+  auto xlsx_art = registry_->GetArtifact(*xlsx_id);
+  ASSERT_TRUE(xlsx_art.has_value());
+  EXPECT_EQ(xlsx_art->kind, MahoArtifactKind::kXlsx);
+
+  auto csv_id = registry_->RegisterArtifact(
+      "session", "data.csv", "text/csv", 15, "data.csv", 4);
+  ASSERT_TRUE(csv_id.has_value());
+  auto csv_art = registry_->GetArtifact(*csv_id);
+  ASSERT_TRUE(csv_art.has_value());
+  EXPECT_EQ(csv_art->kind, MahoArtifactKind::kXlsx);
+
+  auto txt_id = registry_->RegisterArtifact(
+      "session", "notes.txt", "text/plain", 5, "notes.txt", 5);
+  ASSERT_TRUE(txt_id.has_value());
+  auto txt_art = registry_->GetArtifact(*txt_id);
+  ASSERT_TRUE(txt_art.has_value());
+  EXPECT_EQ(txt_art->kind, MahoArtifactKind::kGeneric);
+}
+
+TEST_F(MahoArtifactRegistryTest, ExplicitKindPreservedAcrossReload) {
+  auto id = registry_->RegisterArtifact(
+      "session", "custom_data.bin", "application/octet-stream", 100,
+      "custom_data.bin", 1, MahoArtifactKind::kXlsx);
+  ASSERT_TRUE(id.has_value());
+  auto art = registry_->GetArtifact(*id);
+  ASSERT_TRUE(art.has_value());
+  EXPECT_EQ(art->kind, MahoArtifactKind::kXlsx);
+
+  // Flush write and reload from disk
+  task_environment()->RunUntilIdle();
+  registry_ = std::make_unique<MahoArtifactRegistry>(
+      profile(), MahoArtifactRegistry::kDefaultStorageLimitBytes, &tick_clock_);
+  task_environment()->RunUntilIdle();
+
+  auto reloaded = registry_->GetArtifact(*id);
+  ASSERT_TRUE(reloaded.has_value());
+  EXPECT_EQ(reloaded->kind, MahoArtifactKind::kXlsx);
+}
+
+TEST_F(MahoArtifactRegistryTest, TokenGatedPreviewEnforcement) {
+  const ArtifactId id = Register("session", "report.pdf", "report.pdf", 25, 1);
+  auto token = registry_->IssueCapability(id, "preview", web_contents());
+  ASSERT_TRUE(token.has_value());
+
+  // Metadata retrieval for response header derivation
+  auto meta = registry_->GetCapabilityArtifactForResponseMetadata(*token, "preview");
+  ASSERT_TRUE(meta.has_value());
+  EXPECT_EQ(meta->display_name, "report.pdf");
+  EXPECT_EQ(meta->kind, MahoArtifactKind::kPdf);
+
+  // Metadata check fails with wrong purpose
+  EXPECT_FALSE(registry_->GetCapabilityArtifactForResponseMetadata(*token, "export"));
+
+  // Body verification enforces web contents binding and purpose
+  auto verified = registry_->VerifyCapability(*token, "preview", web_contents());
+  ASSERT_TRUE(verified.has_value());
+  EXPECT_EQ(verified->artifact_id, id);
+
+  // Different purpose denied
+  EXPECT_FALSE(registry_->VerifyCapability(*token, "export", web_contents()));
+
+  // Different WebContents denied
+  EXPECT_FALSE(registry_->VerifyCapability(*token, "preview", other_contents_.get()));
+
+  // Invalid token denied
+  EXPECT_FALSE(registry_->VerifyCapability("invalid-token", "preview", web_contents()));
+}
+
 } // namespace
 } // namespace maho::ai

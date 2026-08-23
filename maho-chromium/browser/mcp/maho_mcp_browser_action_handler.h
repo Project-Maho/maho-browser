@@ -59,16 +59,14 @@ class MahoMcpBrowserActionHandler {
                             const RefTable& refs,
                             int tab_id,
                             const base::DictValue* arguments) {
-    if (!arguments || !arguments->FindInt("ref")) {
-      return MakeError(-32602, "Invalid params: ref required");
+    Result validation = ValidateClickRequest(refs, arguments);
+    if (validation.error.has_value()) {
+      return validation;
     }
     int ref = arguments->FindInt("ref").value();
-    auto it = refs.find(ref);
-    if (it == refs.end()) {
-      return UnknownRefError();
-    }
+    ui::AXNodeID ax_id = validation.value.FindInt("ax_id").value();
 
-    bool clicked = delegate && delegate->Click(tab_id, it->second);
+    bool clicked = delegate && delegate->Click(tab_id, ax_id);
     if (!clicked) {
       return MakeError(-32000,
                        "Action failed: click could not be dispatched");
@@ -84,28 +82,16 @@ class MahoMcpBrowserActionHandler {
                            const RefTable& refs,
                            int tab_id,
                            const base::DictValue* arguments) {
-    if (!arguments || !arguments->FindInt("ref") ||
-        !arguments->FindString("text")) {
-      return MakeError(-32602, "Invalid params: ref and text required");
+    Result validation =
+        ValidateTypeRequest(delegate, refs, tab_id, arguments);
+    if (validation.error.has_value()) {
+      return validation;
     }
     int ref = arguments->FindInt("ref").value();
-    auto it = refs.find(ref);
-    if (it == refs.end()) {
-      return UnknownRefError();
-    }
-
-    const bool allow_credentials =
-        arguments->FindBool("allow_credentials").value_or(false);
-    if (!allow_credentials && delegate &&
-        IsCredentialField(delegate->GetFieldMetadata(tab_id, it->second))) {
-      return MakeError(
-          -32002,
-          "Credential fields (password, one-time-code, recovery) cannot be "
-          "filled through generic typing");
-    }
+    ui::AXNodeID ax_id = validation.value.FindInt("ax_id").value();
 
     const std::string& text = *arguments->FindString("text");
-    bool typed = delegate && delegate->Type(tab_id, it->second, text);
+    bool typed = delegate && delegate->Type(tab_id, ax_id, text);
     if (!typed) {
       return MakeError(-32000,
                        "Action failed: type could not be dispatched");
@@ -115,6 +101,48 @@ class MahoMcpBrowserActionHandler {
     result.Set("typed", typed);
     result.Set("ref", ref);
     return MakeSuccess(std::move(result));
+  }
+
+  static Result ValidateClickRequest(const RefTable& refs,
+                                     const base::DictValue* arguments) {
+    if (!arguments || !arguments->FindInt("ref")) {
+      return MakeError(-32602, "Invalid params: ref required");
+    }
+    const int ref = arguments->FindInt("ref").value();
+    auto it = refs.find(ref);
+    if (it == refs.end()) {
+      return UnknownRefError();
+    }
+    base::DictValue value;
+    value.Set("ax_id", static_cast<int>(it->second));
+    return MakeSuccess(std::move(value));
+  }
+
+  static Result ValidateTypeRequest(MahoMcpBrowserDelegate* delegate,
+                                    const RefTable& refs,
+                                    int tab_id,
+                                    const base::DictValue* arguments) {
+    if (!arguments || !arguments->FindInt("ref") ||
+        !arguments->FindString("text")) {
+      return MakeError(-32602, "Invalid params: ref and text required");
+    }
+    const int ref = arguments->FindInt("ref").value();
+    auto it = refs.find(ref);
+    if (it == refs.end()) {
+      return UnknownRefError();
+    }
+    const bool allow_credentials =
+        arguments->FindBool("allow_credentials").value_or(false);
+    if (!allow_credentials && delegate &&
+        IsCredentialField(delegate->GetFieldMetadata(tab_id, it->second))) {
+      return MakeError(
+          -32002,
+          "Credential fields (password, one-time-code, recovery) cannot be "
+          "filled through generic typing");
+    }
+    base::DictValue value;
+    value.Set("ax_id", static_cast<int>(it->second));
+    return MakeSuccess(std::move(value));
   }
 
   static Result HandleSelect(MahoMcpBrowserDelegate* delegate,
@@ -256,6 +284,26 @@ class MahoMcpBrowserActionHandler {
     base::DictValue result;
     result.Set("key_pressed", true);
     result.Set("key", key);
+    return MakeSuccess(std::move(result));
+  }
+
+  static Result HandleFileUpload(MahoMcpBrowserDelegate* delegate,
+                                 int tab_id,
+                                 const base::DictValue* arguments) {
+    if (!arguments || !arguments->FindString("path")) {
+      return MakeError(-32602, "Invalid params: path required");
+    }
+    const std::string& path = *arguments->FindString("path");
+    if (path.empty()) {
+      return MakeError(-32602, "Invalid params: path required");
+    }
+    if (!delegate || !delegate->SelectFileForPendingChooser(tab_id, path)) {
+      return MakeError(-32000,
+                       "Action failed: file upload could not be dispatched");
+    }
+
+    base::DictValue result;
+    result.Set("file_selected", true);
     return MakeSuccess(std::move(result));
   }
 

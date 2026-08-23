@@ -8,9 +8,13 @@
 #include <string>
 #include <string_view>
 
+#if !defined(MAHO_STANDALONE_TEST)
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
+#endif
+
+#include <optional>
 
 namespace maho::credential_redaction {
 
@@ -206,6 +210,7 @@ inline std::string RedactCredentialText(std::string_view input) {
   return output;
 }
 
+#if !defined(MAHO_STANDALONE_TEST)
 inline void RedactStructuredValue(base::Value& value) {
   if (value.is_string()) {
     value = base::Value(RedactCredentialText(value.GetString()));
@@ -231,8 +236,10 @@ inline void RedactStructuredValue(base::Value& value) {
     }
   }
 }
+#endif
 
 inline std::string RedactJsonOrText(std::string_view input) {
+#if !defined(MAHO_STANDALONE_TEST)
   std::optional<base::Value> parsed =
       base::JSONReader::Read(input, base::JSON_PARSE_RFC);
   if (!parsed.has_value()) {
@@ -242,6 +249,9 @@ inline std::string RedactJsonOrText(std::string_view input) {
   std::string output;
   base::JSONWriter::Write(*parsed, &output);
   return output;
+#else
+  return RedactCredentialText(input);
+#endif
 }
 
 }  // namespace maho::credential_redaction

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "base/timer/timer.h"
 
 struct MahoCore;
@@ -14,6 +15,8 @@ namespace maho {
 
 class MahoRoutinesScheduler {
  public:
+  static constexpr base::TimeDelta kStatusTickInterval = base::Seconds(30);
+
   explicit MahoRoutinesScheduler(MahoCore* core);
   ~MahoRoutinesScheduler();
 

@@ -7,10 +7,16 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -46,6 +52,25 @@ std::unique_ptr<MahoMcpSession> MakeInitializedSession() {
   return session;
 }
 
+std::unique_ptr<MahoMcpSession> MakeInitializedTrustedCliSession() {
+#if BUILDFLAG(IS_APPLE)
+  constexpr char kMahoCliPath[] =
+      "/Applications/Maho.app/Contents/Helpers/maho";
+#else
+  constexpr char kMahoCliPath[] = "/usr/bin/maho";
+#endif
+  auto session = std::make_unique<MahoMcpSession>(
+      getuid(), nullptr, kMahoCliPath, true);
+  auto responses = session->ProcessData(
+      R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+      R"("params":{"protocolVersion":"2025-03-26",)"
+      R"("controllerKind":"maho-cli",)"
+      R"("clientInfo":{"name":"itest","version":"0.1.0"}}})"
+      "\n");
+  CHECK_EQ(responses.size(), 1u);
+  return session;
+}
+
 base::Value CallTool(MahoMcpSession* session,
                      const std::string& name,
                      const std::string& args,
@@ -61,6 +86,63 @@ base::Value CallTool(MahoMcpSession* session,
   std::optional<base::Value> parsed =
       base::JSONReader::Read(responses.back(), base::JSON_PARSE_RFC);
   return parsed.has_value() ? std::move(*parsed) : base::Value();
+}
+
+std::optional<base::Value> DeferredOutput(const base::Value& response) {
+  const base::DictValue* result = response.GetDict().FindDict("result");
+  if (!result) {
+    return std::nullopt;
+  }
+  const std::string* output_json = result->FindString("outputJson");
+  if (!output_json) {
+    return std::nullopt;
+  }
+  return base::JSONReader::Read(*output_json, base::JSON_PARSE_RFC);
+}
+
+std::optional<int> FindRefForElementId(const base::Value& node,
+                                       const std::string& element_id) {
+  const base::DictValue* dict = node.GetIfDict();
+  if (!dict) {
+    return std::nullopt;
+  }
+  const std::string* snapshot_element_id = dict->FindString("elementId");
+  if (snapshot_element_id && *snapshot_element_id == element_id) {
+    return dict->FindInt("ref");
+  }
+  const base::ListValue* children = dict->FindList("children");
+  if (!children) {
+    return std::nullopt;
+  }
+  for (const base::Value& child : *children) {
+    if (std::optional<int> ref = FindRefForElementId(child, element_id)) {
+      return ref;
+    }
+  }
+  return std::nullopt;
+}
+
+const base::DictValue* FindNodeForElementId(const base::Value& node,
+                                            const std::string& element_id) {
+  const base::DictValue* dict = node.GetIfDict();
+  if (!dict) {
+    return nullptr;
+  }
+  const std::string* snapshot_element_id = dict->FindString("elementId");
+  if (snapshot_element_id && *snapshot_element_id == element_id) {
+    return dict;
+  }
+  const base::ListValue* children = dict->FindList("children");
+  if (!children) {
+    return nullptr;
+  }
+  for (const base::Value& child : *children) {
+    if (const base::DictValue* found =
+            FindNodeForElementId(child, element_id)) {
+      return found;
+    }
+  }
+  return nullptr;
 }
 
 int ActiveTabSessionId(Browser* browser) {
@@ -234,6 +316,159 @@ IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
   ASSERT_TRUE(after_error);
   EXPECT_EQ(after_error->FindInt("code").value(), -32004);
   EXPECT_EQ(*after_error->FindString("message"), "tab not found");
+}
+
+IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
+                       TrustedCliTypeIsVerifiedAgainstRendererAxState) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<input%20id%3D'mcp-target'%20aria-label%3D'MCP%20target'>")));
+  const int tab_id = ActiveTabSessionId(browser());
+  ASSERT_NE(tab_id, 0);
+
+  auto session = MakeInitializedTrustedCliSession();
+  base::Value snapshot = CallTool(
+      session.get(), "browser_accessibility_snapshot",
+      base::StringPrintf(R"({"tab_id":%d})", tab_id), 2);
+  const base::DictValue* snapshot_result = snapshot.GetDict().FindDict("result");
+  ASSERT_TRUE(snapshot_result);
+  std::optional<int> ref =
+      FindRefForElementId(base::Value(snapshot_result->Clone()), "mcp-target");
+  ASSERT_TRUE(ref);
+
+  std::vector<std::string> deferred_responses;
+  base::RunLoop run_loop;
+  bool timed_out = false;
+  session->SetDeferredResponseSender(base::BindRepeating(
+      [](std::vector<std::string>* responses, base::RunLoop* loop,
+         std::string response) {
+        responses->push_back(std::move(response));
+        loop->Quit();
+      },
+      &deferred_responses, &run_loop));
+  base::OneShotTimer timeout;
+  timeout.Start(FROM_HERE, base::Seconds(5),
+                base::BindOnce(
+                    [](bool* out_timed_out, base::RunLoop* loop) {
+                      *out_timed_out = true;
+                      loop->Quit();
+                    },
+                    &timed_out, &run_loop));
+
+  auto immediate = session->ProcessData(base::StringPrintf(
+      R"({"jsonrpc":"2.0","method":"tools/call","id":3,)"
+      R"("params":{"name":"browser_type",)"
+      R"("arguments":{"tab_id":%d,"ref":%d,"text":"verified value"}}})"
+      "\n",
+      tab_id, *ref));
+  EXPECT_TRUE(immediate.empty());
+  run_loop.Run();
+  timeout.Stop();
+  ASSERT_FALSE(timed_out);
+  ASSERT_EQ(deferred_responses.size(), 1u);
+
+  std::optional<base::Value> typed_response =
+      base::JSONReader::Read(deferred_responses.front(), base::JSON_PARSE_RFC);
+  ASSERT_TRUE(typed_response);
+  std::optional<base::Value> typed_output = DeferredOutput(*typed_response);
+  ASSERT_TRUE(typed_output);
+  const base::DictValue* typed_output_dict = typed_output->GetIfDict();
+  ASSERT_TRUE(typed_output_dict);
+  EXPECT_TRUE(typed_output_dict->FindBool("typed").value_or(false));
+  EXPECT_TRUE(typed_output_dict->FindBool("verified").value_or(false));
+
+  base::Value after = CallTool(
+      session.get(), "browser_accessibility_snapshot",
+      base::StringPrintf(R"({"tab_id":%d})", tab_id), 4);
+  const base::DictValue* after_result = after.GetDict().FindDict("result");
+  ASSERT_TRUE(after_result);
+  const base::DictValue* field =
+      FindNodeForElementId(base::Value(after_result->Clone()), "mcp-target");
+  ASSERT_TRUE(field);
+  const std::string* value = field->FindString("value");
+  ASSERT_TRUE(value);
+  EXPECT_EQ(*value, "verified value");
+}
+
+IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
+                       SnapshotRefRejectsCommittedNavigation) {
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(),
+      GURL("data:text/html,<input%20id%3D'mcp-target'%20aria-label%3D'MCP%20target'>")));
+  const int tab_id = ActiveTabSessionId(browser());
+  ASSERT_NE(tab_id, 0);
+
+  auto session = MakeInitializedTrustedCliSession();
+  base::Value snapshot = CallTool(
+      session.get(), "browser_accessibility_snapshot",
+      base::StringPrintf(R"({"tab_id":%d})", tab_id), 2);
+  const base::DictValue* snapshot_result = snapshot.GetDict().FindDict("result");
+  ASSERT_TRUE(snapshot_result);
+  std::optional<int> ref =
+      FindRefForElementId(base::Value(snapshot_result->Clone()), "mcp-target");
+  ASSERT_TRUE(ref);
+
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(
+      browser(), GURL("data:text/html,<input%20id%3D'new-target'>")));
+
+  base::Value response = CallTool(
+      session.get(), "browser_type",
+      base::StringPrintf(
+          R"({"tab_id":%d,"ref":%d,"text":"must not dispatch"})",
+          tab_id, *ref),
+      3);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorStaleReference);
+}
+
+IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,
+                       TypeInIframeSucceedsWithVerification) {
+  // Test iframe typing and AX fallback verification for nested frames.
+  const std::string html =
+      "data:text/html,"
+      "<html><body>"
+      "<iframe id='test-frame' srcdoc=\""
+      "<html><body><input id='iframe-input' placeholder='Name'></body></html>"
+      "\"></iframe>"
+      "</body></html>";
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), GURL(html)));
+
+  int tab_id = GetActiveTabId();
+  ASSERT_GT(tab_id, 0);
+
+  auto session = MakeInitializedTrustedCliSession();
+  base::Value snapshot = CallTool(
+      session.get(), "browser_accessibility_snapshot",
+      base::StringPrintf(R"({"tab_id":%d})", tab_id), 2);
+  const base::DictValue* snapshot_result = snapshot.GetDict().FindDict("result");
+  ASSERT_TRUE(snapshot_result);
+  std::optional<int> ref =
+      FindRefForElementId(base::Value(snapshot_result->Clone()), "iframe-input");
+  ASSERT_TRUE(ref);
+
+  base::Value response = CallTool(
+      session.get(), "browser_type",
+      base::StringPrintf(
+          R"({"tab_id":%d,"ref":%d,"text":"윤인도"})",
+          tab_id, *ref),
+      3);
+  const base::DictValue* type_result = response.GetDict().FindDict("result");
+  ASSERT_TRUE(type_result);
+  EXPECT_TRUE(type_result->FindBool("typed").value_or(false));
+  EXPECT_TRUE(type_result->FindBool("verified").value_or(false));
+
+  // Also verify numbers
+  base::Value response_num = CallTool(
+      session.get(), "browser_type",
+      base::StringPrintf(
+          R"({"tab_id":%d,"ref":%d,"text":"01024674727"})",
+          tab_id, *ref),
+      4);
+  const base::DictValue* num_result = response_num.GetDict().FindDict("result");
+  ASSERT_TRUE(num_result);
+  EXPECT_TRUE(num_result->FindBool("typed").value_or(false));
+  EXPECT_TRUE(num_result->FindBool("verified").value_or(false));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoMcpIncognitoBrowserTest,

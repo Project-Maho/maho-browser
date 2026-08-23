@@ -12,16 +12,20 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
-fn get_mcp_runtime() -> &'static Runtime {
-    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
+fn get_mcp_runtime() -> Result<&'static Runtime> {
+    static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
+    let res = RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("mcp-worker-pool")
             .enable_all()
             .build()
-            .expect("Failed to build MCP dedicated runtime")
-    })
+            .map_err(|e| format!("Failed to build MCP dedicated runtime: {e}"))
+    });
+    match res {
+        Ok(rt) => Ok(rt),
+        Err(e) => Err(anyhow::anyhow!("{e}")),
+    }
 }
 
 /// Decide the *candidate* default permission for tools exposed over a UDS server.
@@ -235,7 +239,7 @@ impl McpClient {
     pub async fn connect(config: &AiMcpServer, auth_token: Option<String>) -> Result<Self> {
         let config_clone = config.clone();
 
-        let handle = get_mcp_runtime()
+        let handle = get_mcp_runtime()?
             .spawn(async move { Self::connect_internal(&config_clone, auth_token).await });
 
         match handle.await? {
@@ -452,7 +456,7 @@ impl McpClient {
         if let Some(browser_client) = self.browser_client.clone() {
             let server_name = self.server_name.clone();
             let permission = self.resolved_permission;
-            let handle = get_mcp_runtime().spawn(async move {
+            let handle = get_mcp_runtime()?.spawn(async move {
                 let result = browser_client
                     .call("tools/list", serde_json::json!({}))
                     .await?;
@@ -518,7 +522,7 @@ impl McpClient {
 
         let permission = self.resolved_permission;
 
-        let handle = get_mcp_runtime().spawn(async move {
+        let handle = get_mcp_runtime()?.spawn(async move {
             let fut = peer.list_all_tools();
             let tools = tokio::time::timeout(timeout, fut)
                 .await
@@ -590,7 +594,7 @@ impl McpClient {
 
         if let Some(browser_client) = self.browser_client.clone() {
             let output_cap = self.output_cap;
-            let handle = get_mcp_runtime().spawn(async move {
+            let handle = get_mcp_runtime()?.spawn(async move {
                 let result = browser_client.call_tool(&raw_name, args).await?;
                 apply_output_cap(result, output_cap)
             });
@@ -607,7 +611,7 @@ impl McpClient {
             params.arguments = Some(obj);
         }
 
-        let handle = get_mcp_runtime().spawn(async move {
+        let handle = get_mcp_runtime()?.spawn(async move {
             let fut = peer.call_tool(params);
             let res = tokio::time::timeout(timeout, fut)
                 .await
@@ -645,13 +649,15 @@ impl McpClient {
         let ws_id = self.workspace_id.clone();
         let s_name = self.server_name.clone();
 
-        let handle = get_mcp_runtime().spawn(async move {
-            if let Some(client) = client_opt.take() {
-                drop(client);
-            }
-        });
+        if let Ok(rt) = get_mcp_runtime() {
+            let handle = rt.spawn(async move {
+                if let Some(client) = client_opt.take() {
+                    drop(client);
+                }
+            });
 
-        let _ = handle.await;
+            let _ = handle.await;
+        }
 
         maho_types::events::core_update::emit_core_update(
             maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {

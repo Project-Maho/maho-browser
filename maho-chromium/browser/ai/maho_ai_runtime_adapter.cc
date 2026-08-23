@@ -7,3 +7,43 @@ MahoAiRuntimeEvent::MahoAiRuntimeEvent(MahoAiRuntimeEvent&&) = default;
 MahoAiRuntimeEvent& MahoAiRuntimeEvent::operator=(MahoAiRuntimeEvent&&) =
     default;
 MahoAiRuntimeEvent::~MahoAiRuntimeEvent() = default;
+
+void MahoAiRuntimeAdapter::RespondToInteraction(
+    const std::string& interaction_id,
+    const std::string& answer_json) {}
+
+bool MahoAiRuntimeAdapter::ReplayAfter(const std::string& run_id,
+                                       uint64_t after_seq,
+                                       RuntimeEventCallback on_event) {
+  return false;
+}
+
+uint64_t MahoAiRuntimeAdapter::GetLastConsumedEventSeq(
+    const std::string& run_id) const {
+  return 0;
+}
+
+bool MahoAiRuntimeAdapter::IsTurnActive() const {
+  return false;
+}
+
+bool MahoAiRuntimeAdapter::SubmitFollowUp(const std::string& message,
+                                         const std::string& intent) {
+  return false;
+}
+
+uint32_t MahoAiRuntimeAdapter::GetTurnQueueDepth() const {
+  return 0;
+}
+
+bool MahoAiRuntimeAdapter::WakeForNotification(const std::string& run_id,
+                                              const std::string& event_json) {
+  return false;
+}
+
+std::string MahoAiRuntimeAdapter::RegisterWait(const std::string& run_id,
+                                              const std::string& filter_json,
+                                              uint64_t timeout_ms) {
+  return "";
+}
+

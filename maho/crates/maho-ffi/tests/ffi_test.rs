@@ -734,3 +734,283 @@ fn test_sync_device_disconnect_and_rename() {
 
     unsafe { maho_ffi::maho_core_free(ptr) };
 }
+
+#[test]
+fn test_agent_unified_event_callback_leased_abi_null_safety() {
+    extern "C" {
+        fn maho_agent_register_unified_event_callback_leased(
+            session: *mut std::ffi::c_void,
+            callback: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const std::ffi::c_void)>,
+            user_data: *mut std::ffi::c_void,
+            on_release: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
+            release_user_data: *mut std::ffi::c_void,
+        ) -> bool;
+    }
+
+    unsafe {
+        // Passing null session and None/nullptr for release callback must safely return false without UB/panic
+        let res = maho_agent_register_unified_event_callback_leased(
+            std::ptr::null_mut(),
+            None,
+            std::ptr::null_mut(),
+            None,
+            std::ptr::null_mut(),
+        );
+        assert!(!res);
+    }
+}
+
+#[test]
+fn test_agent_unified_event_callback_leased_receives_event_and_releases() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::ffi::{CStr, CString};
+
+    #[derive(Debug, Clone)]
+    struct CapturedEvent {
+        run_id: String,
+        seq: u64,
+        payload: String,
+    }
+
+    unsafe extern "C" fn on_event(
+        user_data: *mut std::ffi::c_void,
+        event: *const maho_ffi::MahoUnifiedAgentEventEnvelope,
+    ) {
+        if user_data.is_null() || event.is_null() {
+            return;
+        }
+        let list = &*(user_data as *const Mutex<Vec<CapturedEvent>>);
+        let ev = &*event;
+        let run_id = if ev.run_id.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(ev.run_id).to_string_lossy().into_owned()
+        };
+        let payload = if ev.payload_json.is_null() {
+            String::new()
+        } else {
+            CStr::from_ptr(ev.payload_json).to_string_lossy().into_owned()
+        };
+        list.lock().unwrap().push(CapturedEvent {
+            run_id,
+            seq: ev.event_seq,
+            payload,
+        });
+    }
+
+    unsafe extern "C" fn on_release(user_data: *mut std::ffi::c_void) {
+        if !user_data.is_null() {
+            let counter = &*(user_data as *const AtomicUsize);
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    // Create a test session
+    let session = maho_ffi::agent::session::MahoAgentSession::create_for_test("test-sess-leased");
+    let session_ptr = Box::into_raw(session);
+
+    let captured = Arc::new(Mutex::new(Vec::<CapturedEvent>::new()));
+    let release_count = Arc::new(AtomicUsize::new(0));
+
+    unsafe {
+        // Register via crate-root exported symbol
+        let registered = maho_ffi::maho_agent_register_unified_event_callback_leased(
+            session_ptr,
+            Some(on_event),
+            Arc::as_ptr(&captured) as *mut std::ffi::c_void,
+            Some(on_release),
+            Arc::as_ptr(&release_count) as *mut std::ffi::c_void,
+        );
+        assert!(registered, "Registration must return true");
+
+        // Start active turn so follow-up is queued and emits status event
+        {
+            let session_ref = &*session_ptr;
+            let mut ctrl = session_ref.turn_controller.lock().unwrap();
+            let _ = ctrl.start_turn("active-turn-1");
+        }
+
+        let run_id_c = CString::new("run-101").unwrap();
+        let msg_c = CString::new(r#"{"message":"Queued question"}"#).unwrap();
+        let intent_c = CString::new("queue").unwrap();
+
+        let submitted = maho_ffi::maho_agent_turn_submit(
+            session_ptr,
+            run_id_c.as_ptr(),
+            msg_c.as_ptr(),
+            intent_c.as_ptr(),
+        );
+        assert!(submitted, "turn_submit must succeed");
+
+        // Assert event was received
+        let events = captured.lock().unwrap().clone();
+        assert!(!events.is_empty(), "Callback must receive unified event");
+        assert_eq!(events[0].run_id, "run-101");
+        assert!(events[0].seq > 0);
+        assert!(events[0].payload.contains("turn_queued"));
+
+        // Unregister -> release callback must be invoked
+        let unreg = maho_ffi::maho_agent_unregister_unified_event_callback(session_ptr);
+        assert!(unreg, "Unregister must return true");
+        assert_eq!(release_count.load(Ordering::SeqCst), 1, "Release callback must be called exactly once");
+
+        // Clean up
+        drop(Box::from_raw(session_ptr));
+    }
+}
+
+#[test]
+fn test_agent_get_last_compaction_info_after_overflow() {
+    use std::ffi::CStr;
+
+    let session_id = "test-sess-compaction-1";
+    let session = maho_ffi::agent::session::MahoAgentSession::create_for_test(session_id);
+    let session_ptr = Box::into_raw(session);
+
+    unsafe {
+        // Null checks
+        assert!(!maho_ffi::maho_agent_get_last_compaction_info(std::ptr::null_mut(), std::ptr::null_mut()));
+        let mut out_null_test: *mut std::ffi::c_char = std::ptr::null_mut();
+        assert!(!maho_ffi::maho_agent_get_last_compaction_info(std::ptr::null_mut(), &mut out_null_test));
+
+        // When no compaction has occurred yet, returns false
+        let mut out_json: *mut std::ffi::c_char = std::ptr::null_mut();
+        let has_compaction = maho_ffi::maho_agent_get_last_compaction_info(session_ptr, &mut out_json);
+        assert!(!has_compaction);
+        assert!(out_json.is_null());
+
+        // Simulate context-too-large flow: record a compaction event in the journal
+        {
+            let session_ref = &*session_ptr;
+            let journal_lock = session_ref.runtime.run_journal();
+            let mut journal = journal_lock.lock().unwrap();
+            let run_id = maho_agent::run_journal::AgentRunId::new(session_id);
+            if !journal.runs().contains_key(&run_id) {
+                let _ = journal.start_run(run_id.clone(), session_id);
+            }
+            let _ = journal.append_event(
+                &run_id,
+                "compacting",
+                serde_json::json!({
+                    "status": "compacting",
+                    "trigger": "emergency_overflow_recovery",
+                    "triggered_at": 1771800000u64,
+                    "session_id": session_id,
+                    "estimated_tokens_before": 120000,
+                    "estimated_tokens_after": 60000,
+                    "dropped_turns": vec![1usize, 2usize, 3usize],
+                    "kept_markers": vec!["system_contract".to_string(), "active_tools".to_string()],
+                })
+                .to_string(),
+            );
+        }
+
+        // Query last compaction info via FFI
+        let ok = maho_ffi::maho_agent_get_last_compaction_info(session_ptr, &mut out_json);
+        assert!(ok, "maho_agent_get_last_compaction_info must return true after compaction");
+        assert!(!out_json.is_null());
+
+        let json_str = CStr::from_ptr(out_json).to_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(json_str).expect("valid json output");
+
+        assert_eq!(parsed["session_id"], session_id);
+        assert_eq!(parsed["triggered_at"], 1771800000u64);
+
+        let dropped = parsed["dropped_turns"].as_array().expect("dropped_turns array");
+        assert!(!dropped.is_empty(), "dropped_turns must be non-empty");
+        assert_eq!(dropped.len(), 3);
+        assert_eq!(dropped[0], 1);
+        assert_eq!(dropped[1], 2);
+        assert_eq!(dropped[2], 3);
+
+        let kept = parsed["kept_markers"].as_array().expect("kept_markers array");
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0], "system_contract");
+
+        // Free the returned C string
+        maho_ffi::maho_string_free(out_json);
+
+        // Teardown
+        drop(Box::from_raw(session_ptr));
+    }
+}
+
+#[test]
+fn test_skills_occurrence_guard_restart_durability_ffi() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let state_path = temp_dir.path().join("routine_occurrences.json");
+    maho_ffi::skills::set_custom_occurrence_guard_path(Some(state_path.clone()));
+
+    maho_ffi::skills::clear_occurrence_guard();
+
+    // 1. Initial fire: occurrence guard records an occurrence
+    let routine_id = "backup_tabs";
+    let minute_bucket: i64 = 1771850000;
+    let occurrence_key = format!("{}:{}", routine_id, minute_bucket);
+    let now_sec = minute_bucket + 15;
+
+    {
+        let mut guard = maho_ffi::skills::get_occurrence_guard().lock().unwrap();
+        guard.insert(occurrence_key.clone(), now_sec);
+        maho_ffi::skills::save_occurrence_guard_to_disk(&state_path, &guard);
+    }
+
+    // Verify persisted file exists
+    assert!(state_path.exists());
+    let disk_guard = maho_ffi::skills::load_occurrence_guard_from_disk(&state_path);
+    assert_eq!(disk_guard.get(&occurrence_key), Some(&now_sec));
+
+    // 2. Simulate process restart: wipe in-memory guard and reload from disk
+    maho_ffi::skills::clear_occurrence_guard();
+    {
+        let guard = maho_ffi::skills::get_occurrence_guard().lock().unwrap();
+        assert!(guard.is_empty());
+    }
+
+    maho_ffi::skills::reload_occurrence_guard_from_disk(&state_path);
+
+    // 3. Verify same occurrence is NOT re-fired
+    {
+        let guard = maho_ffi::skills::get_occurrence_guard().lock().unwrap();
+        assert!(guard.contains_key(&occurrence_key));
+    }
+
+    // 4. Next minute bucket occurrence fires successfully
+    let next_minute_bucket = minute_bucket + 60;
+    let next_occurrence_key = format!("{}:{}", routine_id, next_minute_bucket);
+    let next_now_sec = next_minute_bucket + 10;
+
+    {
+        let mut guard = maho_ffi::skills::get_occurrence_guard().lock().unwrap();
+        assert!(!guard.contains_key(&next_occurrence_key));
+        guard.insert(next_occurrence_key.clone(), next_now_sec);
+        maho_ffi::skills::save_occurrence_guard_to_disk(&state_path, &guard);
+    }
+
+    let updated_disk_guard = maho_ffi::skills::load_occurrence_guard_from_disk(&state_path);
+    assert!(updated_disk_guard.contains_key(&next_occurrence_key));
+    assert!(updated_disk_guard.contains_key(&occurrence_key));
+
+    maho_ffi::skills::set_custom_occurrence_guard_path(None);
+}
+
+#[test]
+fn test_maho_chat_config_abi_layout() {
+    use std::mem::{align_of, offset_of, size_of};
+    let ptr_size = size_of::<*const std::ffi::c_char>();
+    assert_eq!(size_of::<maho_ffi::MahoChatConfig>(), 4 * ptr_size);
+    assert_eq!(
+        align_of::<maho_ffi::MahoChatConfig>(),
+        align_of::<*const std::ffi::c_char>()
+    );
+    assert_eq!(offset_of!(maho_ffi::MahoChatConfig, api_key), 0);
+    assert_eq!(offset_of!(maho_ffi::MahoChatConfig, endpoint), ptr_size);
+    assert_eq!(offset_of!(maho_ffi::MahoChatConfig, model), 2 * ptr_size);
+    assert_eq!(
+        offset_of!(maho_ffi::MahoChatConfig, system_instruction),
+        3 * ptr_size
+    );
+}
+
+

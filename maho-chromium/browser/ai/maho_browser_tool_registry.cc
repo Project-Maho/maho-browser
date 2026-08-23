@@ -8,10 +8,14 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/no_destructor.h"
 #include "crypto/sha2.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_ffi.h"
 
 namespace {
 
@@ -246,6 +250,76 @@ base::DictValue BuildMailUpdateDraftSchema() {
   return BuildObjectSchema(std::move(properties), std::move(required));
 }
 
+base::DictValue BuildRoutineTriggerSchema() {
+  base::DictValue schema;
+  schema.Set("type", "string");
+  base::ListValue enum_list;
+  enum_list.Append("cron");
+  enum_list.Append("event");
+  schema.Set("enum", std::move(enum_list));
+  schema.Set(
+      "description",
+      "Trigger kind: 'cron' for schedule or 'event' for browser events "
+      "(event triggers are deferred and disabled until emitters are wired).");
+  return schema;
+}
+
+base::DictValue BuildRoutineCreateSchema() {
+  base::DictValue properties;
+  properties.Set("name", BuildStringSchema("Routine display name."));
+  properties.Set(
+      "prompt",
+      BuildStringSchema(
+          "Stored natural language prompt or recipe to execute. "
+          "Arbitrary executable or script payloads are strictly forbidden."));
+  properties.Set("trigger", BuildRoutineTriggerSchema());
+  properties.Set(
+      "schedule",
+      BuildStringSchema(
+          "Cron schedule expression (e.g. '0 9 * * *') when trigger is 'cron'."));
+  properties.Set(
+      "event",
+      BuildStringSchema(
+          "Event trigger name (e.g. 'on_startup', 'on_many_tabs') when trigger is 'event'."));
+  return BuildObjectSchema(std::move(properties), {"name", "prompt"});
+}
+
+base::DictValue BuildRoutineUpdateSchema() {
+  base::DictValue properties;
+  properties.Set("id", BuildStringSchema("Routine ID to update."));
+  properties.Set("name", BuildStringSchema("Updated routine name."));
+  properties.Set(
+      "prompt",
+      BuildStringSchema(
+          "Updated stored prompt or recipe. "
+          "Arbitrary executable or script payloads are strictly forbidden."));
+  properties.Set("trigger", BuildRoutineTriggerSchema());
+  properties.Set("schedule",
+                 BuildStringSchema("Updated cron schedule expression."));
+  properties.Set("event",
+                 BuildStringSchema("Updated event trigger name."));
+  properties.Set("enabled",
+                 BuildBooleanSchema("Whether the routine is enabled."));
+  return BuildObjectSchema(std::move(properties), {"id"});
+}
+
+base::DictValue BuildRoutineDeleteSchema() {
+  base::DictValue properties;
+  properties.Set("id", BuildStringSchema("Routine ID to delete."));
+  return BuildObjectSchema(std::move(properties), {"id"});
+}
+
+base::DictValue BuildRoutineHistorySchema() {
+  base::DictValue properties;
+  properties.Set(
+      "routine_id",
+      BuildStringSchema("Optional routine ID to filter execution history."));
+  properties.Set(
+      "limit",
+      BuildIntegerSchema("Maximum history rows to return; default 50.", 1, 100));
+  return BuildObjectSchema(std::move(properties), {});
+}
+
 void AddOptionalTabId(base::DictValue &properties) {
   properties.Set(
       "tab_id",
@@ -308,6 +382,10 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
     }
     required.Append("ref");
     required.Append("text");
+  } else if (tool_name == "browser_file_upload_select") {
+    properties.Set("path",
+                   BuildStringSchema("Absolute path to the AAB file to select."));
+    required.Append("path");
   } else if (tool_name == "browser_select") {
     properties.Set(
         "ref", BuildIntegerSchema(
@@ -635,6 +713,18 @@ BuildDesktopInputSchema(const CapabilityDescriptor &descriptor) {
   if (descriptor.tool_name == "search_in_page") {
     return BuildSearchSchema();
   }
+  if (descriptor.tool_name == "browser_history_search_desktop") {
+    base::DictValue properties;
+    properties.Set("query", BuildStringSchema("Text to search in history."));
+    properties.Set("max_results",
+                   BuildIntegerSchema("Maximum history results to return."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (descriptor.tool_name == "screenshot_proof") {
+    base::DictValue properties;
+    AddOptionalTabId(properties);
+    return BuildObjectSchema(std::move(properties), {});
+  }
   if (descriptor.tool_name == "mail_list_folders") {
     return BuildMailAccountSchema();
   }
@@ -656,6 +746,18 @@ BuildDesktopInputSchema(const CapabilityDescriptor &descriptor) {
   }
   if (descriptor.tool_name == "mail_update_draft") {
     return BuildMailUpdateDraftSchema();
+  }
+  if (descriptor.tool_name == "browser_routines_create") {
+    return BuildRoutineCreateSchema();
+  }
+  if (descriptor.tool_name == "browser_routines_update") {
+    return BuildRoutineUpdateSchema();
+  }
+  if (descriptor.tool_name == "browser_routines_delete") {
+    return BuildRoutineDeleteSchema();
+  }
+  if (descriptor.tool_name == "browser_routines_history") {
+    return BuildRoutineHistorySchema();
   }
   return BuildNoArgSchema();
 }
@@ -685,7 +787,8 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
                    BuildStringSchema("URL to open; defaults to about:blank."));
     return BuildObjectSchema(std::move(properties), {});
   }
-  if (name == "browser_history_search") {
+  if (name == "browser_history_search" ||
+      name == "browser_history_search_desktop") {
     properties.Set("query", BuildStringSchema("Text to search in history."));
     properties.Set("max_results",
                    BuildIntegerSchema("Maximum history results to return."));
@@ -703,6 +806,7 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
   }
   if (name == "browser_page_content" || name == "browser_page_text" ||
       name == "browser_page_context" || name == "browser_screenshot_full" ||
+      name == "screenshot_proof" ||
       name == "browser_network_start_capture" ||
       name == "browser_network_stop_capture" ||
       name == "browser_network_get_har" ||
@@ -732,6 +836,18 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
   if (name == "browser_routines_run") {
     properties.Set("id", BuildStringSchema("Routine id."));
     return BuildObjectSchema(std::move(properties), {"id"});
+  }
+  if (name == "browser_routines_create") {
+    return BuildRoutineCreateSchema();
+  }
+  if (name == "browser_routines_update") {
+    return BuildRoutineUpdateSchema();
+  }
+  if (name == "browser_routines_delete") {
+    return BuildRoutineDeleteSchema();
+  }
+  if (name == "browser_routines_history") {
+    return BuildRoutineHistorySchema();
   }
   if (name == "mail_list_folders") {
     return BuildMailAccountSchema();
@@ -1262,4 +1378,222 @@ MahoBrowserToolRegistry::SerializePhase1ToolSchemas(bool enabled) {
 bool MahoBrowserToolRegistry::IsBrowserActionTool(
     const std::string &tool_name) {
   return maho::ai::FindBrowserActionContract(tool_name) != nullptr;
+}
+
+// static
+bool MahoBrowserToolRegistry::IsRoutineEventTriggerSupported() {
+  // Event triggers remain disabled until browser notification and inbox heartbeat
+  // emitters are wired to the runtime in Wave 2B/3.
+  return false;
+}
+
+// static
+bool MahoBrowserToolRegistry::ExecuteRoutineCreate(
+    const base::DictValue& params,
+    MahoCore* core,
+    std::string* error_out) {
+  const std::string* name = params.FindString("name");
+  if (!name || name->empty()) {
+    if (error_out) {
+      *error_out = "Missing or empty routine 'name'";
+    }
+    return false;
+  }
+  const std::string* prompt = params.FindString("prompt");
+  if (!prompt || prompt->empty()) {
+    if (error_out) {
+      *error_out = "Missing or empty routine 'prompt'";
+    }
+    return false;
+  }
+
+  // Reject executable or script payloads explicitly.
+  if (params.Find("script") || params.Find("code") || params.Find("executable") ||
+      params.Find("command")) {
+    if (error_out) {
+      *error_out = "Script and code payloads are not accepted; use stored natural language prompts only";
+    }
+    return false;
+  }
+
+  const std::string* trigger = params.FindString("trigger");
+  if (trigger) {
+    if (*trigger != "cron" && *trigger != "event") {
+      if (error_out) {
+        *error_out = "Trigger must be either 'cron' or 'event'";
+      }
+      return false;
+    }
+    if (*trigger == "event" && !IsRoutineEventTriggerSupported()) {
+      if (error_out) {
+        *error_out = "Event triggers are deferred and currently disabled until emitters are wired";
+      }
+      return false;
+    }
+  }
+
+  if (params.Find("event") && !IsRoutineEventTriggerSupported()) {
+    if (error_out) {
+      *error_out = "Event triggers are deferred and currently disabled until emitters are wired";
+    }
+    return false;
+  }
+
+  base::DictValue routine_dict;
+  routine_dict.Set("name", *name);
+  routine_dict.Set("prompt", *prompt);
+  if (const std::string* schedule = params.FindString("schedule")) {
+    routine_dict.Set("schedule", *schedule);
+  }
+  if (const std::string* event = params.FindString("event")) {
+    routine_dict.Set("trigger", *event);
+  }
+
+  std::string json_str;
+  if (!base::JSONWriter::Write(routine_dict, &json_str)) {
+    if (error_out) {
+      *error_out = "Failed to serialize routine payload";
+    }
+    return false;
+  }
+
+  MahoCore* live_core = core ? core : maho::GetCore();
+  if (!live_core) {
+    if (error_out) {
+      *error_out = "MahoCore is not initialized";
+    }
+    return false;
+  }
+
+  int32_t rc = maho_routines_create_custom(live_core, json_str.c_str());
+  if (rc != 0) {
+    if (error_out) {
+      *error_out = "maho_routines_create_custom returned error code " + base::NumberToString(rc);
+    }
+    return false;
+  }
+  return true;
+}
+
+// static
+bool MahoBrowserToolRegistry::ExecuteRoutineUpdate(
+    const base::DictValue& params,
+    MahoCore* core,
+    std::string* error_out) {
+  const std::string* id = params.FindString("id");
+  if (!id || id->empty()) {
+    if (error_out) {
+      *error_out = "Missing or empty routine 'id'";
+    }
+    return false;
+  }
+
+  // Reject executable or script payloads explicitly.
+  if (params.Find("script") || params.Find("code") || params.Find("executable") ||
+      params.Find("command")) {
+    if (error_out) {
+      *error_out = "Script and code payloads are not accepted; use stored natural language prompts only";
+    }
+    return false;
+  }
+
+  const std::string* trigger = params.FindString("trigger");
+  if (trigger) {
+    if (*trigger != "cron" && *trigger != "event") {
+      if (error_out) {
+        *error_out = "Trigger must be either 'cron' or 'event'";
+      }
+      return false;
+    }
+    if (*trigger == "event" && !IsRoutineEventTriggerSupported()) {
+      if (error_out) {
+        *error_out = "Event triggers are deferred and currently disabled until emitters are wired";
+      }
+      return false;
+    }
+  }
+
+  if (params.Find("event") && !IsRoutineEventTriggerSupported()) {
+    if (error_out) {
+      *error_out = "Event triggers are deferred and currently disabled until emitters are wired";
+    }
+    return false;
+  }
+
+  MahoCore* live_core = core ? core : maho::GetCore();
+  if (!live_core) {
+    if (error_out) {
+      *error_out = "MahoCore is not initialized";
+    }
+    return false;
+  }
+
+  std::string json_str;
+  if (!base::JSONWriter::Write(params, &json_str)) {
+    if (error_out) {
+      *error_out = "Failed to serialize routine update payload";
+    }
+    return false;
+  }
+
+  int32_t rc = maho_routines_create_custom(live_core, json_str.c_str());
+  if (rc != 0) {
+    if (error_out) {
+      *error_out = "maho_routines_create_custom update returned error code " + base::NumberToString(rc);
+    }
+    return false;
+  }
+  return true;
+}
+
+// static
+bool MahoBrowserToolRegistry::ExecuteRoutineDelete(
+    std::string_view routine_id,
+    MahoCore* core,
+    std::string* error_out) {
+  if (routine_id.empty()) {
+    if (error_out) {
+      *error_out = "Routine ID cannot be empty";
+    }
+    return false;
+  }
+
+  MahoCore* live_core = core ? core : maho::GetCore();
+  if (!live_core) {
+    if (error_out) {
+      *error_out = "MahoCore is not initialized";
+    }
+    return false;
+  }
+
+  int32_t rc = maho_routines_delete_custom(live_core, std::string(routine_id).c_str());
+  if (rc != 0) {
+    if (error_out) {
+      *error_out = "maho_routines_delete_custom returned error code " + base::NumberToString(rc);
+    }
+    return false;
+  }
+  return true;
+}
+
+// static
+std::string MahoBrowserToolRegistry::ExecuteRoutineHistory(
+    std::optional<std::string_view> routine_id,
+    uint32_t limit,
+    MahoCore* core) {
+  MahoCore* live_core = core ? core : maho::GetCore();
+  if (!live_core) {
+    return "[]";
+  }
+
+  char* json = maho_routines_history(
+      live_core,
+      routine_id ? std::string(*routine_id).c_str() : nullptr,
+      limit);
+  if (!json) {
+    return "[]";
+  }
+  std::string result(json);
+  maho_string_free(json);
+  return result;
 }

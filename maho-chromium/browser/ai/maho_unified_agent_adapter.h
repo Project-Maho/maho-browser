@@ -39,6 +39,11 @@ struct MahoAcpHandle;
 class Browser;
 class PrefService;
 
+namespace maho::ai {
+class MahoAuthenticatedServiceApiBroker;
+class MahoAgentChannelGateway;
+}  // namespace maho::ai
+
 namespace network {
 class SharedURLLoaderFactory;
 }
@@ -116,6 +121,31 @@ struct BrowserToolPreflightState {
   bool requires_approval = false;
 };
 
+// ABI v2 Agent Event Kind
+enum class MahoAgentEventKindV2 : uint32_t {
+  kToken = 1,
+  kThinking = 2,
+  kToolCall = 3,
+  kToolResult = 4,
+  kArtifactCreated = 5,
+  kCompleted = 6,
+  kError = 7,
+  kInteractionRequest = 8,
+  kStatus = 9,
+};
+
+// Unified Agent Event Envelope across FFI boundaries
+struct MahoUnifiedAgentEventEnvelope {
+  uint32_t abi_version;
+  const char* run_id;
+  uint64_t event_seq;
+  MahoAgentEventKindV2 kind;
+  const char* payload_json;
+};
+
+using MahoUnifiedAgentEventCallback =
+    void (*)(void* user_data, const MahoUnifiedAgentEventEnvelope* event);
+
 // Injectable table of the maho-agent C FFI entry points the adapter calls.
 // Production uses GetProductionMahoAgentFfi() (forwards to the real symbols);
 // tests inject a fake table via set_agent_ffi_for_testing() to exercise the
@@ -162,6 +192,43 @@ struct MahoAgentFfi {
       MahoAgentSession* session,
       void (*cb)(void*, const char*),
       void* user_data);
+  // Unified Agent Event envelope callback & interaction / replay FFI (todo 8 & 9).
+  bool (*register_unified_event_callback_leased)(
+      MahoAgentSession* session,
+      void (*cb)(void*, const MahoUnifiedAgentEventEnvelope*),
+      void* user_data,
+      MahoAgentReleaseCallback on_release,
+      void* release_user_data);
+  bool (*unregister_unified_event_callback)(MahoAgentSession* session);
+  bool (*interaction_resolve)(MahoAgentSession* session,
+                              const char* request_id,
+                              const char* answer_json);
+  bool (*interaction_timeout)(MahoAgentSession* session,
+                              const char* request_id);
+  bool (*interaction_cancel)(MahoAgentSession* session,
+                             const char* request_id);
+  bool (*get_events_after)(MahoAgentSession* session,
+                           const char* run_id,
+                           uint64_t after_seq,
+                           char** out_json);
+  // Turn control and wait/wake / model routing FFI (todo 23).
+  bool (*turn_submit)(MahoAgentSession* session,
+                      const char* run_ctx,
+                      const char* message_json,
+                      const char* intent);
+  bool (*turn_queue_depth)(MahoAgentSession* session, uint32_t* out_u32);
+  char* (*wait_register)(MahoAgentSession* session,
+                         const char* run_id,
+                         const char* filter_json,
+                         uint64_t timeout_ms);
+  bool (*wait_wake)(MahoAgentSession* session,
+                    const char* run_id,
+                    const char* event_json);
+  bool (*resolve_model)(MahoAgentSession* session,
+                        const char* category,
+                        const char* preference_opt_json,
+                        const char* available_opt_json,
+                        char** out_json);
 };
 
 const MahoAgentFfi* GetProductionMahoAgentFfi();
@@ -197,8 +264,30 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   void CancelCurrentTurn() override;
   void RespondToApproval(const std::string& approval_id,
                          bool approved) override;
+  void RespondToInteraction(const std::string& interaction_id,
+                            const std::string& answer_json) override;
+  bool ReplayAfter(const std::string& run_id,
+                   uint64_t after_seq,
+                   RuntimeEventCallback on_event) override;
+  uint64_t GetLastConsumedEventSeq(const std::string& run_id) const override;
+  bool IsTurnActive() const override;
+  bool SubmitFollowUp(const std::string& message,
+                      const std::string& intent = "queue") override;
+  uint32_t GetTurnQueueDepth() const override;
+  bool WakeForNotification(const std::string& run_id,
+                           const std::string& event_json) override;
+  std::string RegisterWait(const std::string& run_id,
+                           const std::string& filter_json,
+                           uint64_t timeout_ms) override;
   std::string GetRuntimeSessionId() const override;
   void Reset() override;
+
+  maho::ai::MahoAuthenticatedServiceApiBroker* api_broker() const {
+    return api_broker_.get();
+  }
+  maho::ai::MahoAgentChannelGateway* channel_gateway() const {
+    return channel_gateway_.get();
+  }
 
  private:
   friend class MahoUnifiedAgentAdapterTest;
@@ -333,6 +422,8 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                                 const char* result,
                                 bool success);
   static void OnAgentArtifactCreated(void* user_data, const char* artifact_json);
+  static void OnAgentUnifiedEvent(void* user_data,
+                                  const MahoUnifiedAgentEventEnvelope* event);
   static void ReleaseTurnFfiResources(void* release_user_data);
   static void ReleaseSessionFfiResources(void* release_user_data);
 
@@ -353,6 +444,12 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                               std::string result,
                               bool success);
   void OnArtifactCreatedOnSequence(std::string artifact_json);
+  void OnUnifiedEventOnSequence(uint64_t generation,
+                                std::string run_id,
+                                uint64_t event_seq,
+                                MahoAgentEventKindV2 kind,
+                                std::string payload_json);
+  void CancelAllPendingInteractions();
   void OnTurnFfiResourcesReleased(uint64_t generation);
   void QuarantineSessionFfiResources();
   void TransitionToErrorForGeneration(uint64_t generation,
@@ -487,6 +584,10 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   size_t PendingApprovalCountForTesting() const {
     return pending_approvals_.size();
   }
+  // Test-only accessor for the count of pending interactions.
+  size_t PendingInteractionCountForTesting() const {
+    return pending_interactions_.size();
+  }
 
   std::shared_ptr<os_crypt_async::Encryptor> encryptor_;
   void OnOsCryptReady(os_crypt_async::Encryptor encryptor);
@@ -508,6 +609,22 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   // per session via set_artifact_created_callback; outlives individual turns).
   std::unique_ptr<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>
       artifact_created_handle_;
+
+  // Session-scoped handle for the unified event callback.
+  std::unique_ptr<maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>>
+      unified_event_handle_;
+
+  // Tracks the highest monotonic event_seq consumed per run_id for live deduplication.
+  std::unordered_map<std::string, uint64_t> last_consumed_seq_per_run_;
+
+  // Canonical interaction broker: maps pending interaction_id to question/confirmation text.
+  std::unordered_map<std::string, std::string> pending_interactions_;
+
+  // Last event callback saved for session-level events delivered outside active turns.
+  RuntimeEventCallback last_event_callback_;
+
+  std::unique_ptr<maho::ai::MahoAuthenticatedServiceApiBroker> api_broker_;
+  std::unique_ptr<maho::ai::MahoAgentChannelGateway> channel_gateway_;
 
   base::WeakPtrFactory<MahoUnifiedAgentAdapter> weak_factory_{this};
 

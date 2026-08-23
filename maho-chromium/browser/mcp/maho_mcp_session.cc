@@ -163,39 +163,65 @@ struct ControllerIdentity {
   const char* display_label = kExternalMcpLabel;
 };
 
-[[maybe_unused]] bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
+bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
   if (!executable.IsAbsolute()) {
     return false;
   }
   const std::string normalized =
       base::ToLowerASCII(executable.NormalizePathSeparators().AsUTF8Unsafe());
 #if BUILDFLAG(IS_WIN)
-  return normalized.find("\\program files\\maho\\") != std::string::npos ||
-         normalized.find("\\program files (x86)\\maho\\") !=
-             std::string::npos;
+  return (base::StartsWith(normalized, "c:\\program files\\maho\\") ||
+          base::StartsWith(normalized,
+                           "c:\\program files (x86)\\maho\\")) &&
+         (base::EndsWith(normalized, "\\maho.exe") ||
+          base::EndsWith(normalized, "\\maho-browser-mcp.exe"));
 #elif BUILDFLAG(IS_APPLE)
-  return base::StartsWith(normalized, "/applications/maho.app/contents/macos/") ||
-         base::StartsWith(normalized, "/applications/maho.app/contents/helpers/");
+  return base::EndsWith(normalized, "/maho.app/contents/helpers/maho") ||
+         base::EndsWith(normalized,
+                        "/maho.app/contents/helpers/maho-browser-mcp");
 #else
-  return base::StartsWith(normalized, "/usr/bin/") ||
-         base::StartsWith(normalized, "/opt/maho/bin/");
+  return normalized == "/usr/bin/maho" ||
+         normalized == "/usr/bin/maho-browser-mcp" ||
+         normalized == "/opt/maho/bin/maho" ||
+         normalized == "/opt/maho/bin/maho-browser-mcp";
 #endif
 }
 
 ControllerIdentity ClassifyController(std::string_view hint,
-                                      std::string_view peer_executable) {
-  if (hint == "maho-cli-repl") {
+                                      std::string_view peer_executable,
+                                      bool peer_is_trusted_maho) {
+  if (!peer_is_trusted_maho ||
+      !IsTrustedMahoExecutablePath(
+          base::FilePath::FromUTF8Unsafe(peer_executable))) {
+    return {};
+  }
+
+  const std::string executable_name = base::ToLowerASCII(
+      base::FilePath::FromUTF8Unsafe(peer_executable)
+          .BaseName()
+          .AsUTF8Unsafe());
+#if BUILDFLAG(IS_WIN)
+  constexpr char kMahoCliExecutable[] = "maho.exe";
+  constexpr char kMahoBrowserMcpExecutable[] = "maho-browser-mcp.exe";
+#else
+  constexpr char kMahoCliExecutable[] = "maho";
+  constexpr char kMahoBrowserMcpExecutable[] = "maho-browser-mcp";
+#endif
+
+  if (executable_name == kMahoCliExecutable && hint == "maho-cli-repl") {
     return {MahoMcpControllerKind::kMahoCliRepl, "maho-cli-repl",
             "Maho CLI REPL"};
   }
-  if (hint == "maho-cli" || hint.empty()) {
+  if (executable_name == kMahoCliExecutable &&
+      (hint == "maho-cli" || hint.empty())) {
     return {MahoMcpControllerKind::kMahoCli, "maho-cli", "Maho CLI"};
   }
-  if (hint == "maho-browser-mcp") {
+  if (executable_name == kMahoBrowserMcpExecutable &&
+      hint == "maho-browser-mcp") {
     return {MahoMcpControllerKind::kMahoBrowserMcp, "maho-browser-mcp",
             "Maho Browser MCP"};
   }
-  return {MahoMcpControllerKind::kMahoCli, "maho-cli", "Maho CLI"};
+  return {};
 }
 
 MahoMcpBrowserDelegate* g_browser_delegate = nullptr;
@@ -648,6 +674,9 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "browser_network_start_capture",
       "browser_network_stop_capture",
       "browser_network_get_har",
+      "browser_acquire_lease",
+      "browser_heartbeat_lease",
+      "browser_release_lease",
       "vault_list_credentials_for_active_page",
       "vault_request_credential_use",
       "vault_fill_credential",
@@ -671,7 +700,9 @@ bool IsRefConsumingTool(std::string_view tool_name) {
   return tool_name == "browser_click" || tool_name == "browser_type" ||
          tool_name == "browser_select" ||
          tool_name == "browser_screenshot_element" ||
-         tool_name == "browser_scroll" || tool_name == "browser_hover";
+         tool_name == "browser_scroll" || tool_name == "browser_hover" ||
+         tool_name == "vault_fill_credential" ||
+         tool_name == "vault_fill_totp";
 }
 
 base::DictValue SerializeTabInfo(const MahoMcpSession::TabInfo& tab_info) {
@@ -886,6 +917,37 @@ MahoMcpBrowserDelegate::BookmarkInfo::operator=(BookmarkInfo&&) noexcept =
 bool MahoMcpBrowserDelegate::RevalidateRefSnapshot(
     const ResolvedMahoMcpTarget& target,
     uint64_t snapshot_token) {
+  return true;
+}
+
+void MahoMcpBrowserDelegate::ClickVerified(
+    int tab_id,
+    ui::AXNodeID ax_id,
+    base::OnceCallback<void(InputActionOutcome)> callback) {
+  InputActionOutcome outcome;
+  outcome.dispatched = Click(tab_id, ax_id);
+  outcome.method = "legacy_delegate";
+  if (!outcome.dispatched) {
+    outcome.reason = "dispatch_failed";
+  }
+  std::move(callback).Run(std::move(outcome));
+}
+
+void MahoMcpBrowserDelegate::TypeVerified(
+    int tab_id,
+    ui::AXNodeID ax_id,
+    const std::string& text,
+    base::OnceCallback<void(InputActionOutcome)> callback) {
+  InputActionOutcome outcome;
+  outcome.dispatched = Type(tab_id, ax_id, text);
+  outcome.method = "legacy_delegate";
+  if (!outcome.dispatched) {
+    outcome.reason = "dispatch_failed";
+  }
+  std::move(callback).Run(std::move(outcome));
+}
+
+bool MahoMcpBrowserDelegate::RequiresDeferredVerifiedInputResponses() const {
   return false;
 }
 
@@ -944,6 +1006,7 @@ bool MahoMcpSession::IsHostBlocked(std::string_view host) const {
 
 bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
                                         const base::DictValue* arguments,
+                                        int target_tab_id,
                                         std::vector<std::string>& responses) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!lease_registry_) {
@@ -956,8 +1019,7 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
         msg.id, -32602, "Invalid params: tab_id required"));
     return true;
   }
-  std::optional<int> tab_id = arguments->FindInt("tab_id");
-  if (!tab_id.has_value()) {
+  if (!arguments->FindInt("tab_id").has_value()) {
     responses.push_back(framer_.BuildErrorResponse(
         msg.id, -32602, "Invalid params: tab_id must be integer"));
     return true;
@@ -966,12 +1028,12 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
   // ADR 0016: CLI/MCP acquisition is user-driven, so it always force-steals.
   constexpr bool kForceStealAlwaysAcquire = true;
   auto result = lease_registry_->Acquire(
-      static_cast<int64_t>(*tab_id), session_id_, base::Seconds(ttl_seconds),
-      kForceStealAlwaysAcquire);
+      static_cast<int64_t>(target_tab_id), session_id_,
+      base::Seconds(ttl_seconds), kForceStealAlwaysAcquire);
   if (!result.ok) {
     base::DictValue data;
     data.Set("previous_holder", result.previous_holder);
-    data.Set("tab_id", *tab_id);
+    data.Set("tab_id", target_tab_id);
     responses.push_back(
         framer_.BuildErrorResponse(msg.id, -32000, result.message));
     return true;
@@ -979,7 +1041,7 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
   base::DictValue out;
   out.Set("acquired", true);
   out.Set("session_id", session_id_);
-  out.Set("tab_id", *tab_id);
+  out.Set("tab_id", target_tab_id);
   out.Set("previous_holder", result.previous_holder);
   out.Set("expires_in_seconds",
           static_cast<int>(
@@ -991,6 +1053,7 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
 
 bool MahoMcpSession::HandleHeartbeatLease(const McpJsonRpcMessage& msg,
                                           const base::DictValue* arguments,
+                                          int target_tab_id,
                                           std::vector<std::string>& responses) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!lease_registry_) {
@@ -1003,15 +1066,15 @@ bool MahoMcpSession::HandleHeartbeatLease(const McpJsonRpcMessage& msg,
         msg.id, -32602, "Invalid params: tab_id required"));
     return true;
   }
-  std::optional<int> tab_id = arguments->FindInt("tab_id");
-  if (!tab_id.has_value()) {
+  if (!arguments->FindInt("tab_id").has_value()) {
     responses.push_back(framer_.BuildErrorResponse(
         msg.id, -32602, "Invalid params: tab_id must be integer"));
     return true;
   }
   const int ttl_seconds = arguments->FindInt("ttl_seconds").value_or(60);
   base::TimeTicks expires = lease_registry_->Heartbeat(
-      static_cast<int64_t>(*tab_id), session_id_, base::Seconds(ttl_seconds));
+      static_cast<int64_t>(target_tab_id), session_id_,
+      base::Seconds(ttl_seconds));
   if (expires.is_null()) {
     responses.push_back(framer_.BuildErrorResponse(
         msg.id, -32000, "Not lease holder or lease expired"));
@@ -1028,6 +1091,7 @@ bool MahoMcpSession::HandleHeartbeatLease(const McpJsonRpcMessage& msg,
 
 bool MahoMcpSession::HandleReleaseLease(const McpJsonRpcMessage& msg,
                                         const base::DictValue* arguments,
+                                        int target_tab_id,
                                         std::vector<std::string>& responses) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!lease_registry_) {
@@ -1040,14 +1104,13 @@ bool MahoMcpSession::HandleReleaseLease(const McpJsonRpcMessage& msg,
         msg.id, -32602, "Invalid params: tab_id required"));
     return true;
   }
-  std::optional<int> tab_id = arguments->FindInt("tab_id");
-  if (!tab_id.has_value()) {
+  if (!arguments->FindInt("tab_id").has_value()) {
     responses.push_back(framer_.BuildErrorResponse(
         msg.id, -32602, "Invalid params: tab_id must be integer"));
     return true;
   }
-  const bool released =
-      lease_registry_->Release(static_cast<int64_t>(*tab_id), session_id_);
+  const bool released = lease_registry_->Release(
+      static_cast<int64_t>(target_tab_id), session_id_);
   base::DictValue out;
   out.Set("released", released);
   responses.push_back(
@@ -1165,7 +1228,7 @@ void MahoMcpSession::HandleInitialize(const McpJsonRpcMessage& msg,
   const ControllerIdentity identity =
       ClassifyController(
           controller_hint ? *controller_hint : std::string_view(),
-          peer_executable_);
+          peer_executable_, peer_is_trusted_maho_);
   controller_kind_ = identity.kind;
   controller_display_label_ = identity.display_label;
 
@@ -1496,18 +1559,21 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       g_browser_delegate && IsTabTargetTool(*tool_name);
   const int resolved_tab_id =
       use_resolved_target ? last_resolved_target_.tab_id : 0;
-  if (IsRefConsumingTool(*tool_name) && arguments &&
-      arguments->FindInt("ref").has_value() &&
-      (ref_table_target_.tab_id != last_resolved_target_.tab_id ||
-       ref_table_target_.browser_id != last_resolved_target_.browser_id ||
-       (g_browser_delegate &&
-        (!g_browser_delegate->RevalidateTarget(ref_table_target_) ||
-         ref_snapshot_token_ == 0 ||
-         !g_browser_delegate->RevalidateRefSnapshot(last_resolved_target_,
-                                                    ref_snapshot_token_))))) {
+  const auto has_stale_ref = [&] {
+    return IsRefConsumingTool(*tool_name) && arguments &&
+           arguments->FindInt("ref").has_value() &&
+           (ref_table_target_.tab_id != last_resolved_target_.tab_id ||
+            ref_table_target_.browser_id != last_resolved_target_.browser_id ||
+            (g_browser_delegate &&
+             (!g_browser_delegate->RevalidateTarget(ref_table_target_) ||
+              (ref_snapshot_token_ != 0 &&
+               !g_browser_delegate->RevalidateRefSnapshot(
+                   last_resolved_target_, ref_snapshot_token_)))));
+  };
+  if (has_stale_ref()) {
     responses.push_back(framer_.BuildErrorResponse(
-        msg.id, -32009,
-        "accessibility snapshot target changed; capture a new snapshot"));
+        msg.id, kMahoMcpErrorStaleReference,
+        kMahoMcpMessageStaleReference));
     return;
   }
 
@@ -1636,6 +1702,13 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
   }
 
+  if (has_stale_ref()) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, kMahoMcpErrorStaleReference,
+        kMahoMcpMessageStaleReference));
+    return;
+  }
+
   if (controller_state_->is_revoked()) {
     responses.push_back(framer_.BuildErrorResponse(
         msg.id, -32004, "Controller session was revoked"));
@@ -1664,6 +1737,34 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         std::string resp =
             framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
         responses.push_back(std::move(resp));
+      };
+
+  auto serialize_verified_action_response =
+      [](std::optional<base::Value> message_id, int ref, std::string action,
+         InputActionOutcome outcome) {
+        if (!outcome.dispatched) {
+          return BuildJsonRpcErrorLine(
+              std::move(message_id), -32000,
+              "Action failed: " + action + " could not be dispatched");
+        }
+        if (outcome.verified.has_value() && !*outcome.verified) {
+          base::DictValue data;
+          data.Set("action", action);
+          data.Set("ref", ref);
+          data.Set("reason", outcome.reason);
+          data.Set("remedy", "capture a new accessibility snapshot and retry");
+          return BuildJsonRpcErrorLine(
+              std::move(message_id), kMahoMcpErrorActionNotApplied,
+              kMahoMcpMessageActionNotApplied, base::Value(std::move(data)));
+        }
+        base::DictValue result;
+        result.Set(action == "click" ? "clicked" : "typed", true);
+        result.Set("ref", ref);
+        result.Set("verified", outcome.verified.value_or(false));
+        result.Set("method", outcome.method);
+        auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+        return BuildJsonRpcSuccessLine(std::move(message_id),
+                                       redacted.get().Clone());
       };
 
   if (*tool_name == "browser_tab_list") {
@@ -2585,17 +2686,32 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   if (*tool_name == "browser_acquire_lease") {
-    HandleAcquireLease(msg, arguments, responses);
+    const int target_tab_id = use_resolved_target
+                                  ? resolved_tab_id
+                                  : (arguments
+                                         ? arguments->FindInt("tab_id").value_or(0)
+                                         : 0);
+    HandleAcquireLease(msg, arguments, target_tab_id, responses);
     return;
   }
 
   if (*tool_name == "browser_heartbeat_lease") {
-    HandleHeartbeatLease(msg, arguments, responses);
+    const int target_tab_id = use_resolved_target
+                                  ? resolved_tab_id
+                                  : (arguments
+                                         ? arguments->FindInt("tab_id").value_or(0)
+                                         : 0);
+    HandleHeartbeatLease(msg, arguments, target_tab_id, responses);
     return;
   }
 
   if (*tool_name == "browser_release_lease") {
-    HandleReleaseLease(msg, arguments, responses);
+    const int target_tab_id = use_resolved_target
+                                  ? resolved_tab_id
+                                  : (arguments
+                                         ? arguments->FindInt("tab_id").value_or(0)
+                                         : 0);
+    HandleReleaseLease(msg, arguments, target_tab_id, responses);
     return;
   }
 
@@ -3134,9 +3250,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     if (g_browser_delegate) {
       snapshot = g_browser_delegate->GetAccessibilitySnapshot(
           tab_id, &ref_to_ax_id_, &ref_snapshot_token_);
-      if (ref_snapshot_token_ == 0) {
-        ref_to_ax_id_.clear();
-      }
     } else {
       base::DictValue empty;
       empty.Set("role", "WebArea");
@@ -3152,15 +3265,122 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
   if (*tool_name == "browser_click") {
     int tab_id = use_resolved_target ? resolved_tab_id : active_tab_id_;
-    append_browser_action_response(MahoMcpBrowserActionHandler::HandleClick(
-        g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
+    auto validation = MahoMcpBrowserActionHandler::ValidateClickRequest(
+        ref_to_ax_id_, arguments);
+    if (validation.error.has_value()) {
+      append_browser_action_response(std::move(validation));
+      return;
+    }
+    const int ref = arguments->FindInt("ref").value();
+    if (!g_browser_delegate) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: click could not be dispatched"));
+      return;
+    }
+    const ui::AXNodeID ax_id = validation.value.FindInt("ax_id").value();
+    if (!terminal_deferred_sender &&
+        g_browser_delegate->RequiresDeferredVerifiedInputResponses()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Action failed: click verification requires deferred transport"));
+      return;
+    }
+    if (terminal_deferred_sender) {
+      g_browser_delegate->ClickVerified(
+          tab_id, ax_id,
+          base::BindOnce(
+              [](DeferredResponseSender sender,
+                 std::optional<base::Value> message_id,
+                 decltype(serialize_verified_action_response) serialize,
+                 int ref, InputActionOutcome outcome) {
+                sender.Run(serialize(std::move(message_id), ref, "click",
+                                     std::move(outcome)));
+              },
+              std::move(terminal_deferred_sender), CloneMessageId(msg.id),
+              serialize_verified_action_response, ref));
+      return;
+    }
+    auto immediate_response = std::make_shared<std::optional<std::string>>();
+    g_browser_delegate->ClickVerified(
+        tab_id, ax_id,
+        base::BindOnce(
+            [](std::shared_ptr<std::optional<std::string>> response,
+               std::optional<base::Value> message_id,
+               decltype(serialize_verified_action_response) serialize,
+               int ref, InputActionOutcome outcome) {
+              *response = serialize(std::move(message_id), ref, "click",
+                                    std::move(outcome));
+            },
+            immediate_response, CloneMessageId(msg.id),
+            serialize_verified_action_response, ref));
+    if (*immediate_response) {
+      responses.push_back(std::move(**immediate_response));
+    } else {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Action failed: click verification requires deferred transport"));
+    }
     return;
   }
 
   if (*tool_name == "browser_type") {
     int tab_id = use_resolved_target ? resolved_tab_id : active_tab_id_;
-    append_browser_action_response(MahoMcpBrowserActionHandler::HandleType(
-        g_browser_delegate, ref_to_ax_id_, tab_id, arguments));
+    auto validation = MahoMcpBrowserActionHandler::ValidateTypeRequest(
+        g_browser_delegate, ref_to_ax_id_, tab_id, arguments);
+    if (validation.error.has_value()) {
+      append_browser_action_response(std::move(validation));
+      return;
+    }
+    const int ref = arguments->FindInt("ref").value();
+    const std::string text = *arguments->FindString("text");
+    if (!g_browser_delegate) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: type could not be dispatched"));
+      return;
+    }
+    const ui::AXNodeID ax_id = validation.value.FindInt("ax_id").value();
+    if (!terminal_deferred_sender &&
+        g_browser_delegate->RequiresDeferredVerifiedInputResponses()) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Action failed: type verification requires deferred transport"));
+      return;
+    }
+    if (terminal_deferred_sender) {
+      g_browser_delegate->TypeVerified(
+          tab_id, ax_id, text,
+          base::BindOnce(
+              [](DeferredResponseSender sender,
+                 std::optional<base::Value> message_id,
+                 decltype(serialize_verified_action_response) serialize,
+                 int ref, InputActionOutcome outcome) {
+                sender.Run(serialize(std::move(message_id), ref, "type",
+                                     std::move(outcome)));
+              },
+              std::move(terminal_deferred_sender), CloneMessageId(msg.id),
+              serialize_verified_action_response, ref));
+      return;
+    }
+    auto immediate_response = std::make_shared<std::optional<std::string>>();
+    g_browser_delegate->TypeVerified(
+        tab_id, ax_id, text,
+        base::BindOnce(
+            [](std::shared_ptr<std::optional<std::string>> response,
+               std::optional<base::Value> message_id,
+               decltype(serialize_verified_action_response) serialize,
+               int ref, InputActionOutcome outcome) {
+              *response = serialize(std::move(message_id), ref, "type",
+                                    std::move(outcome));
+            },
+            immediate_response, CloneMessageId(msg.id),
+            serialize_verified_action_response, ref));
+    if (*immediate_response) {
+      responses.push_back(std::move(**immediate_response));
+    } else {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000,
+          "Action failed: type verification requires deferred transport"));
+    }
     return;
   }
 

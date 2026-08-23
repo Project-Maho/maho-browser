@@ -94,6 +94,15 @@ std::optional<MahoArtifact> ArtifactFromValue(const base::Value &value) {
       !base::StringToInt64(*created_at_ms, &artifact.created_at_ms)) {
     return std::nullopt;
   }
+
+  const std::string *kind_str = dict.FindString("kind");
+  if (kind_str) {
+    artifact.kind = MahoArtifactKindFromString(*kind_str);
+  } else {
+    artifact.kind = DeduceMahoArtifactKind(artifact.mime_type,
+                                           artifact.display_name,
+                                           artifact.storage_rel_path);
+  }
   return artifact;
 }
 
@@ -106,6 +115,7 @@ base::DictValue ArtifactToValue(const MahoArtifact &artifact) {
   value.Set("size_bytes", base::NumberToString(artifact.size_bytes));
   value.Set("storage_rel_path", artifact.storage_rel_path);
   value.Set("created_at_ms", base::NumberToString(artifact.created_at_ms));
+  value.Set("kind", MahoArtifactKindToString(artifact.kind));
   return value;
 }
 
@@ -128,6 +138,74 @@ std::string PreserveExtension(const std::string &original_name,
 }
 
 }  // namespace
+
+const char* MahoArtifactKindToString(MahoArtifactKind kind) {
+  switch (kind) {
+    case MahoArtifactKind::kHtml:
+      return "html";
+    case MahoArtifactKind::kPdf:
+      return "pdf";
+    case MahoArtifactKind::kXlsx:
+      return "xlsx";
+    case MahoArtifactKind::kGeneric:
+    default:
+      return "generic";
+  }
+}
+
+MahoArtifactKind MahoArtifactKindFromString(std::string_view str) {
+  if (str == "html") return MahoArtifactKind::kHtml;
+  if (str == "pdf") return MahoArtifactKind::kPdf;
+  if (str == "xlsx") return MahoArtifactKind::kXlsx;
+  return MahoArtifactKind::kGeneric;
+}
+
+namespace {
+
+bool EndsWithCaseInsensitive(std::string_view str, std::string_view suffix) {
+  if (str.size() < suffix.size()) return false;
+  size_t offset = str.size() - suffix.size();
+  for (size_t i = 0; i < suffix.size(); ++i) {
+    char a = str[offset + i];
+    char b = suffix[i];
+    if (a >= 'A' && a <= 'Z') a += ('a' - 'A');
+    if (b >= 'A' && b <= 'Z') b += ('a' - 'A');
+    if (a != b) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+MahoArtifactKind DeduceMahoArtifactKind(std::string_view mime_type,
+                                       std::string_view display_name,
+                                       std::string_view storage_rel_path) {
+  if (mime_type == "application/pdf" ||
+      EndsWithCaseInsensitive(display_name, ".pdf") ||
+      EndsWithCaseInsensitive(storage_rel_path, ".pdf")) {
+    return MahoArtifactKind::kPdf;
+  }
+  if (mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      mime_type == "application/vnd.ms-excel" ||
+      mime_type == "text/csv" ||
+      EndsWithCaseInsensitive(display_name, ".xlsx") ||
+      EndsWithCaseInsensitive(display_name, ".xls") ||
+      EndsWithCaseInsensitive(display_name, ".csv") ||
+      EndsWithCaseInsensitive(storage_rel_path, ".xlsx") ||
+      EndsWithCaseInsensitive(storage_rel_path, ".xls") ||
+      EndsWithCaseInsensitive(storage_rel_path, ".csv")) {
+    return MahoArtifactKind::kXlsx;
+  }
+  if (mime_type == "text/html" ||
+      mime_type == "application/xhtml+xml" ||
+      EndsWithCaseInsensitive(display_name, ".html") ||
+      EndsWithCaseInsensitive(display_name, ".htm") ||
+      EndsWithCaseInsensitive(storage_rel_path, ".html") ||
+      EndsWithCaseInsensitive(storage_rel_path, ".htm")) {
+    return MahoArtifactKind::kHtml;
+  }
+  return MahoArtifactKind::kGeneric;
+}
 
 MahoArtifact::MahoArtifact() = default;
 MahoArtifact::MahoArtifact(const MahoArtifact&) = default;
@@ -181,7 +259,8 @@ MahoArtifactRegistry::~MahoArtifactRegistry() = default;
 
 base::expected<ArtifactId, std::string> MahoArtifactRegistry::RegisterArtifact(
     std::string session_id, std::string display_name, std::string mime_type,
-    uint64_t size_bytes, std::string storage_rel_path, int64_t created_at_ms) {
+    uint64_t size_bytes, std::string storage_rel_path, int64_t created_at_ms,
+    std::optional<MahoArtifactKind> kind) {
   if (!IsAllowed()) {
     return base::unexpected(
         "Artifact registry is unavailable in private profiles");
@@ -225,6 +304,8 @@ base::expected<ArtifactId, std::string> MahoArtifactRegistry::RegisterArtifact(
       existing.mime_type = std::move(mime_type);
       existing.size_bytes = size_bytes;
       existing.created_at_ms = created_at_ms;
+      existing.kind = kind.value_or(DeduceMahoArtifactKind(
+          existing.mime_type, existing.display_name, existing.storage_rel_path));
       ScheduleSave();
       return base::ok(existing_id);
     }
@@ -243,6 +324,8 @@ base::expected<ArtifactId, std::string> MahoArtifactRegistry::RegisterArtifact(
   artifact.size_bytes = size_bytes;
   artifact.storage_rel_path = std::move(storage_rel_path);
   artifact.created_at_ms = created_at_ms;
+  artifact.kind = kind.value_or(DeduceMahoArtifactKind(
+      artifact.mime_type, artifact.display_name, artifact.storage_rel_path));
   artifacts_.emplace(artifact_id, std::move(artifact));
   PruneToStorageLimit();
   if (!artifacts_.contains(artifact_id)) {

@@ -13,6 +13,7 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "maho/browser/ai/maho_page_adapter_registry.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -140,7 +141,9 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
     return result;
   }
 
+  int get_element_text_count = 0;
   std::string GetElementText(int tab_id, const std::string& ref_id) override {
+    ++get_element_text_count;
     return "element text";
   }
 
@@ -170,10 +173,13 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
                                           size_t max_results) override {
     return {};
   }
+  int capture_full_page_count = 0;
+  std::string screenshot_b64 = "fake_screenshot_png_base64_data";
   void CaptureFullPagePngBase64(
       int tab_id,
       base::OnceCallback<void(std::string)> callback) override {
-    std::move(callback).Run({});
+    ++capture_full_page_count;
+    std::move(callback).Run(screenshot_b64);
   }
   void CaptureElementPngBase64(
       int tab_id,
@@ -1355,6 +1361,65 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
   EXPECT_FALSE(lease_registry_.IsHeldBy(7, "external-session"));
   EXPECT_EQ(delegate_.click_count, 1);
+}
+
+TEST_F(MahoBrowserToolExecutorParityTest,
+       ScreenshotProofDispatchesToCapturePath) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  base::DictValue arguments;
+  base::DictValue result =
+      Execute(executor, "screenshot_proof", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(result.FindString("tool").value_or(""), "screenshot_proof");
+  EXPECT_EQ(result.FindString("content_type").value_or(""), "image/png");
+  EXPECT_EQ(result.FindString("data").value_or(""), delegate_.screenshot_b64);
+  EXPECT_EQ(delegate_.capture_full_page_count, 1);
+  EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
+}
+
+TEST_F(MahoBrowserToolExecutorParityTest,
+       LookupPageAdapterForSeamInterceptsAndFallsThrough) {
+  maho::ai::MahoPageAdapterRegistry::GetGlobalRegistry().Clear();
+  maho::ai::MahoPageAdapterRegistry::GetGlobalRegistry().RegisterSimple(
+      "test-adapter-1",
+      {"https://example.com"},
+      {"page_get_text", "browser_click"},
+      "isolated_world_1",
+      4096);
+
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  PopulateRef(executor, 10, 1010);
+
+  // 1. Registered adapter on matching origin falls through to real DOM execution tier
+  base::DictValue arguments;
+  arguments.Set("ref_id", "ref-10");
+  base::DictValue adapter_result =
+      Execute(executor, "page_get_text", std::move(arguments));
+
+  EXPECT_TRUE(adapter_result.FindBool("ok").value_or(false));
+  EXPECT_EQ(adapter_result.FindString("tool").value_or(""), "page_get_text");
+  EXPECT_EQ(adapter_result.FindString("text").value_or(""), "element text");
+  EXPECT_EQ(delegate_.get_element_text_count, 1);
+
+  // 2. Unregistered origin also executes through generic DOM execution path
+  delegate_.active_url = "https://unregistered-domain.org/page";
+  base::DictValue generic_args;
+  generic_args.Set("ref_id", "ref-10");
+  base::DictValue generic_result =
+      Execute(executor, "page_get_text", std::move(generic_args));
+
+  EXPECT_TRUE(generic_result.FindBool("ok").value_or(false));
+  EXPECT_EQ(generic_result.FindString("tool").value_or(""), "page_get_text");
+  EXPECT_EQ(generic_result.FindString("text").value_or(""), "element text");
+  EXPECT_EQ(delegate_.get_element_text_count, 2);
+
+  EXPECT_TRUE(generic_result.FindBool("ok").value_or(false));
+  EXPECT_EQ(generic_result.FindString("tool").value_or(""), "page_get_text");
+  EXPECT_EQ(generic_result.FindString("adapter_id"), nullptr);
+  EXPECT_NE(generic_result.FindString("tier").value_or(""), "page_adapter");
+
+  maho::ai::MahoPageAdapterRegistry::GetGlobalRegistry().Clear();
 }
 
 }

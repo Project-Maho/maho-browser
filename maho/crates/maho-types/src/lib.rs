@@ -13,6 +13,7 @@ pub mod easel;
 pub mod events;
 pub mod extension;
 pub mod folder;
+pub mod hardware_security;
 pub mod identifiers;
 pub mod keyboard;
 pub mod llm;

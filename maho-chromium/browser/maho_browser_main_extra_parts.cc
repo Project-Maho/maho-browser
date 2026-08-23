@@ -83,6 +83,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -395,20 +396,58 @@ std::string ExecuteMcpActionJsBlocking(content::WebContents* wc,
   if (!wc || !wc->GetPrimaryMainFrame()) {
     return std::string();
   }
+  base::WeakPtr<content::WebContents> wc_weak = wc->GetWeakPtr();
   std::string result;
   base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
   wc->GetPrimaryMainFrame()->ExecuteJavaScriptInIsolatedWorld(
       base::UTF8ToUTF16(script),
       base::BindOnce(
-          [](std::string* out, base::OnceClosure quit, base::Value val) {
-            if (val.is_string()) {
+          [](base::WeakPtr<content::WebContents> wc_weak,
+             std::string* out, base::OnceClosure quit, base::Value val) {
+            if (wc_weak && val.is_string()) {
               *out = val.GetString();
             }
             std::move(quit).Run();
           },
-          &result, run_loop.QuitClosure()),
+          wc_weak, &result, run_loop.QuitClosure()),
       kIsolatedWorldIdForMcpAction);
   run_loop.Run();
+  return result;
+}
+
+std::string ExecuteMcpActionJsAllFramesBlocking(content::WebContents* wc,
+                                                const std::string& script) {
+  if (!wc) {
+    return std::string();
+  }
+  base::WeakPtr<content::WebContents> wc_weak = wc->GetWeakPtr();
+  std::string result;
+  std::vector<content::RenderFrameHost*> frames;
+  wc->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
+    if (rfh && rfh->IsRenderFrameLive()) {
+      frames.push_back(rfh);
+    }
+  });
+  for (content::RenderFrameHost* rfh : frames) {
+    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    std::string frame_result;
+    rfh->ExecuteJavaScriptInIsolatedWorld(
+        base::UTF8ToUTF16(script),
+        base::BindOnce(
+            [](base::WeakPtr<content::WebContents> wc_weak,
+               std::string* out, base::OnceClosure quit, base::Value val) {
+              if (wc_weak && val.is_string()) {
+                *out = val.GetString();
+              }
+              std::move(quit).Run();
+            },
+            wc_weak, &frame_result, run_loop.QuitClosure()),
+        kIsolatedWorldIdForMcpAction);
+    run_loop.Run();
+    if (!frame_result.empty()) {
+      result = frame_result;
+    }
+  }
   return result;
 }
 
@@ -422,21 +461,32 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
   // offset-container walk below is a fallback that ignores scroll/transform and
   // therefore mislocates targets whenever the page is scrolled or the target
   // lives inside a scrolled/fixed container such as a modal dialog.
+  // Note: AXTree bounds serialized by Blink are already in CSS viewport pixels.
   {
     ui::AXTree tree;
     if (tree.Unserialize(update)) {
       if (const ui::AXNode* node = tree.GetFromId(ax_id)) {
         gfx::RectF bounds = tree.GetTreeBounds(node, /*offscreen=*/nullptr,
                                                /*clip_bounds=*/false);
+        // If the node lives inside an embedded subframe (kRootWebArea / iframe),
+        // ui::AXTree::GetTreeBounds stops at the subframe root whose offset_container_id is -1.
+        // Traverse up the tree hierarchy and accumulate parent container bounds.
+        const ui::AXNode* curr = node;
+        while (curr) {
+          const ui::AXNode* parent = curr->parent();
+          if (parent && curr->GetRole() == ax::mojom::Role::kRootWebArea) {
+            gfx::RectF parent_bounds = tree.GetTreeBounds(parent, nullptr, false);
+            if (!parent_bounds.IsEmpty()) {
+              bounds.Offset(parent_bounds.OffsetFromOrigin());
+            }
+          }
+          curr = parent;
+        }
         if (!bounds.IsEmpty()) {
           gfx::PointF center = bounds.CenterPoint();
           if (prefer_leading_edge) {
             center.set_x(bounds.x() +
-                         std::min(bounds.width() / 2.f,
-                                  12.f * device_scale_factor));
-          }
-          if (device_scale_factor > 0.f) {
-            center.Scale(1.f / device_scale_factor);
+                         std::min(bounds.width() / 2.f, 12.f));
           }
           return center;
         }
@@ -484,10 +534,7 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
   gfx::PointF center = bounds.CenterPoint();
   if (prefer_leading_edge) {
     center.set_x(bounds.x() +
-                 std::min(bounds.width() / 2.f, 12.f * device_scale_factor));
-  }
-  if (device_scale_factor > 0.f) {
-    center.Scale(1.f / device_scale_factor);
+                 std::min(bounds.width() / 2.f, 12.f));
   }
   return center;
 }
@@ -579,33 +626,22 @@ bool PerformAxAction(content::WebContents* wc,
                      ui::AXNodeID ax_id,
                      ax::mojom::Action action,
                      const std::string& value = std::string()) {
-  if (!wc || !wc->GetPrimaryMainFrame()) {
+  if (!wc) {
     return false;
   }
   ui::AXActionData action_data;
   action_data.action = action;
   action_data.target_node_id = ax_id;
   action_data.value = value;
-  wc->GetPrimaryMainFrame()->AccessibilityPerformAction(action_data);
-  return true;
-}
 
-void DispatchActiveElementValueEvents(content::WebContents* wc,
-                                      const std::string& value) {
-  if (!wc || !wc->GetPrimaryMainFrame()) {
-    return;
-  }
-  const std::string value_json = base::GetQuotedJSONString(value);
-  const std::string script =
-      "(()=>{const e=document.activeElement;if(!e)return false;"
-      "if('value' in e){e.value=" +
-      value_json +
-      ";e.dispatchEvent(new Event('input',{bubbles:true}));"
-      "e.dispatchEvent(new Event('change',{bubbles:true}));return true;}"
-      "return false;})()";
-  wc->GetPrimaryMainFrame()->ExecuteJavaScriptInIsolatedWorld(
-      base::UTF8ToUTF16(script), base::NullCallback(),
-      kIsolatedWorldIdForMcpAction);
+  bool dispatched = false;
+  wc->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
+    if (rfh && rfh->IsRenderFrameLive()) {
+      rfh->AccessibilityPerformAction(action_data);
+      dispatched = true;
+    }
+  });
+  return dispatched;
 }
 
 void SecureZeroizeString(std::string& value) {
@@ -1049,6 +1085,177 @@ std::vector<maho::MahoMcpSession::TabInfo> BuildLiveMcpTabStripInventory(
     }
   }
   return tabs;
+}
+
+bool IsInputValueMatching(const std::string& observed,
+                          const std::string& target,
+                          bool is_protected) {
+  // 1. Exact match
+  if (observed == target) {
+    return true;
+  }
+
+  // 2. Whitespace trimmed match
+  std::string trimmed_obs;
+  std::string trimmed_tgt;
+  base::TrimWhitespaceASCII(observed, base::TRIM_ALL, &trimmed_obs);
+  base::TrimWhitespaceASCII(target, base::TRIM_ALL, &trimmed_tgt);
+  if (trimmed_obs == trimmed_tgt) {
+    return true;
+  }
+
+  // 3. Case-insensitive fallback
+  if (base::EqualsCaseInsensitiveASCII(observed, target) ||
+      base::EqualsCaseInsensitiveASCII(trimmed_obs, trimmed_tgt)) {
+    return true;
+  }
+
+  // 4. Protected password/PIN field handling
+  if (is_protected && !target.empty()) {
+    if (observed.length() == target.length()) {
+      return true;
+    }
+    const std::u16string obs_u16 = base::UTF8ToUTF16(observed);
+    const std::u16string tgt_u16 = base::UTF8ToUTF16(target);
+    if (obs_u16.length() == tgt_u16.length()) {
+      return true;
+    }
+    if (!obs_u16.empty()) {
+      bool all_bullets = true;
+      for (char16_t c : obs_u16) {
+        if (c != u'*' && c != 0x2022 && c != 0x25CF && c != 0x00B7 &&
+            c != 0x25E6 && c != 0x2219 && c != 0xFF0A && c != 0x2981) {
+          all_bullets = false;
+          break;
+        }
+      }
+      if (all_bullets) {
+        return true;
+      }
+    }
+  }
+
+  // 5. Phone number / numeric / formatting normalization:
+  // Strip non-digit characters (e.g. '-', ' ', '(', ')', '.', '/', '+').
+  // If target contains digits and the stripped digits match (or international
+  // prefix +82 vs 010 matches), treat as matched.
+  std::string obs_digits;
+  obs_digits.reserve(observed.size());
+  for (char c : observed) {
+    if (base::IsAsciiDigit(c)) {
+      obs_digits.push_back(c);
+    }
+  }
+
+  std::string tgt_digits;
+  tgt_digits.reserve(target.size());
+  for (char c : target) {
+    if (base::IsAsciiDigit(c)) {
+      tgt_digits.push_back(c);
+    }
+  }
+
+  if (!tgt_digits.empty()) {
+    if (obs_digits == tgt_digits) {
+      return true;
+    }
+    // International prefix +82 vs 010 (or 82 vs 0)
+    if (base::StartsWith(tgt_digits, "0") &&
+        base::StartsWith(obs_digits, "82") &&
+        tgt_digits.substr(1) == obs_digits.substr(2)) {
+      return true;
+    }
+    if (base::StartsWith(obs_digits, "0") &&
+        base::StartsWith(tgt_digits, "82") &&
+        obs_digits.substr(1) == tgt_digits.substr(2)) {
+      return true;
+    }
+  }
+
+  // 6. Formatting characters stripped comparison (e.g., spaces, dashes, commas, slashes)
+  auto strip_formatting = [](const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+      if (c != '-' && c != ' ' && c != '(' && c != ')' && c != '.' &&
+          c != '/' && c != '+' && c != ',' && c != ':' && c != '$' &&
+          c != '#' && c != '%' && c != '_') {
+        out.push_back(c);
+      }
+    }
+    return out;
+  };
+  std::string stripped_obs = strip_formatting(observed);
+  std::string stripped_tgt = strip_formatting(target);
+  if (!stripped_tgt.empty() &&
+      (stripped_obs == stripped_tgt ||
+       base::EqualsCaseInsensitiveASCII(stripped_obs, stripped_tgt))) {
+    return true;
+  }
+
+  return false;
+}
+
+void ReadAxNodeValue(const ui::AXTreeUpdate& tree_update,
+                     ui::AXNodeID node_id,
+                     std::string* out_value,
+                     bool* out_found,
+                     bool* out_editable,
+                     bool* out_protected = nullptr) {
+  *out_found = false;
+  *out_editable = false;
+  if (out_protected) {
+    *out_protected = false;
+  }
+  out_value->clear();
+  for (const ui::AXNodeData& node : tree_update.nodes) {
+    if (node.id == node_id) {
+      *out_found = true;
+      *out_editable =
+          (node.role == ax::mojom::Role::kTextField ||
+           node.role == ax::mojom::Role::kTextFieldWithComboBox ||
+           node.role == ax::mojom::Role::kSearchBox ||
+           node.role == ax::mojom::Role::kComboBoxMenuButton ||
+           node.role == ax::mojom::Role::kComboBoxGrouping ||
+           node.role == ax::mojom::Role::kListBox ||
+           node.role == ax::mojom::Role::kSpinButton ||
+           node.HasState(ax::mojom::State::kEditable) ||
+           node.HasState(ax::mojom::State::kRichlyEditable));
+      if (out_protected) {
+        *out_protected = node.HasState(ax::mojom::State::kProtected);
+      }
+      if (node.HasStringAttribute(ax::mojom::StringAttribute::kValue)) {
+        *out_value =
+            node.GetStringAttribute(ax::mojom::StringAttribute::kValue);
+      }
+      if (out_value->empty()) {
+        for (const auto& attr : node.html_attributes) {
+          if (attr.first == "value" && !attr.second.empty()) {
+            *out_value = attr.second;
+            break;
+          }
+        }
+      }
+      if (out_value->empty() && !node.child_ids.empty()) {
+        for (ui::AXNodeID child_id : node.child_ids) {
+          for (const ui::AXNodeData& child_node : tree_update.nodes) {
+            if (child_node.id == child_id) {
+              if (child_node.HasStringAttribute(ax::mojom::StringAttribute::kName)) {
+                *out_value = child_node.GetStringAttribute(ax::mojom::StringAttribute::kName);
+              } else if (child_node.HasStringAttribute(ax::mojom::StringAttribute::kValue)) {
+                *out_value = child_node.GetStringAttribute(ax::mojom::StringAttribute::kValue);
+              }
+              break;
+            }
+          }
+          if (!out_value->empty()) {
+            break;
+          }
+        }
+      }
+      break;
+    }
+  }
 }
 
 class MahoMcpBrowserDelegateImpl : public maho::MahoMcpBrowserDelegate {
@@ -2613,16 +2820,22 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (!wc) {
       return update;
     }
+    base::WeakPtr<content::WebContents> wc_weak = wc->GetWeakPtr();
+    base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate_weak = ui_weak_ptr_;
     base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
     wc->RequestAXTreeSnapshot(
         base::BindOnce(
-            [](ui::AXTreeUpdate* out, base::OnceClosure quit,
+            [](base::WeakPtr<content::WebContents> wc_weak,
+               base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate_weak,
+               ui::AXTreeUpdate* out, base::OnceClosure quit,
                ui::AXTreeUpdate& u) {
-              *out = std::move(u);
+              if (wc_weak && delegate_weak) {
+                *out = std::move(u);
+              }
               std::move(quit).Run();
             },
-            &update, run_loop.QuitClosure()),
-        ui::kAXModeWebContentsOnly,
+            wc_weak, delegate_weak, &update, run_loop.QuitClosure()),
+        ui::kAXModeComplete,
         /*max_nodes=*/0,
         /*timeout=*/base::Seconds(5),
         content::WebContents::AXTreeSnapshotPolicy::kAll);
@@ -2747,10 +2960,13 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
   uint64_t GetNavigationEpoch(int tab_id) {
     content::WebContents* wc =
-        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
-    auto* tracker =
-        wc ? maho::MahoMcpNavigationTracker::FromWebContents(wc) : nullptr;
-    return tracker ? tracker->navigation_epoch() : 0;
+        tab_id == 0 ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      return 0;
+    }
+    const content::NavigationEntry* entry =
+        wc->GetController().GetLastCommittedEntry();
+    return entry ? static_cast<uint64_t>(entry->GetUniqueID()) : 0;
   }
 
   void CaptureFullPagePngBase64(
@@ -3044,6 +3260,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
          target_node->role == ax::mojom::Role::kMenuItemCheckBox ||
          target_node->role == ax::mojom::Role::kMenuItemRadio);
     const bool is_checkbox = target_node->role == ax::mojom::Role::kCheckBox;
+    const bool is_radio = target_node->role == ax::mojom::Role::kRadioButton ||
+                          target_node->role == ax::mojom::Role::kMenuItemRadio;
     const ax::mojom::CheckedState pre_checked =
         target_node->HasCheckedState() ? target_node->GetCheckedState()
                                        : ax::mojom::CheckedState::kNone;
@@ -3064,8 +3282,66 @@ std::string FormatMailActionDetails(const std::string& action_name,
       // full pointerdown -> mousedown -> pointerup -> mouseup -> click sequence.
       clicked = maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {});
     }
+
+    // Also trigger element.click() or checkbox toggle in DOM across all frames matching accessible name
+    if (target_node && target_node->HasStringAttribute(ax::mojom::StringAttribute::kName)) {
+      const std::string target_name =
+          target_node->GetStringAttribute(ax::mojom::StringAttribute::kName);
+      if (!target_name.empty()) {
+        const std::string js_script =
+            "(()=>{const target = " + base::GetQuotedJSONString(target_name) + ".trim().toLowerCase();"
+            "const chks = Array.from(document.querySelectorAll('input[type=checkbox], input[type=radio]'));"
+            "for (const c of chks) {"
+            "  const elName = (c.getAttribute('name') || c.getAttribute('aria-label') || c.id || '').trim().toLowerCase();"
+            "  const elLabel = c.labels && c.labels[0] ? c.labels[0].innerText.trim().toLowerCase() : '';"
+            "  const parentText = (c.parentElement ? c.parentElement.innerText : '').trim().toLowerCase();"
+            "  if ((elName.length > 0 && (elName === target || elName.includes(target))) ||"
+            "      (elLabel.length > 0 && (elLabel === target || elLabel.includes(target))) ||"
+            "      (parentText.length > 0 && parentText.includes(target))) {"
+            "    if (typeof c.click === 'function') {"
+            "      c.click();"
+            "    } else {"
+            "      c.checked = !c.checked;"
+            "      c.dispatchEvent(new Event('change', {bubbles: true, cancelable: true}));"
+            "    }"
+            "    return 'toggled';"
+            "  }"
+            "}"
+            "const elements = Array.from(document.querySelectorAll('button, a, input[type=button], input[type=submit], [role=button], [role=link], [role=tab]'));"
+            "let bestMatch = null;"
+            "for (const el of elements) {"
+            "  const img = el.querySelector('img');"
+            "  const imgAlt = (img ? (img.getAttribute('alt') || img.getAttribute('title') || '') : '').trim().toLowerCase();"
+            "  const text = (el.innerText || el.value || el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || imgAlt || '').trim().toLowerCase();"
+            "  if (text.length > 0 || imgAlt.length > 0) {"
+            "    if (text === target || imgAlt === target || el.getAttribute('aria-label') === target) {"
+            "      bestMatch = el; break;"
+            "    } else if (text.includes(target) || imgAlt.includes(target) || (target.length >= 2 && text.length >= 2 && target.includes(text))) {"
+            "      if (!bestMatch) bestMatch = el;"
+            "    }"
+            "  }"
+            "}"
+            "if (bestMatch) {"
+            "  bestMatch.dispatchEvent(new MouseEvent('mousedown', {bubbles: true, cancelable: true, view: window}));"
+            "  bestMatch.dispatchEvent(new MouseEvent('mouseup', {bubbles: true, cancelable: true, view: window}));"
+            "  bestMatch.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));"
+            "  if (typeof bestMatch.click === 'function') bestMatch.click();"
+            "  return 'clicked';"
+            "}"
+            "return '';})()";
+        std::string res = ExecuteMcpActionJsAllFramesBlocking(wc, js_script);
+        if (res == "clicked" || res == "toggled") {
+          clicked = true;
+        }
+      }
+    }
+
+    // Also perform semantic DOM default action across frames to guarantee click
+    // delivery to event listeners inside subframes/custom controls.
+    if (PerformAxAction(wc, ax_id, ax::mojom::Action::kDoDefault)) {
+      clicked = true;
+    }
     if (!clicked) {
-      clicked = PerformAxAction(wc, ax_id, ax::mojom::Action::kDoDefault);
       method = "ax_fallback";
     }
 
@@ -3079,29 +3355,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
 
     if (is_toggleable) {
-      ui::AXTreeUpdate post_tree = SnapshotAXTree(wc);
-      const ui::AXNodeData* post_node = nullptr;
-      for (const ui::AXNodeData& node : post_tree.nodes) {
-        if (node.id == ax_id) {
-          post_node = &node;
-          break;
-        }
-      }
-      const ax::mojom::CheckedState post_checked =
-          (post_node && post_node->HasCheckedState())
-              ? post_node->GetCheckedState()
-              : ax::mojom::CheckedState::kNone;
-
-      maho::InputActionOutcome outcome;
-      outcome.dispatched = true;
-      outcome.method = method;
-      if (post_checked != pre_checked) {
-        outcome.verified = true;
-      } else {
-        outcome.verified = false;
-        outcome.reason = "state_not_toggled";
-      }
-      std::move(done).Run(std::move(outcome));
+      VerifyToggleableClickAsync(wc->GetWeakPtr(), ax_id, pre_checked, is_radio,
+                                 method, std::move(done), /*attempts_left=*/4);
       return;
     }
 
@@ -3113,6 +3368,88 @@ std::string FormatMailActionDetails(const std::string& action_name,
     outcome.reason = "unverifiable_role";
     std::move(done).Run(std::move(outcome));
   }
+
+  void VerifyToggleableClickAsync(
+      base::WeakPtr<content::WebContents> wc_weak,
+      ui::AXNodeID ax_id,
+      ax::mojom::CheckedState pre_checked,
+      bool is_radio,
+      std::string method,
+      base::OnceCallback<void(maho::InputActionOutcome)> done,
+      int attempts_left) {
+    content::GetUIThreadTaskRunner({})->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+               base::WeakPtr<content::WebContents> wc_weak, ui::AXNodeID ax,
+               ax::mojom::CheckedState pre_checked, bool is_radio,
+               std::string method,
+               base::OnceCallback<void(maho::InputActionOutcome)> done,
+               int attempts_left) {
+              if (!delegate) {
+                maho::InputActionOutcome outcome;
+                outcome.dispatched = false;
+                outcome.reason = "delegate_destroyed";
+                outcome.method = method;
+                std::move(done).Run(std::move(outcome));
+                return;
+              }
+              content::WebContents* current_wc = wc_weak.get();
+              if (!current_wc) {
+                maho::InputActionOutcome outcome;
+                outcome.dispatched = false;
+                outcome.reason = "no_web_contents";
+                outcome.method = method;
+                std::move(done).Run(std::move(outcome));
+                return;
+              }
+
+              ui::AXTreeUpdate post_tree = delegate->SnapshotAXTree(current_wc);
+              const ui::AXNodeData* post_node = nullptr;
+              for (const ui::AXNodeData& node : post_tree.nodes) {
+                if (node.id == ax) {
+                  post_node = &node;
+                  break;
+                }
+              }
+
+              if (post_node) {
+                const ax::mojom::CheckedState post_checked =
+                    post_node->HasCheckedState()
+                        ? post_node->GetCheckedState()
+                        : ax::mojom::CheckedState::kNone;
+                bool toggled = is_radio ? (post_checked == ax::mojom::CheckedState::kTrue)
+                                        : (post_checked != pre_checked);
+                if (toggled) {
+                  maho::InputActionOutcome outcome;
+                  outcome.dispatched = true;
+                  outcome.verified = true;
+                  outcome.method = method;
+                  std::move(done).Run(std::move(outcome));
+                  return;
+                }
+              }
+
+              if (attempts_left > 1) {
+                delegate->VerifyToggleableClickAsync(
+                    wc_weak, ax, pre_checked, is_radio, method,
+                    std::move(done), attempts_left - 1);
+                return;
+              }
+
+              maho::InputActionOutcome outcome;
+              outcome.dispatched = true;
+              outcome.method = method;
+              outcome.verified = false;
+              outcome.reason = post_node ? "state_not_toggled" : "node_gone";
+              std::move(done).Run(std::move(outcome));
+            },
+            ui_weak_ptr_, wc_weak, ax_id, pre_checked, is_radio, method,
+            std::move(done), attempts_left),
+        base::Milliseconds(60));
+  }
+
+  bool RequiresDeferredVerifiedInputResponses() const override { return true; }
 
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string& text) override {
     TypeVerified(tab_id, ax_id, text, base::DoNothing());
@@ -3155,10 +3492,10 @@ std::string FormatMailActionDetails(const std::string& action_name,
     std::optional<gfx::PointF> center =
         ComputeViewportCenterCss(update, ax_id, device_scale_factor);
 
-    auto verify_or_fallback = base::BindOnce(
+    auto on_typed = base::BindOnce(
         [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
-           base::WeakPtr<content::WebContents> wc_weak, ui::AXNodeID ax,
-           std::string target_text, bool initial_focus,
+           base::WeakPtr<content::WebContents> wc_weak, int target_tab_id,
+           ui::AXNodeID ax, std::string target_text, bool initial_focus,
            base::OnceCallback<void(maho::InputActionOutcome)> done_cb,
            bool typed_success) {
           if (!delegate) {
@@ -3169,124 +3506,292 @@ std::string FormatMailActionDetails(const std::string& action_name,
             std::move(done_cb).Run(std::move(outcome));
             return;
           }
-          content::WebContents* current_wc = wc_weak.get();
-          if (!current_wc) {
-            maho::InputActionOutcome outcome;
-            outcome.dispatched = false;
-            outcome.reason = "no_web_contents";
-            outcome.method = "trusted_input";
-            std::move(done_cb).Run(std::move(outcome));
-            return;
-          }
-
-          auto read_node_value = [](const ui::AXTreeUpdate& tree_update,
-                                    ui::AXNodeID node_id,
-                                    std::string* out_value, bool* out_found,
-                                    bool* out_editable) {
-            *out_found = false;
-            *out_editable = false;
-            out_value->clear();
-            for (const ui::AXNodeData& node : tree_update.nodes) {
-              if (node.id == node_id) {
-                *out_found = true;
-                *out_editable =
-                    (node.role == ax::mojom::Role::kTextField ||
-                     node.role == ax::mojom::Role::kTextFieldWithComboBox ||
-                     node.role == ax::mojom::Role::kSearchBox ||
-                     node.role == ax::mojom::Role::kComboBoxMenuButton ||
-                     node.role == ax::mojom::Role::kComboBoxGrouping ||
-                     node.role == ax::mojom::Role::kListBox ||
-                     node.role == ax::mojom::Role::kSpinButton ||
-                     node.HasState(ax::mojom::State::kEditable));
-                if (node.HasStringAttribute(
-                        ax::mojom::StringAttribute::kValue)) {
-                  *out_value = node.GetStringAttribute(
-                      ax::mojom::StringAttribute::kValue);
-                }
-                break;
-              }
-            }
-          };
-
           if (typed_success) {
-            ui::AXTreeUpdate post_tree = delegate->SnapshotAXTree(current_wc);
-            std::string observed_val;
-            bool node_found = false;
-            bool node_editable = false;
-            read_node_value(post_tree, ax, &observed_val, &node_found,
-                            &node_editable);
-            if (node_found &&
-                (observed_val == target_text ||
-                 (!target_text.empty() &&
-                  observed_val.find(target_text) != std::string::npos))) {
-              maho::InputActionOutcome outcome;
-              outcome.dispatched = true;
-              outcome.verified = true;
-              outcome.method = "trusted_input";
-              outcome.observed_value = std::move(observed_val);
-              std::move(done_cb).Run(std::move(outcome));
-              return;
-            }
-          }
-
-          // Trigger AX fallback
-          PerformAxAction(current_wc, ax, ax::mojom::Action::kFocus);
-          PerformAxAction(current_wc, ax, ax::mojom::Action::kSetValue,
-                          target_text);
-          DispatchActiveElementValueEvents(current_wc, target_text);
-
-          // Re-snapshot after AX fallback
-          ui::AXTreeUpdate post_ax_tree = delegate->SnapshotAXTree(current_wc);
-          std::string post_ax_val;
-          bool post_ax_found = false;
-          bool post_ax_editable = false;
-          read_node_value(post_ax_tree, ax, &post_ax_val, &post_ax_found,
-                          &post_ax_editable);
-
-          maho::InputActionOutcome outcome;
-          outcome.dispatched = true;
-          outcome.method = "ax_fallback";
-          outcome.observed_value = post_ax_val;
-
-          if (post_ax_found &&
-              (post_ax_val == target_text ||
-               (!target_text.empty() &&
-                post_ax_val.find(target_text) != std::string::npos))) {
-            outcome.verified = true;
+            delegate->VerifyTypedInputAsync(
+                wc_weak, target_tab_id, ax, std::move(target_text),
+                initial_focus, std::move(done_cb), /*attempts_left=*/6);
           } else {
-            outcome.verified = false;
-            if (!initial_focus) {
-              outcome.reason = "window_not_focused";
-            } else if (!post_ax_found) {
-              outcome.reason = "node_gone";
-            } else if (!post_ax_editable) {
-              outcome.reason = "element_not_editable";
-            } else {
-              outcome.reason = "value_mismatch";
-            }
+            delegate->PerformAxFallback(
+                wc_weak, target_tab_id, ax, std::move(target_text),
+                initial_focus, std::move(done_cb));
           }
-          std::move(done_cb).Run(std::move(outcome));
         },
-        ui_weak_ptr_, wc->GetWeakPtr(), ax_id, text, initial_has_focus,
+        ui_weak_ptr_, wc->GetWeakPtr(), tab_id, ax_id, text, initial_has_focus,
         std::move(done));
 
     if (center) {
       const int cx = std::lround(center->x());
       const int cy = std::lround(center->y());
-      // Focus the field with a trusted click, select-all + delete
-      // to clear any existing content, then type via trusted key
-      // events so framework-controlled inputs fire onChange.
+      // Focus the field with a trusted click.
       if (maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {})) {
-        maho::MahoMcpInputSynthesizer::KeyPress(wc, "a", {"meta"});
-        maho::MahoMcpInputSynthesizer::KeyPress(wc, "Delete", {});
-        maho::MahoMcpInputSynthesizer::TypeTextAsync(
-            wc, text, maho::TypingOptions{}, std::move(verify_or_fallback));
+        // Post delayed task (60ms) to allow the clicked frame (including child
+        // iframes) to process the pointer event and establish focus in WebContents
+        // before key events are dispatched.
+        content::GetUIThreadTaskRunner({})->PostDelayedTask(
+            FROM_HERE,
+            base::BindOnce(
+                [](base::WeakPtr<content::WebContents> wc_weak,
+                   std::string text_to_type,
+                   base::OnceCallback<void(bool)> typed_cb) {
+                  content::WebContents* current_wc = wc_weak.get();
+                  if (!current_wc) {
+                    std::move(typed_cb).Run(false);
+                    return;
+                  }
+                  const std::vector<std::string> select_all_modifiers =
+#if BUILDFLAG(IS_MAC)
+                      {"meta"};
+#else
+                      {"ctrl"};
+#endif
+                  maho::MahoMcpInputSynthesizer::KeyPress(
+                      current_wc, "a", select_all_modifiers);
+                  maho::MahoMcpInputSynthesizer::KeyPress(
+                      current_wc, "Backspace", {});
+                  maho::MahoMcpInputSynthesizer::KeyPress(
+                      current_wc, "Delete", {});
+                  maho::MahoMcpInputSynthesizer::TypeTextAsync(
+                      current_wc, text_to_type, maho::TypingOptions{},
+                      std::move(typed_cb));
+                },
+                wc->GetWeakPtr(), text, std::move(on_typed)),
+            base::Milliseconds(60));
         return;
       }
     }
 
     // If no center found or click failed, immediately execute AX fallback path.
-    std::move(verify_or_fallback).Run(/*typed_success=*/false);
+    std::move(on_typed).Run(/*typed_success=*/false);
+  }
+
+  void VerifyTypedInputAsync(
+      base::WeakPtr<content::WebContents> wc_weak,
+      int target_tab_id,
+      ui::AXNodeID ax,
+      std::string target_text,
+      bool initial_focus,
+      base::OnceCallback<void(maho::InputActionOutcome)> done_cb,
+      int attempts_left) {
+    content::WebContents* current_wc = wc_weak.get();
+    if (!current_wc) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.reason = "no_web_contents";
+      outcome.method = "trusted_input";
+      std::move(done_cb).Run(std::move(outcome));
+      return;
+    }
+
+    ui::AXTreeUpdate post_tree = SnapshotAXTree(current_wc);
+    std::string observed_val;
+    bool node_found = false;
+    bool node_editable = false;
+    bool is_protected = false;
+    ReadAxNodeValue(post_tree, ax, &observed_val, &node_found, &node_editable,
+                    &is_protected);
+
+    if (node_found &&
+        IsInputValueMatching(observed_val, target_text, is_protected)) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = true;
+      outcome.verified = true;
+      outcome.method = "trusted_input";
+      std::move(done_cb).Run(std::move(outcome));
+      return;
+    }
+
+    if (attempts_left > 1) {
+      content::GetUIThreadTaskRunner({})->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::VerifyTypedInputAsync,
+                         ui_weak_ptr_, wc_weak, target_tab_id, ax,
+                         std::move(target_text), initial_focus,
+                         std::move(done_cb), attempts_left - 1),
+          base::Milliseconds(80));
+      return;
+    }
+
+    // Retries exhausted: fall back to AX mutation.
+    PerformAxFallback(wc_weak, target_tab_id, ax, std::move(target_text),
+                      initial_focus, std::move(done_cb));
+  }
+
+  void PerformAxFallback(
+      base::WeakPtr<content::WebContents> wc_weak,
+      int target_tab_id,
+      ui::AXNodeID ax,
+      std::string target_text,
+      bool initial_focus,
+      base::OnceCallback<void(maho::InputActionOutcome)> done_cb) {
+    content::WebContents* current_wc = wc_weak.get();
+    if (!current_wc) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.reason = "no_web_contents";
+      outcome.method = "ax_fallback";
+      std::move(done_cb).Run(std::move(outcome));
+      return;
+    }
+
+    // Target-bound fallback mutation:
+    // Check credential protections first.
+    maho::MahoMcpFieldMetadata meta = GetFieldMetadata(target_tab_id, ax);
+    if (maho::MahoMcpSession::IsCredentialField(meta)) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.verified = false;
+      outcome.reason = "credential_field";
+      outcome.method = "ax_fallback";
+      std::move(done_cb).Run(std::move(outcome));
+      return;
+    }
+
+    ui::AXTreeUpdate pre_ax_tree = SnapshotAXTree(current_wc);
+    std::string pre_ax_val;
+    bool pre_ax_found = false;
+    bool pre_ax_editable = false;
+    bool pre_ax_protected = false;
+    ReadAxNodeValue(pre_ax_tree, ax, &pre_ax_val, &pre_ax_found,
+                    &pre_ax_editable, &pre_ax_protected);
+    if (!pre_ax_found) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.verified = false;
+      outcome.reason = "node_gone";
+      outcome.method = "ax_fallback";
+      std::move(done_cb).Run(std::move(outcome));
+      return;
+    }
+    if (!pre_ax_editable) {
+      maho::InputActionOutcome outcome;
+      outcome.dispatched = false;
+      outcome.verified = false;
+      outcome.reason = "element_not_editable";
+      outcome.method = "ax_fallback";
+      std::move(done_cb).Run(std::move(outcome));
+      return;
+    }
+
+    // Focus target AX node (best effort across all live frames)
+    PerformAxAction(current_wc, ax, ax::mojom::Action::kFocus);
+
+    // Mutate target AX node specifically across all live frames
+    PerformAxAction(current_wc, ax, ax::mojom::Action::kSetValue, target_text);
+
+    // Also set value directly via DOM script across all frames and fire input/change/blur
+    // events so framework-controlled forms (React/Vue) synchronize their state.
+    for (const auto& node : pre_ax_tree.nodes) {
+      if (node.id == ax && node.HasStringAttribute(ax::mojom::StringAttribute::kName)) {
+        const std::string name = node.GetStringAttribute(ax::mojom::StringAttribute::kName);
+        if (!name.empty()) {
+          const std::string script =
+              "(()=>{const target = " + base::GetQuotedJSONString(name) + ".trim().toLowerCase();"
+              "const val = " + base::GetQuotedJSONString(target_text) + ";"
+              "const inputs = Array.from(document.querySelectorAll('input, textarea'));"
+              "for (const el of inputs) {"
+              "  const elName = (el.getAttribute('name') || el.getAttribute('placeholder') || el.getAttribute('aria-label') || el.id || '').trim().toLowerCase();"
+              "  const elLabel = el.labels && el.labels[0] ? el.labels[0].innerText.trim().toLowerCase() : '';"
+              "  const parentText = (el.parentElement ? el.parentElement.innerText : '').trim().toLowerCase();"
+              "  if ((elName.length > 0 && (elName === target || elName.includes(target))) ||"
+              "      (elLabel.length > 0 && (elLabel === target || elLabel.includes(target))) ||"
+              "      (parentText.length > 0 && parentText.includes(target))) {"
+              "    el.focus();"
+              "    el.value = val;"
+              "    el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));"
+              "    el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));"
+              "    el.blur();"
+              "    return 'ok';"
+              "  }"
+              "}"
+              "return '';})()";
+          ExecuteMcpActionJsAllFramesBlocking(current_wc, script);
+        }
+        break;
+      }
+    }
+
+    // AX set-value carries full UTF-8 text, unlike the trusted keyboard
+    // synthesizer's physical-key path. Let the renderer apply that action
+    // before reading its accessibility value back for verification.
+    VerifyAxFallbackAsync(wc_weak, ax, std::move(target_text), initial_focus,
+                          std::move(done_cb), /*attempts_left=*/6);
+  }
+
+  void VerifyAxFallbackAsync(
+      base::WeakPtr<content::WebContents> wc_weak,
+      ui::AXNodeID ax,
+      std::string target_text,
+      bool initial_focus,
+      base::OnceCallback<void(maho::InputActionOutcome)> done_cb,
+      int attempts_left) {
+    content::GetUIThreadTaskRunner({})->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+               base::WeakPtr<content::WebContents> wc_weak, ui::AXNodeID ax,
+               std::string target_text, bool initial_focus,
+               base::OnceCallback<void(maho::InputActionOutcome)> done_cb,
+               int attempts_left) {
+              if (!delegate) {
+                maho::InputActionOutcome outcome;
+                outcome.dispatched = false;
+                outcome.reason = "delegate_destroyed";
+                outcome.method = "ax_fallback";
+                std::move(done_cb).Run(std::move(outcome));
+                return;
+              }
+              content::WebContents* current_wc = wc_weak.get();
+              if (!current_wc) {
+                maho::InputActionOutcome outcome;
+                outcome.dispatched = false;
+                outcome.reason = "no_web_contents";
+                outcome.method = "ax_fallback";
+                std::move(done_cb).Run(std::move(outcome));
+                return;
+              }
+              ui::AXTreeUpdate post_ax_tree =
+                  delegate->SnapshotAXTree(current_wc);
+              std::string post_ax_val;
+              bool post_ax_found = false;
+              bool post_ax_editable = false;
+              bool post_ax_protected = false;
+              ReadAxNodeValue(post_ax_tree, ax, &post_ax_val, &post_ax_found,
+                              &post_ax_editable, &post_ax_protected);
+
+              if (post_ax_found &&
+                  IsInputValueMatching(post_ax_val, target_text,
+                                       post_ax_protected)) {
+                maho::InputActionOutcome outcome;
+                outcome.dispatched = true;
+                outcome.verified = true;
+                outcome.method = "ax_fallback";
+                std::move(done_cb).Run(std::move(outcome));
+                return;
+              }
+
+              if (attempts_left > 1) {
+                delegate->VerifyAxFallbackAsync(
+                    wc_weak, ax, std::move(target_text), initial_focus,
+                    std::move(done_cb), attempts_left - 1);
+                return;
+              }
+
+              maho::InputActionOutcome outcome;
+              outcome.dispatched = true;
+              outcome.method = "ax_fallback";
+              outcome.verified = false;
+              outcome.reason = !initial_focus
+                                   ? "window_not_focused"
+                                   : !post_ax_found
+                                         ? "node_gone"
+                                         : !post_ax_editable
+                                               ? "element_not_editable"
+                                               : "value_mismatch";
+              std::move(done_cb).Run(std::move(outcome));
+            },
+            ui_weak_ptr_, wc_weak, ax, std::move(target_text), initial_focus,
+            std::move(done_cb), attempts_left),
+        base::Milliseconds(50));
   }
 
   bool SelectFileForPendingChooser(int tab_id,
@@ -3332,8 +3837,11 @@ std::string FormatMailActionDetails(const std::string& action_name,
     content::GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(
-            [](MahoMcpBrowserDelegateImpl* delegate, int id, ui::AXNodeID ax,
-               std::string select_value) {
+            [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate, int id,
+               ui::AXNodeID ax, std::string select_value) {
+              if (!delegate) {
+                return;
+              }
               content::WebContents* wc =
                   (id == 0) ? delegate->GetActiveWebContents()
                             : delegate->GetWebContentsForTabId(id);
@@ -3385,14 +3893,17 @@ std::string FormatMailActionDetails(const std::string& action_name,
                   }
                 }
                 if (!selected) {
-                  PerformAxAction(wc, ax, ax::mojom::Action::kFocus);
-                  PerformAxAction(wc, ax, ax::mojom::Action::kSetValue,
-                                  select_value);
-                  DispatchActiveElementValueEvents(wc, select_value);
+                  maho::MahoMcpFieldMetadata meta =
+                      delegate->GetFieldMetadata(id, ax);
+                  if (!maho::MahoMcpSession::IsCredentialField(meta)) {
+                    PerformAxAction(wc, ax, ax::mojom::Action::kFocus);
+                    PerformAxAction(wc, ax, ax::mojom::Action::kSetValue,
+                                    select_value);
+                  }
                 }
               }
             },
-            base::Unretained(this), tab_id, ax_id, value));
+            ui_weak_ptr_, tab_id, ax_id, value));
     return true;
   }
 
@@ -3400,7 +3911,11 @@ std::string FormatMailActionDetails(const std::string& action_name,
     content::GetUIThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(
-            [](MahoMcpBrowserDelegateImpl* delegate, int id, ui::AXNodeID ax) {
+            [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate, int id,
+               ui::AXNodeID ax) {
+              if (!delegate) {
+                return;
+              }
               content::WebContents* wc =
                   (id == 0) ? delegate->GetActiveWebContents()
                             : delegate->GetWebContentsForTabId(id);
@@ -3440,7 +3955,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                 }
               }
             },
-            base::Unretained(this), tab_id, ax_id));
+            ui_weak_ptr_, tab_id, ax_id));
     return true;
   }
 
@@ -3975,7 +4490,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (!js_filled) {
       PerformAxAction(wc, ax_id, ax::mojom::Action::kFocus);
       PerformAxAction(wc, ax_id, ax::mojom::Action::kSetValue, value);
-      DispatchActiveElementValueEvents(wc, value);
       js_filled = true;
     }
     return js_filled;

@@ -270,6 +270,8 @@ source_set("maho_ai_runtime_adapter") {
     "ai/maho_ai_runtime_adapter.h",
     "ai/maho_ai_runtime_router.cc",
     "ai/maho_ai_runtime_router.h",
+    "ai/maho_omnibox_agent_router.cc",
+    "ai/maho_omnibox_agent_router.h",
   ]
   public_deps = [
     "//base",
@@ -305,6 +307,27 @@ source_set("maho_artifact_html_sanitizer") {
   ]
 }
 
+source_set("maho_artifact_xlsx_processor") {
+  sources = [
+    "ai/maho_artifact_xlsx_processor.cc",
+    "ai/maho_artifact_xlsx_processor.h",
+  ]
+  deps = [
+    "//base",
+    "//third_party/zlib",
+  ]
+}
+
+source_set("maho_artifact_pdf_processor") {
+  sources = [
+    "ai/maho_artifact_pdf_processor.cc",
+    "ai/maho_artifact_pdf_processor.h",
+  ]
+  deps = [
+    "//base",
+  ]
+}
+
 source_set("maho_ai_ingress_coordinator") {
   sources = [
     "ui/maho_ai_ingress_coordinator.cc",
@@ -321,14 +344,23 @@ source_set("maho_ai_ingress_coordinator") {
 }
 
 
+source_set("maho_browser_tool_registry") {
+  sources = [
+    "ai/maho_browser_tool_registry.cc",
+    "ai/maho_browser_tool_registry.h",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+  ]
+}
+
 source_set("maho_browser_ai_tools") {
   sources = [
     "ai/maho_ai_page_context_extractor.cc",
     "ai/maho_ai_page_context_extractor.h",
     "ai/maho_browser_tool_executor.cc",
     "ai/maho_browser_tool_executor.h",
-    "ai/maho_browser_tool_registry.cc",
-    "ai/maho_browser_tool_registry.h",
     "ai/maho_capability_broker.cc",
     "ai/maho_capability_broker.h",
     "ai/maho_capability_principal.cc",
@@ -338,6 +370,8 @@ source_set("maho_browser_ai_tools") {
     "ai/maho_mail_tool_authorization.h",
   ]
   deps = [
+    ":maho_browser_tool_registry",
+    ":maho_page_adapter_registry",
     "//base",
     "//chrome/browser/ui/tabs:tab_strip",
     "//content/public/browser",
@@ -364,6 +398,7 @@ source_set("maho_control_activity_service") {
 source_set("maho_browser_tool_executor_unittests") {
   testonly = true
   sources = [
+    "ai/maho_ai_page_context_extractor_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -383,6 +418,7 @@ source_set("maho_browser_tool_executor_unittests") {
 
 test("maho_browser_tool_executor_test") {
   sources = [
+    "ai/maho_ai_page_context_extractor_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -1097,13 +1133,16 @@ source_set("maho_unified_agent_adapter") {
     "//base",
   ]
   deps = [
+    ":maho_agent_channel_gateway",
     ":maho_ai_runtime_adapter_interface",
     ":maho_artifact_registry",
+    ":maho_authenticated_service_api_broker",
     ":maho_browser_ai_tools",
     ":maho_conversation_task",
     ":maho_control_activity_service",
     ":maho_core_holder",
     ":maho_ffi_callback_handle",
+    ":maho_page_adapter_registry",
     ":maho_tool_execution_graph",
     "//maho/browser/mcp:maho_mcp",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
@@ -1124,6 +1163,16 @@ source_set("maho_agent_event_replay_buffer") {
   ]
 }
 
+source_set("maho_page_adapter_registry") {
+  sources = [
+    "ai/maho_page_adapter_registry.cc",
+    "ai/maho_page_adapter_registry.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
 source_set("maho_authenticated_service_api_broker") {
   sources = [
     "ai/maho_authenticated_service_api_broker.cc",
@@ -1131,6 +1180,13 @@ source_set("maho_authenticated_service_api_broker") {
   ]
   public_deps = [
     "//base",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
   ]
 }
 
@@ -1140,7 +1196,12 @@ source_set("maho_agent_channel_gateway") {
     "ai/maho_agent_channel_gateway.h",
   ]
   public_deps = [
+    ":maho_authenticated_service_api_broker",
     "//base",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter_interface",
+    "//components/prefs",
   ]
 }
 
@@ -1219,6 +1280,7 @@ source_set("maho_ai_runtime_router_unittests") {
   testonly = true
   sources = [
     "ai/maho_ai_runtime_router_unittest.cc",
+    "ai/maho_omnibox_agent_router_unittest.cc",
   ]
   deps = [
     ":maho_ai_runtime_adapter",
@@ -1237,6 +1299,46 @@ source_set("maho_agent_event_replay_buffer_unittests") {
   ]
   deps = [
     ":maho_agent_event_replay_buffer",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_page_adapter_registry_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_page_adapter_registry_unittest.cc",
+  ]
+  deps = [
+    ":maho_page_adapter_registry",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_authenticated_service_api_broker_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_authenticated_service_api_broker_unittest.cc",
+  ]
+  deps = [
+    ":maho_authenticated_service_api_broker",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_agent_channel_gateway_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_agent_channel_gateway_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_channel_gateway",
+    ":maho_authenticated_service_api_broker",
     "//base",
     "//base/test:test_support",
     "//testing/gtest",
@@ -1264,8 +1366,11 @@ source_set("maho_context_menus_unittests") {
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
+    "ai/maho_agent_channel_gateway_unittest.cc",
     "ai/maho_artifact_html_sanitizer_unittest.cc",
+    "ai/maho_artifact_pdf_processor_unittest.cc",
     "ai/maho_artifact_registry_unittest.cc",
+    "ai/maho_artifact_xlsx_processor_unittest.cc",
     "ai/maho_unified_agent_adapter_lifecycle_unittest.cc",
     "maho_vault_runtime_bridge_unittest.cc",
     "ui/theme/maho_sidebar_palette_unittest.cc",
@@ -1276,8 +1381,11 @@ source_set("maho_theme_io_unittests") {
     "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
   ]
   deps = [
+    ":maho_agent_channel_gateway",
     ":maho_artifact_html_sanitizer",
+    ":maho_artifact_pdf_processor",
     ":maho_artifact_registry",
+    ":maho_artifact_xlsx_processor",
     ":maho_tab_id_helper",
     ":maho_theme_support",
     ":maho_unified_agent_adapter",

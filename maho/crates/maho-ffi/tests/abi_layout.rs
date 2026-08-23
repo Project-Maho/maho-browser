@@ -33,7 +33,7 @@ const _: () = {
     assert!(mem::align_of::<MahoAgentSecureKey>() == 8);
 
     // Assert size and alignment of MahoAgentToolResult
-    assert!(mem::size_of::<MahoAgentToolResult>() == 24);
+    assert!(mem::size_of::<MahoAgentToolResult>() == 40);
     assert!(mem::align_of::<MahoAgentToolResult>() == 8);
 };
 

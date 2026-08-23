@@ -13,6 +13,8 @@
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 
+struct MahoCore;
+
 namespace maho::ai {
 struct BrowserActionContract;
 }
@@ -163,6 +165,22 @@ public:
   static const ToolSchema *FindToolSchema(const std::string &tool_name);
   static base::ListValue SerializePhase1ToolSchemas(bool enabled = true);
   static bool IsBrowserActionTool(const std::string &tool_name);
+
+  // Routines CRUD execution and validation bridges.
+  static bool IsRoutineEventTriggerSupported();
+  static bool ExecuteRoutineCreate(const base::DictValue& params,
+                                   MahoCore* core = nullptr,
+                                   std::string* error_out = nullptr);
+  static bool ExecuteRoutineUpdate(const base::DictValue& params,
+                                   MahoCore* core = nullptr,
+                                   std::string* error_out = nullptr);
+  static bool ExecuteRoutineDelete(std::string_view routine_id,
+                                   MahoCore* core = nullptr,
+                                   std::string* error_out = nullptr);
+  static std::string ExecuteRoutineHistory(
+      std::optional<std::string_view> routine_id = std::nullopt,
+      uint32_t limit = 50,
+      MahoCore* core = nullptr);
 
   static constexpr bool HasSurface(const CapabilityDescriptor &descriptor,
                                    Surface surface) {

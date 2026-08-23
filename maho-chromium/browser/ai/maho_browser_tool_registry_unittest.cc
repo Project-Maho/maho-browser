@@ -91,9 +91,15 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
   const std::set<std::string> expected = {
       "browser_accessibility_snapshot",
       "browser_click",
+      "browser_file_upload_select",
+      "browser_history_search_desktop",
       "browser_hover",
       "browser_key_press",
       "browser_navigate",
+      "browser_routines_create",
+      "browser_routines_delete",
+      "browser_routines_history",
+      "browser_routines_update",
       "browser_scroll",
       "browser_select",
       "browser_type",
@@ -115,13 +121,14 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
       "page_query_selector",
       "page_wait_for_selector",
       "read_current_page",
+      "screenshot_proof",
       "search_in_page",
   };
 
   base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
-  EXPECT_EQ(tools.size(), 27u);
+  EXPECT_EQ(tools.size(), 34u);
   EXPECT_EQ(ToolNames(tools), expected);
-  EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 13u);
+  EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 14u);
 
   size_t action_contract_entries = 0;
   for (const MahoBrowserToolRegistry::ToolSchema &schema :
@@ -130,7 +137,7 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
       ++action_contract_entries;
     }
   }
-  EXPECT_EQ(action_contract_entries, 13u);
+  EXPECT_EQ(action_contract_entries, 14u);
 }
 
 TEST(MahoBrowserToolRegistryTest,
@@ -233,6 +240,7 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "browser_bookmarks_search",
       "browser_click",
       "browser_console_messages",
+      "browser_file_upload_select",
       "browser_get_blocked_domains",
       "browser_history_search",
       "browser_hover",
@@ -286,14 +294,14 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
     EXPECT_TRUE(actual.insert(std::string(descriptor->tool_name)).second)
         << descriptor->tool_name;
   }
-  EXPECT_EQ(capabilities.size(), 49u);
+  EXPECT_EQ(capabilities.size(), 50u);
   EXPECT_EQ(actual, expected);
 }
 
 TEST(MahoBrowserToolRegistryTest, PublicAndControlSchemasAreClosed) {
   base::ListValue public_tools =
       MahoBrowserToolRegistry::SerializePublicMcpCapabilities();
-  ASSERT_EQ(public_tools.size(), 49u);
+  ASSERT_EQ(public_tools.size(), 50u);
 
   auto expect_closed_schema = [](const base::DictValue &tool) {
     const std::string *name = tool.FindString("name");
@@ -371,6 +379,13 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
       viewport.FindDictByDottedPath("properties.width_px")->FindInt("maximum"),
       4096);
 
+  const base::DictValue& file_upload =
+      PublicSchema(tools, "browser_file_upload_select");
+  EXPECT_EQ(PropertyNames(file_upload),
+            std::set<std::string>({"path", "tab_id"}));
+  EXPECT_EQ(StringSet(*file_upload.FindList("required")),
+            std::set<std::string>({"path"}));
+
   const base::DictValue &mail_search =
       PublicSchema(tools, "mail_search_emails");
   EXPECT_EQ(PropertyNames(mail_search),
@@ -420,7 +435,7 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
 
 TEST(MahoBrowserToolRegistryTest, CanonicalDescriptorsHaveCompletePolicy) {
   const auto &descriptors = MahoBrowserToolRegistry::GetCapabilityDescriptors();
-  EXPECT_EQ(descriptors.size(), 75u);
+  EXPECT_EQ(descriptors.size(), 82u);
   EXPECT_TRUE(
       MahoBrowserToolRegistry::ValidateCapabilityDescriptors(descriptors));
 
@@ -471,8 +486,8 @@ TEST(MahoBrowserToolRegistryTest, FeatureGatesFilterSurfaceProjection) {
       MahoBrowserToolRegistry::kBrowserMcp);
   const auto gated = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
       MahoBrowserToolRegistry::kBrowserMcp, false, false, false);
-  EXPECT_EQ(all.size(), 49u);
-  EXPECT_EQ(gated.size(), 35u);
+  EXPECT_EQ(all.size(), 50u);
+  EXPECT_EQ(gated.size(), 36u);
   for (const auto *descriptor : gated) {
     EXPECT_EQ(descriptor->feature_gate,
               MahoBrowserToolRegistry::FeatureGate::kAlways);
@@ -577,7 +592,7 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(diagnostics.FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 75);
+  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 82);
   ASSERT_TRUE(diagnostics.FindString("catalogHash"));
   EXPECT_EQ(diagnostics.FindString("catalogHash")->size(), 64u);
 
@@ -591,8 +606,8 @@ TEST(MahoBrowserToolRegistryTest,
   ASSERT_TRUE(surfaces);
   const base::DictValue* public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 35);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 35u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 36);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 36u);
   EXPECT_FALSE(surfaces->Find("desktopAgent"));
   EXPECT_FALSE(surfaces->Find("cliAgent"));
   EXPECT_FALSE(surfaces->Find("cliGeneric"));
@@ -666,6 +681,341 @@ TEST(MahoBrowserToolRegistryTest, DisabledRegistryReturnsZeroSchemas) {
       MahoBrowserToolRegistry::SerializePhase1ToolSchemas(false);
 
   EXPECT_TRUE(tools.empty());
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     RoutineSchemasRejectScriptPayloadsAndEnforceTriggerEnum) {
+  base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
+
+  // 1. browser_routines_create schema checks
+  const base::DictValue* create =
+      FindSerializedTool(tools, "browser_routines_create");
+  ASSERT_TRUE(create);
+  const base::DictValue* create_schema = create->FindDict("input_schema");
+  ASSERT_TRUE(create_schema);
+  EXPECT_EQ(*create_schema->FindString("type"), "object");
+  EXPECT_EQ(create_schema->FindBool("additionalProperties"), false);
+
+  const base::DictValue* create_props = create_schema->FindDict("properties");
+  ASSERT_TRUE(create_props);
+  EXPECT_TRUE(create_props->contains("name"));
+  EXPECT_TRUE(create_props->contains("prompt"));
+  EXPECT_TRUE(create_props->contains("trigger"));
+  EXPECT_TRUE(create_props->contains("schedule"));
+  EXPECT_TRUE(create_props->contains("event"));
+
+  // Scripts / executable code properties must NOT be accepted in schema
+  EXPECT_FALSE(create_props->contains("script"));
+  EXPECT_FALSE(create_props->contains("code"));
+  EXPECT_FALSE(create_props->contains("executable"));
+  EXPECT_FALSE(create_props->contains("command"));
+
+  // Trigger property enum MUST contain ONLY "cron" and "event"
+  const base::DictValue* trigger_schema = create_props->FindDict("trigger");
+  ASSERT_TRUE(trigger_schema);
+  EXPECT_EQ(*trigger_schema->FindString("type"), "string");
+  const base::ListValue* trigger_enum = trigger_schema->FindList("enum");
+  ASSERT_TRUE(trigger_enum);
+  EXPECT_EQ(trigger_enum->size(), 2u);
+  std::set<std::string> enum_values = StringSet(*trigger_enum);
+  EXPECT_EQ(enum_values, std::set<std::string>({"cron", "event"}));
+
+  // Required properties for create
+  const base::ListValue* create_required = create_schema->FindList("required");
+  ASSERT_TRUE(create_required);
+  std::set<std::string> create_req_set = StringSet(*create_required);
+  EXPECT_EQ(create_req_set.count("name"), 1u);
+  EXPECT_EQ(create_req_set.count("prompt"), 1u);
+
+  // 2. browser_routines_update schema checks
+  const base::DictValue* update =
+      FindSerializedTool(tools, "browser_routines_update");
+  ASSERT_TRUE(update);
+  const base::DictValue* update_schema = update->FindDict("input_schema");
+  ASSERT_TRUE(update_schema);
+  EXPECT_EQ(update_schema->FindBool("additionalProperties"), false);
+  const base::DictValue* update_props = update_schema->FindDict("properties");
+  ASSERT_TRUE(update_props);
+  EXPECT_TRUE(update_props->contains("id"));
+  EXPECT_FALSE(update_props->contains("script"));
+  EXPECT_FALSE(update_props->contains("code"));
+
+  // 3. browser_routines_delete schema checks
+  const base::DictValue* del =
+      FindSerializedTool(tools, "browser_routines_delete");
+  ASSERT_TRUE(del);
+  const base::DictValue* del_schema = del->FindDict("input_schema");
+  ASSERT_TRUE(del_schema);
+  EXPECT_EQ(del_schema->FindBool("additionalProperties"), false);
+  const base::ListValue* del_required = del_schema->FindList("required");
+  ASSERT_TRUE(del_required);
+  EXPECT_EQ(StringSet(*del_required), std::set<std::string>({"id"}));
+
+  // 4. browser_routines_history schema checks
+  const base::DictValue* history =
+      FindSerializedTool(tools, "browser_routines_history");
+  ASSERT_TRUE(history);
+  const base::DictValue* history_schema = history->FindDict("input_schema");
+  ASSERT_TRUE(history_schema);
+  EXPECT_EQ(history_schema->FindBool("additionalProperties"), false);
+  const base::DictValue* history_props = history_schema->FindDict("properties");
+  ASSERT_TRUE(history_props);
+  EXPECT_TRUE(history_props->contains("routine_id"));
+  EXPECT_TRUE(history_props->contains("limit"));
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     RoutineMutationsMarkedSensitiveAndRequireConfirmation) {
+  // Check descriptors directly
+  const auto* create_desc =
+      MahoBrowserToolRegistry::FindCapability("browser_routines_create");
+  ASSERT_TRUE(create_desc);
+  EXPECT_EQ(create_desc->mutability,
+            MahoBrowserToolRegistry::Mutability::kMutable);
+  EXPECT_EQ(create_desc->sensitivity,
+            MahoBrowserToolRegistry::Sensitivity::kSensitive);
+  EXPECT_TRUE(create_desc->changes_authority);
+
+  const auto* update_desc =
+      MahoBrowserToolRegistry::FindCapability("browser_routines_update");
+  ASSERT_TRUE(update_desc);
+  EXPECT_EQ(update_desc->mutability,
+            MahoBrowserToolRegistry::Mutability::kMutable);
+  EXPECT_EQ(update_desc->sensitivity,
+            MahoBrowserToolRegistry::Sensitivity::kSensitive);
+  EXPECT_TRUE(update_desc->changes_authority);
+
+  const auto* delete_desc =
+      MahoBrowserToolRegistry::FindCapability("browser_routines_delete");
+  ASSERT_TRUE(delete_desc);
+  EXPECT_EQ(delete_desc->mutability,
+            MahoBrowserToolRegistry::Mutability::kMutable);
+  EXPECT_EQ(delete_desc->sensitivity,
+            MahoBrowserToolRegistry::Sensitivity::kSensitive);
+  EXPECT_TRUE(delete_desc->changes_authority);
+
+  const auto* history_desc =
+      MahoBrowserToolRegistry::FindCapability("browser_routines_history");
+  ASSERT_TRUE(history_desc);
+  EXPECT_EQ(history_desc->mutability,
+            MahoBrowserToolRegistry::Mutability::kReadOnly);
+  EXPECT_EQ(history_desc->sensitivity,
+            MahoBrowserToolRegistry::Sensitivity::kLow);
+  EXPECT_FALSE(history_desc->changes_authority);
+
+  // Check serialized agent capabilities policy
+  base::ListValue agent_tools =
+      MahoBrowserToolRegistry::SerializeAgentCapabilities();
+
+  for (const std::string& mutation_tool :
+       {"browser_routines_create", "browser_routines_update",
+        "browser_routines_delete"}) {
+    const base::DictValue* tool =
+        FindSerializedTool(agent_tools, mutation_tool);
+    ASSERT_TRUE(tool) << mutation_tool;
+    const base::DictValue* policy = tool->FindDict("policy");
+    ASSERT_TRUE(policy) << mutation_tool;
+    EXPECT_TRUE(policy->FindBool("sensitive").value()) << mutation_tool;
+    EXPECT_EQ(*policy->FindString("permission"), "always_ask")
+        << mutation_tool;
+  }
+
+  const base::DictValue* hist_tool =
+      FindSerializedTool(agent_tools, "browser_routines_history");
+  ASSERT_TRUE(hist_tool);
+  const base::DictValue* hist_policy = hist_tool->FindDict("policy");
+  ASSERT_TRUE(hist_policy);
+  EXPECT_FALSE(hist_policy->FindBool("sensitive").value());
+  EXPECT_EQ(*hist_policy->FindString("permission"), "auto_approve");
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     RoutineEventTriggerMarkedDisabledUntilEmitterWired) {
+  EXPECT_FALSE(MahoBrowserToolRegistry::IsRoutineEventTriggerSupported());
+
+  // Attempting to create a routine with event trigger fails closed
+  base::DictValue event_routine;
+  event_routine.Set("name", "Event Routine");
+  event_routine.Set("prompt", "Take screenshot on startup");
+  event_routine.Set("trigger", "event");
+  event_routine.Set("event", "on_startup");
+
+  std::string error;
+  bool success = MahoBrowserToolRegistry::ExecuteRoutineCreate(
+      event_routine, nullptr, &error);
+  EXPECT_FALSE(success);
+  EXPECT_TRUE(error.find("Event triggers are deferred and currently disabled") !=
+              std::string::npos);
+
+  // Attempting to pass script payload fails closed
+  base::DictValue script_routine;
+  script_routine.Set("name", "Malicious Script");
+  script_routine.Set("prompt", "Do something");
+  script_routine.Set("script", "console.log('pwn')");
+
+  std::string script_error;
+  bool script_success = MahoBrowserToolRegistry::ExecuteRoutineCreate(
+      script_routine, nullptr, &script_error);
+  EXPECT_FALSE(script_success);
+  EXPECT_TRUE(script_error.find("Script and code payloads are not accepted") !=
+              std::string::npos);
+}
+
+TEST(MahoBrowserToolRegistryTest, RoutineRegistryHandlersBridgeToRoutinesFFI) {
+  // Creation fails with null core
+  base::DictValue cron_routine;
+  cron_routine.Set("name", "Daily Summary");
+  cron_routine.Set("prompt", "Summarize my tabs");
+  cron_routine.Set("trigger", "cron");
+  cron_routine.Set("schedule", "0 9 * * *");
+
+  std::string error;
+  bool ok = MahoBrowserToolRegistry::ExecuteRoutineCreate(
+      cron_routine, nullptr, &error);
+  EXPECT_FALSE(ok);
+  EXPECT_EQ(error, "MahoCore is not initialized");
+
+  // Deletion with empty id fails validation
+  std::string del_err;
+  bool del_ok = MahoBrowserToolRegistry::ExecuteRoutineDelete("", nullptr, &del_err);
+  EXPECT_FALSE(del_ok);
+  EXPECT_EQ(del_err, "Routine ID cannot be empty");
+
+  // History with null core returns safe empty array JSON
+  std::string history_json =
+      MahoBrowserToolRegistry::ExecuteRoutineHistory(std::nullopt, 50, nullptr);
+  EXPECT_EQ(history_json, "[]");
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     BrowserHistorySearchDesktopDiscoverableOnDesktopAgentWithoutBrowserMcp) {
+  const auto* desc =
+      MahoBrowserToolRegistry::FindCapability("browser_history_search_desktop");
+  ASSERT_TRUE(desc);
+  EXPECT_EQ(desc->canonical_id, "history.search_desktop");
+  EXPECT_EQ(desc->category, MahoBrowserToolRegistry::Category::kHistory);
+  EXPECT_EQ(desc->mutability, MahoBrowserToolRegistry::Mutability::kReadOnly);
+  EXPECT_EQ(desc->sensitivity, MahoBrowserToolRegistry::Sensitivity::kSensitive);
+  EXPECT_FALSE(desc->changes_authority);
+
+  // Surface membership: DesktopAgent surface enabled, BrowserMcp disabled
+  EXPECT_TRUE(MahoBrowserToolRegistry::HasSurface(
+      *desc, MahoBrowserToolRegistry::kDesktopAgent));
+  EXPECT_FALSE(MahoBrowserToolRegistry::HasSurface(
+      *desc, MahoBrowserToolRegistry::kBrowserMcp));
+
+  // DesktopAgent projection contains it
+  const auto desktop_caps =
+      MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+          MahoBrowserToolRegistry::kDesktopAgent);
+  bool found_in_desktop = false;
+  for (const auto* cap : desktop_caps) {
+    if (cap->tool_name == "browser_history_search_desktop") {
+      found_in_desktop = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_in_desktop);
+
+  // BrowserMcp projection does NOT contain it
+  const auto mcp_caps =
+      MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+          MahoBrowserToolRegistry::kBrowserMcp);
+  for (const auto* cap : mcp_caps) {
+    EXPECT_NE(cap->tool_name, "browser_history_search_desktop");
+  }
+
+  // Serialized desktop agent tools expose it with query and max_results schema
+  base::ListValue agent_tools =
+      MahoBrowserToolRegistry::SerializeAgentCapabilities();
+  const base::DictValue* serialized =
+      FindSerializedTool(agent_tools, "browser_history_search_desktop");
+  ASSERT_TRUE(serialized);
+  EXPECT_EQ(*serialized->FindString("capabilityId"), "history.search_desktop");
+  const base::DictValue* schema = serialized->FindDict("inputSchema");
+  ASSERT_TRUE(schema);
+  EXPECT_EQ(PropertyNames(*schema),
+            std::set<std::string>({"max_results", "query"}));
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     ScreenshotProofMarkedSensitiveAndConfirmationGated) {
+  const auto* desc =
+      MahoBrowserToolRegistry::FindCapability("screenshot_proof");
+  ASSERT_TRUE(desc);
+  EXPECT_EQ(desc->canonical_id, "capture.screenshot_proof");
+  EXPECT_EQ(desc->category, MahoBrowserToolRegistry::Category::kCapture);
+  EXPECT_EQ(desc->mutability, MahoBrowserToolRegistry::Mutability::kReadOnly);
+  EXPECT_EQ(desc->sensitivity, MahoBrowserToolRegistry::Sensitivity::kSensitive);
+  EXPECT_FALSE(desc->changes_authority);
+
+  // Surface membership: DesktopAgent surface enabled, BrowserMcp disabled
+  EXPECT_TRUE(MahoBrowserToolRegistry::HasSurface(
+      *desc, MahoBrowserToolRegistry::kDesktopAgent));
+  EXPECT_FALSE(MahoBrowserToolRegistry::HasSurface(
+      *desc, MahoBrowserToolRegistry::kBrowserMcp));
+
+  // Check serialized agent capability policy confirms sensitivity and always_ask gate
+  base::ListValue agent_tools =
+      MahoBrowserToolRegistry::SerializeAgentCapabilities();
+  const base::DictValue* proof_tool =
+      FindSerializedTool(agent_tools, "screenshot_proof");
+  ASSERT_TRUE(proof_tool);
+  EXPECT_EQ(*proof_tool->FindString("capabilityId"), "capture.screenshot_proof");
+  const base::DictValue* policy = proof_tool->FindDict("policy");
+  ASSERT_TRUE(policy);
+  EXPECT_TRUE(policy->FindBool("sensitive").value());
+  EXPECT_EQ(*policy->FindString("permission"), "always_ask");
+
+  const base::DictValue* schema = proof_tool->FindDict("inputSchema");
+  ASSERT_TRUE(schema);
+  EXPECT_EQ(PropertyNames(*schema), std::set<std::string>({"tab_id"}));
+  EXPECT_TRUE(schema->FindList("required")->empty());
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     PlainBrowserHistorySearchRestrictedToBrowserMcp) {
+  // 1. Plain browser_history_search descriptor is BrowserMcp ONLY
+  const auto* mcp_desc =
+      MahoBrowserToolRegistry::FindCapability("browser_history_search");
+  ASSERT_TRUE(mcp_desc);
+  EXPECT_EQ(mcp_desc->canonical_id, "history.search");
+  EXPECT_TRUE(MahoBrowserToolRegistry::HasSurface(
+      *mcp_desc, MahoBrowserToolRegistry::kBrowserMcp));
+  EXPECT_FALSE(MahoBrowserToolRegistry::HasSurface(
+      *mcp_desc, MahoBrowserToolRegistry::kDesktopAgent));
+
+  // 2. Both-direction surface assertion
+  const auto desktop_caps =
+      MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+          MahoBrowserToolRegistry::kDesktopAgent);
+  const auto mcp_caps =
+      MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+          MahoBrowserToolRegistry::kBrowserMcp);
+
+  std::set<std::string> desktop_names;
+  for (const auto* cap : desktop_caps) {
+    desktop_names.insert(std::string(cap->tool_name));
+  }
+  std::set<std::string> mcp_names;
+  for (const auto* cap : mcp_caps) {
+    mcp_names.insert(std::string(cap->tool_name));
+  }
+
+  // DesktopAgent has browser_history_search_desktop but NOT plain browser_history_search
+  EXPECT_EQ(desktop_names.count("browser_history_search_desktop"), 1u);
+  EXPECT_EQ(desktop_names.count("browser_history_search"), 0u);
+
+  // BrowserMcp has plain browser_history_search but NOT browser_history_search_desktop
+  EXPECT_EQ(mcp_names.count("browser_history_search"), 1u);
+  EXPECT_EQ(mcp_names.count("browser_history_search_desktop"), 0u);
+
+  // Serialized Phase 1 tools check
+  base::ListValue phase1_tools =
+      MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
+  std::set<std::string> phase1_names = ToolNames(phase1_tools);
+  EXPECT_EQ(phase1_names.count("browser_history_search_desktop"), 1u);
+  EXPECT_EQ(phase1_names.count("browser_history_search"), 0u);
 }
 
 } // namespace

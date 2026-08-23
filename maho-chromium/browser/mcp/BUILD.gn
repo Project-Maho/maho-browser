@@ -47,6 +47,7 @@ source_set("maho_mcp") {
     "//base",
     "//content/public/browser",
     "//crypto",
+    "//maho/browser:maho_browser_tool_registry",
     "//net",
     "//skia",
     "//third_party/re2",

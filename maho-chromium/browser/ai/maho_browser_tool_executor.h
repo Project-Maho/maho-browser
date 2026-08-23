@@ -122,6 +122,9 @@ class MahoBrowserToolExecutor {
   void ExecuteBrowserAction(const maho::ai::BrowserActionContract& contract,
                             const base::DictValue& arguments,
                             ToolResultCallback callback);
+  void ExecuteScreenshotProof(const std::string& tool_name,
+                              const base::DictValue& arguments,
+                              ToolResultCallback callback);
 
   void OnReadCurrentPageContext(ToolResultCallback callback,
                                MahoAiPageContextExtractor::PageContextResult result);

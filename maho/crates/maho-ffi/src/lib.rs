@@ -6890,6 +6890,31 @@ pub unsafe extern "C" fn maho_core_handle_memory_pressure(
 
 /// # Safety
 /// `core` must be a valid pointer returned by `maho_core_new`.
+/// Caller must free the returned string with `maho_core_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_memory_get_l1_briefing(core: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = unsafe { &*core };
+            match core.get_l1_briefing() {
+                Some(content) => CString::new(content)
+                    .map(CString::into_raw)
+                    .unwrap_or(ptr::null_mut()),
+                None => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
 /// `tab_id` and `form_json` must be valid null-terminated C strings.
 #[no_mangle]
 pub unsafe extern "C" fn maho_core_save_form_data(
@@ -11140,9 +11165,58 @@ fn apply_agent_skill_system_prompt(session: &MahoAgentSession, runtime: &Swiftid
     }
 }
 
+// THREAD-SAFETY CONTRACT FOR user_data:
+// In the Maho C-FFI boundary, `user_data` raw pointers (`*mut c_void` / `usize`) are passed
+// alongside C function callbacks. By transferring these callbacks and their associated
+// `user_data` across the FFI boundary into asynchronous Rust runtimes/threads:
+// 1. The caller/embedding environment (Chromium / iOS / Android shell) guarantees that the
+//    underlying object pointed to by `user_data` remains valid and is safe to access
+//    concurrently or sequentially across threads for the active duration of the callback
+//    lease (i.e. until the registered `on_release` callback is invoked or the session is freed).
+// 2. The release callback (when provided) is guaranteed by the Rust runtime to be invoked
+//    at most once after all active dispatches referencing `user_data` have finished and all
+//    clones of the lease have dropped. If no release callback is provided (`None`), dropping
+//    the lease safely skips invoking any callback.
+// 3. To avoid blanket unsafety, `SendableCallback<T>` is strictly constrained to implement
+//    `Send` and `Sync` only for concrete C function pointer wrapper types used in the agent FFI.
+
 struct SendableCallback<T>(T);
-unsafe impl<T> Send for SendableCallback<T> {}
-unsafe impl<T> Sync for SendableCallback<T> {}
+
+unsafe impl Send for SendableCallback<MahoAgentReleaseCallback> {}
+unsafe impl Sync for SendableCallback<MahoAgentReleaseCallback> {}
+
+unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char)>> {}
+unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char)>> {}
+
+unsafe impl Send for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char)> {}
+unsafe impl Sync for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char)> {}
+
+unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>> {}
+unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char)>> {}
+
+unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char)>> {}
+unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char)>> {}
+
+unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char, bool)>> {}
+unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char, *const c_char, bool)>> {}
+
+unsafe impl Send for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult> {}
+unsafe impl Sync for SendableCallback<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult> {}
+
+unsafe impl Send for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult>> {}
+unsafe impl Sync for SendableCallback<Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char) -> MahoAgentToolResult>> {}
+
+unsafe impl Send for SendableCallback<MahoAgentPermissionCallback> {}
+unsafe impl Sync for SendableCallback<MahoAgentPermissionCallback> {}
+
+unsafe impl Send for SendableCallback<Option<MahoAgentPermissionCallback>> {}
+unsafe impl Sync for SendableCallback<Option<MahoAgentPermissionCallback>> {}
+
+unsafe impl Send for SendableCallback<MahoAgentSecureStorageCallback> {}
+unsafe impl Sync for SendableCallback<MahoAgentSecureStorageCallback> {}
+
+unsafe impl Send for SendableCallback<Option<MahoAgentSecureStorageCallback>> {}
+unsafe impl Sync for SendableCallback<Option<MahoAgentSecureStorageCallback>> {}
 
 struct SendableUserData(usize);
 #[allow(dead_code)]
@@ -11212,6 +11286,7 @@ impl Drop for AcceptedLeasedTurn {
 }
 
 pub type MahoAgentReleaseCallback = unsafe extern "C" fn(user_data: *mut c_void);
+type OptReleaseCb = Option<unsafe extern "C" fn(user_data: *mut c_void)>;
 
 struct CallbackReleasePolicy {
     callback: MahoAgentReleaseCallback,
@@ -11220,15 +11295,15 @@ struct CallbackReleasePolicy {
 
 struct CallbackRelease {
     armed: AtomicBool,
-    callback: SendableCallback<MahoAgentReleaseCallback>,
+    callback: Option<SendableCallback<MahoAgentReleaseCallback>>,
     user_data: SendableUserData,
 }
 
 impl CallbackRelease {
-    fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Self {
+    fn new(callback: OptReleaseCb, user_data: *mut c_void) -> Self {
         Self {
             armed: AtomicBool::new(false),
-            callback: SendableCallback(callback),
+            callback: callback.map(SendableCallback),
             user_data: SendableUserData(user_data as usize),
         }
     }
@@ -11241,9 +11316,11 @@ impl CallbackRelease {
         if !self.armed.load(AtomicOrdering::Acquire) {
             return;
         }
-        // SAFETY: the FFI ownership contract transfers `user_data` to this lease exactly once.
-        // The caller's release callback must not unwind or retain the pointer after this call.
-        unsafe { (self.callback.0)(self.user_data.0 as *mut c_void) };
+        if let Some(ref callback) = self.callback {
+            // SAFETY: the FFI ownership contract transfers `user_data` to this lease exactly once.
+            // The caller's release callback must not unwind or retain the pointer after this call.
+            unsafe { (callback.0)(self.user_data.0 as *mut c_void) };
+        }
     }
 }
 
@@ -11252,7 +11329,7 @@ struct TurnCallbackLease(CallbackRelease);
 
 impl TurnCallbackLease {
     fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Self {
-        Self(CallbackRelease::new(callback, user_data))
+        Self(CallbackRelease::new(Some(callback), user_data))
     }
 
     fn arm(&self) {
@@ -11275,7 +11352,7 @@ fn invoke_with_turn_callback_lease(lease: Option<Arc<TurnCallbackLease>>, callba
 struct SessionCallbackLease(CallbackRelease);
 
 impl SessionCallbackLease {
-    fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Arc<Self> {
+    fn new(callback: OptReleaseCb, user_data: *mut c_void) -> Arc<Self> {
         Arc::new(Self(CallbackRelease::new(callback, user_data)))
     }
 
@@ -12040,7 +12117,7 @@ unsafe fn maho_agent_create_session_impl(
 
             let agent_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
             let callback_lease = callback_release_policy
-                .map(|policy| SessionCallbackLease::new(policy.callback, policy.user_data));
+                .map(|policy| SessionCallbackLease::new(Some(policy.callback), policy.user_data));
 
             let session_permission_callback = permission_cb;
             let permission_callback = session_permission_callback.map(|cb| {
@@ -12085,9 +12162,11 @@ unsafe fn maho_agent_create_session_impl(
             let runtime = Arc::new(SwiftideBackend::new(
                 Arc::new(agent_storage),
                 permission_callback,
-                workspace_path,
+                workspace_path.clone(),
                 allow_insecure_key_storage,
             ));
+            // Automatically attach durable session journal with disk write-through persistence
+            runtime.attach_session_journal(&sid, &workspace_path);
 
             if let Some(cb) = secure_storage_cb {
                 let user_data_ptr = SendableUserData(secure_storage_user_data as usize);
@@ -13114,6 +13193,27 @@ pub unsafe extern "C" fn maho_agent_artifact_path(
         std::ptr::null_mut()
     )
 }
+
+#[path = "common.rs"]
+pub(crate) mod common;
+
+pub mod agent;
+
+pub mod skills;
+
+pub use crate::agent::events::{
+    maho_agent_get_events_after, maho_agent_get_last_compaction_info,
+    maho_agent_interaction_cancel, maho_agent_interaction_resolve,
+    maho_agent_interaction_timeout, maho_agent_register_unified_event_callback,
+    maho_agent_register_unified_event_callback_leased,
+    maho_agent_resolve_model, maho_agent_turn_queue_depth,
+    maho_agent_turn_submit, maho_agent_unregister_unified_event_callback,
+    maho_agent_wait_notification_permission,
+    maho_agent_wait_register, maho_agent_wait_wake,
+    MahoAgentEventCallbackV2, MahoAgentEventKindV2, MahoAgentEventV2,
+    MahoAgentUnifiedEventCallback, MahoAgentUnifiedEventEnvelope,
+    MahoUnifiedAgentEventCallback, MahoUnifiedAgentEventEnvelope,
+};
 
 /// # Safety
 /// `ptr` must be a valid pointer to a `MahoCore`.
@@ -14943,6 +15043,49 @@ pub unsafe extern "C" fn maho_routines_latest(
     )
 }
 
+/// Sets the available browser capabilities for skill activation and filtering.
+///
+/// Queries discoverable skills matching the supplied capability list (plus any
+/// user-handoff skills) and updates the internal capability filter on `MahoCore`.
+/// Returns a JSON array of `SkillInfo` structs representing discoverable skills.
+///
+/// # Safety
+/// `core` must be a valid non-null pointer to a `MahoCore`.
+/// `capabilities_json` must be a valid null-terminated UTF-8 JSON string array.
+/// Caller must free returned JSON string via `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_skills_set_available_capabilities(
+    core: *mut MahoCore,
+    capabilities_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if core.is_null() || capabilities_json.is_null() {
+                return ptr::null_mut();
+            }
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core_ref = unsafe { &mut *core };
+            let json_str = match unsafe { CStr::from_ptr(capabilities_json) }.to_str() {
+                Ok(s) => s,
+                Err(_) => return ptr::null_mut(),
+            };
+            let capabilities: Vec<String> = match serde_json::from_str(json_str) {
+                Ok(caps) => caps,
+                Err(_) => return ptr::null_mut(),
+            };
+            let cap_refs: Vec<&str> = capabilities.iter().map(|s| s.as_str()).collect();
+            let discovered = core_ref.discover_skills(&cap_refs);
+            let skill_infos: Vec<maho_types::events::core_update::SkillInfo> =
+                discovered.into_iter().map(|s| s.into()).collect();
+            core_ref.set_skills_available_capabilities(capabilities);
+            to_json_cstring(&skill_infos)
+        },
+        ptr::null_mut()
+    )
+}
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone)]
@@ -15504,6 +15647,43 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(serde_json::from_str(json).expect("status json"));
+    }
+
+    #[test]
+    fn test_maho_skills_set_available_capabilities_ffi() {
+        let core = maho_core_new();
+        assert!(!core.is_null());
+
+        // Call FFI with empty capability list: only user_handoff skills returned
+        let empty_caps = CString::new("[]").unwrap();
+        let handoff_ptr = unsafe { maho_skills_set_available_capabilities(core, empty_caps.as_ptr()) };
+        assert!(!handoff_ptr.is_null());
+        let handoff_str = unsafe { CStr::from_ptr(handoff_ptr) }.to_str().unwrap();
+        let handoff_skills: Vec<maho_types::events::core_update::SkillInfo> =
+            serde_json::from_str(handoff_str).unwrap();
+        unsafe { maho_string_free(handoff_ptr) };
+
+        assert!(!handoff_skills.is_empty(), "User handoff skills should be returned");
+
+        // Call FFI with specific capabilities
+        let caps = CString::new(r#"["web_search", "browser_history_search_desktop"]"#).unwrap();
+        let caps_ptr = unsafe { maho_skills_set_available_capabilities(core, caps.as_ptr()) };
+        assert!(!caps_ptr.is_null());
+        let caps_str = unsafe { CStr::from_ptr(caps_ptr) }.to_str().unwrap();
+        let skills: Vec<maho_types::events::core_update::SkillInfo> =
+            serde_json::from_str(caps_str).unwrap();
+        unsafe { maho_string_free(caps_ptr) };
+
+        assert!(skills.len() >= handoff_skills.len());
+
+        // Null core or null json fails safely
+        let null_res = unsafe { maho_skills_set_available_capabilities(std::ptr::null_mut(), caps.as_ptr()) };
+        assert!(null_res.is_null());
+
+        let null_json = unsafe { maho_skills_set_available_capabilities(core, std::ptr::null()) };
+        assert!(null_json.is_null());
+
+        unsafe { maho_core_free(core) };
     }
 
     #[test]
@@ -16180,7 +16360,7 @@ mod tests {
         let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
             .cast_mut()
             .cast();
-        let session_lease = SessionCallbackLease::new(record_release, user_data);
+        let session_lease = SessionCallbackLease::new(Some(record_release), user_data);
         let runtime_callback_lease = Arc::clone(&session_lease);
         session_lease.arm();
 
@@ -16216,13 +16396,20 @@ mod tests {
         let user_data = (&events as *const Mutex<Vec<CallbackLeaseEvent>>)
             .cast_mut()
             .cast();
-        let lease = SessionCallbackLease::new(record_release, user_data);
+        let lease = SessionCallbackLease::new(Some(record_release), user_data);
 
         // When: session setup fails before acceptance.
         drop(lease);
 
         // Then: no release callback runs for the unaccepted session context.
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn none_session_callback_lease_drops_safely_without_callback() {
+        let lease = SessionCallbackLease::new(None, ptr::null_mut());
+        lease.arm();
+        drop(lease);
     }
 
     #[test]

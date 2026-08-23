@@ -2,19 +2,33 @@ use std::collections::HashMap;
 
 use crate::approval::ToolSensitivity;
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum FallbackTier {
     TypedDomainApi,
+    #[serde(alias = "page_adapter", alias = "adapter_tier", alias = "adapter")]
+    ExactOriginPageAdapter,
     DomRefLocator,
     AccessibilitySnapshot,
     ScreenshotCua,
 }
 
 impl FallbackTier {
+    #[allow(non_upper_case_globals)]
+    pub const PageAdapter: Self = Self::ExactOriginPageAdapter;
+    #[allow(non_upper_case_globals)]
+    pub const AdapterTier: Self = Self::ExactOriginPageAdapter;
+    #[allow(non_upper_case_globals)]
+    pub const DomTier: Self = Self::DomRefLocator;
+
+    pub const PAGE_ADAPTER: Self = Self::ExactOriginPageAdapter;
+    pub const ADAPTER_TIER: Self = Self::ExactOriginPageAdapter;
+    pub const DOM_TIER: Self = Self::DomRefLocator;
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::TypedDomainApi => "typed_domain_api",
+            Self::ExactOriginPageAdapter => "exact_origin_page_adapter",
             Self::DomRefLocator => "dom_ref_locator",
             Self::AccessibilitySnapshot => "accessibility_snapshot",
             Self::ScreenshotCua => "screenshot_cua",
@@ -28,6 +42,10 @@ pub enum FallbackDecisionReason {
     TypedDomainAvailable,
     TypedDomainUnavailable,
     TypedDomainAlreadySucceeded,
+    PageAdapterAvailable,
+    PageAdapterUnavailable,
+    PageAdapterAlreadySucceeded,
+    PageAdapterSelected,
     DomRefMissing,
     AccessibilitySelected,
     ScreenshotCuaApprovalRequired,
@@ -41,6 +59,10 @@ impl FallbackDecisionReason {
             Self::TypedDomainAvailable => "typed_domain_available",
             Self::TypedDomainUnavailable => "typed_domain_unavailable",
             Self::TypedDomainAlreadySucceeded => "typed_domain_already_succeeded",
+            Self::PageAdapterAvailable => "page_adapter_available",
+            Self::PageAdapterUnavailable => "page_adapter_unavailable",
+            Self::PageAdapterAlreadySucceeded => "page_adapter_already_succeeded",
+            Self::PageAdapterSelected => "page_adapter_selected",
             Self::DomRefMissing => "dom_ref_missing",
             Self::AccessibilitySelected => "accessibility_selected",
             Self::ScreenshotCuaApprovalRequired => "screenshot_cua_approval_required",
@@ -186,6 +208,18 @@ impl FallbackLadderState {
             );
             return Err(FallbackLadderError::UnsafeDowngrade(decision));
         }
+        if previous == Some(FallbackTier::ExactOriginPageAdapter)
+            && request.requested_tier > FallbackTier::ExactOriginPageAdapter
+        {
+            let decision = decision(
+                request.requested_tier,
+                FallbackTier::ExactOriginPageAdapter,
+                FallbackDecisionReason::PageAdapterAlreadySucceeded,
+                FallbackSafetyState::Blocked,
+                false,
+            );
+            return Err(FallbackLadderError::UnsafeDowngrade(decision));
+        }
 
         match request.requested_tier {
             FallbackTier::TypedDomainApi => {
@@ -196,6 +230,22 @@ impl FallbackLadderState {
                     FallbackTier::TypedDomainApi,
                     FallbackDecisionReason::TypedDomainAvailable,
                     FallbackSafetyState::Safe,
+                    false,
+                ))
+            }
+            FallbackTier::ExactOriginPageAdapter => {
+                self.progress_by_class
+                    .insert(action_class, FallbackTier::ExactOriginPageAdapter);
+                let state = if previous.is_some() {
+                    FallbackSafetyState::Safe
+                } else {
+                    FallbackSafetyState::Downgraded
+                };
+                Ok(decision(
+                    FallbackTier::TypedDomainApi,
+                    FallbackTier::ExactOriginPageAdapter,
+                    FallbackDecisionReason::TypedDomainUnavailable,
+                    state,
                     false,
                 ))
             }
@@ -231,6 +281,30 @@ impl FallbackLadderState {
                 ))
             }
             FallbackTier::ScreenshotCua => self.decide_screenshot_cua(action_class, request),
+        }
+    }
+
+    pub fn decide_with_adapter_registry(
+        &mut self,
+        tool_name: &str,
+        origin: &str,
+        operation: &str,
+        registry: &crate::page_adapters::PageAdapterRegistry,
+    ) -> Result<FallbackDecision, FallbackLadderError> {
+        if registry.lookup(origin, operation).is_some() {
+            self.decide(FallbackSelectionRequest {
+                tool_name,
+                requested_tier: FallbackTier::ExactOriginPageAdapter,
+                sensitivity: ToolSensitivity::ReadOnly,
+                screenshot_cua_approval: ScreenshotCuaApproval::NotRequested,
+            })
+        } else {
+            self.decide(FallbackSelectionRequest {
+                tool_name,
+                requested_tier: FallbackTier::DomRefLocator,
+                sensitivity: ToolSensitivity::ReadOnly,
+                screenshot_cua_approval: ScreenshotCuaApproval::NotRequested,
+            })
         }
     }
 

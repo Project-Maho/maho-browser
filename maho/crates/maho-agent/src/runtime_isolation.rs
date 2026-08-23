@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
-static GLOBAL_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+static GLOBAL_RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
 
 pub struct SessionRuntime {
     handle: tokio::runtime::Handle,
@@ -12,16 +12,19 @@ pub struct SessionRuntime {
 
 impl SessionRuntime {
     pub fn new() -> Result<Self, AgentError> {
-        let runtime = GLOBAL_RUNTIME.get_or_init(|| {
+        let runtime_res = GLOBAL_RUNTIME.get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .thread_name("maho-agent-worker")
                 .enable_all()
                 .build()
-                .expect("Failed to build global runtime")
+                .map_err(|e| format!("Failed to build global runtime: {e}"))
         });
-        Ok(Self {
-            handle: runtime.handle().clone(),
-        })
+        match runtime_res {
+            Ok(runtime) => Ok(Self {
+                handle: runtime.handle().clone(),
+            }),
+            Err(err) => Err(AgentError::ExecutionError(err.clone())),
+        }
     }
 
     pub fn block_on<F, T>(&self, future: F) -> Result<T, AgentError>
