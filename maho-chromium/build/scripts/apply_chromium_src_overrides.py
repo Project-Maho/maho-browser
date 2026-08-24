@@ -5192,6 +5192,39 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="maho_sidebar_palette_subscription_ = {};",
         ),
+        Replacement(
+            old=(
+                "  std::optional<ui::ElementIdentifier> highlight_element =\n"
+                "      kTranslatePageActionElementId;\n"
+                "\n"
+                "  views::BubbleAnchor anchor =\n"
+                "      toolbar_button_provider()->GetBubbleAnchor(kActionShowTranslate);\n"
+                "  if (bubble_anchor_util::IsHighlightable(anchor)) {\n"
+                "    // No need for a separate highlight.\n"
+                "    highlight_element = std::nullopt;\n"
+                "  }\n"
+                "  CHECK_DEREF(TranslateBubbleController::From(browser_.get()))\n"
+                "      .ShowTranslateBubble(web_contents, anchor, highlight_element, step,\n"
+                "                           source_language, target_language, error_type,\n"
+                "                           is_user_gesture ? TranslateBubbleView::USER_GESTURE\n"
+                "                                           : TranslateBubbleView::AUTOMATIC);\n"
+                "\n"
+                "  return ShowTranslateBubbleResult::kSuccess;\n"
+            ),
+            new=(
+                "  // Maho: in Maho's Arc-style layout, translation affordances are surfaced\n"
+                "  // via the sidebar search pill (MahoSidebarSearchView) and on-device\n"
+                "  // translation engine. The upstream TranslateBubbleView popup is suppressed\n"
+                "  // so it does not duplicate or overlay the sidebar interface.\n"
+                "  return ShowTranslateBubbleResult::kSuccess;\n"
+            ),
+            description=(
+                "Maho: suppress upstream TranslateBubbleView in BrowserView::ShowTranslateBubble "
+                "so the native Google Translate bubble never overlays the sidebar search pill"
+            ),
+            guard="// Maho: in Maho's Arc-style layout, translation affordances are surfaced\n  // via the sidebar search pill",
+            idempotent=True,
+        ),
     ],
     # ── browser.cc ───────────────────────────────────────────────────────────
     "chrome/browser/ui/browser.cc": [
@@ -7675,7 +7708,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         Replacement(
             old=(
                 "  const bool show_background =\n"
-                "      drop_target_view_->GetVisible() || IsInSplitView();\n"
+                "      drop_target_view_->GetVisible() &&\n"
+                "      drop_target_view_->drag_type() != MultiContentsDropTargetView::DragType::kTab;\n"
             ),
             new=(
                 "  const bool show_background =\n"
@@ -7686,7 +7720,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "behind split panes (only during drag-drop); it was the visible gray "
                 "rounded frame around split content"
             ),
-            guard="  const bool show_background =\n      drop_target_view_->GetVisible();\n",
+            guard="show_background",
         ),
     ],
     "chrome/browser/ui/views/frame/contents_container_view.cc": [

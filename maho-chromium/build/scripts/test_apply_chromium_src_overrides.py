@@ -732,6 +732,32 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 1,
             )
 
+    def test_translate_bubble_suppression_is_applied_to_browser_view(self):
+        replacement = next(
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if item.description
+            == (
+                "Maho: suppress upstream TranslateBubbleView in BrowserView::ShowTranslateBubble "
+                "so the native Google Translate bubble never overlays the sidebar search pill"
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(replacement.old)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertNotIn("TranslateBubbleController::From", output)
+            self.assertIn("ShowTranslateBubbleResult::kSuccess", output)
+
     def test_shared_glass_view_is_browser_owned_and_spans_all_three_panes(self):
         replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
         rendered = "\n".join(item.new for item in replacements)
