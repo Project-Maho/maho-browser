@@ -37,6 +37,28 @@ pub const MAIL_WRITE_ACCOUNT_TOOLS: &[&str] = &[
     "mail_import_migration_archive",
 ];
 
+pub const CREDENTIAL_TYPING_APPROVAL_REQUIRED: &str =
+    "credential_typing_approval_required";
+pub const CREDENTIAL_TYPING_DENIED: &str = "credential_typing_denied";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialTypingAuthorizationAction {
+    Allow,
+    RequireApproval(&'static str),
+}
+
+pub const fn authorize_credential_typing(
+    allow_credentials_requested: bool,
+) -> CredentialTypingAuthorizationAction {
+    if !allow_credentials_requested {
+        CredentialTypingAuthorizationAction::Allow
+    } else {
+        CredentialTypingAuthorizationAction::RequireApproval(
+            CREDENTIAL_TYPING_APPROVAL_REQUIRED,
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MailAuthorizationState {
     pub feature_enabled: bool,
@@ -376,6 +398,25 @@ mod tests {
     use super::*;
 
     const SENTINEL: &str = "S3NTINEL-maho-vault-9F4C";
+
+    #[test]
+    fn credential_typing_authorization_contract_requires_explicit_approval() {
+        assert_eq!(
+            CREDENTIAL_TYPING_APPROVAL_REQUIRED,
+            "credential_typing_approval_required"
+        );
+        assert_eq!(CREDENTIAL_TYPING_DENIED, "credential_typing_denied");
+        assert_eq!(
+            authorize_credential_typing(false),
+            CredentialTypingAuthorizationAction::Allow
+        );
+        assert_eq!(
+            authorize_credential_typing(true),
+            CredentialTypingAuthorizationAction::RequireApproval(
+                CREDENTIAL_TYPING_APPROVAL_REQUIRED
+            )
+        );
+    }
 
     #[test]
     fn test_permission_request_redacts_credentials() {

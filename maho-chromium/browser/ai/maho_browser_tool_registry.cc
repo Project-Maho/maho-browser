@@ -374,11 +374,14 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
         "ref", BuildIntegerSchema(
                    "Accessibility ref from browser_accessibility_snapshot."));
     properties.Set(
-        "text", BuildStringSchema("Text to type. Never use for credentials."));
+        "text",
+        BuildStringSchema(
+            "Text to type. Credential fields require explicit user approval."));
     if (catalog_surface) {
       properties.Set(
           "allow_credentials",
-          BuildBooleanSchema("Allow generic typing into a credential field."));
+          BuildBooleanSchema(
+              "Request user-approved generic typing into a credential field."));
     }
     required.Append("ref");
     required.Append("text");

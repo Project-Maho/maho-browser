@@ -49,6 +49,35 @@ struct BrowserActionContract {
   BrowserActionEmptyAllowlistPolicy empty_allowlist_policy;
 };
 
+// Stable public-contract reason codes for generic typing into credential-class
+// fields. Keep these strings synchronized with maho-agent permission.rs and the
+// website Agent/MCP documentation. allow_credentials requests this gate; it is
+// never evidence that the user approved it.
+inline constexpr std::string_view kCredentialTypingApprovalRequired =
+    "credential_typing_approval_required";
+inline constexpr std::string_view kCredentialTypingDenied =
+    "credential_typing_denied";
+
+enum class CredentialTypingAuthorizationAction {
+  kAllow,
+  kRequireApproval,
+};
+
+struct CredentialTypingAuthorizationDecision {
+  CredentialTypingAuthorizationAction action =
+      CredentialTypingAuthorizationAction::kAllow;
+  std::string_view reason_code;
+};
+
+constexpr CredentialTypingAuthorizationDecision AuthorizeCredentialTyping(
+    bool allow_credentials_requested) {
+  if (!allow_credentials_requested) {
+    return {CredentialTypingAuthorizationAction::kAllow, {}};
+  }
+  return {CredentialTypingAuthorizationAction::kRequireApproval,
+          kCredentialTypingApprovalRequired};
+}
+
 inline constexpr bool IsSensitive(const BrowserActionContract& contract) {
   return contract.sensitivity == BrowserActionSensitivity::kSensitive;
 }

@@ -13,6 +13,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -698,6 +699,10 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     base::DictValue result = BuildBrowserActionErrorResult(
         std::string(contract.tool_name), kActionDeniedError,
         authorization_error);
+    if (authorization_error == maho::ai::kCredentialTypingApprovalRequired ||
+        authorization_error == maho::ai::kCredentialTypingDenied) {
+      result.Set("reason_code", authorization_error);
+    }
     AttachFallbackDecision(result, fallback_decision);
     std::move(callback).Run(std::move(result));
     return;
@@ -917,12 +922,19 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
     action_result = maho::MahoMcpBrowserActionHandler::HandleClick(
         delegate, browser_action_refs_, tab_id, &arguments);
   } else if (tool_name == "browser_type") {
-    // The shared Rust shim marks credential typing for the CLI MCP path. The
-    // in-browser agent retains its separate approval-and-Vault-only boundary.
-    base::DictValue sanitized_arguments = arguments.Clone();
-    sanitized_arguments.Remove("allow_credentials");
+    // allow_credentials requests crossing the credential-typing boundary; it
+    // is not itself proof of approval. Paths without an in-process Agent
+    // approval callback have already passed the native credential gate, so the
+    // request may reach the trusted field classifier. The in-browser Agent is
+    // the production caller that supplies action_approval_callback_; keep its
+    // existing Vault-only credential boundary by stripping generic credential
+    // typing there. Vault fill controls remain the only Agent credential path.
+    base::DictValue type_arguments = arguments.Clone();
+    if (action_approval_callback_) {
+      type_arguments.Remove("allow_credentials");
+    }
     action_result = maho::MahoMcpBrowserActionHandler::HandleType(
-        delegate, browser_action_refs_, tab_id, &sanitized_arguments);
+        delegate, browser_action_refs_, tab_id, &type_arguments);
   } else if (tool_name == "browser_select") {
     action_result = maho::MahoMcpBrowserActionHandler::HandleSelect(
         delegate, browser_action_refs_, tab_id, &arguments);
@@ -1475,37 +1487,66 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
   }
 
   if (maho::ai::RequiresApproval(contract)) {
+    const bool credential_typing_requested =
+        contract.tool_name == "browser_type" &&
+        arguments.FindBool("allow_credentials").value_or(false);
+    const auto credential_authorization =
+        maho::ai::AuthorizeCredentialTyping(credential_typing_requested);
+
     if (!action_approval_callback_) {
-      error = "Browser action requires typed approval authorization.";
-      return false;
-    }
+      if (credential_authorization.action ==
+          maho::ai::CredentialTypingAuthorizationAction::kRequireApproval) {
+        maho::MahoMcpTargetResolution resolution =
+            delegate->ResolveTabTarget(tab_id);
+        if (!resolution.target.valid) {
+          error = std::string(maho::ai::kCredentialTypingApprovalRequired);
+          return false;
+        }
+        if (!delegate->ConfirmCredentialTypingApproval(contract.tool_name,
+                                                        resolution.target)) {
+          error = std::string(maho::ai::kCredentialTypingDenied);
+          return false;
+        }
+      } else {
+        error = "Browser action requires typed approval authorization.";
+        return false;
+      }
+    } else {
+      BrowserActionAuthorization metadata;
+      metadata.tool_name = std::string(contract.tool_name);
+      metadata.kind =
+          credential_typing_requested
+              ? "credential_typing"
+              : std::string(maho::ai::BrowserActionKindName(contract.kind));
+      metadata.sensitivity =
+          credential_typing_requested
+              ? "credential"
+              : std::string(maho::ai::BrowserActionSensitivityName(
+                    contract.sensitivity));
+      metadata.requires_approval = true;
+      metadata.requires_lease = maho::ai::RequiresLease(contract);
+      metadata.domain_policy = std::string(
+          maho::ai::BrowserActionDomainPolicyName(contract.domain_policy));
+      metadata.empty_allowlist_policy = std::string(
+          maho::ai::BrowserActionEmptyAllowlistPolicyName(
+              contract.empty_allowlist_policy));
+      metadata.active_origin = *active_origin;
+      metadata.destination_origin = std::move(destination_origin);
+      metadata.page_derived_justification =
+          arguments.FindBool("page_derived_justification")
+              .value_or(arguments.FindBool("pageDerivedJustification")
+                            .value_or(false));
 
-    BrowserActionAuthorization metadata;
-    metadata.tool_name = std::string(contract.tool_name);
-    metadata.kind = std::string(maho::ai::BrowserActionKindName(contract.kind));
-    metadata.sensitivity = std::string(
-        maho::ai::BrowserActionSensitivityName(contract.sensitivity));
-    metadata.requires_approval = true;
-    metadata.requires_lease = maho::ai::RequiresLease(contract);
-    metadata.domain_policy = std::string(
-        maho::ai::BrowserActionDomainPolicyName(contract.domain_policy));
-    metadata.empty_allowlist_policy = std::string(
-        maho::ai::BrowserActionEmptyAllowlistPolicyName(
-            contract.empty_allowlist_policy));
-    metadata.active_origin = *active_origin;
-    metadata.destination_origin = std::move(destination_origin);
-    metadata.page_derived_justification =
-        arguments.FindBool("page_derived_justification")
-            .value_or(
-                arguments.FindBool("pageDerivedJustification").value_or(false));
-
-    BrowserActionApprovalDecision approval_decision =
-        action_approval_callback_.Run(metadata);
-    if (!approval_decision.approved) {
-      error = approval_decision.error.empty()
-                  ? "Browser action approval was denied."
-                  : std::move(approval_decision.error);
-      return false;
+      BrowserActionApprovalDecision approval_decision =
+          action_approval_callback_.Run(metadata);
+      if (!approval_decision.approved) {
+        error = credential_typing_requested
+                    ? std::string(maho::ai::kCredentialTypingDenied)
+                    : (approval_decision.error.empty()
+                           ? "Browser action approval was denied."
+                           : std::move(approval_decision.error));
+        return false;
+      }
     }
   }
 

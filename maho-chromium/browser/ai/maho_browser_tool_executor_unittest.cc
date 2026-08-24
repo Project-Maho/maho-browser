@@ -13,6 +13,7 @@
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "maho/browser/ai/maho_browser_action_contract.h"
 #include "maho/browser/ai/maho_page_adapter_registry.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
@@ -36,6 +37,8 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
   maho::ai::MailAuthorizationContext mail_authorization_context{
       true, true, false, true, maho::ai::MailGlobalPolicy::kPrompt, 1};
   int mail_approval_count = 0;
+  int credential_typing_approval_count = 0;
+  bool credential_typing_approval_result = true;
   bool defer_mail_reads = false;
   MailReadCallback pending_mail_read;
 
@@ -47,6 +50,13 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
                                std::string_view) override {
     ++mail_approval_count;
     return true;
+  }
+
+  bool ConfirmCredentialTypingApproval(
+      std::string_view,
+      const maho::ResolvedMahoMcpTarget&) override {
+    ++credential_typing_approval_count;
+    return credential_typing_approval_result;
   }
 
   int active_tab_id = 7;
@@ -607,8 +617,19 @@ TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
 }
 
 TEST_F(MahoBrowserToolExecutorTest,
-       CredentialFieldRejectsAllowCredentialsAfterApproval) {
-  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+       CredentialFieldRemainsVaultOnlyAfterExistingAgentApprovalWithoutSecondPrompt) {
+  int agent_approval_count = 0;
+  auto executor = MakeExecutor(base::BindRepeating(
+      [](int* approval_count, const Authorization& metadata) {
+        ++*approval_count;
+        EXPECT_EQ(metadata.kind, "credential_typing");
+        EXPECT_EQ(metadata.sensitivity, "credential");
+        EXPECT_TRUE(metadata.requires_approval);
+        ApprovalDecision decision;
+        decision.approved = true;
+        return decision;
+      },
+      &agent_approval_count));
   PopulateRef(executor, 2, 202);
   maho::MahoMcpFieldMetadata metadata;
   metadata.classified = true;
@@ -622,8 +643,67 @@ TEST_F(MahoBrowserToolExecutorTest,
   base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
 
   EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(agent_approval_count, 1);
+  EXPECT_EQ(delegate_.credential_typing_approval_count, 0);
   EXPECT_EQ(delegate_.type_count, 0);
   EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       CredentialFieldNativeApprovalAllowsCredentialTyping) {
+  auto executor = MakeExecutor();
+  PopulateRef(executor, 2, 202);
+  maho::MahoMcpFieldMetadata metadata;
+  metadata.classified = true;
+  metadata.is_protected = true;
+  delegate_.field_metadata[202] = metadata;
+
+  base::DictValue arguments;
+  arguments.Set("ref", 2);
+  arguments.Set("text", "S3NTINEL-native-approved-password");
+  arguments.Set("allow_credentials", true);
+  base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
+
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.credential_typing_approval_count, 1);
+  EXPECT_EQ(delegate_.type_count, 1);
+  EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
+}
+
+TEST_F(MahoBrowserToolExecutorTest,
+       CredentialFieldNativeApprovalDenialReturnsStableReason) {
+  auto executor = MakeExecutor();
+  PopulateRef(executor, 2, 202);
+  delegate_.credential_typing_approval_result = false;
+  maho::MahoMcpFieldMetadata metadata;
+  metadata.classified = true;
+  metadata.is_protected = true;
+  delegate_.field_metadata[202] = metadata;
+
+  base::DictValue arguments;
+  arguments.Set("ref", 2);
+  arguments.Set("text", "S3NTINEL-native-denied-password");
+  arguments.Set("allow_credentials", true);
+  base::DictValue result = Execute(executor, "browser_type", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_EQ(result.FindInt("error_code").value(), -32008);
+  EXPECT_EQ(*result.FindString("reason_code"),
+            maho::ai::kCredentialTypingDenied);
+  EXPECT_EQ(delegate_.credential_typing_approval_count, 1);
+  EXPECT_EQ(delegate_.type_count, 0);
+  EXPECT_EQ(result.DebugString().find("S3NTINEL"), std::string::npos);
+}
+
+TEST(CredentialTypingAuthorizationTest, StableApprovalRequiredContract) {
+  const auto requires_approval =
+      maho::ai::AuthorizeCredentialTyping(true);
+  EXPECT_EQ(requires_approval.action,
+            maho::ai::CredentialTypingAuthorizationAction::kRequireApproval);
+  EXPECT_EQ(requires_approval.reason_code,
+            maho::ai::kCredentialTypingApprovalRequired);
+  EXPECT_EQ(maho::ai::AuthorizeCredentialTyping(false).action,
+            maho::ai::CredentialTypingAuthorizationAction::kAllow);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, InvalidDirectionAndKeyFailBeforeDispatch) {
@@ -1371,9 +1451,9 @@ TEST_F(MahoBrowserToolExecutorParityTest,
       Execute(executor, "screenshot_proof", std::move(arguments));
 
   EXPECT_TRUE(result.FindBool("ok").value_or(false));
-  EXPECT_EQ(result.FindString("tool").value_or(""), "screenshot_proof");
-  EXPECT_EQ(result.FindString("content_type").value_or(""), "image/png");
-  EXPECT_EQ(result.FindString("data").value_or(""), delegate_.screenshot_b64);
+  EXPECT_EQ(*result.FindString("tool"), "screenshot_proof");
+  EXPECT_EQ(*result.FindString("content_type"), "image/png");
+  EXPECT_EQ(*result.FindString("data"), delegate_.screenshot_b64);
   EXPECT_EQ(delegate_.capture_full_page_count, 1);
   EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
 }
@@ -1398,8 +1478,8 @@ TEST_F(MahoBrowserToolExecutorParityTest,
       Execute(executor, "page_get_text", std::move(arguments));
 
   EXPECT_TRUE(adapter_result.FindBool("ok").value_or(false));
-  EXPECT_EQ(adapter_result.FindString("tool").value_or(""), "page_get_text");
-  EXPECT_EQ(adapter_result.FindString("text").value_or(""), "element text");
+  EXPECT_EQ(*adapter_result.FindString("tool"), "page_get_text");
+  EXPECT_EQ(*adapter_result.FindString("text"), "element text");
   EXPECT_EQ(delegate_.get_element_text_count, 1);
 
   // 2. Unregistered origin also executes through generic DOM execution path
@@ -1410,14 +1490,14 @@ TEST_F(MahoBrowserToolExecutorParityTest,
       Execute(executor, "page_get_text", std::move(generic_args));
 
   EXPECT_TRUE(generic_result.FindBool("ok").value_or(false));
-  EXPECT_EQ(generic_result.FindString("tool").value_or(""), "page_get_text");
-  EXPECT_EQ(generic_result.FindString("text").value_or(""), "element text");
+  EXPECT_EQ(*generic_result.FindString("tool"), "page_get_text");
+  EXPECT_EQ(*generic_result.FindString("text"), "element text");
   EXPECT_EQ(delegate_.get_element_text_count, 2);
 
   EXPECT_TRUE(generic_result.FindBool("ok").value_or(false));
-  EXPECT_EQ(generic_result.FindString("tool").value_or(""), "page_get_text");
+  EXPECT_EQ(*generic_result.FindString("tool"), "page_get_text");
   EXPECT_EQ(generic_result.FindString("adapter_id"), nullptr);
-  EXPECT_NE(generic_result.FindString("tier").value_or(""), "page_adapter");
+  EXPECT_NE(*generic_result.FindString("tier"), "page_adapter");
 
   maho::ai::MahoPageAdapterRegistry::GetGlobalRegistry().Clear();
 }

@@ -48,6 +48,16 @@ reason code as the message.
 | `mail_read_consent_required` | **Allow AI to read Mail** is off. Grant it in Settings. |
 | `mail_typed_approval_required` | A write or account tool needs the typed per-call approval prompt. |
 | `mail_typed_approval_denied` | The user rejected the typed approval prompt. |
+| `credential_typing_approval_required` | Generic `browser_type` requested credential-field typing and requires the per-call user approval gate. |
+| `credential_typing_denied` | The user rejected the credential-typing approval prompt. |
+
+The credential-typing codes are shared public authorization contract
+strings across Browser and Agent code. `allow_credentials` requests the gate;
+it never counts as approval by itself. When the flag is absent, generic typing
+into a credential-class field remains blocked. The in-browser Agent keeps its
+existing approval plus Vault-sourced credential boundary: its already-recorded
+action approval is not followed by a second native prompt, and generic
+`browser_type` still cannot bypass Vault filling for credential fields.
 
 Denied requests redact Mail arguments and return only the reason code, so a
 denial never returns message content. Mail tools are also hidden from tool
