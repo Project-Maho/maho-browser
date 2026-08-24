@@ -3522,42 +3522,58 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (center) {
       const int cx = std::lround(center->x());
       const int cy = std::lround(center->y());
-      // Focus the field with a trusted click.
-      if (maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {})) {
-        // Post delayed task (60ms) to allow the clicked frame (including child
-        // iframes) to process the pointer event and establish focus in WebContents
-        // before key events are dispatched.
-        content::GetUIThreadTaskRunner({})->PostDelayedTask(
-            FROM_HERE,
-            base::BindOnce(
-                [](base::WeakPtr<content::WebContents> wc_weak,
-                   std::string text_to_type,
-                   base::OnceCallback<void(bool)> typed_cb) {
-                  content::WebContents* current_wc = wc_weak.get();
-                  if (!current_wc) {
-                    std::move(typed_cb).Run(false);
-                    return;
-                  }
-                  const std::vector<std::string> select_all_modifiers =
+      // Focus the field with a trusted click whose pointer events travel a
+      // bounded interpolated trajectory, then continue typing once the full
+      // click sequence has dispatched. A short settle delay still lets the
+      // clicked frame (including child iframes) establish focus in
+      // WebContents before key events are dispatched.
+      maho::MahoMcpInputSynthesizer::ClickAtAsync(
+          wc, cx, cy, {},
+          /*sensitive=*/true,
+          maho::MahoActionMarkerService::Kind::kClick,
+          maho::ClickMotionProfile{},
+          base::BindOnce(
+              [](base::WeakPtr<content::WebContents> wc_weak,
+                 std::string text_to_type,
+                 base::OnceCallback<void(bool)> typed_cb,
+                 bool clicked) {
+                if (!clicked || !wc_weak) {
+                  std::move(typed_cb).Run(false);
+                  return;
+                }
+                content::GetUIThreadTaskRunner({})->PostDelayedTask(
+                    FROM_HERE,
+                    base::BindOnce(
+                        [](base::WeakPtr<content::WebContents> wc_weak,
+                           std::string text_to_type,
+                           base::OnceCallback<void(bool)> typed_cb) {
+                          content::WebContents* current_wc = wc_weak.get();
+                          if (!current_wc) {
+                            std::move(typed_cb).Run(false);
+                            return;
+                          }
+                          const std::vector<std::string> select_all_modifiers =
 #if BUILDFLAG(IS_MAC)
-                      {"meta"};
+                              {"meta"};
 #else
-                      {"ctrl"};
+                              {"ctrl"};
 #endif
-                  maho::MahoMcpInputSynthesizer::KeyPress(
-                      current_wc, "a", select_all_modifiers);
-                  maho::MahoMcpInputSynthesizer::KeyPress(
-                      current_wc, "Backspace", {});
-                  maho::MahoMcpInputSynthesizer::KeyPress(
-                      current_wc, "Delete", {});
-                  maho::MahoMcpInputSynthesizer::TypeTextAsync(
-                      current_wc, text_to_type, maho::TypingOptions{},
-                      std::move(typed_cb));
-                },
-                wc->GetWeakPtr(), text, std::move(on_typed)),
-            base::Milliseconds(60));
-        return;
-      }
+                          maho::MahoMcpInputSynthesizer::KeyPress(
+                              current_wc, "a", select_all_modifiers);
+                          maho::MahoMcpInputSynthesizer::KeyPress(
+                              current_wc, "Backspace", {});
+                          maho::MahoMcpInputSynthesizer::KeyPress(
+                              current_wc, "Delete", {});
+                          maho::MahoMcpInputSynthesizer::TypeTextAsync(
+                              current_wc, text_to_type, maho::TypingOptions{},
+                              std::move(typed_cb));
+                        },
+                        wc_weak, std::move(text_to_type),
+                        std::move(typed_cb)),
+                    base::Milliseconds(30));
+              },
+              wc->GetWeakPtr(), text, std::move(on_typed)));
+      return;
     }
 
     // If no center found or click failed, immediately execute AX fallback path.

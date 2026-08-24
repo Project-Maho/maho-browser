@@ -5,12 +5,16 @@
 #include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
 
 #include <cctype>
+#include <algorithm>
+#include <cmath>
 
 #ifndef MAHO_STANDALONE_TEST
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/time/time.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/time/time.h"
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
@@ -26,12 +30,17 @@
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/dom_key.h"
 #include "ui/events/event_constants.h"
+#include "ui/gfx/geometry/point_conversions.h"
 #endif
 
 namespace maho {
 
 #ifndef MAHO_STANDALONE_TEST
 namespace {
+
+// pi is needed for the ease-in-out click trajectory; this Chromium tree's
+// base/numerics/math_constants.h does not carry a pi constant.
+constexpr double kPi = 3.14159265358979323846;
 
 ui::AXNode* FindNodeById(ui::AXNode* root, ui::AXNodeID ax_id) {
   if (!root) return nullptr;
@@ -90,6 +99,32 @@ content::RenderWidgetHost* GetTargetRenderWidgetHost(content::WebContents* wc) {
   return view ? view->GetRenderWidgetHost() : nullptr;
 }
 
+// Normalizes focus state before dispatching synthesized input so pages only
+// ever observe trusted input while their frame reports focus coherently.
+// Injecting keys or clicks into an unfocused renderer produces a state that
+// cannot occur with physical input and breaks focus-dependent page behavior.
+void EnsureFocusedForInput(content::WebContents* wc) {
+  if (!wc) return;
+  content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+  if (view && view->HasFocus()) return;
+  wc->Focus();
+}
+
+blink::WebMouseEvent MakeMouseEvent(
+    blink::WebInputEvent::Type type,
+    int modifiers_mask,
+    blink::WebMouseEvent::Button button,
+    int click_count,
+    const gfx::Point& widget_point,
+    const gfx::Point& screen_point) {
+  blink::WebMouseEvent event(type, modifiers_mask, base::TimeTicks::Now());
+  event.button = button;
+  event.click_count = click_count;
+  event.SetPositionInWidget(widget_point.x(), widget_point.y());
+  event.SetPositionInScreen(screen_point.x(), screen_point.y());
+  return event;
+}
+
 }  // namespace
 
 // static
@@ -97,6 +132,7 @@ bool MahoMcpInputSynthesizer::Scroll(content::WebContents* wc,
                                      const std::string& direction,
                                      int pixels,
                                      std::optional<ui::AXNodeID> ax_id) {
+  EnsureFocusedForInput(wc);
   content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
   if (!view) return false;
   content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
@@ -144,6 +180,7 @@ bool MahoMcpInputSynthesizer::Scroll(content::WebContents* wc,
 
 // static
 bool MahoMcpInputSynthesizer::Hover(content::WebContents* wc, ui::AXNodeID ax_id) {
+  EnsureFocusedForInput(wc);
   content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
   if (!view) return false;
   content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
@@ -171,6 +208,7 @@ bool MahoMcpInputSynthesizer::HoverAt(content::WebContents* wc,
                                       int y_css,
                                       bool sensitive) {
   if (!wc) return false;
+  EnsureFocusedForInput(wc);
   content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
   if (!view) return false;
   content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
@@ -208,6 +246,7 @@ bool MahoMcpInputSynthesizer::ClickAt(
     bool sensitive,
     MahoActionMarkerService::Kind marker_kind) {
   if (!wc) return false;
+  EnsureFocusedForInput(wc);
   content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
   if (!view) return false;
   content::RenderWidgetHost* rwh = view->GetRenderWidgetHost();
@@ -224,12 +263,8 @@ bool MahoMcpInputSynthesizer::ClickAt(
 
   auto build = [&](blink::WebInputEvent::Type type, int modifiers_mask,
                    blink::WebMouseEvent::Button button, int click_count) {
-    blink::WebMouseEvent event(type, modifiers_mask, base::TimeTicks::Now());
-    event.button = button;
-    event.click_count = click_count;
-    event.SetPositionInWidget(widget_point.x(), widget_point.y());
-    event.SetPositionInScreen(screen_point.x(), screen_point.y());
-    return event;
+    return MakeMouseEvent(type, modifiers_mask, button, click_count,
+                          widget_point, screen_point);
   };
 
   // Move the pointer over the target first so hover/pointer state is correct,
@@ -251,6 +286,44 @@ bool MahoMcpInputSynthesizer::ClickAt(
            .sensitive = sensitive,
            .primary_frame_id = primary_frame_id});
   return true;
+}
+
+// static
+double MahoMcpInputSynthesizer::EaseInOutFraction(double t) {
+  if (t <= 0.0) return 0.0;
+  if (t >= 1.0) return 1.0;
+  return 0.5 * (1.0 - std::cos(kPi * t));
+}
+
+// static
+std::vector<gfx::PointF> MahoMcpInputSynthesizer::ComputeTrajectory(
+    const gfx::PointF& start,
+    const gfx::PointF& end,
+    int waypoint_count,
+    int jitter_px,
+    SplitMix64Prng& rng) {
+  std::vector<gfx::PointF> points;
+  waypoint_count = std::clamp(waypoint_count, 2, 64);
+  points.reserve(static_cast<size_t>(waypoint_count));
+  const float dx = end.x() - start.x();
+  const float dy = end.y() - start.y();
+  for (int i = 1; i <= waypoint_count; ++i) {
+    if (i == waypoint_count) {
+      points.push_back(end);
+      break;
+    }
+    const double t =
+        EaseInOutFraction(static_cast<double>(i) /
+                          static_cast<double>(waypoint_count));
+    float x = start.x() + static_cast<float>(dx * t);
+    float y = start.y() + static_cast<float>(dy * t);
+    if (jitter_px > 0) {
+      x += static_cast<float>(rng.NextRange(-jitter_px, jitter_px));
+      y += static_cast<float>(rng.NextRange(-jitter_px, jitter_px));
+    }
+    points.emplace_back(x, y);
+  }
+  return points;
 }
 
 // static
@@ -287,6 +360,7 @@ std::vector<TypingKeyUnit> MahoMcpInputSynthesizer::Utf8ToTypingUnits(
 // static
 bool MahoMcpInputSynthesizer::TypeText(content::WebContents* wc,
                                        const std::string& text) {
+  EnsureFocusedForInput(wc);
   content::RenderWidgetHost* rwh = GetTargetRenderWidgetHost(wc);
   if (!rwh) return false;
 
@@ -509,6 +583,203 @@ void MahoMcpInputSynthesizer::TypeTextAsync(
           },
           base::Unretained(session)));
 }
+
+namespace {
+
+// Drives one trusted click as a timed sequence: interpolated ease-in-out
+// pointer travel, a pre-click dwell, and a press-to-release gap, followed by
+// completion reporting. Strictly bounded by ClickMotionProfile caps.
+class AsyncClickSession {
+ public:
+  struct Params {
+    raw_ptr<content::RenderWidgetHost> rwh;
+    gfx::Point widget_point;
+    gfx::Point screen_point;
+    int base_modifiers = 0;
+    std::optional<content::GlobalRenderFrameHostId> primary_frame_id;
+    std::optional<gfx::PointF> marker_viewport_point;
+    MahoActionMarkerService::Kind marker_kind =
+        MahoActionMarkerService::Kind::kClick;
+    bool marker_sensitive = true;
+  };
+
+  AsyncClickSession(
+      Params params,
+      base::WeakPtr<content::WebContents> web_contents,
+      const ClickMotionProfile& profile,
+      base::OnceCallback<void(bool)> callback)
+      : params_(std::move(params)),
+        web_contents_(std::move(web_contents)),
+        profile_(profile),
+        prng_(profile.rng_seed.value_or(0x94d049bb133111ebULL)),
+        callback_(std::move(callback)) {}
+
+  void Start() {
+    if (!params_.rwh) {
+      Finish(false);
+      return;
+    }
+    // Pointer travel begins from a bounded random approach vector; the exact
+    // prior cursor position is not tracked.
+    const int approach_mag = prng_.NextRange(60, 140);
+    const double angle_rad =
+        static_cast<double>(prng_.NextRange(0, 359)) * kPi /
+        180.0;
+    const gfx::PointF target(
+        static_cast<float>(params_.widget_point.x()),
+        static_cast<float>(params_.widget_point.y()));
+    const gfx::PointF start(
+        target.x() - static_cast<float>(approach_mag * std::cos(angle_rad)),
+        target.y() - static_cast<float>(approach_mag * std::sin(angle_rad)));
+    const int waypoint_count =
+        prng_.NextRange(profile_.min_waypoints, profile_.max_waypoints);
+    waypoints_ = MahoMcpInputSynthesizer::ComputeTrajectory(
+        start, target, waypoint_count, profile_.approach_jitter_px, prng_);
+    const int total_ms = prng_.NextRange(profile_.total_duration_ms.min_ms,
+                                         profile_.total_duration_ms.max_ms);
+    step_delay_ = base::Milliseconds(
+        std::max(1, total_ms / static_cast<int>(waypoints_.size())));
+    AdvancePointer();
+  }
+
+ private:
+  void PostDelayed(base::TimeDelta delay, base::OnceClosure closure) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+        FROM_HERE, std::move(closure), delay);
+  }
+
+  void AdvancePointer() {
+    if (!weak_factory_.HasWeakPtrs()) return;
+    if (index_ >= waypoints_.size()) {
+      PostDelayed(
+          base::Milliseconds(
+              prng_.NextRange(profile_.pre_click_dwell_ms.min_ms,
+                              profile_.pre_click_dwell_ms.max_ms)),
+          base::BindOnce(&AsyncClickSession::DispatchPress,
+                         weak_factory_.GetWeakPtr()));
+      return;
+    }
+    const gfx::PointF p = waypoints_[index_++];
+    params_.rwh->ForwardMouseEvent(MakeMouseEvent(
+        blink::WebInputEvent::Type::kMouseMove, params_.base_modifiers,
+        blink::WebMouseEvent::Button::kNoButton, 0,
+        gfx::ToRoundedPoint(p), params_.screen_point));
+    PostDelayed(
+        step_delay_,
+        base::BindOnce(&AsyncClickSession::AdvancePointer,
+                       weak_factory_.GetWeakPtr()));
+  }
+
+  void DispatchPress() {
+    params_.rwh->ForwardMouseEvent(MakeMouseEvent(
+        blink::WebInputEvent::Type::kMouseDown,
+        params_.base_modifiers | blink::WebInputEvent::kLeftButtonDown,
+        blink::WebMouseEvent::Button::kLeft, 1, params_.widget_point,
+        params_.screen_point));
+    PostDelayed(
+        base::Milliseconds(prng_.NextRange(profile_.press_release_ms.min_ms,
+                                           profile_.press_release_ms.max_ms)),
+        base::BindOnce(&AsyncClickSession::DispatchRelease,
+                       weak_factory_.GetWeakPtr()));
+  }
+
+  void DispatchRelease() {
+    params_.rwh->ForwardMouseEvent(MakeMouseEvent(
+        blink::WebInputEvent::Type::kMouseUp, params_.base_modifiers,
+        blink::WebMouseEvent::Button::kLeft, 1, params_.widget_point,
+        params_.screen_point));
+    if (web_contents_ && params_.marker_viewport_point &&
+        params_.primary_frame_id) {
+      MahoActionMarkerService::ShowForRevalidatedTarget(
+          web_contents_.get(),
+          {.viewport_point = *params_.marker_viewport_point,
+           .kind = params_.marker_kind,
+           .sensitive = params_.marker_sensitive,
+           .primary_frame_id = *params_.primary_frame_id});
+    }
+    Finish(true);
+  }
+
+  void Finish(bool ok) {
+    std::move(callback_).Run(ok);
+    delete this;
+  }
+
+  Params params_;
+  base::WeakPtr<content::WebContents> web_contents_;
+  ClickMotionProfile profile_;
+  SplitMix64Prng prng_;
+  std::vector<gfx::PointF> waypoints_;
+  size_t index_ = 0;
+  base::TimeDelta step_delay_;
+  base::OnceCallback<void(bool)> callback_;
+  base::WeakPtrFactory<AsyncClickSession> weak_factory_{this};
+};
+
+}  // namespace
+
+// static
+void MahoMcpInputSynthesizer::ClickAtAsync(
+    content::WebContents* wc,
+    int x_css,
+    int y_css,
+    const std::vector<std::string>& modifiers,
+    bool sensitive,
+    MahoActionMarkerService::Kind marker_kind,
+    const ClickMotionProfile& profile,
+    base::OnceCallback<void(bool)> callback) {
+  if (!profile.validate()) {
+    if (base::SequencedTaskRunner::HasCurrentDefault()) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(callback), false));
+    } else {
+      std::move(callback).Run(false);
+    }
+    return;
+  }
+  if (!base::SequencedTaskRunner::HasCurrentDefault()) {
+    // No UI-sequenced task runner (e.g. plain unit-test context): fall back to
+    // synchronous dispatch so behavior stays well-defined.
+    const bool ok =
+        ClickAt(wc, x_css, y_css, modifiers, sensitive, marker_kind);
+    std::move(callback).Run(ok);
+    return;
+  }
+
+  EnsureFocusedForInput(wc);
+  content::RenderWidgetHostView* view =
+      wc ? wc->GetRenderWidgetHostView() : nullptr;
+  content::RenderWidgetHost* rwh =
+      view ? view->GetRenderWidgetHost() : nullptr;
+  content::RenderFrameHost* primary = wc ? wc->GetPrimaryMainFrame() : nullptr;
+  if (!rwh || !primary) {
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(callback), false));
+    return;
+  }
+
+  AsyncClickSession::Params params;
+  params.rwh = rwh;
+  params.widget_point = gfx::Point(x_css, y_css);
+  params.screen_point =
+      params.widget_point + view->GetViewBounds().origin().OffsetFromOrigin();
+  params.base_modifiers = ModifierListToWebModifiers(modifiers);
+  params.primary_frame_id = primary->GetGlobalId();
+  params.marker_viewport_point = gfx::PointF(x_css, y_css);
+  params.marker_kind = marker_kind;
+  params.marker_sensitive = sensitive;
+
+  auto* session =
+      new AsyncClickSession(std::move(params), wc->GetWeakPtr(), profile,
+                            std::move(callback));
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](AsyncClickSession* pending_session) {
+            pending_session->Start();
+          },
+          base::Unretained(session)));
+}
 #endif
 
 #ifdef MAHO_STANDALONE_TEST
@@ -649,6 +920,7 @@ int MahoMcpInputSynthesizer::ModifierListToWebModifiers(
 bool MahoMcpInputSynthesizer::KeyPress(content::WebContents* wc,
                                        const std::string& key,
                                        const std::vector<std::string>& modifiers) {
+  EnsureFocusedForInput(wc);
   content::RenderWidgetHost* rwh = GetTargetRenderWidgetHost(wc);
   if (!rwh) return false;
 

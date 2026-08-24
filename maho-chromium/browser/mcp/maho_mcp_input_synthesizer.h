@@ -15,6 +15,7 @@
 #include "maho/browser/ui/views/maho_action_marker_service.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/gfx/geometry/point_f.h"
 #else
 namespace content {
 class WebContents;
@@ -273,6 +274,36 @@ struct TypingOptions {
   TypingPacingPolicy pacing_policy;
 };
 
+#ifndef MAHO_STANDALONE_TEST
+// Strictly bounded motion profile governing how a synthesized trusted click
+// travels to its target. All ranges are hard-capped so total motion time stays
+// small and deterministic under a fixed seed. This exists for input realism /
+// UX consistency (coherent hover + press semantics), never as adaptive or
+// site-aware behavior.
+struct ClickMotionProfile {
+  // Max total pointer-travel duration cap (1 second).
+  static constexpr int32_t kMaxMotionDurationCapMs = 1000;
+
+  DelayRangeMs total_duration_ms{80, 250};
+  int32_t min_waypoints{8};
+  int32_t max_waypoints{20};
+  // Per-waypoint positional jitter bound in px; the final point is exact.
+  int32_t approach_jitter_px{2};
+  DelayRangeMs pre_click_dwell_ms{40, 120};
+  DelayRangeMs press_release_ms{50, 90};
+  std::optional<uint64_t> rng_seed{std::nullopt};
+
+  bool validate() const {
+    return min_waypoints >= 1 && min_waypoints <= max_waypoints &&
+           max_waypoints <= 64 &&
+           total_duration_ms.is_valid(kMaxMotionDurationCapMs) &&
+           approach_jitter_px >= 0 && approach_jitter_px <= 10 &&
+           pre_click_dwell_ms.is_valid(TypingPacingPolicy::kMaxDelayCapMs) &&
+           press_release_ms.is_valid(TypingPacingPolicy::kMaxDelayCapMs);
+  }
+};
+#endif  // !MAHO_STANDALONE_TEST
+
 class MahoMcpInputSynthesizer {
  public:
   static bool Scroll(content::WebContents* wc,
@@ -320,6 +351,40 @@ class MahoMcpInputSynthesizer {
                             const std::string& text,
                             TypingOptions options,
                             base::OnceCallback<void(bool)> callback);
+
+#ifndef MAHO_STANDALONE_TEST
+  // Sine ease-in-out progress curve mapped to [0, 1]. Returns 0 for t <= 0 and
+  // 1 for t >= 1.
+  static double EaseInOutFraction(double t);
+
+  // Builds a deterministic pointer trajectory of exactly |waypoint_count|
+  // points from |start| toward |end| following the ease-in-out profile. The
+  // final point equals |end| exactly; intermediate points carry bounded
+  // jitter of |jitter_px| px sampled from |rng|.
+  static std::vector<gfx::PointF> ComputeTrajectory(
+      const gfx::PointF& start,
+      const gfx::PointF& end,
+      int waypoint_count,
+      int jitter_px,
+      SplitMix64Prng& rng);
+
+  // Dispatches a trusted left-button click whose pointer events travel an
+  // interpolated ease-in-out trajectory over a bounded, randomized duration,
+  // followed by a pre-click dwell and a press-to-release gap, all drawn from
+  // |profile|. Invokes |callback| with true once the full sequence has been
+  // forwarded, or false if dispatch failed (e.g. no WebContents/task runner).
+  // Requires a UI-sequenced task runner; otherwise falls back to synchronous
+  // ClickAt().
+  static void ClickAtAsync(
+      content::WebContents* wc,
+      int x_css,
+      int y_css,
+      const std::vector<std::string>& modifiers,
+      bool sensitive,
+      MahoActionMarkerService::Kind marker_kind,
+      const ClickMotionProfile& profile,
+      base::OnceCallback<void(bool)> callback);
+#endif  // !MAHO_STANDALONE_TEST
 
   static bool KeyPress(content::WebContents* wc,
                        const std::string& key,

@@ -217,7 +217,7 @@ test("maho_mcp_input_synthesizer_test") {
     "//maho/browser:maho_mcp_integration",
     "//base",
     "//base/test:test_support",
-    "//chrome/browser/ui:ui",
+    "//chrome/test:test_support",
     "//testing/gtest",
     "//third_party/blink/public/common",
     "//ui/events",

@@ -416,6 +416,120 @@ TEST(MahoMcpInputSynthesizerTest, PacingPolicy_CharOverloadNoSignedTruncation) {
   EXPECT_LE(d_char, 30);
 }
 
+TEST(MahoMcpInputSynthesizerTest, EaseInOutFractionEndpointsAndMidpoint) {
+  EXPECT_DOUBLE_EQ(MahoMcpInputSynthesizer::EaseInOutFraction(-0.5), 0.0);
+  EXPECT_DOUBLE_EQ(MahoMcpInputSynthesizer::EaseInOutFraction(0.0), 0.0);
+  EXPECT_DOUBLE_EQ(MahoMcpInputSynthesizer::EaseInOutFraction(1.0), 1.0);
+  EXPECT_DOUBLE_EQ(MahoMcpInputSynthesizer::EaseInOutFraction(1.5), 1.0);
+  EXPECT_NEAR(MahoMcpInputSynthesizer::EaseInOutFraction(0.5), 0.5, 1e-9);
+}
+
+TEST(MahoMcpInputSynthesizerTest, EaseInOutFractionMonotonic) {
+  double previous = MahoMcpInputSynthesizer::EaseInOutFraction(0.0);
+  for (int i = 1; i <= 100; ++i) {
+    const double current =
+        MahoMcpInputSynthesizer::EaseInOutFraction(i / 100.0);
+    EXPECT_GE(current, previous);
+    previous = current;
+  }
+}
+
+TEST(MahoMcpInputSynthesizerTest, ComputeTrajectoryDeterministicExactEnd) {
+  const gfx::PointF start(10.0f, 20.0f);
+  const gfx::PointF end(310.0f, 220.0f);
+
+  SplitMix64Prng rng_a(42ULL);
+  const std::vector<gfx::PointF> first =
+      MahoMcpInputSynthesizer::ComputeTrajectory(start, end, 12, 2, rng_a);
+  SplitMix64Prng rng_b(42ULL);
+  const std::vector<gfx::PointF> second =
+      MahoMcpInputSynthesizer::ComputeTrajectory(start, end, 12, 2, rng_b);
+
+  ASSERT_EQ(first.size(), 12u);
+  ASSERT_EQ(first.size(), second.size());
+  for (size_t i = 0; i < first.size(); ++i) {
+    EXPECT_FLOAT_EQ(first[i].x(), second[i].x());
+    EXPECT_FLOAT_EQ(first[i].y(), second[i].y());
+  }
+  // Final point is the exact click target.
+  EXPECT_FLOAT_EQ(first.back().x(), end.x());
+  EXPECT_FLOAT_EQ(first.back().y(), end.y());
+  // Progress strictly advances toward the target on both axes.
+  for (size_t i = 1; i + 1 < first.size(); ++i) {
+    EXPECT_GT(first[i].x(), start.x());
+    EXPECT_LT(first[i].x(), end.x());
+    EXPECT_GT(first[i].y(), start.y());
+    EXPECT_LT(first[i].y(), end.y());
+  }
+}
+
+TEST(MahoMcpInputSynthesizerTest, ComputeTrajectoryJitterBounded) {
+  const gfx::PointF start(0.0f, 0.0f);
+  const gfx::PointF end(500.0f, -200.0f);
+  const int kJitter = 3;
+
+  SplitMix64Prng rng(7ULL);
+  const std::vector<gfx::PointF> points =
+      MahoMcpInputSynthesizer::ComputeTrajectory(start, end, 20, kJitter, rng);
+  ASSERT_EQ(points.size(), 20u);
+  for (size_t i = 0; i + 1 < points.size(); ++i) {
+    // Ease-in-out progress stays within the axis bounds plus jitter slack.
+    EXPECT_GE(points[i].x(), std::min(start.x(), end.x()) - kJitter - 1.0f);
+    EXPECT_LE(points[i].x(), std::max(start.x(), end.x()) + kJitter + 1.0f);
+    EXPECT_GE(points[i].y(), std::min(start.y(), end.y()) - kJitter - 1.0f);
+    EXPECT_LE(points[i].y(), std::max(start.y(), end.y()) + kJitter + 1.0f);
+  }
+  EXPECT_FLOAT_EQ(points.back().x(), end.x());
+  EXPECT_FLOAT_EQ(points.back().y(), end.y());
+}
+
+TEST(MahoMcpInputSynthesizerTest, ComputeTrajectoryClampsWaypointCount) {
+  const gfx::PointF start(0.0f, 0.0f);
+  const gfx::PointF end(10.0f, 10.0f);
+  SplitMix64Prng rng(1ULL);
+
+  const auto tiny =
+      MahoMcpInputSynthesizer::ComputeTrajectory(start, end, 0, 0, rng);
+  EXPECT_EQ(tiny.size(), 2u);
+  EXPECT_FLOAT_EQ(tiny.back().x(), end.x());
+
+  const auto huge =
+      MahoMcpInputSynthesizer::ComputeTrajectory(start, end, 500, 0, rng);
+  EXPECT_EQ(huge.size(), 64u);
+}
+
+TEST(MahoMcpInputSynthesizerClickMotionProfileTest, DefaultsValidate) {
+  EXPECT_TRUE((ClickMotionProfile{}).validate());
+}
+
+TEST(MahoMcpInputSynthesizerClickMotionProfileTest,
+     InvalidConfigurationsRejected) {
+  ClickMotionProfile profile;
+
+  profile.min_waypoints = 0;
+  EXPECT_FALSE(profile.validate());
+
+  profile = ClickMotionProfile{};
+  profile.max_waypoints = 65;
+  EXPECT_FALSE(profile.validate());
+
+  profile = ClickMotionProfile{};
+  profile.total_duration_ms = {250, 80};
+  EXPECT_FALSE(profile.validate());
+
+  profile = ClickMotionProfile{};
+  profile.total_duration_ms = {80, 2000};
+  EXPECT_FALSE(profile.validate());
+
+  profile = ClickMotionProfile{};
+  profile.approach_jitter_px = 11;
+  EXPECT_FALSE(profile.validate());
+
+  profile = ClickMotionProfile{};
+  profile.pre_click_dwell_ms = {40, 6000};
+  EXPECT_FALSE(profile.validate());
+}
+
 }  // namespace maho
 
 #else
