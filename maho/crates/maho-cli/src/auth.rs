@@ -1,3 +1,7 @@
+#[path = "cli_entry.rs"]
+mod cli_entry;
+pub(crate) use cli_entry::effective_agent_system_prompt;
+
 use anyhow::{bail, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

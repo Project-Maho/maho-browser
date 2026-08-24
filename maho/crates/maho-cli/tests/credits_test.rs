@@ -167,12 +167,17 @@ async fn test_buy_credits_amount_10_prints_url() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("credit-pack-10"),
-        "stdout should contain credit-pack-10 URL, got: {stdout}"
+        stdout.contains("93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35"),
+        "stdout should contain PAYG checkout URL, got: {stdout}"
     );
     assert!(
         stdout.contains("$10"),
-        "stdout should mention $10, got: {stdout}"
+        "stdout should mention the suggested $10 amount, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("pay-what-you-want")
+            && stdout.contains("choose the final amount in checkout"),
+        "stdout should honestly describe the single PWYW checkout, got: {stdout}"
     );
 }
 

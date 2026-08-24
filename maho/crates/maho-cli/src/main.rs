@@ -48,6 +48,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = DEFAULT_RELAY_URL)]
     pub relay_url: String,
 
+    /// Parse-only robots.txt consent carried into agent execution.
+    #[arg(skip)]
+    pub allow_robots_bypass: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -321,7 +325,7 @@ pub enum Commands {
     /// [deprecated] Use `maho billing buy-credits`
     #[command(hide = true, name = "buy-credits")]
     BuyCredits {
-        /// Amount in USD (10, 50, or 100)
+        /// Suggested USD amount (10, 50, or 100); choose the final amount in checkout
         #[arg(long, value_parser = ["10", "50", "100"])]
         amount: String,
     },
@@ -502,10 +506,10 @@ pub enum AuthCommands {
 pub enum BillingCommands {
     /// Show PAYG credit balance
     Balance,
-    /// Open checkout for a credit pack
+    /// Open the pay-what-you-want credit checkout
     #[command(name = "buy-credits")]
     BuyCredits {
-        /// Amount in USD (10, 50, or 100)
+        /// Suggested USD amount (10, 50, or 100); choose the final amount in checkout
         #[arg(long, value_parser = ["10", "50", "100"])]
         amount: String,
     },
@@ -883,6 +887,7 @@ async fn main() -> Result<()> {
     let json_output = cli.json;
     let relay_url = cli.relay_url;
     let proxy_url = cli.proxy_url;
+    let allow_robots_bypass = cli.allow_robots_bypass;
     let command = cli.command;
 
     match command {
@@ -1016,6 +1021,7 @@ async fn main() -> Result<()> {
                 workspace.as_deref(),
                 socket_path.as_deref(),
                 session.as_deref(),
+                allow_robots_bypass,
             )
             .await
         }
@@ -1087,6 +1093,7 @@ async fn main() -> Result<()> {
                     final_workspace.as_deref(),
                     socket_path.as_deref(),
                     final_session.as_deref(),
+                    allow_robots_bypass,
                 )
                 .await
             } else {
@@ -1124,6 +1131,7 @@ async fn main() -> Result<()> {
                 workspace.as_deref(),
                 socket_path.as_deref(),
                 json_output,
+                allow_robots_bypass,
             )
             .await
         }
@@ -1249,7 +1257,7 @@ async fn cmd_balance(relay_url: &str) -> Result<()> {
 
 fn cmd_buy_credits(amount: &str) -> Result<()> {
     let url = credits::checkout_url_for_pack(amount);
-    println!("Opening LemonSqueezy checkout for ${amount} pack...");
+    println!("Opening LemonSqueezy pay-what-you-want checkout (suggested amount: ${amount}; choose the final amount in checkout)...");
     println!("Checkout URL: {url}");
     match credits::open_checkout_url(url) {
         Ok(credits::OpenOutcome::OpenedInMahoBrowser) => {
@@ -1491,7 +1499,7 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
                     t.parse::<i64>().unwrap_or(0),
                 ));
             }
-            let result = browser::send_tool_call(&client, "browser_acquire_lease", args).await?;
+            let result = browser::send_control_call(&client, "browser_acquire_lease", args).await?;
 
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1512,7 +1520,7 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
                     t.parse::<i64>().unwrap_or(0),
                 ));
             }
-            let result = browser::send_tool_call(&client, "browser_release_lease", args).await?;
+            let result = browser::send_control_call(&client, "browser_release_lease", args).await?;
 
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -1529,7 +1537,8 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
                     t.parse::<i64>().unwrap_or(0),
                 ));
             }
-            let result = browser::send_tool_call(&client, "browser_heartbeat_lease", args).await?;
+            let result =
+                browser::send_control_call(&client, "browser_heartbeat_lease", args).await?;
 
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
@@ -2703,6 +2712,7 @@ async fn build_cli_backend(
     model: Option<&str>,
     workspace: Option<&str>,
     socket_path: Option<&str>,
+    allow_robots_bypass: bool,
 ) -> Result<SwiftideBackend> {
     let db_path = maho_cli::workspace::default_db_path();
 
@@ -2768,26 +2778,11 @@ async fn build_cli_backend(
     // browser capability sandbox remains the independent enforcement boundary.
     backend.set_browser_action_tools_enabled(true);
 
-    // Without a system prompt the model has no answer contract, so it narrates
-    // that it found the information and stops without ever reporting it. State
-    // the reporting requirement explicitly.
-    if let Some(prompt) = std::env::var("MAHO_AGENT_SYSTEM_PROMPT")
-        .ok()
-        .filter(|p| !p.is_empty())
-    {
-        maho_agent::AgentRuntime::set_system_prompt(&backend, &prompt);
-    } else {
-        maho_agent::AgentRuntime::set_system_prompt(
-            &backend,
-            "You are Maho's browser agent, driving a real browser through tools.\n\
-             Use the browser tools to inspect and act on live pages; never answer \
-             a question about page content from memory.\n\
-             Your final message must contain the actual answer: quote the exact \
-             text, value, or result you observed. Saying that you found or \
-             verified something without stating it is a failed response.\n\
-             If a task cannot be completed, say precisely what blocked it.",
-        );
-    }
+    // MAHO_AGENT_SYSTEM_PROMPT is input-only. Compose invocation-local robots
+    // consent here, after parsing, so non-agent children such as `maho mcp`
+    // never inherit a rewritten process environment.
+    let system_prompt = auth::effective_agent_system_prompt(allow_robots_bypass);
+    maho_agent::AgentRuntime::set_system_prompt(&backend, &system_prompt);
 
     // Auto-approve all browser tools and actions by default in maho run (Aside-parity)
     backend
@@ -2875,8 +2870,10 @@ async fn cmd_run(
     workspace: Option<&str>,
     socket_path: Option<&str>,
     session_id: Option<&str>,
+    allow_robots_bypass: bool,
 ) -> Result<()> {
-    let backend = build_cli_backend(provider, model, workspace, socket_path).await?;
+    let backend =
+        build_cli_backend(provider, model, workspace, socket_path, allow_robots_bypass).await?;
 
     // Run the prompt
     println!("Running autonomous agent session...");
@@ -2907,6 +2904,7 @@ async fn cmd_research(
     workspace: Option<&str>,
     socket_path: Option<&str>,
     json_output: bool,
+    allow_robots_bypass: bool,
 ) -> Result<()> {
     if provider.is_none() {
         bail!(
@@ -2915,7 +2913,8 @@ async fn cmd_research(
         );
     }
 
-    let backend = build_cli_backend(provider, model, workspace, socket_path).await?;
+    let backend =
+        build_cli_backend(provider, model, workspace, socket_path, allow_robots_bypass).await?;
     let runtime: Arc<dyn maho_agent::AgentRuntime> = Arc::new(backend);
     let session_id = format!("research-{}", uuid::Uuid::new_v4());
     let stepper = maho_agent::AgentResearchStepper::new(runtime, session_id, 0.02);
@@ -4199,7 +4198,8 @@ fn dirs_path() -> std::path::PathBuf {
 }
 
 /// Acquire an (auto-stealing) lease on the active tab so subsequent mutations
-/// pass the active-tab lease gate. Best-effort.
+/// pass the active-tab lease gate. Stateful transport failures are propagated
+/// because their outcome may be ambiguous and must never be replayed.
 async fn ensure_active_lease(client: &maho_browser_mcp::client::BrowserClient) -> Result<()> {
     let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
     if let Some(tabs) = result.get("tabs").and_then(|t| t.as_array()) {
@@ -4208,12 +4208,12 @@ async fn ensure_active_lease(client: &maho_browser_mcp::client::BrowserClient) -
             .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
         {
             if let Some(id) = active.get("id").and_then(|v| v.as_i64()) {
-                let _ = browser::send_tool_call(
+                browser::send_control_call(
                     client,
                     "browser_acquire_lease",
                     serde_json::json!({ "tab_id": id, "ttl_seconds": 300 }),
                 )
-                .await;
+                .await?;
             }
         }
     }
@@ -4616,7 +4616,7 @@ async fn handle_repl_line(
                     }
                 }
             };
-            browser::send_tool_call(
+            browser::send_control_call(
                 client,
                 "browser_acquire_lease",
                 serde_json::json!({ "tab_id": tab_id, "ttl_seconds": 300 }),

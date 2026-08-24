@@ -28,13 +28,11 @@ pub async fn fetch_balance(
     Ok(resp.json().await?)
 }
 
-pub fn checkout_url_for_pack(amount: &str) -> &'static str {
-    match amount {
-        "10" => "https://maho.lemonsqueezy.com/buy/credit-pack-10",
-        "50" => "https://maho.lemonsqueezy.com/buy/credit-pack-50",
-        "100" => "https://maho.lemonsqueezy.com/buy/credit-pack-100",
-        _ => "https://maho.lemonsqueezy.com/buy",
-    }
+pub fn checkout_url_for_pack(_amount: &str) -> &'static str {
+    // Single pay-what-you-want LemonSqueezy product buy link (variant 1988896).
+    // The buyer chooses their desired amount in the LemonSqueezy checkout,
+    // kept in sync with maho_subscription_checkout.h (kPaygCreditsCheckoutUrl).
+    "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35"
 }
 
 /// Outcome of a checkout URL launch attempt.
@@ -190,34 +188,20 @@ mod tests {
 
     #[test]
     fn checkout_url_for_pack_returns_known_slugs() {
-        assert_eq!(
-            checkout_url_for_pack("10"),
-            "https://maho.lemonsqueezy.com/buy/credit-pack-10"
-        );
-        assert_eq!(
-            checkout_url_for_pack("50"),
-            "https://maho.lemonsqueezy.com/buy/credit-pack-50"
-        );
-        assert_eq!(
-            checkout_url_for_pack("100"),
-            "https://maho.lemonsqueezy.com/buy/credit-pack-100"
-        );
+        let expected =
+            "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35";
+        assert_eq!(checkout_url_for_pack("10"), expected);
+        assert_eq!(checkout_url_for_pack("50"), expected);
+        assert_eq!(checkout_url_for_pack("100"), expected);
     }
 
     #[test]
     fn checkout_url_for_pack_falls_back_on_unknown() {
-        assert_eq!(
-            checkout_url_for_pack("999"),
-            "https://maho.lemonsqueezy.com/buy"
-        );
-        assert_eq!(
-            checkout_url_for_pack(""),
-            "https://maho.lemonsqueezy.com/buy"
-        );
-        assert_eq!(
-            checkout_url_for_pack("abc"),
-            "https://maho.lemonsqueezy.com/buy"
-        );
+        let expected =
+            "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35";
+        assert_eq!(checkout_url_for_pack("999"), expected);
+        assert_eq!(checkout_url_for_pack(""), expected);
+        assert_eq!(checkout_url_for_pack("abc"), expected);
     }
 
     #[test]

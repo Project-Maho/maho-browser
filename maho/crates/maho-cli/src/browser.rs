@@ -8,6 +8,10 @@
 //! ordering for sensitive operations and invalidates the connection after
 //! any transport/timeout ambiguity.
 
+#[path = "refactor.rs"]
+#[doc(hidden)]
+pub mod refactor;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -200,10 +204,30 @@ pub fn is_transport_ambiguous(e: &anyhow::Error) -> bool {
     format!("{e}").contains("operation state unknown")
 }
 
+/// Call a control-plane capability on the connected browser via `maho/control/call`.
+pub async fn send_control_call(
+    client: &BrowserClient,
+    capability: &str,
+    args: Value,
+) -> Result<Value> {
+    let params = serde_json::json!({
+        "name": capability,
+        "arguments": args,
+    });
+    let result = client
+        .call_without_reconnect("maho/control/call", params)
+        .await
+        .map_err(|error| describe_tool_call_failure(capability, error))?;
+    Ok(project_cli_result(result))
+}
+
 /// Call an MCP tool on the connected browser and return the result payload.
 ///
 /// This wraps the `tools/call` JSON-RPC method, extracting the result content.
 pub async fn send_tool_call(client: &BrowserClient, tool: &str, args: Value) -> Result<Value> {
+    if refactor::is_semantic_call(&args) {
+        return refactor::execute_semantic_call(client, tool, args).await;
+    }
     send_tool_call_with(client, tool, args, true).await
 }
 

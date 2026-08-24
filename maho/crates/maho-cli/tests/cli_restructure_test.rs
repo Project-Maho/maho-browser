@@ -296,7 +296,7 @@ fn billing_buy_credits_preserves_behavior() {
 
     // Should still produce the checkout URL (behavior preserved)
     assert!(
-        stdout.contains("credit-pack-10"),
+        stdout.contains("93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35"),
         "buy-credits should still produce URL, got stdout:\n{stdout}"
     );
 }
