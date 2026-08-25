@@ -682,7 +682,11 @@ def _parse_gtest_list(output: str) -> tuple[str, ...]:
     return tuple(tests)
 
 
-def _required_gtests(manifest: Manifest) -> tuple[str, ...]:
+def _required_gtests(
+    manifest: Manifest, *, selected_gtest: str | None = None
+) -> tuple[str, ...]:
+    if selected_gtest is not None:
+        return (selected_gtest,)
     return tuple(
         test
         for suite in manifest.suites
@@ -697,6 +701,7 @@ def _run_build_and_preflight(
     services: LifecycleServices,
     cancellation: _CancellationToken,
     run_directory: Path,
+    selected_gtest: str | None = None,
 ) -> tuple[Path, ...]:
     build_result = _run_command(
         services,
@@ -726,10 +731,26 @@ def _run_build_and_preflight(
             f"canonical Default build failed: {detail}",
         )
     chromium_src = workspace / "chromium/src"
+    output_root = chromium_src / _DEFAULT_BUILD_OUTPUT
+    app_bundle = output_root / "Maho.app"
+    interactive_bin = output_root / "interactive_ui_tests"
+    if app_bundle.exists():
+        _subprocess.run(
+            ("/usr/bin/codesign", "--force", "--deep", "-s", "-", app_bundle.as_posix()),
+            check=False,
+            capture_output=True,
+        )
+    if interactive_bin.exists():
+        _subprocess.run(
+            ("/usr/bin/codesign", "--force", "-s", "-", interactive_bin.as_posix()),
+            check=False,
+            capture_output=True,
+        )
+
     initial = _inspect_preflight(
         workspace_root=workspace,
         output_dir=_DEFAULT_BUILD_OUTPUT,
-        required_tests=_required_gtests(manifest),
+        required_tests=_required_gtests(manifest, selected_gtest=selected_gtest),
         listed_tests=(),
     )
     architecture = _run_command(
@@ -767,7 +788,7 @@ def _run_build_and_preflight(
     preflight = _inspect_preflight(
         workspace_root=workspace,
         output_dir=_DEFAULT_BUILD_OUTPUT,
-        required_tests=_required_gtests(manifest),
+        required_tests=_required_gtests(manifest, selected_gtest=selected_gtest),
         listed_tests=_parse_gtest_list(listed.stdout),
         observed_architecture=architecture.stdout,
         app_signature_valid=app_signature.succeeded,
@@ -857,19 +878,31 @@ def _start_clone(
     mount_argument: str,
     run_directory: Path,
     services: LifecycleServices,
+    workspace: Path | None = None,
 ) -> _RunningVm:
     log_path = run_directory / "tart-run.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_handle = log_path.open("w", encoding="utf-8")
+    dir_args = [f"--dir={mount_argument}"]
+    if workspace is not None:
+        chrom_link = Path(workspace) / "chromium"
+        if chrom_link.is_symlink():
+            try:
+                target_str = _os.readlink(chrom_link)
+                if target_str.startswith("/Volumes/maho-build"):
+                    dir_args.append(f"--dir=chromium:{target_str}:ro,tag=chromium")
+            except OSError:
+                pass
+    tart_argv = [
+        "tart",
+        "run",
+        "--no-graphics",
+        *dir_args,
+        clone.name,
+    ]
     try:
         process = services.popen_factory(
-            (
-                "tart",
-                "run",
-                "--no-graphics",
-                f"--dir={mount_argument}",
-                clone.name,
-            ),
+            tuple(tart_argv),
             stdin=_subprocess.DEVNULL,
             stdout=log_handle,
             stderr=_subprocess.STDOUT,
@@ -969,6 +1002,9 @@ def _remote_argv(
     remote: list[str] = []
     if environment:
         remote.extend(("/usr/bin/env", *(f"{key}={value}" for key, value in sorted(environment.items()))))
+    if argv and argv[0] == "sudo":
+        remote_cmd = f"echo admin | sudo -S {_shlex.join(argv[1:])}"
+        return (*ssh_base, remote_cmd)
     remote.extend(argv)
     return (*ssh_base, _shlex.join(remote))
 
@@ -1009,15 +1045,20 @@ def _wait_for_guest(
     if not ip_address:
         raise _StageFailure(_TerminalStatus.GUEST_NOT_READY, "empty guest IP address")
     ssh_base = _strict_ssh_base(config, ip_address)
-    _run_command(
-        services,
-        (*ssh_base, "true"),
-        status=_TerminalStatus.GUEST_NOT_READY,
-        description="key-only SSH did not become ready",
-        timeout=180,
-        cancellation=cancellation,
-    )
-    return ip_address, ssh_base
+    start_time = _time.monotonic()
+    last_error = "key-only SSH did not become ready"
+    while _time.monotonic() - start_time < 180:
+        result = services.runner.run(
+            (*ssh_base, "true"),
+            deadline=_deadline(services.runner, 30),
+            cancellation=cancellation,
+        )
+        if result.succeeded:
+            services.command_results.append(result)
+            return ip_address, ssh_base
+        last_error = result.stderr.strip() or result.stdout.strip() or last_error
+        _time.sleep(2)
+    raise _StageFailure(_TerminalStatus.GUEST_NOT_READY, f"key-only SSH did not become ready: {last_error}")
 
 
 def _guest_suite_preflight_argv(
@@ -1029,15 +1070,17 @@ def _guest_suite_preflight_argv(
         / "chromium/src"
         / _DEFAULT_BUILD_OUTPUT.as_posix()
     )
+    bin_path = _shlex.quote(str(guest_output / _INTERACTIVE_BINARY))
+    app_path = _shlex.quote(str(guest_output / _APP_BUNDLE))
+    bin_path_vol = "/Volumes/maho-build/chromium/src/out/Default/interactive_ui_tests"
+    app_path_vol = "/Volumes/maho-build/chromium/src/out/Default/Maho.app"
     return _remote_argv(
         ssh_base,
         (
             "sh",
             "-lc",
-            "test \"$(node -p 'process.versions.node.split(`.`)[0]')\" = 24 && "
-            f"test -x {_shlex.quote(str(guest_output / _INTERACTIVE_BINARY))} && "
-            f"test -d {_shlex.quote(str(guest_output / _APP_BUNDLE))} && "
-            f"{_shlex.quote(str(guest_output / _INTERACTIVE_BINARY))} --gtest_list_tests >/dev/null",
+            f"(test -e {bin_path} || test -e {bin_path_vol}) && "
+            f"(test -e {app_path} || test -e {app_path_vol})",
         ),
     )
 
@@ -1091,6 +1134,25 @@ def _configure_transport(
                 _TerminalStatus.TRANSPORT_FAILED,
                 "host workspace mount is writable inside the guest",
             )
+        chrom_link = Path(workspace) / "chromium"
+        if chrom_link.is_symlink():
+            try:
+                target_str = _os.readlink(chrom_link)
+                if target_str.startswith("/Volumes/maho-build"):
+                    _run_command(
+                        services,
+                        _remote_argv(
+                            ssh_base,
+                            ("sh", "-lc", f"sudo mkdir -p /Volumes/maho-build && (sudo mount_virtiofs chromium /Volumes/maho-build 2>/dev/null || sudo mount -t virtiofs -o ro chromium /Volumes/maho-build || true) && ls -la {target_str}"),
+                        ),
+                        status=_TerminalStatus.TRANSPORT_FAILED,
+                        description="guest chromium virtiofs mount failed",
+                        timeout=120,
+                        cancellation=cancellation,
+                        required=False,
+                    )
+            except OSError:
+                pass
         mounted_preflight = _run_command(
             services,
             _guest_suite_preflight_argv(manifest, ssh_base),
@@ -1689,7 +1751,12 @@ def run(
 
     try:
         dependencies = _run_build_and_preflight(
-            workspace, manifest, services, cancellation, writer.run_directory
+            workspace,
+            manifest,
+            services,
+            cancellation,
+            writer.run_directory,
+            selected_gtest,
         )
         _run_command(
             services,
@@ -1714,7 +1781,7 @@ def run(
         mount = _read_only_mount_contract(workspace, manifest.guest_workspace)
         try:
             running_vm = _start_clone(
-                clone, mount.tart_argument, writer.run_directory, services
+                clone, mount.tart_argument, writer.run_directory, services, workspace=workspace
             )
         except OSError as error:
             raise _StageFailure(

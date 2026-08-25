@@ -12,6 +12,8 @@
       "gtest_filter": [
         "MahoAiSidePanelLifecycleTest.ShowPanel_EntryIsShowing",
         "MahoCommandOverlayInteractiveUiTest.FocusPath_UserInitiatedFocusOpensOverlay",
+        "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults",
+        "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath",
         "MahoSidebarSpacesInteractiveTest.FooterActionOpensSpacesSurface"
       ]
     },

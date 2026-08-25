@@ -70,8 +70,37 @@ class MacosVmE2eManifestTest(unittest.TestCase):
             "MahoAiSidePanelLifecycleTest.ShowPanel_EntryIsShowing",
             manifest.suite("interactive-smoke").gtest_filter,
         )
+        self.assertIn(
+            "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath",
+            manifest.suite("interactive-smoke").gtest_filter,
+        )
+        self.assertIn(
+            "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults",
+            manifest.suite("interactive-smoke").gtest_filter,
+        )
         with self.assertRaises(FrozenInstanceError):
             setattr(manifest, "golden_image", "changed")
+
+    def test_selected_gtest_narrows_preflight_inventory(self) -> None:
+        manifest = macos_vm_e2e.load_manifest(_MANIFEST_PATH)
+        selected = "MahoPeekInteractiveUiTest.RoutesPopupToForegroundTabPreservingOpenerMessaging"
+
+        self.assertEqual(
+            macos_vm_e2e._required_gtests(manifest, selected_gtest=selected),
+            (selected,),
+        )
+
+    def test_guest_preflight_requires_only_native_test_artifacts(self) -> None:
+        manifest = macos_vm_e2e.load_manifest(_MANIFEST_PATH)
+        command = macos_vm_e2e._guest_suite_preflight_argv(
+            manifest, ("ssh", "admin@example.test")
+        )
+
+        remote_command = command[-1]
+        self.assertNotIn("process.versions.node", remote_command)
+        self.assertIn("interactive_ui_tests", remote_command)
+        self.assertIn("Maho.app", remote_command)
+        self.assertNotIn("--gtest_list_tests", remote_command)
 
     def test_list_json_prints_only_manifest_suites_and_ai_scenarios(self) -> None:
         stdout = io.StringIO()

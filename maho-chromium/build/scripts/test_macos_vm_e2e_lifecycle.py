@@ -610,7 +610,7 @@ def test_selected_interactive_gtest_builds_one_exact_command_and_one_suite_resul
     assert results[0].details["expected"] == [selected]
 
 
-def test_full_interactive_suite_remains_all_three_manifest_tests() -> None:
+def test_full_interactive_suite_includes_palette_startup_and_interaction() -> None:
     manifest = vm.load_manifest()
     suite = manifest.suite("interactive-smoke")
     command = vm._build_interactive_command(
@@ -619,9 +619,16 @@ def test_full_interactive_suite_remains_all_three_manifest_tests() -> None:
         suite.gtest_filter,
     )
 
-    assert len(command.expected_results) == 3
+    assert len(command.expected_results) == 5
     assert command.expected_results == suite.gtest_filter
-    assert "--gtest_filter=" + ":".join(suite.gtest_filter) in command.argv
+    assert (
+        "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults"
+        in command.expected_results
+    )
+    assert "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath" in (
+        command.expected_results
+    )
+    assert "--gtest_filter=" + ":".join(suite.gtest_filter) in command.argv[-1]
 
 
 def test_source_revision_uses_git_head(tmp_path) -> None:
