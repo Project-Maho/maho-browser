@@ -6089,7 +6089,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             old="void UrlsToTabs(const std::vector<GURL>& urls, StartupTabs* tabs) {\n",
             new=(
                 "// Maho cold-start: retry opening the new-tab command palette until the\n"
-                "// BrowserView and its sidebar container are constructed. On the zero-tab\n"
+                "// BrowserView is constructed. On the zero-tab\n"
                 "// startup path BrowserView::GetBrowserViewForBrowser() can briefly return\n"
                 "// null (or the sidebar container is not built yet) right after\n"
                 "// window()->Show(), so a single attempt is dropped and no palette appears.\n"
@@ -6102,10 +6102,12 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  }\n"
                 "  if (auto* browser_view =\n"
                 "          BrowserView::GetBrowserViewForBrowser(browser.get())) {\n"
-                "    if (browser_view->maho_sidebar_container()) {\n"
-                "      browser_view->ShowMahoCommandOverlayForNewTab();\n"
-                "      return;\n"
-                "    }\n"
+                "    // BrowserView queues the new-tab overlay until its widget and views\n"
+                "    // are initialized. Do not wait for sidebar construction here: in slow\n"
+                "    // cold starts that unnecessarily exhausts this helper's retry budget\n"
+                "    // and leaves the zero-tab browser with no palette.\n"
+                "    browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "    return;\n"
                 "  }\n"
                 "  if (remaining_attempts <= 0) {\n"
                 "    return;\n"
@@ -6121,11 +6123,41 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description=(
                 "Maho cold-start: add a bounded UI-task-runner retry helper that opens "
-                "the new-tab command palette once the BrowserView + sidebar container "
-                "are ready (mirrors the browser_command_controller anon-namespace "
-                "retry, which is unreachable from this TU)"
+                "the new-tab command palette once BrowserView is registered; BrowserView "
+                "itself defers while its widget and views initialize"
             ),
             guard="void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<Browser> browser,",
+        ),
+        Replacement(
+            old=(
+                "  if (auto* browser_view =\n"
+                "          BrowserView::GetBrowserViewForBrowser(browser.get())) {\n"
+                "    if (browser_view->maho_sidebar_container()) {\n"
+                "      browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "      return;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (auto* browser_view =\n"
+                "          BrowserView::GetBrowserViewForBrowser(browser.get())) {\n"
+                "    // BrowserView queues the new-tab overlay until its widget and views\n"
+                "    // are initialized. Do not wait for sidebar construction here: in slow\n"
+                "    // cold starts that unnecessarily exhausts this helper's retry budget\n"
+                "    // and leaves the zero-tab browser with no palette.\n"
+                "    browser_view->ShowMahoCommandOverlayForNewTab();\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            description=(
+                "Maho cold-start: migrate the legacy sidebar-gated retry helper to "
+                "BrowserView's widget-ready pending-overlay handoff"
+            ),
+            guard=(
+                "// BrowserView queues the new-tab overlay until its widget and views\n"
+                "    // are initialized. Do not wait for sidebar construction here:"
+            ),
+            idempotent=True,
         ),
         Replacement(
             old=(

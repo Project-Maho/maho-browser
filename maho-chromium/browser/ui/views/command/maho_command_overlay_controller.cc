@@ -57,7 +57,6 @@ namespace {
 
 constexpr base::TimeDelta kFadeOutDuration = base::Milliseconds(180);
 constexpr base::TimeDelta kResizeDuration = base::Milliseconds(200);
-constexpr base::TimeDelta kFadeInDuration = base::Milliseconds(120);
 constexpr base::TimeDelta kDeactivationHideDelay = base::Milliseconds(200);
 
 constexpr int kPopupWidthDp = 744;
@@ -512,9 +511,6 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   if (root_view) {
     root_view->SetPaintToLayer();
     root_view->layer()->SetFillsBoundsOpaquely(false);
-    // Prepare the transparent start state before Show() so no opaque frame can
-    // be presented ahead of the entrance fade.
-    root_view->layer()->SetOpacity(0.0f);
   }
 
   gfx::Size preferred = overlay_ptr->GetPreferredSize();
@@ -542,13 +538,6 @@ void MahoCommandOverlayController::Show(views::View* anchor,
 
   StartOutsideClickMonitor();
   RegisterParentEscAccelerator();
-
-  if (root_view && root_view->layer()) {
-    views::AnimationBuilder()
-        .Once()
-        .SetDuration(kFadeInDuration)
-        .SetOpacity(root_view->layer(), 1.0f, gfx::Tween::EASE_OUT);
-  }
 
   // RequestFocus() is posted rather than called synchronously so that the
   // platform's native window activation (triggered by Activate() above) has

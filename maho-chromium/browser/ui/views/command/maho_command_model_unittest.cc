@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "base/files/scoped_temp_dir.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/task_environment.h"
 #include "base/time/time.h"
@@ -18,6 +19,8 @@
 #include "chrome/test/base/testing_profile_manager.h"
 #include "components/omnibox/browser/autocomplete_provider.h"
 #include "components/prefs/pref_service.h"
+#include "maho/browser/maho_core_holder.h"
+#include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho {
@@ -614,6 +617,87 @@ TEST_F(SearchEmptyQueryTest,
          "not via the debounce timer";
   EXPECT_TRUE(received_results.empty())
       << "kCurrentTab empty-query callback must deliver an empty result vector";
+}
+
+class MahoCommandModelCoreReadyTest : public ::testing::Test {
+ protected:
+  base::test::TaskEnvironment task_env_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+};
+
+// Regression: the startup palette auto-opens (kNewTab mode) while maho-core
+// is still initializing asynchronously (storage dir + vault key derivation +
+// LoadState). Its initial search observed GetCore() == null and published an
+// empty snapshot that stayed on screen until the user typed. The model must
+// subscribe to the core-ready notification and re-issue the pending query.
+TEST_F(MahoCommandModelCoreReadyTest, CoreReadyRefetchesCurrentQuery) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  // Phase 1: initial search races ahead of the core and completes empty.
+  MahoCommandModel model(/*browser=*/nullptr);
+  int callback_count = 0;
+  auto cb = base::BindRepeating(
+      [](int* count, std::vector<CommandSuggestion>) { ++(*count); },
+      &callback_count);
+  model.Search("", CommandOverlayMode::kNewTab, cb);
+  task_env_.FastForwardBy(kModelDebounceDelay);
+  ASSERT_EQ(1, callback_count);
+
+  // Phase 2: install a real core. SetCore() synchronously notifies
+  // core-ready subscribers (BrowserThread::UI is not initialized in this
+  // fixture, so the notify path runs inline).
+  ASSERT_TRUE(maho_storage_set_sqlcipher_key(
+      "0123456789abcdef"
+      "0123456789abcdef"
+      "0123456789abcdef"
+      "0123456789abcdef"));
+  MahoCore* core = maho_core_new_with_storage(
+      temp_dir.GetPath().AppendASCII("core-ready.sqlite").AsUTF8Unsafe().c_str());
+  ASSERT_NE(core, nullptr);
+  MahoCore* saved_core = maho::GetCore();
+
+  const uint32_t generation_before = model.search_generation_for_testing();
+  maho::SetCore(core);
+
+  // The core-ready notification must have re-issued the pending query...
+  EXPECT_EQ(generation_before + 1, model.search_generation_for_testing());
+
+  // ...and the refetched search must run to completion and publish again.
+  task_env_.FastForwardBy(kModelDebounceDelay);
+  EXPECT_EQ(2, callback_count);
+
+  maho::SetCore(saved_core);
+  maho_core_free(core);
+}
+
+// Palettes whose search starts after the core is already up must not be
+// disturbed by later core installs: the notify fires only when a search is
+// live, and RefetchCurrentQuery is a no-op without a pending callback.
+TEST_F(MahoCommandModelCoreReadyTest, CoreReadyWithoutPendingSearchIsNoop) {
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+  MahoCommandModel model(/*browser=*/nullptr);
+  // No Search() call: no pending callback, so nothing to refetch.
+  const uint32_t generation_before = model.search_generation_for_testing();
+
+  ASSERT_TRUE(maho_storage_set_sqlcipher_key(
+      "0123456789abcdef"
+      "0123456789abcdef"
+      "0123456789abcdef"
+      "0123456789abcdef"));
+  MahoCore* core = maho_core_new_with_storage(
+      temp_dir.GetPath().AppendASCII("core-ready-noop.sqlite").AsUTF8Unsafe()
+          .c_str());
+  ASSERT_NE(core, nullptr);
+  MahoCore* saved_core = maho::GetCore();
+
+  maho::SetCore(core);
+  EXPECT_EQ(generation_before, model.search_generation_for_testing());
+
+  maho::SetCore(saved_core);
+  maho_core_free(core);
 }
 
 class QuickActionGateTest : public ::testing::Test {};

@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -276,6 +277,11 @@ class MahoCommandModel : public TabStripModelObserver,
                                   std::string bookmark_url,
                                   const favicon_base::LargeIconResult& result);
   void RequestTabFavicons(uint32_t generation);
+  // CoreReadyCallbackList handler: re-runs the current query once maho-core
+  // finishes its asynchronous initialization, so a search that raced ahead of
+  // the core (and observed GetCore() == null) does not leave the palette
+  // showing the stale empty snapshot.
+  void OnCoreReady();
   void HydrateSiteSearchEngines();
   void RequestSearchEngineFavicons(uint32_t generation);
   void OnSearchEngineLargeIconLoaded(uint32_t search_generation,
@@ -327,6 +333,12 @@ class MahoCommandModel : public TabStripModelObserver,
 
   base::ScopedObservation<GlobalBrowserCollection, BrowserCollectionObserver>
       browser_collection_observation_{this};
+
+  // Re-runs the pending query when the maho-core FFI becomes available.
+  // Models created after the core is ready never observe a notification
+  // (SetCore notifies only on non-null installs), so this is inert for
+  // palettes opened later in the session.
+  base::CallbackListSubscription core_ready_subscription_;
 
   SEQUENCE_CHECKER(sequence_checker_);
 

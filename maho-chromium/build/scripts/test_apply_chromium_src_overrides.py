@@ -19,9 +19,57 @@ _PASSWORD_BACKEND_FACTORY_PATH = (
 _PASSWORD_BACKEND_FACTORY_BUILD_PATH = (
     "chrome/browser/password_manager/factories/BUILD.gn"
 )
+_STARTUP_BROWSER_CREATOR_IMPL_PATH = (
+    "chrome/browser/ui/startup/startup_browser_creator_impl.cc"
+)
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+    def test_cold_start_helper_migrates_legacy_sidebar_gate(self):
+        replacement = next(
+            replacement
+            for replacement in REPLACEMENTS[_STARTUP_BROWSER_CREATOR_IMPL_PATH]
+            if replacement.description
+            == "Maho cold-start: migrate the legacy sidebar-gated retry helper to "
+            "BrowserView's widget-ready pending-overlay handoff"
+        )
+        legacy_helper = (
+            "void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<Browser> browser,\n"
+            "                                       int remaining_attempts) {\n"
+            "  if (auto* browser_view =\n"
+            "          BrowserView::GetBrowserViewForBrowser(browser.get())) {\n"
+            "    if (browser_view->maho_sidebar_container()) {\n"
+            "      browser_view->ShowMahoCommandOverlayForNewTab();\n"
+            "      return;\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "startup_browser_creator_impl.cc"
+            target.write_text(legacy_helper)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_STARTUP_BROWSER_CREATOR_IMPL_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("browser_view->ShowMahoCommandOverlayForNewTab();", output)
+            self.assertIn(
+                "Do not wait for sidebar construction here: in slow", output
+            )
+            self.assertNotIn("maho_sidebar_container()", output)
+
+            changed_again, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_STARTUP_BROWSER_CREATOR_IMPL_PATH,
+            )
+            self.assertFalse(changed_again)
+
     def test_password_fill_contract_transformations_are_guarded_and_idempotent(self):
         fixtures = {
             "components/password_manager/core/browser/password_form_digest.h": (

@@ -95,6 +95,7 @@ source_set("unit_tests") {
     ":maho_command_overlay",
     "//base",
     "//base/test:test_support",
+    "//maho/browser:maho_core_holder",
     "//maho/browser/ui/views/split_view:maho_split_view",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",

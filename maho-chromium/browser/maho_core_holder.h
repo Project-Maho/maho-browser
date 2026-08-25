@@ -60,6 +60,14 @@ void QuiesceCoreTasksAndWait();
 // uninitialized/locked/auto-locked all report true so subscribers fail closed.
 using VaultLockStateCallbackList = base::RepeatingCallbackList<void(bool)>;
 
+// Published after a usable MahoCore replaces the unavailable state. Browser
+// observers use this to retry work that intentionally failed closed while the
+// core was not initialized.
+using CoreReadyCallbackList = base::RepeatingCallbackList<void()>;
+
+[[nodiscard]] base::CallbackListSubscription AddCoreReadyCallback(
+    base::RepeatingClosure callback);
+
 // Subscribes to Vault lock-state transitions. Callbacks run on the sequence
 // that published the change (the UI thread for the tick driver). The returned
 // subscription must be destroyed before the subscriber.

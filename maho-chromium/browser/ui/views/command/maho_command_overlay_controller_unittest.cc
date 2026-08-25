@@ -121,8 +121,7 @@ TEST_F(MahoCommandOverlayControllerTest, IsVisibleFalseWithNoWidget) {
   EXPECT_FALSE(controller->IsVisible());
 }
 
-TEST_F(MahoCommandOverlayControllerTest,
-       ShowStartsEntranceWithIdentityRootTransform) {
+TEST_F(MahoCommandOverlayControllerTest, ShowKeepsRootLayerOpaqueAtStartup) {
   gfx::ScopedAnimationDurationScaleMode non_zero_duration(
       gfx::ScopedAnimationDurationScaleMode::NON_ZERO_DURATION);
   std::unique_ptr<views::Widget> parent =
@@ -140,8 +139,9 @@ TEST_F(MahoCommandOverlayControllerTest,
   EXPECT_TRUE(root_layer->transform().IsIdentity())
       << "command palette entrance must not translate its text-bearing root "
          "layer";
-  EXPECT_LT(root_layer->opacity(), 1.0f)
-      << "command palette entrance should retain its opacity fade";
+  EXPECT_FLOAT_EQ(root_layer->opacity(), 1.0f)
+      << "a shown command palette must not depend on a pending fade to be "
+         "visible";
   ASSERT_NE(controller->GetOverlayViewForTesting(), nullptr);
   ASSERT_NE(controller->GetOverlayViewForTesting()->GetActionSelectorForTesting(),
             nullptr);

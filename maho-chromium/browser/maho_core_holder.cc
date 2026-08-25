@@ -23,6 +23,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/browser_task_traits.h"
 #include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
@@ -36,6 +37,7 @@ std::atomic<Profile*> g_core_owner_profile{nullptr};
 std::atomic<bool> g_blocker_quiesced{false};
 std::atomic<bool> g_vault_backend_quiesced{false};
 std::atomic<bool> g_core_tasks_quiesced{true};
+std::atomic<uint64_t> g_core_generation{0};
 
 base::Lock& GetVaultBackendCreationLock() {
   static base::NoDestructor<base::Lock> lock;
@@ -48,6 +50,22 @@ base::Lock& GetVaultBackendCreationLock() {
 VaultLockStateCallbackList& GetVaultLockStateCallbackList() {
   static base::NoDestructor<VaultLockStateCallbackList> callbacks;
   return *callbacks;
+}
+
+CoreReadyCallbackList& GetCoreReadyCallbackList() {
+  static base::NoDestructor<CoreReadyCallbackList> callbacks;
+  return *callbacks;
+}
+
+void NotifyCoreReady(uint64_t generation) {
+  DCHECK(!content::BrowserThread::IsThreadInitialized(
+             content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  if (g_core_generation.load(std::memory_order_acquire) != generation ||
+      !GetCore()) {
+    return;
+  }
+  GetCoreReadyCallbackList().Notify();
 }
 
 // Fail-closed default: nothing has published a state yet, so treat the Vault as
@@ -102,17 +120,39 @@ void SetCore(::MahoCore* core) {
 }
 
 void SetCoreForProfile(::MahoCore* core, Profile* owner_profile) {
-  base::AutoLock lock(GetVaultBackendCreationLock());
-  if (!core) {
-    g_vault_backend_quiesced.store(true, std::memory_order_release);
-    maho::core::QuiesceVaultBackendSessions();
-    g_core_owner_profile.store(nullptr, std::memory_order_release);
-  } else {
-    g_vault_backend_quiesced.store(false, std::memory_order_release);
-    g_core_tasks_quiesced.store(false, std::memory_order_release);
-    g_core_owner_profile.store(owner_profile, std::memory_order_release);
+  uint64_t generation;
+  {
+    base::AutoLock lock(GetVaultBackendCreationLock());
+    generation = g_core_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (!core) {
+      g_vault_backend_quiesced.store(true, std::memory_order_release);
+      maho::core::QuiesceVaultBackendSessions();
+      g_core_owner_profile.store(nullptr, std::memory_order_release);
+    } else {
+      g_vault_backend_quiesced.store(false, std::memory_order_release);
+      g_core_tasks_quiesced.store(false, std::memory_order_release);
+      g_core_owner_profile.store(owner_profile, std::memory_order_release);
+    }
+    g_core.store(core, std::memory_order_release);
   }
-  g_core.store(core, std::memory_order_release);
+  if (core) {
+    if (!content::BrowserThread::IsThreadInitialized(
+            content::BrowserThread::UI) ||
+        content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+      NotifyCoreReady(generation);
+    } else {
+      content::GetUIThreadTaskRunner({})->PostTask(
+          FROM_HERE, base::BindOnce(&NotifyCoreReady, generation));
+    }
+  }
+}
+
+base::CallbackListSubscription AddCoreReadyCallback(
+    base::RepeatingClosure callback) {
+  DCHECK(!content::BrowserThread::IsThreadInitialized(
+             content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  return GetCoreReadyCallbackList().Add(std::move(callback));
 }
 
 Profile* GetCoreOwnerProfile() {

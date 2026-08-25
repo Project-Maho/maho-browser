@@ -381,6 +381,20 @@ MahoCommandModel::MahoCommandModel(Browser* browser)
         return true;
       });
   HydrateSiteSearchEngines();
+
+  // The startup palette can run its first search while the maho-core FFI is
+  // still initializing asynchronously (storage directory creation, vault key
+  // derivation, LoadState — measured ~2s on a real profile). That search
+  // observes GetCore() == null and publishes an empty snapshot, which left
+  // the auto-opened startup palette blank until the user typed. Re-run the
+  // current query when the core becomes ready.
+  //
+  // Unretained (not weak_factory_): Search() invalidates all weak pointers on
+  // every call, which would silently kill this subscription after the first
+  // query. The RAII CallbackListSubscription member unsubscribes during
+  // destruction, so Unretained is safe here (same pattern as MahoTabRegistry).
+  core_ready_subscription_ = maho::AddCoreReadyCallback(base::BindRepeating(
+      &MahoCommandModel::OnCoreReady, base::Unretained(this)));
 }
 
 MahoCommandModel::~MahoCommandModel() {
@@ -512,6 +526,15 @@ void MahoCommandModel::RefetchCurrentQuery() {
   const CommandOverlayMode mode = mode_;
   ResultsCallback callback = pending_callback_;
   Search(query, mode, std::move(callback));
+}
+
+void MahoCommandModel::OnCoreReady() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // No-op unless a search is live (pending_callback_ set): RefetchCurrentQuery
+  // re-issues the current query/mode so FFI-backed sources (recent suspended
+  // tabs, saved bookmarks/history, recent searches) replace the empty
+  // snapshot published before the core existed.
+  RefetchCurrentQuery();
 }
 
 void MahoCommandModel::SetRemoteSearchSourceForTesting(
