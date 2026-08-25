@@ -1580,6 +1580,26 @@ std::string FormatMailActionDetails(const std::string& action_name,
                                   std::string(redacted_arguments));
   }
 
+  bool ConfirmCredentialTypingApproval(
+      std::string_view tool_name,
+      const maho::ResolvedMahoMcpTarget& target) override {
+    const std::string title = "Maho Browser - Credential Permission Requested";
+    const std::string details =
+        "Credential typing into browser " +
+        base::NumberToString(target.browser_id) + ", tab " +
+        base::NumberToString(target.tab_id) +
+        ". The credential value is intentionally not shown.";
+    const std::string message =
+        "An AI agent is requesting permission to perform the following "
+        "credential action:\n\n[" +
+        std::string(tool_name) + "]\nDetails:\n" + details +
+        "\n\nDo you allow this action?";
+    const chrome::MessageBoxResult result = chrome::ShowQuestionMessageBoxSync(
+        gfx::NativeWindow(), base::UTF8ToUTF16(title),
+        base::UTF8ToUTF16(message));
+    return result == chrome::MESSAGE_BOX_RESULT_YES;
+  }
+
   bool ConfirmBrowserActionApproval(
       std::string_view tool_name,
       const maho::ResolvedMahoMcpTarget& target) override {
