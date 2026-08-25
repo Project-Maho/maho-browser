@@ -175,13 +175,19 @@ void ResolveRoleColors(MahoSidebarPalette* palette) {
   palette->secondary_text = ResolveRoleColor(
       secondary_candidate, endpoint,
       color_utils::kMinimumReadableContrastRatio, surfaces);
-  palette->tertiary_text = ResolveRoleColor(
-      tertiary_candidate, endpoint, color_utils::kMinimumVisibleContrastRatio,
-      surfaces);
+  // Subtle roles held to the visible minimum (3.0:1) read as washed out on a
+  // light-family surface: mid-tone blue-gray candidates land near the floor
+  // and placeholder icons/section headers become hard to distinguish. Hold
+  // light-family subtle roles to the readable minimum instead.
+  const float subtle_minimum =
+      palette->dark_family
+          ? color_utils::kMinimumVisibleContrastRatio
+          : color_utils::kMinimumReadableContrastRatio;
+  palette->tertiary_text = ResolveRoleColor(tertiary_candidate, endpoint,
+                                            subtle_minimum, surfaces);
   palette->disabled_text = palette->tertiary_text;
-  palette->neutral_glyph = ResolveRoleColor(
-      secondary_candidate, endpoint, color_utils::kMinimumVisibleContrastRatio,
-      surfaces);
+  palette->neutral_glyph = ResolveRoleColor(secondary_candidate, endpoint,
+                                            subtle_minimum, surfaces);
 }
 
 bool PaletteMeetsContrast(const MahoSidebarPalette& palette) {
@@ -191,7 +197,10 @@ bool PaletteMeetsContrast(const MahoSidebarPalette& palette) {
          MeetsContrast(palette.secondary_text,
                        color_utils::kMinimumReadableContrastRatio, surfaces) &&
          MeetsContrast(palette.neutral_glyph,
-                       color_utils::kMinimumVisibleContrastRatio, surfaces);
+                       palette.dark_family
+                           ? color_utils::kMinimumVisibleContrastRatio
+                           : color_utils::kMinimumReadableContrastRatio,
+                       surfaces);
 }
 
 }  // namespace

@@ -127,15 +127,18 @@ void ExpectContrastAtLeast(const MahoSidebarPalette& palette,
 
 void ExpectPaletteRolesAtSurface(const MahoSidebarPalette& palette,
                                   SkColor surface) {
+  // Light-family subtle roles are held to the readable minimum (4.5:1);
+  // dark-family keeps the visible minimum (3.0:1).
+  const float subtle_minimum = palette.dark_family ? 3.0f : 4.5f;
   EXPECT_GE(color_utils::GetContrastRatio(palette.primary_text, surface), 4.5f);
   EXPECT_GE(color_utils::GetContrastRatio(palette.secondary_text, surface),
             4.5f);
   EXPECT_GE(color_utils::GetContrastRatio(palette.tertiary_text, surface),
-            3.0f);
+            subtle_minimum);
   EXPECT_GE(color_utils::GetContrastRatio(palette.disabled_text, surface),
-            3.0f);
+            subtle_minimum);
   EXPECT_GE(color_utils::GetContrastRatio(palette.neutral_glyph, surface),
-            3.0f);
+            subtle_minimum);
 }
 
 void ExpectSamePaletteSnapshot(const MahoSidebarPalette& expected,
@@ -285,11 +288,12 @@ TEST(MahoSidebarPaletteTest,
   ASSERT_EQ(palette.surface_stops.size(), 1u);
   EXPECT_EQ(SkColorGetA(palette.surface_stops[0]), 139u);
   EXPECT_FALSE(palette.used_surface_fallback);
+  const float subtle_minimum = palette.dark_family ? 3.0f : 4.5f;
   ExpectContrastAtLeast(palette, palette.primary_text, 4.5f);
   ExpectContrastAtLeast(palette, palette.secondary_text, 4.5f);
-  ExpectContrastAtLeast(palette, palette.tertiary_text, 3.0f);
-  ExpectContrastAtLeast(palette, palette.disabled_text, 3.0f);
-  ExpectContrastAtLeast(palette, palette.neutral_glyph, 3.0f);
+  ExpectContrastAtLeast(palette, palette.tertiary_text, subtle_minimum);
+  ExpectContrastAtLeast(palette, palette.disabled_text, subtle_minimum);
+  ExpectContrastAtLeast(palette, palette.neutral_glyph, subtle_minimum);
 }
 
 TEST(MahoSidebarPaletteTest, SamplesContinuousGradientAndEveryRowState) {
@@ -361,9 +365,10 @@ TEST(MahoSidebarPaletteTest, ReadableRolesAndNeutralGlyphMeetThresholds) {
     ExpectContrastAtLeast(palette, palette.secondary_text, 4.5f);
     EXPECT_NE(palette.tertiary_text, SK_ColorTRANSPARENT);
     EXPECT_EQ(palette.disabled_text, palette.tertiary_text);
-    ExpectContrastAtLeast(palette, palette.tertiary_text, 3.0f);
-    ExpectContrastAtLeast(palette, palette.disabled_text, 3.0f);
-    ExpectContrastAtLeast(palette, palette.neutral_glyph, 3.0f);
+    const float subtle_minimum = palette.dark_family ? 3.0f : 4.5f;
+    ExpectContrastAtLeast(palette, palette.tertiary_text, subtle_minimum);
+    ExpectContrastAtLeast(palette, palette.disabled_text, subtle_minimum);
+    ExpectContrastAtLeast(palette, palette.neutral_glyph, subtle_minimum);
   }
 }
 
