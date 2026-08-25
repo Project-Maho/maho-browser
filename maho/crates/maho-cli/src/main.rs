@@ -5,6 +5,8 @@ mod chat;
 pub mod config;
 mod credits;
 
+use maho_cli::browser_pipe;
+
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use maho_agent::{
@@ -148,6 +150,13 @@ pub enum Commands {
 
     /// Browser control utilities
     Browser {
+        /// Override the browser MCP RPC timeout in seconds.
+        ///
+        /// Without this flag, cheap RPCs use 15 seconds while accessibility
+        /// snapshots and ref-consuming input actions use 60 seconds.
+        #[arg(long, global = true, value_name = "SECS")]
+        timeout: Option<u64>,
+
         #[command(subcommand)]
         command: BrowserCommands,
     },
@@ -857,6 +866,13 @@ pub struct HeadlessArgs {
 pub enum BrowserCommands {
     /// Interactive browser REPL
     Repl,
+
+    /// Machine-readable persistent automation pipe over stdin/stdout NDJSON
+    Pipe {
+        /// Enable JSONL NDJSON stream protocol
+        #[arg(long)]
+        jsonl: bool,
+    },
 }
 
 #[derive(Subcommand, Clone)]
@@ -949,9 +965,15 @@ async fn main() -> Result<()> {
         Commands::Headless(args) => cmd_headless(args, socket_path.as_deref(), json_output).await,
 
         // ─── Browser group (stub — Task 3.4) ──────────────────────────────
-        Commands::Browser { command } => match command {
-            BrowserCommands::Repl => cmd_repl(socket_path.as_deref(), json_output).await,
-        },
+        Commands::Browser { command, timeout } => {
+            browser::set_timeout_override(timeout)?;
+            match command {
+                BrowserCommands::Repl => cmd_repl(socket_path.as_deref(), json_output).await,
+                BrowserCommands::Pipe { jsonl: _ } => {
+                    browser_pipe::run_pipe(socket_path.as_deref()).await
+                }
+            }
+        }
 
         // ─── MCP server ───────────────────────────────────────────────────
         Commands::Mcp { command } => cmd_mcp(command, json_output).await,
@@ -4138,6 +4160,9 @@ Commands:
   text                  Get page text (truncated)
   screenshot            Save full-page screenshot to /tmp
   snapshot              Accessibility snapshot (JSON)
+  observe [mode] [sel]  Compact accessibility snapshot (mode: interactive|compact|full)
+  wait selector <css>   Wait for CSS selector to appear
+  wait url <pattern>    Wait for active tab URL to match pattern
   click <ref>|@<name>   Click by ref, or by name (re-resolved live)
   type <ref> <text>     Type text into element (also: type @<name>=<text>)
   upload <path>         Select an .aab file for the active upload chooser
@@ -4397,6 +4422,114 @@ async fn handle_repl_line(
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        "observe" => {
+            let rest = line[cmd.len()..].trim();
+            let (first_word, rem) = match rest.split_once(char::is_whitespace) {
+                Some((w, r)) => (w, r.trim()),
+                None => (rest, ""),
+            };
+            let (mode, selector) = match first_word {
+                "interactive" | "compact" | "full" => {
+                    let sel = if rem.is_empty() { None } else { Some(rem) };
+                    (first_word, sel)
+                }
+                "" => ("compact", None),
+                _ => ("compact", Some(rest)),
+            };
+
+            let mut args = serde_json::json!({
+                "mode": mode,
+            });
+            if let Some(sel) = selector {
+                args["scope"] = serde_json::json!({ "selector": sel });
+            }
+
+            let result = client
+                .call_capability("page.accessibility_snapshot_v2", args)
+                .await?;
+            let projected = browser::project_cli_result(result);
+            if let Some(tree) = projected.get("tree").and_then(|v| v.as_str()) {
+                if tree.trim().is_empty() {
+                    println!("(empty tree)");
+                } else {
+                    print!("{tree}");
+                    if !tree.ends_with('\n') {
+                        println!();
+                    }
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&projected)?);
+            }
+        }
+        "wait" => {
+            let rest = line[cmd.len()..].trim();
+            let (subcmd, target) = match rest.split_once(char::is_whitespace) {
+                Some((sc, tg)) => (sc, tg.trim()),
+                None => (rest, ""),
+            };
+            match subcmd {
+                "selector" => {
+                    if target.is_empty() {
+                        println!("Usage: wait selector <css>");
+                        return Ok(());
+                    }
+                    let result = browser::send_tool_call(
+                        client,
+                        "page_wait_for_selector",
+                        serde_json::json!({ "selector": target, "timeout_ms": 10000 }),
+                    )
+                    .await?;
+                    let found = result
+                        .get("found")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if found {
+                        println!("ok");
+                    } else {
+                        println!("not found (timeout)");
+                    }
+                }
+                "url" => {
+                    if target.is_empty() {
+                        println!("Usage: wait url <pattern>");
+                        return Ok(());
+                    }
+                    let start = std::time::Instant::now();
+                    let timeout = std::time::Duration::from_millis(10000);
+                    let mut matched = false;
+                    while start.elapsed() < timeout {
+                        let tab_list = browser::send_tool_call(
+                            client,
+                            "browser_tab_list",
+                            serde_json::json!({}),
+                        )
+                        .await?;
+                        if let Some(tabs) = tab_list.get("tabs").and_then(|t| t.as_array()) {
+                            if let Some(active) = tabs
+                                .iter()
+                                .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
+                            {
+                                if let Some(url) = active.get("url").and_then(|v| v.as_str()) {
+                                    if browser_pipe::matches_url_pattern(url, target) {
+                                        matched = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    if matched {
+                        println!("ok");
+                    } else {
+                        println!("timeout");
+                    }
+                }
+                _ => {
+                    println!("Usage: wait selector <css> | wait url <pattern>");
+                }
+            }
         }
         "refs" => {
             let filter = line[cmd.len()..].trim().to_lowercase();

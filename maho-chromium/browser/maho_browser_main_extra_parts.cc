@@ -451,6 +451,37 @@ std::string ExecuteMcpActionJsAllFramesBlocking(content::WebContents* wc,
   return result;
 }
 
+std::optional<gfx::PointF> ComputeViewportCenterCssFromTree(
+    const ui::AXTree& tree,
+    ui::AXNodeID ax_id,
+    bool prefer_leading_edge = false) {
+  const ui::AXNode* node = tree.GetFromId(ax_id);
+  if (!node) {
+    return std::nullopt;
+  }
+  gfx::RectF bounds = tree.GetTreeBounds(node, /*offscreen=*/nullptr,
+                                         /*clip_bounds=*/false);
+  const ui::AXNode* curr = node;
+  while (curr) {
+    const ui::AXNode* parent = curr->parent();
+    if (parent && curr->GetRole() == ax::mojom::Role::kRootWebArea) {
+      gfx::RectF parent_bounds = tree.GetTreeBounds(parent, nullptr, false);
+      if (!parent_bounds.IsEmpty()) {
+        bounds.Offset(parent_bounds.OffsetFromOrigin());
+      }
+    }
+    curr = parent;
+  }
+  if (bounds.IsEmpty()) {
+    return std::nullopt;
+  }
+  gfx::PointF center = bounds.CenterPoint();
+  if (prefer_leading_edge) {
+    center.set_x(bounds.x() + std::min(bounds.width() / 2.f, 12.f));
+  }
+  return center;
+}
+
 std::optional<gfx::PointF> ComputeViewportCenterCss(
     const ui::AXTreeUpdate& update,
     ui::AXNodeID ax_id,
@@ -465,31 +496,9 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
   {
     ui::AXTree tree;
     if (tree.Unserialize(update)) {
-      if (const ui::AXNode* node = tree.GetFromId(ax_id)) {
-        gfx::RectF bounds = tree.GetTreeBounds(node, /*offscreen=*/nullptr,
-                                               /*clip_bounds=*/false);
-        // If the node lives inside an embedded subframe (kRootWebArea / iframe),
-        // ui::AXTree::GetTreeBounds stops at the subframe root whose offset_container_id is -1.
-        // Traverse up the tree hierarchy and accumulate parent container bounds.
-        const ui::AXNode* curr = node;
-        while (curr) {
-          const ui::AXNode* parent = curr->parent();
-          if (parent && curr->GetRole() == ax::mojom::Role::kRootWebArea) {
-            gfx::RectF parent_bounds = tree.GetTreeBounds(parent, nullptr, false);
-            if (!parent_bounds.IsEmpty()) {
-              bounds.Offset(parent_bounds.OffsetFromOrigin());
-            }
-          }
-          curr = parent;
-        }
-        if (!bounds.IsEmpty()) {
-          gfx::PointF center = bounds.CenterPoint();
-          if (prefer_leading_edge) {
-            center.set_x(bounds.x() +
-                         std::min(bounds.width() / 2.f, 12.f));
-          }
-          return center;
-        }
+      if (std::optional<gfx::PointF> center = ComputeViewportCenterCssFromTree(
+              tree, ax_id, prefer_leading_edge)) {
+        return center;
       }
     }
   }
@@ -2319,6 +2328,230 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
   }
 
+  bool WaitForAutoQuiet(int tab_id, int timeout_ms) override {
+    base::TimeTicks start = base::TimeTicks::Now();
+    base::TimeDelta timeout = base::Milliseconds(timeout_ms > 0 ? timeout_ms : 10000);
+    while (true) {
+      content::WebContents* wc = (tab_id == 0) ? GetActiveWebContents()
+                                               : GetWebContentsForTabId(tab_id);
+      if (!wc) {
+        return false;
+      }
+      if (!wc->IsLoading() && !wc->IsWaitingForResponse()) {
+        return true;
+      }
+      if (base::TimeTicks::Now() - start >= timeout) {
+        return false;
+      }
+      base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(50));
+      run_loop.Run();
+    }
+  }
+
+  maho::MahoMcpBrowserDelegate::LocatorResolution ResolveLocator(
+      int tab_id,
+      const maho::MahoMcpBrowserDelegate::LocatorParams& params,
+      const maho::MahoMcpSession::RefTable& refs) override {
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    maho::MahoMcpBrowserDelegate::LocatorResolution res;
+    if (!wc) {
+      res.error_code = "locator_detached";
+      res.hint = "Tab not found or detached";
+      return res;
+    }
+
+    if (params.ref.has_value()) {
+      auto it = refs.find(*params.ref);
+      if (it == refs.end()) {
+        res.error_code = "locator_not_found";
+        res.hint = "Ref " + base::NumberToString(*params.ref) +
+                   " not found in session ref table";
+        return res;
+      }
+      ui::AXNodeID ax_id = it->second;
+      ui::AXTreeUpdate update = SnapshotAXTree(wc);
+      const ui::AXNodeData* target_node = nullptr;
+      for (const ui::AXNodeData& node : update.nodes) {
+        if (node.id == ax_id) {
+          target_node = &node;
+          break;
+        }
+      }
+      if (!target_node) {
+        res.error_code = "locator_detached";
+        res.hint = "Element is detached from DOM";
+        return res;
+      }
+      if (target_node->GetRestriction() == ax::mojom::Restriction::kDisabled) {
+        res.error_code = "locator_not_actionable";
+        res.hint = "Element is disabled";
+        return res;
+      }
+      if (target_node->HasState(ax::mojom::State::kInvisible) ||
+          target_node->HasState(ax::mojom::State::kIgnored)) {
+        res.error_code = "locator_obscured";
+        res.hint = "Element is obscured or not visible";
+        return res;
+      }
+      res.success = true;
+      res.ax_id = ax_id;
+      return res;
+    }
+
+    if (params.css.has_value()) {
+      std::string escaped_css = base::GetQuotedJSONString(*params.css);
+      std::string script =
+          "(() => {\n"
+          "  try {\n"
+          "    const els = document.querySelectorAll(" + escaped_css + ");\n"
+          "    if (els.length === 0) return JSON.stringify({count: 0});\n"
+          "    if (els.length > 1) return JSON.stringify({count: els.length});\n"
+          "    const el = els[0];\n"
+          "    const rect = el.getBoundingClientRect();\n"
+          "    const style = window.getComputedStyle(el);\n"
+          "    const visible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;\n"
+          "    const disabled = el.disabled === true || el.getAttribute('aria-disabled') === 'true';\n"
+          "    const attached = el.isConnected;\n"
+          "    const id = el.id || '';\n"
+          "    const name = el.getAttribute('aria-label') || el.innerText || el.value || '';\n"
+          "    return JSON.stringify({count: 1, attached: attached, visible: visible, disabled: disabled, id: id, name: name});\n"
+          "  } catch (e) {\n"
+          "    return JSON.stringify({error: e.message});\n"
+          "  }\n"
+          "})()";
+      std::string js_res = ExecuteMcpActionJsBlocking(wc, script);
+      std::optional<base::Value> parsed_json =
+          base::JSONReader::Read(js_res, base::JSON_PARSE_RFC);
+      if (!parsed_json || !parsed_json->is_dict()) {
+        res.error_code = "locator_not_found";
+        res.hint = "Failed to query selector: " + *params.css;
+        return res;
+      }
+      const auto& dict = parsed_json->GetDict();
+      int count = dict.FindInt("count").value_or(0);
+      if (count == 0) {
+        res.error_code = "locator_not_found";
+        res.hint = "No element matches selector: " + *params.css;
+        return res;
+      }
+      if (count > 1) {
+        res.error_code = "locator_ambiguous";
+        res.matches = count;
+        res.hint = "Selector matched multiple elements (" + base::NumberToString(count) + "); refine selector";
+        return res;
+      }
+      bool attached = dict.FindBool("attached").value_or(false);
+      if (!attached) {
+        res.error_code = "locator_detached";
+        res.hint = "Element is detached from DOM";
+        return res;
+      }
+      bool disabled = dict.FindBool("disabled").value_or(false);
+      if (disabled) {
+        res.error_code = "locator_not_actionable";
+        res.hint = "Element is disabled";
+        return res;
+      }
+      bool visible = dict.FindBool("visible").value_or(false);
+      if (!visible) {
+        res.error_code = "locator_obscured";
+        res.hint = "Element is obscured or not visible";
+        return res;
+      }
+
+      ui::AXTreeUpdate update = SnapshotAXTree(wc);
+      const std::string* el_id = dict.FindString("id");
+      const std::string* el_name = dict.FindString("name");
+      ui::AXNodeID matched_ax_id = 0;
+      if (el_id && !el_id->empty()) {
+        for (const auto& node : update.nodes) {
+          if (node.GetStringAttribute(ax::mojom::StringAttribute::kHtmlId) == *el_id) {
+            matched_ax_id = node.id;
+            break;
+          }
+        }
+      }
+      if (matched_ax_id == 0 && el_name && !el_name->empty()) {
+        for (const auto& node : update.nodes) {
+          if (node.GetStringAttribute(ax::mojom::StringAttribute::kName) == *el_name) {
+            matched_ax_id = node.id;
+            break;
+          }
+        }
+      }
+      if (matched_ax_id == 0 && !update.nodes.empty()) {
+        matched_ax_id = update.nodes[0].id;
+      }
+      res.success = true;
+      res.ax_id = matched_ax_id;
+      return res;
+    }
+
+    if (params.role.has_value() && params.name.has_value()) {
+      ui::AXTreeUpdate update = SnapshotAXTree(wc);
+      std::vector<const ui::AXNodeData*> matches;
+      std::string search_role = base::ToLowerASCII(*params.role);
+      std::string search_name = *params.name;
+      for (const auto& node : update.nodes) {
+        std::string role_str = base::ToLowerASCII(maho::MahoMcpAccessibilityHandler::RoleToString(node.role));
+        bool role_matched = (role_str == search_role);
+        if (!role_matched) {
+          if (search_role == "button" && (role_str == "button" || role_str == "popupbutton" || role_str == "togglebutton")) {
+            role_matched = true;
+          } else if ((search_role == "textbox" || search_role == "textfield" || search_role == "input") &&
+                     (role_str == "textfield" || role_str == "searchbox")) {
+            role_matched = true;
+          }
+        }
+        if (!role_matched) continue;
+
+        std::string node_name = node.GetStringAttribute(ax::mojom::StringAttribute::kName);
+        bool name_matched = false;
+        if (params.exact) {
+          name_matched = base::EqualsCaseInsensitiveASCII(node_name, search_name);
+        } else {
+          name_matched = (base::ToLowerASCII(node_name).find(base::ToLowerASCII(search_name)) != std::string::npos);
+        }
+        if (name_matched) {
+          matches.push_back(&node);
+        }
+      }
+      if (matches.empty()) {
+        res.error_code = "locator_not_found";
+        res.hint = "No element matches role '" + *params.role + "' and name '" + *params.name + "'";
+        return res;
+      }
+      if (matches.size() > 1) {
+        res.error_code = "locator_ambiguous";
+        res.matches = static_cast<int>(matches.size());
+        res.hint = "Multiple elements (" + base::NumberToString(matches.size()) + ") match role and name; refine selector";
+        return res;
+      }
+      const auto* target = matches[0];
+      if (target->GetRestriction() == ax::mojom::Restriction::kDisabled) {
+        res.error_code = "locator_not_actionable";
+        res.hint = "Element is disabled";
+        return res;
+      }
+      if (target->HasState(ax::mojom::State::kInvisible) ||
+          target->HasState(ax::mojom::State::kIgnored)) {
+        res.error_code = "locator_obscured";
+        res.hint = "Element is obscured or not visible";
+        return res;
+      }
+      res.success = true;
+      res.ax_id = target->id;
+      return res;
+    }
+
+    res.error_code = "locator_not_found";
+    res.hint = "Invalid locator parameters";
+    return res;
+  }
+
   void SameOriginFetch(
       int tab_id,
       const GURL& url,
@@ -2829,12 +3062,136 @@ std::string FormatMailActionDetails(const std::string& action_name,
     return result;
   }
 
+  using RefFrameSignature =
+      std::vector<std::pair<content::GlobalRenderFrameHostId, std::string>>;
+  struct CachedRefNode {
+    ax::mojom::Role role = ax::mojom::Role::kUnknown;
+    bool has_checked_state = false;
+    ax::mojom::CheckedState checked_state = ax::mojom::CheckedState::kNone;
+    bool is_protected = false;
+    std::string autocomplete;
+    std::string accessible_name;
+    std::optional<gfx::PointF> center;
+    std::optional<gfx::PointF> leading_center;
+  };
+  struct CachedRefSnapshot {
+    uint64_t navigation_epoch = 0;
+    RefFrameSignature frame_signature;
+    std::unordered_map<ui::AXNodeID, CachedRefNode> nodes;
+  };
+  struct RefSnapshotGuard {
+    int tab_id = 0;
+    uint64_t navigation_epoch = 0;
+    RefFrameSignature frame_signature;
+  };
+
+  RefFrameSignature CaptureRefFrameSignature(content::WebContents* wc) {
+    RefFrameSignature signature;
+    if (!wc) {
+      return signature;
+    }
+    wc->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
+      if (!rfh || !rfh->IsRenderFrameLive()) {
+        return;
+      }
+      const auto global_id = rfh->GetGlobalId();
+      signature.push_back(
+          {global_id, rfh->GetLastCommittedURL().spec()});
+    });
+    std::sort(signature.begin(), signature.end());
+    return signature;
+  }
+
+  int ResolveRefCacheTabId(int tab_id, content::WebContents* wc) const {
+    return tab_id == 0 && wc ? McpSessionIdOf(wc) : tab_id;
+  }
+
+  void InvalidateCachedRefSnapshot(int tab_id, content::WebContents* wc) {
+    ref_snapshot_cache_.erase(ResolveRefCacheTabId(tab_id, wc));
+  }
+
+  const CachedRefSnapshot* GetValidCachedRefSnapshot(
+      content::WebContents* wc,
+      int tab_id) {
+    const int resolved_tab_id = ResolveRefCacheTabId(tab_id, wc);
+    auto it = ref_snapshot_cache_.find(resolved_tab_id);
+    if (it == ref_snapshot_cache_.end()) {
+      return nullptr;
+    }
+    if (!wc ||
+        it->second.navigation_epoch != GetNavigationEpoch(resolved_tab_id) ||
+        it->second.frame_signature != CaptureRefFrameSignature(wc)) {
+      ref_snapshot_cache_.erase(it);
+      return nullptr;
+    }
+    return &it->second;
+  }
+
+  std::optional<CachedRefNode> GetCachedRefNode(content::WebContents* wc,
+                                                int tab_id,
+                                                ui::AXNodeID ax_id) {
+    const CachedRefSnapshot* snapshot = GetValidCachedRefSnapshot(wc, tab_id);
+    if (!snapshot) {
+      return std::nullopt;
+    }
+    auto it = snapshot->nodes.find(ax_id);
+    return it == snapshot->nodes.end()
+               ? std::nullopt
+               : std::optional<CachedRefNode>(it->second);
+  }
+
+  void StoreRefSnapshotCache(
+      content::WebContents* wc,
+      int tab_id,
+      uint64_t navigation_epoch,
+      const RefFrameSignature& frame_signature,
+      const ui::AXTree& tree,
+      const maho::MahoMcpAccessibilityHandler::RefTable& refs) {
+    CachedRefSnapshot cache;
+    cache.navigation_epoch = navigation_epoch;
+    cache.frame_signature = frame_signature;
+    for (const auto& ref_entry : refs) {
+      const ui::AXNodeID ax_id = ref_entry.second;
+      const ui::AXNode* node = tree.GetFromId(ax_id);
+      if (!node) {
+        continue;
+      }
+      const ui::AXNodeData& data = node->data();
+      CachedRefNode cached;
+      cached.role = data.role;
+      cached.has_checked_state = data.HasCheckedState();
+      cached.checked_state = cached.has_checked_state
+                                 ? data.GetCheckedState()
+                                 : ax::mojom::CheckedState::kNone;
+      cached.is_protected = data.HasState(ax::mojom::State::kProtected);
+      cached.autocomplete =
+          data.GetStringAttribute(ax::mojom::StringAttribute::kAutoComplete);
+      cached.accessible_name =
+          data.GetStringAttribute(ax::mojom::StringAttribute::kName);
+      cached.center = ComputeViewportCenterCssFromTree(tree, ax_id);
+      cached.leading_center = ComputeViewportCenterCssFromTree(
+          tree, ax_id, /*prefer_leading_edge=*/true);
+      cache.nodes.emplace(ax_id, std::move(cached));
+    }
+    const int resolved_tab_id = ResolveRefCacheTabId(tab_id, wc);
+    if (ref_snapshot_cache_.find(resolved_tab_id) ==
+            ref_snapshot_cache_.end() &&
+        ref_snapshot_cache_.size() >= kMaxCachedRefSnapshots) {
+      ref_snapshot_cache_.erase(ref_snapshot_cache_.begin());
+    }
+    ref_snapshot_cache_[resolved_tab_id] = std::move(cache);
+  }
+
   // Synchronously snapshot the AX tree of `wc` via RequestAXTreeSnapshot.
   // This bypasses the visibility gate on live AX mode — session-restored
   // hidden tabs still return a real tree because the snapshot is a one-shot
   // Mojo request to the renderer that runs independently of live AX state.
-  // MUST be called on UI thread; uses a nested RunLoop to await the Mojo
-  // reply. Returns an empty AXTreeUpdate on failure.
+  // The delegate contract is synchronous today while RequestAXTreeSnapshot is
+  // asynchronous Mojo. A nestable RunLoop is therefore required here to
+  // service the renderer reply on the UI thread without deadlocking. Keep this
+  // bridge until the delegate contract itself becomes async; the node cap below
+  // bounds pathological all-frame snapshots in the meantime.
+  // Returns an empty AXTreeUpdate on failure.
   ui::AXTreeUpdate SnapshotAXTree(content::WebContents* wc) {
     ui::AXTreeUpdate update;
     if (!wc) {
@@ -2856,7 +3213,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
             },
             wc_weak, delegate_weak, &update, run_loop.QuitClosure()),
         ui::kAXModeComplete,
-        /*max_nodes=*/0,
+        /*max_nodes=*/kMaxAxSnapshotNodes,
         /*timeout=*/base::Seconds(5),
         content::WebContents::AXTreeSnapshotPolicy::kAll);
     run_loop.Run();
@@ -2934,8 +3291,11 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (navigation_epoch == 0) {
       return base::Value(std::move(empty));
     }
+    InvalidateCachedRefSnapshot(tab_id, wc);
+    const RefFrameSignature frame_signature = CaptureRefFrameSignature(wc);
     ui::AXTreeUpdate update = SnapshotAXTree(wc);
-    if (navigation_epoch != GetNavigationEpoch(tab_id)) {
+    if (navigation_epoch != GetNavigationEpoch(tab_id) ||
+        frame_signature != CaptureRefFrameSignature(wc)) {
       if (out_refs) {
         out_refs->clear();
       }
@@ -2953,6 +3313,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
     maho::MahoMcpAccessibilityHandler::RefTable local_refs;
     base::Value snapshot =
         maho::MahoMcpAccessibilityHandler::BuildSnapshot(tree, local_refs);
+    StoreRefSnapshotCache(wc, tab_id, navigation_epoch, frame_signature, tree,
+                          local_refs);
     if (out_refs) {
       out_refs->clear();
       for (const auto& pair : local_refs) {
@@ -2964,18 +3326,141 @@ std::string FormatMailActionDetails(const std::string& action_name,
       if (ref_snapshot_guards_.size() == kMaxRefSnapshotGuards) {
         ref_snapshot_guards_.erase(ref_snapshot_guards_.begin());
       }
-      ref_snapshot_guards_[token] = {McpSessionIdOf(wc), navigation_epoch};
+      ref_snapshot_guards_[token] = {McpSessionIdOf(wc), navigation_epoch,
+                                      frame_signature};
       *out_snapshot_token = token;
     }
     return snapshot;
   }
 
+  AccessibilitySnapshotV2Result GetAccessibilitySnapshotV2(
+      const AccessibilitySnapshotV2Params& params,
+      maho::MahoMcpSession::RefTable* out_refs,
+      maho::MahoMcpAccessibilityHandler::ObservationCache& observation_cache,
+      uint64_t token_sequence) override {
+    AccessibilitySnapshotV2Result result;
+    const int tab_id = params.tab_id;
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      result.snapshot_token = "s_" + std::to_string(tab_id) + "_" +
+                              std::to_string(token_sequence);
+      result.tab.id = tab_id;
+      result.tree = "WebArea\n";
+      result.bytes = result.tree.size();
+      return result;
+    }
+
+    maho::MahoMcpNavigationTracker::CreateForWebContents(wc);
+    const uint64_t navigation_epoch = GetNavigationEpoch(tab_id);
+    const RefFrameSignature frame_signature = CaptureRefFrameSignature(wc);
+    std::string frame_sig_str;
+    for (const auto& entry : frame_signature) {
+      if (!frame_sig_str.empty()) {
+        frame_sig_str += ",";
+      }
+      frame_sig_str += std::to_string(entry.first.child_id.value()) + ":" +
+                       std::to_string(entry.first.frame_routing_id) +
+                       ":" + entry.second;
+    }
+
+    base::TimeTicks t0 = base::TimeTicks::Now();
+    ui::AXTreeUpdate update = SnapshotAXTree(wc);
+    base::TimeTicks t1 = base::TimeTicks::Now();
+    result.renderer_snapshot_ms = (t1 - t0).InMillisecondsF();
+
+    if (navigation_epoch != GetNavigationEpoch(tab_id) ||
+        frame_signature != CaptureRefFrameSignature(wc) ||
+        update.nodes.empty()) {
+      if (out_refs) {
+        out_refs->clear();
+      }
+      result.snapshot_token = "s_" + std::to_string(tab_id) + "_" +
+                              std::to_string(token_sequence);
+      result.tab.id = tab_id;
+      result.tab.url = wc->GetLastCommittedURL().spec();
+      result.tab.title = base::UTF16ToUTF8(wc->GetTitle());
+      result.tree = "WebArea\n";
+      result.bytes = result.tree.size();
+      return result;
+    }
+
+    NormalizeMcpSnapshotRoles(&update);
+    ui::AXTree tree;
+    if (!tree.Unserialize(update)) {
+      result.snapshot_token = "s_" + std::to_string(tab_id) + "_" +
+                              std::to_string(token_sequence);
+      result.tab.id = tab_id;
+      result.tab.url = wc->GetLastCommittedURL().spec();
+      result.tab.title = base::UTF16ToUTF8(wc->GetTitle());
+      result.tree = "WebArea\n";
+      result.bytes = result.tree.size();
+      return result;
+    }
+
+    maho::MahoMcpAccessibilityHandler::SnapshotV2Options opts;
+    if (params.mode == "compact") {
+      opts.mode =
+          maho::MahoMcpAccessibilityHandler::SnapshotMode::kCompact;
+    } else if (params.mode == "full") {
+      opts.mode = maho::MahoMcpAccessibilityHandler::SnapshotMode::kFull;
+    } else {
+      opts.mode =
+          maho::MahoMcpAccessibilityHandler::SnapshotMode::kInteractive;
+    }
+    opts.include_hidden = params.include_hidden;
+    opts.scope_selector = params.scope_selector;
+    opts.scope_ref = params.scope_ref;
+    opts.since_snapshot_token = params.since_snapshot_token;
+    opts.max_bytes = params.max_bytes;
+    opts.max_depth = params.max_depth;
+
+    maho::MahoMcpAccessibilityHandler::SnapshotV2Result::TabMetadata tab_meta;
+    tab_meta.id = (tab_id != 0) ? tab_id : 1;
+    tab_meta.url = wc->GetLastCommittedURL().spec();
+    tab_meta.title = base::UTF16ToUTF8(wc->GetTitle());
+
+    maho::MahoMcpAccessibilityHandler::RefTable local_refs;
+    base::TimeTicks t2 = base::TimeTicks::Now();
+    auto v2_res = maho::MahoMcpAccessibilityHandler::BuildSnapshotV2(
+        tree, opts, local_refs, tab_meta, navigation_epoch, frame_sig_str,
+        observation_cache, token_sequence);
+    base::TimeTicks t3 = base::TimeTicks::Now();
+    result.ax_serialize_ms = (t3 - t2).InMillisecondsF();
+
+    StoreRefSnapshotCache(wc, tab_id, navigation_epoch, frame_signature, tree,
+                          local_refs);
+    if (out_refs) {
+      out_refs->clear();
+      for (const auto& pair : local_refs) {
+        out_refs->emplace(pair.first, pair.second);
+      }
+    }
+
+    result.snapshot_token = v2_res.snapshot_token;
+    result.tab.id = tab_meta.id;
+    result.tab.url = tab_meta.url;
+    result.tab.title = tab_meta.title;
+    result.tree = std::move(v2_res.tree);
+    result.diff = std::move(v2_res.diff);
+    result.captured_nodes = v2_res.stats.captured_nodes;
+    result.serialized_nodes = v2_res.stats.serialized_nodes;
+    result.bytes = v2_res.stats.bytes;
+    result.truncated = v2_res.stats.truncated;
+    return result;
+  }
+
   bool RevalidateRefSnapshot(const maho::ResolvedMahoMcpTarget& target,
                              uint64_t snapshot_token) override {
     auto guard = ref_snapshot_guards_.find(snapshot_token);
-    return guard != ref_snapshot_guards_.end() && target.valid &&
-           target.tab_id == guard->second.tab_id &&
-           GetNavigationEpoch(target.tab_id) == guard->second.navigation_epoch;
+    if (guard == ref_snapshot_guards_.end() || !target.valid ||
+        target.tab_id != guard->second.tab_id ||
+        GetNavigationEpoch(target.tab_id) != guard->second.navigation_epoch) {
+      return false;
+    }
+    content::WebContents* wc = GetWebContentsForTabId(target.tab_id);
+    return wc &&
+           CaptureRefFrameSignature(wc) == guard->second.frame_signature;
   }
 
   uint64_t GetNavigationEpoch(int tab_id) {
@@ -3217,6 +3702,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                   (id == 0) ? delegate->GetActiveWebContents()
                             : delegate->GetWebContentsForTabId(id);
               if (wc) {
+                delegate->InvalidateCachedRefSnapshot(id, wc);
                 maho::MahoMcpInputSynthesizer::Scroll(wc, dir, px, ax);
               }
             },
@@ -3255,16 +3741,55 @@ std::string FormatMailActionDetails(const std::string& action_name,
       return;
     }
 
-    ui::AXTreeUpdate update = SnapshotAXTree(wc);
-    const ui::AXNodeData* target_node = nullptr;
-    for (const ui::AXNodeData& node : update.nodes) {
-      if (node.id == ax_id) {
-        target_node = &node;
-        break;
+    bool target_found = false;
+    ax::mojom::Role target_role = ax::mojom::Role::kUnknown;
+    bool target_has_checked_state = false;
+    ax::mojom::CheckedState target_checked_state =
+        ax::mojom::CheckedState::kNone;
+    std::string target_name;
+    std::optional<gfx::PointF> center;
+
+    if (std::optional<CachedRefNode> cached =
+            GetCachedRefNode(wc, tab_id, ax_id)) {
+      target_found = true;
+      target_role = cached->role;
+      target_has_checked_state = cached->has_checked_state;
+      target_checked_state = cached->checked_state;
+      target_name = cached->accessible_name;
+      center = target_role == ax::mojom::Role::kCheckBox
+                   ? cached->leading_center
+                   : cached->center;
+    } else {
+      ui::AXTreeUpdate update = SnapshotAXTree(wc);
+      const ui::AXNodeData* target_node = nullptr;
+      for (const ui::AXNodeData& node : update.nodes) {
+        if (node.id == ax_id) {
+          target_node = &node;
+          break;
+        }
+      }
+      if (target_node) {
+        target_found = true;
+        target_role = target_node->role;
+        target_has_checked_state = target_node->HasCheckedState();
+        target_checked_state =
+            target_has_checked_state ? target_node->GetCheckedState()
+                                     : ax::mojom::CheckedState::kNone;
+        target_name = target_node->GetStringAttribute(
+            ax::mojom::StringAttribute::kName);
+        content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+        const float device_scale_factor =
+            view ? view->GetDeviceScaleFactor() : 1.f;
+        center = ComputeViewportCenterCss(
+            update, ax_id, device_scale_factor,
+            target_role == ax::mojom::Role::kCheckBox);
       }
     }
+    // Coordinates describe the exact layout captured with the RefTable. An
+    // input action can mutate layout, so consume this cache entry once.
+    InvalidateCachedRefSnapshot(tab_id, wc);
 
-    if (!target_node) {
+    if (!target_found) {
       maho::InputActionOutcome outcome;
       outcome.dispatched = false;
       outcome.reason = "node_gone";
@@ -3274,24 +3799,17 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
 
     const bool is_toggleable =
-        (target_node->role == ax::mojom::Role::kCheckBox ||
-         target_node->role == ax::mojom::Role::kRadioButton ||
-         target_node->role == ax::mojom::Role::kSwitch ||
-         target_node->role == ax::mojom::Role::kMenuItemCheckBox ||
-         target_node->role == ax::mojom::Role::kMenuItemRadio);
-    const bool is_checkbox = target_node->role == ax::mojom::Role::kCheckBox;
-    const bool is_radio = target_node->role == ax::mojom::Role::kRadioButton ||
-                          target_node->role == ax::mojom::Role::kMenuItemRadio;
+        target_role == ax::mojom::Role::kCheckBox ||
+        target_role == ax::mojom::Role::kRadioButton ||
+        target_role == ax::mojom::Role::kSwitch ||
+        target_role == ax::mojom::Role::kMenuItemCheckBox ||
+        target_role == ax::mojom::Role::kMenuItemRadio;
+    const bool is_radio =
+        target_role == ax::mojom::Role::kRadioButton ||
+        target_role == ax::mojom::Role::kMenuItemRadio;
     const ax::mojom::CheckedState pre_checked =
-        target_node->HasCheckedState() ? target_node->GetCheckedState()
-                                       : ax::mojom::CheckedState::kNone;
-
-    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
-    const float device_scale_factor =
-        view ? view->GetDeviceScaleFactor() : 1.f;
-    std::optional<gfx::PointF> center =
-        ComputeViewportCenterCss(update, ax_id, device_scale_factor,
-                                 is_checkbox);
+        target_has_checked_state ? target_checked_state
+                                 : ax::mojom::CheckedState::kNone;
 
     bool clicked = false;
     std::string method = "trusted_input";
@@ -3304,10 +3822,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
 
     // Also trigger element.click() or checkbox toggle in DOM across all frames matching accessible name
-    if (target_node && target_node->HasStringAttribute(ax::mojom::StringAttribute::kName)) {
-      const std::string target_name =
-          target_node->GetStringAttribute(ax::mojom::StringAttribute::kName);
-      if (!target_name.empty()) {
+    if (!target_name.empty()) {
         const std::string js_script =
             "(()=>{const target = " + base::GetQuotedJSONString(target_name) + ".trim().toLowerCase();"
             "const chks = Array.from(document.querySelectorAll('input[type=checkbox], input[type=radio]'));"
@@ -3353,7 +3868,6 @@ std::string FormatMailActionDetails(const std::string& action_name,
         if (res == "clicked" || res == "toggled") {
           clicked = true;
         }
-      }
     }
 
     // Also perform semantic DOM default action across frames to guarantee click
@@ -3508,9 +4022,17 @@ std::string FormatMailActionDetails(const std::string& action_name,
     const float device_scale_factor =
         view ? view->GetDeviceScaleFactor() : 1.f;
 
-    ui::AXTreeUpdate update = SnapshotAXTree(wc);
-    std::optional<gfx::PointF> center =
-        ComputeViewportCenterCss(update, ax_id, device_scale_factor);
+    std::optional<gfx::PointF> center;
+    if (std::optional<CachedRefNode> cached =
+            GetCachedRefNode(wc, tab_id, ax_id)) {
+      center = cached->center;
+    } else {
+      ui::AXTreeUpdate update = SnapshotAXTree(wc);
+      center = ComputeViewportCenterCss(update, ax_id, device_scale_factor);
+    }
+    // Typing can synchronously reflow or validate the page; consume the point
+    // captured with the RefTable before dispatching input.
+    InvalidateCachedRefSnapshot(tab_id, wc);
 
     auto on_typed = base::BindOnce(
         [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
@@ -3851,6 +4373,15 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (!wc) {
       return meta;
     }
+    if (std::optional<CachedRefNode> cached =
+            GetCachedRefNode(wc, tab_id, ax_id)) {
+      meta.classified = true;
+      meta.is_protected = cached->is_protected;
+      meta.autocomplete = base::ToLowerASCII(cached->autocomplete);
+      meta.accessible_name = base::ToLowerASCII(cached->accessible_name);
+      return meta;
+    }
+
     ui::AXTreeUpdate update = SnapshotAXTree(wc);
     for (const ui::AXNodeData& node : update.nodes) {
       if (node.id != ax_id) {
@@ -3882,6 +4413,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                   (id == 0) ? delegate->GetActiveWebContents()
                             : delegate->GetWebContentsForTabId(id);
               if (wc) {
+                delegate->InvalidateCachedRefSnapshot(id, wc);
                 ui::AXTreeUpdate update = delegate->SnapshotAXTree(wc);
                 content::RenderWidgetHostView* view =
                     wc->GetRenderWidgetHostView();
@@ -3956,6 +4488,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                   (id == 0) ? delegate->GetActiveWebContents()
                             : delegate->GetWebContentsForTabId(id);
               if (wc) {
+                delegate->InvalidateCachedRefSnapshot(id, wc);
                 ui::AXTreeUpdate update = delegate->SnapshotAXTree(wc);
                 content::RenderWidgetHostView* view =
                     wc->GetRenderWidgetHostView();
@@ -4006,6 +4539,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                              (id == 0) ? delegate->GetActiveWebContents()
                                        : delegate->GetWebContentsForTabId(id);
                          if (wc) {
+                           delegate->InvalidateCachedRefSnapshot(id, wc);
                            wc->Focus();
                            if (wc->GetRenderWidgetHostView()) {
                              wc->GetRenderWidgetHostView()->Focus();
@@ -4057,6 +4591,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
                   (id == 0) ? delegate->GetActiveWebContents()
                             : delegate->GetWebContentsForTabId(id);
               if (wc) {
+                delegate->InvalidateCachedRefSnapshot(id, wc);
                 content::NavigationController::LoadURLParams params(nav_url);
                 params.transition_type = ui::PageTransitionFromInt(
                     ui::PAGE_TRANSITION_TYPED |
@@ -4543,11 +5078,10 @@ std::string FormatMailActionDetails(const std::string& action_name,
   base::OneShotTimer vault_credential_expiry_timer_;
   std::set<std::pair<std::string, std::string>>
       pending_agent_credential_authorizations_;
-  struct RefSnapshotGuard {
-    int tab_id = 0;
-    uint64_t navigation_epoch = 0;
-  };
+  static constexpr size_t kMaxAxSnapshotNodes = 12000;
+  static constexpr size_t kMaxCachedRefSnapshots = 8;
   static constexpr size_t kMaxRefSnapshotGuards = 64;
+  std::map<int, CachedRefSnapshot> ref_snapshot_cache_;
   uint64_t next_ref_snapshot_token_ = 0;
   std::map<uint64_t, RefSnapshotGuard> ref_snapshot_guards_;
   static constexpr size_t kMaxResolvedTargets = 1024;

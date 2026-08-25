@@ -13,6 +13,7 @@
 pub mod refactor;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -22,8 +23,59 @@ use maho_browser_mcp::paths::default_socket_path;
 use maho_browser_mcp::protocol::ControllerKind;
 use serde_json::Value;
 
-/// Default timeout for MCP tool calls from the CLI.
-const CLI_TIMEOUT: Duration = Duration::from_secs(15);
+/// Default timeout for cheap MCP RPCs from the CLI.
+const CLI_DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Accessibility snapshots and input actions may legitimately wait on renderer
+/// work; keep a wider safety window without making cheap verbs sluggish.
+const CLI_SLOW_TOOL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Zero means no command-line override. `maho browser --timeout <secs>` sets
+/// this once at process startup for every browser RPC made by that invocation.
+static CLI_TIMEOUT_OVERRIDE_SECS: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_timeout_override(timeout_secs: Option<u64>) -> Result<()> {
+    if timeout_secs == Some(0) {
+        bail!("--timeout must be greater than 0 seconds");
+    }
+    CLI_TIMEOUT_OVERRIDE_SECS.store(timeout_secs.unwrap_or(0), Ordering::Relaxed);
+    Ok(())
+}
+
+fn timeout_override() -> Option<Duration> {
+    let seconds = CLI_TIMEOUT_OVERRIDE_SECS.load(Ordering::Relaxed);
+    (seconds != 0).then(|| Duration::from_secs(seconds))
+}
+
+fn default_tool_timeout(tool: &str) -> Duration {
+    if matches!(
+        tool,
+        "browser_accessibility_snapshot"
+            | "page.accessibility_snapshot_v2"
+            | "page_accessibility_snapshot_v2"
+            | "input.locator_click"
+            | "input.locator_type"
+            | "browser_type"
+            | "browser_click"
+            | "browser_key_press"
+            | "browser_select"
+            | "browser_screenshot_element"
+            | "browser_scroll"
+            | "browser_hover"
+            | "vault_fill_credential"
+            | "vault_fill_totp"
+    ) {
+        CLI_SLOW_TOOL_TIMEOUT
+    } else {
+        CLI_DEFAULT_TIMEOUT
+    }
+}
+
+fn tool_timeout(tool: &str) -> Duration {
+    timeout_override().unwrap_or_else(|| default_tool_timeout(tool))
+}
+
+fn connection_timeout() -> Duration {
+    timeout_override().unwrap_or(CLI_DEFAULT_TIMEOUT)
+}
 
 /// A browser connection for one CLI run. Owns the transport and enforces
 /// the capability sandbox lifecycle: grant origins before dispatch, acquire
@@ -142,7 +194,7 @@ async fn connect_as(
         None => default_socket_path(),
     };
 
-    BrowserClient::connect_as(&path, CLI_TIMEOUT, controller_kind)
+    BrowserClient::connect_as(&path, connection_timeout(), controller_kind)
         .await
         .map_err(|e| {
             // Provide a helpful message for the most common error case.
@@ -166,7 +218,7 @@ async fn connect_as(
 /// `no eligible active tab` by opening a tab, but only if it can still read
 /// that text. Wrapping the error in a generic "tools/call X failed" destroyed
 /// the signal and left the agent retrying navigation forever.
-fn describe_tool_call_failure(tool: &str, error: McpBridgeError) -> anyhow::Error {
+pub(crate) fn describe_tool_call_failure(tool: &str, error: McpBridgeError) -> anyhow::Error {
     match &error {
         maho_browser_mcp::error::McpBridgeError::Io(io_err) if is_io_transport_loss(io_err) => {
             anyhow::anyhow!(
@@ -204,6 +256,109 @@ pub fn is_transport_ambiguous(e: &anyhow::Error) -> bool {
     format!("{e}").contains("operation state unknown")
 }
 
+static V2_DETECTION_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, bool>>> =
+    std::sync::Mutex::new(None);
+
+fn connection_cache_key(
+    client: &BrowserClient,
+    session_info: Option<&maho_browser_mcp::protocol::SessionInfo>,
+) -> String {
+    if let Some(session) = session_info {
+        if !session.id.is_empty() {
+            return format!("{:p}_{}", client, session.id);
+        }
+    }
+    format!("{:p}", client)
+}
+
+/// Check if V2 browser-side locator capabilities are available on the connection.
+///
+/// Feature detection checks if V2 capabilities (`input.locator_click`, `input.locator_type`,
+/// or `page.accessibility_snapshot_v2`) are advertised in session info or the live catalog,
+/// caching the result per connection to keep semantic command RPCs minimal.
+pub async fn is_v2_available(client: &BrowserClient) -> bool {
+    let session = client.session_info().await;
+    let key = connection_cache_key(client, session.as_ref());
+
+    if let Ok(guard) = V2_DETECTION_CACHE.lock() {
+        if let Some(cache) = guard.as_ref() {
+            if let Some(&supported) = cache.get(&key) {
+                return supported;
+            }
+        }
+    }
+
+    if let Some(ref s) = session {
+        if s.id.contains("v2") || s.display_label.to_ascii_lowercase().contains("v2") {
+            cache_v2_detection(&key, true);
+            return true;
+        }
+    }
+
+    let is_v2 = match client
+        .call_with_timeout("tools/list", serde_json::json!({}), connection_timeout())
+        .await
+    {
+        Ok(discovery) => catalog_advertises_v2(&discovery),
+        Err(_) => false,
+    };
+
+    cache_v2_detection(&key, is_v2);
+    is_v2
+}
+
+fn cache_v2_detection(key: &str, supported: bool) {
+    if let Ok(mut guard) = V2_DETECTION_CACHE.lock() {
+        let cache = guard.get_or_insert_with(std::collections::HashMap::new);
+        cache.insert(key.to_string(), supported);
+    }
+}
+
+pub fn catalog_advertises_v2(discovery: &Value) -> bool {
+    if let Some(tools) = discovery.get("tools").and_then(Value::as_array) {
+        for tool in tools {
+            if let Some(cap_id) = tool.get("capabilityId").and_then(Value::as_str) {
+                if cap_id == "input.locator_click"
+                    || cap_id == "input.locator_type"
+                    || cap_id == "page.accessibility_snapshot_v2"
+                {
+                    return true;
+                }
+            }
+            if let Some(name) = tool.get("name").and_then(Value::as_str) {
+                if name == "input.locator_click"
+                    || name == "input.locator_type"
+                    || name == "page.accessibility_snapshot_v2"
+                    || name == "page_accessibility_snapshot_v2"
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    if let Some(surfaces) = discovery
+        .get("catalogDiagnostics")
+        .and_then(|d| d.get("surfaces"))
+        .and_then(Value::as_object)
+    {
+        for surface in surfaces.values() {
+            if let Some(ids) = surface.get("ids").and_then(Value::as_array) {
+                for id in ids {
+                    if let Some(id_str) = id.as_str() {
+                        if id_str == "input.locator_click"
+                            || id_str == "input.locator_type"
+                            || id_str == "page.accessibility_snapshot_v2"
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Call a control-plane capability on the connected browser via `maho/control/call`.
 pub async fn send_control_call(
     client: &BrowserClient,
@@ -215,7 +370,11 @@ pub async fn send_control_call(
         "arguments": args,
     });
     let result = client
-        .call_without_reconnect("maho/control/call", params)
+        .call_without_reconnect_with_timeout(
+            "maho/control/call",
+            params,
+            timeout_override().unwrap_or(CLI_DEFAULT_TIMEOUT),
+        )
         .await
         .map_err(|error| describe_tool_call_failure(capability, error))?;
     Ok(project_cli_result(result))
@@ -246,12 +405,13 @@ pub async fn send_routine_run(
     id: &str,
 ) -> std::result::Result<Value, RoutineCallError> {
     let result = client
-        .call(
+        .call_with_timeout(
             "tools/call",
             serde_json::json!({
                 "name": "browser_routines_run",
                 "arguments": {"id": id},
             }),
+            tool_timeout("browser_routines_run"),
         )
         .await
         .map_err(|error| match error {
@@ -289,10 +449,15 @@ async fn send_tool_call_with(
         "arguments": args,
     });
 
+    let timeout = tool_timeout(tool);
     let result = if reconnect {
-        client.call("tools/call", params).await
+        client
+            .call_with_timeout("tools/call", params, timeout)
+            .await
     } else {
-        client.call_without_reconnect("tools/call", params).await
+        client
+            .call_without_reconnect_with_timeout("tools/call", params, timeout)
+            .await
     }
     .map_err(|error| describe_tool_call_failure(tool, error))?;
 
@@ -464,6 +629,36 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn browser_tool_timeouts_keep_expensive_actions_wide_and_cheap_verbs_snappy() {
+        for tool in [
+            "browser_accessibility_snapshot",
+            "browser_type",
+            "browser_click",
+            "browser_key_press",
+            "browser_select",
+            "browser_screenshot_element",
+            "browser_scroll",
+            "browser_hover",
+            "vault_fill_credential",
+            "vault_fill_totp",
+        ] {
+            assert_eq!(
+                default_tool_timeout(tool),
+                Duration::from_secs(60),
+                "{tool} should use the slow-tool safety window"
+            );
+        }
+        assert_eq!(
+            default_tool_timeout("browser_tab_list"),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            default_tool_timeout("browser_history_search"),
+            Duration::from_secs(15)
+        );
+    }
 
     #[test]
     fn parse_duration_days() {
