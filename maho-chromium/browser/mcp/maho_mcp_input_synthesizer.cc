@@ -649,7 +649,14 @@ class AsyncClickSession {
   }
 
   void AdvancePointer() {
-    if (!weak_factory_.HasWeakPtrs()) return;
+    // Deliberately no weak_factory_.HasWeakPtrs() guard here. Start() invokes
+    // AdvancePointer() directly before any weak pointer has been handed out,
+    // so such a guard always early-returned: no mouse events were forwarded,
+    // Finish() never ran, and the completion callback never fired, hanging
+    // async click/type callers until they timed out. Lifetime safety is
+    // already provided by binding every continuation below through
+    // weak_factory_.GetWeakPtr() - pending steps are dropped if this session
+    // is destroyed.
     if (index_ >= waypoints_.size()) {
       PostDelayed(
           base::Milliseconds(
