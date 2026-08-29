@@ -261,17 +261,27 @@ maho-release-cli promote-channel \
 
 ## 6. Linux Package Manager Guidance
 
-Linux updates are delivered through the system package manager, not Sparkle.
-The update delegate for Linux (`maho_update_delegate_linux.cc`) handles
-notification-only behavior; the system handles actual delivery.
+Linux updates are never applied by Maho itself, and Sparkle is not involved.
+The Linux delegate (`maho_update_delegate_linux.cc`) is notification-only: it
+verifies the signed manifest, compares versions, and raises a banner. Delivery
+is the package manager's job on deb/rpm, and the user's job on the tarball.
 
 ### In-app banner
 
 When an update is available on Linux, Maho displays an in-app notification
-banner (not a Sparkle-style modal).  The banner text:
+banner (not a Sparkle-style modal).  Which banner depends on how the running
+build was installed — the delegate classifies the executable directory at
+runtime, so both texts come from the same binary.
 
-> "A new version of Maho is available. Update using your package manager:
-> `sudo apt update && sudo apt upgrade maho`"
+Package install (`/usr/lib/maho`, `/usr/lib64/maho`, `/opt/maho`):
+
+> "A newer version of Maho is available. Install it with your system package
+> manager (sudo apt upgrade maho, or sudo dnf upgrade maho)."
+
+Tarball install (anywhere else):
+
+> "A newer version of Maho is available. Download the latest Linux archive from
+> https://mahobrowser.com/download/ and replace this installation."
 
 ### APT / dpkg
 
@@ -295,17 +305,15 @@ sudo dnf config-manager --add-repo https://packages.maho.app/rpm/maho.repo
 sudo dnf upgrade maho
 ```
 
-### Flatpak
+### Tarball (.tar.gz)
 
-```bash
-# Flatpak updates happen via Flathub or the Maho Flatpak remote:
-flatpak update com.maho.Browser
-```
+A tarball install has no package manager behind it, so the banner sends the
+user to https://mahobrowser.com/download/ to fetch the new archive and replace
+the extracted directory. Maho does not overwrite its own installation
+directory.
 
-### AppImage
-
-AppImage users self-update by downloading the new AppImage from the releases
-page.  The in-app banner links directly to the download URL.
+> Maho ships no Flatpak or AppImage build. `--format` accepts only `tarball`,
+> `deb`, and `rpm`, so there is no rollout lane for those formats.
 
 ---
 

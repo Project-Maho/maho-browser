@@ -56,7 +56,7 @@ maho-chromium/
 | Browser-side MCP server | `browser/mcp/` |
 | Theme / colors | `browser/ui/theme/` — `maho_color_mixer.cc`, `maho_color_id.h` |
 | Ad blocking | `browser/net/maho_ad_block_throttle.cc` |
-| Auto-updates | `browser/updates/` — per-platform delegates (mac/win/linux) |
+| Auto-updates | `browser/updates/` — one delegate per platform: `maho_update_delegate_{mac.mm,win.cc,linux.cc}`, each platform-gated in `BUILD.gn` so exactly ONE `CreatePlatformUpdaterDelegate()` is compiled per build. (`maho_update_delegate_stub.cc` defines a fourth but belongs to no GN target — it is an orphan, never compiled.) **Linux is notification-only and never self-updates**: `linux_install_kind.cc` classifies the running executable's directory at runtime — `/usr/lib/maho`, `/usr/lib64/maho`, `/opt/maho` → system package, anything else → self-contained tarball — and the delegate shows package-manager guidance or a `https://mahobrowser.com/download/` link accordingly. Tests: `maho_updates_unittests`, runnable via the `maho_theme_io_test` binary. |
 | Sync bridge | `browser/sync/` |
 | Upstream patches | `chromium_src/` — Brave-style #define + #include |
 | Maho-core FFI bridge | `third_party/maho/maho_bridge.cc` + `maho_ffi.h` |
@@ -87,6 +87,8 @@ maho-chromium/
 - **Theme picker is permanently `chrome://maho-space-create`** — Do NOT migrate it to `maho_space_config`. Do NOT resurrect a native Views theme picker. Do NOT introduce a second production WebUI for theme selection. See `.sisyphus/plans/theme-picker-architecture-decision.md` (ADR, 2026-05-22) — this decision is permanent and supersedes all prior plans proposing migration.
 - **빌드 실패 시 GN 파일 강제 수정 금지** — `build_maho.py` 가 GN regen (`gn gen` / `Regenerating ninja files`) 단계 또는 그 이후 단계에서 실패하면 즉시 중단하고 사용자에게 보고. `BUILD.gn`, `chromium/src/chrome/test/BUILD.gn`, override 파일 등을 GN 통과를 위해 임의로 편집하지 말 것. unresolved deps / missing target 류 에러는 다른 세션 미완 작업·working tree dirty state 가 원인인 경우가 대부분이며, 임의 cleanup 은 추후 충돌과 데이터 손실을 부른다. **사용자 명시 승인 없이는 GN 편집 금지.**
 - **Clipboard-copy must confirm with a toast** — every "copy link/URL" surface (Cmd+Shift+C / command-palette `copy_url` and `copy_url_markdown`, and the Maho Mini copy button) must show the shared `MahoNotificationOverlay` "Link copied" toast via `ShowLinkCopiedToast()` in `browser/ui/views/command/maho_command_action_handler.cc`. A copy path that writes the clipboard without the toast is the regression that made Cmd+Shift+C copy silently while the Maho Mini button showed the toast.
+- **No per-package-format Linux update delegates** — Linux has exactly ONE delegate, `maho_update_delegate_linux.cc`. Do NOT reintroduce `_pkg` / `_noop` / `_flatpak` / `_appimage` variants, and do NOT add a GN flag that selects one. Install kind is a **runtime** property — the identical binary ships inside `.deb`, `.rpm`, and `.tar.gz` — so it is resolved by `DetectLinuxInstallKind()`, not at compile time. The bug this design replaced was a tarball delegate that reported `kUpToDate` unconditionally, hiding real updates; any Linux delegate must verify the signed manifest and compare versions before deciding.
+- **Linux update banners are guidance, not actions** — Maho must never overwrite its own Linux installation directory. The delegate raises a banner; delivery is the package manager's job on deb/rpm and the user's job on the tarball.
 
 ## WEBUI SURFACES (12)
 | Feature | URL | Mojom |

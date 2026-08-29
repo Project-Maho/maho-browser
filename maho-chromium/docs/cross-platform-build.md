@@ -70,12 +70,13 @@ The build scripts in this overlay assume that `maho/` and `maho-chromium/` live 
 
 | Platform | Compiled delegate | Status |
 |---|---|---|
-| macOS | `maho_update_delegate_stub.cc` | 🚨 **Stub compiled**; real Sparkle 2 `.mm` exists on disk but **not referenced by any BUILD.gn**. Comment: *"until the Sparkle-backed delegate is reintegrated"* |
+| macOS | `maho_update_delegate_mac.mm` | ✅ Sparkle 2 backed |
 | Windows | `maho_update_delegate_win.cc` (~14.8KB) | ✅ **Full WinRT implementation** with JSON manifest download, signature verification |
-| Linux (pkg) | `maho_update_delegate_linux_pkg.cc` | ✅ apt/dnf banner functional |
-| Linux (AppImage) | `maho_update_delegate_linux_appimage.cc` | 🟡 **DEFERRED** — banner only; TODO: `libappimageupdate` |
-| Linux (Flatpak) | `maho_update_delegate_linux_flatpak.cc` | ⚪ Stub — always `kUpToDate` |
-| Linux (noop) | `maho_update_delegate_linux_noop.cc` | ⚪ Stub |
+| Linux | `maho_update_delegate_linux.cc` | ✅ Signed-manifest check, one factory for all shipped formats. Dispatches on `linux_install_kind.cc`: an install under `/usr/lib/maho` (deb/rpm) gets the apt/dnf banner, any other directory (tar.gz) gets download guidance |
+
+`maho_update_delegate_stub.cc` still sits on disk and defines a fourth
+`CreatePlatformUpdaterDelegate()`, but is referenced by no `BUILD.gn` and is
+never compiled.
 
 ### Chromium source overrides
 
@@ -212,7 +213,7 @@ The script:
 - The Rust static library is emitted as `libmaho_ffi.a`.
 - `third_party/maho/BUILD.gn` links `dl`, `rt`, `pthread`, `m` on Linux.
 - The GN config template enables `use_sysroot = true` for Chromium-compatible builds.
-- **Update delegates**: `pkg` (apt/dnf banner) is functional; `appimage`, `flatpak`, and `noop` are stubs. The pkg delegate is sufficient for a Debian/Ubuntu/Fedora release.
+- **Update delegates**: Linux compiles exactly one delegate covering all three shipped formats — deb/rpm get the apt/dnf banner, tar.gz gets download guidance. The AppImage, Flatpak, and noop delegates were deleted; Maho ships none of those formats.
 - **Known gaps** (see completion plan):
   - Chromium cookie decryption (v10) requires libsecret/kwallet integration; currently returns `None` on non-mac.
 

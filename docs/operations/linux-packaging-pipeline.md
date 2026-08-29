@@ -31,8 +31,9 @@ The Linux packaging pipeline produces installable Maho Browser packages for majo
 | tarball | `tar` | pre-installed | pre-installed |
 | deb | `dpkg-deb`, `fakeroot` | `apt install dpkg-dev fakeroot` | N/A (use Ubuntu) |
 | rpm | `rpmbuild` | `apt install rpm` | `dnf install rpm-build` |
-| flatpak | `flatpak-builder` | — STUB, not yet usable — | — |
-| appimage | `appimagetool` | — STUB, not yet usable — | — |
+
+These three are the only formats `--format` accepts. Maho ships no Flatpak or
+AppImage build.
 
 ### Other Prerequisites
 
@@ -116,7 +117,9 @@ The executable names intentionally have separate contracts:
 - Simplest format — just `tar -czf` the built binary
 - Includes a Maho desktop entry, icon, and optional `maho-browser` launcher
   for per-user integration after extraction
-- Update mechanism: `maho_update_delegate_linux_noop.cc` — returns `kUpToDate` (user manages updates manually)
+- Update mechanism: `maho_update_delegate_linux.cc`, self-contained branch —
+  verifies the signed manifest and, when a newer version exists, points the user
+  at the download page. It never claims "up to date" for a stale install.
 - File naming: `maho-<version>-x86_64.tar.gz`
 - Release builds create and verify a detached armored signature:
   `maho-<version>-x86_64.tar.gz.sig`.
@@ -126,7 +129,8 @@ The executable names intentionally have separate contracts:
 - Generated `DEBIAN/control` file with minimal metadata
 - **Review the control file before publishing** — placeholders for Maintainer and Homepage
 - Depends: `libgtk-3-0, libdbus-1-3, libnss3, libatk1.0-0` (verify on target distro)
-- Update mechanism: `maho_update_delegate_linux_pkg.cc` — displays signed-envelope banner prompting user to `apt upgrade`
+- Update mechanism: `maho_update_delegate_linux.cc`, system-package branch —
+  displays a signed-envelope banner prompting the user to `apt upgrade`
 - File naming: `maho_<version>_amd64.deb`
 - Release builds create and verify `maho_<version>_amd64.deb.sig`.
 
@@ -135,23 +139,18 @@ The executable names intentionally have separate contracts:
 - Generated `.spec` file with minimal metadata
 - **Review the spec file before publishing** — placeholders for Packager and URL
 - Requires: `gtk3, dbus-libs, nss` (verify on target distro)
-- Update mechanism: `maho_update_delegate_linux_pkg.cc` — same signed-envelope banner as deb
+- Update mechanism: `maho_update_delegate_linux.cc`, system-package branch —
+  same signed-envelope banner as deb
 - File naming: `maho-<version>-1.x86_64.rpm`
 - Release builds create and verify `maho-<version>-1.x86_64.rpm.sig`.
 
-### Flatpak — STUB
+### Which delegate a package gets
 
-- **Status:** NOT IMPLEMENTED
-- C++ delegate: `maho-chromium/browser/updates/maho_update_delegate_linux_flatpak.cc` — returns `kUpToDate` unconditionally
-- Blocked on: libflatpak integration in the update delegate
-- Track in: P0-4 follow-up
-
-### AppImage — STUB
-
-- **Status:** NOT IMPLEMENTED
-- C++ delegate: `maho-chromium/browser/updates/maho_update_delegate_linux_appimage.cc` — has TODO comment for libappimageupdate
-- Blocked on: libappimageupdate integration in the update delegate
-- Track in: P0-4 follow-up
+There is one Linux delegate. It picks its branch at runtime from the executable
+directory (`linux_install_kind.cc`): a runtime under `/usr/lib/maho`,
+`/usr/lib64/maho`, or `/opt/maho` is a package install, anything else is a
+self-contained tarball install. Nothing is selected at build time, so the deb,
+rpm, and tarball all ship the same binary.
 
 ---
 
@@ -223,9 +222,10 @@ To submit Maho for Phoronix review:
 
 ## Known Limitations
 
-1. **Flatpak and AppImage delegates are stubs** — packages will build the Chromium binary correctly (the GN flag routes to the appropriate delegate), but the in-app update banner will always report "up to date" for these formats until the corresponding `.cc` delegate files are fully implemented:
-   - `maho-chromium/browser/updates/maho_update_delegate_linux_flatpak.cc`
-   - `maho-chromium/browser/updates/maho_update_delegate_linux_appimage.cc`
+1. **Updates are notification-only on every Linux format** — the delegate
+   verifies the manifest and raises a banner, but never downloads or applies a
+   payload. Package installs are upgraded by `apt`/`dnf`; tarball installs are
+   replaced by hand from the download page.
 
 2. **Release signing is mandatory** — `--release` fails if GPG is unavailable,
    signing fails, or the detached signature does not verify against the

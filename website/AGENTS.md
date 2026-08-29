@@ -57,7 +57,7 @@ All `PUBLIC_*` and site-config env vars are **baked into the static JS at build 
 | `PUBLIC_RELEASE_REPO_URL` | Base URL for Maho's release-only GitHub repository used by `/download` | `https://github.com/Project-Maho/release` | same |
 | `PUBLIC_RELEASE_URL_MACOS` | macOS download URL shown on `/download` | direct `.dmg` asset URL or release page | falls back to `${PUBLIC_RELEASE_REPO_URL}/releases/latest` |
 | `PUBLIC_RELEASE_URL_WINDOWS` | Windows download URL shown on `/download` | direct `.exe` / `.msi` asset URL or release page | falls back to `${PUBLIC_RELEASE_REPO_URL}/releases/latest` |
-| `PUBLIC_RELEASE_URL_LINUX` | Linux download URL shown on `/download` | direct `.AppImage` asset URL or release page | falls back to `${PUBLIC_RELEASE_REPO_URL}/releases/latest` |
+| `PUBLIC_RELEASE_URL_LINUX` | Linux download URL shown on `/download` | direct `.deb` / `.rpm` / `.tar.gz` asset URL or release page (no AppImage/Flatpak is built) | falls back to `${PUBLIC_RELEASE_REPO_URL}/releases/latest` |
 
 **IMPORTANT**: This project uses **Direct Upload** (no Git integration; Cloudflare does NOT build on their servers). Env vars set in the Cloudflare Dashboard are IGNORED for Direct Upload deploys. Values must be present in the LOCAL shell at build time.
 
