@@ -555,6 +555,79 @@ where
     }
 }
 
+fn build_v2_locator(selector: Option<&str>, object: &Map<String, Value>) -> Result<Value> {
+    if let Some(selector) = selector {
+        if let Some(reference) = selector.strip_prefix('@') {
+            let reference = reference
+                .parse::<i64>()
+                .map_err(|_| anyhow::anyhow!("invalid accessibility ref selector: {selector}"))?;
+            return Ok(json!({ "ref": reference }));
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(selector) {
+            if value.is_object()
+                && (value.get("ref").is_some()
+                    || value.get("css").is_some()
+                    || value.get("role").is_some())
+            {
+                return Ok(value);
+            }
+        }
+        return Ok(json!({ "css": selector }));
+    }
+
+    if let Some(reference) = object.get("ref").and_then(Value::as_i64) {
+        return Ok(json!({ "ref": reference }));
+    }
+
+    Ok(json!({ "css": ":focus" }))
+}
+
+async fn try_execute_v2_semantic_call(
+    client: &maho_browser_mcp::client::BrowserClient,
+    tool: &str,
+    requested_tab_id: Option<i64>,
+    selector: Option<&str>,
+    submit: bool,
+    object: &Map<String, Value>,
+) -> Result<Option<Value>> {
+    let capability_id = match tool {
+        "browser_click" | "input.click" => "input.locator_click",
+        "browser_type" | "input.type" => "input.locator_type",
+        _ => return Ok(None),
+    };
+
+    let locator = build_v2_locator(selector, object)?;
+    let mut capability_args = json!({
+        "locator": locator,
+        "lease": "scoped",
+    });
+
+    if let Some(tab_id) = requested_tab_id {
+        capability_args["tab_id"] = Value::Number(tab_id.into());
+    }
+    if capability_id == "input.locator_type" {
+        if let Some(text) = object.get("text") {
+            capability_args["text"] = text.clone();
+        }
+        if submit {
+            capability_args["submit"] = Value::Bool(true);
+        }
+    }
+    if let Some(wait) = object.get("wait") {
+        capability_args["wait"] = wait.clone();
+    }
+    if let Some(observe) = object.get("observe") {
+        capability_args["observe"] = observe.clone();
+    }
+
+    let raw = client
+        .call_capability(capability_id, capability_args)
+        .await
+        .map_err(|err| super::describe_tool_call_failure(capability_id, err))?;
+
+    Ok(Some(super::project_cli_result(raw)))
+}
+
 pub(super) async fn execute_semantic_call(
     client: &maho_browser_mcp::client::BrowserClient,
     tool: &str,
@@ -594,6 +667,22 @@ pub(super) async fn execute_semantic_call(
         )
     {
         bail!("semantic selector is not valid for tool '{tool}'");
+    }
+
+    // Direct browser-side V2 locator path when advertised
+    if super::is_v2_available(client).await {
+        if let Some(v2_result) = try_execute_v2_semantic_call(
+            client,
+            tool,
+            requested_tab_id,
+            selector.as_deref(),
+            submit,
+            object,
+        )
+        .await?
+        {
+            return Ok(v2_result);
+        }
     }
 
     // Pin the action to one concrete tab before acquiring the lease. This is the

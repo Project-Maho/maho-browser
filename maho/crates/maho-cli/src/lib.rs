@@ -1,7 +1,7 @@
 pub mod browser;
+pub mod browser_pipe;
 pub mod config;
 pub mod credits;
-pub mod session_artifact;
 pub mod vault;
 pub mod workspace;
 

@@ -94,6 +94,11 @@ class MahoMcpLeaseRegistry {
   // |tab_id|.
   bool IsHeldBy(int64_t tab_id, const std::string& session_id);
 
+  // Predicate used by browser-side seams (e.g. file-chooser suppression):
+  // returns true iff |tab_id| has a valid (not-expired) lease held by any
+  // session.
+  bool HasActiveLease(int64_t tab_id);
+
   // Test hooks.
   size_t active_lease_count();
   std::vector<AuditEntry> GetAuditLog() const;

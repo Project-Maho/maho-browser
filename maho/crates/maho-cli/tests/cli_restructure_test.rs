@@ -19,7 +19,6 @@ fn help_contains_all_command_groups() {
     // All visible top-level groups must appear in --help
     let expected_groups = [
         "auth",
-        "chat",
         "billing",
         "tab",
         "history",
@@ -72,10 +71,6 @@ fn help_contains_global_flags() {
     assert!(
         stdout.contains("--socket-path"),
         "--help should show --socket-path flag, got:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("--proxy-url"),
-        "--help should show --proxy-url flag, got:\n{stdout}"
     );
     assert!(
         stdout.contains("--relay-url"),
@@ -258,22 +253,17 @@ fn help_output_snapshot() {
         "help should contain 'Maho CLI', got:\n{stdout}"
     );
     assert!(
-        stdout.contains("browser control and AI from your terminal"),
+        stdout.contains("browser control from your terminal"),
         "help should contain updated about text, got:\n{stdout}"
     );
 
     // Verify command ordering (all groups present in order)
     let auth_pos = stdout.find("auth").expect("auth not found");
-    let chat_pos = stdout.find("chat").expect("chat not found");
     let billing_pos = stdout.find("billing").expect("billing not found");
 
     assert!(
-        auth_pos < chat_pos,
-        "auth should appear before chat in help"
-    );
-    assert!(
-        chat_pos < billing_pos,
-        "chat should appear before billing in help"
+        auth_pos < billing_pos,
+        "auth should appear before billing in help"
     );
 }
 

@@ -27,7 +27,7 @@ pub fn open_storage(
         let mut status = 0;
         if maho_core::oscrypt::derive_key(&key_path.to_string_lossy(), &mut key_bytes, &mut status)
         {
-            let hex_key: String = key_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+            let hex_key: String = key_bytes.iter().map(|b| format!("{:02X}", b)).collect();
             let _ = maho_storage::sqlite::set_sqlcipher_key(&hex_key);
         }
     }
@@ -206,5 +206,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res, "ws-1");
+    }
+
+    #[test]
+    fn sqlcipher_key_formatter_uses_uppercase_hex() {
+        let sample_bytes: [u8; 16] = [
+            0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60, 0x71, 0x82, 0x93, 0xa4, 0xb5, 0xc6, 0xd7,
+            0xe8, 0xf9,
+        ];
+        let hex_key: String = sample_bytes
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect();
+        assert_eq!(hex_key, "0A1B2C3D4E5F60718293A4B5C6D7E8F9");
+        assert!(hex_key
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
     }
 }

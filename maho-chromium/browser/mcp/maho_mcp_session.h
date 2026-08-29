@@ -25,6 +25,7 @@
 #include "base/sequence_checker.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 #include "maho/browser/ai/maho_mail_tool_authorization.h"
+#include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
@@ -61,7 +62,9 @@ inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
 inline constexpr char kMahoMcpMessageNoEligibleActiveBrowser[] =
     "no eligible active browser";
 inline constexpr char kMahoMcpMessageStaleReference[] =
-    "accessibility snapshot target changed; capture a new snapshot";
+    "accessibility snapshot target changed; refs are session-scoped - capture "
+    "a new snapshot (browser_snapshot) in this session, then retry with the "
+    "new ref";
 inline constexpr char kMahoMcpMessageActionNotApplied[] =
     "action dispatched but not applied";
 
@@ -238,6 +241,7 @@ class MahoMcpSession {
     return controller_display_label_;
   }
   MahoMcpControllerKind controller_kind() const { return controller_kind_; }
+  bool autonomous() const { return autonomous_; }
 
   struct ConsoleMessage {
     ConsoleMessage();
@@ -287,6 +291,14 @@ class MahoMcpSession {
   RefTable& ref_table() { return ref_to_ax_id_; }
   const RefTable& ref_table() const { return ref_to_ax_id_; }
 
+  MahoMcpAccessibilityHandler::ObservationCache& observation_cache() {
+    return observation_cache_;
+  }
+  const MahoMcpAccessibilityHandler::ObservationCache& observation_cache()
+      const {
+    return observation_cache_;
+  }
+
  private:
   void HandleInitialize(const McpJsonRpcMessage& msg,
                         std::vector<std::string>& responses);
@@ -327,6 +339,7 @@ class MahoMcpSession {
   std::string peer_executable_;
   bool peer_is_trusted_maho_ = false;
   MahoMcpControllerKind controller_kind_ = MahoMcpControllerKind::kThirdParty;
+  bool autonomous_ = false;
   std::string controller_display_label_ = "External MCP";
   MahoMcpJsonRpc framer_;
 
@@ -337,6 +350,10 @@ class MahoMcpSession {
   RefTable ref_to_ax_id_;
   ResolvedMahoMcpTarget ref_table_target_;
   uint64_t ref_snapshot_token_ = 0;
+
+  // Observation cache for V2 snapshots.
+  MahoMcpAccessibilityHandler::ObservationCache observation_cache_;
+  uint64_t next_v2_snapshot_token_seq_ = 0;
 
   // Per-session network capture observer (Wave 4.4).
   std::unique_ptr<MahoMcpNetworkObserver> network_observer_;
@@ -400,6 +417,56 @@ class MahoMcpBrowserDelegate {
       int tab_id,
       MahoMcpSession::RefTable* out_refs,
       uint64_t* out_snapshot_token);
+
+  struct AccessibilitySnapshotV2Params {
+    AccessibilitySnapshotV2Params();
+    ~AccessibilitySnapshotV2Params();
+    AccessibilitySnapshotV2Params(const AccessibilitySnapshotV2Params&);
+    AccessibilitySnapshotV2Params(AccessibilitySnapshotV2Params&&) noexcept;
+    AccessibilitySnapshotV2Params& operator=(
+        const AccessibilitySnapshotV2Params&);
+    AccessibilitySnapshotV2Params& operator=(
+        AccessibilitySnapshotV2Params&&) noexcept;
+
+    int tab_id = 0;
+    std::string mode = "interactive";
+    bool include_hidden = false;
+    std::optional<std::string> scope_selector;
+    std::optional<int> scope_ref;
+    std::optional<std::string> since_snapshot_token;
+    size_t max_bytes = 24000;
+    std::optional<int> max_depth;
+  };
+
+  struct AccessibilitySnapshotV2Result {
+    AccessibilitySnapshotV2Result();
+    ~AccessibilitySnapshotV2Result();
+    AccessibilitySnapshotV2Result(const AccessibilitySnapshotV2Result&);
+    AccessibilitySnapshotV2Result(AccessibilitySnapshotV2Result&&) noexcept;
+    AccessibilitySnapshotV2Result& operator=(
+        const AccessibilitySnapshotV2Result&);
+    AccessibilitySnapshotV2Result& operator=(
+        AccessibilitySnapshotV2Result&&) noexcept;
+
+    std::string snapshot_token;
+    MahoMcpSession::TabInfo tab;
+    std::string tree;
+    std::optional<std::string> diff;
+    size_t captured_nodes = 0;
+    size_t serialized_nodes = 0;
+    size_t bytes = 0;
+    bool truncated = false;
+    std::optional<double> renderer_snapshot_ms;
+    std::optional<double> ax_serialize_ms;
+    std::optional<size_t> wire_bytes;
+    std::optional<double> total_ms;
+  };
+
+  virtual AccessibilitySnapshotV2Result GetAccessibilitySnapshotV2(
+      const AccessibilitySnapshotV2Params& params,
+      MahoMcpSession::RefTable* out_refs,
+      MahoMcpAccessibilityHandler::ObservationCache& observation_cache,
+      uint64_t token_sequence);
 
   struct PageContentResult {
     std::string text;
@@ -523,6 +590,45 @@ class MahoMcpBrowserDelegate {
       ui::AXNodeID ax_id,
       const std::string& text,
       base::OnceCallback<void(InputActionOutcome)> callback);
+  struct LocatorParams {
+    LocatorParams();
+    ~LocatorParams();
+    LocatorParams(const LocatorParams&);
+    LocatorParams& operator=(const LocatorParams&);
+    LocatorParams(LocatorParams&&) noexcept;
+    LocatorParams& operator=(LocatorParams&&) noexcept;
+
+    int tab_id = 0;
+    std::optional<int> ref;
+    std::optional<std::string> css;
+    std::optional<std::string> role;
+    std::optional<std::string> name;
+    bool exact = true;
+  };
+
+  struct LocatorResolution {
+    LocatorResolution();
+    ~LocatorResolution();
+    LocatorResolution(const LocatorResolution&);
+    LocatorResolution& operator=(const LocatorResolution&);
+    LocatorResolution(LocatorResolution&&) noexcept;
+    LocatorResolution& operator=(LocatorResolution&&) noexcept;
+
+    bool success = false;
+    ui::AXNodeID ax_id = 0;
+    std::string error_code;  // locator_not_found, locator_ambiguous,
+                             // locator_not_actionable, locator_obscured,
+                             // locator_detached, locator_stale
+    int matches = 0;
+    std::string hint;
+  };
+
+  virtual LocatorResolution ResolveLocator(
+      int tab_id,
+      const LocatorParams& params,
+      const MahoMcpSession::RefTable& refs);
+  virtual bool WaitForAutoQuiet(int tab_id, int timeout_ms);
+
   virtual bool RequiresDeferredVerifiedInputResponses() const;
   virtual bool Select(int tab_id,
                       ui::AXNodeID ax_id,
@@ -669,6 +775,9 @@ class MahoMcpBrowserDelegate {
   virtual ai::MailAuthorizationContext GetMailAuthorizationContext();
   virtual bool ConfirmMailToolApproval(std::string_view tool_name,
                                        std::string_view redacted_arguments);
+  virtual bool ConfirmCredentialTypingApproval(
+      std::string_view tool_name,
+      const ResolvedMahoMcpTarget& target);
   virtual bool ConfirmBrowserActionApproval(
       std::string_view tool_name,
       const ResolvedMahoMcpTarget& target);

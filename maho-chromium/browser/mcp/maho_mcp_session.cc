@@ -102,6 +102,57 @@ base::Value MahoMcpBrowserDelegate::GetAccessibilitySnapshot(
   return GetAccessibilitySnapshot(tab_id, out_refs);
 }
 
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params::
+    AccessibilitySnapshotV2Params() = default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params::
+    ~AccessibilitySnapshotV2Params() = default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params::
+    AccessibilitySnapshotV2Params(const AccessibilitySnapshotV2Params&) =
+        default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params::
+    AccessibilitySnapshotV2Params(AccessibilitySnapshotV2Params&&) noexcept =
+        default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params&
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params::operator=(
+    const AccessibilitySnapshotV2Params&) = default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params&
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params::operator=(
+    AccessibilitySnapshotV2Params&&) noexcept = default;
+
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
+    AccessibilitySnapshotV2Result() = default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
+    ~AccessibilitySnapshotV2Result() = default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
+    AccessibilitySnapshotV2Result(const AccessibilitySnapshotV2Result&) =
+        default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
+    AccessibilitySnapshotV2Result(AccessibilitySnapshotV2Result&&) noexcept =
+        default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result&
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::operator=(
+    const AccessibilitySnapshotV2Result&) = default;
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result&
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::operator=(
+    AccessibilitySnapshotV2Result&&) noexcept = default;
+
+MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result
+MahoMcpBrowserDelegate::GetAccessibilitySnapshotV2(
+    const AccessibilitySnapshotV2Params& params,
+    MahoMcpSession::RefTable* out_refs,
+    MahoMcpAccessibilityHandler::ObservationCache& observation_cache,
+    uint64_t token_sequence) {
+  AccessibilitySnapshotV2Result result;
+  result.snapshot_token = "s_" + std::to_string(params.tab_id) + "_" +
+                          std::to_string(token_sequence);
+  result.tab.id = params.tab_id;
+  result.tab.url = "https://example.com/";
+  result.tab.title = "Page";
+  result.tree = "WebArea\n";
+  result.bytes = result.tree.size();
+  return result;
+}
+
 class MahoMcpControllerState
     : public base::RefCountedThreadSafe<MahoMcpControllerState> {
  public:
@@ -396,6 +447,19 @@ std::optional<base::Value> CloneMessageId(
   return id->Clone();
 }
 
+std::string BuildLeaseContentionErrorLine(
+    std::optional<base::Value> id,
+    int tab_id,
+    const MahoMcpLeaseRegistry::AcquireResult& result) {
+  DCHECK(!result.ok);
+  DCHECK(!result.previous_holder.empty());
+  base::DictValue data;
+  data.Set("previous_holder", result.previous_holder);
+  data.Set("tab_id", tab_id);
+  return BuildJsonRpcErrorLine(std::move(id), -32000, result.message,
+                               base::Value(std::move(data)));
+}
+
 std::string BuildRevokedControllerErrorLine(std::string_view line) {
   std::optional<base::DictValue> response =
       base::JSONReader::ReadDict(line, base::JSON_PARSE_RFC);
@@ -659,6 +723,16 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "page_wait_for_selector",
       "browser_same_origin_fetch",
       "browser_accessibility_snapshot",
+      "page.accessibility_snapshot_v2",
+      "page_accessibility_snapshot_v2",
+      "browser_locator_click",
+      "input.locator_click",
+      "input_locator_click",
+      "browser_locator_type",
+      "input.locator_type",
+      "input_locator_type",
+      "browser_act_and_observe",
+      "browser.act_and_observe",
       "browser_click",
       "browser_type",
       "browser_file_upload_select",
@@ -724,6 +798,14 @@ base::DictValue SerializeTabInfo(const MahoMcpSession::TabInfo& tab_info) {
 // are intentionally excluded so they remain available without a lease.
 bool IsLeaseGatedMutation(std::string_view tool_name) {
   return tool_name == "browser_click" || tool_name == "browser_type" ||
+         tool_name == "browser_locator_click" ||
+         tool_name == "input.locator_click" ||
+         tool_name == "input_locator_click" ||
+         tool_name == "browser_locator_type" ||
+         tool_name == "input.locator_type" ||
+         tool_name == "input_locator_type" ||
+         tool_name == "browser_act_and_observe" ||
+         tool_name == "browser.act_and_observe" ||
          tool_name == "browser_file_upload_select" ||
          tool_name == "browser_select" || tool_name == "browser_scroll" ||
          tool_name == "browser_key_press" || tool_name == "browser_navigate" ||
@@ -738,6 +820,8 @@ bool IsSensitiveReadTool(std::string_view tool_name) {
          tool_name == "browser_screenshot_full" ||
          tool_name == "browser_screenshot_element" ||
          tool_name == "browser_accessibility_snapshot" ||
+         tool_name == "page.accessibility_snapshot_v2" ||
+         tool_name == "page_accessibility_snapshot_v2" ||
          tool_name == "browser_console_messages" ||
          tool_name == "browser_network_get_har" ||
          tool_name == "browser_network_start_capture" ||
@@ -947,6 +1031,57 @@ void MahoMcpBrowserDelegate::TypeVerified(
   std::move(callback).Run(std::move(outcome));
 }
 
+MahoMcpBrowserDelegate::LocatorParams::LocatorParams() = default;
+MahoMcpBrowserDelegate::LocatorParams::~LocatorParams() = default;
+MahoMcpBrowserDelegate::LocatorParams::LocatorParams(
+    const LocatorParams&) = default;
+MahoMcpBrowserDelegate::LocatorParams&
+MahoMcpBrowserDelegate::LocatorParams::operator=(
+    const LocatorParams&) = default;
+MahoMcpBrowserDelegate::LocatorParams::LocatorParams(
+    LocatorParams&&) noexcept = default;
+MahoMcpBrowserDelegate::LocatorParams&
+MahoMcpBrowserDelegate::LocatorParams::operator=(
+    LocatorParams&&) noexcept = default;
+
+MahoMcpBrowserDelegate::LocatorResolution::LocatorResolution() = default;
+MahoMcpBrowserDelegate::LocatorResolution::~LocatorResolution() = default;
+MahoMcpBrowserDelegate::LocatorResolution::LocatorResolution(
+    const LocatorResolution&) = default;
+MahoMcpBrowserDelegate::LocatorResolution&
+MahoMcpBrowserDelegate::LocatorResolution::operator=(
+    const LocatorResolution&) = default;
+MahoMcpBrowserDelegate::LocatorResolution::LocatorResolution(
+    LocatorResolution&&) noexcept = default;
+MahoMcpBrowserDelegate::LocatorResolution&
+MahoMcpBrowserDelegate::LocatorResolution::operator=(
+    LocatorResolution&&) noexcept = default;
+
+MahoMcpBrowserDelegate::LocatorResolution MahoMcpBrowserDelegate::ResolveLocator(
+    int tab_id,
+    const LocatorParams& params,
+    const MahoMcpSession::RefTable& refs) {
+  LocatorResolution res;
+  if (params.ref.has_value()) {
+    auto it = refs.find(*params.ref);
+    if (it != refs.end()) {
+      res.success = true;
+      res.ax_id = it->second;
+      return res;
+    }
+    res.error_code = "locator_not_found";
+    res.hint = "Ref not found in session table";
+    return res;
+  }
+  res.error_code = "locator_not_found";
+  res.hint = "Locator not found";
+  return res;
+}
+
+bool MahoMcpBrowserDelegate::WaitForAutoQuiet(int tab_id, int timeout_ms) {
+  return true;
+}
+
 bool MahoMcpBrowserDelegate::RequiresDeferredVerifiedInputResponses() const {
   return false;
 }
@@ -1025,17 +1160,15 @@ bool MahoMcpSession::HandleAcquireLease(const McpJsonRpcMessage& msg,
     return true;
   }
   const int ttl_seconds = arguments->FindInt("ttl_seconds").value_or(60);
-  // ADR 0016: CLI/MCP acquisition is user-driven, so it always force-steals.
-  constexpr bool kForceStealAlwaysAcquire = true;
+  // ADR 0016 keeps user-driven acquisition force-stealing. Autonomous
+  // sessions explicitly opt into non-stealing admission instead.
+  const bool force_steal = !autonomous_;
   auto result = lease_registry_->Acquire(
       static_cast<int64_t>(target_tab_id), session_id_,
-      base::Seconds(ttl_seconds), kForceStealAlwaysAcquire);
+      base::Seconds(ttl_seconds), force_steal);
   if (!result.ok) {
-    base::DictValue data;
-    data.Set("previous_holder", result.previous_holder);
-    data.Set("tab_id", target_tab_id);
-    responses.push_back(
-        framer_.BuildErrorResponse(msg.id, -32000, result.message));
+    responses.push_back(BuildLeaseContentionErrorLine(
+        CloneMessageId(msg.id), target_tab_id, result));
     return true;
   }
   base::DictValue out;
@@ -1192,6 +1325,16 @@ void MahoMcpSession::HandleInitialize(const McpJsonRpcMessage& msg,
     return;
   }
 
+  if (const base::Value* autonomous_value = params.Find("autonomous");
+      autonomous_value && !autonomous_value->is_bool()) {
+    std::string err = framer_.BuildErrorResponse(
+        msg.id, -32602, "Invalid params: autonomous must be boolean");
+    responses.push_back(std::move(err));
+    state_ = State::kClosed;
+    return;
+  }
+  autonomous_ = params.FindBool("autonomous").value_or(false);
+
 #if BUILDFLAG(IS_WIN)
   // Validate DPAPI session token on Windows.
   if (session_token_) {
@@ -1231,6 +1374,9 @@ void MahoMcpSession::HandleInitialize(const McpJsonRpcMessage& msg,
           peer_executable_, peer_is_trusted_maho_);
   controller_kind_ = identity.kind;
   controller_display_label_ = identity.display_label;
+  if (controller_kind_ == MahoMcpControllerKind::kMahoCli && autonomous_) {
+    controller_display_label_ = "Maho Agent";
+  }
 
   base::DictValue server_info;
   server_info.Set("name", kServerName);
@@ -1248,6 +1394,7 @@ void MahoMcpSession::HandleInitialize(const McpJsonRpcMessage& msg,
   session_info.Set("id", session_id_);
   session_info.Set("displayLabel", controller_display_label_);
   session_info.Set("controllerKind", identity.wire_kind);
+  session_info.Set("autonomous", autonomous_);
 
   base::DictValue result;
   result.Set("serverInfo", std::move(server_info));
@@ -1617,7 +1764,11 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
                                        : active_tab_id_);
     if (!lease_registry_->IsHeldBy(static_cast<int64_t>(gate_tab_id),
                                    session_id_)) {
-      if (is_internal_cli) {
+      const std::string* lease_arg =
+          arguments ? arguments->FindString("lease") : nullptr;
+      if (lease_arg && *lease_arg == "scoped") {
+        // Scoped lease will be acquired and managed during action execution.
+      } else if (is_internal_cli && !autonomous_) {
         lease_registry_->Acquire(static_cast<int64_t>(gate_tab_id),
                                  session_id_, base::Seconds(60),
                                  /*force_steal=*/true);
@@ -1631,6 +1782,31 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
   }
 
   const ai::MailToolClass mail_tool_class = ai::ClassifyMailTool(*tool_name);
+
+  const bool credential_typing_requested =
+      *tool_name == "browser_type" && arguments &&
+      arguments->FindBool("allow_credentials").value_or(false);
+  const ai::CredentialTypingAuthorizationDecision credential_authorization =
+      ai::AuthorizeCredentialTyping(credential_typing_requested);
+  bool credential_typing_approval_satisfied = false;
+  if (credential_authorization.action ==
+      ai::CredentialTypingAuthorizationAction::kRequireApproval) {
+    if (!g_browser_delegate) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32008,
+          std::string(ai::kCredentialTypingApprovalRequired)));
+      return;
+    }
+    if (!g_browser_delegate->ConfirmCredentialTypingApproval(
+            *tool_name, last_resolved_target_)) {
+      *approval_outcome = "denied";
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32008, std::string(ai::kCredentialTypingDenied)));
+      return;
+    }
+    credential_typing_approval_satisfied = true;
+    *approval_outcome = "approved";
+  }
 
   if (g_browser_delegate && descriptor->changes_authority &&
       !descriptor->browser_action_contract &&
@@ -1648,7 +1824,8 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
   if (g_browser_delegate && descriptor->browser_action_contract &&
       ai::RequiresApproval(*descriptor->browser_action_contract)) {
-    if (!is_internal_cli && !g_browser_delegate->ConfirmBrowserActionApproval(
+    if (!is_internal_cli && !credential_typing_approval_satisfied &&
+        !g_browser_delegate->ConfirmBrowserActionApproval(
             *tool_name, last_resolved_target_)) {
       *approval_outcome = "denied";
       responses.push_back(framer_.BuildErrorResponse(
@@ -3237,6 +3414,138 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     return;
   }
 
+  if (*tool_name == "page.accessibility_snapshot_v2" ||
+      *tool_name == "page_accessibility_snapshot_v2") {
+    int tab_id = use_resolved_target
+                     ? resolved_tab_id
+                     : (arguments && arguments->FindInt("tab_id")
+                            ? arguments->FindInt("tab_id").value()
+                            : active_tab_id_);
+
+    MahoMcpAccessibilityHandler::SnapshotV2Options options;
+    if (arguments) {
+      if (const std::string* mode_str = arguments->FindString("mode")) {
+        if (*mode_str == "compact") {
+          options.mode =
+              MahoMcpAccessibilityHandler::SnapshotMode::kCompact;
+        } else if (*mode_str == "full") {
+          options.mode = MahoMcpAccessibilityHandler::SnapshotMode::kFull;
+        } else {
+          options.mode =
+              MahoMcpAccessibilityHandler::SnapshotMode::kInteractive;
+        }
+      }
+      if (std::optional<bool> hidden = arguments->FindBool("include_hidden")) {
+        options.include_hidden = *hidden;
+      }
+      if (const base::DictValue* scope = arguments->FindDict("scope")) {
+        if (const std::string* sel = scope->FindString("selector")) {
+          options.scope_selector = *sel;
+        }
+        if (std::optional<int> r = scope->FindInt("ref")) {
+          options.scope_ref = *r;
+        }
+      }
+      if (const std::string* since =
+              arguments->FindString("since_snapshot_token")) {
+        options.since_snapshot_token = *since;
+      }
+      if (std::optional<int> max_b = arguments->FindInt("max_bytes")) {
+        if (*max_b > 0) {
+          options.max_bytes = static_cast<size_t>(*max_b);
+        }
+      }
+      if (std::optional<int> depth = arguments->FindInt("max_depth")) {
+        options.max_depth = *depth;
+      }
+    }
+
+    base::TimeTicks start_time = base::TimeTicks::Now();
+    ref_to_ax_id_.clear();
+    ref_table_target_ = last_resolved_target_;
+    ref_snapshot_token_ = 0;
+
+    MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params v2_params;
+    v2_params.tab_id = tab_id;
+    v2_params.mode =
+        (options.mode == MahoMcpAccessibilityHandler::SnapshotMode::kCompact)
+            ? "compact"
+            : (options.mode ==
+               MahoMcpAccessibilityHandler::SnapshotMode::kFull)
+                  ? "full"
+                  : "interactive";
+    v2_params.include_hidden = options.include_hidden;
+    v2_params.scope_selector = options.scope_selector;
+    v2_params.scope_ref = options.scope_ref;
+    v2_params.since_snapshot_token = options.since_snapshot_token;
+    v2_params.max_bytes = options.max_bytes;
+    v2_params.max_depth = options.max_depth;
+
+    MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result v2_res;
+    if (g_browser_delegate) {
+      v2_res = g_browser_delegate->GetAccessibilitySnapshotV2(
+          v2_params, &ref_to_ax_id_, observation_cache_,
+          ++next_v2_snapshot_token_seq_);
+    } else {
+      v2_res.snapshot_token = "s_" + std::to_string(tab_id) + "_" +
+                              std::to_string(++next_v2_snapshot_token_seq_);
+      v2_res.tab.id = tab_id;
+      v2_res.tab.url = "about:blank";
+      v2_res.tab.title = "";
+      v2_res.tree = "WebArea\n";
+      v2_res.captured_nodes = 0;
+      v2_res.serialized_nodes = 0;
+      v2_res.bytes = v2_res.tree.size();
+      v2_res.truncated = false;
+    }
+
+    base::DictValue result;
+    result.Set("snapshot_token", v2_res.snapshot_token);
+
+    base::DictValue tab_dict;
+    tab_dict.Set("id", v2_res.tab.id != 0 ? v2_res.tab.id : tab_id);
+    tab_dict.Set("url", v2_res.tab.url);
+    tab_dict.Set("title", v2_res.tab.title);
+    result.Set("tab", std::move(tab_dict));
+
+    result.Set("tree", v2_res.tree);
+    if (v2_res.diff.has_value()) {
+      result.Set("diff", *v2_res.diff);
+    } else {
+      result.Set("diff", base::Value());
+    }
+
+    base::DictValue stats_dict;
+    stats_dict.Set("captured_nodes", static_cast<int>(v2_res.captured_nodes));
+    stats_dict.Set("serialized_nodes",
+                   static_cast<int>(v2_res.serialized_nodes));
+    stats_dict.Set("bytes", static_cast<int>(v2_res.bytes));
+    stats_dict.Set("truncated", v2_res.truncated);
+
+    const char* perf_env = getenv("MAHO_MCP_PERF_TRACE");
+    bool perf_trace_enabled =
+        perf_env && (std::string_view(perf_env) == "1" ||
+                     std::string_view(perf_env) == "true");
+    if (perf_trace_enabled) {
+      base::TimeDelta total_elapsed = base::TimeTicks::Now() - start_time;
+      double total_ms = total_elapsed.InMillisecondsF();
+      double renderer_ms = v2_res.renderer_snapshot_ms.value_or(0.0);
+      double serialize_ms =
+          v2_res.ax_serialize_ms.value_or(std::max(0.0, total_ms - renderer_ms));
+      stats_dict.Set("renderer_snapshot_ms", renderer_ms);
+      stats_dict.Set("ax_serialize_ms", serialize_ms);
+      stats_dict.Set("wire_bytes", static_cast<int>(v2_res.bytes));
+      stats_dict.Set("total_ms", total_ms);
+    }
+    result.Set("stats", std::move(stats_dict));
+
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
   if (*tool_name == "browser_accessibility_snapshot") {
     int tab_id = use_resolved_target
                      ? resolved_tab_id
@@ -3257,6 +3566,332 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       snapshot = base::Value(std::move(empty));
     }
     auto redacted = MahoMcpFirewall::Wrap(std::move(snapshot));
+    std::string resp =
+        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
+    responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_locator_click" ||
+      *tool_name == "input.locator_click" ||
+      *tool_name == "input_locator_click" ||
+      *tool_name == "browser_locator_type" ||
+      *tool_name == "input.locator_type" ||
+      *tool_name == "input_locator_type" ||
+      *tool_name == "browser_act_and_observe" ||
+      *tool_name == "browser.act_and_observe" ||
+      ((*tool_name == "browser_click" || *tool_name == "browser_type") &&
+       arguments &&
+       (arguments->FindDict("locator") || arguments->FindString("css") ||
+        (arguments->FindString("role") && arguments->FindString("name")) ||
+        arguments->FindDict("wait") || arguments->FindString("observe") ||
+        arguments->FindString("lease")))) {
+    const int tab_id = use_resolved_target
+                           ? resolved_tab_id
+                           : (arguments && arguments->FindInt("tab_id")
+                                  ? arguments->FindInt("tab_id").value()
+                                  : active_tab_id_);
+
+    const std::string* lease_arg =
+        arguments ? arguments->FindString("lease") : nullptr;
+    bool is_scoped_lease = (lease_arg && *lease_arg == "scoped");
+    bool acquired_scoped_lease = false;
+    if (is_scoped_lease && lease_registry_) {
+      if (!lease_registry_->IsHeldBy(static_cast<int64_t>(tab_id),
+                                     session_id_)) {
+        auto acq = lease_registry_->Acquire(
+            static_cast<int64_t>(tab_id), session_id_, base::Seconds(60),
+            /*force_steal=*/is_internal_cli && !autonomous_);
+        if (acq.ok) {
+          acquired_scoped_lease = true;
+        } else {
+          responses.push_back(BuildLeaseContentionErrorLine(
+              CloneMessageId(msg.id), tab_id, acq));
+          return;
+        }
+      }
+    }
+
+    auto cleanup_scoped_lease = [&]() {
+      if (acquired_scoped_lease && lease_registry_) {
+        lease_registry_->Release(static_cast<int64_t>(tab_id), session_id_);
+        acquired_scoped_lease = false;
+      }
+    };
+
+    std::string observe_mode = "none";
+    if (arguments) {
+      if (const std::string* obs = arguments->FindString("observe")) {
+        observe_mode = *obs;
+      } else if (const base::DictValue* obs_dict =
+                     arguments->FindDict("observe")) {
+        if (const std::string* m = obs_dict->FindString("mode")) {
+          observe_mode = *m;
+        }
+      }
+    }
+
+    std::string pre_action_token;
+    if (observe_mode == "diff") {
+      const auto* cached = observation_cache_.Find(tab_id, "");
+      if (cached) {
+        pre_action_token = cached->token;
+      } else {
+        MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params pre_params;
+        pre_params.tab_id = tab_id;
+        pre_params.mode = "interactive";
+        if (g_browser_delegate) {
+          auto pre_res = g_browser_delegate->GetAccessibilitySnapshotV2(
+              pre_params, &ref_to_ax_id_, observation_cache_,
+              ++next_v2_snapshot_token_seq_);
+          pre_action_token = pre_res.snapshot_token;
+        } else {
+          pre_action_token = "s_" + std::to_string(tab_id) + "_" +
+                             std::to_string(++next_v2_snapshot_token_seq_);
+        }
+      }
+    }
+
+    MahoMcpBrowserDelegate::LocatorParams locator_params;
+    locator_params.tab_id = tab_id;
+    const base::DictValue* loc_dict = nullptr;
+    if (arguments) {
+      loc_dict = arguments->FindDict("locator");
+      if (!loc_dict) {
+        if (const base::DictValue* act_dict = arguments->FindDict("action")) {
+          loc_dict = act_dict->FindDict("locator");
+        }
+      }
+    }
+
+    if (loc_dict) {
+      if (std::optional<int> r = loc_dict->FindInt("ref")) {
+        locator_params.ref = *r;
+      }
+      if (const std::string* c = loc_dict->FindString("css")) {
+        locator_params.css = *c;
+      }
+      if (const std::string* ro = loc_dict->FindString("role")) {
+        locator_params.role = *ro;
+      }
+      if (const std::string* na = loc_dict->FindString("name")) {
+        locator_params.name = *na;
+      }
+      if (std::optional<bool> ex = loc_dict->FindBool("exact")) {
+        locator_params.exact = *ex;
+      }
+    } else if (arguments) {
+      if (std::optional<int> r = arguments->FindInt("ref")) {
+        locator_params.ref = *r;
+      }
+      if (const std::string* c = arguments->FindString("css")) {
+        locator_params.css = *c;
+      }
+      if (const std::string* ro = arguments->FindString("role")) {
+        locator_params.role = *ro;
+      }
+      if (const std::string* na = arguments->FindString("name")) {
+        locator_params.name = *na;
+      }
+      if (std::optional<bool> ex = arguments->FindBool("exact")) {
+        locator_params.exact = *ex;
+      }
+    }
+
+    MahoMcpBrowserDelegate::LocatorResolution resolution;
+    if (g_browser_delegate) {
+      resolution = g_browser_delegate->ResolveLocator(tab_id, locator_params,
+                                                      ref_to_ax_id_);
+    } else {
+      resolution.error_code = "locator_not_found";
+      resolution.hint = "Browser delegate not available";
+    }
+
+    if (!resolution.success) {
+      cleanup_scoped_lease();
+      base::DictValue error_body;
+      error_body.Set("code", resolution.error_code);
+      if (resolution.matches > 0) {
+        error_body.Set("matches", resolution.matches);
+      }
+      if (!resolution.hint.empty()) {
+        error_body.Set("hint", resolution.hint);
+      }
+
+      base::DictValue data_body;
+      data_body.Set("code", resolution.error_code);
+      if (resolution.matches > 0) {
+        data_body.Set("matches", resolution.matches);
+      }
+      if (!resolution.hint.empty()) {
+        data_body.Set("hint", resolution.hint);
+      }
+      data_body.Set("error", error_body.Clone());
+
+      base::DictValue rpc_error;
+      rpc_error.Set("code", -32000);
+      rpc_error.Set("message", "Locator error: " + resolution.error_code);
+      rpc_error.Set("data", std::move(data_body));
+      rpc_error.Set("error", std::move(error_body));
+
+      base::DictValue response;
+      response.Set("id", msg.id ? msg.id->Clone() : base::Value());
+      response.Set("error", std::move(rpc_error));
+
+      std::string out;
+      base::JSONWriter::Write(base::Value(std::move(response)), &out);
+      out.push_back('\n');
+      responses.push_back(std::move(out));
+      return;
+    }
+
+    if (g_browser_delegate &&
+        !g_browser_delegate->RevalidateTarget(last_resolved_target_)) {
+      cleanup_scoped_lease();
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, kMahoMcpErrorTabNotFound, kMahoMcpMessageTabNotFound));
+      return;
+    }
+
+    bool is_type_action = (*tool_name == "browser_locator_type" ||
+                           *tool_name == "input.locator_type" ||
+                           *tool_name == "input_locator_type" ||
+                           *tool_name == "browser_type");
+    if (!is_type_action && arguments) {
+      if (const base::DictValue* act_dict = arguments->FindDict("action")) {
+        if (const std::string* kind = act_dict->FindString("kind")) {
+          if (*kind == "type") {
+            is_type_action = true;
+          }
+        }
+      }
+    }
+
+    std::string text_to_type;
+    if (is_type_action && arguments) {
+      if (const std::string* direct_text = arguments->FindString("text")) {
+        text_to_type = *direct_text;
+      } else if (const base::DictValue* act_dict =
+                     arguments->FindDict("action")) {
+        if (const std::string* act_text = act_dict->FindString("text")) {
+          text_to_type = *act_text;
+        }
+      }
+    }
+
+    InputActionOutcome outcome;
+    if (!g_browser_delegate) {
+      cleanup_scoped_lease();
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: delegate not available"));
+      return;
+    }
+
+    if (is_type_action) {
+      outcome.dispatched =
+          g_browser_delegate->Type(tab_id, resolution.ax_id, text_to_type);
+      outcome.verified = outcome.dispatched;
+      outcome.method = "trusted_input";
+    } else {
+      outcome.dispatched =
+          g_browser_delegate->Click(tab_id, resolution.ax_id);
+      outcome.verified = outcome.dispatched;
+      outcome.method = "trusted_input";
+    }
+
+    if (!outcome.dispatched) {
+      cleanup_scoped_lease();
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Action failed: dispatch failed"));
+      return;
+    }
+
+    std::string wait_mode = "none";
+    int timeout_ms = 10000;
+    std::string wait_selector;
+    if (arguments) {
+      if (const base::DictValue* wait_dict = arguments->FindDict("wait")) {
+        if (const std::string* m = wait_dict->FindString("mode")) {
+          wait_mode = *m;
+        } else {
+          wait_mode = "auto";
+        }
+        if (std::optional<int> t = wait_dict->FindInt("timeout_ms")) {
+          timeout_ms = *t;
+        }
+        if (const std::string* sel = wait_dict->FindString("selector")) {
+          wait_selector = *sel;
+        }
+      }
+    }
+
+    std::string wait_reason = "none";
+    int wait_elapsed_ms = 0;
+    if (wait_mode == "auto") {
+      base::TimeTicks wstart = base::TimeTicks::Now();
+      bool quiet = g_browser_delegate->WaitForAutoQuiet(tab_id, timeout_ms);
+      wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
+      wait_reason = quiet ? "auto_quiet" : "timeout";
+    } else if (wait_mode == "selector" && !wait_selector.empty()) {
+      base::TimeTicks wstart = base::TimeTicks::Now();
+      bool present =
+          g_browser_delegate->WaitForSelector(tab_id, wait_selector, timeout_ms);
+      wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
+      wait_reason = present ? "selector_present" : "timeout";
+    } else if (wait_mode == "navigation") {
+      base::TimeTicks wstart = base::TimeTicks::Now();
+      bool settled =
+          g_browser_delegate->WaitForAutoQuiet(tab_id, timeout_ms);
+      wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
+      wait_reason = settled ? "navigation_settled" : "timeout";
+    }
+
+    std::optional<std::string> post_snapshot_token;
+    std::optional<std::string> post_diff;
+    if (observe_mode == "diff") {
+      MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params post_params;
+      post_params.tab_id = tab_id;
+      post_params.mode = "interactive";
+      post_params.since_snapshot_token = pre_action_token;
+
+      auto post_res = g_browser_delegate->GetAccessibilitySnapshotV2(
+          post_params, &ref_to_ax_id_, observation_cache_,
+          ++next_v2_snapshot_token_seq_);
+      post_snapshot_token = post_res.snapshot_token;
+      post_diff = post_res.diff;
+    }
+
+    base::DictValue result;
+    base::DictValue action_dict;
+    action_dict.Set("dispatched", outcome.dispatched);
+    if (outcome.verified.has_value()) {
+      action_dict.Set("verified", *outcome.verified);
+    }
+    action_dict.Set("method",
+                    outcome.method.empty() ? "trusted_input" : outcome.method);
+    result.Set("action", std::move(action_dict));
+
+    if (wait_mode != "none" || (arguments && arguments->Find("wait"))) {
+      base::DictValue wait_dict;
+      wait_dict.Set("reason", wait_reason);
+      wait_dict.Set("elapsed_ms", wait_elapsed_ms);
+      result.Set("wait", std::move(wait_dict));
+    }
+
+    if (observe_mode == "diff") {
+      base::DictValue obs_dict;
+      obs_dict.Set("snapshot_token", post_snapshot_token.value_or(""));
+      if (post_diff.has_value()) {
+        obs_dict.Set("diff", *post_diff);
+      } else {
+        obs_dict.Set("diff", base::Value());
+      }
+      result.Set("observation", std::move(obs_dict));
+    }
+
+    cleanup_scoped_lease();
+
+    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
@@ -4152,6 +4787,12 @@ MahoMcpBrowserDelegate::GetMailAuthorizationContext() {
 bool MahoMcpBrowserDelegate::ConfirmMailToolApproval(
     std::string_view tool_name,
     std::string_view redacted_arguments) {
+  return false;
+}
+
+bool MahoMcpBrowserDelegate::ConfirmCredentialTypingApproval(
+    std::string_view tool_name,
+    const ResolvedMahoMcpTarget& target) {
   return false;
 }
 

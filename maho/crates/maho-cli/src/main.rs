@@ -1,33 +1,24 @@
 mod auth;
 mod browser;
-mod byok;
-mod chat;
 pub mod config;
 mod credits;
+mod platform;
 
 use maho_cli::browser_pipe;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use maho_agent::{
-    AgentError, AgentRuntime, AgentStorage, MutexAgentStorage, PermissionDecision, SecureKeyBundle,
-    SwiftideBackend, ZeroizedString,
-};
 use maho_cli::vault::{self, RecoveryUnlockResult};
-use maho_types::chat::ChatMessage;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use config::CliConfig;
 
-const DEFAULT_PROXY_URL: &str = "https://proxy.maho.co/v1";
 const DEFAULT_RELAY_URL: &str = "https://relay.maho.co";
 
 #[derive(Parser)]
 #[command(
     name = "maho",
     version,
-    about = "Maho CLI — browser control and AI from your terminal"
+    about = "Maho CLI — browser control from your terminal"
 )]
 pub struct Cli {
     /// Output structured JSON for all commands
@@ -42,49 +33,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub socket_path: Option<String>,
 
-    /// Override the billing proxy URL
-    #[arg(long, global = true, default_value = DEFAULT_PROXY_URL)]
-    pub proxy_url: String,
-
     /// Override the relay URL
     #[arg(long, global = true, default_value = DEFAULT_RELAY_URL)]
     pub relay_url: String,
 
-    /// Parse-only robots.txt consent carried into agent execution.
-    #[arg(skip)]
-    pub allow_robots_bypass: bool,
-
     #[command(subcommand)]
     pub command: Commands,
-}
-
-#[derive(Subcommand)]
-pub enum AgentSubcommands {
-    /// Run an autonomous AI agent session. Tool calls are auto-approved.
-    Run {
-        /// Prompt or command string
-        prompt: Option<String>,
-
-        /// Path to routine JSON or routine name
-        #[arg(long)]
-        routine: Option<String>,
-
-        /// LLM provider
-        #[arg(long)]
-        provider: Option<String>,
-
-        /// LLM model name override
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Target workspace ID
-        #[arg(long)]
-        workspace: Option<String>,
-
-        /// Continue an existing persisted session
-        #[arg(long)]
-        session: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]
@@ -93,20 +47,6 @@ pub enum Commands {
     Auth {
         #[command(subcommand)]
         command: AuthCommands,
-    },
-
-    /// Send a chat message
-    Chat {
-        /// The message to send
-        message: String,
-
-        /// Use BYOK (bring your own key) mode: provider name
-        #[arg(long, requires = "api_key")]
-        byok: Option<String>,
-
-        /// API key for BYOK mode
-        #[arg(long, requires = "byok")]
-        api_key: Option<String>,
     },
 
     /// Credit balance & purchases
@@ -182,105 +122,34 @@ pub enum Commands {
     /// Show version info
     Version,
 
-    /// Run an autonomous AI agent session. Tool calls are auto-approved.
-    Run {
-        /// The prompt to execute
-        prompt: String,
-
-        /// LLM provider (e.g. anthropic, gemini, claude)
-        #[arg(long)]
-        provider: Option<String>,
-
-        /// LLM model name override
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Workspace ID to target
-        #[arg(long)]
-        workspace: Option<String>,
-
-        /// Continue an existing persisted session
-        #[arg(long)]
-        session: Option<String>,
-    },
-
-    /// Run an autonomous AI agent session or routine. Tool calls are auto-approved.
-    Agent {
-        #[command(subcommand)]
-        subcommand: Option<AgentSubcommands>,
-
-        /// Prompt to execute
-        #[arg(short, long)]
-        prompt: Option<String>,
-
-        /// Path to routine JSON or routine name to execute
-        #[arg(long)]
-        routine: Option<String>,
-
-        /// LLM provider (e.g. anthropic, gemini, claude)
-        #[arg(long)]
-        provider: Option<String>,
-
-        /// LLM model name override
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Workspace ID to target
-        #[arg(long)]
-        workspace: Option<String>,
-
-        /// Continue an existing persisted session
-        #[arg(long)]
-        session: Option<String>,
-    },
-
     /// Tool execution and inspection
     Tool {
         #[command(subcommand)]
         command: ToolCommands,
     },
 
-    /// Continue and inspect agent sessions in shared storage
-    Session {
+    /// Platform contacts operations
+    Contacts {
         #[command(subcommand)]
-        command: SessionCommands,
+        command: ContactsCommands,
     },
 
-    /// List and export browser-owned session artifacts
-    Artifact {
+    /// Platform iMessage operations
+    Imessage {
         #[command(subcommand)]
-        command: ArtifactCommands,
+        command: ImessageCommands,
     },
 
-    /// Bounded deep-research mode (Max/PAYG). Runs a capped multi-step research
-    /// loop and prints a cited summary. BYOK-only from the CLI.
-    Research {
-        /// The research question
-        query: String,
+    /// Platform disk status
+    Disk {
+        #[command(subcommand)]
+        command: DiskCommands,
+    },
 
-        /// LLM provider (e.g. anthropic, gemini, openai); required for BYOK
-        #[arg(long)]
-        provider: Option<String>,
-
-        /// LLM model name override
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Maximum research steps (hard-capped at 20)
-        #[arg(long, default_value_t = 6)]
-        max_steps: u32,
-
-        /// Maximum estimated spend for the run, in USD
-        #[arg(long, default_value_t = 0.50)]
-        budget_usd: f64,
-
-        /// Maximum wall-clock time for the run, in seconds
-        #[arg(long, default_value_t = 120)]
-        timeout_secs: u64,
-
-        /// Workspace ID to target
-        #[arg(long)]
-        workspace: Option<String>,
+    /// Platform desktop input (keyboard/mouse) — requires --approve
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopCommands,
     },
 
     // ─── Deprecation shims (hidden) ───────────────────────────────────────
@@ -337,39 +206,6 @@ pub enum Commands {
         /// Suggested USD amount (10, 50, or 100); choose the final amount in checkout
         #[arg(long, value_parser = ["10", "50", "100"])]
         amount: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum SessionCommands {
-    /// List sessions in the shared desktop-agent store
-    List,
-    /// Resume an existing session by loading its persisted history
-    Resume {
-        /// Opaque session ID
-        session_id: String,
-    },
-    /// Show a session's persisted message history
-    History {
-        /// Opaque session ID
-        session_id: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum ArtifactCommands {
-    /// List artifacts, optionally scoped to one session
-    List {
-        #[arg(long)]
-        session: Option<String>,
-    },
-    /// Export an artifact to a validated destination
-    Export {
-        /// Opaque artifact ID
-        artifact_id: String,
-        /// Destination file path
-        #[arg(long)]
-        out: PathBuf,
     },
 }
 
@@ -881,6 +717,182 @@ pub enum ConfigAction {
     Show,
 }
 
+#[derive(Subcommand, Debug, Clone)]
+pub enum ContactsCommands {
+    /// Search contacts by query
+    Search {
+        /// Contact search query
+        query: String,
+    },
+    /// Resolve contact handles
+    Resolve {
+        /// Contact handles
+        handles: Vec<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ImessageCommands {
+    /// List iMessage chats
+    Chats {
+        /// Path to chat.db SQLite database
+        #[arg(long)]
+        db_path: Option<String>,
+    },
+    /// Retrieve message history for a chat
+    History {
+        /// Chat GUID
+        chat_guid: String,
+        /// Maximum number of messages to return
+        #[arg(long, default_value = "50")]
+        limit: u32,
+        /// Path to chat.db SQLite database
+        #[arg(long)]
+        db_path: Option<String>,
+    },
+    /// Search messages by query or sender
+    Search {
+        /// Search query text
+        query: Option<String>,
+        /// Filter by sender handle
+        #[arg(long)]
+        sender: Option<String>,
+        /// Path to chat.db SQLite database
+        #[arg(long)]
+        db_path: Option<String>,
+    },
+    /// Send an iMessage
+    Send {
+        /// Recipient handle
+        #[arg(long)]
+        to: String,
+        /// Message text
+        #[arg(long)]
+        text: String,
+        /// Chat GUID
+        #[arg(long)]
+        chat_guid: Option<String>,
+        /// Dry run: compose without sending
+        #[arg(long)]
+        dry_run: bool,
+        /// Approve send
+        #[arg(long)]
+        approve: bool,
+        /// Path to chat.db SQLite database
+        #[arg(long)]
+        db_path: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DiskCommands {
+    /// Check Full Disk Access status
+    Status,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DesktopCommands {
+    /// Report Accessibility (TCC) grant status without prompting
+    Status,
+
+    /// Capture the screen to an image file
+    Capture {
+        /// Optional path to save the captured image
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Perform OCR on a captured screen or image
+    Ocr {
+        /// Optional bounding box as "x,y,w,h"
+        #[arg(long)]
+        region: Option<String>,
+        /// Output all recognized text blocks instead of filtered summary
+        #[arg(long)]
+        full: bool,
+        /// Optional path to an image file to OCR
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Inspect accessibility elements of an application
+    Elements {
+        /// Target application: "frontmost" or numeric PID
+        #[arg(long)]
+        app: Option<String>,
+        /// Filter by element role (e.g. AXButton, AXTextField)
+        #[arg(long)]
+        role: Option<String>,
+        /// Optional path to write elements output
+        #[arg(long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Find text on screen or in an image and return coordinates
+    FindText {
+        /// Text to search for
+        #[arg(long)]
+        text: String,
+        /// Optional image path to search in (defaults to live screen)
+        #[arg(long)]
+        image: Option<std::path::PathBuf>,
+    },
+
+    /// Move the mouse cursor to absolute coordinates
+    Move {
+        #[arg(long)]
+        x: i32,
+        #[arg(long)]
+        y: i32,
+        #[arg(long)]
+        approve: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Click a mouse button
+    Click {
+        #[arg(long, default_value = "left")]
+        button: String,
+        #[arg(long)]
+        approve: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Scroll by (dx, dy)
+    Scroll {
+        #[arg(long, default_value = "0")]
+        dx: i32,
+        #[arg(long, default_value = "0")]
+        dy: i32,
+        #[arg(long)]
+        approve: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Type text into the focused application
+    Type {
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        approve: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Press a hotkey combo, e.g. --keys cmd+shift+t (last key is tapped)
+    Hotkey {
+        #[arg(long)]
+        keys: String,
+        #[arg(long)]
+        approve: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
 // ─── Deprecation helper ───────────────────────────────────────────────────────
 
 fn deprecation_warning(old: &str, new: &str) {
@@ -902,8 +914,6 @@ async fn main() -> Result<()> {
     let socket_path = cli.socket_path;
     let json_output = cli.json;
     let relay_url = cli.relay_url;
-    let proxy_url = cli.proxy_url;
-    let allow_robots_bypass = cli.allow_robots_bypass;
     let command = cli.command;
 
     match command {
@@ -921,20 +931,6 @@ async fn main() -> Result<()> {
             AuthCommands::Whoami => cmd_whoami(&relay_url).await,
             AuthCommands::ConfigShow => cmd_config_show(),
         },
-
-        // ─── Chat (top-level) ─────────────────────────────────────────────
-        Commands::Chat {
-            message,
-            byok,
-            api_key,
-        } => {
-            if let (Some(provider), Some(key)) = (byok, api_key) {
-                byok::send_byok(&provider, &key, &message).await
-            } else {
-                let cfg = CliConfig::load()?;
-                chat::send_chat(&proxy_url, &cfg, &message).await
-            }
-        }
 
         // ─── Billing group ────────────────────────────────────────────────
         Commands::Billing { command } => match command {
@@ -998,8 +994,7 @@ async fn main() -> Result<()> {
                     eprintln!(
                         "Error: {} not supported by `maho routine run`. Routines execute inside \
                          the running browser using its own provider, model, and permission \
-                         settings, so these flags cannot be applied to a browser-side routine. \
-                         For a CLI-driven agent session that honors them, use `maho run <prompt>`.",
+                         settings, so these flags cannot be applied to a browser-side routine.",
                         unsupported.join(", ")
                     );
                     std::process::exit(2);
@@ -1029,134 +1024,12 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Run {
-            prompt,
-            provider,
-            model,
-            workspace,
-            session,
-        } => {
-            cmd_run(
-                &prompt,
-                provider.as_deref(),
-                model.as_deref(),
-                workspace.as_deref(),
-                socket_path.as_deref(),
-                session.as_deref(),
-                allow_robots_bypass,
-            )
-            .await
-        }
-
-        Commands::Agent {
-            subcommand,
-            prompt,
-            routine,
-            provider,
-            model,
-            workspace,
-            session,
-        } => {
-            let (
-                final_prompt,
-                final_routine,
-                final_provider,
-                final_model,
-                final_workspace,
-                final_session,
-            ) = match subcommand {
-                Some(AgentSubcommands::Run {
-                    prompt: sub_prompt,
-                    routine: sub_routine,
-                    provider: sub_provider,
-                    model: sub_model,
-                    workspace: sub_workspace,
-                    session: sub_session,
-                }) => (
-                    sub_prompt.or(prompt),
-                    sub_routine.or(routine),
-                    sub_provider.or(provider),
-                    sub_model.or(model),
-                    sub_workspace.or(workspace),
-                    sub_session.or(session),
-                ),
-                None => (
-                    prompt,
-                    routine,
-                    provider,
-                    model,
-                    workspace,
-                    session,
-                ),
-            };
-
-            if let Some(r_path) = final_routine {
-                let unsupported = unsupported_routine_run_flags(
-                    final_provider.is_some(),
-                    final_model.is_some(),
-                    final_workspace.is_some(),
-                );
-                if !unsupported.is_empty() {
-                    eprintln!(
-                        "Error: {} not supported by `maho routine run`. Routines execute inside \
-                         the running browser using its own provider, model, and permission \
-                         settings, so these flags cannot be applied to a browser-side routine. \
-                         For a CLI-driven agent session that honors them, use `maho run <prompt>`.",
-                        unsupported.join(", ")
-                    );
-                    std::process::exit(2);
-                }
-                cmd_routine_run(&r_path, socket_path.as_deref(), json_output).await
-            } else if let Some(p) = final_prompt {
-                cmd_run(
-                    &p,
-                    final_provider.as_deref(),
-                    final_model.as_deref(),
-                    final_workspace.as_deref(),
-                    socket_path.as_deref(),
-                    final_session.as_deref(),
-                    allow_robots_bypass,
-                )
-                .await
-            } else {
-                eprintln!("Error: Either a prompt or --routine flag is required for maho agent");
-                std::process::exit(1);
-            }
-        }
-
         Commands::Tool { command } => cmd_tool(command, socket_path.as_deref(), json_output).await,
 
-        Commands::Session { command } => {
-            cmd_session(command, socket_path.as_deref(), json_output).await
-        }
-
-        Commands::Artifact { command } => {
-            cmd_artifact(command, socket_path.as_deref(), json_output).await
-        }
-
-        Commands::Research {
-            query,
-            provider,
-            model,
-            max_steps,
-            budget_usd,
-            timeout_secs,
-            workspace,
-        } => {
-            cmd_research(
-                &query,
-                provider.as_deref(),
-                model.as_deref(),
-                max_steps,
-                budget_usd,
-                timeout_secs,
-                workspace.as_deref(),
-                socket_path.as_deref(),
-                json_output,
-                allow_robots_bypass,
-            )
-            .await
-        }
+        Commands::Contacts { command } => platform::cmd_contacts(command).await,
+        Commands::Imessage { command } => platform::cmd_imessage(command).await,
+        Commands::Disk { command } => platform::cmd_disk(command).await,
+        Commands::Desktop { command } => platform::cmd_desktop(command).await,
 
         // ─── Deprecation shims ────────────────────────────────────────────
         Commands::Login {
@@ -2171,150 +2044,6 @@ async fn cmd_page(
     }
 }
 
-struct CliAgentStorage {
-    inner: MutexAgentStorage,
-    bypass_auth: bool,
-}
-
-#[async_trait::async_trait]
-impl AgentStorage for CliAgentStorage {
-    async fn get_byok_key(&self, provider: &str) -> Result<Option<ZeroizedString>, AgentError> {
-        self.inner.get_byok_key(provider).await
-    }
-
-    async fn get_setting(&self, key: &str) -> Result<Option<ZeroizedString>, AgentError> {
-        if key == "auth:access_token" && self.bypass_auth {
-            return Ok(None);
-        }
-        self.inner.get_setting(key).await
-    }
-
-    async fn save_message(
-        &self,
-        session_id: &str,
-        role: &str,
-        content: &str,
-    ) -> Result<(), AgentError> {
-        self.inner.save_message(session_id, role, content).await
-    }
-
-    async fn get_history(&self, session_id: &str) -> Result<Vec<ChatMessage>, AgentError> {
-        self.inner.get_history(session_id).await
-    }
-
-    async fn list_mcp_servers(
-        &self,
-        workspace_id: &str,
-    ) -> Result<Vec<maho_types::ai::AiMcpServer>, AgentError> {
-        self.inner.list_mcp_servers(workspace_id).await
-    }
-
-    async fn list_cli_tools(
-        &self,
-        workspace_id: &str,
-    ) -> Result<Vec<maho_types::ai::AiCliTool>, AgentError> {
-        self.inner.list_cli_tools(workspace_id).await
-    }
-
-    async fn get_mcp_server(
-        &self,
-        id: &str,
-    ) -> Result<Option<maho_types::ai::AiMcpServer>, AgentError> {
-        self.inner.get_mcp_server(id).await
-    }
-
-    async fn get_cli_tool(
-        &self,
-        id: &str,
-    ) -> Result<Option<maho_types::ai::AiCliTool>, AgentError> {
-        self.inner.get_cli_tool(id).await
-    }
-
-    async fn list_workspaces(&self) -> Result<Vec<maho_types::ai::AiWorkspace>, AgentError> {
-        self.inner.list_workspaces().await
-    }
-
-    async fn get_profile(&self, id: &str) -> Result<Option<maho_types::ai::AiProfile>, AgentError> {
-        self.inner.get_profile(id).await
-    }
-
-    async fn set_system_prompt_snapshot_if_absent(
-        &self,
-        conversation_id: &str,
-        system_prompt: &str,
-    ) -> Result<(), AgentError> {
-        self.inner
-            .set_system_prompt_snapshot_if_absent(conversation_id, system_prompt)
-            .await
-    }
-
-    async fn get_system_prompt_snapshot(
-        &self,
-        conversation_id: &str,
-    ) -> Result<Option<String>, AgentError> {
-        self.inner.get_system_prompt_snapshot(conversation_id).await
-    }
-}
-
-/// Bridges the agent to the running browser's authoritative MCP capability
-/// discovery and execution endpoints. Browser tool identities are never
-/// reconstructed or aliased in the CLI.
-struct CliBrowserToolBridge {
-    socket_path: Option<String>,
-    /// One reused browser connection for the whole run.
-    ///
-    /// The MCP server scopes tab leases and the domain allowlist to the
-    /// connection, so reconnecting per call threw away the lease the previous call
-    /// had just acquired. Holding the client here keeps that state alive.
-    client: Arc<tokio::sync::Mutex<Option<Arc<maho_browser_mcp::client::BrowserClient>>>>,
-}
-
-impl CliBrowserToolBridge {
-    fn new(socket_path: Option<String>) -> Self {
-        Self {
-            socket_path,
-            client: Arc::new(tokio::sync::Mutex::new(Option::None)),
-        }
-    }
-}
-
-fn browser_session_transport_failed(message: &str) -> bool {
-    message.contains("socket connect failed")
-        || message.contains("io error")
-        || message.contains("response handler closed")
-        || message.contains("connection reset")
-        || message.contains("broken pipe")
-}
-
-fn normalize_provider_name(p: &str) -> &str {
-    if p == "claude" {
-        "anthropic"
-    } else {
-        p
-    }
-}
-
-fn normalize_base_url_env_value(value: Option<String>) -> Option<String> {
-    value
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn select_byok_base_url(
-    maho_byok_base_url: Option<String>,
-    openai_base_url: Option<String>,
-) -> Option<String> {
-    normalize_base_url_env_value(maho_byok_base_url)
-        .or_else(|| normalize_base_url_env_value(openai_base_url))
-}
-
-fn byok_base_url_from_env() -> Option<String> {
-    select_byok_base_url(
-        std::env::var("MAHO_BYOK_BASE_URL").ok(),
-        std::env::var("OPENAI_BASE_URL").ok(),
-    )
-}
-
 fn unsupported_routine_run_flags(
     provider: bool,
     model: bool,
@@ -2332,135 +2061,39 @@ fn unsupported_routine_run_flags(
     }
     flags
 }
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use super::{mail_tool_request, unsupported_routine_run_flags, Cli, Commands, MailCommands};
 
-    use maho_agent::{
-        BrowserToolBridge, BrowserToolDescriptor, BrowserToolExecution, BrowserToolExecutionReceipt,
-    };
-    use serde_json::{json, Value};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixListener;
-
+    /// clap must give registered platform subcommands precedence over the
+    /// agent-first prompt fallback (`maho <prompt>`). Regression: these used to
+    /// be swallowed as the prompt, launching the agent instead of dispatching.
     #[test]
-    fn browser_bridge_reuses_one_connection_for_lease_continuity() {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .expect("test runtime must build");
-        let temp = tempfile::tempdir().expect("temporary socket directory must exist");
-        let socket_path = temp.path().join("browser.sock");
-        let listener = {
-            let _runtime_guard = runtime.enter();
-            UnixListener::bind(&socket_path).expect("test socket must bind")
-        };
-        let accepts = Arc::new(AtomicUsize::new(0));
-        let accepts_for_server = Arc::clone(&accepts);
-        let server = runtime.spawn(async move {
-            let (stream, _) = listener.accept().await.expect("bridge must connect");
-            accepts_for_server.fetch_add(1, Ordering::SeqCst);
-            let (reader, mut writer) = stream.into_split();
-            let mut reader = BufReader::new(reader);
-            for index in 0..3 {
-                let mut line = String::new();
-                reader
-                    .read_line(&mut line)
-                    .await
-                    .expect("request must be readable");
-                let request: Value = serde_json::from_str(&line).expect("request must be JSON");
-                let result = if index == 0 {
-                    json!({
-                        "protocolVersion": "2025-03-26",
-                        "serverInfo": {"name": "maho-browser", "version": "1"},
-                        "capabilities": {"tools": {}},
-                        "sessionInfo": {
-                            "id": "mock-session-id",
-                            "displayLabel": "Maho CLI",
-                            "controllerKind": "maho-cli"
-                        }
-                    })
-                } else {
-                    json!({"content": [{"type": "text", "text": "{\"ok\":true}"}]})
-                };
-                let response = json!({
-                    "jsonrpc": "2.0",
-                    "id": request["id"],
-                    "result": result
-                });
-                writer
-                    .write_all(format!("{response}\n").as_bytes())
-                    .await
-                    .expect("response must be writable");
-            }
-        });
-        let bridge =
-            crate::CliBrowserToolBridge::new(Some(socket_path.to_string_lossy().into_owned()));
-
-        let first = runtime
-            .block_on(bridge.execute_tool("browser_tab_list", "{}"))
-            .expect("first execution succeeds");
-        let second = runtime
-            .block_on(bridge.execute_tool("browser_tab_list", "{}"))
-            .expect("second execution succeeds");
-        assert_eq!(first.output_json, "{\"ok\":true}");
-        assert_eq!(second.output_json, "{\"ok\":true}");
-        runtime.block_on(server).expect("test server must finish");
-        assert_eq!(accepts.load(Ordering::SeqCst), 1);
-    }
-
-    use super::{
-        mail_tool_request, select_byok_base_url, unsupported_routine_run_flags, MailCommands,
-    };
-
-    #[test]
-    fn browser_discovery_decodes_only_typed_descriptors() {
-        let descriptor = BrowserToolDescriptor {
-            capability_id: "tab.list".to_string(),
-            name: "browser_tab_list".to_string(),
-            description: "List tabs".to_string(),
-            input_schema: serde_json::json!({"type":"object","properties":{}}),
-            schema_version: 1,
-            policy: maho_agent::BrowserToolPolicy {
-                sensitive: false,
-                permission: maho_types::tool::ToolPermission::AutoApprove,
-            },
-        };
-        let wire = serde_json::json!({"tools": [descriptor.clone()]});
-        assert_eq!(
-            crate::decode_browser_descriptors(wire).expect("typed discovery decodes"),
-            vec![descriptor]
-        );
-        assert!(crate::decode_browser_descriptors(serde_json::json!({
-            "tools": [{"name":"guessed_tool","description":"missing typed policy"}]
-        }))
-        .is_err());
-    }
-
-    #[test]
-    fn typed_execution_decoder_preserves_receipt_or_builds_boundary_receipt() {
-        let typed = BrowserToolExecution {
-            output_json: "{\"ok\":true}".to_string(),
-            receipt: BrowserToolExecutionReceipt {
-                capability_id: "tab.list".to_string(),
-                execution_id: "browser-receipt".to_string(),
-                metadata: serde_json::json!({}),
-            },
-        };
-        let decoded = crate::decode_browser_execution(
-            "tab.list",
-            serde_json::to_value(&typed).expect("execution serializes"),
-        )
-        .expect("typed execution decodes");
-        assert_eq!(decoded, typed);
-
-        let wrapped = crate::decode_browser_execution("tab.list", serde_json::json!({"tabs": []}))
-            .expect("legacy result envelope is wrapped at the transport boundary");
-        assert_eq!(wrapped.receipt.capability_id, "tab.list");
-        assert_eq!(wrapped.output_json, "{\"tabs\":[]}");
+    fn platform_subcommands_take_precedence_over_prompt_positional() {
+        use clap::Parser as _;
+        for args in [
+            vec!["maho", "disk", "status"],
+            vec!["maho", "contacts", "search", "Indo"],
+            vec!["maho", "imessage", "chats"],
+            vec!["maho", "desktop", "status"],
+            vec!["maho", "desktop", "capture"],
+            vec!["maho", "desktop", "ocr"],
+            vec!["maho", "desktop", "elements"],
+            vec!["maho", "desktop", "find-text", "--text", "hello"],
+        ] {
+            let parsed = Cli::try_parse_from(&args);
+            let command = parsed.expect("must parse").command;
+            assert!(
+                matches!(
+                    command,
+                    Commands::Disk { .. }
+                        | Commands::Contacts { .. }
+                        | Commands::Imessage { .. }
+                        | Commands::Desktop { .. }
+                ),
+                "args {args:?} must match a platform subcommand"
+            );
+        }
     }
 
     #[test]
@@ -2517,49 +2150,6 @@ mod tests {
     }
 
     #[test]
-    fn byok_base_url_prefers_maho_specific_env() {
-        let selected = select_byok_base_url(
-            Some(" http://127.0.0.1:18317/v1 ".to_string()),
-            Some("https://proxy.example/v1".to_string()),
-        );
-
-        assert_eq!(selected.as_deref(), Some("http://127.0.0.1:18317/v1"));
-    }
-
-    #[test]
-    fn byok_base_url_falls_back_to_openai_env() {
-        let selected = select_byok_base_url(None, Some("http://localhost:9999/v1".to_string()));
-
-        assert_eq!(selected.as_deref(), Some("http://localhost:9999/v1"));
-    }
-
-    #[test]
-    fn byok_base_url_ignores_empty_values() {
-        let selected = select_byok_base_url(
-            Some("   ".to_string()),
-            Some(" http://localhost:9999/v1 ".to_string()),
-        );
-
-        assert_eq!(selected.as_deref(), Some("http://localhost:9999/v1"));
-    }
-
-    #[test]
-    fn browser_session_invalidation_distinguishes_transport_from_rpc_errors() {
-        assert!(crate::browser_session_transport_failed(
-            "tools/call browser_navigate failed: io error: broken pipe"
-        ));
-        assert!(!crate::browser_session_transport_failed(
-            "tools/call browser_navigate failed: request timed out after 15s"
-        ));
-        assert!(!crate::browser_session_transport_failed(
-            "tools/call browser_navigate failed: rpc error -32007: active tab lease required"
-        ));
-        assert!(!crate::browser_session_transport_failed(
-            "tools/call browser_navigate failed: rpc error -32000: domain_approval_required"
-        ));
-    }
-
-    #[test]
     fn maho_app_bundle_path_resolves_to_executable() {
         let temp = tempfile::tempdir().expect("temporary app directory must exist");
         let app = temp.path().join("Maho.app");
@@ -2586,411 +2176,6 @@ mod tests {
             Some(executable.clone())
         );
     }
-}
-
-fn decode_browser_descriptors(
-    result: serde_json::Value,
-) -> Result<Vec<maho_agent::BrowserToolDescriptor>> {
-    let tools = result
-        .get("tools")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("browser tools/list response is missing typed tools"))?;
-    serde_json::from_value(tools).map_err(|error| {
-        anyhow::anyhow!("browser tools/list returned invalid descriptors: {error}")
-    })
-}
-
-fn decode_browser_execution(
-    capability_id: &str,
-    result: serde_json::Value,
-) -> Result<maho_agent::BrowserToolExecution> {
-    if let Ok(execution) =
-        serde_json::from_value::<maho_agent::BrowserToolExecution>(result.clone())
-    {
-        if execution.receipt.capability_id != capability_id {
-            bail!("browser execution receipt capability does not match the requested capability");
-        }
-        return Ok(execution);
-    }
-    Ok(maho_agent::BrowserToolExecution {
-        output_json: serde_json::to_string(&result)?,
-        receipt: maho_agent::BrowserToolExecutionReceipt {
-            capability_id: capability_id.to_string(),
-            execution_id: uuid::Uuid::new_v4().to_string(),
-            metadata: serde_json::json!({"source":"maho-cli-browser-transport"}),
-        },
-    })
-}
-
-#[async_trait::async_trait]
-impl maho_agent::BrowserToolBridge for CliBrowserToolBridge {
-    async fn list_tool_descriptors(
-        &self,
-    ) -> std::result::Result<
-        Vec<maho_agent::BrowserToolDescriptor>,
-        maho_agent::BrowserToolBridgeError,
-    > {
-        let socket_path = self.socket_path.clone();
-        let mut client = self.client.lock().await;
-        if client.is_none() {
-            let connected = browser::connect(socket_path.as_deref())
-                .await
-                .map_err(|error| {
-                    maho_agent::BrowserToolBridgeError::new(
-                        "discovery_unavailable",
-                        error.to_string(),
-                        true,
-                    )
-                })?;
-            *client = Some(Arc::new(connected));
-        }
-        let connected = client.as_ref().ok_or_else(|| {
-            maho_agent::BrowserToolBridgeError::new(
-                "discovery_unavailable",
-                "browser client initialization produced no client",
-                true,
-            )
-        })?;
-        let descriptors = connected
-            .call("tools/list", serde_json::json!({}))
-            .await
-            .map_err(|error| {
-                maho_agent::BrowserToolBridgeError::new(
-                    "discovery_unavailable",
-                    error.to_string(),
-                    true,
-                )
-            })?;
-        decode_browser_descriptors(descriptors).map_err(|error| {
-            maho_agent::BrowserToolBridgeError::new(
-                "discovery_unavailable",
-                error.to_string(),
-                true,
-            )
-        })
-    }
-
-    async fn execute_tool(
-        &self,
-        capability_id: &str,
-        args_json: &str,
-    ) -> std::result::Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError>
-    {
-        let capability_id = capability_id.to_string();
-        let socket_path = self.socket_path.clone();
-        let args = serde_json::from_str(args_json).map_err(|error| {
-            maho_agent::BrowserToolBridgeError::new("invalid_arguments", error.to_string(), false)
-        })?;
-        let mut client = self.client.lock().await;
-        if client.is_none() {
-            let connected = browser::connect(socket_path.as_deref())
-                .await
-                .map_err(|error| {
-                    maho_agent::BrowserToolBridgeError::new(
-                        "execution_unavailable",
-                        error.to_string(),
-                        true,
-                    )
-                })?;
-            *client = Some(Arc::new(connected));
-        }
-        let result = {
-            let connected = client.as_ref().ok_or_else(|| {
-                maho_agent::BrowserToolBridgeError::new(
-                    "execution_unavailable",
-                    "browser client initialization produced no client",
-                    true,
-                )
-            })?;
-            browser::send_stateful_tool_call(connected, &capability_id, args).await
-        };
-        match result {
-            Ok(result) => decode_browser_execution(&capability_id, result).map_err(|error| {
-                maho_agent::BrowserToolBridgeError::new(
-                    "execution_failed",
-                    error.to_string(),
-                    false,
-                )
-            }),
-            Err(error) => {
-                let message = error.to_string();
-                if browser_session_transport_failed(&message)
-                    || browser::is_transport_ambiguous(&error)
-                {
-                    *client = None;
-                }
-                Err(maho_agent::BrowserToolBridgeError::new(
-                    "execution_failed",
-                    message,
-                    false,
-                ))
-            }
-        }
-    }
-}
-
-async fn build_cli_backend(
-    provider: Option<&str>,
-    model: Option<&str>,
-    workspace: Option<&str>,
-    socket_path: Option<&str>,
-    allow_robots_bypass: bool,
-) -> Result<SwiftideBackend> {
-    let db_path = maho_cli::workspace::default_db_path();
-
-    // Resolve target workspace
-    let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(&db_path, workspace).await?;
-
-    let storage = maho_cli::workspace::open_storage(&db_path)
-        .map_err(|e| anyhow::anyhow!("Failed to open database: {}", e))?;
-
-    let workspaces = storage
-        .list_workspaces()
-        .map_err(|e| anyhow::anyhow!("Failed to list workspaces: {}", e))?;
-
-    let ws = workspaces
-        .into_iter()
-        .find(|w| w.id == resolved_ws_id)
-        .ok_or_else(|| anyhow::anyhow!("Resolved workspace not found in database"))?;
-
-    let workspace_root = ws
-        .workspace_root
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-
-    let mutex_storage = MutexAgentStorage(Arc::new(Mutex::new(storage)));
-    let bypass_auth = provider.is_some() || model.is_some();
-    let cli_storage = Arc::new(CliAgentStorage {
-        inner: mutex_storage,
-        bypass_auth,
-    });
-
-    let backend = SwiftideBackend::new(
-        cli_storage,
-        None,
-        workspace_root,
-        true, // allow insecure key storage for CLI BYOK convenience
-    );
-
-    if let Some(space_id) = &ws.space_id {
-        backend.set_active_space_id(Some(space_id.clone()));
-    }
-
-    // Route `--provider`/`--model` to the correct BYOK client + base URL.
-    backend.set_preferred_provider(provider.map(str::to_string));
-
-    // CLI agent sessions are non-interactive and always use AllowAll.
-    // Consequential tools and typed approval flows are auto-approved as well;
-    // the browser capability sandbox still enforces its independent boundaries.
-    backend.set_approval_policy("allow".to_string());
-
-    // Register the running browser as a tool bridge so the agent can drive
-    // page/tab tools over the MCP socket during the loop.
-    let browser_bridge: Arc<dyn maho_agent::BrowserToolBridge> =
-        Arc::new(CliBrowserToolBridge::new(socket_path.map(String::from)));
-    backend
-        .set_browser_tool_bridge(browser_bridge)
-        .map_err(|e| anyhow::anyhow!("Failed to set browser tool bridge: {:?}", e))?;
-
-    // Browser action tools (click / type / navigate / scroll) are disabled by
-    // default in the library so embedders must opt in. The CLI is an explicit
-    // browser-automation surface, so it always exposes them and its AllowAll
-    // approval policy auto-approves their sensitive action contracts. The
-    // browser capability sandbox remains the independent enforcement boundary.
-    backend.set_browser_action_tools_enabled(true);
-
-    // MAHO_AGENT_SYSTEM_PROMPT is input-only. Compose invocation-local robots
-    // consent here, after parsing, so non-agent children such as `maho mcp`
-    // never inherit a rewritten process environment.
-    let system_prompt = auth::effective_agent_system_prompt(allow_robots_bypass);
-    maho_agent::AgentRuntime::set_system_prompt(&backend, &system_prompt);
-
-    // Auto-approve all browser tools and actions by default in maho run (Aside-parity)
-    backend
-        .set_permission_callback(Box::new(move |_req| {
-            Box::pin(async move { PermissionDecision::Allow })
-        }))
-        .map_err(|e| anyhow::anyhow!("Failed to set permission callback: {:?}", e))?;
-
-    // Resolve BYOK keys and set secure storage callback if provider is requested
-    let openai_env = std::env::var("OPENAI_API_KEY").ok();
-    let anthropic_env = std::env::var("ANTHROPIC_API_KEY").ok();
-
-    // We open a separate storage handle to read DB keys
-    let db_storage = maho_cli::workspace::open_storage(&db_path)?;
-    let openai_db = db_storage.get_setting("byok:openai").ok().flatten();
-    let anthropic_db = db_storage.get_setting("byok:anthropic").ok().flatten();
-
-    let resolved_openai = openai_env.or(openai_db);
-    let resolved_anthropic = anthropic_env.or(anthropic_db);
-
-    // BYOK base-URL override: when set, target an OpenAI-compatible endpoint
-    // other than api.openai.com (e.g. a local proxy). `MAHO_BYOK_BASE_URL` is
-    // Maho-specific and wins; `OPENAI_BASE_URL` is the conventional OpenAI SDK
-    // var and is the fallback. Unset => None => provider default base URL, so
-    // existing behavior is unchanged. Only the OpenAI-compatible client consumes
-    // base_url (see build_byok_client in swiftide_backend.rs); the Anthropic
-    // client builder does not honor it, so we only attach it to openai bundles.
-    let byok_base_url = byok_base_url_from_env();
-
-    let provider_override = provider.map(String::from);
-    let model_override = model.map(String::from);
-
-    backend
-        .set_secure_storage_callback(Box::new(move |provider_req| {
-            // Honor the probe argument so the backend can label the resolved key
-            // correctly. When an explicit --provider override is set, only the
-            // matching probe returns a key; every other probe returns Err. This
-            // prevents an Anthropic key from being handed back for an "openai"
-            // probe (which previously built an OpenAI client at the OpenAI base URL).
-            let normalize = normalize_provider_name;
-            let requested = normalize(provider_req);
-            if let Some(ref ovr) = provider_override {
-                if normalize(ovr) != requested {
-                    return Err(AgentError::ExecutionError(format!(
-                        "Provider {provider_req} not selected (override is {ovr})"
-                    )));
-                }
-            }
-            let key_str = if requested == "openai" {
-                resolved_openai.clone()
-            } else if requested == "anthropic" {
-                resolved_anthropic.clone()
-            } else {
-                None
-            }
-            .ok_or_else(|| {
-                AgentError::ExecutionError(format!(
-                    "No API key found for provider {}",
-                    provider_req
-                ))
-            })?;
-
-            Ok(SecureKeyBundle {
-                key: ZeroizedString::new(key_str),
-                // Only the OpenAI-compatible client honors base_url; attach the
-                // override there so BYOK can target a local proxy instead of
-                // api.openai.com. Anthropic ignores it (see build_byok_client).
-                base_url: if requested == "openai" {
-                    byok_base_url.clone()
-                } else {
-                    None
-                },
-                model: model_override.clone(),
-            })
-        }))
-        .map_err(|e| anyhow::anyhow!("Failed to set secure storage callback: {:?}", e))?;
-
-    Ok(backend)
-}
-
-async fn cmd_run(
-    prompt: &str,
-    provider: Option<&str>,
-    model: Option<&str>,
-    workspace: Option<&str>,
-    socket_path: Option<&str>,
-    session_id: Option<&str>,
-    allow_robots_bypass: bool,
-) -> Result<()> {
-    let backend =
-        build_cli_backend(provider, model, workspace, socket_path, allow_robots_bypass).await?;
-
-    // Run the prompt
-    println!("Running autonomous agent session...");
-    let response = if let Some(session_id) = session_id {
-        backend.run_prompt_in_session(session_id, prompt).await
-    } else {
-        backend.run_prompt(prompt).await
-    }
-    .map_err(|e| anyhow::anyhow!("Agent loop failed: {:?}", e))?;
-
-    println!("\n--- Agent Response ---\n{}", response);
-    Ok(())
-}
-
-/// Bounded deep-research mode (Max/PAYG feature). Drives the existing agent
-/// loop under strict step/cost/time caps and emits a cited summary. This CLI
-/// surface is BYOK (`--provider`/`--model`): the user brings their own key and
-/// cost, so it is treated as entitled. Managed (Maho-billed) deep research runs
-/// on the desktop AI surface; the frontier-model gate still applies there.
-#[allow(clippy::too_many_arguments)]
-async fn cmd_research(
-    query: &str,
-    provider: Option<&str>,
-    model: Option<&str>,
-    max_steps: u32,
-    budget_usd: f64,
-    timeout_secs: u64,
-    workspace: Option<&str>,
-    socket_path: Option<&str>,
-    json_output: bool,
-    allow_robots_bypass: bool,
-) -> Result<()> {
-    if provider.is_none() {
-        bail!(
-            "`maho research` is BYOK-only: pass --provider (and optionally --model). \
-             Managed deep research runs on the desktop AI surface."
-        );
-    }
-
-    let backend =
-        build_cli_backend(provider, model, workspace, socket_path, allow_robots_bypass).await?;
-    let runtime: Arc<dyn maho_agent::AgentRuntime> = Arc::new(backend);
-    let session_id = format!("research-{}", uuid::Uuid::new_v4());
-    let stepper = maho_agent::AgentResearchStepper::new(runtime, session_id, 0.02);
-
-    // BYOK path: entitlement is the user's own key, and managed=false skips the
-    // frontier gate (that gate protects Maho-billed managed routing only).
-    let policy = maho_agent::ResearchPolicy {
-        entitlement: maho_agent::ResearchEntitlement {
-            tier: maho_types::account::UserTier::Max,
-            payg_credits_usd: 0.0,
-        },
-        model: model.unwrap_or("byok").to_string(),
-        managed: false,
-    };
-    let budget = maho_agent::ResearchBudget {
-        max_steps,
-        max_wall_clock: std::time::Duration::from_secs(timeout_secs),
-        max_cost_usd: budget_usd,
-    };
-
-    let report = maho_agent::run_deep_research(query, &policy, budget, &stepper)
-        .await
-        .map_err(|e| anyhow::anyhow!("Deep research failed: {}", e))?;
-
-    if json_output {
-        let citations: Vec<serde_json::Value> = report
-            .citations
-            .iter()
-            .map(|c| serde_json::json!({ "url": c.url, "note": c.note }))
-            .collect();
-        let out = serde_json::json!({
-            "summary": report.summary,
-            "citations": citations,
-            "evidence": report.evidence,
-            "steps_taken": report.steps_taken,
-            "estimated_cost_usd": report.estimated_cost_usd,
-            "stop_reason": format!("{:?}", report.stop_reason),
-            "model": report.model,
-        });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        println!("\n--- Deep Research Summary ---\n{}", report.summary);
-        if !report.citations.is_empty() {
-            println!("\n--- Sources ---");
-            for c in &report.citations {
-                println!("- {}", c.url);
-            }
-        }
-        println!(
-            "\n[steps={} est_cost=${:.4} stop={:?} model={}]",
-            report.steps_taken, report.estimated_cost_usd, report.stop_reason, report.model
-        );
-    }
-    Ok(())
 }
 
 fn validate_tool_discovery(result: &serde_json::Value) -> Result<()> {
@@ -3185,200 +2370,6 @@ async fn cmd_tool(
             Ok(())
         }
     }
-}
-
-fn require_non_empty(value: &str, field: &str) -> Result<()> {
-    if value.trim().is_empty() {
-        bail!("{field} cannot be empty");
-    }
-    Ok(())
-}
-
-fn print_control_error(error: &maho_cli::session_artifact::CliControlError, json_output: bool) {
-    if json_output {
-        let body = serde_json::json!({
-            "ok": false,
-            "error": {
-                "status": error.status(),
-                "message": error.to_string(),
-                "data": error.data(),
-            }
-        });
-        eprintln!(
-            "{}",
-            serde_json::to_string_pretty(&body).unwrap_or_else(|_| error.to_string())
-        );
-    } else {
-        eprintln!("Error [{}]: {}", error.status(), error);
-    }
-}
-
-async fn connect_control_browser(
-    socket_path: Option<&str>,
-) -> std::result::Result<
-    maho_browser_mcp::client::BrowserClient,
-    maho_cli::session_artifact::CliControlError,
-> {
-    maho_cli::session_artifact::connect(socket_path).await
-}
-
-async fn run_control_operation(
-    client: &maho_browser_mcp::client::BrowserClient,
-    operation: maho_cli::session_artifact::ControlOperation,
-    arguments: serde_json::Value,
-    json_output: bool,
-) -> Result<serde_json::Value> {
-    match maho_cli::session_artifact::call(client, operation, arguments).await {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            print_control_error(&error, json_output);
-            std::process::exit(1);
-        }
-    }
-}
-
-async fn cmd_session(
-    command: SessionCommands,
-    _socket_path: Option<&str>,
-    json_output: bool,
-) -> Result<()> {
-    let db_path = maho_cli::workspace::default_db_path();
-    let storage = maho_cli::workspace::open_storage(&db_path)
-        .map_err(|error| anyhow::anyhow!("Failed to open shared agent storage: {error}"))?;
-    let result = match command {
-        SessionCommands::List => maho_cli::session_artifact::list_sessions(&storage),
-        SessionCommands::Resume { session_id } => {
-            require_non_empty(&session_id, "session ID")?;
-            maho_cli::session_artifact::resume_session(&storage, &session_id)
-                .map_err(anyhow::Error::new)?
-        }
-        SessionCommands::History { session_id } => {
-            require_non_empty(&session_id, "session ID")?;
-            maho_cli::session_artifact::session_history(&storage, &session_id)
-                .map_err(anyhow::Error::new)?
-        }
-    };
-    print_session_result(&result, json_output)
-}
-
-fn print_session_result(result: &serde_json::Value, json_output: bool) -> Result<()> {
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(result)?);
-        return Ok(());
-    }
-    if let Some(sessions) = result.get("sessions").and_then(serde_json::Value::as_array) {
-        if sessions.is_empty() {
-            println!("No sessions found.");
-        } else {
-            println!("{:<24} {:<24} {}", "SESSION", "UPDATED", "TITLE");
-            for session in sessions {
-                println!(
-                    "{:<24} {:<24} {}",
-                    session.get("id").and_then(|v| v.as_str()).unwrap_or(""),
-                    session
-                        .get("updatedAt")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(""),
-                    session.get("title").and_then(|v| v.as_str()).unwrap_or("")
-                );
-            }
-        }
-    } else {
-        println!("{}", serde_json::to_string_pretty(result)?);
-    }
-    Ok(())
-}
-
-async fn cmd_artifact(
-    command: ArtifactCommands,
-    socket_path: Option<&str>,
-    json_output: bool,
-) -> Result<()> {
-    use maho_cli::session_artifact::{validate_export_destination, ControlOperation};
-
-    let (operation, arguments) = match command {
-        ArtifactCommands::List { session } => {
-            if let Some(session) = session.as_deref() {
-                require_non_empty(session, "session ID")?;
-            }
-            (
-                ControlOperation::ArtifactList,
-                serde_json::json!({"session_id": session}),
-            )
-        }
-        ArtifactCommands::Export { artifact_id, out } => {
-            require_non_empty(&artifact_id, "artifact ID")?;
-            let destination = validate_export_destination(&out).map_err(anyhow::Error::new)?;
-            (
-                ControlOperation::ArtifactExport,
-                serde_json::json!({
-                    "artifact_id": artifact_id,
-                    "destination": destination.to_string_lossy(),
-                }),
-            )
-        }
-    };
-
-    let client = match connect_control_browser(socket_path).await {
-        Ok(client) => client,
-        Err(error) => {
-            print_control_error(&error, json_output);
-            std::process::exit(1);
-        }
-    };
-    let result = run_control_operation(&client, operation, arguments, json_output).await?;
-    print_artifact_result(operation, &result, json_output)
-}
-
-fn print_artifact_result(
-    operation: maho_cli::session_artifact::ControlOperation,
-    result: &serde_json::Value,
-    json_output: bool,
-) -> Result<()> {
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(result)?);
-        return Ok(());
-    }
-    match operation {
-        maho_cli::session_artifact::ControlOperation::ArtifactList => {
-            let artifacts = result
-                .get("artifacts")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if artifacts.is_empty() {
-                println!("No artifacts found.");
-            } else {
-                println!(
-                    "{:<24} {:<12} {:<10} {}",
-                    "ARTIFACT", "SESSION", "BYTES", "NAME"
-                );
-                for artifact in artifacts {
-                    println!(
-                        "{:<24} {:<12} {:<10} {}",
-                        artifact
-                            .get("artifact_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(""),
-                        artifact
-                            .get("session_id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(""),
-                        artifact
-                            .get("size_bytes")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        artifact
-                            .get("display_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                    );
-                }
-            }
-        }
-        _ => println!("{}", serde_json::to_string_pretty(result)?),
-    }
-    Ok(())
 }
 
 // ─── MCP server entrypoint ──────────────────────────────────────────────────
@@ -4170,6 +3161,7 @@ Commands:
   refs [filter]         List interactive elements: <ref> <role> <name>[=<value>]
   key <name> [mods]     Press a key (e.g. Enter, ArrowDown; mods: shift,ctrl,alt,meta)
   lease [tab_id]        Acquire active-tab lease (auto-acquired before mutations)
+  grant <origin>        Grant exact origin to this session's sandbox
   help                  Show this help
   .quit / .exit         Exit REPL
 ";
@@ -4711,6 +3703,26 @@ async fn handle_repl_line(
                     println!("ok");
                 }
                 _ => println!("Usage: select <ref> <value> | select @<name>=<value>"),
+            }
+        }
+        "grant" => {
+            // Grant an exact origin to THIS session's capability sandbox
+            // (browser_grant_exact_origin). The grant lives on this REPL
+            // session's connection, so re-issue it here after reconnecting
+            // before dispatching actions on that origin.
+            match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                Some(origin) => {
+                    browser::send_tool_call(
+                        client,
+                        "browser_grant_exact_origin",
+                        serde_json::json!({ "origin": origin }),
+                    )
+                    .await?;
+                    println!("Origin granted: {origin}");
+                }
+                None => {
+                    println!("Usage: grant <origin>");
+                }
             }
         }
         "lease" => {

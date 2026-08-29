@@ -96,6 +96,7 @@ pub struct BrowserClient {
     next_id: AtomicI64,
     timeout: Duration,
     controller_kind: ControllerKind,
+    autonomous: bool,
     session_info: Mutex<Option<SessionInfo>>,
     connect_duration: Mutex<Duration>,
     handshake_duration: Mutex<Duration>,
@@ -119,6 +120,25 @@ impl BrowserClient {
         timeout: Duration,
         controller_kind: ControllerKind,
     ) -> Result<Self> {
+        Self::connect_with_identity(path, timeout, controller_kind, false).await
+    }
+
+    /// Connect as an autonomous controller. The browser must acknowledge the
+    /// requested admission mode during every initialize handshake.
+    pub async fn connect_autonomous_as(
+        path: &Path,
+        timeout: Duration,
+        controller_kind: ControllerKind,
+    ) -> Result<Self> {
+        Self::connect_with_identity(path, timeout, controller_kind, true).await
+    }
+
+    async fn connect_with_identity(
+        path: &Path,
+        timeout: Duration,
+        controller_kind: ControllerKind,
+        autonomous: bool,
+    ) -> Result<Self> {
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<PendingResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
@@ -134,6 +154,7 @@ impl BrowserClient {
             next_id: AtomicI64::new(1),
             timeout,
             controller_kind,
+            autonomous,
             session_info: Mutex::new(None),
             connect_duration: Mutex::new(connect_duration),
             handshake_duration: Mutex::new(Duration::ZERO),
@@ -227,6 +248,7 @@ impl BrowserClient {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             controller_kind: self.controller_kind,
+            autonomous: self.autonomous,
             auth_token,
         };
         let result_value = self
@@ -238,6 +260,14 @@ impl BrowserClient {
             return Err(McpBridgeError::HandshakeMismatch {
                 expected: EXPECTED_SERVER_NAME.to_string(),
                 got: init_result.server_info.name,
+            });
+        }
+        if self.autonomous && !init_result.session_info.autonomous {
+            return Err(McpBridgeError::HandshakeMismatch {
+                expected: "sessionInfo.autonomous=true (autonomous lease admission supported)"
+                    .to_string(),
+                got: "autonomous acknowledgement missing/false; update or restart the browser"
+                    .to_string(),
             });
         }
         *self.session_info.lock().await = Some(init_result.session_info);
@@ -591,6 +621,216 @@ mod tests {
         let result = client.call("ping", json!({})).await.unwrap();
         assert_eq!(result, json!({"pong": true}));
 
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn autonomous_connect_sends_flag_and_requires_ack() {
+        let (_dir, sock_path, listener) = make_listener().await;
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(req["method"], "initialize");
+            assert_eq!(req["params"]["controllerKind"], "maho-cli");
+            assert_eq!(req["params"]["autonomous"], true);
+            let resp = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "sessionInfo": {
+                        "id": "agent-session",
+                        "displayLabel": "Maho Agent",
+                        "controllerKind": "maho-cli",
+                        "autonomous": true
+                    },
+                    "capabilities": {"tools": {}}
+                }
+            });
+            writer
+                .write_all(format!("{resp}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let client = BrowserClient::connect_autonomous_as(
+            &sock_path,
+            Duration::from_secs(1),
+            ControllerKind::MahoCli,
+        )
+        .await
+        .unwrap();
+        let info = client.session_info().await.unwrap();
+        assert!(info.autonomous);
+        assert_eq!(info.display_label, "Maho Agent");
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn autonomous_connect_rejects_legacy_server_without_ack() {
+        let (_dir, sock_path, listener) = make_listener().await;
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(req["params"]["autonomous"], true);
+            let resp = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "sessionInfo": {
+                        "id": "legacy-session",
+                        "displayLabel": "Maho CLI",
+                        "controllerKind": "maho-cli"
+                    },
+                    "capabilities": {"tools": {}}
+                }
+            });
+            writer
+                .write_all(format!("{resp}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let error = match BrowserClient::connect_autonomous_as(
+            &sock_path,
+            Duration::from_secs(1),
+            ControllerKind::MahoCli,
+        )
+        .await
+        {
+            Ok(_) => panic!("legacy browser must not admit an autonomous client"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, McpBridgeError::HandshakeMismatch { .. }));
+        assert!(error.to_string().contains("sessionInfo.autonomous=true"));
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn human_connect_accepts_legacy_server_without_autonomy_ack() {
+        let (_dir, sock_path, listener) = make_listener().await;
+        let server_handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            assert!(req["params"].get("autonomous").is_none());
+            let resp = json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "sessionInfo": {
+                        "id": "legacy-session",
+                        "displayLabel": "Maho CLI",
+                        "controllerKind": "maho-cli"
+                    },
+                    "capabilities": {"tools": {}}
+                }
+            });
+            writer
+                .write_all(format!("{resp}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let client =
+            BrowserClient::connect_as(&sock_path, Duration::from_secs(1), ControllerKind::MahoCli)
+                .await
+                .unwrap();
+        assert!(!client.session_info().await.unwrap().autonomous);
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn autonomous_reconnect_fails_closed_without_ack() {
+        let (_dir, sock_path, listener) = make_listener().await;
+        let server_handle = tokio::spawn(async move {
+            let (first, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = first.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let init: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(init["params"]["autonomous"], true);
+            let ack = json!({
+                "jsonrpc": "2.0",
+                "id": init["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "sessionInfo": {
+                        "id": "first-agent-session",
+                        "displayLabel": "Maho Agent",
+                        "controllerKind": "maho-cli",
+                        "autonomous": true
+                    },
+                    "capabilities": {"tools": {}}
+                }
+            });
+            writer
+                .write_all(format!("{ack}\n").as_bytes())
+                .await
+                .unwrap();
+
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "retry_me");
+            drop(reader);
+            drop(writer);
+
+            let (second, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = second.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let reinit: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(reinit["params"]["autonomous"], true);
+            let legacy = json!({
+                "jsonrpc": "2.0",
+                "id": reinit["id"],
+                "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "sessionInfo": {
+                        "id": "legacy-reconnect",
+                        "displayLabel": "Maho CLI",
+                        "controllerKind": "maho-cli"
+                    },
+                    "capabilities": {"tools": {}}
+                }
+            });
+            writer
+                .write_all(format!("{legacy}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let client = BrowserClient::connect_autonomous_as(
+            &sock_path,
+            Duration::from_secs(1),
+            ControllerKind::MahoCli,
+        )
+        .await
+        .unwrap();
+        let error = client.call("retry_me", json!({})).await.unwrap_err();
+        assert!(matches!(error, McpBridgeError::HandshakeMismatch { .. }));
+        assert!(error.to_string().contains("sessionInfo.autonomous=true"));
         server_handle.await.unwrap();
     }
 

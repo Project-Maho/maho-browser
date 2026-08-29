@@ -20,6 +20,7 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/json/json_reader.h"
 #include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
@@ -431,6 +432,36 @@ class MahoMcpSocketServerDeferredTest : public testing::Test {
   std::vector<int> client_fds_;
   std::map<int, std::string> rx_;
 };
+
+TEST_F(MahoMcpSocketServerDeferredTest,
+       InitializeAutonomousFieldRoundTripsOverUds) {
+  int client = Connect();
+  ASSERT_GE(client, 0);
+  SendRaw(client,
+          R"({"jsonrpc":"2.0","method":"initialize","id":41,)"
+          R"("params":{"protocolVersion":"2025-03-26",)"
+          R"("autonomous":true,)"
+          R"("clientInfo":{"name":"test-client","version":"0.1.0"}}})"
+          "\n");
+  std::string init_line = ReadLine(client);
+  ASSERT_FALSE(init_line.empty());
+  auto init = base::JSONReader::Read(init_line, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(init.has_value()) << init_line;
+  const base::DictValue* result = init->GetDict().FindDict("result");
+  ASSERT_TRUE(result) << init_line;
+  const base::DictValue* info = result->FindDict("sessionInfo");
+  ASSERT_TRUE(info) << init_line;
+  EXPECT_EQ(info->FindBool("autonomous"), true);
+
+  SendRaw(client,
+          R"({"jsonrpc":"2.0","method":"tools/list","id":42,"params":{}})"
+          "\n");
+  std::string list_line = ReadLine(client);
+  ASSERT_FALSE(list_line.empty());
+  auto list = base::JSONReader::Read(list_line, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(list.has_value()) << list_line;
+  EXPECT_TRUE(list->GetDict().FindDict("result")) << list_line;
+}
 
 // Two live UDS clients issue deferred screenshots with distinct request IDs
 // and distinct payloads. Their completion callbacks fire in REVERSE order.

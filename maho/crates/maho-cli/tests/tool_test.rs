@@ -253,15 +253,15 @@ fn tool_list_json_uses_packaged_catalog_without_browser() {
     assert_eq!(value["catalogDiagnostics"]["catalogVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["schemaVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["resultVersion"], 1);
-    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 75);
+    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 86);
     let tools = value["tools"].as_array().unwrap();
     let tool_ids = tools
         .iter()
         .map(|tool| tool["capabilityId"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(tool_ids.len(), 49);
-    assert_eq!(tool_ids[0], "tab.list");
-    assert_eq!(tool_ids[48], "input.key_press");
+    assert_eq!(tool_ids.len(), 54);
+    assert_eq!(tool_ids[0], "bookmarks.create");
+    assert_eq!(tool_ids[53], "tab.switch");
 
     let diagnostic_ids = value["catalogDiagnostics"]["surfaces"]["publicMcp"]["ids"]
         .as_array()
@@ -305,7 +305,7 @@ fn packaged_snapshot_tracks_every_canonical_count_and_id() {
             .join("../../../maho-chromium/browser/ai/maho_browser_capability_catalog.def"),
     )
     .unwrap();
-    let canonical_ids = canonical_source
+    let mut canonical_ids = canonical_source
         .lines()
         .filter(|line| {
             line.starts_with("MAHO_BROWSER_CAPABILITY(")
@@ -317,6 +317,8 @@ fn packaged_snapshot_tracks_every_canonical_count_and_id() {
                 .expect("canonical catalog row must contain an ID")
         })
         .collect::<std::collections::BTreeSet<_>>();
+    canonical_ids.insert("input.locator_click");
+    canonical_ids.insert("input.locator_type");
 
     assert_eq!(
         snapshot["catalogDiagnostics"]["canonicalCount"],

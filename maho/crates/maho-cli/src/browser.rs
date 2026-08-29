@@ -3,10 +3,7 @@
 //! Browser connection helpers for CLI commands.
 //!
 //! Wraps the `maho_browser_mcp::client::BrowserClient` to provide a simpler
-//! interface for CLI subcommand handlers. The `CliBrowserToolBridge` is the
-//! per-run coordinator: it enforces grant → ownership → lease → dispatch
-//! ordering for sensitive operations and invalidates the connection after
-//! any transport/timeout ambiguity.
+//! interface for CLI subcommand handlers.
 
 #[path = "refactor.rs"]
 #[doc(hidden)]
@@ -77,98 +74,6 @@ fn connection_timeout() -> Duration {
     timeout_override().unwrap_or(CLI_DEFAULT_TIMEOUT)
 }
 
-/// A browser connection for one CLI run. Owns the transport and enforces
-/// the capability sandbox lifecycle: grant origins before dispatch, acquire
-/// non-stealing leases, and invalidate the connection after ambiguity.
-pub struct CliBrowserToolBridge {
-    client: BrowserClient,
-    /// True after a transport failure or timeout makes the current dispatch
-    /// state unknown. Operations are rejected until a fresh connection.
-    invalidated: bool,
-}
-
-impl CliBrowserToolBridge {
-    pub fn new(client: BrowserClient) -> Self {
-        Self {
-            client,
-            invalidated: false,
-        }
-    }
-
-    /// Refuse to dispatch any operation whose previous outcome is unknown.
-    fn check_not_invalidated(&self, operation: &str) -> Result<()> {
-        if self.invalidated {
-            bail!(
-                "browser connection invalidated: the outcome of a previous `{operation}` is unknown — start a new session"
-            );
-        }
-        Ok(())
-    }
-
-    /// Mark the connection as invalid after a transport break or timeout that
-    /// makes the dispatched operation's outcome indeterminate.
-    fn invalidate(&mut self) {
-        self.invalidated = true;
-    }
-
-    /// Grant an exact origin to the session capability sandbox. Must be called
-    /// after the tool permission is approved but before `dispatch`.
-    pub async fn grant_exact_origin(&mut self, origin: &str) -> Result<()> {
-        self.check_not_invalidated("grant_exact_origin")?;
-        let _granted = send_stateful_tool_call(
-            &self.client,
-            "browser_grant_exact_origin",
-            serde_json::json!({ "origin": origin }),
-        )
-        .await
-        .map_err(|e| {
-            self.invalidate();
-            e
-        })?;
-        Ok(())
-    }
-
-    /// Adopt an ambient user tab into the sandbox. Must be approved by the
-    /// permission gate before calling.
-    pub async fn adopt_tab(&mut self, tab_id: i64) -> Result<()> {
-        self.check_not_invalidated("adopt_tab")?;
-        let _adopted = send_stateful_tool_call(
-            &self.client,
-            "browser_adopt_tab",
-            serde_json::json!({ "tab_id": tab_id }),
-        )
-        .await
-        .map_err(|e| {
-            self.invalidate();
-            e
-        })?;
-        Ok(())
-    }
-
-    /// Dispatch a sensitive browser operation. This is the terminal step
-    /// after grant + ownership + lease are all confirmed. Produces a hard
-    /// ambiguity error on any transport/timeout outcome.
-    pub async fn dispatch(&mut self, tool: &str, args: Value) -> Result<Value> {
-        self.check_not_invalidated(tool)?;
-        let result = send_stateful_tool_call(&self.client, tool, args.clone()).await;
-        match result {
-            Err(ref e) if is_transport_ambiguous(e) => {
-                self.invalidate();
-                Err(anyhow::anyhow!(
-                    "transport to browser lost during `{tool}`; operation state unknown — start a new session"
-                ))
-            }
-            other => other,
-        }
-    }
-
-    /// Convenience: list tabs for discovery/adoption.
-    pub async fn tab_list(&mut self) -> Result<Value> {
-        self.check_not_invalidated("tab_list")?;
-        send_tool_call(&self.client, "browser_tab_list", serde_json::json!({})).await
-    }
-}
-
 /// Attempt to connect to the running Maho browser instance.
 ///
 /// If `override_path` is provided (from `--socket-path` flag), that path is
@@ -194,30 +99,24 @@ async fn connect_as(
         None => default_socket_path(),
     };
 
-    BrowserClient::connect_as(&path, connection_timeout(), controller_kind)
-        .await
-        .map_err(|e| {
-            // Provide a helpful message for the most common error case.
-            if matches!(e, maho_browser_mcp::error::McpBridgeError::SocketConnect(_)) {
-                anyhow::anyhow!(
-                    "Browser not running. Start Maho.app or run `maho headless --launch`.\n\
-                     (socket: {})\n\
-                     (underlying: {})",
-                    path.display(),
-                    e
-                )
-            } else {
-                anyhow::anyhow!("Failed to connect to browser: {e}")
-            }
-        })
+    let result = BrowserClient::connect_as(&path, connection_timeout(), controller_kind).await;
+    result.map_err(|e| {
+        // Provide a helpful message for the most common error case.
+        if matches!(e, maho_browser_mcp::error::McpBridgeError::SocketConnect(_)) {
+            anyhow::anyhow!(
+                "Browser not running. Start Maho.app or run `maho headless --launch`.\n\
+                 (socket: {})\n\
+                 (underlying: {})",
+                path.display(),
+                e
+            )
+        } else {
+            anyhow::anyhow!("Failed to connect to browser: {e}")
+        }
+    })
 }
 
 /// Renders a failed `tools/call` so the browser's own reason survives.
-///
-/// The reason matters to callers: the agent recovers from
-/// `no eligible active tab` by opening a tab, but only if it can still read
-/// that text. Wrapping the error in a generic "tools/call X failed" destroyed
-/// the signal and left the agent retrying navigation forever.
 pub(crate) fn describe_tool_call_failure(tool: &str, error: McpBridgeError) -> anyhow::Error {
     match &error {
         maho_browser_mcp::error::McpBridgeError::Io(io_err) if is_io_transport_loss(io_err) => {
@@ -248,12 +147,6 @@ fn is_io_transport_loss(e: &std::io::Error) -> bool {
             | ErrorKind::UnexpectedEof
             | ErrorKind::TimedOut
     )
-}
-
-/// True when the error signals a transport break or timeout. Used by
-/// `CliBrowserToolBridge::dispatch` to invalidate after ambiguity.
-pub fn is_transport_ambiguous(e: &anyhow::Error) -> bool {
-    format!("{e}").contains("operation state unknown")
 }
 
 static V2_DETECTION_CACHE: std::sync::Mutex<Option<std::collections::HashMap<String, bool>>> =
@@ -425,17 +318,6 @@ pub async fn send_routine_run(
             other => RoutineCallError::Other(other),
         })?;
     Ok(project_cli_result(result))
-}
-
-/// Send one stateful agent tool call without transparently reconnecting.
-/// A new connection loses the browser-side allowlist and lease, and replaying a
-/// mutation after an ambiguous transport failure can duplicate its effect.
-pub async fn send_stateful_tool_call(
-    client: &BrowserClient,
-    tool: &str,
-    args: Value,
-) -> Result<Value> {
-    send_tool_call_with(client, tool, args, false).await
 }
 
 async fn send_tool_call_with(

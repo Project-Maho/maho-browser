@@ -1,12 +1,11 @@
 //! End-to-end integration tests for the `maho` CLI binary.
 //!
-//! Spawns mock relay + mock billing-proxy servers, then exercises
-//! the full login → whoami → chat → logout flow via `std::process::Command`.
+//! Spawns a mock relay server, then exercises
+//! the full login → whoami → logout flow via `std::process::Command`.
 
 use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -17,12 +16,6 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 
 // ---------- Shared state for mock servers ----------
-
-/// Captured auth header from the proxy request.
-#[derive(Clone, Default)]
-struct ProxyState {
-    captured_auth: Arc<Mutex<Option<String>>>,
-}
 
 /// Mock relay state: stores one user (email, password, token) after signup.
 #[derive(Clone, Default)]
@@ -160,53 +153,11 @@ async fn handle_me(State(state): State<RelayState>, req: Request<Body>) -> impl 
     }
 }
 
-// ---------- Mock Billing Proxy ----------
-
-fn mock_proxy(state: ProxyState) -> Router {
-    Router::new()
-        .route("/v1/chat/completions", post(handle_chat))
-        .with_state(state)
-}
-
-async fn handle_chat(State(state): State<ProxyState>, req: Request<Body>) -> impl IntoResponse {
-    // Capture the Authorization header
-    let auth_header = req
-        .headers()
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    *state.captured_auth.lock().unwrap() = auth_header;
-
-    // Return a canned SSE response
-    let sse_body = concat!(
-        "data: {\"choices\":[{\"delta\":{\"content\":\"hello from maho\"}}]}\n\n",
-        "data: [DONE]\n\n",
-    );
-
-    (
-        axum::http::StatusCode::OK,
-        [("content-type", "text/event-stream")],
-        sse_body,
-    )
-}
-
 // ---------- Test helpers ----------
 
 async fn spawn_mock_relay() -> (SocketAddr, RelayState) {
     let state = RelayState::default();
     let app = mock_relay(state.clone());
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    (addr, state)
-}
-
-async fn spawn_mock_proxy() -> (SocketAddr, ProxyState) {
-    let state = ProxyState::default();
-    let app = mock_proxy(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -226,20 +177,16 @@ fn maho_cmd(config_dir: &std::path::Path) -> Command {
 // ---------- Tests ----------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_login_signup_whoami_chat_logout_flow() {
+async fn test_login_signup_whoami_logout_flow() {
     let (relay_addr, _relay_state) = spawn_mock_relay().await;
-    let (proxy_addr, proxy_state) = spawn_mock_proxy().await;
     let tmp = TempDir::new().unwrap();
     let relay_url = format!("http://{}", relay_addr);
-    let proxy_url = format!("http://{}/v1", proxy_addr);
 
     // 1. Signup
     let output = maho_cmd(tmp.path())
         .args([
             "--relay-url",
             &relay_url,
-            "--proxy-url",
-            &proxy_url,
             "login",
             "--signup",
             "--email",
@@ -285,44 +232,7 @@ async fn test_login_signup_whoami_chat_logout_flow() {
         "whoami should show free tier, got: {stdout}"
     );
 
-    // 3. Chat
-    let output = maho_cmd(tmp.path())
-        .args([
-            "--relay-url",
-            &relay_url,
-            "--proxy-url",
-            &proxy_url,
-            "chat",
-            "Say hello",
-        ])
-        .output()
-        .expect("failed to run maho chat");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "chat failed: stdout={stdout}, stderr={stderr}"
-    );
-    assert!(
-        stdout.contains("hello from maho"),
-        "chat should show canned response, got: {stdout}"
-    );
-
-    // Verify mock proxy received the Bearer token
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let captured = proxy_state.captured_auth.lock().unwrap().clone();
-    assert!(
-        captured.is_some(),
-        "proxy should have received an auth header"
-    );
-    let auth_val = captured.unwrap();
-    assert!(
-        auth_val.starts_with("Bearer at_"),
-        "proxy should receive the user's Bearer token, got: {auth_val}"
-    );
-
-    // 4. Config show
+    // 3. Config show
     let output = maho_cmd(tmp.path())
         .args(["config", "show"])
         .output()
@@ -340,7 +250,7 @@ async fn test_login_signup_whoami_chat_logout_flow() {
         "config show should display email, got: {stdout}"
     );
 
-    // 5. Logout
+    // 4. Logout
     let output = maho_cmd(tmp.path())
         .args(["logout"])
         .output()
@@ -360,18 +270,14 @@ async fn test_login_signup_whoami_chat_logout_flow() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_signup_subcommand_alias() {
     let (relay_addr, _) = spawn_mock_relay().await;
-    let (proxy_addr, _) = spawn_mock_proxy().await;
     let tmp = TempDir::new().unwrap();
     let relay_url = format!("http://{}", relay_addr);
-    let proxy_url = format!("http://{}/v1", proxy_addr);
 
     // Use the `signup` subcommand directly
     let output = maho_cmd(tmp.path())
         .args([
             "--relay-url",
             &relay_url,
-            "--proxy-url",
-            &proxy_url,
             "signup",
             "--email",
             "alias@example.com",
@@ -457,31 +363,6 @@ async fn test_relay_down_connection_refused() {
             || stderr_lower.contains("tcp connect error")
             || stderr_lower.contains("error"),
         "stderr should indicate connection failure, got: {stderr}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_chat_without_login() {
-    let (proxy_addr, _) = spawn_mock_proxy().await;
-    let tmp = TempDir::new().unwrap();
-    let proxy_url = format!("http://{}/v1", proxy_addr);
-
-    // No login performed — config is empty
-    let output = maho_cmd(tmp.path())
-        .args(["--proxy-url", &proxy_url, "chat", "Say hello"])
-        .output()
-        .expect("failed to run maho chat");
-
-    assert!(!output.status.success(), "chat without login should fail");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr_lower = stderr.to_lowercase();
-    assert!(
-        stderr_lower.contains("not logged in"),
-        "stderr should say 'not logged in', got: {stderr}"
-    );
-    assert!(
-        stderr_lower.contains("maho login"),
-        "stderr should mention 'maho login', got: {stderr}"
     );
 }
 

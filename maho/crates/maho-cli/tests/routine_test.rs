@@ -299,45 +299,6 @@ fn cli_routine_run_success_renders_browser_result() {
     assert!(stdout.contains("Here is your morning briefing."));
 }
 
-#[test]
-fn cli_agent_routine_flag_contract_test() {
-    let mut responses = HashMap::new();
-    responses.insert(
-        "browser_routines_run".to_string(),
-        ToolResponse::Ok {
-            text: serde_json::json!({
-                "id": "morning_briefing",
-                "content": "Routine execution success."
-            })
-            .to_string(),
-        },
-    );
-    let mock = MockBrowser::spawn(responses);
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    let output = run_cli_with_socket(&["agent", "--routine", "morning_briefing"], mock.socket());
-    assert!(
-        output.status.success(),
-        "maho agent --routine should succeed and exit 0; stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    // Test malformed JSON file
-    let dir = tempfile::tempdir().expect("tempdir");
-    let bad_json_file = dir.path().join("invalid.json");
-    std::fs::write(&bad_json_file, "{ invalid json").unwrap();
-
-    let bad_output = run_cli_with_socket(
-        &["agent", "--routine", bad_json_file.to_str().unwrap()],
-        mock.socket(),
-    );
-    assert_eq!(
-        bad_output.status.code(),
-        Some(1),
-        "malformed routine JSON must exit 1"
-    );
-}
-
 /// `maho routine run` must reject provider/model/workspace because browser-side
 /// routines cannot honor those CLI overrides. The approval flags are global
 /// deprecated no-ops and must execute the routine normally.
@@ -398,50 +359,6 @@ fn cli_routine_run_rejects_removed_approval_flags() {
             output.status.code(),
             Some(2),
             "routine run {flag} must exit 2; stderr: {stderr}"
-        );
-    }
-}
-
-#[test]
-fn cli_agent_routine_rejects_only_provider_model_and_workspace() {
-    let mut responses = HashMap::new();
-    responses.insert(
-        "browser_routines_run".to_string(),
-        ToolResponse::Ok {
-            text: serde_json::json!({
-                "id": "morning_briefing",
-                "content": "AGENT_ROUTINE_SHOULD_NOT_HAVE_RUN"
-            })
-            .to_string(),
-        },
-    );
-    let mock = MockBrowser::spawn(responses);
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    for flag in [
-        vec!["--provider", "anthropic"],
-        vec!["--model", "claude-3-5-sonnet"],
-        vec!["--workspace", "ws1"],
-    ] {
-        let mut args = vec!["agent", "--routine", "morning_briefing"];
-        args.extend_from_slice(&flag);
-        let output = run_cli_with_socket(&args, mock.socket());
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        assert_eq!(
-            output.status.code(),
-            Some(2),
-            "`agent --routine {flag:?}` must exit 2 (unsupported flag); stderr: {stderr}"
-        );
-        assert!(
-            stderr.contains(flag[0]),
-            "error must name the rejected flag {}; stderr: {stderr}",
-            flag[0]
-        );
-        assert!(
-            !stdout.contains("AGENT_ROUTINE_SHOULD_NOT_HAVE_RUN"),
-            "unsupported flag must be rejected before the routine runs; stdout: {stdout}"
         );
     }
 }

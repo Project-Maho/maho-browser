@@ -11,6 +11,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// A JSON-RPC 2.0 request ID — may be a number, a string, or null.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -103,6 +107,10 @@ pub struct InitializeParams {
     /// The browser honors known values only when the authenticated peer
     /// executable matches the corresponding shipped Maho executable.
     pub controller_kind: ControllerKind,
+    /// Whether this connection is an autonomous agent session. This is a
+    /// privilege-reducing admission mode, not an authority-bearing identity.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub autonomous: bool,
     /// DPAPI session token (base64-encoded, Windows only).
     /// When present, the server validates against its in-memory token.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -170,6 +178,9 @@ pub struct SessionInfo {
     pub display_label: String,
     /// Browser-validated controller classification.
     pub controller_kind: ControllerKind,
+    /// Browser acknowledgement of autonomous lease-admission mode.
+    #[serde(default)]
+    pub autonomous: bool,
 }
 
 impl Default for SessionInfo {
@@ -178,6 +189,7 @@ impl Default for SessionInfo {
             id: String::new(),
             display_label: "External MCP".to_string(),
             controller_kind: ControllerKind::ThirdParty,
+            autonomous: false,
         }
     }
 }
@@ -566,18 +578,50 @@ mod tests {
                 version: "0.1.0".to_string(),
             },
             controller_kind: ControllerKind::MahoBrowserMcp,
+            autonomous: false,
             auth_token: None,
         };
         let val = serde_json::to_value(&params).unwrap();
         assert_eq!(val["protocolVersion"], "2025-03-26");
         assert_eq!(val["clientInfo"]["name"], "maho-browser-mcp");
         assert_eq!(val["controllerKind"], "maho-browser-mcp");
+        assert!(val.get("autonomous").is_none());
         assert!(val.get("authToken").is_none());
 
         let back: InitializeParams = serde_json::from_value(val).unwrap();
         assert_eq!(back.protocol_version, "2025-03-26");
         assert_eq!(back.controller_kind, ControllerKind::MahoBrowserMcp);
+        assert!(!back.autonomous);
         assert!(back.auth_token.is_none());
+    }
+
+    #[test]
+    fn autonomous_initialize_params_serialize_true() {
+        let params = InitializeParams {
+            protocol_version: "2025-03-26".to_string(),
+            client_info: ClientInfo {
+                name: "maho-cli".to_string(),
+                version: "0.1.0".to_string(),
+            },
+            controller_kind: ControllerKind::MahoCli,
+            autonomous: true,
+            auth_token: None,
+        };
+        let value = serde_json::to_value(&params).unwrap();
+        assert_eq!(value["autonomous"], true);
+        let roundtrip: InitializeParams = serde_json::from_value(value).unwrap();
+        assert!(roundtrip.autonomous);
+    }
+
+    #[test]
+    fn legacy_session_info_defaults_autonomous_false() {
+        let info: SessionInfo = serde_json::from_value(json!({
+            "id": "legacy-session",
+            "displayLabel": "Maho CLI",
+            "controllerKind": "maho-cli"
+        }))
+        .unwrap();
+        assert!(!info.autonomous);
     }
 
     #[test]
@@ -605,6 +649,7 @@ mod tests {
                 id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
                 display_label: "Maho Browser MCP".to_string(),
                 controller_kind: ControllerKind::MahoBrowserMcp,
+                autonomous: false,
             },
             capabilities: Capabilities {
                 tools: Some(json!({})),
@@ -614,6 +659,7 @@ mod tests {
         assert_eq!(val["serverInfo"]["name"], "maho-browser");
         assert_eq!(val["protocolVersion"], "2025-03-26");
         assert_eq!(val["sessionInfo"]["displayLabel"], "Maho Browser MCP");
+        assert_eq!(val["sessionInfo"]["autonomous"], false);
         assert!(val["capabilities"]["tools"].is_object());
 
         let back: InitializeResult = serde_json::from_value(val).unwrap();
@@ -622,6 +668,7 @@ mod tests {
             back.session_info.controller_kind,
             ControllerKind::MahoBrowserMcp
         );
+        assert!(!back.session_info.autonomous);
     }
 
     #[test]

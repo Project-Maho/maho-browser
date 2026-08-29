@@ -179,6 +179,11 @@ bool MahoMcpLeaseRegistry::IsHeldBy(int64_t tab_id,
   return leases_[tab_id].session_id == session_id;
 }
 
+bool MahoMcpLeaseRegistry::HasActiveLease(int64_t tab_id) {
+  base::AutoLock lock(lock_);
+  return SweepAndCheck(tab_id);
+}
+
 size_t MahoMcpLeaseRegistry::active_lease_count() {
   base::AutoLock lock(lock_);
   return leases_.size();

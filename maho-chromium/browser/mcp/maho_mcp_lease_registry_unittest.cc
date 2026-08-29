@@ -26,11 +26,30 @@ TEST_F(MahoMcpLeaseRegistryTest, AcquireGrantsToFirstSession) {
   EXPECT_TRUE(registry_.IsHeldBy(1, "sess-A"));
 }
 
+TEST_F(MahoMcpLeaseRegistryTest, HasActiveLeaseIsHolderAgnostic) {
+  EXPECT_FALSE(registry_.HasActiveLease(1));
+  auto result = registry_.Acquire(1, "sess-A", base::Seconds(60), false);
+  ASSERT_TRUE(result.ok);
+  // Held by ANY session: a per-session IsHeldBy("sess-B") fails but the
+  // tab still has an active lease, which is what chooser suppression needs.
+  EXPECT_TRUE(registry_.HasActiveLease(1));
+  EXPECT_FALSE(registry_.IsHeldBy(1, "sess-B"));
+  // Expiry sweeps make the tab lease-free again (MOCK_TIME advances).
+  task_env_.FastForwardBy(base::Seconds(61));
+  EXPECT_FALSE(registry_.HasActiveLease(1));
+}
+
 TEST_F(MahoMcpLeaseRegistryTest, SecondSessionBlockedWithoutForceSteal) {
   registry_.Acquire(1, "sess-A", base::Seconds(60), false);
   auto result = registry_.Acquire(1, "sess-B", base::Seconds(60), false);
   EXPECT_FALSE(result.ok);
   EXPECT_EQ(result.previous_holder, "sess-A");
+  EXPECT_EQ(result.message, "tab already leased");
+  EXPECT_TRUE(registry_.IsHeldBy(1, "sess-A"));
+  EXPECT_FALSE(registry_.IsHeldBy(1, "sess-B"));
+  for (const auto& entry : registry_.GetAuditLog()) {
+    EXPECT_NE(entry.action, "steal");
+  }
 }
 
 TEST_F(MahoMcpLeaseRegistryTest, SameSessionReacquireRefreshesTtl) {

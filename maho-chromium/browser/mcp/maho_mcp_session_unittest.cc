@@ -110,6 +110,22 @@ public:
   int browser_type_call_count = 0;
   int browser_type_tab_id = 0;
   ui::AXNodeID browser_type_ax_id = 0;
+  int browser_click_call_count = 0;
+  int browser_click_tab_id = 0;
+  ui::AXNodeID browser_click_ax_id = 0;
+  bool click_succeeds = true;
+  bool type_succeeds = true;
+
+  struct MockLocatorNode {
+    ui::AXNodeID ax_id = 0;
+    std::string role;
+    std::string name;
+    std::string css;
+    bool attached = true;
+    bool visible = true;
+    bool enabled = true;
+  };
+  std::vector<MockLocatorNode> mock_locator_nodes;
   int file_upload_call_count = 0;
   int file_upload_tab_id = 0;
   std::string file_upload_path;
@@ -297,6 +313,82 @@ public:
                              uint64_t snapshot_token) override {
     return target.valid && snapshot_token == navigation_epoch;
   }
+  AccessibilitySnapshotV2Result GetAccessibilitySnapshotV2(
+      const AccessibilitySnapshotV2Params& params,
+      MahoMcpSession::RefTable* out_refs,
+      MahoMcpAccessibilityHandler::ObservationCache& observation_cache,
+      uint64_t token_sequence) override {
+    ui::AXTreeUpdate update;
+    update.root_id = 1;
+    if (browser_click_call_count > 0) {
+      update.nodes.resize(4);
+      update.nodes[0].id = 1;
+      update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+      update.nodes[0].child_ids = {2, 3, 4};
+      update.nodes[1].id = 2;
+      update.nodes[1].role = ax::mojom::Role::kHeading;
+      update.nodes[1].SetName("Dashboard");
+      update.nodes[2].id = 3;
+      update.nodes[2].role = ax::mojom::Role::kButton;
+      update.nodes[2].SetName("Logout");
+      update.nodes[3].id = 4;
+      update.nodes[3].role = ax::mojom::Role::kStaticText;
+      update.nodes[3].SetName("Action completed");
+    } else {
+      update.nodes.resize(3);
+      update.nodes[0].id = 1;
+      update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+      update.nodes[0].child_ids = {2, 3};
+      update.nodes[1].id = 2;
+      update.nodes[1].role = ax::mojom::Role::kHeading;
+      update.nodes[1].SetName("Dashboard");
+      update.nodes[2].id = 3;
+      update.nodes[2].role = ax::mojom::Role::kButton;
+      update.nodes[2].SetName("Logout");
+    }
+
+    ui::AXTree tree(update);
+    MahoMcpAccessibilityHandler::SnapshotV2Options opts;
+    if (params.mode == "compact") {
+      opts.mode = MahoMcpAccessibilityHandler::SnapshotMode::kCompact;
+    } else if (params.mode == "full") {
+      opts.mode = MahoMcpAccessibilityHandler::SnapshotMode::kFull;
+    } else {
+      opts.mode = MahoMcpAccessibilityHandler::SnapshotMode::kInteractive;
+    }
+    opts.include_hidden = params.include_hidden;
+    opts.scope_selector = params.scope_selector;
+    opts.scope_ref = params.scope_ref;
+    opts.since_snapshot_token = params.since_snapshot_token;
+    opts.max_bytes = params.max_bytes;
+    opts.max_depth = params.max_depth;
+
+    MahoMcpAccessibilityHandler::SnapshotV2Result::TabMetadata tab_meta;
+    tab_meta.id = (params.tab_id != 0) ? params.tab_id : 7;
+    tab_meta.url = "https://example.com/page";
+    tab_meta.title = "Test Page";
+
+    MahoMcpAccessibilityHandler::RefTable local_refs;
+    std::string frame_sig = "1:0";
+    auto v2_res = MahoMcpAccessibilityHandler::BuildSnapshotV2(
+        tree, opts, local_refs, tab_meta, navigation_epoch, frame_sig,
+        observation_cache, token_sequence);
+    if (out_refs) {
+      *out_refs = local_refs;
+    }
+    AccessibilitySnapshotV2Result result;
+    result.snapshot_token = v2_res.snapshot_token;
+    result.tab.id = tab_meta.id;
+    result.tab.url = tab_meta.url;
+    result.tab.title = tab_meta.title;
+    result.tree = std::move(v2_res.tree);
+    result.diff = std::move(v2_res.diff);
+    result.captured_nodes = v2_res.stats.captured_nodes;
+    result.serialized_nodes = v2_res.stats.serialized_nodes;
+    result.bytes = v2_res.stats.bytes;
+    result.truncated = v2_res.stats.truncated;
+    return result;
+  }
   PageContentResult GetPageContent(int tab_id) override {
     PageContentResult result;
     result.url = "https://example.com/page";
@@ -363,11 +455,182 @@ public:
               std::optional<ui::AXNodeID> ax_id) override {
     return false;
   }
-  bool Click(int tab_id, ui::AXNodeID ax_id) override { return false; }
+  bool Click(int tab_id, ui::AXNodeID ax_id) override {
+    ++browser_click_call_count;
+    browser_click_tab_id = tab_id;
+    browser_click_ax_id = ax_id;
+    return click_succeeds;
+  }
+  void ClickVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      base::OnceCallback<void(InputActionOutcome)> callback) override {
+    ++browser_click_call_count;
+    browser_click_tab_id = tab_id;
+    browser_click_ax_id = ax_id;
+    InputActionOutcome outcome;
+    outcome.dispatched = click_succeeds;
+    outcome.verified = click_succeeds;
+    outcome.method = "trusted_input";
+    if (!click_succeeds) {
+      outcome.reason = "click_failed";
+    }
+    std::move(callback).Run(std::move(outcome));
+  }
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string &text) override {
     ++browser_type_call_count;
     browser_type_tab_id = tab_id;
     browser_type_ax_id = ax_id;
+    return type_succeeds;
+  }
+  void TypeVerified(
+      int tab_id,
+      ui::AXNodeID ax_id,
+      const std::string& text,
+      base::OnceCallback<void(InputActionOutcome)> callback) override {
+    ++browser_type_call_count;
+    browser_type_tab_id = tab_id;
+    browser_type_ax_id = ax_id;
+    InputActionOutcome outcome;
+    outcome.dispatched = type_succeeds;
+    outcome.verified = type_succeeds;
+    outcome.method = "trusted_input";
+    if (!type_succeeds) {
+      outcome.reason = "type_failed";
+    }
+    std::move(callback).Run(std::move(outcome));
+  }
+
+  LocatorResolution ResolveLocator(
+      int tab_id,
+      const LocatorParams& params,
+      const MahoMcpSession::RefTable& refs) override {
+    LocatorResolution res;
+
+    if (params.ref.has_value()) {
+      auto it = refs.find(*params.ref);
+      if (it == refs.end()) {
+        res.error_code = "locator_not_found";
+        res.hint = "Ref not found in session table";
+        return res;
+      }
+      ui::AXNodeID target_ax_id = it->second;
+      for (const auto& node : mock_locator_nodes) {
+        if (node.ax_id == target_ax_id) {
+          if (!node.attached) {
+            res.error_code = "locator_detached";
+            res.hint = "Element is detached from DOM";
+            return res;
+          }
+          if (!node.enabled) {
+            res.error_code = "locator_not_actionable";
+            res.hint = "Element is disabled";
+            return res;
+          }
+          if (!node.visible) {
+            res.error_code = "locator_obscured";
+            res.hint = "Element is obscured or not visible";
+            return res;
+          }
+          break;
+        }
+      }
+      res.success = true;
+      res.ax_id = target_ax_id;
+      return res;
+    }
+
+    if (params.css.has_value()) {
+      std::vector<const MockLocatorNode*> matches;
+      for (const auto& node : mock_locator_nodes) {
+        if (node.css == *params.css) {
+          matches.push_back(&node);
+        }
+      }
+      if (matches.empty()) {
+        res.error_code = "locator_not_found";
+        res.hint = "No element matches selector: " + *params.css;
+        return res;
+      }
+      if (matches.size() > 1) {
+        res.error_code = "locator_ambiguous";
+        res.matches = static_cast<int>(matches.size());
+        res.hint = "Multiple elements match selector";
+        return res;
+      }
+      const auto* target = matches[0];
+      if (!target->attached) {
+        res.error_code = "locator_detached";
+        res.hint = "Element is detached from DOM";
+        return res;
+      }
+      if (!target->enabled) {
+        res.error_code = "locator_not_actionable";
+        res.hint = "Element is disabled";
+        return res;
+      }
+      if (!target->visible) {
+        res.error_code = "locator_obscured";
+        res.hint = "Element is obscured or not visible";
+        return res;
+      }
+      res.success = true;
+      res.ax_id = target->ax_id;
+      return res;
+    }
+
+    if (params.role.has_value() && params.name.has_value()) {
+      std::vector<const MockLocatorNode*> matches;
+      for (const auto& node : mock_locator_nodes) {
+        bool role_match =
+            base::EqualsCaseInsensitiveASCII(node.role, *params.role);
+        bool name_match =
+            params.exact
+                ? base::EqualsCaseInsensitiveASCII(node.name, *params.name)
+                : (base::ToLowerASCII(node.name).find(
+                       base::ToLowerASCII(*params.name)) != std::string::npos);
+        if (role_match && name_match) {
+          matches.push_back(&node);
+        }
+      }
+      if (matches.empty()) {
+        res.error_code = "locator_not_found";
+        res.hint = "No element matches role and name";
+        return res;
+      }
+      if (matches.size() > 1) {
+        res.error_code = "locator_ambiguous";
+        res.matches = static_cast<int>(matches.size());
+        res.hint = "Multiple elements match role and name";
+        return res;
+      }
+      const auto* target = matches[0];
+      if (!target->attached) {
+        res.error_code = "locator_detached";
+        res.hint = "Element is detached from DOM";
+        return res;
+      }
+      if (!target->enabled) {
+        res.error_code = "locator_not_actionable";
+        res.hint = "Element is disabled";
+        return res;
+      }
+      if (!target->visible) {
+        res.error_code = "locator_obscured";
+        res.hint = "Element is obscured or not visible";
+        return res;
+      }
+      res.success = true;
+      res.ax_id = target->ax_id;
+      return res;
+    }
+
+    res.error_code = "locator_not_found";
+    res.hint = "Invalid locator parameters";
+    return res;
+  }
+
+  bool WaitForAutoQuiet(int tab_id, int timeout_ms) override {
     return true;
   }
   bool SelectFileForPendingChooser(int tab_id,
@@ -417,7 +680,8 @@ protected:
 
   // Installs a ResolvingFakeDelegate + lease registry and initializes a fresh
   // session for the R-8 target-resolution tests.
-  void InitResolvingSession(bool browser_mcp = false) {
+  void InitResolvingSession(bool browser_mcp = false,
+                            bool autonomous = false) {
     session_.reset();
     delegate_ = std::make_unique<ResolvingFakeDelegate>();
     MahoMcpSession::SetBrowserDelegate(delegate_.get());
@@ -442,8 +706,10 @@ protected:
         R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
         R"("params":{"protocolVersion":"2025-03-26",)"
         R"("controllerKind":"%s",)"
+        R"("autonomous":%s,)"
         R"("clientInfo":{"name":"t","version":"0.1.0"}}})"
-        "\n", browser_mcp ? "maho-browser-mcp" : "maho-cli"));
+        "\n", browser_mcp ? "maho-browser-mcp" : "maho-cli",
+        autonomous ? "true" : "false"));
     EXPECT_EQ(responses.size(), 1u);
     EXPECT_EQ(session_->state(), MahoMcpSession::State::kActive);
   }
@@ -460,7 +726,26 @@ protected:
   std::vector<std::string> CallControlRaw(const std::string& name,
                                           const std::string& args,
                                           int id) {
-    return session_->ProcessData(base::StringPrintf(
+    return CallControlRawOn(session_.get(), name, args, id);
+  }
+
+  std::vector<std::string> InitializeCliRaw(MahoMcpSession* target,
+                                            bool autonomous,
+                                            int id = 1) {
+    return target->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"initialize","id":%d,)"
+        R"("params":{"protocolVersion":"2025-03-26",)"
+        R"("controllerKind":"maho-cli","autonomous":%s,)"
+        R"("clientInfo":{"name":"t","version":"0.1.0"}}})"
+        "\n",
+        id, autonomous ? "true" : "false"));
+  }
+
+  std::vector<std::string> CallControlRawOn(MahoMcpSession* target,
+                                             const std::string& name,
+                                             const std::string& args,
+                                             int id) {
+    return target->ProcessData(base::StringPrintf(
         R"({"jsonrpc":"2.0","method":"maho/control/call","id":%d,)"
         R"("params":{"name":"%s","arguments":%s}})"
         "\n",
@@ -599,6 +884,62 @@ TEST_F(MahoMcpSessionTest, KnownControllersRequireMatchingPeerExecutable) {
     EXPECT_EQ(*info->FindString("controllerKind"), test.expected_kind);
     EXPECT_EQ(*info->FindString("id"), candidate->session_id());
   }
+}
+
+TEST_F(MahoMcpSessionTest,
+       AutonomousTrustedCliInitializeAcknowledgesModeAndAgentLabel) {
+  auto agent = MakeTrustedCliTestSession();
+  auto responses = InitializeCliRaw(agent.get(), true, 901);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* result = response.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  const base::DictValue* info = result->FindDict("sessionInfo");
+  ASSERT_TRUE(info);
+  ASSERT_TRUE(info->FindString("controllerKind"));
+  ASSERT_TRUE(info->FindString("displayLabel"));
+  EXPECT_EQ(*info->FindString("controllerKind"), "maho-cli");
+  EXPECT_EQ(*info->FindString("displayLabel"), "Maho Agent");
+  EXPECT_EQ(info->FindBool("autonomous"), true);
+  EXPECT_TRUE(agent->autonomous());
+
+  auto third_party = MakeTestSession();
+  responses = third_party->ProcessData(
+      R"({"jsonrpc":"2.0","method":"initialize","id":902,)"
+      R"("params":{"protocolVersion":"2025-03-26",)"
+      R"("controllerKind":"third-party","autonomous":true,)"
+      R"("clientInfo":{"name":"external","version":"1"}}})"
+      "\n");
+  ASSERT_EQ(responses.size(), 1u);
+  response = ParseLine(responses[0]);
+  result = response.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  info = result->FindDict("sessionInfo");
+  ASSERT_TRUE(info);
+  ASSERT_TRUE(info->FindString("controllerKind"));
+  ASSERT_TRUE(info->FindString("displayLabel"));
+  EXPECT_EQ(*info->FindString("controllerKind"), "third-party");
+  EXPECT_EQ(*info->FindString("displayLabel"), "External MCP");
+  EXPECT_EQ(info->FindBool("autonomous"), true);
+}
+
+TEST_F(MahoMcpSessionTest, InitializeRejectsNonBooleanAutonomous) {
+  auto responses = session_->ProcessData(
+      R"({"jsonrpc":"2.0","method":"initialize","id":903,)"
+      R"("params":{"protocolVersion":"2025-03-26",)"
+      R"("autonomous":"yes",)"
+      R"("clientInfo":{"name":"test","version":"1"}}})"
+      "\n");
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), -32602);
+  ASSERT_TRUE(error->FindString("message"));
+  EXPECT_EQ(*error->FindString("message"),
+            "Invalid params: autonomous must be boolean");
+  EXPECT_EQ(session_->state(), MahoMcpSession::State::kClosed);
+  EXPECT_FALSE(session_->autonomous());
 }
 
 TEST_F(MahoMcpSessionTest, DevelopmentBundleCliIsTrusted) {
@@ -3017,6 +3358,40 @@ TEST_F(MahoMcpSessionTest,
   EXPECT_EQ(delegate_->browser_type_call_count, 0);
 }
 
+TEST_F(MahoMcpSessionTest, NavigationEpochResetsDiff) {
+  InitResolvingSession();
+
+  // Initial V2 snapshot on active tab (tab_id: 7)
+  auto responses1 = CallToolRaw("page.accessibility_snapshot_v2",
+                                R"({"tab_id":7,"mode":"interactive"})", 501);
+  ASSERT_EQ(responses1.size(), 1u);
+  base::Value output1 = ParseExecutionOutput(responses1[0]);
+  const base::DictValue* result1 = output1.GetIfDict();
+  ASSERT_TRUE(result1) << responses1[0];
+  const std::string* token1 = result1->FindString("snapshot_token");
+  ASSERT_TRUE(token1);
+  EXPECT_FALSE(token1->empty());
+
+  // Advance navigation epoch on the delegate to simulate page navigation
+  ++delegate_->navigation_epoch;
+
+  // Request next snapshot with since_snapshot_token from previous epoch
+  std::string req2 = base::StringPrintf(
+      R"({"tab_id":7,"mode":"interactive","since_snapshot_token":"%s"})",
+      token1->c_str());
+  auto responses2 = CallToolRaw("page.accessibility_snapshot_v2", req2, 502);
+  ASSERT_EQ(responses2.size(), 1u);
+  base::Value output2 = ParseExecutionOutput(responses2[0]);
+  const base::DictValue* result2 = output2.GetIfDict();
+  ASSERT_TRUE(result2) << responses2[0];
+
+  // Navigation epoch change forces a full reset diff (all nodes added)
+  const std::string* diff = result2->FindString("diff");
+  ASSERT_TRUE(diff);
+  EXPECT_FALSE(diff->empty());
+  EXPECT_NE(diff->find("+ "), std::string::npos);
+}
+
 TEST_F(MahoMcpSessionTest, AcquireLeaseForceStealsOtherSession) {
   InitResolvingSession();
   auto other_session = MakeTrustedCliTestSession(lease_registry_.get());
@@ -3050,6 +3425,145 @@ TEST_F(MahoMcpSessionTest, AcquireLeaseForceStealsOtherSession) {
   EXPECT_EQ(*previous_holder, other_session_id);
   EXPECT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
   EXPECT_FALSE(lease_registry_->IsHeldBy(7, other_session_id));
+}
+
+TEST_F(MahoMcpSessionTest,
+       AutonomousAcquireLeaseRejectsContestedTabWithHolderData) {
+  InitResolvingSession(false, true);
+  ASSERT_TRUE(session_->autonomous());
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 910)
+                .size(),
+            1u);
+  ASSERT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
+
+  auto contender = MakeTrustedCliTestSession(lease_registry_.get());
+  auto init = InitializeCliRaw(contender.get(), true, 911);
+  ASSERT_EQ(init.size(), 1u);
+  ASSERT_TRUE(contender->autonomous());
+
+  auto responses = CallControlRawOn(
+      contender.get(), "browser_acquire_lease", R"({"tab_id":7})", 912);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  EXPECT_EQ(error->FindInt("code"), -32000);
+  ASSERT_TRUE(error->FindString("message"));
+  EXPECT_EQ(*error->FindString("message"), "tab already leased");
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  EXPECT_EQ(data->size(), 2u);
+  ASSERT_TRUE(data->FindString("previous_holder"));
+  EXPECT_EQ(*data->FindString("previous_holder"), session_->session_id());
+  EXPECT_EQ(data->FindInt("tab_id"), 7);
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, session_->session_id()));
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, contender->session_id()));
+
+  for (const auto& entry : lease_registry_->GetAuditLog()) {
+    EXPECT_FALSE(entry.action == "steal" &&
+                 entry.session_id == contender->session_id());
+  }
+}
+
+TEST_F(MahoMcpSessionTest, HumanCliAcquireLeaseForceStealsAutonomousHolder) {
+  InitResolvingSession(false, true);
+  ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 920)
+                .size(),
+            1u);
+  const std::string agent_id = session_->session_id();
+  ASSERT_TRUE(lease_registry_->IsHeldBy(7, agent_id));
+
+  auto human = MakeTrustedCliTestSession(lease_registry_.get());
+  auto init = InitializeCliRaw(human.get(), false, 921);
+  ASSERT_EQ(init.size(), 1u);
+  ASSERT_FALSE(human->autonomous());
+  auto responses = CallControlRawOn(
+      human.get(), "browser_acquire_lease", R"({"tab_id":7})", 922);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  ASSERT_FALSE(response.GetDict().FindDict("error")) << responses[0];
+  const base::DictValue* result = response.GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  base::Value payload(result->Clone());
+  if (const std::string* output_json = result->FindString("outputJson")) {
+    auto parsed = base::JSONReader::Read(*output_json, base::JSON_PARSE_RFC);
+    ASSERT_TRUE(parsed.has_value());
+    payload = std::move(*parsed);
+  }
+  const base::DictValue* payload_dict = payload.GetIfDict();
+  ASSERT_TRUE(payload_dict);
+  ASSERT_TRUE(payload_dict->FindString("previous_holder"));
+  EXPECT_EQ(*payload_dict->FindString("previous_holder"), agent_id);
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, human->session_id()));
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, agent_id));
+
+  bool saw_steal = false;
+  for (const auto& entry : lease_registry_->GetAuditLog()) {
+    if (entry.action == "steal" && entry.session_id == human->session_id() &&
+        entry.previous == agent_id && entry.tab_id == 7) {
+      saw_steal = true;
+    }
+  }
+  EXPECT_TRUE(saw_steal);
+}
+
+TEST_F(MahoMcpSessionTest,
+       AutonomousMutationWithoutLeaseDoesNotImplicitlyForceSteal) {
+  InitResolvingSession(false, true);
+  const std::string incumbent = "incumbent-session";
+  ASSERT_TRUE(
+      lease_registry_->Acquire(7, incumbent, base::Seconds(60), false).ok);
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#action-btn"}})", 930);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorLeaseRequired);
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, incumbent));
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_->session_id()));
+  EXPECT_EQ(delegate_->browser_click_call_count, 0);
+  for (const auto& entry : lease_registry_->GetAuditLog()) {
+    EXPECT_FALSE(entry.action == "steal" &&
+                 entry.session_id == session_->session_id());
+  }
+}
+
+TEST_F(MahoMcpSessionTest,
+       AutonomousScopedLeaseContentionReturnsStructuredAdmissionError) {
+  InitResolvingSession(false, true);
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101,
+       .role = "button",
+       .name = "Submit",
+       .css = "#action-btn"},
+  };
+  const std::string incumbent = "incumbent-session";
+  ASSERT_TRUE(
+      lease_registry_->Acquire(7, incumbent, base::Seconds(60), false).ok);
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#action-btn"},"lease":"scoped"})",
+      940);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  EXPECT_EQ(error->FindInt("code"), -32000);
+  ASSERT_TRUE(error->FindString("message"));
+  EXPECT_EQ(*error->FindString("message"), "tab already leased");
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  EXPECT_EQ(data->size(), 2u);
+  ASSERT_TRUE(data->FindString("previous_holder"));
+  EXPECT_EQ(*data->FindString("previous_holder"), incumbent);
+  EXPECT_EQ(data->FindInt("tab_id"), 7);
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, incumbent));
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_->session_id()));
+  EXPECT_EQ(delegate_->browser_click_call_count, 0);
 }
 
 TEST_F(MahoMcpSessionTest, GrantedExactOriginIsRequiredForNavigation) {
@@ -3430,6 +3944,8 @@ class TypeGuardFakeDelegate : public ResolvingFakeDelegate {
 public:
   std::unordered_map<ui::AXNodeID, MahoMcpFieldMetadata> field_metadata;
   int type_call_count = 0;
+  int credential_typing_approval_count = 0;
+  bool credential_typing_approval_result = true;
   std::string last_typed_text;
   int vault_fill_count = 0;
   int vault_totp_fill_count = 0;
@@ -3445,6 +3961,13 @@ public:
   bool verified_click_result = true;
   bool verified_click_dispatched = true;
   std::string verified_click_reason;
+
+  bool ConfirmCredentialTypingApproval(
+      std::string_view,
+      const ResolvedMahoMcpTarget&) override {
+    ++credential_typing_approval_count;
+    return credential_typing_approval_result;
+  }
 
   bool Type(int tab_id, ui::AXNodeID ax_id, const std::string &text) override {
     ++type_call_count;
@@ -3734,8 +4257,33 @@ TEST_F(MahoMcpSessionTypeGuardTest,
 
   const auto *result = resp.GetDict().FindDict("result");
   ASSERT_TRUE(result) << resp.DebugString();
+  EXPECT_EQ(delegate_->credential_typing_approval_count, 1);
   EXPECT_EQ(delegate_->type_call_count, 1);
   EXPECT_EQ(delegate_->last_typed_text, "admin1234");
+  EXPECT_EQ(resp.DebugString().find("admin1234"), std::string::npos);
+}
+
+TEST_F(MahoMcpSessionTypeGuardTest,
+       CredentialFieldRejectsWhenNativeApprovalIsDenied) {
+  MahoMcpFieldMetadata secret;
+  secret.classified = true;
+  secret.is_protected = true;
+  delegate_->field_metadata[202] = secret;
+  delegate_->credential_typing_approval_result = false;
+  CaptureAccessibilitySnapshot(12);
+  session_->ref_table()[2] = 202;
+
+  base::Value response = CallTool(
+      "browser_type",
+      R"({"ref":2,"text":"S3NTINEL-denied","allow_credentials":true})", 13);
+
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << response.DebugString();
+  EXPECT_EQ(error->FindInt("code"), -32008);
+  EXPECT_EQ(*error->FindString("message"), "credential_typing_denied");
+  EXPECT_EQ(delegate_->credential_typing_approval_count, 1);
+  EXPECT_EQ(delegate_->type_call_count, 0);
+  EXPECT_EQ(response.DebugString().find("S3NTINEL"), std::string::npos);
 }
 
 TEST_F(MahoMcpSessionTypeGuardTest,
@@ -4303,8 +4851,11 @@ TEST_F(MahoMcpSessionTest, LegacyDelegateWithoutSnapshotTokensPreservesRefsAndAl
 
 TEST(MahoMcpTruthfulInputTest, StaleReferenceErrorCodeContract) {
   EXPECT_EQ(kMahoMcpErrorStaleReference, -32009);
-  EXPECT_STREQ(kMahoMcpMessageStaleReference,
-               "accessibility snapshot target changed; capture a new snapshot");
+  EXPECT_STREQ(
+      kMahoMcpMessageStaleReference,
+      "accessibility snapshot target changed; refs are session-scoped - "
+      "capture a new snapshot (browser_snapshot) in this session, then retry "
+      "with the new ref");
 }
 
 TEST(MahoMcpTruthfulInputTest, CredentialFieldClassificationProtection) {
@@ -4342,6 +4893,160 @@ TEST(MahoMcpTruthfulInputTest, CredentialFieldClassificationProtection) {
   ordinary.autocomplete = "username";
   ordinary.accessible_name = "search query";
   EXPECT_FALSE(MahoMcpSession::IsCredentialField(ordinary));
+}
+
+TEST_F(MahoMcpSessionTest, DuplicateRoleNameFailsClosed) {
+  InitResolvingSession();
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Continue"},
+      {.ax_id = 102, .role = "button", .name = "Continue"},
+  };
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"role":"button","name":"Continue","exact":true}})",
+      101);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  const std::string* code = data->FindString("code");
+  ASSERT_TRUE(code);
+  EXPECT_EQ(*code, "locator_ambiguous");
+  EXPECT_EQ(data->FindInt("matches").value_or(0), 2);
+  EXPECT_EQ(delegate_->browser_click_call_count, 0);
+}
+
+TEST_F(MahoMcpSessionTest, CssLocatorMapsExactNode) {
+  InitResolvingSession();
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#submit"},
+  };
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#submit"}})",
+      102);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value output = ParseExecutionOutput(responses[0]);
+  const base::DictValue* result = output.GetIfDict();
+  ASSERT_TRUE(result);
+  const base::DictValue* action = result->FindDict("action");
+  ASSERT_TRUE(action);
+  EXPECT_TRUE(action->FindBool("dispatched").value_or(false));
+  EXPECT_EQ(delegate_->browser_click_call_count, 1);
+  EXPECT_EQ(delegate_->browser_click_ax_id, 101);
+}
+
+TEST_F(MahoMcpSessionTest, DetachedNodeError) {
+  InitResolvingSession();
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#detached-btn", .attached = false},
+  };
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#detached-btn"}})",
+      103);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  const std::string* code = data->FindString("code");
+  ASSERT_TRUE(code);
+  EXPECT_EQ(*code, "locator_detached");
+  EXPECT_EQ(delegate_->browser_click_call_count, 0);
+}
+
+TEST_F(MahoMcpSessionTest, DisabledNodeError) {
+  InitResolvingSession();
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#disabled-btn", .enabled = false},
+  };
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#disabled-btn"}})",
+      104);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  const base::DictValue* data = error->FindDict("data");
+  ASSERT_TRUE(data);
+  const std::string* code = data->FindString("code");
+  ASSERT_TRUE(code);
+  EXPECT_EQ(*code, "locator_not_actionable");
+  EXPECT_EQ(delegate_->browser_click_call_count, 0);
+}
+
+TEST_F(MahoMcpSessionTest, ScopedLeaseCleanup) {
+  InitResolvingSession(true);
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#action-btn"},
+  };
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_->session_id()));
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#action-btn"},"lease":"scoped"})",
+      105);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  EXPECT_FALSE(response.GetDict().FindDict("error")) << responses[0];
+  EXPECT_EQ(delegate_->browser_click_call_count, 1);
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_->session_id()));
+}
+
+TEST_F(MahoMcpSessionTest, NoReplayOnUnknownResult) {
+  InitResolvingSession();
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#fail-btn"},
+  };
+  delegate_->click_succeeds = false;
+
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#fail-btn"}})",
+      106);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value response = ParseLine(responses[0]);
+  const base::DictValue* error = response.GetDict().FindDict("error");
+  ASSERT_TRUE(error) << responses[0];
+  EXPECT_EQ(delegate_->browser_click_call_count, 1);
+}
+
+TEST_F(MahoMcpSessionTest, ObserveReturnsPostActionDiff) {
+  InitResolvingSession();
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#observe-btn"},
+  };
+
+  // Initial snapshot to populate observation cache
+  auto snap_responses = CallToolRaw("page.accessibility_snapshot_v2",
+                                    R"({"tab_id":7,"mode":"interactive"})",
+                                    1071);
+  ASSERT_EQ(snap_responses.size(), 1u);
+
+  // Click with observe: "diff"
+  auto responses = CallToolRaw(
+      "input.locator_click",
+      R"({"tab_id":7,"locator":{"css":"#observe-btn"},"observe":"diff"})",
+      1072);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value output = ParseExecutionOutput(responses[0]);
+  const base::DictValue* result = output.GetIfDict();
+  ASSERT_TRUE(result);
+  const base::DictValue* obs = result->FindDict("observation");
+  ASSERT_TRUE(obs);
+  const std::string* token = obs->FindString("snapshot_token");
+  ASSERT_TRUE(token);
+  EXPECT_FALSE(token->empty());
+  EXPECT_TRUE(obs->Find("diff"));
 }
 
 } // namespace

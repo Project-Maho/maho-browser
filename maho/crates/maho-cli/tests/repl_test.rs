@@ -284,3 +284,154 @@ async fn repl_unknown_command() {
         "expected unknown cmd msg, got: {stdout}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_observe_prints_compact_tree() {
+    let obs_resp = json!({
+        "snapshot_token": "s_1",
+        "tree": "WebArea 'Test Page'\n  button 'Submit' [ref=1]\n"
+    });
+    let (_dir, sock_path, server) = make_mock_server(vec![obs_resp]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "observe\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("WebArea 'Test Page'"),
+        "expected tree in stdout, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("button 'Submit'"),
+        "expected button in tree output, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_wait_selector() {
+    let wait_resp = json!({ "found": true });
+    let (_dir, sock_path, server) = make_mock_server(vec![wait_resp]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "wait selector #main\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected 'ok' in stdout, got: {stdout}"
+    );
+}
+
+
+// ─── D4: public `grant <origin>` REPL path (browser_grant_exact_origin) ──────
+
+async fn make_mock_server_capturing(
+    responses: Vec<Value>,
+    captured: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+) -> (tempfile::TempDir, PathBuf, tokio::task::JoinHandle<()>) {
+    let dir = tempfile::tempdir().unwrap();
+    let sock_path = dir.path().join("test.sock");
+    let listener = UnixListener::bind(&sock_path).unwrap();
+
+    let handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+
+        reader.read_line(&mut line).await.unwrap();
+        let req: Value = serde_json::from_str(&line).unwrap();
+        let id = req["id"].as_i64().unwrap();
+        let init_resp = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                "capabilities": {"tools": {}}
+            }
+        });
+        let mut buf = serde_json::to_vec(&init_resp).unwrap();
+        buf.push(b'\n');
+        writer.write_all(&buf).await.unwrap();
+
+        for response_result in responses {
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let id = req["id"].as_i64().unwrap();
+            captured.lock().unwrap().push(req.clone());
+            let resp = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{"type": "text", "text": serde_json::to_string(&response_result).unwrap()}]
+                }
+            });
+            let mut buf = serde_json::to_vec(&resp).unwrap();
+            buf.push(b'\n');
+            writer.write_all(&buf).await.unwrap();
+        }
+    });
+
+    (dir, sock_path.clone(), handle)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_grant_sends_grant_exact_origin() {
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let grant_resp = json!({ "ok": true });
+    let (_dir, sock_path, server) =
+        make_mock_server_capturing(vec![grant_resp], captured.clone()).await;
+
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "grant https://contest.aitestbed.kr\n.quit\n",
+    );
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Origin granted"),
+        "expected 'Origin granted' in stdout, got: {stdout}"
+    );
+    let requests = captured.lock().unwrap();
+    let grant_req = requests
+        .iter()
+        .find(|req| req["method"] == "tools/call")
+        .expect("grant must issue a tools/call");
+    assert_eq!(grant_req["params"]["name"], "browser_grant_exact_origin");
+    assert_eq!(
+        grant_req["params"]["arguments"]["origin"],
+        "https://contest.aitestbed.kr"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_grant_without_origin_prints_usage() {
+    let (_dir, sock_path, server) = make_mock_server(vec![]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "grant\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: grant <origin>"),
+        "expected usage line in stdout, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_help_lists_grant() {
+    let (_dir, sock_path, server) = make_mock_server(vec![]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "help\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("grant <origin>"),
+        "expected 'grant <origin>' in help, got: {stdout}"
+    );
+}
