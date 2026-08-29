@@ -312,7 +312,7 @@ TEST_F(MahoUpdateManagerTest, AutoCheckTimer_StoppedWhenDisabled) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr, nullptr);
+  manager->Initialize(nullptr, local_state);
 
   task_environment_.FastForwardBy(base::Seconds(60));
   EXPECT_EQ(delegate_ptr->check_count, 0);
@@ -334,7 +334,7 @@ TEST_F(MahoUpdateManagerTest, AutoCheckTimer_StoppedOnCrashLoop) {
   auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
   auto* delegate_ptr = delegate.get();
   manager->SetDelegateForTesting(std::move(delegate));
-  manager->Initialize(nullptr, nullptr);
+  manager->Initialize(nullptr, local_state);
 
   // Crash-loop tripped during Initialize → state == kError(kCrashLoop), and
   // the timer must NOT have started.

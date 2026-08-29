@@ -63,6 +63,8 @@ component("maho_updates_lib") {
   sources = [
     "crash_loop_sentinel.cc",
     "crash_loop_sentinel.h",
+    "linux_install_kind.cc",
+    "linux_install_kind.h",
     "maho_update_manager.cc",
     "maho_update_manager.h",
     "maho_update_server_url.cc",
@@ -85,10 +87,8 @@ component("maho_updates_lib") {
   }
   if (is_linux) {
     sources += [
-      "maho_update_delegate_linux_appimage.cc",
-      "maho_update_delegate_linux_flatpak.cc",
-      "maho_update_delegate_linux_noop.cc",
-      "maho_update_delegate_linux_pkg.cc",
+      "maho_update_delegate_linux.cc",
+      "maho_update_delegate_linux.h",
     ]
   }
   deps = [
@@ -108,15 +108,22 @@ component("maho_updates_lib") {
     deps += [ "//chrome/browser:browser_process" ]
     libs = [ "runtimeobject.lib" ]
   }
+  if (is_linux) {
+    deps += [ "//chrome/browser:browser_process" ]
+  }
 }
 
 source_set("maho_updates_unittests") {
   testonly = true
   sources = [
+    "linux_install_kind_unittest.cc",
     "maho_config_manager_unittest.cc",
     "maho_update_manager_unittest.cc",
     "maho_update_signature_unittest.cc",
   ]
+  if (is_linux) {
+    sources += [ "maho_update_delegate_linux_unittest.cc" ]
+  }
   deps = [
     ":maho_config_manager",
     ":maho_updates_lib",
@@ -127,6 +134,7 @@ source_set("maho_updates_unittests") {
     "//chrome/test:test_support",
     "//components/prefs",
     "//components/prefs:test_support",
+    "//components/version_info",
     "//testing/gtest",
   ]
 }

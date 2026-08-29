@@ -572,8 +572,9 @@ struct BrowserVersionInfo {
   string version;
   string channel;
   BrowserUpdateState update_state;
-  // False on platforms whose updater delegate is a no-op (e.g. Linux package
-  // managers own updates), so the UI can hide the check/apply controls.
+  // False for unbranded/developer builds (channel UNKNOWN), which cannot
+  // self-update from the release feed, so the UI hides the check/apply
+  // controls. Not platform-gated: every shipped platform has a real delegate.
   bool update_supported;
 };
 
