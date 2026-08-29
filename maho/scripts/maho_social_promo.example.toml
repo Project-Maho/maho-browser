@@ -1,0 +1,110 @@
+# Copy this file outside the repository for real operation and edit it there.
+# Safe defaults: scanning/drafting are enabled; final sending is disabled.
+
+[maho]
+executable = "maho"
+# Optional override. The CLI otherwise follows MAHO_MCP_SOCKET_PATH and its
+# canonical platform default (macOS: ~/Library/Application Support/Maho/maho.sock).
+# socket_path = "/Users/you/Library/Application Support/Maho/maho.sock"
+
+[database]
+path = "~/.local/state/maho-social-promo/ledger.sqlite3"
+
+[monitor]
+poll_interval_seconds = 900
+
+[safety]
+dry_run = true
+require_manual_approval = true
+min_candidate_score = 0.55
+max_reply_chars = 260
+max_posts_per_hour = 3
+max_posts_per_day = 10
+min_seconds_between_posts = 900
+author_cooldown_hours = 168
+candidate_ttl_hours = 48
+similarity_limit = 0.88
+
+# Put your own/company handles here so discovery never queues self-replies.
+# Handles are normalized case-insensitively and may be written with or without @.
+excluded_authors = ["MahoBrowser"]
+
+# Conservative exclusions for contexts where unsolicited product promotion is
+# inappropriate or likely to be harmful/manipulative.
+blocked_terms = [
+  "suicide",
+  "self harm",
+  "self-harm",
+  "medical emergency",
+  "diagnosis",
+  "election",
+  "vote for",
+  "porn",
+  "weapon",
+  "buy drugs",
+  "giveaway",
+  "airdrop",
+]
+
+# Case-insensitive regular expressions applied to generated replies.
+blocked_claim_patterns = [
+  '\bguaranteed\b',
+  '\bbest browser\b',
+  '\bnumber[ -]?one\b',
+  '\b100%\b',
+  '\bzero risk\b',
+]
+
+[generation]
+# `template` drafts deterministic local fallback text only (default).
+# `llm` drafts through an external OpenAI-compatible endpoint; requires
+#   llm_base_url, llm_api_key, and llm_model below.
+mode = "template"
+timeout_seconds = 60
+allow_template_fallback = true
+# llm_base_url = "https://api.openai.com/v1"
+# llm_api_key = "sk-..."
+# llm_model = "gpt-4o-mini"
+
+[product]
+name = "Maho Browser"
+url = "https://maho.co"
+facts = [
+  "Maho Browser exposes browser control through the Maho CLI.",
+  "The Maho CLI connects to the running browser over the local maho.sock IPC endpoint.",
+  "Maho CLI supports tab operations, capability execution with `maho tool run`, and a persistent `maho browser repl` session.",
+]
+
+[platforms.x]
+enabled = true
+canonical_host = "x.com"
+search_url_template = "https://x.com/search?q={query}&src=typed_query&f=live"
+link_pattern = 'https://(?:x\.com|twitter\.com)/([A-Za-z0-9_]{1,15})/status/([0-9]+)'
+keywords = [
+  "browser use",
+  "AI browser",
+  "agent browser",
+  "browser automation",
+  "automate browser",
+]
+composer_names = ["Post text", "Reply", "Tweet text"]
+reply_open_names = ["Reply"]
+submit_names = ["Reply", "Post"]
+scan_scrolls = 2
+
+[platforms.threads]
+enabled = true
+canonical_host = "www.threads.net"
+search_url_template = "https://www.threads.net/search?q={query}"
+link_pattern = 'https://(?:www\.)?(?:threads\.net|threads\.com)/@([A-Za-z0-9._]+)/post/([A-Za-z0-9_-]+)'
+keywords = [
+  "browser use",
+  "AI browser",
+  "agent browser",
+  "browser automation",
+  "automation",
+]
+composer_names = ["Reply", "Add a reply", "Write a reply"]
+reply_open_names = ["Reply"]
+submit_names = ["Post", "Reply"]
+scan_scrolls = 2

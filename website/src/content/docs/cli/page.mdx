@@ -1,0 +1,224 @@
+---
+title: Page Extraction CLI
+description: Extract rendered page text and Markdown with maho page, render URLs with maho headless, and pipe browser content into jq or LLM CLIs.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`maho page` is the content-oriented side of the CLI. Where
+[`maho tab`](/cli/browser/) manages browser state, `maho page` turns the rendered
+page into data you can read, save, search, or pipe into another program.
+
+The current page command family is:
+
+```text
+maho page text
+maho page markdown
+maho page extract …
+maho headless <url>
+```
+
+Use the live `page` commands when the page is already open in Maho. Use
+`headless` when the URL itself is the input to your shell pipeline.
+
+## `maho page text`
+
+Returns readable text from the rendered page rather than raw HTML.
+
+```bash
+maho page text
+maho page text > article.txt
+```
+
+This is the lowest-noise format for ordinary Unix text tools:
+
+```bash
+maho page text | wc -w
+maho page text | rg -n 'security|permission|credential'
+```
+
+Use text when structure is not important and you primarily care about the words
+a user can read.
+
+## `maho page markdown`
+
+Returns the rendered page as Markdown suitable for preserving headings, lists,
+links, and other document structure without carrying the full HTML DOM.
+
+```bash
+maho page markdown
+maho page markdown > article.md
+```
+
+Markdown is usually the best input for an LLM because it preserves useful
+semantic structure with substantially less markup noise than HTML:
+
+```bash
+maho page markdown \
+  | llm 'Summarize this page. Preserve the heading structure and cite section names.'
+```
+
+A fact-extraction pipeline can stay equally small:
+
+```bash
+maho page markdown \
+  | llm 'Return only the product names, prices, and stated limitations as JSON.' \
+  | jq '.'
+```
+
+`llm` in these examples is an external stdin-capable model CLI; it is not a
+required Maho dependency. You can replace it with any local or cloud model tool
+that reads stdin.
+
+## `maho page extract`
+
+`extract` is the structured extraction entry point for cases where full-page
+text or Markdown is too broad.
+
+```bash
+maho page extract --help
+```
+
+Pass the selector/extraction arguments shown by the installed build, then use
+`--json` when the result will be processed programmatically:
+
+```bash
+maho --json page extract <extraction-arguments> | jq '.'
+```
+
+This split is deliberate:
+
+- `text` is optimized for readable words.
+- `markdown` preserves document structure.
+- `extract` is for targeted/structured page data.
+- [`tab html`](/cli/browser/#maho-tab-html) is for the markup itself.
+
+<Aside type="tip" title="Prefer the narrowest representation">
+If you need one structured region, use `extract`. If you need the article,
+prefer Markdown. If you only need words, use text. Passing an entire HTML DOM to
+a downstream model usually costs more tokens and adds less useful signal.
+</Aside>
+
+## Headless rendering
+
+```text
+maho headless <url>
+```
+
+`maho headless` renders a URL through Maho without requiring you to prepare the
+active GUI tab first, then writes the rendered page result to stdout.
+
+```bash
+maho headless https://example.com
+```
+
+This makes it a natural source command in pipelines:
+
+```bash
+maho headless https://example.com \
+  | llm 'Give me a one-paragraph summary and a list of outbound links mentioned in the content.'
+```
+
+Or save the browser-rendered result before doing anything model-dependent:
+
+```bash
+maho headless https://example.com > rendered-page.txt
+llm 'Summarize the page and identify unsupported claims.' < rendered-page.txt
+```
+
+The second form is especially useful for debugging: you can inspect exactly
+what the browser produced before deciding whether a downstream model answer is
+wrong because of extraction or because of reasoning.
+
+### Headless vs `curl`
+
+`curl` downloads an HTTP response. `maho headless` goes through a browser
+rendering path. That distinction matters for pages whose useful content appears
+after client-side rendering or depends on browser/profile state.
+
+Use `curl` when you want the wire response. Use `maho headless` when you want
+browser-rendered page content.
+
+### Headless vs the active page
+
+| Input | Command |
+|-------|---------|
+| The page already open in the browser | `maho page text`, `markdown`, or `extract` |
+| A URL in a script | `maho headless <url>` |
+| Raw DOM/markup from the current tab | `maho tab html` |
+| Explicit trusted JavaScript against a tab | `maho tab eval` |
+
+## JSON pipelines
+
+Global `--json` is intended for structured CLI results. Put it at the Maho
+boundary rather than trying to turn human-readable output back into JSON later:
+
+```bash
+maho --json page extract <extraction-arguments> \
+  | jq '.'
+```
+
+For exploratory work, start with `jq '.'`, inspect the actual result emitted by
+your installed build, then narrow the query:
+
+```bash
+maho --json page extract <extraction-arguments> | jq '.'
+```
+
+That avoids scripts depending on column spacing or a guessed wrapper object.
+
+## LLM pipeline recipes
+
+### Summarize the active article
+
+```bash
+maho page markdown \
+  | llm 'Summarize in five bullets. Keep concrete dates, names, and numbers.'
+```
+
+### Extract claims that need verification
+
+```bash
+maho page markdown \
+  | llm 'Return a JSON array of factual claims that should be independently verified.' \
+  | jq '.'
+```
+
+### Compare two URLs without copying pages by hand
+
+```bash
+{
+  echo '# Source A'
+  maho headless https://example.com/a
+  echo '# Source B'
+  maho headless https://example.com/b
+} | llm 'Compare these sources. List agreements, contradictions, and missing evidence.'
+```
+
+### Save before modeling
+
+```bash
+maho page markdown | tee /tmp/current-page.md \
+  | llm 'Produce a concise briefing from this page.'
+```
+
+`tee` gives you an audit/debug copy of the exact extracted content that entered
+the model pipeline.
+
+## Security boundary
+
+Page extraction can expose whatever the selected browser surface is allowed to
+read. Treat stdout as potentially sensitive data: shell history, redirected
+files, terminal scrollback, and downstream programs are all outside the page
+once content has been emitted.
+
+MCP uses a stricter typed tool surface with browser-side redaction and approval
+policies. In particular, the MCP server intentionally does not expose the CLI's
+generic JavaScript evaluation primitive. If an AI client should choose browser
+actions dynamically, use [`maho mcp`](/cli/mcp/) rather than wrapping
+`maho tab eval` as an agent tool.
+
+## Related commands
+
+- [Browser Control CLI](/cli/browser/) for tabs, history, and bookmarks.
+- [MCP Server](/cli/mcp/) for Claude Desktop, Cursor, and other MCP clients.

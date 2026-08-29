@@ -324,19 +324,7 @@ maho whoami
 # → Tier: free
 ```
 
-### C2. Chat
-```bash
-maho chat "Hello, what is 2+2?"
-# → streaming response via billing-proxy
-```
-
-### C3. BYOK shortcut
-```bash
-maho chat --byok openai sk-... "test"
-# → direct OpenAI call, NOT through proxy
-```
-
-### C4. Logout
+### C2. Logout
 ```bash
 maho logout
 maho whoami

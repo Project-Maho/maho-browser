@@ -16,20 +16,7 @@ profile-level Mail-read permission, and writes retain typed approval.
 
 ## CLI Subcommands
 
-### 1. `maho agent`
-Run agent prompts or execute automated routine files.
-
-- **Run Prompt:**
-  ```bash
-  maho agent run "Summarize my active space tabs"
-  ```
-- **Execute Routine File:**
-  ```bash
-  maho agent --routine /path/to/routine.json
-  ```
-  *Note:* Routine files must contain valid JSON. Invalid files will fail closed with exit code `1`.
-
-### 2. `maho mcp`
+### 1. `maho mcp`
 Manage local MCP server registrations.
 
 - **List MCP Servers:**
@@ -45,7 +32,7 @@ Manage local MCP server registrations.
   maho mcp remove <name>
   ```
 
-### 3. `maho mail`
+### 2. `maho mail`
 Bridge to Maho Mail commands and local workspace configuration.
 
 ## MCP Protocol Capabilities

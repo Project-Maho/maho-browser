@@ -28,8 +28,9 @@ The launch-claim policy is updated to permit active claims for the following **i
      trigger parsers with deferred runtime emitters (no browser/mail adapter
      emits them yet).
    - Bounded deep research mode exists as a Max/PAYG-gated, budget-capped
-     multi-step agent loop in `maho-agent`, reachable from the agent API and the
-     `maho research` CLI command (BYOK). It emits citations/evidence and cannot
+     multi-step agent loop in `maho-agent`, reachable from the agent API. (The
+     `maho research` BYOK CLI entry point was removed on 2026-08-28 together
+     with the external CLI agent path.) It emits citations/evidence and cannot
      run unbounded. It is NOT a frontier managed model and NOT a cloud-executed
      Ultrabrowse (see status).
    - Resumable cloud handoff exists as **durable local/staging job STATE**
@@ -45,7 +46,7 @@ prior evidence asserting that all four parity surfaces are complete.
 |---|---|---|
 | 15. Routine result inbox | Partial: durable ledger + core/FFI/storage query implemented and tested; WebUI/CLI/MCP history surfacing deferred (needs C++ bridge + Mojo, not built this pass) | Only "routines persist their results" — NOT "results inbox in every surface" |
 | 16. Notification + inbox/mail heartbeat triggers | Partial: typed `OnNotification` / `OnInboxHeartbeat` triggers parse/match/fire and are reachable via `maho_routines_fire_event`; no browser/mail emitter wired | NO — deferred runtime wiring, do not claim as a shipped trigger |
-| 17. Bounded deep research mode | Implemented (minimal): bounded loop with hard max-steps/wall-clock/cost caps, Max/PAYG entitlement gate, managed frontier-model gate, citations/evidence output; reachable via agent API + `maho research` (BYOK) CLI; 12 tests | Only "bounded deep research mode (Max/PAYG) with step/cost/time caps and citations" — NOT "frontier managed research" or "cloud Ultrabrowse" |
+| 17. Bounded deep research mode | Implemented (minimal): bounded loop with hard max-steps/wall-clock/cost caps, Max/PAYG entitlement gate, managed frontier-model gate, citations/evidence output; reachable via agent API (CLI entry removed 2026-08-28); 12 tests | Only "bounded deep research mode (Max/PAYG) with step/cost/time caps and citations" — NOT "frontier managed research" or "cloud Ultrabrowse" |
 | 18. Resumable cloud handoff jobs | Partial: durable job STATE (D1 `handoff_jobs` table + service-token create/poll/complete/fail routes) with bill-once idempotency and reconnect/poll resumability; 10 state-machine tests. **Remote Worker EXECUTION is DEFERRED** — no Worker runs the job body; a local/CLI producer drives work and reports completion | Only "resumable managed job STATE with bill-once accounting" — NOT "cloud-executed managed jobs" |
 
 Do NOT claim "Aside automation parity" as a fully completed launch surface.

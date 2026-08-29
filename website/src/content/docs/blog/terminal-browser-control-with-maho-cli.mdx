@@ -1,0 +1,449 @@
+---
+title: "Control a browser from the terminal with Maho CLI"
+description: "Developer tutorial for controlling browser tabs, history, bookmarks, rendered pages, headless URLs, and AI workflows from the terminal with the Maho Browser CLI."
+date: 2026-08-18
+tags:
+  - browser
+  - cli
+  - terminal
+  - automation
+  - how-to
+excerpt: "Maho turns the browser you already use into a Unix-friendly CLI: control tabs, search local browsing data, extract rendered pages, pipe them through jq or an LLM, and escalate to an agent only when you need one."
+authors:
+  - name: Maho Team
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Maho CLI Terminal Browser Control](/assets/blog/terminal-browser-control-with-maho-cli/hero.png)
+
+If you want to **control a web browser from the terminal**, Maho gives you a
+single `maho` CLI for the browser state you already have open. You can list and
+open tabs, inspect history and bookmarks, extract the active page as text or
+Markdown, render a URL headlessly, or expose the same browser to an MCP client.
+
+The short version is:
+
+```bash
+maho tab list
+maho tab open https://example.com
+maho page markdown
+maho headless https://example.com
+```
+
+That is a different goal from browser test automation. Maho CLI is for
+**terminal browser control and scripting against your real Maho profile**. If
+you need deterministic end-to-end tests with assertions, fixtures, and clean
+browser contexts, Playwright remains the better abstraction.
+
+For the complete command catalog, keep the [Maho CLI reference](/cli/) open next
+to this tutorial.
+
+## Why put a real browser behind a CLI?
+
+Shell tools are excellent at composition. Browsers are excellent at rendering
+the modern web. The awkward part is the boundary between them.
+
+`curl` is perfect when the HTTP response is the data. It is less useful when the
+content you need is produced by client-side JavaScript, lives in a logged-in
+profile, or is already open in the browser you are using for research.
+
+A browser CLI lets you keep the shell workflow:
+
+```text
+browser -> stdout -> jq / rg / fzf / llm / file
+```
+
+without pretending a rendered page is the same thing as an HTTP response.
+
+Maho's command groups make that separation explicit:
+
+- `maho tab` controls live tabs.
+- `maho history` queries local history.
+- `maho bookmarks` reads and creates bookmarks.
+- `maho page` extracts the active rendered page.
+- `maho headless <url>` starts from a URL instead of the active tab.
+- `maho mcp` hands browser tools to an external MCP host.
+
+## 1. Confirm the CLI can see your browser
+
+Install/start Maho Browser and make sure `maho` is on your `PATH`:
+
+```bash
+maho --version
+maho tab list
+```
+
+Then ask for the active tab:
+
+```bash
+maho tab active
+```
+
+For scripts, immediately get in the habit of requesting JSON:
+
+```bash
+maho --json tab active | jq '.'
+```
+
+Why start with `jq '.'` instead of a clever filter? Because the first job is to
+see the structured shape your installed Maho build actually returns. Once you
+know that shape, narrow the filter for the script you are writing.
+
+The full tab command reference is at [Browser Control CLI](/cli/browser/).
+
+## 2. Open and close tabs from the shell
+
+Open a page:
+
+```bash
+maho tab open https://example.com
+```
+
+Quote URLs containing shell metacharacters:
+
+```bash
+maho tab open 'https://example.com/search?q=browser+cli&sort=new'
+```
+
+List the tabs again, choose the runtime tab id, then close one:
+
+```bash
+maho --json tab list | jq '.'
+maho tab close <tab-id>
+```
+
+Do not build automation around a tab's visual position. A tab id is the better
+handle because tabs move when the user reorders them or other scripts open new
+ones.
+
+### One rule that prevents brittle scripts
+
+Use human output for humans and JSON for programs.
+
+This is good:
+
+```bash
+maho --json tab list | jq '.'
+```
+
+This is brittle:
+
+```bash
+# Avoid splitting aligned terminal output by spaces.
+maho tab list | awk '{print $1}'
+```
+
+The second script quietly depends on presentation formatting that is allowed to
+change independently of the JSON contract.
+
+## 3. Extract the page you are actually looking at
+
+The active tab is already rendered. You do not need to re-download it just to
+get the content.
+
+For plain readable words:
+
+```bash
+maho page text
+```
+
+For document structure:
+
+```bash
+maho page markdown
+```
+
+For raw markup:
+
+```bash
+maho tab html
+```
+
+For targeted extraction, use the `extract` entry point and inspect the exact
+arguments exposed by your installed build:
+
+```bash
+maho page extract --help
+maho --json page extract <extraction-arguments> | jq '.'
+```
+
+A useful mental model is:
+
+| You need | Use |
+|----------|-----|
+| words | `maho page text` |
+| headings, lists, links, document structure | `maho page markdown` |
+| one structured region | `maho page extract …` |
+| the DOM/markup itself | `maho tab html` |
+
+That choice matters for downstream AI. Sending 150 KB of HTML to a model when
+18 KB of Markdown contains the same article wastes context and makes the prompt
+harder to inspect.
+
+See [Page Extraction CLI](/cli/page/) for the canonical reference.
+
+## 4. Pipe browser content to ordinary Unix tools
+
+Once page content is on stdout, the browser disappears from the rest of the
+pipeline.
+
+Count words:
+
+```bash
+maho page text | wc -w
+```
+
+Search the rendered page:
+
+```bash
+maho page text | rg -n 'MCP|permission|credential'
+```
+
+Keep a copy while continuing the pipeline:
+
+```bash
+maho page markdown \
+  | tee /tmp/page.md \
+  | rg '^## '
+```
+
+This style is deliberately boring. Boring pipelines are debuggable pipelines.
+If the output is wrong, you can inspect `/tmp/page.md` and determine whether the
+problem happened in browser extraction or later.
+
+## 5. Pipe a rendered page into an LLM
+
+Any model CLI that reads stdin can sit after Maho.
+
+```bash
+maho page markdown \
+  | llm 'Summarize this page in five bullets. Keep all concrete numbers.'
+```
+
+Ask for structured output and validate it with `jq`:
+
+```bash
+maho page markdown \
+  | llm 'Return a JSON array of dates, organizations, and numerical claims.' \
+  | jq '.'
+```
+
+The `llm` executable here is just an example of a downstream model CLI. Maho
+does not require it. The important architecture is that browser extraction and
+model inference are separate processes.
+
+That has three practical benefits:
+
+1. You can inspect exactly what the model received.
+2. You can swap model providers without changing browser control.
+3. You can choose not to use a model at all when `jq`, `rg`, or a small script is
+   enough.
+
+## 6. Start from a URL with `maho headless`
+
+Sometimes there is no useful active tab. The URL is the input.
+
+```bash
+maho headless https://example.com
+```
+
+Now the browser renderer becomes a source command:
+
+```bash
+maho headless https://example.com \
+  | llm 'Explain the main claim, evidence, and missing caveats.'
+```
+
+Or capture first, analyze second:
+
+```bash
+maho headless https://example.com > /tmp/example-page.txt
+llm 'Summarize this page.' < /tmp/example-page.txt
+```
+
+This is the core difference from `curl`: the command is intended to give you a
+browser-rendered result, not simply the raw HTTP response body.
+
+![Terminal Pipeline Data Flow](/assets/blog/terminal-browser-control-with-maho-cli/body-1.png)
+
+<Aside type="tip" title="Use the simplest tool that matches the job">
+If an API or static HTML response already contains exactly what you need, use
+`curl`. Use a browser renderer when browser rendering/profile state is actually
+part of the problem.
+</Aside>
+
+## 7. Search history and bookmarks without opening UI panels
+
+Terminal browser control is not only about tabs. Maho also exposes local
+browsing data.
+
+Search history:
+
+```bash
+maho history search 'release notes'
+maho --json history search 'release notes' | jq '.'
+```
+
+See today's history:
+
+```bash
+maho history today
+```
+
+Inspect top history entries/sites:
+
+```bash
+maho history top
+```
+
+Search bookmarks:
+
+```bash
+maho bookmarks search 'rust'
+```
+
+Add a bookmark:
+
+```bash
+maho bookmarks add https://example.com
+```
+
+These commands are useful when the next step is already a shell step. There is
+no reason to open a History UI, copy a URL, switch to the terminal, and paste it
+if the history database can be queried directly.
+
+## 8. Use `tab eval` only when you actually need JavaScript
+
+The CLI has an explicit JavaScript evaluation command:
+
+```bash
+maho tab eval 'document.title'
+```
+
+It can return structured, serializable data:
+
+```bash
+maho --json tab eval '({ title: document.title, links: document.links.length })' \
+  | jq '.'
+```
+
+This is powerful and therefore intentionally **not** the default extraction
+path. Prefer `page text`, `page markdown`, or `page extract` when one of those
+expresses the job.
+
+Treat `tab eval` like DevTools code execution. Do not interpolate untrusted
+strings into it.
+
+Also note an important product boundary: Maho's MCP server does not expose a
+generic eval tool. Agent-controlled page access uses typed tools so browser-side
+redaction and policy can be enforced. The [MCP reference](/cli/mcp/) explains
+why.
+
+## 9. When a task needs an agent
+
+![Two calm paths from a terminal window: one to an AI-guided browser, one to an external MCP client handshake](/assets/blog/terminal-browser-control-with-maho-cli/body-2.png)
+
+A shell pipeline is best when **you** know the steps.
+
+When the task itself needs to decide which browser actions to take, use an
+agent surface instead of scripting one yourself:
+
+- **Maho AI panel** — the in-browser agent decides and acts with the same
+  browser-side policy boundaries.
+- **Your own MCP-capable agent** (Claude Code, Cursor, or any MCP host) — run
+  `maho mcp` and let the external model drive the browser tool surface. The
+  model lives outside; browser policy stays inside Maho.
+
+The decision is straightforward:
+
+```text
+known deterministic steps -> shell pipeline
+AI decides the steps      -> Maho AI panel or your MCP client
+external AI host          -> maho mcp
+```
+
+## 10. A practical research script
+
+Here is a deliberately simple pattern for capturing two pages and asking a model
+to compare only the captured evidence:
+
+```bash
+{
+  echo '# Source A'
+  maho headless https://example.com/a
+  echo
+  echo '# Source B'
+  maho headless https://example.com/b
+} | tee /tmp/sources.md \
+  | llm 'Compare only these two sources. List agreements, contradictions, and missing evidence.'
+```
+
+Why `tee`? Because it gives you the exact evidence bundle independently of the
+model answer. If the answer looks suspicious, inspect `/tmp/sources.md` before
+you rerun anything.
+
+For a machine-readable collection step, request JSON at each structured Maho
+boundary and normalize with `jq` before analysis.
+
+## Where Maho CLI fits next to Playwright and browser MCP
+
+These tools overlap in the word "browser" but optimize for different jobs.
+
+### Maho CLI
+
+Use it for personal/developer shell workflows against Maho Browser: current
+tabs, local history, bookmarks, page extraction, and headless URLs.
+
+### Playwright
+
+Use it for repeatable browser automation/tests where you control the entire
+flow, browser context, assertions, and fixtures.
+
+### Maho MCP
+
+Use it when Claude Desktop, Cursor, or another MCP host should decide which
+browser tool to call. The model is outside Maho; browser policy remains inside
+Maho.
+
+You can use all three in one development environment without pretending they
+are substitutes.
+
+## Command cheat sheet
+
+```bash
+# Browser state
+maho tab list
+maho tab active
+maho tab open https://example.com
+maho tab close <tab-id>
+
+# Page data
+maho page text
+maho page markdown
+maho page extract --help
+maho tab html
+
+# URL -> browser-rendered stdout
+maho headless https://example.com
+
+# Local browsing data
+maho history search 'query'
+maho history top
+maho history today
+maho bookmarks list
+maho bookmarks search 'query'
+maho bookmarks add https://example.com
+
+# MCP
+maho mcp
+```
+
+## Next steps
+
+- [Maho CLI Reference](/cli/) — full command map and global flags.
+- [Browser Control CLI](/cli/browser/) — tabs, history, bookmarks, JSON output.
+- [Page Extraction CLI](/cli/page/) — text, Markdown, extraction, headless, LLM
+  pipelines.
+- [Maho MCP Server](/cli/mcp/) — connect Claude Desktop, Cursor, or another MCP
+  client to the browser.
