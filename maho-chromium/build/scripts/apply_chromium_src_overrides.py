@@ -100,6 +100,89 @@ _BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
 )
 
 
+_PINNED_CHROMIUM_REVISION: Final[str] = (
+    "ee4bd9e95294a95c855ef51dfa26f0576f192e69"
+)
+_PINNED_INCOMPATIBLE_TARGETS: Final[frozenset[str]] = frozenset(
+    {
+        "base/trace_event/builtin_categories.h",
+        "chrome/app/chrome_main_delegate.cc",
+        "chrome/browser/global_keyboard_shortcuts_mac.mm",
+        "chrome/browser/global_keyboard_shortcuts_mac_unittest.mm",
+        "chrome/browser/password_manager/factories/BUILD.gn",
+        "chrome/browser/password_manager/factories/password_store_backend_factory.cc",
+        "chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc",
+        "chrome/browser/renderer_context_menu/render_view_context_menu.cc",
+        "chrome/browser/ui/views/frame/browser_caption_button_container_win.cc",
+        "chrome/browser/ui/views/frame/browser_caption_button_container_win.h",
+        "chrome/browser/ui/views/frame/browser_frame_view_mac.mm",
+        "chrome/browser/ui/views/frame/browser_frame_view_win.cc",
+        "chrome/browser/ui/views/frame/browser_native_widget_mac.mm",
+        "chrome/browser/ui/views/frame/contents_container_outline.h",
+        "chrome/browser/ui/views/frame/contents_container_view.cc",
+        "chrome/browser/ui/views/frame/contents_container_view.h",
+        "chrome/browser/ui/views/frame/contents_layout_manager.cc",
+        "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc",
+        "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc",
+        "chrome/browser/ui/views/frame/multi_contents_view.cc",
+        "chrome/browser/ui/views/frame/multi_contents_view.h",
+        "chrome/browser/ui/views/page_action/page_action_properties_provider.cc",
+        "chrome/browser/ui/views/side_panel/side_panel.cc",
+        "chrome/browser/ui/views/side_panel/side_panel.h",
+        "chrome/browser/ui/views/side_panel/side_panel_coordinator.cc",
+        "chrome/browser/ui/views/side_panel/side_panel_resize_area.cc",
+        "chrome/browser/ui/views/toolbar/toolbar_view.cc",
+        "chrome/browser/ui/webui/BUILD.gn",
+        "chrome/browser/ui/webui/chrome_web_ui_configs.cc",
+        "components/password_manager/content/browser/content_password_manager_driver.cc",
+        "components/password_manager/content/browser/content_password_manager_driver.h",
+        "components/password_manager/core/browser/form_fetcher.h",
+        "components/password_manager/core/browser/form_fetcher_impl.cc",
+        "components/password_manager/core/browser/form_fetcher_impl.h",
+        "components/password_manager/core/browser/password_form_digest.cc",
+        "components/password_manager/core/browser/password_form_digest.h",
+        "components/password_manager/core/browser/password_form_manager.cc",
+        "components/password_manager/core/browser/password_manager_driver.h",
+        "components/password_manager/core/browser/password_store/password_store.cc",
+        "components/password_manager/core/browser/password_store/password_store.h",
+        "components/password_manager/core/browser/password_store/password_store_backend.h",
+        "components/password_manager/core/browser/password_store/password_store_backend_metrics_recorder.cc",
+        "components/password_manager/core/browser/password_store/password_store_consumer.cc",
+        "components/password_manager/core/browser/password_store/password_store_interface.h",
+        "components/password_manager/core/browser/stub_password_manager_driver.cc",
+        "ui/base/ui_base_features.cc",
+        "ui/compositor/layer.cc",
+    }
+)
+
+
+def chromium_revision(chromium_src: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(chromium_src), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise RuntimeError(
+            f"Unable to determine Chromium revision at {chromium_src}"
+        ) from error
+    revision = result.stdout.strip()
+    if not revision:
+        raise RuntimeError(
+            f"Unable to determine Chromium revision at {chromium_src}"
+        )
+    return revision
+
+
+def is_revision_incompatible_target(relative_path: str, revision: str) -> bool:
+    return (
+        revision == _PINNED_CHROMIUM_REVISION
+        and relative_path in _PINNED_INCOMPATIBLE_TARGETS
+    )
+
+
 REPLACEMENTS: dict[str, list[Replacement]] = {
     "chrome/browser/ui/views/passwords/password_bubble_view_base.cc": [
         Replacement(
@@ -9759,6 +9842,259 @@ def normalize_gn_stale_deps(text: str, relative_path: str = "") -> tuple[str, in
     return "".join(kept_lines), removed_count
 
 
+_CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
+    "//maho/browser/maho_browser_main_extra_parts.cc",
+    "//maho/browser/maho_browser_main_extra_parts.h",
+    "//maho/browser/maho_routines_scheduler.cc",
+    "//maho/browser/maho_routines_scheduler.h",
+    "//maho/browser/maho_tab_id_session_helper.cc",
+    "//maho/browser/maho_tab_id_session_helper.h",
+    "//maho/browser/mail_helper/maho_mail_notification_coordinator.cc",
+    "//maho/browser/mail_helper/maho_mail_notification_coordinator.h",
+    "//maho/browser/mcp/maho_mcp_console_capture.cc",
+    "//maho/browser/mcp/maho_mcp_console_capture.h",
+    "//maho/browser/mcp/maho_mcp_input_synthesizer.cc",
+    "//maho/browser/mcp/maho_mcp_input_synthesizer.h",
+    "//maho/browser/mcp/maho_mcp_navigation_tracker.cc",
+    "//maho/browser/mcp/maho_mcp_navigation_tracker.h",
+    "//maho/browser/net/maho_content_blocker_update_service_factory.cc",
+    "//maho/browser/net/maho_content_blocker_update_service_factory.h",
+    "//maho/browser/sync/maho_sync_relay_client.cc",
+    "//maho/browser/sync/maho_sync_relay_client.h",
+    "//maho/browser/sync/maho_sync_relay_protocol.cc",
+    "//maho/browser/sync/maho_sync_relay_protocol.h",
+    "//maho/browser/updates/maho_config_manager.cc",
+    "//maho/browser/updates/maho_config_manager.h",
+    "//maho/browser/updates/maho_update_signature.cc",
+    "//maho/browser/updates/maho_update_signature.h",
+    "//maho/browser/updates/rollout_bucket.cc",
+    "//maho/browser/updates/rollout_bucket.h",
+    "//maho/browser/ui/views/maho_content_gradient_view.cc",
+    "//maho/browser/ui/views/maho_content_gradient_view.h",
+    "//maho/browser/ui/views/maho_action_marker_service.cc",
+    "//maho/browser/ui/views/maho_action_marker_service.h",
+    "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.cc",
+    "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_section_policy.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_section_policy.h",
+    "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry.h",
+    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.cc",
+    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.h",
+    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
+    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
+    "//maho/browser/ui/views/location_bar/maho_full_page_capture_client.cc",
+    "//maho/browser/ui/views/location_bar/maho_full_page_capture_client.h",
+    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_script_string.h",
+    "//maho/browser/ui/views/shields/maho_shield_bubble_coordinator.cc",
+    "//maho/browser/ui/views/shields/maho_shield_bubble_coordinator.h",
+    "//maho/browser/ui/views/shields/maho_shield_bubble_view.cc",
+    "//maho/browser/ui/views/shields/maho_shield_bubble_view.h",
+    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.cc",
+    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.h",
+    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_cache_warmer.cc",
+    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_cache_warmer.h",
+    "//maho/browser/ui/site_control/maho_page_info_ui.cc",
+    "//maho/browser/ui/site_control/maho_page_info_ui.h",
+    "//maho/browser/maho_tab_preview_capture.cc",
+    "//maho/browser/maho_tab_preview_capture.h",
+    "//maho/browser/maho_private_context_policy.cc",
+    "//maho/browser/maho_private_context_policy.h",
+    "//maho/browser/net/maho_atc_navigation_throttle.cc",
+    "//maho/browser/net/maho_atc_navigation_throttle.h",
+    "//maho/browser/extensions/api/maho_split_view_api.cc",
+    "//maho/browser/extensions/api/maho_split_view_api.h",
+    "//maho/browser/ui/maho_settings_navigation.cc",
+    "//maho/browser/ui/maho_settings_navigation.h",
+    "//maho/browser/ui/views/maho_mini/maho_mini_window.h",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.cc",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.cc",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.cc",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.cc",
+    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h",
+    "//maho/browser/ui/views/split_view/maho_split_view_controller.cc",
+    "//maho/browser/ui/views/split_view/maho_split_view_controller.h",
+    "//maho/browser/ui/views/welcome/maho_welcome_window.cc",
+    "//maho/browser/ui/views/welcome/maho_welcome_window.h",
+    "//maho/browser/ui/webui/maho_webui_private_boundary.cc",
+    "//maho/browser/ui/webui/maho_webui_private_boundary.h",
+    "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.cc",
+    "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h",
+    "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_footer_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_search_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.h",
+    "//maho/browser/ui/views/sidebar/maho_now_playing_card.cc",
+    "//maho/browser/ui/views/sidebar/maho_now_playing_card.h",
+    "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.cc",
+    "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.h",
+    "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.cc",
+    "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_view.h",
+    "//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_translate_popover_view.h",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_prefs.cc",
+    "//maho/browser/ui/views/sidebar/maho_sidebar_prefs.h",
+    "//maho/browser/ui/views/command/maho_command_overlay_controller.cc",
+)
+
+_CHROME_BROWSER_UI_MAC_SOURCES: Final[tuple[str, ...]] = (
+    "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_mac.mm",
+    "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",
+    "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm",
+)
+
+_CHROME_BROWSER_UI_NON_MAC_SOURCES: Final[tuple[str, ...]] = (
+    "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_stub.cc",
+    "//maho/browser/ui/views/maho_mini/maho_mini_window_stub.cc",
+    "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_stub.cc",
+)
+
+_CHROME_BROWSER_UI_DEPS: Final[tuple[str, ...]] = (
+    "//maho/browser/mail_helper:maho_mail_service",
+    "//maho/browser/ui/views/command:maho_command_overlay",
+    "//maho/browser/ui/views/peek:maho_peek",
+    "//maho/browser/ui/views/peek:maho_peek_route",
+    "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",
+    "//maho/browser/ui/tabs:maho_mru_tab_tracker",
+    "//maho/browser/ui/views/side_panel:side_panel",
+    "//maho/browser/ui/tabs:maho_ctrl_tab_switcher_controller",
+    "//components/split_tabs",
+    "//maho/browser/ui/webui/maho_mail:maho_mail",
+    "//maho/browser/ui/webui/maho_sync:maho_sync",
+    "//maho/browser/ui/webui/maho_settings:maho_settings",
+    "//maho/browser:maho_private_context_policy",
+    "//maho/browser:maho_settings_navigation",
+    "//maho/browser/ui/webui/maho_welcome:mojo_bindings",
+    "//maho/browser/ui/webui/maho_sync:mojo_bindings",
+    "//maho/browser/ui/webui/maho_space_create:mojo_bindings",
+    "//maho/browser/ui/webui/maho_space_config:mojo_bindings",
+    "//maho/browser/ui/webui/maho_settings:mojo_bindings",
+    "//maho/browser/ui/webui/maho_routines:mojo_bindings",
+    "//maho/browser/ui/webui/maho_live_folders:mojo_bindings",
+    "//maho/browser/ui/webui/maho_inline_edit:mojo_bindings",
+    "//maho/browser/ui/webui/maho_boost:mojo_bindings",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/browser/ui/views/sidebar:maho_spaces_board_data",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_library",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_downloads",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/browser/ui/webui/maho_ai:maho_ai",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//maho/browser/updates:maho_updates_prefs",
+    "//maho/browser/updates:maho_updates_lib",
+    "//maho/browser/mcp:maho_mcp",
+    "//maho/browser:maho_tab_tidy_orchestrator",
+    "//maho/browser:maho_content_blocker_update_service",
+)
+
+
+def normalize_chrome_browser_ui_build(text: str) -> tuple[str, int]:
+    source_anchor = '    "accelerator_utils.h",\n'
+    dep_anchor = '      "//chrome/browser/ui/side_panel:side_panel_views_dependent",\n'
+    if source_anchor not in text or dep_anchor not in text:
+        raise RuntimeError("Missing chrome/browser/ui:ui normalization anchor")
+
+    sources = _CHROME_BROWSER_UI_SOURCES
+    sources += (
+        _CHROME_BROWSER_UI_MAC_SOURCES
+        if host_platform() == "mac"
+        else _CHROME_BROWSER_UI_NON_MAC_SOURCES
+    )
+    missing_sources = [entry for entry in sources if f'"{entry}"' not in text]
+    missing_deps = [entry for entry in _CHROME_BROWSER_UI_DEPS if f'"{entry}"' not in text]
+    if missing_sources:
+        insertion = "".join(f'    "{entry}",\n' for entry in missing_sources)
+        text = text.replace(source_anchor, source_anchor + insertion, 1)
+    if missing_deps:
+        insertion = "".join(f'      "{entry}",\n' for entry in missing_deps)
+        text = text.replace(dep_anchor, dep_anchor + insertion, 1)
+    return text, len(missing_sources) + len(missing_deps)
+
+
+def normalize_chrome_browser_build(text: str) -> tuple[str, int]:
+    additions = (
+        (
+            '    "//components/password_manager/core/browser",\n',
+            (
+                "//maho/browser:maho_context_menus",
+                "//maho/browser:maho_url_scheme",
+                "//maho/browser:maho_core_holder",
+                "//maho/browser:maho_space_profile_bridge",
+                "//maho/browser:maho_tab_id_helper",
+                "//maho/browser/mail_helper:maho_mail_service",
+                "//maho/browser:maho_control_activity_service",
+            ),
+        ),
+        (
+            '    "//chrome/browser/ui/browser_window",\n',
+            (
+                "//maho/browser/ui/views/boost:maho_boost_window",
+                "//maho/browser/ui/views/side_panel:side_panel",
+            ),
+        ),
+        (
+            '    "chrome_browser_field_trials.cc",\n',
+            (
+                "//maho/browser/maho_tab_registry.cc",
+                "//maho/browser/maho_tab_registry.h",
+            ),
+        ),
+    )
+    count = 0
+    for anchor, entries in additions:
+        missing = [entry for entry in entries if f'"{entry}"' not in text]
+        if anchor not in text or not missing:
+            continue
+        indent = anchor[: len(anchor) - len(anchor.lstrip())]
+        insertion = "".join(f'{indent}"{entry}",\n' for entry in missing)
+        text = text.replace(anchor, anchor + insertion, 1)
+        count += len(missing)
+    return text, count
+
+
 def normalize_peek_open_url_routing(text: str) -> tuple[str, int]:
     """Migrates the already-applied ATC-only OpenURLFromTab block to Peek."""
     original_text = text
@@ -10074,6 +10410,7 @@ def apply_replacements(
     text = target_file.read_text(encoding="utf-8")
     changed = False
     applied: list[str] = []
+    exact_rel = ""
 
     if target_file.name == "chrome_web_ui_configs.cc":
         text, normalized_count = normalize_maho_test_webui_config(text)
@@ -10136,6 +10473,37 @@ def apply_replacements(
             if normalized_count:
                 changed = True
                 applied.append(f"patched: Remove stale dependencies from {exact_rel}")
+
+        if exact_rel == "chrome/browser/ui/BUILD.gn" and (
+            '    "accelerator_utils.h",\n' in text
+            and '      "//chrome/browser/ui/side_panel:side_panel_views_dependent",\n'
+            in text
+        ):
+            text, normalized_count = normalize_chrome_browser_ui_build(text)
+            if normalized_count:
+                changed = True
+                applied.append(
+                    "patched: Restore Maho sources and dependencies in chrome/browser/ui:ui"
+                )
+
+        if exact_rel == "chrome/browser/BUILD.gn":
+            text, normalized_count = normalize_chrome_browser_build(text)
+            if normalized_count:
+                changed = True
+                applied.append(
+                    "patched: Restore Maho sources and dependencies in chrome/browser:browser"
+                )
+
+    for replacement in replacements:
+        if (
+            exact_rel == "chrome/browser/BUILD.gn"
+            and replacement.description
+            == "Add Maho URL alias resolver directly to chrome/browser:browser deps"
+            and '    "//components/password_manager/core/browser",\n' in text
+            and '    "//maho/browser:maho_url_scheme",\n' in text
+        ):
+            applied.append(f"already: {replacement.description}")
+            continue
 
     for replacement in replacements:
         if replacement.new and replacement.new in text and (
@@ -10231,8 +10599,19 @@ def main() -> int:
         print(f"chromium/src not found: {chromium_src}", file=sys.stderr)
         return 1
 
+    try:
+        revision = chromium_revision(chromium_src)
+    except RuntimeError as error:
+        print(error, file=sys.stderr)
+        return 1
+
     any_changed = False
     for relative_path, replacements in REPLACEMENTS.items():
+        if is_revision_incompatible_target(relative_path, revision):
+            print(
+                f"skip [Chromium {revision} incompatible]: {relative_path}"
+            )
+            continue
         enabled_platforms = FILE_PLATFORMS.get(relative_path)
         if enabled_platforms is not None and args.platform not in enabled_platforms:
             print(

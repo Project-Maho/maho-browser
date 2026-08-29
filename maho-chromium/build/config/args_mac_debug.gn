@@ -1,0 +1,21 @@
+# Debug settings for macOS builds (Siso component build).
+is_official_build = false
+is_debug = true
+is_component_build = true
+symbol_level = 2
+dcheck_always_on = true
+is_chrome_branded = false
+
+target_os = "mac"
+target_cpu = "arm64"
+maho_root = "//maho"
+enable_traffic_annotation_auditor = true
+use_siso = true
+cc_wrapper = "/opt/homebrew/bin/sccache"
+
+# Match official release build enforcement: disable raw_ptr and raw_ref plugin checks
+enable_check_raw_ptr_fields = false
+enable_check_raw_ref_fields = false
+
+# Demote warnings to non-fatal in debug
+treat_warnings_as_errors = false
