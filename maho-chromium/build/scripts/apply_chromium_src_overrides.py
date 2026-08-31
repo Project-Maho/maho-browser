@@ -6713,39 +6713,173 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     # ── chrome_web_ui_configs.cc ──────────────────────────────────────────────
+    "chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc": [
+        Replacement(
+            old='#include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"\n',
+            new=(
+                '#include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_space_config/maho_space_config_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_space_create/maho_space_create_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_sync/maho_sync_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_welcome/maho_welcome_ui.h"\n'
+            ),
+            description="Maho: include the Maho WebUI headers for binder registration",
+            guard='#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"',
+        ),
+        Replacement(
+            old=(
+                "  registry.ForWebUI<TabSearchUI>().Add<tab_search::mojom::PageHandlerFactory>();\n"
+            ),
+            new=(
+                "  registry.ForWebUI<TabSearchUI>().Add<tab_search::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoAIUI>().Add<maho_ai::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoLiveFoldersUI>().Add<maho_live_folders::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoMailUI>().Add<maho_mail::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoSettingsUI>().Add<maho_settings::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoSpaceConfigUI>().Add<maho_space_config::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoSpaceCreateUI>().Add<maho_space_create::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoSyncUI>().Add<maho_sync::mojom::PageHandlerFactory>();\n"
+                "  registry.ForWebUI<MahoWelcomeUI>().Add<maho_welcome::mojom::PageHandlerFactory>();\n"
+            ),
+            description="Maho: expose the Maho WebUI page-handler factories",
+            guard="registry.ForWebUI<MahoWelcomeUI>()",
+        ),
+    ],
+    "chrome/chrome_paks.gni": [
+        Replacement(
+            old='      "$root_gen_dir/chrome/browser_resources.pak",\n',
+            new=(
+                '      "$root_gen_dir/chrome/browser_resources.pak",\n'
+                + "".join(
+                    '      "$root_gen_dir/chrome/%s_resources.pak",\n' % d
+                    for d in [
+                        "maho_ai",
+                        "maho_boost",
+                        "maho_boost_content_script",
+                        "maho_changelog",
+                        "maho_mail",
+                        "maho_settings",
+                        "maho_space_config",
+                        "maho_space_create",
+                        "maho_translate_content_script",
+                        "maho_welcome",
+                    ]
+                )
+            ),
+            description="Maho: pack the Maho WebUI resource paks into resources.pak",
+            guard="$root_gen_dir/chrome/maho_welcome_resources.pak",
+        ),
+        Replacement(
+            old=(
+                '      "$root_gen_dir/ui/webui/resources/webui_resources.pak",\n'
+                "    ]\n"
+                "\n"
+                "    deps = [\n"
+                '      "//base/tracing/protos:chrome_track_event_resources",\n'
+            ),
+            new=(
+                '      "$root_gen_dir/ui/webui/resources/webui_resources.pak",\n'
+                "    ]\n"
+                "\n"
+                "    deps = [\n"
+                '      "//base/tracing/protos:chrome_track_event_resources",\n'
+                + "".join(
+                    '      "//maho/browser/resources/%s:resources_grit",\n' % d
+                    for d in [
+                        "maho_ai",
+                        "maho_boost",
+                        "maho_boost_content_script",
+                        "maho_changelog",
+                        "maho_mail",
+                        "maho_settings",
+                        "maho_space_config",
+                        "maho_space_create",
+                        "maho_translate_content_script",
+                        "maho_welcome",
+                    ]
+                )
+            ),
+            description="Maho: depend on the Maho grit targets that feed resources.pak",
+            guard='//maho/browser/resources/maho_welcome:resources_grit',
+        ),
+    ],
     "chrome/browser/ui/webui/chrome_web_ui_configs.cc": [
         Replacement(
-            old='#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n',
+            old=(
+                '#include "chrome/browser/ui/webui/commerce/commerce_internals_ui_config.h"\n'
+                '#include "chrome/browser/ui/webui/components/components_ui.h"\n'
+            ),
             new=(
+                '#include "chrome/browser/ui/webui/commerce/commerce_internals_ui_config.h"\n'
+                '#include "chrome/browser/ui/webui/components/components_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_changelog/maho_changelog_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_space_config/maho_space_config_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_space_create/maho_space_create_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_sync/maho_sync_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_welcome/maho_welcome_ui.h"\n'
             ),
-            description="Add maho_mail_ui.h and maho_routines_ui.h includes before maho_settings_ui.h",
-            guard='#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"',
+            description="Maho: include the Maho trusted WebUI config headers",
+            guard='#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"',
         ),
         Replacement(
-            old='  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());\n',
+            old=(
+                '  auto& map = content::WebUIConfigMap::GetInstance();\n'
+                '  map.AddWebUIConfig(std::make_unique<AccessibilityUIConfig>());\n'
+            ),
             new=(
+                '  auto& map = content::WebUIConfigMap::GetInstance();\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoAIUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoChangelogUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoLiveFoldersUIConfig>());\n'
                 '  map.AddWebUIConfig(std::make_unique<MahoMailUIConfig>());\n'
                 '  map.AddWebUIConfig(std::make_unique<MahoRoutinesUIConfig>());\n'
                 '  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoSpaceConfigUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoSpaceCreateUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoSyncUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoTestUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<MahoWelcomeUIConfig>());\n'
+                '  map.AddWebUIConfig(std::make_unique<AccessibilityUIConfig>());\n'
             ),
-            description="Register MahoMailUIConfig and MahoRoutinesUIConfig before MahoSettingsUIConfig",
-            guard='MahoMailUIConfig',
+            description="Maho: register the Maho trusted WebUI configs",
+            guard="map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());",
         ),
     ],
     # ── chrome/browser/ui/webui/BUILD.gn ──────────────────────────────────────
     "chrome/browser/ui/webui/BUILD.gn": [
         Replacement(
-            old='    "//maho/browser/ui/webui/maho_settings",\n',
+            old=(
+                '  deps = [\n'
+                '    ":webui",\n'
+            ),
             new=(
+                '  deps = [\n'
+                '    ":webui",\n'
+                '    "//maho/browser/ui/webui/maho_ai",\n'
+                '    "//maho/browser/ui/webui/maho_boost",\n'
+                '    "//maho/browser/ui/webui/maho_changelog",\n'
+                '    "//maho/browser/ui/webui/maho_live_folders",\n'
                 '    "//maho/browser/ui/webui/maho_mail",\n'
                 '    "//maho/browser/ui/webui/maho_routines",\n'
                 '    "//maho/browser/ui/webui/maho_settings",\n'
+                '    "//maho/browser/ui/webui/maho_space_config",\n'
+                '    "//maho/browser/ui/webui/maho_space_create",\n'
+                '    "//maho/browser/ui/webui/maho_sync",\n'
+                '    "//maho/browser/ui/webui/maho_test",\n'
+                '    "//maho/browser/ui/webui/maho_welcome",\n'
             ),
-            description="Add maho_mail and maho_routines dep before maho_settings in webui BUILD.gn",
-            guard='"//maho/browser/ui/webui/maho_mail"',
+            description="Maho: depend on the Maho WebUI targets so their configs link",
+            guard='"//maho/browser/ui/webui/maho_settings",',
         ),
     ],
     "chrome/browser/global_keyboard_shortcuts_mac.mm": [

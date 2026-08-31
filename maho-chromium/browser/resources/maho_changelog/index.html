@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What's New in Maho</title>
+  <link rel="stylesheet" href="chrome://resources/maho_common/maho_theme.css">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--maho-font-family);
+      background-color: var(--maho-bg-base);
+      color: var(--maho-text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+      padding: var(--maho-space-xl) var(--maho-space-md);
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    header.page-header {
+      margin-bottom: var(--maho-space-xl);
+      padding-bottom: var(--maho-space-lg);
+      border-bottom: 1px solid var(--maho-border);
+    }
+
+    .header-title-row {
+      display: flex;
+      align-items: center;
+      gap: var(--maho-space-sm);
+      margin-bottom: var(--maho-space-xs);
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--maho-text-primary);
+      letter-spacing: -0.02em;
+    }
+
+    .page-subtitle {
+      color: var(--maho-text-secondary);
+      font-size: var(--maho-font-size-md);
+    }
+
+    .release-card {
+      background-color: var(--maho-bg-surface);
+      border: 1px solid var(--maho-border);
+      border-radius: var(--maho-radius-lg);
+      padding: var(--maho-space-lg);
+      margin-bottom: var(--maho-space-xl);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    }
+
+    .release-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--maho-space-sm);
+      margin-bottom: var(--maho-space-md);
+      padding-bottom: var(--maho-space-sm);
+      border-bottom: 1px solid var(--maho-border);
+    }
+
+    .release-title-group {
+      display: flex;
+      align-items: center;
+      gap: var(--maho-space-sm);
+    }
+
+    .release-version {
+      font-size: var(--maho-font-size-xl);
+      font-weight: 700;
+      color: var(--maho-text-primary);
+    }
+
+    .release-date {
+      color: var(--maho-text-secondary);
+      font-size: var(--maho-font-size-sm);
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: var(--maho-radius-sm);
+      font-size: var(--maho-font-size-xs);
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .badge-channel {
+      background: var(--maho-primary-alpha);
+      color: var(--maho-primary);
+      border: 1px solid var(--maho-primary);
+    }
+
+    .badge-added {
+      background: rgba(46, 160, 67, 0.15);
+      color: #3fb950;
+    }
+
+    .badge-fixed {
+      background: rgba(56, 139, 253, 0.15);
+      color: #58a6ff;
+    }
+
+    .badge-changed {
+      background: rgba(210, 153, 34, 0.15);
+      color: #d29922;
+    }
+
+    .badge-removed {
+      background: rgba(248, 81, 73, 0.15);
+      color: #f85149;
+    }
+
+    .badge-general {
+      background: var(--maho-bg-elevated);
+      color: var(--maho-text-secondary);
+    }
+
+    .highlights-box {
+      background: var(--maho-primary-alpha);
+      border-left: 3px solid var(--maho-primary);
+      border-radius: 0 var(--maho-radius-md) var(--maho-radius-md) 0;
+      padding: var(--maho-space-md) var(--maho-space-lg);
+      margin-bottom: var(--maho-space-md);
+    }
+
+    .highlights-title {
+      font-size: var(--maho-font-size-sm);
+      font-weight: 700;
+      color: var(--maho-primary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: var(--maho-space-xs);
+    }
+
+    .change-group {
+      background: var(--maho-bg-elevated);
+      border: 1px solid var(--maho-border);
+      border-radius: var(--maho-radius-md);
+      padding: var(--maho-space-md);
+      margin-bottom: var(--maho-space-sm);
+    }
+
+    .change-header {
+      display: flex;
+      align-items: center;
+      gap: var(--maho-space-sm);
+      margin-bottom: var(--maho-space-xs);
+    }
+
+    .change-title {
+      font-size: var(--maho-font-size-md);
+      font-weight: 600;
+      color: var(--maho-text-primary);
+    }
+
+    ul.item-list {
+      padding-left: var(--maho-space-lg);
+      margin: 0;
+    }
+
+    ul.item-list li {
+      margin-bottom: var(--maho-space-xs);
+      color: var(--maho-text-primary);
+      font-size: var(--maho-font-size-md);
+    }
+
+    .release-body {
+      margin-top: var(--maho-space-md);
+      padding-top: var(--maho-space-md);
+      border-top: 1px solid var(--maho-border);
+      color: var(--maho-text-secondary);
+      font-size: var(--maho-font-size-md);
+    }
+
+    .release-body h1, .release-body h2, .release-body h3, .release-body h4 {
+      color: var(--maho-text-primary);
+      margin-top: var(--maho-space-md);
+      margin-bottom: var(--maho-space-xs);
+    }
+
+    .release-body p {
+      margin-bottom: var(--maho-space-sm);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: var(--maho-space-xl) var(--maho-space-md);
+      color: var(--maho-text-muted);
+      font-size: var(--maho-font-size-md);
+      background: var(--maho-bg-surface);
+      border: 1px dashed var(--maho-border);
+      border-radius: var(--maho-radius-lg);
+    }
+
+    .release-empty-notice {
+      color: var(--maho-text-muted);
+      font-style: italic;
+      font-size: var(--maho-font-size-sm);
+      padding: var(--maho-space-sm) 0;
+    }
+
+    code {
+      font-family: ui-monospace, monospace;
+      font-size: 0.9em;
+      background: var(--maho-bg-elevated);
+      border: 1px solid var(--maho-border);
+      padding: 1px 5px;
+      border-radius: var(--maho-radius-sm);
+      color: var(--maho-text-primary);
+    }
+
+    pre {
+      background: var(--maho-bg-base);
+      border: 1px solid var(--maho-border);
+      border-radius: var(--maho-radius-md);
+      padding: var(--maho-space-md);
+      overflow-x: auto;
+      margin: var(--maho-space-sm) 0;
+    }
+
+    pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+    }
+
+    a {
+      color: var(--maho-primary);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="page-header">
+      <div class="header-title-row">
+        <h1>What's New in Maho</h1>
+      </div>
+      <p class="page-subtitle">Release updates, new capabilities, and performance enhancements.</p>
+    </header>
+    <main id="app">
+      <div class="empty-state">Loading release notes...</div>
+    </main>
+  </div>
+  <script type="module" src="changelog.js"></script>
+</body>
+</html>

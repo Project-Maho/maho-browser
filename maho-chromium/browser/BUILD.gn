@@ -1412,6 +1412,7 @@ test("maho_theme_io_test") {
     ":maho_ffi_callback_handle_unittests",
     ":maho_theme_io_unittests",
     "//maho/browser/updates:maho_updates_unittests",
+    "//maho/browser/ui/views/changelog:unit_tests",
     "//base",
     "//base/test:test_support",
     "//chrome/browser:browser",

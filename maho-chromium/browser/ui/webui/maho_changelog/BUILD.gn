@@ -1,0 +1,21 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_changelog") {
+  sources = [
+    "maho_changelog_ui.cc",
+    "maho_changelog_ui.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//maho/browser/resources/maho_changelog:resources",
+    "//maho/components/constants",
+    "//services/network/public/mojom",
+    "//ui/webui",
+  ]
+}
