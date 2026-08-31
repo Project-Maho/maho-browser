@@ -1,0 +1,29 @@
+{
+  "releases": [
+    {
+      "version": "1.0.0",
+      "date": "2026-08-12",
+      "channel": "stable",
+      "highlights": [
+        "Initial public release of Maho browser across macOS, Windows, and Linux",
+        "Built-in Model Context Protocol (MCP) server for native AI tool integration and automation",
+        "Integrated AI workspace with smart sidebar, side-by-side tabs, and spaces"
+      ],
+      "sections": [
+        {
+          "type": "added",
+          "title": "New Features",
+          "items": [
+            "Full cross-platform browser support with distribution packages for macOS (.dmg), Windows (.exe, .msix), and Linux (.deb, .rpm, .tar.gz)",
+            "Built-in Model Context Protocol (MCP) server enabling agentic tool execution and semantic browser interaction",
+            "Native AI chat and side assistant with Bring-Your-Own-Key (BYOK) provider support",
+            "Customizable workspaces and spaces management for advanced tab organization",
+            "Split-view browsing, peek overlays, and fast tab navigation",
+            "Built-in privacy engine with ad and tracker content blocking"
+          ]
+        }
+      ],
+      "body": "# Maho 1.0.0\n\nMaho 1.0.0 release.\n\n## Overview\n\nMaho 1.0.0 marks the initial general availability release of Maho — built for people who take browsers seriously.\n\n### What's New\n\n- **Cross-Platform Releases**: Native installers available for macOS (Universal), Windows x64, and Linux (Debian, RPM, tarball).\n- **Native MCP Server**: First-class Model Context Protocol integration supporting autonomous agent tools and leases.\n- **AI Workspace**: Built-in conversational panel and workspace tools designed for modern developer workflows.\n- **Privacy & Performance**: Native content blocking and optimized multi-tab resource management."
+    }
+  ]
+}
