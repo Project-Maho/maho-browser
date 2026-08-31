@@ -118,6 +118,7 @@
 #include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/theme/maho_color_mixer.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
+#include "maho/browser/ui/views/changelog/maho_changelog_auto_opener.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
@@ -5544,6 +5545,7 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
   maho::MahoUpdateManager::GetInstance()->Initialize(
       profile, g_browser_process ? g_browser_process->local_state() : nullptr);
   maho::updates::MahoConfigManager::GetInstance()->Initialize(profile);
+  maho::MahoChangelogScheduleAutoOpenCheck();
 
   MaybeLaunchMailHelper(profile);
 
