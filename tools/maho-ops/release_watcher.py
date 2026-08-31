@@ -25,8 +25,19 @@ load_dotenv(Path(__file__).parent / ".env")
 
 ANN_CHANNEL_ID = int(os.environ.get("MAHO_ANNOUNCEMENTS_CHANNEL_ID", "0"))
 ISSUE_RE = re.compile(r"#(\d+)")
+SUMMARY_MAX_CHARS = 1500
 
 log = logging.getLogger("release-watcher")
+
+
+def sanitize_summary(text: str) -> str:
+    """Enforce announcement-safety rules on any summary source.
+
+    Applied to BOTH the successful LLM output and the raw-body fallback so a
+    model response can never reintroduce issue references or exceed the
+    announcement length budget.
+    """
+    return ISSUE_RE.sub("", text)[:SUMMARY_MAX_CHARS]
 
 
 def build_announcement(tag: str, name: str | None, summary: str | None) -> str:
@@ -60,14 +71,15 @@ async def run():
     summary = ""
     if body:
         try:
-            summary = await asyncio.to_thread(
+            raw = await asyncio.to_thread(
                 llm.summarize_release, tag, rel.get("name") or "", body
             )
+            summary = sanitize_summary(raw)
         except Exception:
             log.exception("LLM release summarization failed; falling back to raw body")
-            summary = ISSUE_RE.sub("", body)[:1500]
+            summary = sanitize_summary(body)
         if not summary:
-            summary = ISSUE_RE.sub("", body)[:1500]
+            summary = sanitize_summary(body)
 
     payload = build_announcement(tag, rel.get("name"), summary)
 

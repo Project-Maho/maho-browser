@@ -5,22 +5,23 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
-#include "base/functional/bind.h"
-#include "base/task/sequenced_task_runner.h"
-#include "base/time/time.h"
+#include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
+#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "components/prefs/pref_service.h"
 #include "components/version_info/version_info.h"
-#include "content/public/browser/web_contents.h"
-#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/browser/updates/maho_update_manager.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
+#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
@@ -61,83 +62,76 @@ inline MahoChangelogAutoOpenDecision MahoChangelogEvaluateAutoOpen(
   return {/*open_tab=*/false, /*write_pref=*/false};
 }
 
-inline void MahoChangelogTryOpenTab() {
+// Applies the decision for one browser window. Returns true when the pref was
+// recorded, i.e. the flow reached a terminal state for this launch.
+inline bool MahoChangelogEvaluateAndOpenForBrowser(Browser* browser) {
   PrefService* local_state =
       g_browser_process ? g_browser_process->local_state() : nullptr;
-  auto* profile_manager =
-      g_browser_process ? g_browser_process->profile_manager() : nullptr;
-  if (!local_state || !profile_manager) {
-    return;
+  if (!local_state || !browser || !browser->is_type_normal()) {
+    return false;
   }
-  for (Profile* profile : profile_manager->GetLoadedProfiles()) {
-    if (!profile->IsRegularProfile()) {
-      continue;
-    }
-    Browser* browser = chrome::FindTabbedBrowser(profile, false);
-    if (!browser) {
-      continue;
-    }
-    const std::string last_shown =
-        local_state->GetString(prefs::kMahoChangelogLastShownVersion);
-    const std::string current_version =
-        std::string(version_info::GetVersionNumber());
-    const MahoChangelogAutoOpenDecision decision = MahoChangelogEvaluateAutoOpen(
-        last_shown, current_version, profile->IsRegularProfile(),
-        browser->is_type_normal(),
-        profile->GetPrefs()->GetBoolean(maho::welcome::kLoginGateActive),
-        MahoUpdateManager::GetInstance()->GetState() ==
-            UpdateState::kReadyToInstall);
-    if (decision.open_tab) {
-      NavigateParams params(browser, GURL(kMahoChangelogURL),
-                            ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
-      params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
-      Navigate(&params);
-    }
-    if (decision.write_pref) {
-      local_state->SetString(prefs::kMahoChangelogLastShownVersion,
-                             current_version);
+  Profile* profile = browser->profile();
+  if (!profile || !profile->IsRegularProfile()) {
+    return false;
+  }
+  const std::string last_shown =
+      local_state->GetString(prefs::kMahoChangelogLastShownVersion);
+  const std::string current_version =
+      std::string(version_info::GetVersionNumber());
+  const MahoChangelogAutoOpenDecision decision = MahoChangelogEvaluateAutoOpen(
+      last_shown, current_version, profile->IsRegularProfile(),
+      browser->is_type_normal(),
+      profile->GetPrefs()->GetBoolean(maho::welcome::kLoginGateActive),
+      MahoUpdateManager::GetInstance()->GetState() ==
+          UpdateState::kReadyToInstall);
+  if (decision.open_tab) {
+    NavigateParams params(browser, GURL(kMahoChangelogURL),
+                          ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    Navigate(&params);
+  }
+  if (decision.write_pref) {
+    local_state->SetString(prefs::kMahoChangelogLastShownVersion,
+                           current_version);
+  }
+  return decision.write_pref;
+}
+
+// Event-driven post-update auto-open: OnBrowserCreated is the single trigger.
+// The observation detaches from the profile collection as soon as the pref is
+// recorded (terminal state for this launch); yield paths keep observing so a
+// later window (e.g. after the login gate completes) is still evaluated.
+class MahoChangelogAutoOpener : public BrowserCollectionObserver {
+ public:
+  // Registers the process-lifetime opener for one profile. Safe to call from
+  // PostProfileInit: browsers do not exist yet, so nothing is evaluated here
+  // (plan Must-NOT: never Navigate directly from PostProfileInit).
+  static void RegisterForProfile(Profile* profile) {
+    auto* opener = new MahoChangelogAutoOpener(profile);
+    opener->observation_.Observe(ProfileBrowserCollection::GetForProfile(profile));
+  }
+
+  // BrowserCollectionObserver:
+  void OnBrowserCreated(BrowserWindowInterface* window) override {
+    if (handled_) {
       return;
     }
+    Browser* browser = window->GetBrowserForMigrationOnly();
+    if (MahoChangelogEvaluateAndOpenForBrowser(browser)) {
+      handled_ = true;
+      observation_.Reset();
+    }
   }
-}
 
-// Checks once per attempt for up to ~60s after startup (browsers may be
-// restored asynchronously). Stops permanently once the pref is recorded.
-inline void MahoChangelogScheduleAutoOpenCheck(int attempt) {
-  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(
-          [](int attempt_left) {
-            PrefService* local_state =
-                g_browser_process ? g_browser_process->local_state() : nullptr;
-            if (!local_state ||
-                local_state->FindPreference(prefs::kMahoChangelogLastShownVersion)) {
-              MahoChangelogTryOpenTab();
-              if (local_state &&
-                  !local_state->GetString(prefs::kMahoChangelogLastShownVersion)
-                       .empty()) {
-                return;
-              }
-            }
-            if (attempt_left > 0) {
-              base::SequencedTaskRunner::GetCurrentDefault()
-                  ->PostDelayedTask(
-                      FROM_HERE,
-                      base::BindOnce(
-                          [](int remaining) {
-                            MahoChangelogScheduleAutoOpenCheck(remaining);
-                          },
-                          attempt_left - 1),
-                      base::Seconds(5));
-            }
-          },
-          attempt),
-      attempt == 0 ? base::Seconds(15) : base::Seconds(5));
-}
+ private:
+  explicit MahoChangelogAutoOpener(Profile* profile)
+      : observation_(this), profile_(profile->GetWeakPtr()) {}
 
-inline void MahoChangelogScheduleAutoOpenCheck() {
-  MahoChangelogScheduleAutoOpenCheck(12);
-}
+  base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
+      observation_;
+  base::WeakPtr<Profile> profile_;
+  bool handled_ = false;
+};
 
 }  // namespace maho
 

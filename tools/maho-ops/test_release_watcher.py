@@ -253,6 +253,60 @@ class TestReleaseWatcher(unittest.IsolatedAsyncioTestCase):
         mock_mark_release.assert_called_once_with("Project-Maho/release", "v3.0.0", "2026-08-31T04:00:00Z")
         mock_client.close.assert_awaited_once()
 
+    @patch("release_watcher.discord.Client")
+    @patch("release_watcher.db.mark_release")
+    @patch("release_watcher.db.threads_for_issues", return_value=[])
+    @patch("release_watcher.db.release_seen", return_value=False)
+    @patch("release_watcher.github_ops.latest_release")
+    @patch("release_watcher.llm.summarize_release")
+    async def test_llm_success_output_is_sanitized_and_capped(
+        self,
+        mock_summarize,
+        mock_release,
+        mock_seen,
+        mock_threads,
+        mock_mark_release,
+        mock_discord_client_cls,
+    ):
+        """Successful LLM output must still pass sanitization + length cap."""
+        hostile_summary = "Fixes #123 and #456! " + "x" * 2000
+        mock_release.return_value = {
+            "tagName": "v3.1.0",
+            "name": "v3.1",
+            "body": "body text",
+            "publishedAt": "2026-08-31T05:00:00Z",
+        }
+        mock_summarize.return_value = hostile_summary
+        mock_threads.return_value = []
+
+        mock_client = MagicMock()
+        mock_discord_client_cls.return_value = mock_client
+        mock_ann_ch = AsyncMock()
+
+        event_handlers = {}
+
+        def fake_event(func):
+            event_handlers[func.__name__] = func
+            return func
+
+        mock_client.event = fake_event
+        mock_client.start = AsyncMock()
+        mock_client.close = AsyncMock()
+
+        with patch.dict(os.environ, {
+            "MAHO_DRY_RUN": "1",
+            "MAHO_ANNOUNCEMENTS_CHANNEL_ID": "12345",
+        }):
+            with self.assertLogs("release-watcher", level="INFO") as cm:
+                await release_watcher.run()
+
+        dry_logs = "\n".join(cm.output)
+        self.assertIn("Fixes  and !", dry_logs)
+        self.assertNotIn("Fixes #123", dry_logs)
+        self.assertNotIn("and #456", dry_logs)
+        # Summary portion is capped at 1500 chars; whole payload = header + summary + download line
+        self.assertLessEqual(len(dry_logs), len(hostile_summary))
+
     @patch("release_watcher.github_ops.latest_release", return_value=None)
     async def test_no_release_found(self, mock_release):
         with self.assertLogs("release-watcher", level="INFO") as cm:

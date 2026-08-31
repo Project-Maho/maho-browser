@@ -22,6 +22,8 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
+#include "base/threading/scoped_blocking_call.h"
+#include "base/supports_user_data.h"
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
 #include "base/task/bind_post_task.h"
@@ -84,6 +86,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/file_select_listener.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -142,13 +145,14 @@
 #include "ui/base/page_transition_types.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/color/color_provider_manager.h"
+#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
 #include "url/gurl.h"
 
 namespace {
 MahoBrowserMainExtraParts* g_instance = nullptr;
-}  // namespace
+}
 
 MahoBrowserMainExtraParts::MahoBrowserMainExtraParts()
     : mail_notification_coordinators_(
@@ -738,6 +742,34 @@ struct BrowserVaultCredentialLease {
   std::string totp;
 };
 
+// True only when the core affirmatively reports that this profile's Vault holds
+// no key material. A missing core, an unreadable status, or any other lock
+// state (locked/unlocked/auto-locked) all mean "initialized or unknown" and
+// return false, so setup is never re-run over key material that exists.
+bool IsVaultUninitialized(MahoCore* core) {
+  if (!core) {
+    return false;
+  }
+  char* status_json = maho_vault_status_json(core);
+  if (!status_json) {
+    return false;
+  }
+  const std::string status(status_json);
+  maho_string_free(status_json);
+
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(status, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return false;
+  }
+  const base::DictValue* data = parsed->GetDict().FindDict("data");
+  if (!data) {
+    return false;
+  }
+  const std::string* lock_state = data->FindString("lockState");
+  return lock_state && *lock_state == "uninitialized";
+}
+
 }  // namespace
 
 void MahoBrowserMainExtraParts::PostEarlyInitialization() {
@@ -896,6 +928,112 @@ class McpTabIdRegistry {
 int McpSessionIdOf(content::WebContents* web_contents) {
   static base::NoDestructor<McpTabIdRegistry> registry;
   return registry->GetIdFor(web_contents);
+}
+
+// ---------------------------------------------------------------------------
+// Maho: automation file-chooser interception.
+//
+// While an MCP/agent session holds an exclusive lease on a tab, a file
+// chooser opened by that tab is NOT shown natively. The pending selection is
+// parked on the WebContents (SupportsUserData, so it dies with the tab) and
+// `input.file_upload_select` completes it later. Tabs without an active
+// lease keep the normal native dialog flow.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+class PendingAutomationFileChooser : public base::SupportsUserData::Data {
+ public:
+  static void* UserDataKey() {
+    static int key = 0;
+    return &key;
+  }
+
+  PendingAutomationFileChooser(
+      scoped_refptr<content::FileSelectListener> listener,
+      blink::mojom::FileChooserParams::Mode mode)
+      : listener_(std::move(listener)), mode_(mode) {}
+
+  scoped_refptr<content::FileSelectListener> TakeListener() {
+    return std::move(listener_);
+  }
+  blink::mojom::FileChooserParams::Mode mode() const { return mode_; }
+
+ private:
+  scoped_refptr<content::FileSelectListener> listener_;
+  blink::mojom::FileChooserParams::Mode mode_;
+};
+
+}  // namespace
+
+// Called from Browser::RunFileChooser (patched via
+// apply_chromium_src_overrides.py). Returns true when the chooser was
+// consumed by automation and the native dialog must be suppressed.
+}  // namespace
+
+namespace maho {
+
+bool MahoBeginAutomationFileChooser(
+    content::RenderFrameHost* render_frame_host,
+    scoped_refptr<content::FileSelectListener> listener,
+    blink::mojom::FileChooserParams::Mode mode) {
+  if (!render_frame_host) {
+    return false;
+  }
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(render_frame_host);
+  if (!web_contents) {
+    return false;
+  }
+  auto* lease_registry =
+      maho::MahoMcpSession::GetLeaseRegistryForBrowserActions();
+  if (!lease_registry ||
+      !lease_registry->HasActiveLease(McpSessionIdOf(web_contents))) {
+    return false;
+  }
+  // A previous pending chooser on the same tab is superseded; cancel its
+  // listener so the page does not stay blocked forever.
+  auto* previous = static_cast<PendingAutomationFileChooser*>(
+      web_contents->GetUserData(PendingAutomationFileChooser::UserDataKey()));
+  if (previous) {
+    scoped_refptr<content::FileSelectListener> stale = previous->TakeListener();
+    if (stale) {
+      stale->FileSelectionCanceled();
+    }
+    web_contents->RemoveUserData(PendingAutomationFileChooser::UserDataKey());
+  }
+  web_contents->SetUserData(
+      PendingAutomationFileChooser::UserDataKey(),
+      std::make_unique<PendingAutomationFileChooser>(std::move(listener),
+                                                     mode));
+  return true;
+}
+
+}  // namespace maho
+
+namespace {
+
+// Completes the pending automation chooser for |web_contents| with |path|.
+// Returns false when no chooser is pending.
+bool MahoCompleteAutomationFileChooser(content::WebContents* web_contents,
+                                       const base::FilePath& path) {
+  auto* pending = static_cast<PendingAutomationFileChooser*>(
+      web_contents->GetUserData(PendingAutomationFileChooser::UserDataKey()));
+  if (!pending) {
+    return false;
+  }
+  scoped_refptr<content::FileSelectListener> listener = pending->TakeListener();
+  const blink::mojom::FileChooserParams::Mode mode = pending->mode();
+  web_contents->RemoveUserData(PendingAutomationFileChooser::UserDataKey());
+  if (!listener) {
+    return false;
+  }
+  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
+  files.push_back(blink::mojom::FileChooserFileInfo::NewNativeFile(
+      blink::mojom::NativeFileInfo::New(
+          path, path.BaseName().AsUTF16Unsafe(), std::vector<std::u16string>())));
+  listener->FileSelected(std::move(files), base::FilePath(), mode);
+  return true;
 }
 
 bool IsMcpSystemSurfaceUrl(const std::string& raw_url) {
@@ -3822,8 +3960,13 @@ std::string FormatMailActionDetails(const std::string& action_name,
       clicked = maho::MahoMcpInputSynthesizer::ClickAt(wc, cx, cy, {});
     }
 
-    // Also trigger element.click() or checkbox toggle in DOM across all frames matching accessible name
-    if (!target_name.empty()) {
+    // Name-based DOM fallback: re-finds an element by accessible name and
+    // clicks the FIRST match, so it must only run when trusted input did NOT
+    // dispatch. Running it after a successful trusted click would click a
+    // different element on pages with duplicate accessible names (e.g. two
+    // radio groups both labelled 동의함) and silently corrupt that element's
+    // state while the target itself was already handled.
+    if (!clicked && !target_name.empty()) {
         const std::string js_script =
             "(()=>{const target = " + base::GetQuotedJSONString(target_name) + ".trim().toLowerCase();"
             "const chks = Array.from(document.querySelectorAll('input[type=checkbox], input[type=radio]'));"
@@ -4358,12 +4501,10 @@ std::string FormatMailActionDetails(const std::string& action_name,
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
     const base::FilePath supplied = base::FilePath::FromUTF8Unsafe(path);
-    if (!wc || !supplied.IsAbsolute() || supplied.ReferencesParent() ||
-        !base::EndsWith(supplied.FinalExtension(), FILE_PATH_LITERAL(".aab"),
-                        base::CompareCase::INSENSITIVE_ASCII)) {
+    if (!wc || !supplied.IsAbsolute() || supplied.ReferencesParent()) {
       return false;
     }
-    return FileSelectHelper::SelectFileForPendingChooser(wc, supplied);
+    return MahoCompleteAutomationFileChooser(wc, supplied);
   }
 
   maho::MahoMcpFieldMetadata GetFieldMetadata(int tab_id,
@@ -5524,8 +5665,26 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           "maho-disable-login-gate");
   const bool has_valid_relay_session = maho::auth::HasValidRelaySession(prefs);
-  const bool needs_login_gate = maho::welcome::IsLoginGateActive(
+  bool needs_login_gate = maho::welcome::IsLoginGateActive(
       login_gate_bypassed, has_valid_relay_session);
+
+  // Reconcile the onboarding flag against the Vault's real on-disk state.
+  // `kWelcomeCompleted` lives in profile Preferences while the Vault's key
+  // material lives in the profile database, so the two can diverge (a reset,
+  // replaced, or recreated database under an already-onboarded profile).
+  // Onboarding is the only path that initializes the Vault, so a diverged
+  // profile would otherwise keep an uninitialized Vault for its whole life and
+  // refuse every native password write. Only an affirmatively reported
+  // uninitialized Vault re-opens setup; an unreadable status never does.
+  if (maho::welcome::RequiresVaultSetupRepair(
+          prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
+          IsVaultUninitialized(core_))) {
+    LOG(WARNING) << "Maho Vault holds no key material for an onboarded "
+                    "profile; re-opening Vault setup so password saves are "
+                    "not silently discarded.";
+    prefs->SetBoolean(maho::welcome::kWelcomeCompleted, false);
+    needs_login_gate = true;
+  }
 
   prefs->SetBoolean(maho::welcome::kLoginGateActive, needs_login_gate);
 
@@ -5545,7 +5704,7 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
   maho::MahoUpdateManager::GetInstance()->Initialize(
       profile, g_browser_process ? g_browser_process->local_state() : nullptr);
   maho::updates::MahoConfigManager::GetInstance()->Initialize(profile);
-  maho::MahoChangelogScheduleAutoOpenCheck();
+  maho::MahoChangelogAutoOpener::RegisterForProfile(profile);
 
   MaybeLaunchMailHelper(profile);
 
