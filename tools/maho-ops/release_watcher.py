@@ -19,13 +19,26 @@ from dotenv import load_dotenv
 
 import db
 import github_ops
+import llm
 
 load_dotenv(Path(__file__).parent / ".env")
 
-ANN_CHANNEL_ID = int(os.environ["MAHO_ANNOUNCEMENTS_CHANNEL_ID"])
+ANN_CHANNEL_ID = int(os.environ.get("MAHO_ANNOUNCEMENTS_CHANNEL_ID", "0"))
 ISSUE_RE = re.compile(r"#(\d+)")
 
 log = logging.getLogger("release-watcher")
+
+
+def build_announcement(tag: str, name: str | None, summary: str | None) -> str:
+    lines = [f"🚀 **maho {tag} released**"]
+    if name:
+        lines.append(f"_{name}_")
+    if summary:
+        lines.append("")
+        lines.append(summary)
+    lines.append("")
+    lines.append("Download: https://mahobrowser.com/download")
+    return "\n".join(lines)
 
 
 async def run():
@@ -43,6 +56,33 @@ async def run():
     body = rel.get("body") or ""
     issue_numbers = list({int(m) for m in ISSUE_RE.findall(body)})
     threads = db.threads_for_issues(github_ops.REPO, issue_numbers)
+
+    summary = ""
+    if body:
+        try:
+            summary = await asyncio.to_thread(
+                llm.summarize_release, tag, rel.get("name") or "", body
+            )
+        except Exception:
+            log.exception("LLM release summarization failed; falling back to raw body")
+            summary = ISSUE_RE.sub("", body)[:1500]
+        if not summary:
+            summary = ISSUE_RE.sub("", body)[:1500]
+
+    payload = build_announcement(tag, rel.get("name"), summary)
+
+    ann_channel_id = int(os.environ.get("MAHO_ANNOUNCEMENTS_CHANNEL_ID", ANN_CHANNEL_ID or "0"))
+
+    dry_run = os.environ.get("MAHO_DRY_RUN") == "1"
+    if dry_run:
+        log.info(f"[DRY RUN] Would notify {len(threads)} threads for issues: {issue_numbers}")
+        log.info(f"[DRY RUN] Final payload for #{ann_channel_id}:\n{payload}")
+        return
+
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if not token:
+        log.error("DISCORD_BOT_TOKEN is not set.")
+        return
 
     intents = discord.Intents.default()
     client = discord.Client(intents=intents)
@@ -67,25 +107,15 @@ async def run():
                     log.exception(f"Failed to notify thread {t['thread_id']}")
 
             # 2. Post release announcement
-            ann = client.get_channel(ANN_CHANNEL_ID)
+            ann = client.get_channel(ann_channel_id)
             if ann:
-                lines = [f"🚀 **maho {tag} released**"]
-                if rel.get("name"):
-                    lines.append(f"_{rel['name']}_")
-                if rel.get("body"):
-                    # Strip GitHub-flavored issue refs since we don't expose those
-                    clean = ISSUE_RE.sub("", rel["body"])[:1500]
-                    lines.append("")
-                    lines.append(clean)
-                lines.append("")
-                lines.append("Download: https://mahobrowser.com/download")
-                await ann.send("\n".join(lines))
+                await ann.send(payload)
 
-            db.mark_release("Project-Maho/release", tag, rel["publishedAt"])
+            db.mark_release("Project-Maho/release", tag, rel.get("publishedAt", ""))
         finally:
             await client.close()
 
-    await client.start(os.environ["DISCORD_BOT_TOKEN"])
+    await client.start(token)
 
 
 if __name__ == "__main__":

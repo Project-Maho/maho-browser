@@ -1,4 +1,4 @@
-.PHONY: setup dev logs install-service start-service stop-service uninstall-service labels test-discord
+.PHONY: setup dev release-check logs install-service start-service stop-service uninstall-service labels test-discord test
 
 VENV := .venv
 PY := $(VENV)/bin/python
@@ -10,6 +10,9 @@ setup:
 
 dev:
 	$(PY) bot.py
+
+release-check:
+	$(PY) release_watcher.py
 
 test-discord:
 	@bash -c 'set -a; source .env; set +a; curl -s -H "Authorization: Bot $$DISCORD_BOT_TOKEN" https://discord.com/api/v10/users/@me | python3 -m json.tool'
