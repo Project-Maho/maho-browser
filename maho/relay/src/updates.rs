@@ -1,4 +1,4 @@
-use crate::db::{self, ConfigUpdate};
+use crate::db::{self, ConfigUpdate, ReleaseUpdate};
 use crate::errors::{AppError, Result};
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
@@ -7,6 +7,21 @@ use worker::*;
 const CONFIG_UPDATE_ADMIN_TOKEN_HEADER: &str = "X-Config-Update-Admin-Token";
 const CONFIG_UPDATE_ADMIN_TOKEN_SECRET: &str = "CONFIG_UPDATE_ADMIN_TOKEN";
 const CONFIG_UPDATE_PUBLIC_KEY_VAR: &str = "CONFIG_UPDATE_PUBLIC_KEY";
+
+const RELEASE_ADMIN_TOKEN_HEADER: &str = "X-Release-Admin-Token";
+const RELEASE_ADMIN_TOKEN_SECRET: &str = "RELEASE_ADMIN_TOKEN";
+
+const CACHE_CONTROL_HEADER: &str = "public, max-age=60, s-maxage=300, stale-while-revalidate=60";
+
+pub const EMPTY_APPCAST_XML: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Maho Updates</title>
+    <link>https://maho.app</link>
+    <description>Maho Updates</description>
+    <language>en</language>
+  </channel>
+</rss>"#;
 
 /// Fail-closed rollout bucket sentinel: strictly greater than any valid
 /// `rollout_threshold` (a 0..=100 percentage), so it never satisfies
@@ -59,6 +74,78 @@ pub async fn post_config(mut req: Request, env: Env) -> Result<Response> {
     Ok(Response::ok("config updated")?)
 }
 
+pub async fn get_macos_appcast(req: Request, env: Env) -> Result<Response> {
+    let db = env.d1("MAHO_DB")?;
+    let url = req.url()?;
+    let query: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+
+    let channel = query
+        .get("channel")
+        .cloned()
+        .unwrap_or_else(|| "stable".to_string());
+    let bucket = parse_rollout_bucket(query.get("b").map(String::as_str));
+
+    let body = match db::find_latest_macos_release(&db, &channel, bucket).await? {
+        Some(release)
+            if release
+                .appcast_xml
+                .as_deref()
+                .is_some_and(|xml| !xml.trim().is_empty()) =>
+        {
+            release.appcast_xml.unwrap()
+        }
+        _ => EMPTY_APPCAST_XML.to_string(),
+    };
+
+    let mut res = Response::ok(body)?;
+    res.headers_mut()
+        .set("Content-Type", "application/xml; charset=utf-8")?;
+    res.headers_mut()
+        .set("Cache-Control", CACHE_CONTROL_HEADER)?;
+    Ok(res)
+}
+
+pub async fn get_windows_check(req: Request, env: Env) -> Result<Response> {
+    let db = env.d1("MAHO_DB")?;
+    let url = req.url()?;
+    let query: std::collections::HashMap<String, String> = url.query_pairs().into_owned().collect();
+
+    let channel = query
+        .get("channel")
+        .cloned()
+        .unwrap_or_else(|| "stable".to_string());
+
+    let body = match db::find_latest_windows_release(&db, &channel).await? {
+        Some(release)
+            if release
+                .win_envelope
+                .as_deref()
+                .is_some_and(|env_str| !env_str.trim().is_empty()) =>
+        {
+            release.win_envelope.unwrap()
+        }
+        _ => "{}".to_string(),
+    };
+
+    let mut res = Response::ok(body)?;
+    res.headers_mut()
+        .set("Content-Type", "application/json")?;
+    res.headers_mut()
+        .set("Cache-Control", CACHE_CONTROL_HEADER)?;
+    Ok(res)
+}
+
+pub async fn post_release(mut req: Request, env: Env) -> Result<Response> {
+    require_release_admin(&req, &env)?;
+
+    let db = env.d1("MAHO_DB")?;
+    let update: ReleaseUpdate = req.json().await?;
+
+    db::upsert_release_update(&db, &update).await?;
+
+    Ok(Response::ok("release updated")?)
+}
+
 /// Requires a dedicated config-update admin token before accepting signed updates.
 ///
 /// The token must be sent in `X-Config-Update-Admin-Token` and match the
@@ -89,6 +176,44 @@ fn require_config_update_admin(req: &Request, env: &Env) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub(crate) fn validate_release_admin_token(
+    presented: Option<&str>,
+    expected: &str,
+) -> Result<()> {
+    let presented_token = presented
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| AppError::Auth("missing release admin token".to_string()))?;
+
+    if expected.is_empty() {
+        return Err(AppError::Internal(
+            "release admin token not configured".to_string(),
+        ));
+    }
+
+    if !constant_time_eq(presented_token.as_bytes(), expected.as_bytes()) {
+        return Err(AppError::Auth(
+            "invalid release admin token".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Requires a dedicated release admin token before accepting releases.
+///
+/// The token must be sent in `X-Release-Admin-Token` and match the
+/// `RELEASE_ADMIN_TOKEN` Worker secret via constant-time equality.
+fn require_release_admin(req: &Request, env: &Env) -> Result<()> {
+    let presented = req.headers().get(RELEASE_ADMIN_TOKEN_HEADER)?;
+    let expected = env
+        .secret(RELEASE_ADMIN_TOKEN_SECRET)
+        .map(|secret| secret.to_string())
+        .map_err(|_| AppError::Internal("release admin token not configured".to_string()))?;
+
+    validate_release_admin_token(presented.as_deref(), &expected)
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -179,5 +304,33 @@ mod tests {
         assert_eq!(parse_rollout_bucket(Some("-1")), ROLLOUT_BUCKET_SENTINEL);
         assert_eq!(parse_rollout_bucket(Some("100")), ROLLOUT_BUCKET_SENTINEL);
         assert_eq!(parse_rollout_bucket(Some("9999")), ROLLOUT_BUCKET_SENTINEL);
+    }
+
+    #[test]
+    fn test_auth_failure_401() {
+        // Missing token -> 401 Auth error
+        let err_missing = validate_release_admin_token(None, "secret_token").unwrap_err();
+        assert!(matches!(err_missing, AppError::Auth(ref msg) if msg.contains("missing")));
+
+        // Empty token -> 401 Auth error
+        let err_empty = validate_release_admin_token(Some("   "), "secret_token").unwrap_err();
+        assert!(matches!(err_empty, AppError::Auth(ref msg) if msg.contains("missing")));
+
+        // Invalid token -> 401 Auth error
+        let err_invalid = validate_release_admin_token(Some("wrong_token"), "secret_token").unwrap_err();
+        assert!(matches!(err_invalid, AppError::Auth(ref msg) if msg.contains("invalid")));
+
+        // Valid token -> Ok
+        assert!(validate_release_admin_token(Some("secret_token"), "secret_token").is_ok());
+    }
+
+    #[test]
+    fn test_empty_channel_200() {
+        assert_eq!(CACHE_CONTROL_HEADER, "public, max-age=60, s-maxage=300, stale-while-revalidate=60");
+        assert!(EMPTY_APPCAST_XML.contains("<rss version=\"2.0\""));
+        assert!(EMPTY_APPCAST_XML.contains("xmlns:sparkle=\"http://www.andymatuschak.org/xml-namespaces/sparkle\""));
+        assert!(EMPTY_APPCAST_XML.contains("<channel>"));
+        assert!(EMPTY_APPCAST_XML.contains("<title>Maho Updates</title>"));
+        assert!(EMPTY_APPCAST_XML.contains("</rss>"));
     }
 }

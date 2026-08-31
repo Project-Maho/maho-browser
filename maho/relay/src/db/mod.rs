@@ -7,6 +7,11 @@ pub use config_updates::{find_latest_config_update, insert_config_update, Config
 
 pub mod jobs;
 
+mod release_updates;
+pub use release_updates::{
+    find_latest_macos_release, find_latest_windows_release, upsert_release_update, ReleaseUpdate,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
     pub id: i32,

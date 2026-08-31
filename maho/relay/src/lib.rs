@@ -252,6 +252,24 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(e) => e.to_response(),
             }
         })
+        .get_async("/updates/macos/appcast", |req, ctx| async move {
+            match updates::get_macos_appcast(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .get_async("/updates/windows/check", |req, ctx| async move {
+            match updates::get_windows_check(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
+        .post_async("/updates/release", |req, ctx| async move {
+            match updates::post_release(req, ctx.env).await {
+                Ok(res) => Ok(res),
+                Err(e) => e.to_response(),
+            }
+        })
         .on_async("/ws", |req, ctx| async move {
             match room::ws_upgrade(req, ctx.env).await {
                 Ok(res) => Ok(res),
