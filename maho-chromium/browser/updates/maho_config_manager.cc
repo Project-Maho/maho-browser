@@ -20,6 +20,7 @@
 #include "components/prefs/pref_service.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/updates/maho_update_pref_names.h"
+#include "maho/browser/updates/maho_update_server_url.h"
 #include "maho/browser/updates/maho_update_signature.h"
 #include "maho/browser/updates/manifest_pubkey.h"
 #include "maho/browser/updates/rollout_bucket.h"
@@ -161,13 +162,7 @@ void MahoConfigManager::CheckForConfigUpdate() {
   }
 
   // Build request URL
-  std::string server_url = "https://update.maho.dev";
-  if (profile_ && profile_->GetPrefs()) {
-    std::string custom_url = profile_->GetPrefs()->GetString(prefs::kMahoUpdateServerUrl);
-    if (!custom_url.empty()) {
-      server_url = custom_url;
-    }
-  }
+  std::string server_url = ResolveUpdateServerBaseUrl(profile_);
   std::string url_str = server_url + "/updates/config?channel=" + channel + "&b=" + std::to_string(bucket);
 
   auto request = std::make_unique<network::ResourceRequest>();

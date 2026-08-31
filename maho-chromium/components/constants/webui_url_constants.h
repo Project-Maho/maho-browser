@@ -68,6 +68,9 @@ inline constexpr char kMahoRoutinesURL[] = "chrome://maho-routines/";
 inline constexpr char kMahoMailHost[] = "maho-mail";
 inline constexpr char kMahoMailURL[] = "chrome://maho-mail/";
 
+inline constexpr char kMahoChangelogHost[] = "maho-changelog";
+inline constexpr char kMahoChangelogURL[] = "chrome://maho-changelog/";
+
 // Public alias constants (maho:// scheme).
 inline constexpr char kMahoSettingsPublicURL[] = "maho://settings/";
 inline constexpr char kMahoAIPublicURL[] = "maho://ai/";
@@ -78,6 +81,7 @@ inline constexpr char kMahoLiveFoldersPublicURL[] = "maho://live-folders/";
 inline constexpr char kMahoWelcomePublicURL[] = "maho://welcome/";
 inline constexpr char kMahoRoutinesPublicURL[] = "maho://routines/";
 inline constexpr char kMahoMailPublicURL[] = "maho://mail/";
+inline constexpr char kMahoChangelogPublicURL[] = "maho://changelog/";
 
 struct MahoUrlAliasRecord {
   const char* alias_host;
@@ -86,8 +90,8 @@ struct MahoUrlAliasRecord {
   const char* actual_url;
 };
 
-// Exactly nine production alias records.
-inline constexpr std::array<MahoUrlAliasRecord, 9> kMahoUrlAliases = {{
+// Exactly ten production alias records.
+inline constexpr std::array<MahoUrlAliasRecord, 10> kMahoUrlAliases = {{
     { "settings", kMahoSettingsPublicURL, kMahoSettingsHost, kMahoSettingsURL },
     { "ai", kMahoAIPublicURL, kMahoAIHost, kMahoAIURL },
     { "space-config", kMahoSpaceConfigPublicURL, kMahoSpaceConfigHost, kMahoSpaceConfigURL },
@@ -97,6 +101,7 @@ inline constexpr std::array<MahoUrlAliasRecord, 9> kMahoUrlAliases = {{
     { "welcome", kMahoWelcomePublicURL, kMahoWelcomeHost, kMahoWelcomeURL },
     { "routines", kMahoRoutinesPublicURL, kMahoRoutinesHost, kMahoRoutinesURL },
     { "mail", kMahoMailPublicURL, kMahoMailHost, kMahoMailURL },
+    { "changelog", kMahoChangelogPublicURL, kMahoChangelogHost, kMahoChangelogURL },
 }};
 
 }  // namespace maho

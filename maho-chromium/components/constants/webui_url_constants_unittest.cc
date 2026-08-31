@@ -13,7 +13,7 @@ namespace maho {
 
 TEST(MahoUrlConstantsTest, ProductionArrayCountAndUniqueness) {
   EXPECT_EQ(kMahoUIScheme, std::string_view("maho"));
-  EXPECT_EQ(kMahoUrlAliases.size(), 9u);
+  EXPECT_EQ(kMahoUrlAliases.size(), 10u);
 
   std::set<std::string> alias_hosts;
   std::set<std::string> public_urls;
@@ -44,10 +44,10 @@ TEST(MahoUrlConstantsTest, ProductionArrayCountAndUniqueness) {
     actual_urls.insert(record.actual_url);
   }
 
-  EXPECT_EQ(alias_hosts.size(), 9u);
-  EXPECT_EQ(public_urls.size(), 9u);
-  EXPECT_EQ(actual_hosts.size(), 9u);
-  EXPECT_EQ(actual_urls.size(), 9u);
+  EXPECT_EQ(alias_hosts.size(), 10u);
+  EXPECT_EQ(public_urls.size(), 10u);
+  EXPECT_EQ(actual_hosts.size(), 10u);
+  EXPECT_EQ(actual_urls.size(), 10u);
 }
 
 TEST(MahoUrlConstantsTest, ActualConstantsRetainChromeSchemes) {
@@ -66,6 +66,7 @@ TEST(MahoUrlConstantsTest, ActualConstantsRetainChromeSchemes) {
       kMahoSpaceCreateURL,
       kMahoRoutinesURL,
       kMahoMailURL,
+      kMahoChangelogURL,
   };
 
   for (const char* url : actual_urls) {
