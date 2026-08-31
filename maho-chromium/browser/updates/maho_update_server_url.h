@@ -12,7 +12,7 @@ class Profile;
 namespace maho {
 namespace updates {
 
-inline constexpr char kMahoUpdateServerDefaultUrl[] = "https://update.mahobrowser.com";
+inline constexpr char kMahoUpdateServerDefaultUrl[] = "https://relay.mahobrowser.com";
 
 inline constexpr char kMahoUpdateServerOverrideEnvVar[] =
     "MAHO_UPDATE_SERVER_OVERRIDE";

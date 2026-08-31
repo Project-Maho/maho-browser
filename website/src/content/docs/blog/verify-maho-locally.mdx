@@ -71,7 +71,7 @@ For TLS-encrypted traffic (which is everything to `mahobrowser.com` and `proxy.m
 
 What you should find:
 
-**Update check**: a single GET to `updates.mahobrowser.com/manifest.json` with no body. Response is a small JSON with the latest version and minimum supported version. No identifiers, no user data, no telemetry beacons.
+**Update check**: a single GET to `relay.mahobrowser.com/updates/macos/appcast` with no body. Response is a small JSON with the latest version and minimum supported version. No identifiers, no user data, no telemetry beacons.
 
 **Sync**: WebSocket frames to `relay.mahobrowser.com`. The frame bodies are AES-GCM ciphertext. You will not be able to read them even with the SSL keys, because the encryption key is derived from your sync passphrase on-device, not from the TLS session. This is by design and described in [the sync architecture post](/blog/sync-architecture-end-to-end/).
 

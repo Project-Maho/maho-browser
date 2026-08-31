@@ -43,7 +43,7 @@ Chromium has a long list of services it can talk to. The list grew over fifteen 
 | Search and omnibox suggestions | Never sent to Maho. Routed only to your configured search engine. |
 | Component updates (Widevine, translation models, etc.) | Never sent. Components are bundled at build time. |
 | Sync relay traffic | Never sent unless Sync is turned on. The relay is end-to-end encrypted. |
-| Update check | Sent to `update.mahobrowser.com` on launch and once every 24 hours. |
+| Update check | Sent to `relay.mahobrowser.com` on launch and once every 24 hours. |
 
 Seven of the eight are zero by default. The eighth is the update check, which is the only call the browser makes to a host we control. That call has its own section.
 
@@ -65,7 +65,7 @@ The minidump itself contains stack traces, register state, and loaded modules. I
 
 A browser that does not check for updates ships unpatched in three months. We keep the path, and we keep it as small as possible.
 
-The update check is a single HTTPS request to `update.mahobrowser.com/v1/check`. The request body has three fields: the current build channel ("stable" or "beta"), the current version string, and the platform ("macos-arm64" or "macos-x86_64"). Nothing else. No machine identifier, no install token, no cookie, no UA fingerprint beyond the platform tuple. The response is a small JSON document that says either "you are current" or points at a signed update payload.
+The update check is a single HTTPS request to `relay.mahobrowser.com/v1/check`. The request body has three fields: the current build channel ("stable" or "beta"), the current version string, and the platform ("macos-arm64" or "macos-x86_64"). Nothing else. No machine identifier, no install token, no cookie, no UA fingerprint beyond the platform tuple. The response is a small JSON document that says either "you are current" or points at a signed update payload.
 
 The check fires on launch and once every 24 hours after that. You can disable it in Settings, Updates. If you do, the browser stops asking entirely, which means it will also stop getting security fixes. We do not recommend turning it off, but the toggle is honest.
 
@@ -77,9 +77,9 @@ If you want to verify the request shape, you can. Run the browser behind `mitmpr
 
 The whole point of this posture is that the claim is testable. Three useful ways.
 
-**Little Snitch.** Install Little Snitch, switch the filter to alert mode, and launch Maho with no extensions installed and Sync turned off. Browse for ten minutes. The only outbound destination triggered by the browser process itself is `update.mahobrowser.com`, and only at launch. Pages you visit will trigger their own connections, naturally. The browser process stays silent otherwise.
+**Little Snitch.** Install Little Snitch, switch the filter to alert mode, and launch Maho with no extensions installed and Sync turned off. Browse for ten minutes. The only outbound destination triggered by the browser process itself is `relay.mahobrowser.com`, and only at launch. Pages you visit will trigger their own connections, naturally. The browser process stays silent otherwise.
 
-**pf rules.** If you prefer the built-in firewall, write a `pf` rule that blocks all outbound traffic from the Maho process except `update.mahobrowser.com`. The browser keeps working. Pages load. The AI panel talks to your configured provider directly. Search engines return results. Nothing else breaks. That is the test.
+**pf rules.** If you prefer the built-in firewall, write a `pf` rule that blocks all outbound traffic from the Maho process except `relay.mahobrowser.com`. The browser keeps working. Pages load. The AI panel talks to your configured provider directly. Search engines return results. Nothing else breaks. That is the test.
 
 **lsof.** A quicker spot check is `lsof -i -P -p $(pgrep -x Maho)`. Run it during a session. The connections you see are to the sites you are visiting, your AI provider, and the update endpoint. Nothing else lives there.
 

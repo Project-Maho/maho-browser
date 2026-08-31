@@ -57,7 +57,7 @@ _VERIFY_MACOS_RELEASE = os.path.join(_SCRIPT_DIR, 'verify_macos_release.py')
 
 DEFAULT_REPO = os.environ.get('MAHO_RELEASE_REPO', 'Project-Maho/release')
 DEFAULT_RELAY_URL = os.environ.get(
-    'MAHO_RELAY_URL', 'https://update.mahobrowser.com/updates/release'
+    'MAHO_RELAY_URL', 'https://relay.mahobrowser.com/updates/release'
 )
 MANIFEST_PUBKEY_HEX = (
     '8b076b75cb7896810997c59b1ec7e184730d714ca0679e0deae22f7aba0d4dbc'

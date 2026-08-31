@@ -78,7 +78,7 @@ Auth subject column prevents the T3-class bug (a client calling a service-only r
 | `/waitlist` | POST | Marketing | none |
 
 ## PRODUCTION DOMAINS
-`relay.mahobrowser.com`, `update.mahobrowser.com`, `updates.mahobrowser.com`, `proxy.mahobrowser.com`
+`relay.mahobrowser.com`, `proxy.mahobrowser.com`
 
 ## CONVENTIONS
 - Runtime: Cloudflare Workers WASM (`worker` crate v0.4). No `std::net`, no `tokio`, no `std::fs`.

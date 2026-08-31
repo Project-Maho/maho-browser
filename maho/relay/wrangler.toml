@@ -10,8 +10,6 @@ command = "cargo install -q worker-build --version \"^0.1\" 2>/dev/null; worker-
 [env.production]
 routes = [
   { pattern = "relay.mahobrowser.com", custom_domain = true },
-  { pattern = "update.mahobrowser.com", custom_domain = true },
-  { pattern = "updates.mahobrowser.com", custom_domain = true },
   { pattern = "proxy.mahobrowser.com", custom_domain = true },
 ]
 

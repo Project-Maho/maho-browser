@@ -227,7 +227,7 @@ TEST_F(MahoUpdateManagerTest, UrlOverride_RejectsFileScheme) {
   EXPECT_FALSE(updates::IsAcceptableUpdateServerUrl(""));
   EXPECT_FALSE(updates::IsAcceptableUpdateServerUrl("ftp://x"));
   EXPECT_TRUE(updates::IsAcceptableUpdateServerUrl("http://localhost:1"));
-  EXPECT_TRUE(updates::IsAcceptableUpdateServerUrl("https://update.mahobrowser.com"));
+  EXPECT_TRUE(updates::IsAcceptableUpdateServerUrl("https://relay.mahobrowser.com"));
 }
 
 TEST_F(MahoUpdateManagerTest, UrlOverride_EnvVarBeatsPref) {
