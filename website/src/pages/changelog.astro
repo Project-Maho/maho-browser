@@ -1,93 +1,91 @@
 ---
-// biome-ignore-all assist/source/organizeImports: Astro component imports stay grouped for readability.
-// biome-ignore-all lint/correctness/noUnusedImports: Astro frontmatter imports are referenced in the template.
-// biome-ignore-all lint/correctness/noUnusedVariables: Astro frontmatter data is referenced in the template.
-import BaseLayout from '../layouts/BaseLayout.astro';
-import Nav from '../components/Nav.astro';
-import Footer from '../components/Footer.astro';
-import JSONLD from '../components/JSONLD.astro';
-import ScrollReveal from '../components/motion/ScrollReveal.astro';
-import { getSiteUrl } from '../lib/site';
-import changelogData from '../data/changelog.json';
+import Footer from "../components/Footer.astro";
+import JSONLD from "../components/JSONLD.astro";
+import ScrollReveal from "../components/motion/ScrollReveal.astro";
+import Nav from "../components/Nav.astro";
+import changelogData from "../data/changelog.json";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { getSiteUrl } from "../lib/site";
 
 interface ChangelogSection {
-  type: 'added' | 'fixed' | 'changed' | 'removed';
-  title: string;
-  items: string[];
+	type: "added" | "fixed" | "changed" | "removed";
+	title: string;
+	items: string[];
 }
 
 interface Release {
-  version: string;
-  date: string;
-  channel: string;
-  highlights: string[];
-  sections: ChangelogSection[];
-  body: string;
+	version: string;
+	date: string;
+	channel: string;
+	highlights: string[];
+	sections: ChangelogSection[];
+	body: string;
 }
 
 const releases: Release[] = (changelogData.releases as Release[]) || [];
 
 const { absoluteUrl } = getSiteUrl(Astro);
 
-const pageTitle = 'Changelog — Maho';
+const pageTitle = "Changelog — Maho";
 const pageDescription =
-  'Every release, feature update, and fix shipped to Maho — structured, verified, and dated.';
+	"Every release, feature update, and fix shipped to Maho — structured, verified, and dated.";
 
 function formatDate(dateStr: string): string {
-  try {
-    const [year, month, day] = dateStr.split('-').map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-      timeZone: 'UTC',
-    }).format(date);
-  } catch {
-    return dateStr;
-  }
+	try {
+		const [year, month, day] = dateStr.split("-").map(Number);
+		const date = new Date(Date.UTC(year, month - 1, day));
+		return new Intl.DateTimeFormat("en-US", {
+			month: "long",
+			day: "numeric",
+			year: "numeric",
+			timeZone: "UTC",
+		}).format(date);
+	} catch {
+		return dateStr;
+	}
 }
 
-const sectionBadgeStyles: Record<string, { label: string; dotClass: string }> = {
-  added: {
-    label: 'New Features',
-    dotClass: 'bg-emerald-500',
-  },
-  fixed: {
-    label: 'Bug Fixes',
-    dotClass: 'bg-amber-500',
-  },
-  changed: {
-    label: 'Improvements',
-    dotClass: 'bg-sky-500',
-  },
-  removed: {
-    label: 'Removed',
-    dotClass: 'bg-rose-500',
-  },
-};
+const sectionBadgeStyles: Record<string, { label: string; dotClass: string }> =
+	{
+		added: {
+			label: "New Features",
+			dotClass: "bg-emerald-500",
+		},
+		fixed: {
+			label: "Bug Fixes",
+			dotClass: "bg-amber-500",
+		},
+		changed: {
+			label: "Improvements",
+			dotClass: "bg-sky-500",
+		},
+		removed: {
+			label: "Removed",
+			dotClass: "bg-rose-500",
+		},
+	};
 
 const channelBadgeStyles: Record<string, string> = {
-  stable: 'border-foreground/20 bg-foreground/10 text-foreground',
-  beta: 'border-border bg-muted/60 text-muted-foreground',
-  nightly: 'border-border bg-muted/40 text-muted-foreground',
+	stable: "border-foreground/20 bg-foreground/10 text-foreground",
+	beta: "border-border bg-muted/60 text-muted-foreground",
+	nightly: "border-border bg-muted/40 text-muted-foreground",
 };
 
 const ld = {
-  '@context': 'https://schema.org',
-  '@type': 'CollectionPage',
-  name: 'Maho Changelog',
-  description: pageDescription,
-  url: absoluteUrl('/changelog'),
-  mainEntity: {
-    '@type': 'ItemList',
-    itemListElement: releases.map((release, index) => ({
-      '@type': 'ListItem',
-      position: index + 1,
-      name: `Maho ${release.version}`,
-      url: `${absoluteUrl('/changelog')}#v${release.version}`,
-    })),
-  },
+	"@context": "https://schema.org",
+	"@type": "CollectionPage",
+	name: "Maho Changelog",
+	description: pageDescription,
+	url: absoluteUrl("/changelog"),
+	mainEntity: {
+		"@type": "ItemList",
+		itemListElement: releases.map((release, index) => ({
+			"@type": "ListItem",
+			position: index + 1,
+			name: `Maho ${release.version}`,
+			url: `${absoluteUrl("/changelog")}#v${release.version}`,
+		})),
+	},
 };
 ---
 

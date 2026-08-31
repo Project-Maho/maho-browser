@@ -86,15 +86,11 @@ pub async fn get_macos_appcast(req: Request, env: Env) -> Result<Response> {
     let bucket = parse_rollout_bucket(query.get("b").map(String::as_str));
 
     let body = match db::find_latest_macos_release(&db, &channel, bucket).await? {
-        Some(release)
-            if release
-                .appcast_xml
-                .as_deref()
-                .is_some_and(|xml| !xml.trim().is_empty()) =>
-        {
-            release.appcast_xml.unwrap()
-        }
-        _ => EMPTY_APPCAST_XML.to_string(),
+        Some(release) => match release.appcast_xml {
+            Some(xml) if !xml.trim().is_empty() => xml,
+            _ => EMPTY_APPCAST_XML.to_string(),
+        },
+        None => EMPTY_APPCAST_XML.to_string(),
     };
 
     let mut res = Response::ok(body)?;
@@ -116,15 +112,11 @@ pub async fn get_windows_check(req: Request, env: Env) -> Result<Response> {
         .unwrap_or_else(|| "stable".to_string());
 
     let body = match db::find_latest_windows_release(&db, &channel).await? {
-        Some(release)
-            if release
-                .win_envelope
-                .as_deref()
-                .is_some_and(|env_str| !env_str.trim().is_empty()) =>
-        {
-            release.win_envelope.unwrap()
-        }
-        _ => "{}".to_string(),
+        Some(release) => match release.win_envelope {
+            Some(envelope) if !envelope.trim().is_empty() => envelope,
+            _ => "{}".to_string(),
+        },
+        None => "{}".to_string(),
     };
 
     let mut res = Response::ok(body)?;
