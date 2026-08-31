@@ -102,6 +102,22 @@ TEST_F(MahoUpdateManagerTest, InitializeIsIdempotent_DelegateInitsExactlyOnce) {
   EXPECT_EQ(delegate_ptr->init_count, 1);
 }
 
+TEST_F(MahoUpdateManagerTest, UnconfiguredLocalStateEnablesUpdatesByDefault) {
+  TestingPrefServiceSimple local_state;
+  updates::RegisterLocalStatePrefs(local_state.registry());
+  ASSERT_FALSE(local_state.HasPrefPath(prefs::kMahoUpdateEnabled));
+
+  auto* manager = MahoUpdateManager::GetInstance();
+  auto delegate = std::make_unique<MockPlatformUpdaterDelegate>();
+  auto* delegate_ptr = delegate.get();
+  manager->SetDelegateForTesting(std::move(delegate));
+  manager->Initialize(nullptr, &local_state);
+
+  manager->CheckForUpdates(true);
+  EXPECT_EQ(delegate_ptr->check_count, 1);
+  EXPECT_TRUE(delegate_ptr->last_manual);
+}
+
 TEST_F(MahoUpdateManagerTest, KillSwitchPrevents_Initialize) {
   auto* local_state =
       TestingBrowserProcess::GetGlobal()->GetTestingLocalState();
@@ -211,7 +227,7 @@ TEST_F(MahoUpdateManagerTest, UrlOverride_RejectsFileScheme) {
   EXPECT_FALSE(updates::IsAcceptableUpdateServerUrl(""));
   EXPECT_FALSE(updates::IsAcceptableUpdateServerUrl("ftp://x"));
   EXPECT_TRUE(updates::IsAcceptableUpdateServerUrl("http://localhost:1"));
-  EXPECT_TRUE(updates::IsAcceptableUpdateServerUrl("https://update.maho.dev"));
+  EXPECT_TRUE(updates::IsAcceptableUpdateServerUrl("https://update.mahobrowser.com"));
 }
 
 TEST_F(MahoUpdateManagerTest, UrlOverride_EnvVarBeatsPref) {

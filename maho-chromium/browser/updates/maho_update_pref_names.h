@@ -15,7 +15,7 @@ inline constexpr char kMahoUpdateCrashSentinel[] = "maho.update.crash_sentinel";
 inline constexpr char kMahoUpdateRollbackRequested[] = "maho.update.rollback_requested";
 
 // Per-profile override of the update server base URL. Empty string falls
-// back to the build-time default (https://update.maho.dev). The
+// back to the build-time default (https://update.mahobrowser.com). The
 // MAHO_UPDATE_SERVER_OVERRIDE env var, if set, beats this pref. Used for
 // pointing dev builds at a local maho-relay without rebuilding.
 inline constexpr char kMahoUpdateServerUrl[] = "maho.update.server_url";
@@ -26,6 +26,12 @@ inline constexpr char kMahoUpdateServerUrl[] = "maho.update.server_url";
 // validated against a fixture server. See the implementation plan §7.
 inline constexpr char kMahoUpdateEnabled[] = "maho.update.enabled";
 inline constexpr char kMahoConfigEnabled[] = "maho.config.enabled";
+
+// Last version for which the post-update changelog tab was auto-opened.
+// Local state. Default empty string (fresh installs seed current version on
+// first run without auto-opening).
+inline constexpr char kMahoChangelogLastShownVersion[] =
+    "maho.changelog.last_shown_version";
 
 }  // namespace prefs
 }  // namespace maho

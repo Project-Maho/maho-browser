@@ -17,10 +17,12 @@ void RegisterLocalStatePrefs(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(prefs::kMahoUpdateInstallId, std::string());
   registry->RegisterStringPref(prefs::kMahoUpdateLastKnownGoodVersion, std::string());
   registry->RegisterStringPref(prefs::kMahoUpdateLastSeenVersion, std::string());
+  registry->RegisterStringPref(prefs::kMahoChangelogLastShownVersion, std::string());
   registry->RegisterBooleanPref(prefs::kMahoUpdateAutoInstall, false);
   registry->RegisterDictionaryPref(prefs::kMahoUpdateCrashSentinel);
   registry->RegisterBooleanPref(prefs::kMahoUpdateRollbackRequested, false);
-  registry->RegisterBooleanPref(prefs::kMahoUpdateEnabled, false);
+  // Enabled only after the release feed was live and canary verification passed.
+  registry->RegisterBooleanPref(prefs::kMahoUpdateEnabled, true);
   registry->RegisterBooleanPref(prefs::kMahoConfigEnabled, true);
 }
 
