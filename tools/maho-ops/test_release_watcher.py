@@ -269,7 +269,10 @@ class TestReleaseWatcher(unittest.IsolatedAsyncioTestCase):
         mock_discord_client_cls,
     ):
         """Successful LLM output must still pass sanitization + length cap."""
-        hostile_summary = "Fixes #123 and #456! " + "x" * 2000
+        hostile_summary = (
+            "Fixes #123 and #456! See https://github.com/Project-Maho/maho/issues/789 "
+            + "x" * 2000
+        )
         mock_release.return_value = {
             "tagName": "v3.1.0",
             "name": "v3.1",
@@ -304,6 +307,7 @@ class TestReleaseWatcher(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Fixes  and !", dry_logs)
         self.assertNotIn("Fixes #123", dry_logs)
         self.assertNotIn("and #456", dry_logs)
+        self.assertNotIn("github.com/Project-Maho/maho/issues/789", dry_logs)
         # Summary portion is capped at 1500 chars; whole payload = header + summary + download line
         self.assertLessEqual(len(dry_logs), len(hostile_summary))
 

@@ -25,6 +25,9 @@ load_dotenv(Path(__file__).parent / ".env")
 
 ANN_CHANNEL_ID = int(os.environ.get("MAHO_ANNOUNCEMENTS_CHANNEL_ID", "0"))
 ISSUE_RE = re.compile(r"#(\d+)")
+GITHUB_ISSUE_URL_RE = re.compile(
+    r"https?://(?:www\.)?github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/\d+\S*"
+)
 SUMMARY_MAX_CHARS = 1500
 
 log = logging.getLogger("release-watcher")
@@ -34,9 +37,10 @@ def sanitize_summary(text: str) -> str:
     """Enforce announcement-safety rules on any summary source.
 
     Applied to BOTH the successful LLM output and the raw-body fallback so a
-    model response can never reintroduce issue references or exceed the
-    announcement length budget.
+    model response can never reintroduce issue references (as #N tokens or as
+    GitHub issue/PR URLs) or exceed the announcement length budget.
     """
+    text = GITHUB_ISSUE_URL_RE.sub("", text)
     return ISSUE_RE.sub("", text)[:SUMMARY_MAX_CHARS]
 
 
