@@ -988,7 +988,7 @@ void GroupSplitTabs(std::vector<SidebarTreeNode>& nodes, TabStripModel* model) {
       const auto& split_id = node_splits[i];
       if (split_id.has_value()) {
         auto it = split_groups.find(split_id.value());
-        if (it != split_groups.end() && it->second.size() == 2) {
+        if (it != split_groups.end() && it->second.size() >= 2) {
           SidebarTreeNode group;
           group.kind = SidebarNodeKind::kSplitGroup;
           group.split_id = split_id.value().ToString();
