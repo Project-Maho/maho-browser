@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ AI_MOCK_SCENARIOS = (
 # with the request-producing scenarios would make one side of the suite fail.
 _NO_KEY_AI_SCENARIOS = frozenset(("ai_mock_key_cleared_no_request",))
 _GTEST_FILTER_OPERATORS = frozenset("*?:-")
+_GTEST_SUCCESS_RE = re.compile(r"^\[\s+OK\s+\]\s+([^\s]+)\s+\(\d+ ms\)$")
 _AI_RESULT_RE = re.compile(r"^(PASS|FAIL|SKIP)\s+([A-Za-z0-9_]+)(?:\s|$)")
 _MOCK_URL_PREFIX = "MOCK_LLM base_url="
 _PROFILE_PREFIX = "PROFILE="
@@ -164,28 +166,46 @@ def build_interactive_command(
     guest_workspace: str,
     guest_run_dir: str,
     test_names: Sequence[str],
+    *,
+    suite_name: str = "interactive-smoke",
+    binary_name: str = "interactive_ui_tests",
 ) -> GuestCommand:
     """Build the exact zero-retry Chromium interactive test command."""
 
+    if (
+        not suite_name
+        or "/" in suite_name
+        or not binary_name
+        or "/" in binary_name
+        or binary_name in (".", "..")
+        or binary_name.endswith(".runtime_deps")
+    ):
+        raise SuiteContractError(
+            "interactive suite and binary names must be single path segments"
+        )
     workspace = _absolute_guest_path(guest_workspace, "guest workspace")
     run_dir = _absolute_guest_path(guest_run_dir, "guest run directory")
     tests = _validated_gtest_names(test_names)
-    binary = workspace / "chromium/src/out/Default/interactive_ui_tests"
+    binary = workspace / "chromium/src/out/Default" / binary_name
     summary = run_dir / "interactive-test-summary.json"
+    bin_str = str(binary)
+    summary_str = str(summary)
+    filter_arg = f"--gtest_filter={':'.join(tests)}"
+    summary_arg = f"--test-launcher-summary-output={summary_str}"
 
     return GuestCommand(
-        suite="interactive-smoke",
+        suite=suite_name,
         argv=(
-            str(binary),
-            f"--gtest_filter={':'.join(tests)}",
+            bin_str,
+            filter_arg,
             "--gtest_fail_if_no_test_selected",
             "--test-launcher-jobs=1",
             "--test-launcher-retry-limit=0",
-            f"--test-launcher-summary-output={summary}",
+            summary_arg,
         ),
         environment=(),
-        stdout_path=str(run_dir / "interactive-smoke.stdout.log"),
-        stderr_path=str(run_dir / "interactive-smoke.stderr.log"),
+        stdout_path=str(run_dir / f"{suite_name}.stdout.log"),
+        stderr_path=str(run_dir / f"{suite_name}.stderr.log"),
         summary_path=str(summary),
         expected_results=tests,
     )
@@ -233,6 +253,30 @@ def _gtest_summary_issues(
     return issues
 
 
+def merge_gtest_summary_with_stdout(
+    summary: Mapping[str, Any],
+    expected_tests: Sequence[str],
+    stdout: str,
+) -> dict[str, Any]:
+    tests = _validated_gtest_names(expected_tests)
+    merged = dict(summary)
+    per_iteration_data = summary.get("per_iteration_data")
+    if not isinstance(per_iteration_data, list) or len(per_iteration_data) != 1:
+        return merged
+    iteration = per_iteration_data[0]
+    if not isinstance(iteration, Mapping):
+        return merged
+
+    merged_iteration = dict(iteration)
+    missing = set(tests) - set(merged_iteration)
+    for line in stdout.splitlines():
+        match = _GTEST_SUCCESS_RE.match(line)
+        if match and match.group(1) in missing:
+            merged_iteration[match.group(1)] = [{"status": "SUCCESS"}]
+    merged["per_iteration_data"] = [merged_iteration]
+    return merged
+
+
 def validate_gtest_summary(
     summary: Mapping[str, Any], expected_tests: Sequence[str]
 ) -> SuiteValidation:
@@ -255,8 +299,8 @@ def validate_interactive_result(
 
     command = result.command
     issues: list[str] = []
-    if command.suite != "interactive-smoke" or command.summary_path is None:
-        issues.append("result is not associated with an interactive-smoke command")
+    if not command.suite or command.summary_path is None:
+        issues.append("result is not associated with an interactive test command")
     if result.returncode != 0:
         issues.append(f"interactive process exited with {result.returncode}")
     try:

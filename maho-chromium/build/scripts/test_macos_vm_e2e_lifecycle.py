@@ -8,8 +8,10 @@ from importlib.machinery import ModuleSpec
 import io
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest import mock
@@ -315,6 +317,79 @@ def test_cleanup_refuses_unowned_clone(tmp_path) -> None:
     assert clone.directory.exists()
 
 
+def test_connect_relay_relays_loopback_connect_roundtrip(tmp_path) -> None:
+    relay_spec = importlib.util.spec_from_file_location(
+        "macos_vm_connect_relay_under_test",
+        Path(__file__).parent / "macos_vm_connect_relay.py",
+    )
+    relay = importlib.util.module_from_spec(relay_spec)
+    relay_spec.loader.exec_module(relay)
+
+    def serve_echo(server: socket.socket) -> None:
+        conn, _ = server.accept()
+        data = conn.recv(100)
+        conn.sendall(b"echo:" + data)
+        conn.close()
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    destination_port = server.getsockname()[1]
+    echo_thread = threading.Thread(
+        target=serve_echo, args=(server,), daemon=True
+    )
+    echo_thread.start()
+
+    client, remote = socket.socketpair()
+    handler = threading.Thread(
+        target=relay._handle, args=(remote,), daemon=True
+    )
+    handler.start()
+
+    client.sendall(
+        f"CONNECT 127.0.0.1:{destination_port} HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n\r\n".encode()
+    )
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = client.recv(4096)
+        assert chunk, "relay closed before CONNECT response"
+        response += chunk
+    assert b"200 Connection Established" in response
+
+    client.sendall(b"ping")
+    client.settimeout(10)
+    assert client.recv(4096) == b"echo:ping"
+    handler.join(timeout=10)
+    assert not handler.is_alive()
+
+
+def test_teardown_treats_already_stopped_clone_as_idempotent_success(tmp_path) -> None:
+    clone = vm.OwnedClone("owned", tmp_path / "owned", "golden", "token")
+    clone.directory.mkdir()
+    clone.receipt.write_text(
+        json.dumps({"name": clone.name, "token": clone.token}),
+        encoding="utf-8",
+    )
+    services = mock.Mock()
+    services.runner.run.side_effect = [
+        command_result(
+            vm,
+            succeeded=False,
+            returncode=1,
+            stderr=f'VM "{clone.name}" is not running',
+        ),
+        command_result(vm, succeeded=True),
+    ]
+
+    result = vm._teardown_clone(clone, None, services)
+
+    assert result.succeeded
+    assert result.error is None
+    assert services.runner.run.call_count == 2
+    assert not clone.directory.exists()
+
+
 def test_teardown_records_second_wait_timeout_and_continues_cleanup(tmp_path) -> None:
     process = mock.Mock()
     process.pid = 8112
@@ -354,6 +429,7 @@ def test_ssh_contract_is_strictly_key_only(tmp_path) -> None:
         "StrictHostKeyChecking=accept-new",
     ):
         assert option in base
+    assert base[base.index("-b") + 1] == "192.0.2.1"
     assert "StrictHostKeyChecking=no" not in base
 
 
@@ -396,6 +472,25 @@ def test_regression_forbidden_prior_lifecycle_patterns_are_absent() -> None:
     assert "_validate_build_output_volume" not in source
     assert '"/usr/sbin/diskutil"' not in source
     assert '"output_volume"' not in source
+
+
+def test_external_chromium_target_accepts_only_real_volumes_chromium_tree(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    allowed = Path("/Volumes/T9-Mac/chromium")
+    if allowed.is_dir():
+        (workspace / "chromium").symlink_to(allowed)
+        assert vm._external_chromium_target(workspace) == allowed
+
+
+def test_external_chromium_target_rejects_arbitrary_absolute_share(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "chromium").symlink_to("/Users/Shared")
+
+    assert vm._external_chromium_target(workspace) is None
 
 
 def test_read_only_transport_is_primary_and_fallback_is_allowlisted() -> None:
@@ -619,7 +714,7 @@ def test_full_interactive_suite_includes_palette_startup_and_interaction() -> No
         suite.gtest_filter,
     )
 
-    assert len(command.expected_results) == 5
+    assert len(command.expected_results) == len(suite.gtest_filter)
     assert command.expected_results == suite.gtest_filter
     assert (
         "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults"
@@ -628,7 +723,7 @@ def test_full_interactive_suite_includes_palette_startup_and_interaction() -> No
     assert "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath" in (
         command.expected_results
     )
-    assert "--gtest_filter=" + ":".join(suite.gtest_filter) in command.argv[-1]
+    assert "--gtest_filter=" + ":".join(suite.gtest_filter) in command.argv
 
 
 def test_source_revision_uses_git_head(tmp_path) -> None:
@@ -642,6 +737,21 @@ def test_source_revision_uses_git_head(tmp_path) -> None:
         capture_output=True,
         text=True,
     )
+
+
+def test_run_parser_accepts_skip_build_for_prebuilt_artifacts() -> None:
+    args = vm.build_parser().parse_args(
+        ["run", "--suite", "interactive-smoke", "--skip-build"]
+    )
+
+    assert args.skip_build is True
+
+
+def test_skip_build_preflight_does_not_invoke_canonical_build(tmp_path) -> None:
+    assert vm.__file__ is not None
+    source = Path(vm.__file__).read_text(encoding="utf-8")
+    assert 'getattr(args, "skip_build", False)' in source
+    assert "dependencies = _preflight_existing_build(" in source
 
 
 def test_run_checkpoints_guest_ready_before_transport_and_preserves_facts(

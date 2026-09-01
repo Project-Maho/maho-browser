@@ -1,41 +1,63 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
+#include "base/compiler_specific.h"
+
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include <array>
+#include <map>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
-#include "base/check.h"
+#include "base/command_line.h"
+#include "base/containers/span.h"
+#include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/functional/bind.h"
+#include "base/no_destructor.h"
+#include "base/path_service.h"
+#include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tabs/tab_strip_user_gesture_details.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "components/split_tabs/split_tab_id.h"
 #include "components/split_tabs/split_tab_visual_data.h"
+#include "components/tabs/public/split_tab_data.h"
 #include "components/translate/core/browser/translate_pref_names.h"
 #include "components/translate/core/browser/translate_prefs.h"
+#include "base/strings/string_number_conversions.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/web_contents.h"
+#include "net/test/embedded_test_server/http_request.h"
+#include "net/test/embedded_test_server/http_response.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
-#include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/test/base/ui_test_utils.h"
-#include "content/public/browser/web_contents.h"
+#include "maho/browser/net/maho_translate_injection_handler.h"
 #include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
-#include "maho/browser/net/maho_translate_injection_handler.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_search_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "ui/accessibility/ax_action_data.h"
@@ -43,25 +65,25 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/test/ui_controls.h"
-#include "ui/events/keycodes/keyboard_codes.h"
-#include "ui/gfx/font.h"
 #include "ui/events/event.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/events/types/event_type.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/native_ui_types.h"
+#include "ui/snapshot/snapshot.h"
 #include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield.h"
-#include "ui/views/bubble/bubble_dialog_delegate_view.h"
 #include "ui/views/focus/focus_manager.h"
+#include "ui/views/paint_info.h"
+#include "ui/views/view_constants.h"
 #include "ui/views/view_utils.h"
+#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
-#include "base/run_loop.h"
-#include "base/threading/thread_restrictions.h"
-#include "ui/snapshot/snapshot.h"
 
 namespace maho {
 namespace {
@@ -109,20 +131,20 @@ views::MdTextButton* FindTextButtonWithText(views::View* root,
 
 void ClickScreenPoint(const gfx::Point& point) {
   ASSERT_TRUE(ui_controls::SendMouseMove(point.x(), point.y()));
-  base::RunLoop click_loop;
+  ::base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 }
 
 void SendKeyPressToWindow(gfx::NativeWindow window, ui::KeyboardCode key_code) {
-  base::RunLoop key_loop;
+  ::base::RunLoop key_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       window, key_code, false, false, false, false, key_loop.QuitClosure()));
   key_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 }
 
 // Grabs an in-process PNG snapshot of the real browser window and writes it to
@@ -131,6 +153,7 @@ void SendKeyPressToWindow(gfx::NativeWindow window, ui::KeyboardCode key_code) {
 // drive; the assertions around each call are the actual pass/fail gate.
 void CaptureWidgetPng(views::Widget* widget, const std::string& file_name) {
   ASSERT_TRUE(widget);
+  ::base::RunLoop run_loop;
   const gfx::Rect window_screen = widget->GetWindowBoundsInScreen();
   gfx::Rect source_rect(window_screen.size());
   if (views::View* contents = widget->GetContentsView()) {
@@ -140,20 +163,19 @@ void CaptureWidgetPng(views::Widget* widget, const std::string& file_name) {
       source_rect = content_screen;
     }
   }
-  base::RunLoop run_loop;
   ui::GrabWindowSnapshotAsPNG(
       widget->GetNativeWindow(), source_rect,
-      base::BindOnce(
-          [](base::OnceClosure quit, const std::string& name,
-             scoped_refptr<base::RefCountedMemory> data) {
+      ::base::BindOnce(
+          [](::base::OnceClosure quit, const std::string& name,
+             scoped_refptr<::base::RefCountedMemory> data) {
             if (data && data->size()) {
-              base::ScopedAllowBlockingForTesting allow_blocking;
-              const base::FilePath dir(FILE_PATH_LITERAL(
+              ::base::ScopedAllowBlockingForTesting allow_blocking;
+              const ::base::FilePath dir(FILE_PATH_LITERAL(
                   "/Users/indo/code/project/maho-workspace/.omo/evidence/"
                   "arc-translate-ui"));
-              base::WriteFile(dir.AppendASCII(name),
-                              base::span<const uint8_t>(data->data(),
-                                                        data->size()));
+              ::base::WriteFile(dir.AppendASCII(name),
+                              UNSAFE_BUFFERS(::base::span<const uint8_t>(data->data(),
+                                                        data->size())));
             }
             std::move(quit).Run();
           },
@@ -161,10 +183,31 @@ void CaptureWidgetPng(views::Widget* widget, const std::string& file_name) {
   run_loop.Run();
 }
 
+std::map<std::string, std::string>& FourWayPages();
+
+// The 4-way capture proof pages are served by the embedded test server; the
+// handler must be registered before the server starts (see SetUpOnMainThread)
+// while the page map is built lazily on first request inside the test body.
+std::unique_ptr<net::test_server::HttpResponse> ServeFourWayPages(
+    const net::test_server::HttpRequest& request) {
+  const auto& pages = FourWayPages();
+  auto it = pages.find(request.relative_url);
+  if (it == pages.end()) {
+    return nullptr;
+  }
+  auto response = std::make_unique<net::test_server::BasicHttpResponse>();
+  response->set_content_type("text/html; charset=utf-8");
+  response->set_content(it->second);
+  return response;
+}
+
 class MahoSidebarActionsInteractiveTest
     : public MahoSidebarInteractiveTestBase {
  protected:
   void SetUpOnMainThread() override {
+    // Handlers must be registered before the embedded server starts.
+    embedded_test_server()->RegisterRequestHandler(
+        base::BindRepeating(&ServeFourWayPages));
     MahoSidebarInteractiveTestBase::SetUpOnMainThread();
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
     ASSERT_TRUE(embedded_test_server()->Start());
@@ -178,18 +221,33 @@ class MahoSidebarActionsInteractiveTest
 
     plus_button->SetFocusBehavior(views::View::FocusBehavior::ALWAYS);
     plus_button->RequestFocus();
-    base::RunLoop().RunUntilIdle();
+    ::base::RunLoop().RunUntilIdle();
 
     SendKeyPressToWindow(plus_button->GetWidget()->GetNativeWindow(),
                          ui::VKEY_SPACE);
 
-    EXPECT_TRUE(base::test::RunUntil([footer] {
+    EXPECT_TRUE(::base::test::RunUntil([footer] {
       views::Widget* widget = footer->action_popover_widget_for_testing();
       return widget && widget->IsVisible();
     }));
     return footer->action_popover_widget_for_testing();
   }
 
+};
+
+// Live-webpage runs route the guest browser's HTTP(S) traffic through a
+// CONNECT relay on the host (the vmnet gateway 192.168.64.1). The Tart shared
+// network's outbound NAT is non-functional in this environment, but the guest
+// can always reach the host itself; the relay forwards unmodified end-to-end
+// TLS so the four panes render genuinely live production pages.
+class MahoLiveWeb4WayTest : public MahoSidebarActionsInteractiveTest {
+ protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    MahoSidebarActionsInteractiveTest::SetUpCommandLine(command_line);
+    command_line->RemoveSwitch("no-proxy-server");
+    command_line->AppendSwitchASCII("proxy-server", "192.168.64.1:8899");
+    command_line->AppendSwitchASCII("proxy-bypass-list", "<local>");
+  }
 };
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
@@ -232,10 +290,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   ClickScreenPoint(new_tab_row->GetBoundsInScreen().CenterPoint());
 
-  EXPECT_TRUE(base::test::RunUntil([footer] {
+  EXPECT_TRUE(::base::test::RunUntil([footer] {
     return footer->action_popover_widget_for_testing() == nullptr;
   }));
-  EXPECT_TRUE(base::test::RunUntil([browser_view] {
+  EXPECT_TRUE(::base::test::RunUntil([browser_view] {
     auto* overlay_controller =
         browser_view->GetMahoCommandOverlayControllerForTesting();
     return overlay_controller && overlay_controller->IsVisible();
@@ -247,7 +305,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   EXPECT_TRUE(overlay_controller->IsVisible());
 
   overlay_controller->Hide();
-  EXPECT_TRUE(base::test::RunUntil([overlay_controller] {
+  EXPECT_TRUE(::base::test::RunUntil([overlay_controller] {
     return !overlay_controller->IsVisible();
   }));
 }
@@ -273,7 +331,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   action.action = ax::mojom::Action::kDoDefault;
   EXPECT_TRUE(new_space_row->HandleAccessibleAction(action));
 
-  EXPECT_TRUE(base::test::RunUntil([footer] {
+  EXPECT_TRUE(::base::test::RunUntil([footer] {
     return footer->action_popover_widget_for_testing() == nullptr;
   }));
 
@@ -306,7 +364,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   SendKeyPressToWindow(popover_widget->GetNativeWindow(), ui::VKEY_ESCAPE);
 
-  EXPECT_TRUE(base::test::RunUntil([footer] {
+  EXPECT_TRUE(::base::test::RunUntil([footer] {
     return footer->action_popover_widget_for_testing() == nullptr;
   }));
   auto* overlay_controller =
@@ -330,7 +388,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   ClickScreenPoint(browser_view->toolbar()->GetBoundsInScreen().CenterPoint());
 
-  EXPECT_TRUE(base::test::RunUntil([footer] {
+  EXPECT_TRUE(::base::test::RunUntil([footer] {
     return footer->action_popover_widget_for_testing() == nullptr;
   }));
 }
@@ -354,7 +412,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   SendKeyPressToWindow(popover_widget->GetNativeWindow(), ui::VKEY_ESCAPE);
 
-  EXPECT_TRUE(base::test::RunUntil([footer] {
+  EXPECT_TRUE(::base::test::RunUntil([footer] {
     return footer->action_popover_widget_for_testing() == nullptr;
   }));
 
@@ -396,21 +454,21 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(target_row);
 
   ShowContextMenuOnView(target_row);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  base::RunLoop down_loop;
+  ::base::RunLoop down_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
       false, false, false, false, down_loop.QuitClosure()));
   down_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  base::RunLoop key_loop;
+  ::base::RunLoop key_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_RETURN,
       false, false, false, false, key_loop.QuitClosure()));
   key_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   ResolveViews();
   auto new_state = GetViewState();
@@ -445,22 +503,22 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(tab_row);
 
   ShowContextMenuOnView(tab_row);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   for (int i = 0; i < 7; ++i) {
-    base::RunLoop down_loop;
+    ::base::RunLoop down_loop;
     ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
         browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
         false, false, false, false, down_loop.QuitClosure()));
     down_loop.Run();
   }
 
-  base::RunLoop enter_loop;
+  ::base::RunLoop enter_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_RETURN,
       false, false, false, false, enter_loop.QuitClosure()));
   enter_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(observer_.HasEvent("pin_tab") ||
               observer_.HasEvent("toggle_pin"))
@@ -490,17 +548,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   const gfx::Point center = title_btn->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop dbl1;
+  ::base::RunLoop dbl1;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       dbl1.QuitClosure()));
   dbl1.Run();
-  base::RunLoop dbl2;
+  ::base::RunLoop dbl2;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       dbl2.QuitClosure()));
   dbl2.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   views::Textfield* field = tab_row->title_field_for_testing();
   if (!field || !field->GetVisible()) {
@@ -510,12 +568,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   field->SetText(u"Renamed Tab");
 
-  base::RunLoop enter_loop;
+  ::base::RunLoop enter_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_RETURN,
       false, false, false, false, enter_loop.QuitClosure()));
   enter_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(observer_.HasEvent("rename_tab"))
       << "Expected rename_tab event after inline edit commit";
@@ -530,12 +588,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   const gfx::Point center = search->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop click_loop;
+  ::base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   views::Textfield* tf = search->textfield_for_testing();
   if (!tf || !tf->GetVisible()) {
@@ -544,17 +602,17 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   }
 
   tf->SetText(u"example");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(search->is_editing_for_testing())
       << "Search view should be in editing state";
 
-  base::RunLoop esc_loop;
+  ::base::RunLoop esc_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE,
       false, false, false, false, esc_loop.QuitClosure()));
   esc_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_FALSE(search->is_editing_for_testing())
       << "ESC should exit search editing mode";
@@ -584,7 +642,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   ClickScreenPoint(translate_label->GetBoundsInScreen().CenterPoint());
 
-  ASSERT_TRUE(base::test::RunUntil([search] {
+  ASSERT_TRUE(::base::test::RunUntil([search] {
     views::Widget* widget = search->translate_popover_widget_for_testing();
     return widget && widget->IsVisible();
   })) << "Clicking the translation label must open its confirmation popover";
@@ -654,7 +712,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   views::LabelButton* idle_button = search->idle_button_for_testing();
   ASSERT_TRUE(idle_button);
   ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
-                             gfx::Point(), base::TimeTicks::Now(), 0, 0);
+                             gfx::Point(), ::base::TimeTicks::Now(), 0, 0);
   idle_button->OnMouseEntered(enter_event);
   ASSERT_NE(0, translate_label->font_list().GetFontStyle() &
                    gfx::Font::UNDERLINE)
@@ -695,7 +753,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(translate_label->GetVisible());
   ClickScreenPoint(translate_label->GetBoundsInScreen().CenterPoint());
 
-  ASSERT_TRUE(base::test::RunUntil([search] {
+  ASSERT_TRUE(::base::test::RunUntil([search] {
     views::Widget* widget = search->translate_popover_widget_for_testing();
     return widget && widget->IsVisible();
   }));
@@ -706,9 +764,9 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(translate_button);
   ClickScreenPoint(translate_button->GetBoundsInScreen().CenterPoint());
 
-  EXPECT_TRUE(base::test::RunUntil(
+  EXPECT_TRUE(::base::test::RunUntil(
       [contents] { return maho::IsMahoPageTranslated(contents); }));
-  EXPECT_TRUE(base::test::RunUntil([search] {
+  EXPECT_TRUE(::base::test::RunUntil([search] {
     return search->translate_popover_widget_for_testing() == nullptr;
   }));
   ASSERT_TRUE(search->translate_label_view());
@@ -759,7 +817,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   EXPECT_NE(selected_language, browser()->profile()->GetPrefs()->GetString(
                                    translate::prefs::kPrefTranslateRecentTarget));
-  EXPECT_TRUE(base::test::RunUntil(
+  EXPECT_TRUE(::base::test::RunUntil(
       [contents] { return maho::IsMahoPageTranslated(contents); }));
 }
 
@@ -791,7 +849,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   search->ExecuteCommand(options.never_translate_command_id, 0);
 
   const std::string host(page_url.host());
-  EXPECT_TRUE(base::test::RunUntil([profile = browser()->profile(), &host] {
+  EXPECT_TRUE(::base::test::RunUntil([profile = browser()->profile(), &host] {
     return translate::TranslatePrefs(profile->GetPrefs())
         .IsSiteOnNeverPromptList(host);
   }));
@@ -822,7 +880,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_NE(0, options.language_settings_command_id);
   search->ExecuteCommand(options.language_settings_command_id, 0);
 
-  EXPECT_TRUE(base::test::RunUntil([this] {
+  EXPECT_TRUE(::base::test::RunUntil([this] {
     content::WebContents* contents =
         browser()->tab_strip_model()->GetActiveWebContents();
     return contents && contents->GetVisibleURL().query() == "pane=general";
@@ -842,19 +900,28 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(idle_button);
   auto* hover_utility_slot = search->utility_icon_slot_for_testing();
   ASSERT_TRUE(hover_utility_slot);
-  EXPECT_TRUE(icon->GetVisible())
+  // The search view's state update is delivered asynchronously by the sidebar
+  // pipeline; wait for the affordance instead of racing it.
+  EXPECT_TRUE(::base::test::RunUntil([&]() { return icon->GetVisible(); }))
       << "Icon must be visible at startup via affordance_visible before any hover";
   EXPECT_FALSE(icon->IsHoverVisibleForTesting());
   EXPECT_FALSE(icon->IsPanelOpenForTesting());
-  EXPECT_TRUE(hover_utility_slot->GetVisible())
+  EXPECT_TRUE(::base::test::RunUntil(
+                  [&]() { return hover_utility_slot->GetVisible(); }))
       << "Utility slot must be visible at baseline (has_active_tab=true) "
          "so the affordance hit-target is present before hover";
 
   const gfx::Rect idle_bounds_before_hover = idle_button->GetBoundsInScreen();
 
-  const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
-  ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+  // The interactive harness cannot deliver a synthetic OS mouse-enter to this
+  // nested idle button (see TranslationLabelAccentAndHoverUnderlineCapture);
+  // invoke the button's real OnMouseEntered so the production hover path runs
+  // (hover_callback_ -> OnIdleButtonHoverChanged -> utility SetHoverVisible).
+  ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
+                             gfx::Point(), ::base::TimeTicks::Now(), 0, 0);
+  idle_button->OnMouseEntered(enter_event);
+  ASSERT_TRUE(::base::test::RunUntil(
+      [&]() { return icon->IsHoverVisibleForTesting(); }));
   EXPECT_TRUE(icon->GetVisible())
       << "Hovering the sidebar pill should keep the utility icon visible";
   EXPECT_TRUE(icon->IsHoverVisibleForTesting())
@@ -879,14 +946,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   const gfx::Point icon_center = icon->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(icon_center.x(), icon_center.y()));
-  base::RunLoop click_loop;
+  ::base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }));
+  ASSERT_TRUE(::base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }));
   EXPECT_TRUE(icon->GetVisible())
       << "Utility icon should remain visible while its panel is open";
   EXPECT_TRUE(icon->IsHoverVisibleForTesting())
@@ -922,17 +989,53 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
   ASSERT_TRUE(
-      base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+      ::base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
 
   ClickScreenPoint(utility_slot->GetBoundsInScreen().CenterPoint());
 
   ASSERT_TRUE(
-      base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }));
+      ::base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }));
   auto* overlay_controller =
       browser_view->GetMahoCommandOverlayControllerForTesting();
   EXPECT_TRUE(overlay_controller == nullptr || !overlay_controller->IsVisible())
       << "Clicking the utility slot should open the utility panel instead of "
          "falling through to the command overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       SearchPillHoverHighlightsTrailingActions) {
+  SeedProfile(2);
+
+  MahoSidebarSearchView* search = sidebar_->search_view_for_testing();
+  ASSERT_TRUE(search);
+  auto* idle_button = search->idle_button_for_testing();
+  auto* copy_url_button = search->copy_url_button_for_testing();
+  auto* utility_icon = search->utility_icon_for_testing();
+  ASSERT_TRUE(idle_button);
+  ASSERT_TRUE(copy_url_button);
+  ASSERT_TRUE(utility_icon);
+
+  // The copy-URL chip only highlights when the model carries a URL (by design
+  // — there is nothing to copy on an empty model); seed the model from the
+  // live view state the same way the translation tests do.
+  MahoSidebarSearchModel model = GetViewState().search;
+  model.has_active_tab = true;
+  model.current_url = "https://search-pill.example/";
+  model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
+  search->Update(model);
+  search->GetWidget()->LayoutRootViewIfNecessary();
+
+  // The interactive harness cannot deliver a synthetic OS mouse-enter to this
+  // nested idle button; invoke its real OnMouseEntered to drive the production
+  // hover path (see TranslationLabelAccentAndHoverUnderlineCapture).
+  ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
+                             gfx::Point(), ::base::TimeTicks::Now(), 0, 0);
+  idle_button->OnMouseEntered(enter_event);
+  ASSERT_TRUE(::base::test::RunUntil(
+      [&]() { return utility_icon->IsHoverVisibleForTesting(); }));
+
+  EXPECT_NE(nullptr, copy_url_button->background());
+  EXPECT_NE(nullptr, utility_icon->background());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
@@ -958,7 +1061,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
   ASSERT_TRUE(
-      base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+      ::base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
 
   // Click in the trailing inset: one pixel right of the utility slot's
   // trailing screen edge, vertically centered on the pill. This point is
@@ -973,7 +1076,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ClickScreenPoint(gfx::Point(trailing_inset_x, trailing_inset_y));
 
   ASSERT_TRUE(
-      base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }))
+      ::base::test::RunUntil([&]() { return icon->IsPanelOpenForTesting(); }))
       << "Click in trailing pill inset must open the utility panel";
   auto* overlay_controller =
       browser_view->GetMahoCommandOverlayControllerForTesting();
@@ -998,18 +1101,18 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   const gfx::Point idle_center = idle_button->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+  ASSERT_TRUE(::base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
   EXPECT_TRUE(icon->IsHoverVisibleForTesting());
 
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  base::RunLoop edit_loop;
+  ::base::RunLoop edit_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       edit_loop.QuitClosure()));
   edit_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(base::test::RunUntil([&]() {
+  ASSERT_TRUE(::base::test::RunUntil([&]() {
     return search->is_editing_for_testing() && !icon->GetVisible();
   }));
   EXPECT_FALSE(utility_slot->GetVisible())
@@ -1018,24 +1121,24 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       << "Editing should clear hover visibility for the utility icon";
   EXPECT_FALSE(icon->IsPanelOpenForTesting());
 
-  base::RunLoop esc_loop;
+  ::base::RunLoop esc_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_ESCAPE,
       false, false, false, false, esc_loop.QuitClosure()));
   esc_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(base::test::RunUntil([&]() { return !search->is_editing_for_testing(); }));
+  ASSERT_TRUE(::base::test::RunUntil([&]() { return !search->is_editing_for_testing(); }));
 
   MahoSidebarSearchModel placeholder_model = GetViewState().search;
   placeholder_model.display_mode = MahoSidebarAddressDisplayMode::kSearchPlaceholder;
   placeholder_model.force_placeholder_for_empty_favorites = true;
   placeholder_model.has_active_tab = true;
   search->Update(placeholder_model);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  ASSERT_TRUE(base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
+  ASSERT_TRUE(::base::test::RunUntil([&]() { return icon->IsHoverVisibleForTesting(); }));
   EXPECT_TRUE(utility_slot->GetVisible())
       << "Placeholder mode with an active tab should keep the utility slot available";
   EXPECT_TRUE(icon->IsHoverVisibleForTesting())
@@ -1059,7 +1162,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   startup_model.display_mode = MahoSidebarAddressDisplayMode::kAddressCard;
   startup_model.force_placeholder_for_empty_favorites = false;
   search->Update(startup_model);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_TRUE(utility_slot->GetVisible())
       << "Utility slot must be visible at startup (has_active_tab=true) before "
@@ -1075,19 +1178,19 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   MahoSidebarSearchModel editing_model = startup_model;
   editing_model.has_active_tab = true;
   search->Update(editing_model);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   const gfx::Point idle_center =
       search->idle_button_for_testing()->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(idle_center.x(), idle_center.y()));
-  base::RunLoop click_loop;
+  ::base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  ASSERT_TRUE(base::test::RunUntil(
+  ASSERT_TRUE(::base::test::RunUntil(
       [&]() { return search->is_editing_for_testing(); }));
 
   EXPECT_FALSE(utility_slot->GetVisible())
@@ -1108,12 +1211,12 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   const gfx::Point center = new_tab_btn->GetBoundsInScreen().CenterPoint();
   ASSERT_TRUE(ui_controls::SendMouseMove(center.x(), center.y()));
-  base::RunLoop click_loop;
+  ::base::RunLoop click_loop;
   ASSERT_TRUE(ui_controls::SendMouseEventsNotifyWhenDone(
       ui_controls::LEFT, ui_controls::DOWN | ui_controls::UP,
       click_loop.QuitClosure()));
   click_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(initial_tab_count + 1, browser()->tab_strip_model()->count())
       << "New tab button should create one new tab";
@@ -1138,14 +1241,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   auto* tab_row = tab_list_->FindTabRowByIdForTesting(first_tab_id);
   ASSERT_TRUE(tab_row);
   tab_row->RequestFocus();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
-  base::RunLoop down_loop;
+  ::base::RunLoop down_loop;
   ASSERT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
       browser()->window()->GetNativeWindow(), ui::VKEY_DOWN,
       false, false, false, false, down_loop.QuitClosure()));
   down_loop.Run();
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_NE(tab_row, tab_list_->GetFocusManager()->GetFocusedView())
       << "Arrow down should move focus away from first tab row";
@@ -1204,7 +1307,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(tab_row->GetVisible());
 
   ShowContextMenuOnView(tab_row);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   for (int i = 0; i < kContextMenuDownsToRename; ++i) {
     SendKeyPressToWindow(browser()->window()->GetNativeWindow(), ui::VKEY_DOWN);
@@ -1235,7 +1338,7 @@ void SeedTestPage(Browser* browser) {
   content::WebContents* wc = browser->tab_strip_model()->GetActiveWebContents();
   ASSERT_TRUE(wc);
   ASSERT_TRUE(content::WaitForLoadStop(wc));
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 }
 
 // Appends a fresh foreground tab straight to the TabStripModel. The new
@@ -1255,7 +1358,7 @@ void AppendBlankTab(Browser* browser) {
   contents->GetController().LoadURLWithParams(load_params);
   model->InsertWebContentsAt(model->count(), std::move(contents),
                              AddTabTypes::ADD_ACTIVE);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 }
 
 // Builds a real two-pane split of tab strip indices 0 and 1 with index 0 as
@@ -1273,7 +1376,7 @@ void CreateTwoPaneSplit(TabStripModel* model) {
       split_tabs::SplitTabLayout::kVertical, 0.5);
   model->AddToNewSplit({1}, visual_data,
                        split_tabs::SplitTabCreatedSource::kToolbarButton);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   ASSERT_TRUE(model->IsActiveTabSplit());
   ASSERT_EQ(0, model->active_index());
 }
@@ -1307,7 +1410,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   // next_split_view: canonical active index moves to the partner.
   ExecuteCommandAction(browser(), "next_split_view");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   EXPECT_EQ(1, model->active_index())
       << "next_split_view must activate the partner through TabStripModel";
   EXPECT_EQ(tab1, model->GetActiveWebContents());
@@ -1319,7 +1422,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   // prev_split_view: canonical active index moves back to the original tab.
   ExecuteCommandAction(browser(), "prev_split_view");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   EXPECT_EQ(0, model->active_index())
       << "prev_split_view must activate the partner through TabStripModel";
   EXPECT_EQ(tab0, model->GetActiveWebContents());
@@ -1343,21 +1446,21 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   model->ActivateTabAt(
       0, TabStripUserGestureDetails(
              TabStripUserGestureDetails::GestureType::kOther));
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   ASSERT_FALSE(model->IsActiveTabSplit());
 
   const int count_before = model->count();
   const int active_before = model->active_index();
 
   ExecuteCommandAction(browser(), "next_split_view");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   EXPECT_EQ(active_before, model->active_index())
       << "next_split_view on a regular tab must not change the active index";
   EXPECT_EQ(count_before, model->count())
       << "next_split_view on a regular tab must not change the tab count";
 
   ExecuteCommandAction(browser(), "prev_split_view");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   EXPECT_EQ(active_before, model->active_index())
       << "prev_split_view on a regular tab must not change the active index";
   EXPECT_EQ(count_before, model->count())
@@ -1384,7 +1487,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
 
   model->ActivateTabAt(0, TabStripUserGestureDetails(
                               TabStripUserGestureDetails::GestureType::kOther));
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   ASSERT_EQ(0, model->active_index());
   ASSERT_FALSE(model->IsActiveTabSplit());
 
@@ -1397,7 +1500,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   const int count_before = model->count();
 
   MahoSplitViewController(browser()).AddSplitForExistingTab(1);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(count_before, model->count())
       << "splitting an existing background tab must not create a new tab";
@@ -1431,7 +1534,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   const int count_before = model->count();
 
   MahoSplitViewController(browser()).AddSplitForExistingTab(active_index);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   EXPECT_EQ(count_before + 1, model->count())
       << "splitting the active tab must create exactly one blank partner";
@@ -1456,16 +1559,364 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   const int active_before = model->active_index();
 
   MahoSplitViewController(browser()).AddSplitForExistingTab(1);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   EXPECT_EQ(count_before, model->count())
       << "splitting an already-split clicked tab must not create a tab";
   EXPECT_EQ(active_before, model->active_index());
 
   MahoSplitViewController(browser()).AddSplitForExistingTab(0);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   EXPECT_EQ(count_before, model->count())
       << "splitting when the active tab is already split must not create a tab";
   EXPECT_EQ(active_before, model->active_index());
+}
+
+void BuildFourWaySplitAndCaptureProof(
+    Browser* browser,
+    const std::array<GURL, 4>& page_urls,
+    const char* artifact_name);
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       CaptureFourWaySplitScreenshotUsesLiveTabContents) {
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 0: Setup rich live web pages ===";
+  // Warm the sidebar/FFI pipeline before the navigation burst: on a cold core
+  // the first tab events trigger synchronous space-bridge initialization that
+  // exceeds the global RunLoop watchdog (observed ~62s for STEP 0).
+  SeedProfile(2);
+  static const std::array<std::string, 4> page_bodies = {
+      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Wikipedia</title><style>"
+      "body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+      "background:%23ffffff;color:%23202122;padding:24px;box-sizing:border-box;}"
+      "header{border-bottom:1px solid %23a2a9b1;padding-bottom:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px;}"
+      ".logo{font-size:26px;font-weight:700;letter-spacing:-0.5px;color:%23000000;}"
+      ".badge{background:%23eaecf0;color:%2354595d;padding:3px 8px;border-radius:4px;font-size:12px;font-weight:600;}"
+      "h1{font-size:22px;margin:0 0 12px 0;color:%23000;border-bottom:1px solid %23eaecf0;padding-bottom:6px;}"
+      "p{font-size:14px;line-height:1.6;color:%23404244;margin:0 0 12px 0;}"
+      ".card{background:%23f8f9fa;border:1px solid %23c8ccd1;border-radius:8px;padding:14px;margin-top:14px;}"
+      ".card h3{margin:0 0 6px 0;font-size:14px;color:%23202122;}"
+      "</style></head><body>"
+      "<header><div class='logo'>WIKIPEDIA</div><div class='badge'>The Free Encyclopedia</div></header>"
+      "<h1>Maho Browser Architecture</h1>"
+      "<p>Maho Browser is a next-generation workstation browser featuring Chromium core overlays, native Rust engine integration, and multi-pane spatial productivity interfaces.</p>"
+      "<div class='card'><h3>Key Features</h3><p>• 4-Way MultiContents grid layout<br>• Isolated Tart macOS VM E2E test harness<br>• Real-time AI context extraction</p></div>"
+      "</body></html>",
+
+      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Rust Programming</title><style>"
+      "body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;"
+      "background:%230f141c;color:%23e6edf3;padding:24px;box-sizing:border-box;}"
+      "header{border-bottom:1px solid %2330363d;padding-bottom:12px;margin-bottom:16px;display:flex;align-items:center;gap:10px;}"
+      ".logo{font-size:22px;font-weight:700;color:%23f74c00;}"
+      ".tag{background:%231f242c;color:%23ff9e64;padding:3px 8px;border-radius:4px;font-size:11px;border:1px solid %23414868;}"
+      "h1{font-size:20px;margin:0 0 12px 0;color:%237aa2f7;}"
+      "pre{background:%23161b22;border:1px solid %2330363d;border-radius:6px;padding:14px;font-size:13px;color:%237ee787;line-height:1.5;overflow:hidden;margin:0;}"
+      ".kw{color:%23ff7b72;}.fn{color:%23d2a8ff;}.str{color:%23a5d6ff;}"
+      "</style></head><body>"
+      "<header><div class='logo'>Rust 1.85</div><div class='tag'>Async Engine Core</div></header>"
+      "<h1>maho_core::split_view</h1>"
+      "<pre><span class='kw'>pub async fn</span> <span class='fn'>create_4way_split</span>(id: SplitId) -&gt; Result&lt;()&gt; {<br>"
+      "    <span class='kw'>let</span> layout = SplitLayout::Grid2x2;<br>"
+      "    engine.apply_topology(id, layout).<span class='kw'>await</span><br>"
+      "}</pre>"
+      "</body></html>",
+
+      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>GitHub - maho-workspace</title><style>"
+      "body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+      "background:%230d1117;color:%23c9d1d9;padding:24px;box-sizing:border-box;}"
+      "header{border-bottom:1px solid %2321262d;padding-bottom:12px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;}"
+      ".repo{font-size:18px;font-weight:600;color:%2358a6ff;display:flex;align-items:center;gap:8px;}"
+      ".branch{background:%2321262d;color:%238b949e;padding:3px 10px;border-radius:12px;font-size:12px;}"
+      ".commit{background:%23161b22;border:1px solid %2330363d;border-radius:6px;padding:12px;margin-top:12px;}"
+      ".title{color:%23f0f6fc;font-size:14px;font-weight:600;margin-bottom:4px;}"
+      ".desc{color:%238b949e;font-size:12px;margin:0;}"
+      "</style></head><body>"
+      "<header><div class='repo'>maho-browser / workspace</div><div class='branch'>main</div></header>"
+      "<div class='commit'><div class='title'>feat(split): verified 4-way MultiContentsView layout in Tart VM</div>"
+      "<p class='desc'>commit 7a5f0fda · verified with live tab WebContents snapshots</p></div>"
+      "</body></html>",
+
+      "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>MDN Web Docs</title><style>"
+      "body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+      "background:%231b1b1f;color:%23ffffff;padding:24px;box-sizing:border-box;}"
+      "header{border-bottom:1px solid %23323238;padding-bottom:12px;margin-bottom:16px;display:flex;align-items:center;gap:10px;}"
+      ".logo{font-size:22px;font-weight:800;letter-spacing:1px;color:%238585ff;}"
+      "h1{font-size:20px;margin:0 0 10px 0;color:%23ffffff;}"
+      ".doc-box{background:%232b2b33;border-left:4px solid %238585ff;padding:12px 16px;border-radius:0 8px 8px 0;margin-top:12px;}"
+      ".doc-box p{margin:0;font-size:13px;line-height:1.5;color:%23d0d0d8;}"
+      "</style></head><body>"
+      "<header><div class='logo'>MDN_</div></header>"
+      "<h1>CSS Grid Layout: 2x2 Viewport Split</h1>"
+      "<div class='doc-box'><p>The CSS Grid Layout module excels at dividing browser viewport real estate into precise proportional quadrants for multi-tasking workflows.</p></div>"
+      "</body></html>"
+  };
+
+  // Serve the pages over the embedded test server instead of data: URLs:
+  // data-URL navigation plus first-paint font fallback stalls far beyond the
+  // global RunLoop watchdog in the Tart VM, and an explicit charset fixes
+  // mojibake in the captured proof.
+  // The handler (registered before the server started) reads this shared map;
+  // fill it before the first navigation so the proof pages resolve.
+  std::map<std::string, std::string>& fourway_pages = FourWayPages();
+  for (size_t i = 0; i < page_bodies.size(); ++i) {
+    fourway_pages["/4way/page" + base::NumberToString(i) + ".html"] =
+        page_bodies[i];
+  }
+  std::array<GURL, 4> page_urls;
+  for (size_t i = 0; i < page_bodies.size(); ++i) {
+    page_urls[i] = embedded_test_server()->GetURL(
+        "/4way/page" + base::NumberToString(i) + ".html");
+  }
+
+  BuildFourWaySplitAndCaptureProof(browser(), page_urls,
+                                   "4way-split-proof.png");
+}
+
+// Navigates four tabs to |page_urls|, assembles the canonical Maho 4-way
+// split through the TabStripModel split APIs (2-way, third pane, fourth pane),
+// and captures the window snapshot next to the gtest summary artifact. Shared
+// by the embedded-fixture proof and the live-webpage proof tests so both
+// exercise the identical pane-assembly and capture contract.
+void BuildFourWaySplitAndCaptureProof(
+    Browser* browser,
+    const std::array<GURL, 4>& page_urls,
+    const char* artifact_name) {
+  TabStripModel* model = browser->tab_strip_model();
+  ASSERT_TRUE(model);
+
+  // Navigate tab 0 in place, then add tabs 1-3. Maho's session-restore
+  // propagation may insert registry tabs asynchronously, so resolve each page
+  // tab by URL instead of assuming stable strip indices.
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, page_urls[0]));
+  for (size_t i = 1; i < 4; ++i) {
+    // Mirrors InProcessBrowserTest::AddTabAtIndexToBrowser (protected) with
+    // the exact NavigateParams it uses for a foreground indexed tab.
+    NavigateParams params(browser, page_urls[i], ui::PAGE_TRANSITION_LINK);
+    params.tabstrip_index = static_cast<int>(i);
+    params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+    params.pwa_navigation_capturing_force_off = true;
+    Navigate(&params);
+    ::base::RunLoop().RunUntilIdle();
+  }
+  ASSERT_GE(model->count(), 4);
+  auto find_page_index = [&](const GURL& url) -> int {
+    for (int j = 0; j < model->count(); ++j) {
+      content::WebContents* candidate = model->GetWebContentsAt(j);
+      if (candidate && candidate->GetLastCommittedURL() == url) {
+        return j;
+      }
+    }
+    return -1;
+  };
+  std::array<int, 4> page_indices = {};
+  for (size_t i = 0; i < page_urls.size(); ++i) {
+    ASSERT_TRUE(::base::test::RunUntil([&]() {
+      return find_page_index(page_urls[i]) >= 0;
+    })) << "page " << i << " tab not committed";
+    const int idx = find_page_index(page_urls[i]);
+    content::WebContents* contents = model->GetWebContentsAt(idx);
+    // Live pages can keep loading late beacons for a long time; a hanging
+    // subresource must not fail the proof. Page identity stays strict below.
+    const bool load_stopped = content::WaitForLoadStop(contents);
+    LOG(INFO) << "=== 4WAY_SPLIT_PAGE " << i << " url=" << page_urls[i]
+              << " load_stopped=" << load_stopped;
+    ASSERT_EQ(page_urls[i], contents->GetLastCommittedURL());
+    page_indices[i] = idx;
+  }
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 1: Create 2way split ===";
+  model->ActivateTabAt(
+      page_indices[0],
+      TabStripUserGestureDetails(
+          TabStripUserGestureDetails::GestureType::kOther));
+  split_tabs::SplitTabVisualData visual_data_2way =
+      split_tabs::SplitTabVisualData::CreateTwoPane(
+          split_tabs::SplitTabLayout::kVertical, 0.5);
+  const split_tabs::SplitTabId split_id = model->AddToNewSplit(
+      {page_indices[1]}, visual_data_2way,
+      split_tabs::SplitTabCreatedSource::kToolbarButton);
+  ASSERT_TRUE(model->IsActiveTabSplit());
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 2: Add 3rd tab ===";
+  split_tabs::SplitTabVisualData visual_data_3way =
+      *model->GetSplitData(split_id)->visual_data();
+  ASSERT_TRUE(visual_data_3way.InsertPaneAtLeaf(
+      1u, split_tabs::SplitTabLayout::kHorizontal, 0.5,
+      split_tabs::SplitPaneInsertionSide::kAfter));
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 2b: calling AddToExistingSplit ===";
+  ASSERT_TRUE(model->AddToExistingSplit(
+      split_id, page_indices[2], 2u, visual_data_3way,
+      split_tabs::SplitTabCreatedSource::kToolbarButton));
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 2c: AddToExistingSplit returned ===";
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 3: Add 4th tab ===";
+  split_tabs::SplitTabVisualData visual_data_4way =
+      *model->GetSplitData(split_id)->visual_data();
+  ASSERT_TRUE(visual_data_4way.InsertPaneAtLeaf(
+      0u, split_tabs::SplitTabLayout::kHorizontal, 0.5,
+      split_tabs::SplitPaneInsertionSide::kBefore));
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 3b: calling AddToExistingSplit ===";
+  ASSERT_TRUE(model->AddToExistingSplit(
+      split_id, page_indices[3], 0u, visual_data_4way,
+      split_tabs::SplitTabCreatedSource::kToolbarButton));
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 3c: AddToExistingSplit returned ===";
+  model->ActivateTabAt(page_indices[0]);
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 4: MultiContentsView verify ===";
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+  ASSERT_TRUE(browser_view);
+  MultiContentsView* mcv = browser_view->multi_contents_view();
+  ASSERT_TRUE(mcv);
+  ASSERT_TRUE(mcv->IsInSplitView());
+
+  views::Widget* widget = browser_view->GetWidget();
+  ASSERT_TRUE(widget);
+  widget->SetBounds(gfx::Rect(0, 0, 1920, 1080));
+  widget->LayoutRootViewIfNecessary();
+
+  // Live panes finish network-driven painting asynchronously; give them a
+  // bounded settle so the proof snapshot shows rendered content in all four
+  // quadrants instead of capturing mid-paint blank panes.
+  base::RunLoop pane_settle;
+  content::GetUIThreadTaskRunner({})->PostDelayedTask(
+      FROM_HERE, pane_settle.QuitClosure(), base::Seconds(4));
+  pane_settle.Run();
+
+  const size_t pane_count = mcv->visible_pane_count();
+  ASSERT_EQ(4u, pane_count);
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 5: Window/View snapshot capture ===";
+  scoped_refptr<base::RefCountedMemory> png_data;
+  bool snapshot_finished = false;
+  const gfx::Rect window_screen = widget->GetWindowBoundsInScreen();
+  const gfx::Rect source_rect(window_screen.size());
+
+  ui::GrabWindowSnapshotAsPNG(
+      widget->GetNativeWindow(), source_rect,
+      ::base::BindOnce(
+          [](scoped_refptr<base::RefCountedMemory>* out_data,
+             bool* finished,
+             scoped_refptr<base::RefCountedMemory> data) {
+            *out_data = data;
+            *finished = true;
+          },
+          &png_data, &snapshot_finished));
+  ASSERT_TRUE(::base::test::RunUntil(
+      [&snapshot_finished] { return snapshot_finished; }));
+
+  ASSERT_TRUE(png_data && png_data->size() > 0);
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 6: Write PNG artifact ===";
+  const ::base::FilePath summary_path =
+      ::base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+          "test-launcher-summary-output");
+  ASSERT_FALSE(summary_path.empty());
+  const ::base::FilePath artifact_path =
+      summary_path.DirName().AppendASCII(artifact_name);
+  {
+    ::base::ScopedAllowBlockingForTesting allow_blocking;
+    ASSERT_TRUE(::base::CreateDirectory(artifact_path.DirName()));
+    ASSERT_TRUE(::base::WriteFile(
+        artifact_path,
+        UNSAFE_BUFFERS(::base::span<const uint8_t>(png_data->data(),
+                                                   png_data->size()))));
+  }
+  fprintf(stderr, "Captured genuine 4-way split proof screenshot to: %s (size: %zu bytes)\n",
+          artifact_path.value().c_str(), png_data->size());
+  fflush(stderr);
+
+  LOG(INFO) << "=== 4WAY_SCREENSHOT_STEP 7: FINISHED ===";
+}
+
+
+// Genuine live-webpage proof: identical split assembly and widget capture,
+// but all four panes navigate real https sites from the open internet so the
+// capture shows real production page renders, not embedded fixtures. Selected
+// explicitly via the live-4way suite; never part of the deterministic suites.
+IN_PROC_BROWSER_TEST_F(MahoLiveWeb4WayTest,
+                       CaptureFourWaySplitScreenshotUsesLiveWebPages) {
+  LOG(INFO) << "=== 4WAY_LIVE_STEP 0: Navigating real web pages ===";
+  SeedProfile(2);
+  const std::array<GURL, 4> page_urls = {
+      GURL("https://www.wikipedia.org/"),
+      GURL("https://developer.mozilla.org/en-US/"),
+      GURL("https://rust-lang.org/"),
+      GURL("https://news.ycombinator.com/"),
+  };
+  BuildFourWaySplitAndCaptureProof(browser(), page_urls,
+                                   "4way-split-proof-real.png");
+}
+
+// Regression: the sidebar state adapter used to materialize split-group rows
+// only when a split had exactly two members, so the viewport-supported 4-way
+// splits degraded to flat tab rows in the sidebar. A four-member split must
+// project into one kSplitGroup with all four members as children.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       GroupSplitTabsProjectsFourMemberSplitGroup) {
+  TabStripModel* model = browser()->tab_strip_model();
+  ASSERT_TRUE(model);
+  SeedTestPage(browser());
+  while (model->count() < 4) {
+    AppendBlankTab(browser());
+  }
+  ASSERT_GE(model->count(), 4);
+
+  split_tabs::SplitTabVisualData two_pane =
+      split_tabs::SplitTabVisualData::CreateTwoPane(
+          split_tabs::SplitTabLayout::kVertical, 0.5);
+  const split_tabs::SplitTabId split_id =
+      model->AddToNewSplit({1}, two_pane,
+                           split_tabs::SplitTabCreatedSource::kToolbarButton);
+  ASSERT_TRUE(model->IsActiveTabSplit());
+
+  split_tabs::SplitTabVisualData three_pane =
+      *model->GetSplitData(split_id)->visual_data();
+  ASSERT_TRUE(three_pane.InsertPaneAtLeaf(
+      1u, split_tabs::SplitTabLayout::kHorizontal, 0.5,
+      split_tabs::SplitPaneInsertionSide::kAfter));
+  ASSERT_TRUE(model->AddToExistingSplit(
+      split_id, 2, 2u, three_pane,
+      split_tabs::SplitTabCreatedSource::kToolbarButton));
+
+  split_tabs::SplitTabVisualData four_pane =
+      *model->GetSplitData(split_id)->visual_data();
+  ASSERT_TRUE(four_pane.InsertPaneAtLeaf(
+      0u, split_tabs::SplitTabLayout::kHorizontal, 0.5,
+      split_tabs::SplitPaneInsertionSide::kBefore));
+  ASSERT_TRUE(model->AddToExistingSplit(
+      split_id, 3, 0u, four_pane,
+      split_tabs::SplitTabCreatedSource::kToolbarButton));
+
+  std::vector<SidebarTreeNode> rows;
+  for (int i = 0; i < model->count(); ++i) {
+    SidebarTreeNode node;
+    node.kind = SidebarNodeKind::kTab;
+    node.tab_strip_index = i;
+    node.is_active = model->active_index() == i;
+    rows.push_back(std::move(node));
+  }
+
+  maho::GroupSplitTabs(rows, model);
+
+  const SidebarTreeNode* split_group = nullptr;
+  int split_group_count = 0;
+  for (const auto& node : rows) {
+    if (node.kind == SidebarNodeKind::kSplitGroup) {
+      ++split_group_count;
+      split_group = &node;
+    }
+  }
+  ASSERT_EQ(split_group_count, 1)
+      << "A four-member split must project into one kSplitGroup row";
+  ASSERT_TRUE(split_group);
+  EXPECT_EQ(split_group->children.size(), 4u)
+      << "All four split members must be children of the group";
+  for (const auto& child : split_group->children) {
+    EXPECT_TRUE(child.is_in_split);
+  }
+}
+
+std::map<std::string, std::string>& FourWayPages() {
+  static base::NoDestructor<std::map<std::string, std::string>> pages;
+  return *pages;
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
@@ -1528,7 +1979,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       << "Tab rows must remain drawn while only the action row processes";
 
   list_view->ResolveActionPlaceholderDeferredForTesting(true);
-  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+  EXPECT_TRUE(::base::test::RunUntil([list_view]() {
     return !list_view->action_placeholder_active_for_testing();
   }));
 }
@@ -1569,19 +2020,19 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   // Two browser-context rebuilds and one zero-context (nullptr) rebuild must
   // all keep the row/processing pointers and the in-progress flag unchanged.
   list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   assert_survived("first browser-context rebuild");
 
   list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), browser());
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   assert_survived("second browser-context rebuild");
 
   list_view->RebuildRowsForTesting(MahoSidebarTabListModel(), nullptr);
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
   assert_survived("zero-context rebuild");
 
   list_view->ResolveActionPlaceholderDeferredForTesting(true);
-  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+  EXPECT_TRUE(::base::test::RunUntil([list_view]() {
     return !list_view->action_placeholder_active_for_testing();
   }));
   EXPECT_TRUE(button_surface->GetCanProcessEventsWithinSubtree())
@@ -1620,7 +2071,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   // OnActionPlaceholderHidden() directly is forbidden: it would bypass the
   // processing view and hide the actual hidden-callback wiring under test.
   list_view->ResolveActionPlaceholderDeferredForTesting(true);
-  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+  EXPECT_TRUE(::base::test::RunUntil([list_view]() {
     return !list_view->action_placeholder_active_for_testing();
   }));
 
@@ -1656,7 +2107,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   EXPECT_FALSE(tidy->HasFocus());
 
   list_view->ResolveActionPlaceholderDeferredForTesting(true);
-  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+  EXPECT_TRUE(::base::test::RunUntil([list_view]() {
     return !list_view->action_placeholder_active_for_testing();
   }));
 
@@ -1675,7 +2126,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
       MahoSidebarProcessingPlaceholderView::Mode::kSingleCycle,
       list_view->clear_button_for_testing());
 
-  EXPECT_TRUE(base::test::RunUntil([list_view]() {
+  EXPECT_TRUE(::base::test::RunUntil([list_view]() {
     return !list_view->action_placeholder_active_for_testing();
   }));
 }
@@ -1692,14 +2143,14 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   list_view->StartActionProcessingForTesting(
       MahoSidebarProcessingPlaceholderView::Mode::kLoop, tidy);
 
-  base::RunLoop run_loop;
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-      FROM_HERE, base::BindLambdaForTesting([&]() {
+  ::base::RunLoop run_loop;
+  ::base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, ::base::BindLambdaForTesting([&]() {
         list_view->ResolveActionPlaceholderDeferredForTesting(true);
-        base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
-            FROM_HERE, run_loop.QuitClosure(), base::Milliseconds(600));
+        ::base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+            FROM_HERE, run_loop.QuitClosure(), ::base::Milliseconds(600));
       }),
-      base::Milliseconds(2500));
+      ::base::Milliseconds(2500));
   run_loop.Run();
 }
 
@@ -1718,7 +2169,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(content::WaitForLoadStop(contents));
 
   ExecuteCommandAction(browser(), "copy_url");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   MahoNotificationOverlay* overlay =
       MahoNotificationOverlay::FromBrowser(browser());
@@ -1739,7 +2190,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   ASSERT_TRUE(content::WaitForLoadStop(contents));
 
   ExecuteCommandAction(browser(), "copy_url_markdown");
-  base::RunLoop().RunUntilIdle();
+  ::base::RunLoop().RunUntilIdle();
 
   MahoNotificationOverlay* overlay =
       MahoNotificationOverlay::FromBrowser(browser());

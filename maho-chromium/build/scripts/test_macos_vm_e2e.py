@@ -25,7 +25,7 @@ sys.modules[_SPEC.name] = macos_vm_e2e
 _SPEC.loader.exec_module(macos_vm_e2e)
 
 
-_EXPECTED_SUITES = ("interactive-smoke", "ai-mock", "all")
+_EXPECTED_SUITES = ("interactive-smoke", "password-fill", "ai-mock", "all", "live-4way")
 _EXPECTED_AI_SCENARIOS = (
     "ai_panel_renders",
     "ai_real_turn",
@@ -65,6 +65,19 @@ class MacosVmE2eManifestTest(unittest.TestCase):
         self.assertEqual(manifest.output_dir, Path("out/Default"))
         self.assertEqual(manifest.cdp_address, "127.0.0.1")
         self.assertEqual(manifest.suite_names, _EXPECTED_SUITES)
+        self.assertTrue(
+            macos_vm_e2e.GtestSuite(
+                name="x", gtest_filter=("A.b",)
+            ).host_relay
+            is False
+        )
+        live_suite = macos_vm_e2e.load_manifest(_MANIFEST_PATH).suite("live-4way")
+        self.assertIsInstance(live_suite, macos_vm_e2e.GtestSuite)
+        self.assertTrue(live_suite.host_relay)
+        smoke_suite = macos_vm_e2e.load_manifest(_MANIFEST_PATH).suite(
+            "interactive-smoke"
+        )
+        self.assertFalse(smoke_suite.host_relay)
         self.assertEqual(manifest.ai_scenarios, _EXPECTED_AI_SCENARIOS)
         self.assertIn(
             "MahoAiSidePanelLifecycleTest.ShowPanel_EntryIsShowing",
@@ -75,7 +88,11 @@ class MacosVmE2eManifestTest(unittest.TestCase):
             manifest.suite("interactive-smoke").gtest_filter,
         )
         self.assertIn(
-            "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults",
+            "MahoSidebarActionsInteractiveTest.HoverRevealsUtilityIconAndClickOpensUtilityPanel",
+            manifest.suite("interactive-smoke").gtest_filter,
+        )
+        self.assertIn(
+            "MahoSidebarActionsInteractiveTest.SearchPillHoverHighlightsTrailingActions",
             manifest.suite("interactive-smoke").gtest_filter,
         )
         with self.assertRaises(FrozenInstanceError):
@@ -89,6 +106,38 @@ class MacosVmE2eManifestTest(unittest.TestCase):
             macos_vm_e2e._required_gtests(manifest, selected_gtest=selected),
             (selected,),
         )
+
+    def test_password_fill_suite_parses_with_dedicated_binary(self) -> None:
+        manifest = macos_vm_e2e.load_manifest(_MANIFEST_PATH)
+
+        suite = manifest.suite("password-fill")
+        self.assertEqual(suite.binary, "maho_password_fill_browsertest")
+        self.assertIn(
+            "MahoPasswordFillRestartBrowserTest.NativeSaveSurvivesBrowserProcessRestartAndReloadFillsTargetRenderer",
+            suite.gtest_filter,
+        )
+        grouped = macos_vm_e2e._required_gtests_by_binary(manifest)
+        self.assertEqual(
+            set(grouped),
+            {"interactive_ui_tests", "maho_password_fill_browsertest"},
+        )
+        selected_test = "MahoPasswordFillBrowserTest.LockedVaultLeavesRendererEmpty"
+        self.assertEqual(
+            macos_vm_e2e._required_gtests_by_binary(
+                manifest, selected_gtest=selected_test
+            ),
+            {"maho_password_fill_browsertest": (selected_test,)},
+        )
+
+    def test_rejects_gtest_suite_with_unsafe_binary_name(self) -> None:
+        data = copy.deepcopy(self.manifest_data)
+        data["suites"][1]["binary"] = "../escape"
+        self._assert_invalid_manifest(data, "invalid gtest binary name")
+
+    def test_rejects_gtest_suite_with_unknown_keys(self) -> None:
+        data = copy.deepcopy(self.manifest_data)
+        data["suites"][1]["unexpected"] = "value"
+        self._assert_invalid_manifest(data, "unknown keys: unexpected")
 
     def test_guest_preflight_requires_only_native_test_artifacts(self) -> None:
         manifest = macos_vm_e2e.load_manifest(_MANIFEST_PATH)
@@ -193,8 +242,8 @@ class MacosVmE2eManifestTest(unittest.TestCase):
 
     def test_rejects_duplicate_ai_scenario_names(self) -> None:
         data = copy.deepcopy(self.manifest_data)
-        data["suites"][1]["scenarios"].append(
-            data["suites"][1]["scenarios"][0]
+        data["suites"][2]["scenarios"].append(
+            data["suites"][2]["scenarios"][0]
         )
         self._assert_invalid_manifest(data, "duplicate")
 
@@ -205,7 +254,7 @@ class MacosVmE2eManifestTest(unittest.TestCase):
 
     def test_rejects_aggregate_member_that_is_not_a_manifest_suite(self) -> None:
         data = copy.deepcopy(self.manifest_data)
-        data["suites"][2]["members"].append("missing-suite")
+        data["suites"][3]["members"].append("missing-suite")
         self._assert_invalid_manifest(data, "missing-suite")
 
     def test_rejects_unknown_requested_suite(self) -> None:

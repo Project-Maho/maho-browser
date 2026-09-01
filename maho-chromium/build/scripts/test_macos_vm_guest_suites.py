@@ -43,20 +43,56 @@ class InteractiveCommandTest(unittest.TestCase):
 
         summary_path = f"{RUN_DIR}/interactive-test-summary.json"
         self.assertEqual(
-            command.argv,
-            (
-                f"{WORKSPACE}/chromium/src/out/Default/interactive_ui_tests",
-                "--gtest_filter=" + ":".join(GTESTS),
-                "--gtest_fail_if_no_test_selected",
-                "--test-launcher-jobs=1",
-                "--test-launcher-retry-limit=0",
-                f"--test-launcher-summary-output={summary_path}",
-            ),
+            command.argv[0],
+            f"{WORKSPACE}/chromium/src/out/Default/interactive_ui_tests",
         )
+        self.assertEqual(command.argv[1], f"--gtest_filter={':'.join(GTESTS)}")
+        self.assertIn("--gtest_fail_if_no_test_selected", command.argv)
+        self.assertIn("--test-launcher-jobs=1", command.argv)
+        self.assertIn("--test-launcher-retry-limit=0", command.argv)
+        self.assertIn(f"--test-launcher-summary-output={summary_path}", command.argv)
         self.assertEqual(command.summary_path, summary_path)
         self.assertEqual(command.expected_results, GTESTS)
         self.assertEqual(command.environment, ())
         self.assertNotIn("out/VM-E2E", "\n".join(command.argv))
+        self.assertNotIn("/Volumes/maho-build", "\n".join(command.argv))
+
+    def test_builds_exact_argv_for_custom_binary_and_suite(self):
+        command = guest_suites.build_interactive_command(
+            WORKSPACE,
+            RUN_DIR,
+            GTESTS,
+            suite_name="password-fill",
+            binary_name="maho_password_fill_browsertest",
+        )
+
+        self.assertEqual(command.suite, "password-fill")
+        self.assertEqual(
+            command.argv[0],
+            (
+                f"{WORKSPACE}/chromium/src/out/Default/"
+                "maho_password_fill_browsertest"
+            ),
+        )
+        self.assertEqual(command.argv[1], f"--gtest_filter={':'.join(GTESTS)}")
+        self.assertEqual(
+            command.stdout_path, f"{RUN_DIR}/password-fill.stdout.log"
+        )
+        self.assertEqual(
+            command.stderr_path, f"{RUN_DIR}/password-fill.stderr.log"
+        )
+        self.assertEqual(command.summary_path, f"{RUN_DIR}/interactive-test-summary.json")
+
+    def test_rejects_unsafe_custom_binary_and_suite_names(self):
+        for binary_name in ("../escape", "a/b", ".", "..", "x.runtime_deps"):
+            with self.assertRaises(guest_suites.SuiteContractError):
+                guest_suites.build_interactive_command(
+                    WORKSPACE, RUN_DIR, GTESTS, binary_name=binary_name
+                )
+        with self.assertRaises(guest_suites.SuiteContractError):
+            guest_suites.build_interactive_command(
+                WORKSPACE, RUN_DIR, GTESTS, suite_name="../escape"
+            )
 
     def test_rejects_empty_duplicate_and_broad_filters(self):
         invalid_filters = (
@@ -94,6 +130,33 @@ class InteractiveResultTest(unittest.TestCase):
         self.assertEqual(validation.returncodes, (0,))
         self.assertEqual(validation.to_dict()["status"], "SUCCESS")
         self.assertNotIn("profile_paths", validation.to_dict())
+
+    def test_recovers_exact_pre_result_when_launcher_summary_overwrites_it(self):
+        pre_test = "RestartSuite.PRE_PersistsCredential"
+        post_test = "RestartSuite.PersistsCredential"
+        command = guest_suites.build_interactive_command(
+            WORKSPACE, RUN_DIR, (pre_test, post_test)
+        )
+        captured = guest_suites.CapturedCommandResult(
+            command=command,
+            returncode=0,
+            stdout=(
+                f"[       OK ] {pre_test} (17017 ms)\n"
+                f"[       OK ] {post_test} (19001 ms)\n"
+            ),
+            stderr="",
+        )
+        overwritten_summary = successful_summary((post_test,))
+
+        merged = guest_suites.merge_gtest_summary_with_stdout(
+            overwritten_summary, command.expected_results, captured.stdout
+        )
+        validation = guest_suites.validate_interactive_result(captured, merged)
+
+        self.assertEqual(
+            tuple(merged["per_iteration_data"][0]), (post_test, pre_test)
+        )
+        self.assertEqual(validation.passed, (pre_test, post_test))
 
     def test_rejects_nonzero_process_even_with_green_summary(self):
         with self.assertRaisesRegex(

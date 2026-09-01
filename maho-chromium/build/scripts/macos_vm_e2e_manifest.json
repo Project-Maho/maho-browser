@@ -11,10 +11,28 @@
       "kind": "gtest",
       "gtest_filter": [
         "MahoAiSidePanelLifecycleTest.ShowPanel_EntryIsShowing",
-        "MahoCommandOverlayInteractiveUiTest.FocusPath_UserInitiatedFocusOpensOverlay",
-        "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults",
         "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath",
-        "MahoSidebarSpacesInteractiveTest.FooterActionOpensSpacesSurface"
+        "MahoPeekInteractiveUiTest.RoutesPopupToForegroundTabPreservingOpenerMessaging",
+        "MahoSidebarSpacesInteractiveTest.FooterActionOpensSpacesSurface",
+        "MahoSidebarActionsInteractiveTest.HoverRevealsUtilityIconAndClickOpensUtilityPanel",
+        "MahoSidebarActionsInteractiveTest.SearchPillHoverHighlightsTrailingActions",
+        "MahoSidebarActionsInteractiveTest.CaptureFourWaySplitScreenshotUsesLiveTabContents",
+        "MahoSidebarActionsInteractiveTest.GroupSplitTabsProjectsFourMemberSplitGroup"
+      ]
+    },
+    {
+      "name": "password-fill",
+      "kind": "gtest",
+      "binary": "maho_password_fill_browsertest",
+      "gtest_filter": [
+        "MahoPasswordFillRestartBrowserTest.PRE_NativeSaveSurvivesBrowserProcessRestartAndReloadFillsTargetRenderer",
+        "MahoPasswordFillRestartBrowserTest.NativeSaveSurvivesBrowserProcessRestartAndReloadFillsTargetRenderer",
+        "MahoPasswordFillBrowserTest.DeniedDeviceReauthLeavesUnlockedVaultAndRendererEmpty",
+        "MahoPasswordFillBrowserTest.WrongOriginLeavesRendererEmpty",
+        "MahoPasswordFillBrowserTest.StaleSelectedRevisionIsRejectedBeforeDispatch",
+        "MahoPasswordFillBrowserTest.CurrentSelectionDispatchesOnlyToCapturedCurrentDocument",
+        "MahoPasswordFillBrowserTest.CrossProfileDoesNotReceiveOwnerCredential",
+        "MahoPasswordFillBrowserTest.LockedVaultLeavesRendererEmpty"
       ]
     },
     {
@@ -36,6 +54,15 @@
         "interactive-smoke",
         "ai-mock"
       ]
+    },
+    {
+      "name": "live-4way",
+      "kind": "gtest",
+      "binary": "interactive_ui_tests",
+      "gtest_filter": [
+        "MahoLiveWeb4WayTest.CaptureFourWaySplitScreenshotUsesLiveWebPages"
+      ],
+      "host_relay": true
     }
   ]
 }

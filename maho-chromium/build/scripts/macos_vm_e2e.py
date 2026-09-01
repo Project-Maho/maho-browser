@@ -9,6 +9,7 @@ import ipaddress
 import json
 from pathlib import Path, PurePosixPath
 import re
+import socket
 import subprocess
 import sys
 from typing import Any, Callable, ClassVar, Mapping, Sequence
@@ -51,6 +52,8 @@ class UnknownSuiteError(MacosVmE2eError):
 class GtestSuite:
     name: str
     gtest_filter: tuple[str, ...]
+    binary: str = "interactive_ui_tests"
+    host_relay: bool = False
     kind: ClassVar[str] = "gtest"
 
 
@@ -139,6 +142,34 @@ def _expect_exact_keys(
         raise _invalid(location, f"missing keys: {', '.join(missing)}")
     if unknown:
         raise _invalid(location, f"unknown keys: {', '.join(unknown)}")
+
+
+def _expect_keys(
+    value: Mapping[str, object],
+    *,
+    required: set[str],
+    optional: set[str],
+    location: str,
+) -> None:
+    actual = set(value)
+    missing = sorted(required - actual)
+    unknown = sorted(actual - required - optional)
+    if missing:
+        raise _invalid(location, f"missing keys: {', '.join(missing)}")
+    if unknown:
+        raise _invalid(location, f"unknown keys: {', '.join(unknown)}")
+
+
+def _parse_binary_name(value: object, location: str) -> str:
+    binary = _expect_string(value, location)
+    if (
+        "/" in binary
+        or binary in (".", "..")
+        or binary.endswith(".runtime_deps")
+        or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", binary)
+    ):
+        raise _invalid(location, f"invalid gtest binary name {binary!r}")
+    return binary
 
 
 def _expect_string(value: object, location: str) -> str:
@@ -243,17 +274,33 @@ def _parse_suites(value: object) -> tuple[Suite, ...]:
             raise _invalid(location, "missing keys: kind")
         kind = _expect_string(suite_data["kind"], f"{location}.kind")
         if kind == GtestSuite.kind:
-            _expect_exact_keys(
+            _expect_keys(
                 suite_data,
-                {"name", "kind", "gtest_filter"},
-                location,
+                required={"name", "kind", "gtest_filter"},
+                optional={"binary", "host_relay"},
+                location=location,
             )
             name = _parse_suite_name(suite_data["name"], f"{location}.name")
             tests = _parse_gtest_filter(
                 suite_data["gtest_filter"],
                 f"{location}.gtest_filter",
             )
-            suites.append(GtestSuite(name=name, gtest_filter=tests))
+            binary = (
+                _parse_binary_name(suite_data["binary"], f"{location}.binary")
+                if "binary" in suite_data
+                else GtestSuite.binary
+            )
+            host_relay = suite_data.get("host_relay", False)
+            if not isinstance(host_relay, bool):
+                raise _invalid(location, "host_relay must be a boolean")
+            suites.append(
+                GtestSuite(
+                    name=name,
+                    gtest_filter=tests,
+                    binary=binary,
+                    host_relay=host_relay,
+                )
+            )
             all_gtests.extend(tests)
         elif kind == AiMockSuite.kind:
             _expect_exact_keys(
@@ -449,6 +496,7 @@ import shutil as _shutil
 import signal as _signal
 import subprocess as _subprocess
 import tempfile as _tempfile
+import threading as _threading
 import time as _time
 from typing import IO as _IO
 import uuid as _uuid
@@ -461,6 +509,7 @@ from macos_vm_build_transport import (
     canonical_build_argv as _canonical_build_argv,
     inspect_preflight as _inspect_preflight,
     plan_rsync_fallback as _plan_rsync_fallback,
+    preflight_command_plan as _preflight_command_plan,
     read_only_mount_contract as _read_only_mount_contract,
 )
 from macos_vm_guest_suites import (
@@ -470,6 +519,7 @@ from macos_vm_guest_suites import (
     build_ai_mock_commands as _build_ai_mock_commands,
     build_intentional_failure_command as _build_intentional_failure_command,
     build_interactive_command as _build_interactive_command,
+    merge_gtest_summary_with_stdout as _merge_gtest_summary_with_stdout,
     validate_ai_mock_results as _validate_ai_mock_results,
     validate_interactive_result as _validate_interactive_result,
 )
@@ -695,6 +745,173 @@ def _required_gtests(
     )
 
 
+def _required_gtests_by_binary(
+    manifest: Manifest, *, selected_gtest: str | None = None
+) -> dict[str, tuple[str, ...]]:
+    grouped: dict[str, list[str]] = {}
+    for suite in manifest.suites:
+        if not isinstance(suite, GtestSuite):
+            continue
+        if selected_gtest is not None and selected_gtest not in suite.gtest_filter:
+            continue
+        tests = (
+            (selected_gtest,)
+            if selected_gtest is not None
+            else suite.gtest_filter
+        )
+        grouped.setdefault(suite.binary, []).extend(tests)
+    return {binary: tuple(tests) for binary, tests in grouped.items()}
+
+
+@_dataclasses.dataclass(frozen=True)
+class _BinaryPreflightObservation:
+    binary: str
+    architecture: str
+    binary_signature_valid: bool
+    list_tests_returncode: int | None
+    listed_tests: tuple[str, ...]
+    required_tests: tuple[str, ...]
+    ready: bool
+    issues: tuple[str, ...]
+    missing_paths: tuple[str, ...]
+    stale_paths: tuple[str, ...]
+
+    def to_json(self) -> dict[str, object]:
+        return {
+            "binary": self.binary,
+            "architecture": self.architecture,
+            "binary_signature_valid": self.binary_signature_valid,
+            "list_tests_returncode": self.list_tests_returncode,
+            "listed_tests": list(self.listed_tests),
+            "required_tests": list(self.required_tests),
+            "ready": self.ready,
+            "issues": list(self.issues),
+            "missing_paths": list(self.missing_paths),
+            "stale_paths": list(self.stale_paths),
+        }
+
+
+def _codesign_host_artifacts(
+    output_root: Path,
+    binaries: dict[str, tuple[str, ...]],
+) -> None:
+    """Ad-hoc re-sign the app bundle and every suite binary that exists."""
+    app_bundle = output_root / "Maho.app"
+    if app_bundle.exists():
+        _subprocess.run(
+            ("/usr/bin/codesign", "--force", "--deep", "-s", "-", app_bundle.as_posix()),
+            timeout=120,
+            check=False,
+            capture_output=True,
+        )
+    for binary_name in binaries:
+        binary = output_root / binary_name
+        if binary.exists():
+            _subprocess.run(
+                ("/usr/bin/codesign", "--force", "-s", "-", binary.as_posix()),
+                timeout=120,
+                check=False,
+                capture_output=True,
+            )
+
+
+def _run_per_binary_preflight(
+    workspace: Path,
+    binaries: dict[str, tuple[str, ...]],
+    services: LifecycleServices,
+    cancellation: _CancellationToken,
+) -> tuple[bool, list[_BinaryPreflightObservation], tuple[Path, ...]]:
+    """Run architecture/signature/inventory checks for each suite binary."""
+    chromium_src = workspace / "chromium/src"
+    app_plan = _preflight_command_plan(chromium_src, _DEFAULT_BUILD_OUTPUT)
+    app_signature = _run_command(
+        services,
+        app_plan.app_signature_argv,
+        status=_TerminalStatus.BUILD_FAILED,
+        description="Maho.app signature check failed",
+        timeout=120,
+        cancellation=cancellation,
+    )
+    observations: list[_BinaryPreflightObservation] = []
+    dependencies: list[Path] = []
+    seen: set[Path] = set()
+    for binary_name, required in binaries.items():
+        plan = _preflight_command_plan(
+            chromium_src, _DEFAULT_BUILD_OUTPUT, binary_name=binary_name
+        )
+        architecture = _run_command(
+            services,
+            plan.architecture_argv,
+            status=_TerminalStatus.BUILD_FAILED,
+            description="interactive binary architecture check failed",
+            timeout=60,
+            cancellation=cancellation,
+        )
+        binary_signature = _run_command(
+            services,
+            plan.binary_signature_argv,
+            status=_TerminalStatus.BUILD_FAILED,
+            description="interactive binary signature check failed",
+            timeout=120,
+            cancellation=cancellation,
+        )
+        listed = _run_command(
+            services,
+            plan.list_tests_argv,
+            status=_TerminalStatus.BUILD_FAILED,
+            description="gtest inventory failed",
+            timeout=300,
+            cancellation=cancellation,
+        )
+        preflight = _inspect_preflight(
+            workspace_root=workspace,
+            output_dir=_DEFAULT_BUILD_OUTPUT,
+            binary_name=binary_name,
+            required_tests=required,
+            listed_tests=_parse_gtest_list(listed.stdout),
+            observed_architecture=architecture.stdout,
+            app_signature_valid=app_signature.succeeded,
+            binary_signature_valid=binary_signature.succeeded,
+            list_tests_exit_code=listed.returncode,
+        )
+        observations.append(
+            _BinaryPreflightObservation(
+                binary=binary_name,
+                architecture=architecture.stdout.strip(),
+                binary_signature_valid=binary_signature.succeeded,
+                list_tests_returncode=listed.returncode,
+                listed_tests=_parse_gtest_list(listed.stdout),
+                required_tests=required,
+                ready=preflight.ready,
+                issues=preflight.issues,
+                missing_paths=tuple(
+                    str(path) for path in preflight.missing_paths
+                ),
+                stale_paths=tuple(
+                    str(path) for path in preflight.stale_paths
+                ),
+            )
+        )
+        for dependency in preflight.dependencies:
+            if dependency not in seen:
+                seen.add(dependency)
+                dependencies.append(dependency)
+    return app_signature.succeeded, observations, tuple(dependencies)
+
+
+def _preflight_blockers(
+    observations: list[_BinaryPreflightObservation],
+) -> list[str]:
+    issues: list[str] = []
+    for observation in observations:
+        issues.extend(observation.issues)
+        issues.extend(
+            f"missing: {path}" for path in observation.missing_paths
+        )
+        issues.extend(f"stale: {path}" for path in observation.stale_paths)
+    return issues
+
+
 def _run_build_and_preflight(
     workspace: Path,
     manifest: Manifest,
@@ -703,9 +920,13 @@ def _run_build_and_preflight(
     run_directory: Path,
     selected_gtest: str | None = None,
 ) -> tuple[Path, ...]:
+    binaries = _required_gtests_by_binary(
+        manifest, selected_gtest=selected_gtest
+    )
+    build_argv = _canonical_build_argv(workspace, ninja_targets=tuple(binaries))
     build_result = _run_command(
         services,
-        _canonical_build_argv(workspace),
+        build_argv,
         status=_TerminalStatus.BUILD_FAILED,
         description="canonical Default build failed",
         timeout=4 * 60 * 60,
@@ -730,103 +951,104 @@ def _run_build_and_preflight(
             _TerminalStatus.BUILD_FAILED,
             f"canonical Default build failed: {detail}",
         )
-    chromium_src = workspace / "chromium/src"
-    output_root = chromium_src / _DEFAULT_BUILD_OUTPUT
-    app_bundle = output_root / "Maho.app"
-    interactive_bin = output_root / "interactive_ui_tests"
-    if app_bundle.exists():
-        _subprocess.run(
-            ("/usr/bin/codesign", "--force", "--deep", "-s", "-", app_bundle.as_posix()),
-            check=False,
-            capture_output=True,
-        )
-    if interactive_bin.exists():
-        _subprocess.run(
-            ("/usr/bin/codesign", "--force", "-s", "-", interactive_bin.as_posix()),
-            check=False,
-            capture_output=True,
-        )
-
-    initial = _inspect_preflight(
-        workspace_root=workspace,
-        output_dir=_DEFAULT_BUILD_OUTPUT,
-        required_tests=_required_gtests(manifest, selected_gtest=selected_gtest),
-        listed_tests=(),
+    output_root = workspace / "chromium/src" / _DEFAULT_BUILD_OUTPUT
+    if cancellation.is_cancelled:
+        raise _StageFailure(_TerminalStatus.CANCELLED, cancellation.reason)
+    _codesign_host_artifacts(output_root, binaries)
+    app_signature_valid, observations, dependencies = _run_per_binary_preflight(
+        workspace, binaries, services, cancellation
     )
-    architecture = _run_command(
-        services,
-        initial.command_plan.architecture_argv,
-        status=_TerminalStatus.BUILD_FAILED,
-        description="interactive binary architecture check failed",
-        timeout=60,
-        cancellation=cancellation,
-    )
-    app_signature = _run_command(
-        services,
-        initial.command_plan.app_signature_argv,
-        status=_TerminalStatus.BUILD_FAILED,
-        description="Maho.app signature check failed",
-        timeout=120,
-        cancellation=cancellation,
-    )
-    binary_signature = _run_command(
-        services,
-        initial.command_plan.binary_signature_argv,
-        status=_TerminalStatus.BUILD_FAILED,
-        description="interactive binary signature check failed",
-        timeout=120,
-        cancellation=cancellation,
-    )
-    listed = _run_command(
-        services,
-        initial.command_plan.list_tests_argv,
-        status=_TerminalStatus.BUILD_FAILED,
-        description="gtest inventory failed",
-        timeout=300,
-        cancellation=cancellation,
-    )
-    preflight = _inspect_preflight(
-        workspace_root=workspace,
-        output_dir=_DEFAULT_BUILD_OUTPUT,
-        required_tests=_required_gtests(manifest, selected_gtest=selected_gtest),
-        listed_tests=_parse_gtest_list(listed.stdout),
-        observed_architecture=architecture.stdout,
-        app_signature_valid=app_signature.succeeded,
-        binary_signature_valid=binary_signature.succeeded,
-        list_tests_exit_code=listed.returncode,
-    )
-    if not preflight.ready:
-        issues = [
-            *preflight.issues,
-            *(f"missing: {path}" for path in preflight.missing_paths),
-            *(f"stale: {path}" for path in preflight.stale_paths),
-        ]
-        raise _StageFailure(_TerminalStatus.BUILD_FAILED, "; ".join(issues))
+    blockers = _preflight_blockers(observations)
+    if blockers:
+        raise _StageFailure(_TerminalStatus.BUILD_FAILED, "; ".join(blockers))
     _atomic_json(
         run_directory / "build-preflight.json",
         {
             "schema_version": 1,
-            "canonical_build_argv": list(_canonical_build_argv(workspace)),
+            "canonical_build_argv": list(build_argv),
             "build_returncode": build_result.returncode,
-            "output_root": str(preflight.output_root),
+            "output_root": str(output_root),
             "artifacts": {
-                "app_bundle": str(preflight.output_root / _APP_BUNDLE),
+                "app_bundle": str(output_root / _APP_BUNDLE),
                 "interactive_binary": str(
-                    preflight.output_root / _INTERACTIVE_BINARY
+                    output_root / _INTERACTIVE_BINARY
                 ),
                 "runtime_deps": str(
-                    preflight.output_root / _RUNTIME_DEPS_FILE
+                    output_root / _RUNTIME_DEPS_FILE
                 ),
+                "suite_binaries": {
+                    binary: {
+                        "binary": str(output_root / binary),
+                        "runtime_deps": str(
+                            output_root / f"{binary}.runtime_deps"
+                        ),
+                    }
+                    for binary in binaries
+                },
             },
-            "architecture": architecture.stdout.strip(),
-            "app_signature_valid": app_signature.succeeded,
-            "binary_signature_valid": binary_signature.succeeded,
-            "list_tests_returncode": listed.returncode,
-            "listed_tests": list(_parse_gtest_list(listed.stdout)),
+            "app_signature_valid": app_signature_valid,
+            "preflight_binaries": [
+                observation.to_json() for observation in observations
+            ],
             "required_tests": list(_required_gtests(manifest)),
         },
     )
-    return preflight.dependencies
+    return dependencies
+
+
+def _preflight_existing_build(
+    workspace: Path,
+    manifest: Manifest,
+    services: LifecycleServices,
+    cancellation: _CancellationToken,
+    run_directory: Path,
+    selected_gtest: str | None = None,
+) -> tuple[Path, ...]:
+    binaries = _required_gtests_by_binary(
+        manifest, selected_gtest=selected_gtest
+    )
+    output_root = workspace / "chromium/src" / _DEFAULT_BUILD_OUTPUT
+    if cancellation.is_cancelled:
+        raise _StageFailure(_TerminalStatus.CANCELLED, cancellation.reason)
+    _codesign_host_artifacts(output_root, binaries)
+    app_signature_valid, observations, dependencies = _run_per_binary_preflight(
+        workspace, binaries, services, cancellation
+    )
+    blockers = _preflight_blockers(observations)
+    if blockers:
+        raise _StageFailure(_TerminalStatus.BUILD_FAILED, "; ".join(blockers))
+    _atomic_json(
+        run_directory / "build-preflight.json",
+        {
+            "schema_version": 1,
+            "build_mode": "prebuilt",
+            "output_root": str(output_root),
+            "artifacts": {
+                "app_bundle": str(output_root / _APP_BUNDLE),
+                "interactive_binary": str(
+                    output_root / _INTERACTIVE_BINARY
+                ),
+                "runtime_deps": str(
+                    output_root / _RUNTIME_DEPS_FILE
+                ),
+                "suite_binaries": {
+                    binary: {
+                        "binary": str(output_root / binary),
+                        "runtime_deps": str(
+                            output_root / f"{binary}.runtime_deps"
+                        ),
+                    }
+                    for binary in binaries
+                },
+            },
+            "app_signature_valid": app_signature_valid,
+            "preflight_binaries": [
+                observation.to_json() for observation in observations
+            ],
+            "required_tests": list(_required_gtests(manifest)),
+        },
+    )
+    return dependencies
 
 
 def _new_clone(
@@ -873,6 +1095,90 @@ def _is_owned(clone: OwnedClone) -> bool:
     return receipt.get("name") == clone.name and receipt.get("token") == clone.token
 
 
+def _external_chromium_target(workspace: Path) -> Path | None:
+    chrom_link = workspace / "chromium"
+    if not chrom_link.is_symlink():
+        return None
+    try:
+        target = Path(_os.readlink(chrom_link))
+    except OSError:
+        return None
+    volumes = Path("/Volumes")
+    if (
+        not target.is_absolute()
+        or not target.is_relative_to(volumes)
+        or target.name != "chromium"
+        or any(character in str(target) for character in (":", ",", "\n", "\r"))
+        or not (target / "src").is_dir()
+    ):
+        return None
+    return target
+
+
+_HOST_RELAY_PORT = 8899
+
+
+def _selected_suite(manifest: Manifest, suite_name: str) -> Suite | None:
+    for suite in manifest.suites:
+        if suite.name == suite_name:
+            return suite
+    return None
+
+
+def _maybe_start_host_relay(
+    manifest: Manifest, suite_name: str
+) -> _subprocess.Popen[bytes] | None:
+    suite = _selected_suite(manifest, suite_name)
+    if not isinstance(suite, GtestSuite) or not suite.host_relay:
+        return None
+    relay_script = Path(__file__).resolve().parent / "macos_vm_connect_relay.py"
+    relay_argv = (
+        sys.executable,
+        str(relay_script),
+        "--port",
+        str(_HOST_RELAY_PORT),
+    )
+    process = _subprocess.Popen(
+        relay_argv,
+        stdin=_subprocess.DEVNULL,
+        stdout=_subprocess.DEVNULL,
+        stderr=_subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    deadline = _time.monotonic() + 5
+    last_error: OSError | None = None
+    while _time.monotonic() < deadline:
+        if process.poll() is not None:
+            break
+        try:
+            probe = socket.create_connection(
+                ("127.0.0.1", _HOST_RELAY_PORT), timeout=2
+            )
+            probe.close()
+            return process
+        except OSError as error:
+            last_error = error
+            _time.sleep(0.1)
+    process.terminate()
+    raise _StageFailure(
+        _TerminalStatus.VM_START_FAILED,
+        "host connect relay failed to start on port "
+        f"{_HOST_RELAY_PORT}: exit={process.poll()} last_error={last_error}",
+    )
+
+
+def _stop_host_relay(relay: _subprocess.Popen[bytes] | None) -> None:
+    if relay is None:
+        return
+    if relay.poll() is None:
+        relay.terminate()
+        try:
+            relay.wait(timeout=10)
+        except _subprocess.TimeoutExpired:
+            relay.kill()
+            relay.wait(timeout=10)
+
+
 def _start_clone(
     clone: OwnedClone,
     mount_argument: str,
@@ -885,14 +1191,9 @@ def _start_clone(
     log_handle = log_path.open("w", encoding="utf-8")
     dir_args = [f"--dir={mount_argument}"]
     if workspace is not None:
-        chrom_link = Path(workspace) / "chromium"
-        if chrom_link.is_symlink():
-            try:
-                target_str = _os.readlink(chrom_link)
-                if target_str.startswith("/Volumes/maho-build"):
-                    dir_args.append(f"--dir=chromium:{target_str}:ro,tag=chromium")
-            except OSError:
-                pass
+        target = _external_chromium_target(Path(workspace))
+        if target is not None:
+            dir_args.append(f"--dir=chromium:{target}:ro,tag=chromium")
     tart_argv = [
         "tart",
         "run",
@@ -968,7 +1269,18 @@ def _teardown_clone(
             required=False,
         )
         if not result.succeeded:
-            errors.append(result.stderr.strip() or result.error or repr(argv))
+            combined = " ".join(
+                part.strip()
+                for part in (result.stderr, result.stdout, result.error)
+                if part
+            )
+            # Stopping an already-exited clone is the desired end state; tart
+            # reports it as an error but the delete below still succeeds.
+            if argv[1] == "stop" and "is not running" in combined:
+                continue
+            errors.append(
+                result.stderr.strip() or result.error or repr(argv)
+            )
     if not errors:
         _shutil.rmtree(clone.directory, ignore_errors=True)
     return _TeardownResult(
@@ -1017,7 +1329,19 @@ def _scp_argv(
     *,
     recursive: bool = False,
 ) -> tuple[str, ...]:
-    options = _strict_ssh_base(config, ip_address)[1:-1]
+    # scp rejects ssh's "-b <address>" bind flag; translate it into the
+    # scp-compatible "-o BindAddress=<address>" form.
+    options: list[str] = []
+    skip_next = False
+    for item in _strict_ssh_base(config, ip_address)[1:-1]:
+        if skip_next:
+            options.extend(("-o", f"BindAddress={item}"))
+            skip_next = False
+            continue
+        if item == "-b":
+            skip_next = True
+            continue
+        options.append(item)
     return (
         "scp",
         *( ("-r",) if recursive else () ),
@@ -1047,17 +1371,23 @@ def _wait_for_guest(
     ssh_base = _strict_ssh_base(config, ip_address)
     start_time = _time.monotonic()
     last_error = "key-only SSH did not become ready"
-    while _time.monotonic() - start_time < 180:
-        result = services.runner.run(
-            (*ssh_base, "true"),
-            deadline=_deadline(services.runner, 30),
-            cancellation=cancellation,
-        )
-        if result.succeeded:
-            services.command_results.append(result)
-            return ip_address, ssh_base
-        last_error = result.stderr.strip() or result.stdout.strip() or last_error
-        _time.sleep(2)
+    cancelled = _threading.Event()
+    registration = cancellation.register(cancelled.set)
+    try:
+        while _time.monotonic() - start_time < 180:
+            result = services.runner.run(
+                (*ssh_base, "true"),
+                deadline=_deadline(services.runner, 30),
+                cancellation=cancellation,
+            )
+            if result.succeeded:
+                services.command_results.append(result)
+                return ip_address, ssh_base
+            last_error = result.stderr.strip() or result.stdout.strip() or last_error
+            if cancelled.wait(2):
+                raise _StageFailure(_TerminalStatus.CANCELLED, cancellation.reason)
+    finally:
+        registration.unregister()
     raise _StageFailure(_TerminalStatus.GUEST_NOT_READY, f"key-only SSH did not become ready: {last_error}")
 
 
@@ -1070,17 +1400,26 @@ def _guest_suite_preflight_argv(
         / "chromium/src"
         / _DEFAULT_BUILD_OUTPUT.as_posix()
     )
-    bin_path = _shlex.quote(str(guest_output / _INTERACTIVE_BINARY))
-    app_path = _shlex.quote(str(guest_output / _APP_BUNDLE))
-    bin_path_vol = "/Volumes/maho-build/chromium/src/out/Default/interactive_ui_tests"
-    app_path_vol = "/Volumes/maho-build/chromium/src/out/Default/Maho.app"
+    binaries = sorted(
+        {
+            suite.binary
+            for suite in manifest.suites
+            if isinstance(suite, GtestSuite)
+        }
+    )
+    existence_checks = [
+        f"test -e {_shlex.quote(str(guest_output / binary))}"
+        for binary in binaries
+    ]
+    existence_checks.append(
+        f"test -e {_shlex.quote(str(guest_output / _APP_BUNDLE))}"
+    )
     return _remote_argv(
         ssh_base,
         (
             "sh",
             "-lc",
-            f"(test -e {bin_path} || test -e {bin_path_vol}) && "
-            f"(test -e {app_path} || test -e {app_path_vol})",
+            " && ".join(existence_checks),
         ),
     )
 
@@ -1099,17 +1438,35 @@ def _configure_transport(
     required_transport: str | None = None,
 ) -> str:
     mount = _read_only_mount_contract(workspace, manifest.guest_workspace)
+
+    # macOS Virtualization.framework virtiofs drops symlinks from shared
+    # directories entirely, so when the host workspace's `chromium` is an
+    # external absolute symlink (e.g. chromium -> /Volumes/T9-Mac/chromium)
+    # the guest can never see it through the workspace share. In that case,
+    # mount the workspace share at a read-only sibling path and assemble the
+    # guest workspace as a real directory holding a `chromium` symlink that
+    # resolves through the separately mounted chromium share.
+    chromium_target = _external_chromium_target(workspace)
+    ws_mount_dir = (
+        str(manifest.guest_workspace) + "-ro"
+        if chromium_target
+        else str(manifest.guest_workspace)
+    )
     _run_command(
         services,
-        _remote_argv(ssh_base, ("sudo", "mkdir", "-p", str(manifest.guest_workspace))),
+        _remote_argv(
+            ssh_base,
+            ("sudo", "mkdir", "-p", str(manifest.guest_workspace), ws_mount_dir),
+        ),
         status=_TerminalStatus.TRANSPORT_FAILED,
         description="guest workspace creation failed",
         timeout=60,
         cancellation=cancellation,
     )
+    remount_argv = mount.remount_argv[:-1] + (ws_mount_dir,)
     mount_result = _run_command(
         services,
-        _remote_argv(ssh_base, mount.remount_argv),
+        _remote_argv(ssh_base, remount_argv),
         status=_TerminalStatus.TRANSPORT_FAILED,
         description="read-only VirtioFS mount failed",
         timeout=120,
@@ -1121,7 +1478,7 @@ def _configure_transport(
             services,
             _remote_argv(
                 ssh_base,
-                ("touch", str(PurePosixPath(str(manifest.guest_workspace)) / ".maho-write-probe")),
+                ("touch", str(PurePosixPath(ws_mount_dir) / ".maho-write-probe")),
             ),
             status=_TerminalStatus.TRANSPORT_FAILED,
             description="read-only write probe unexpectedly succeeded",
@@ -1134,25 +1491,94 @@ def _configure_transport(
                 _TerminalStatus.TRANSPORT_FAILED,
                 "host workspace mount is writable inside the guest",
             )
-        chrom_link = Path(workspace) / "chromium"
-        if chrom_link.is_symlink():
-            try:
-                target_str = _os.readlink(chrom_link)
-                if target_str.startswith("/Volumes/maho-build"):
-                    _run_command(
-                        services,
-                        _remote_argv(
-                            ssh_base,
-                            ("sh", "-lc", f"sudo mkdir -p /Volumes/maho-build && (sudo mount_virtiofs chromium /Volumes/maho-build 2>/dev/null || sudo mount -t virtiofs -o ro chromium /Volumes/maho-build || true) && ls -la {target_str}"),
+        if chromium_target is not None:
+            target_path = chromium_target
+            # Mount the chromium share tag at the symlink target's parent so
+            # the wrapped share child (named after the target basename)
+            # completes the exact guest-side target path.
+            share_name = target_path.name or "chromium"
+            mount_parent = str(target_path.parent)
+            quoted_mount_parent = _shlex.quote(mount_parent)
+            quoted_share_name = _shlex.quote(share_name)
+            quoted_target = _shlex.quote(str(chromium_target))
+            quoted_workspace = _shlex.quote(str(manifest.guest_workspace))
+            _run_command(
+                services,
+                _remote_argv(
+                    ssh_base,
+                    (
+                        "sh",
+                        "-lc",
+                        f"sudo mkdir -p {quoted_mount_parent} && "
+                        f"(sudo mount_virtiofs {quoted_share_name} {quoted_mount_parent} 2>/dev/null || "
+                        f"sudo mount -t virtiofs -o ro {quoted_share_name} {quoted_mount_parent}) && "
+                        f"test -e {quoted_target} && ls -la {quoted_target}",
+                    ),
+                ),
+                status=_TerminalStatus.TRANSPORT_FAILED,
+                description="guest chromium virtiofs mount failed",
+                timeout=120,
+                cancellation=cancellation,
+                required=False,
+            )
+            _run_command(
+                services,
+                _remote_argv(
+                    ssh_base,
+                    (
+                        "sh",
+                        "-lc",
+                        f"sudo find {_shlex.quote(ws_mount_dir)} -mindepth 1 -maxdepth 1 "
+                        "! -name chromium -exec ln -sfn {} "
+                        f"{quoted_workspace}/ \\;",
+                    ),
+                ),
+                status=_TerminalStatus.TRANSPORT_FAILED,
+                description="guest workspace symlink assembly failed",
+                timeout=60,
+                cancellation=cancellation,
+            )
+            _run_command(
+                services,
+                _remote_argv(
+                    ssh_base,
+                    (
+                        "sh",
+                        "-lc",
+                        f"sudo rm -rf {quoted_workspace}/chromium && "
+                        f"sudo ln -sfn {quoted_target} {quoted_workspace}/chromium && "
+                        f"test -e {quoted_workspace}/chromium/src",
+                    ),
+                ),
+                status=_TerminalStatus.TRANSPORT_FAILED,
+                description="guest chromium symlink shim failed",
+                timeout=60,
+                cancellation=cancellation,
+                required=False,
+            )
+            shim_write_probe = _run_command(
+                services,
+                _remote_argv(
+                    ssh_base,
+                    (
+                        "touch",
+                        str(
+                            PurePosixPath(str(manifest.guest_workspace))
+                            / "chromium/.maho-write-probe"
                         ),
-                        status=_TerminalStatus.TRANSPORT_FAILED,
-                        description="guest chromium virtiofs mount failed",
-                        timeout=120,
-                        cancellation=cancellation,
-                        required=False,
-                    )
-            except OSError:
-                pass
+                    ),
+                ),
+                status=_TerminalStatus.TRANSPORT_FAILED,
+                description="read-only write probe unexpectedly succeeded",
+                timeout=30,
+                cancellation=cancellation,
+                required=False,
+            )
+            if shim_write_probe.succeeded:
+                raise _StageFailure(
+                    _TerminalStatus.TRANSPORT_FAILED,
+                    "host chromium mount is writable inside the guest",
+                )
         mounted_preflight = _run_command(
             services,
             _guest_suite_preflight_argv(manifest, ssh_base),
@@ -1168,7 +1594,7 @@ def _configure_transport(
             services,
             _remote_argv(
                 ssh_base,
-                ("sudo", "umount", str(manifest.guest_workspace)),
+                ("sudo", "umount", ws_mount_dir),
             ),
             status=_TerminalStatus.TRANSPORT_FAILED,
             description="failed to unmount incompatible VirtioFS transport",
@@ -1412,7 +1838,11 @@ def _run_selected_suites(
                     else suite.gtest_filter
                 )
                 command = _build_interactive_command(
-                    str(manifest.guest_workspace), str(guest_run_dir), selected_tests
+                    str(manifest.guest_workspace),
+                    str(guest_run_dir),
+                    selected_tests,
+                    suite_name=suite.name,
+                    binary_name=suite.binary,
                 )
                 captured, runtime_result = _execute_guest_command(
                     command,
@@ -1435,7 +1865,15 @@ def _run_selected_suites(
                     cancellation,
                 )
                 artifact_paths.append(str(summary_path))
-                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                summary = _merge_gtest_summary_with_stdout(
+                    json.loads(summary_path.read_text(encoding="utf-8")),
+                    command.expected_results,
+                    captured.stdout,
+                )
+                summary_path.write_text(
+                    json.dumps(summary, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
                 validation = _validate_interactive_result(captured, summary)
             elif isinstance(suite, AiMockSuite):
                 commands = _build_ai_mock_commands(
@@ -1750,14 +2188,24 @@ def run(
         previous_handlers[signum] = _signal.signal(signum, cancel)
 
     try:
-        dependencies = _run_build_and_preflight(
-            workspace,
-            manifest,
-            services,
-            cancellation,
-            writer.run_directory,
-            selected_gtest,
-        )
+        if getattr(args, "skip_build", False):
+            dependencies = _preflight_existing_build(
+                workspace,
+                manifest,
+                services,
+                cancellation,
+                writer.run_directory,
+                selected_gtest,
+            )
+        else:
+            dependencies = _run_build_and_preflight(
+                workspace,
+                manifest,
+                services,
+                cancellation,
+                writer.run_directory,
+                selected_gtest,
+            )
         _run_command(
             services,
             ("tart", "get", config.golden_image, "--format", "json"),
@@ -1772,6 +2220,7 @@ def run(
             receipt,
             isolation_snapshots=(_receipt_snapshot("baseline", baseline),),
         )
+        relay_process = _maybe_start_host_relay(manifest, args.suite)
         clone = _new_clone(
             config.golden_image,
             _state_root(args.state_dir),
@@ -1910,6 +2359,7 @@ def run(
     finally:
         for signum, handler in previous_handlers.items():
             _signal.signal(signum, handler)
+        _stop_host_relay(locals().get("relay_process"))
 
     try:
         teardown = _teardown_clone(clone, running_vm, services)
@@ -2075,6 +2525,11 @@ def build_parser() -> argparse.ArgumentParser:
             "cancel immediately after the guest_ready_at receipt checkpoint "
             "to exercise deterministic teardown"
         ),
+    )
+    run_parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Validate and reuse existing host build products without invoking build_maho.py.",
     )
     run_parser.add_argument("--run-id")
     run_parser.add_argument("--workspace", type=Path)
