@@ -11,6 +11,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/run_loop.h"
+#include "base/test/run_until.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
@@ -30,15 +31,16 @@
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/password_form_digest.h"
 #include "components/password_manager/core/browser/password_form_manager.h"
-#include "components/password_manager/core/browser/password_store/password_form_converters.h"
+#include "components/password_manager/core/browser/password_manager_client.h"
+#include "components/password_manager/core/browser/password_manager_interface.h"
 #include "components/password_manager/core/browser/password_store/password_store.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
-#include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
@@ -109,7 +111,7 @@ BuildMahoPasswordStore(bool enabled, content::BrowserContext *context) {
 
 struct MatchingResult {
   bool success = false;
-  password_manager::BackendLoginsResult forms;
+  password_manager::LoginsResult forms;
 };
 
 } // namespace
@@ -269,6 +271,12 @@ protected:
   }
 
   void NavigateToPasswordForm(Browser *target_browser, const GURL &url) {
+    // Maho's session helper may close the startup tab on a fresh test
+    // profile ("Restored 0 tabs"), leaving the strip empty before the test
+    // body runs. Guarantee an active WebContents before navigating.
+    if (target_browser->tab_strip_model()->empty()) {
+      AddBlankTabAndShow(target_browser);
+    }
     content::WebContents *web_contents =
         target_browser->tab_strip_model()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
@@ -279,6 +287,9 @@ protected:
   }
 
   void ReloadPasswordForm(Browser *target_browser) {
+    if (target_browser->tab_strip_model()->empty()) {
+      AddBlankTabAndShow(target_browser);
+    }
     content::WebContents *web_contents =
         target_browser->tab_strip_model()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
@@ -320,9 +331,6 @@ protected:
     content::WebContents *web_contents =
         target_browser->tab_strip_model()->GetActiveWebContents();
     ASSERT_NE(nullptr, web_contents);
-    SetWebContents(web_contents);
-    WaitForElementValue("username_field", username);
-    WaitForElementValue("password_field", password);
     EXPECT_EQ(std::make_pair(username, password),
               ReadFields(web_contents->GetPrimaryMainFrame(), "username_field",
                          "password_field"));
@@ -344,7 +352,7 @@ protected:
       return false;
     }
 
-    password_manager::StoredCredential credential;
+    password_manager::PasswordForm credential;
     credential.scheme = password_manager::PasswordForm::Scheme::kHtml;
     credential.signon_realm = OriginFor(form_url);
     credential.url = form_url;
@@ -374,7 +382,7 @@ protected:
   }
 
   bool UpdateCredential(Profile *profile,
-                        password_manager::StoredCredential credential) {
+                        password_manager::PasswordForm credential) {
     MahoPasswordStoreBackend *backend = BackendForProfile(profile);
     if (!backend) {
       return false;
@@ -433,8 +441,8 @@ protected:
 
   static void CaptureMatchingResult(
       base::RunLoop *loop, MatchingResult *output,
-      password_manager::BackendLoginsResultOrError result) {
-    if (auto *forms = std::get_if<password_manager::BackendLoginsResult>(
+      password_manager::LoginsResultOrError result) {
+    if (auto *forms = std::get_if<password_manager::LoginsResult>(
             &result)) {
       output->success = true;
       output->forms = std::move(*forms);
@@ -448,6 +456,40 @@ protected:
         GetForRenderFrameHost(frame);
     EXPECT_NE(nullptr, driver);
     return driver;
+  }
+
+  bool PrepareRendererFill(
+      password_manager::ContentPasswordManagerDriver &driver) {
+    driver.GetPasswordManager()->GetClient()->UpdateFormManagers();
+    if (!base::test::RunUntil([&driver]() {
+      return driver.GetPasswordManager()->HaveFormManagersReceivedData(&driver);
+    })) {
+      return false;
+    }
+
+    content::RenderFrameHost *frame = driver.render_frame_host();
+    if (!frame) {
+      return false;
+    }
+    content::WebContents *web_contents =
+        content::WebContents::FromRenderFrameHost(frame);
+    if (!web_contents) {
+      return false;
+    }
+    content::RenderWidgetHostView *view =
+        web_contents->GetRenderWidgetHostView();
+    if (!view) {
+      return false;
+    }
+    web_contents->Focus();
+    content::SimulateEndOfPaintHoldingOnPrimaryMainFrame(web_contents);
+    content::InputEventAckWaiter mouse_up_waiter(
+        view->GetRenderWidgetHost(),
+        blink::WebInputEvent::Type::kMouseUp);
+    content::SimulateMouseClickOrTapElementWithId(web_contents,
+                                                  "username_field");
+    mouse_up_waiter.Wait();
+    return true;
   }
 
   std::optional<password_manager::PasswordFillSelection> DiscoverSelection(
@@ -478,12 +520,6 @@ protected:
       const password_manager::PasswordFillRequestContext &context,
       const password_manager::PasswordFillSelection &selection,
       const std::string &username) {
-    if (content::RenderFrameHost *rfh = driver.render_frame_host()) {
-      if (content::WebContents *web_contents =
-              content::WebContents::FromRenderFrameHost(rfh)) {
-        web_contents->Focus();
-      }
-    }
     base::RunLoop loop;
     bool filled = false;
     password_manager::PasswordFillResolver resolver =
@@ -548,7 +584,8 @@ IN_PROC_BROWSER_TEST_F(
   std::optional<password_manager::PasswordFillSelection> selection =
       DiscoverSelection(*backend, form_url, context);
   ASSERT_TRUE(selection.has_value());
-  EXPECT_TRUE(
+  ASSERT_TRUE(PrepareRendererFill(*driver));
+  ASSERT_TRUE(
       ResolveAndDispatch(*backend, *driver, context, *selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kPassword);
 
@@ -564,7 +601,8 @@ IN_PROC_BROWSER_TEST_F(
   Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
   selection = DiscoverSelection(*backend, form_url, reloaded_context);
   ASSERT_TRUE(selection.has_value());
-  EXPECT_TRUE(ResolveAndDispatch(*backend, *driver, reloaded_context,
+  ASSERT_TRUE(PrepareRendererFill(*driver));
+  ASSERT_TRUE(ResolveAndDispatch(*backend, *driver, reloaded_context,
                                  *selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kPassword);
 }
@@ -670,7 +708,8 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   std::optional<password_manager::PasswordFillSelection> current_selection =
       DiscoverSelection(*backend, saved_url, current_context);
   ASSERT_TRUE(current_selection.has_value());
-  EXPECT_TRUE(ResolveAndDispatch(*backend, *current_driver, current_context,
+  ASSERT_TRUE(PrepareRendererFill(*current_driver));
+  ASSERT_TRUE(ResolveAndDispatch(*backend, *current_driver, current_context,
                                  *current_selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kPassword);
 }
@@ -702,9 +741,7 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   MatchingResult initial = ReadMatching(*backend, form_url);
   ASSERT_TRUE(initial.success);
   ASSERT_EQ(1u, initial.forms.size());
-  password_manager::StoredCredential current =
-      password_manager::FromPasswordForm(
-          password_manager::ToPasswordForm(initial.forms[0]));
+  password_manager::PasswordForm current = initial.forms[0];
   current.password_value = u"S3NTINEL-current-revision-6B2F";
   ASSERT_TRUE(UpdateCredential(browser()->profile(), std::move(current)));
 
@@ -719,7 +756,8 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   ASSERT_TRUE(current_selection.has_value());
   EXPECT_NE(stale_selection->observed_revision,
             current_selection->observed_revision);
-  EXPECT_TRUE(ResolveAndDispatch(*backend, *driver, context,
+  ASSERT_TRUE(PrepareRendererFill(*driver));
+  ASSERT_TRUE(ResolveAndDispatch(*backend, *driver, context,
                                  *current_selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kFreshPassword);
 }
@@ -780,7 +818,8 @@ IN_PROC_BROWSER_TEST_F(
         OriginFor(form_url));
   selection = DiscoverSelection(*backend, form_url, current_context);
   ASSERT_TRUE(selection.has_value());
-  EXPECT_TRUE(ResolveAndDispatch(*backend, *target_driver, current_context,
+  ASSERT_TRUE(PrepareRendererFill(*target_driver));
+  ASSERT_TRUE(ResolveAndDispatch(*backend, *target_driver, current_context,
                                  *selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kPassword);
 }
@@ -831,7 +870,8 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   ExpectMainFrameEmpty(other_browser);
 
   Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
-  EXPECT_TRUE(ResolveAndDispatch(*owner_backend, *owner_driver, owner_context,
+  ASSERT_TRUE(PrepareRendererFill(*owner_driver));
+  ASSERT_TRUE(ResolveAndDispatch(*owner_backend, *owner_driver, owner_context,
                                  *selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kPassword);
 }
@@ -868,7 +908,8 @@ IN_PROC_BROWSER_TEST_F(MahoPasswordFillBrowserTest,
   authorization_service()->SetVaultLockedForTesting(false);
   maho::NotifyVaultLockStateChanged(/*locked=*/false);
   Grant(browser()->profile(), PasswordAuthorizationAction::kFill, origin);
-  EXPECT_TRUE(
+  ASSERT_TRUE(PrepareRendererFill(*driver));
+  ASSERT_TRUE(
       ResolveAndDispatch(*backend, *driver, context, *selection, kUsername));
   ExpectMainFrameFilled(browser(), kUsername, kPassword);
 }

@@ -6,6 +6,7 @@ import argparse
 import ast
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -123,33 +124,12 @@ _PINNED_INCOMPATIBLE_TARGETS: Final[frozenset[str]] = frozenset(
         "chrome/browser/ui/views/frame/contents_container_view.h",
         "chrome/browser/ui/views/frame/contents_layout_manager.cc",
         "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc",
-        "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc",
         "chrome/browser/ui/views/frame/multi_contents_view.cc",
         "chrome/browser/ui/views/frame/multi_contents_view.h",
         "chrome/browser/ui/views/page_action/page_action_properties_provider.cc",
-        "chrome/browser/ui/views/side_panel/side_panel.cc",
-        "chrome/browser/ui/views/side_panel/side_panel.h",
         "chrome/browser/ui/views/side_panel/side_panel_coordinator.cc",
         "chrome/browser/ui/views/side_panel/side_panel_resize_area.cc",
         "chrome/browser/ui/views/toolbar/toolbar_view.cc",
-        "chrome/browser/ui/webui/BUILD.gn",
-        "chrome/browser/ui/webui/chrome_web_ui_configs.cc",
-        "components/password_manager/content/browser/content_password_manager_driver.cc",
-        "components/password_manager/content/browser/content_password_manager_driver.h",
-        "components/password_manager/core/browser/form_fetcher.h",
-        "components/password_manager/core/browser/form_fetcher_impl.cc",
-        "components/password_manager/core/browser/form_fetcher_impl.h",
-        "components/password_manager/core/browser/password_form_digest.cc",
-        "components/password_manager/core/browser/password_form_digest.h",
-        "components/password_manager/core/browser/password_form_manager.cc",
-        "components/password_manager/core/browser/password_manager_driver.h",
-        "components/password_manager/core/browser/password_store/password_store.cc",
-        "components/password_manager/core/browser/password_store/password_store.h",
-        "components/password_manager/core/browser/password_store/password_store_backend.h",
-        "components/password_manager/core/browser/password_store/password_store_backend_metrics_recorder.cc",
-        "components/password_manager/core/browser/password_store/password_store_consumer.cc",
-        "components/password_manager/core/browser/password_store/password_store_interface.h",
-        "components/password_manager/core/browser/stub_password_manager_driver.cc",
         "ui/base/ui_base_features.cc",
         "ui/compositor/layer.cc",
     }
@@ -1324,7 +1304,36 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="void ContentsWebView::SetMahoBackgroundOverride(",
         ),
     ],
-    "chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc": [],
+    "chrome/browser/ui/webui/chrome_untrusted_web_ui_configs.cc": [
+        Replacement(
+            old='#include "content/public/browser/webui_config_map.h"\n',
+            new=(
+                '#include "content/public/browser/webui_config_map.h"\n'
+                '#include "maho/browser/ui/webui/maho_boost/maho_boost_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_ai/maho_artifact_preview_untrusted_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_ai/maho_artifact_export_untrusted_ui.h"\n'
+            ),
+            description="Maho: include the Maho untrusted WebUI config headers",
+            guard='#include "maho/browser/ui/webui/maho_boost/maho_boost_ui.h"',
+        ),
+        Replacement(
+            old=(
+                '#if defined(TOOLKIT_VIEWS)\n'
+                '  map.AddUntrustedWebUIConfig(\n'
+                '      std::make_unique<lens::LensOverlayUntrustedUIConfig>());\n'
+            ),
+            new=(
+                '#if defined(TOOLKIT_VIEWS)\n'
+                '  map.AddUntrustedWebUIConfig(std::make_unique<MahoBoostUIConfig>());\n'
+                '  map.AddUntrustedWebUIConfig(std::make_unique<MahoArtifactPreviewUntrustedUIConfig>());\n'
+                '  map.AddUntrustedWebUIConfig(std::make_unique<MahoArtifactExportUntrustedUIConfig>());\n'
+                '  map.AddUntrustedWebUIConfig(\n'
+                '      std::make_unique<lens::LensOverlayUntrustedUIConfig>());\n'
+            ),
+            description="Maho: register the Maho untrusted WebUI configs",
+            guard="map.AddUntrustedWebUIConfig(std::make_unique<MahoBoostUIConfig>());",
+        ),
+    ],
     # ── settings_ui.cc: allow chrome://settings to be framed by the Maho
     #    settings "Chromium settings" embed pane ────────────────────────────
     "chrome/browser/ui/webui/settings/settings_ui.cc": [
@@ -1482,6 +1491,54 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "side-panel extension functions"
             ),
             guard="MAHO_SPLITVIEW_CREATE = 1964,",
+        ),
+    ],
+    "chrome/app/chromium_strings.grd": [
+        Replacement(
+            old=(
+                '          <message name="IDS_PRODUCT_NAME" desc="The Chrome application name" translateable="false">\n'
+                "            Chromium\n"
+                "          </message>\n"
+                '          <message name="IDS_SHORT_PRODUCT_NAME" desc="The Chrome application short name." translateable="false">\n'
+                "            Chromium\n"
+                "          </message>\n"
+            ),
+            new=(
+                '          <message name="IDS_PRODUCT_NAME" desc="The Chrome application name" translateable="false">\n'
+                "            Maho\n"
+                "          </message>\n"
+                '          <message name="IDS_SHORT_PRODUCT_NAME" desc="The Chrome application short name." translateable="false">\n'
+                "            Maho\n"
+                "          </message>\n"
+            ),
+            description=(
+                "Maho: brand IDS_PRODUCT_NAME/IDS_SHORT_PRODUCT_NAME so the "
+                "os_crypt keychain item is \"Maho Safe Storage\" (not "
+                "\"Chromium Safe Storage\") and in-app product strings say Maho"
+            ),
+        ),
+    ],
+    "components/os_crypt/common/keychain_password_mac.mm": [
+        Replacement(
+            old=(
+                "#else\n"
+                "const char kDefaultServiceName[] = \"Chromium Safe Storage\";\n"
+                "const char kDefaultAccountName[] = \"Chromium\";\n"
+                "#endif\n"
+            ),
+            new=(
+                "#else\n"
+                "const char kDefaultServiceName[] = \"Maho Safe Storage\";\n"
+                "const char kDefaultAccountName[] = \"Maho\";\n"
+                "#endif\n"
+            ),
+            description=(
+                "Maho: use Maho's own macOS keychain item for the os_crypt "
+                "encryption key instead of Chromium's, matching the release "
+                "build — the Chromium-signed item's ACL never matches a "
+                "rebuilt binary, which re-triggered the login-password "
+                "keychain prompt after every build"
+            ),
         ),
     ],
     # ── generated_resources.grd ────────────────────────────────────────────────
@@ -3194,7 +3251,11 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ai/maho_tab_tidy_orchestrator.h",\n'
             ),
             description="Include Maho tab preview controller sources in Chromium browser UI build",
-            guard='      "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",\n',
+            # These sources are already emitted into the unconditional top-level
+            # sources list by normalize_chrome_browser_ui_build(), so match that
+            # 4-space form; the old 6-space guard never fired and re-adding them
+            # made GN fail with duplicate entries.
+            guard='    "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",\n',
         ),
         Replacement(
             old=(
@@ -3233,7 +3294,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h",\n'
             ),
             description="Compile Maho now playing coordinator and factory in chrome/browser/ui:ui target",
-            guard='      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.cc",\n',
+            guard='maho/browser/ui/views/sidebar/maho_now_playing_coordinator.cc',
         ),
         Replacement(
             old='      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",\n',
@@ -3277,6 +3338,19 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='#include "maho/browser/passwords/maho_password_provider_utils.h"',
         ),
         Replacement(
+            old=(
+                '#include "maho/browser/passwords/maho_password_provider_utils.h"\n'
+            ),
+            new=(
+                '#include "maho/browser/passwords/maho_password_provider_utils.h"\n'
+                '#include "maho/browser/maho_tab_id_session_helper.h"\n'
+            ),
+            description=(
+                "Include maho_tab_id_session_helper.h in browser_prefs.cc for tab ID session pref registration"
+            ),
+            guard='#include "maho/browser/maho_tab_id_session_helper.h"',
+        ),
+        Replacement(
             old='  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n',
             new=(
                 '  maho::sidebar_prefs::RegisterProfilePrefs(registry);\n'
@@ -3288,6 +3362,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "alongside the other Maho profile prefs"
             ),
             guard="maho::MahoMailService::RegisterProfilePrefs",
+        ),
+        Replacement(
+            old='  maho::MahoMailService::RegisterProfilePrefs(registry);\n',
+            new=(
+                '  maho::MahoMailService::RegisterProfilePrefs(registry);\n'
+                '  maho::MahoTabIdSessionHelper::RegisterProfilePrefs(registry);\n'
+            ),
+            description=(
+                "Register tab ID session prefs alongside the other Maho profile prefs"
+            ),
+            guard="maho::MahoTabIdSessionHelper::RegisterProfilePrefs",
         ),
         Replacement(
             old='void RegisterLocalState(PrefRegistrySimple* registry) {\n',
@@ -3597,7 +3682,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Maho(win): allow Window Controls Overlay to be enabled for the Arc "
                 "main window, not only PWA app windows"
             ),
-            guard="const bool maho_wco = IsMahoArcLayoutActive();",
+            guard="const bool maho_wco =",
         ),
         Replacement(
             old=(
@@ -4138,6 +4223,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    maho_create_space_blank_view_->SetVisible(false);\n"
             ),
             description="Use MahoCreateSpaceBlankView for blank view instead of generic views::View",
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -4309,7 +4395,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "}\n"
             ),
             description="Add Maho shortcut interceptor to BrowserView::OnKeyEvent",
-            guard="maho::MahoShortcutInterceptor::ResolveActionForKeyEvent",
+            idempotent=True,
         ),
         # ── [Maho fix] WebView fast_resize race defensive cleanup ────────────
         # See chromium_src overlay browser_view.cc section 13 for the
@@ -4418,6 +4504,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\n"
                 "  widget_observation_.Observe(GetWidget());\n"
             ),
+            idempotent=True,
             description=(
                 "Register Ctrl+1..9 as FocusManager accelerators in AddedToWidget "
                 "so Maho space-switching shortcuts fire regardless of which view "
@@ -6533,6 +6620,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description=(
                 "Add Maho URL alias resolver directly to chrome/browser:browser deps"
             ),
+            idempotent=True,
             guard=(
                 '      "//maho/browser:maho_password_provider",\n'
                 '       "//maho/browser:maho_url_scheme",\n'
@@ -6540,6 +6628,59 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "chrome/test/BUILD.gn": [
+        # Self-healing interactive_tests dep links. Each link anchors on the
+        # sidebar dep line (present once any Maho interactive dep exists) and
+        # is guarded by its own target line, so a partially reverted
+        # chrome/test/BUILD.gn is repaired in one apply pass without
+        # duplicating deps.
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+                '      "//maho/browser/ui/views/spaces_overlay:interactive_tests",\n'
+            ),
+            description="Include Maho spaces-overlay interactive tests in Chromium interactive_ui_tests deps (self-healing)",
+            idempotent=True,
+            guard='"//maho/browser/ui/views/spaces_overlay:interactive_tests"',
+        ),
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+                '      "//maho/browser/ui/views/peek:interactive_tests",\n'
+            ),
+            description="Include Maho Peek interactive tests in Chromium interactive_ui_tests deps (self-healing)",
+            idempotent=True,
+            guard='"//maho/browser/ui/views/peek:interactive_tests"',
+        ),
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+                '      "//chrome/browser/ui/views/side_panel:interactive_tests",\n'
+            ),
+            description="Include Maho AI side-panel interactive tests in Chromium interactive_ui_tests deps (self-healing)",
+            idempotent=True,
+            guard='"//chrome/browser/ui/views/side_panel:interactive_tests"',
+        ),
+        Replacement(
+            old=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+            ),
+            new=(
+                '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+                '      "//maho/browser/ui/views/command:interactive_tests",\n'
+            ),
+            description="Include Maho command interactive tests in Chromium interactive_ui_tests deps (self-healing)",
+            idempotent=True,
+            guard='"//maho/browser/ui/views/command:interactive_tests"',
+        ),
         Replacement(
             old=(
                 '      "//maho/browser/ui/views/spaces_overlay:interactive_tests",\n'
@@ -6549,6 +6690,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/peek:interactive_tests",\n'
             ),
             description="Include Maho Peek interactive tests in Chromium interactive_ui_tests deps",
+            idempotent=True,
             guard='"//maho/browser/ui/views/peek:interactive_tests"',
         ),
         Replacement(
@@ -6560,6 +6702,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//chrome/browser/ui/views/side_panel:interactive_tests",\n'
             ),
             description="Include Maho AI side-panel interactive tests in Chromium interactive_ui_tests deps",
+            idempotent=True,
             guard='"//chrome/browser/ui/views/side_panel:interactive_tests"',
         ),
         Replacement(
@@ -6571,6 +6714,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
             ),
             description="Include Maho sidebar interactive tests in Chromium interactive_ui_tests deps",
+            idempotent=True,
+            guard='"//maho/browser/ui/views/sidebar:interactive_tests"',
         ),
         Replacement(
             old='      "//maho/browser/ui/link_preview:interactive_tests",\n',
@@ -6638,6 +6783,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Maho R-9: include the AI runtime-router and LLM-client OTR-denial "
                 "unit tests (task-9-ai-unit) in Chromium unit_tests"
             ),
+            idempotent=True,
             guard='"//maho/browser:maho_ai_runtime_router_unittests"',
         ),
         Replacement(
@@ -6650,6 +6796,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Include Maho ad-block tab helper request-context unit tests "
                 "in Chromium unit_tests"
             ),
+            idempotent=True,
             guard='"//maho/browser/net:maho_ad_block_tab_helper_unittests"',
         ),
         Replacement(
@@ -8374,6 +8521,91 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc": [
         Replacement(
+            old="  bool needs_exclusion = true;\n",
+            new=(
+                "  // Maho: reserve the leading rail for the native sidebar before the\n"
+                "  // upstream pipeline consumes `params`. Upstream lays out the rest of\n"
+                "  // the browser inside the remaining area with no further changes.\n"
+                "  if (views().maho_sidebar_container &&\n"
+                "      views().maho_sidebar_container->GetVisible()) {\n"
+                "    const int maho_rail_width =\n"
+                "        views().maho_sidebar_container->GetPreferredSize().width();\n"
+                "    if (maho_rail_width > 0) {\n"
+                "      const gfx::Rect maho_rail_bounds(\n"
+                "          params.visual_client_area.x(), params.visual_client_area.y(),\n"
+                "          maho_rail_width, params.visual_client_area.height());\n"
+                "      layout.AddChild(views().maho_sidebar_container, maho_rail_bounds);\n"
+                "      params.InsetHorizontal(maho_rail_width, /*leading=*/true);\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  bool needs_exclusion = true;\n"
+            ),
+            description=(
+                "Maho: lay out the native sidebar rail on the leading edge and inset "
+                "the remaining browser area"
+            ),
+            guard="Maho: reserve the leading rail for the native sidebar",
+        ),
+        Replacement(
+            old=(
+                "BrowserViewTabbedLayoutImpl::GetTabStripType() const {\n"
+                "  if (delegate().ShouldUseTouchableTabstrip()) {\n"
+            ),
+            new=(
+                "BrowserViewTabbedLayoutImpl::GetTabStripType() const {\n"
+                "  // Maho Arc layout: the sidebar rail replaces the stock tab strip.\n"
+                "  if (views().maho_sidebar_container &&\n"
+                "      views().maho_sidebar_container->GetVisible()) {\n"
+                "    return TabStripType::kNone;\n"
+                "  }\n"
+                "  if (delegate().ShouldUseTouchableTabstrip()) {\n"
+            ),
+            description="Maho: suppress the stock tab strip while the Arc rail is visible",
+            guard="Maho Arc layout: the sidebar rail replaces the stock tab strip.",
+        ),
+        Replacement(
+            old=(
+                "    views().vertical_tab_strip_region_view->SetCaptionButtonWidthForLayout(\n"
+                "        std::max(0, caption_button_width));\n"
+                "  }\n"
+                "\n"
+                "  return layout;\n"
+            ),
+            new=(
+                "    views().vertical_tab_strip_region_view->SetCaptionButtonWidthForLayout(\n"
+                "        std::max(0, caption_button_width));\n"
+                "  }\n"
+                "\n"
+                "  // Maho Arc layout: the sidebar rail owns navigation and the omnibox,\n"
+                "  // so the stock top chrome must not occupy the window. Collapse it\n"
+                "  // after upstream has finished laying everything out, which keeps the\n"
+                "  // upstream geometry pipeline (exclusions, side panels, splits) intact.\n"
+                "  if (views().maho_sidebar_container &&\n"
+                "      views().maho_sidebar_container->GetVisible()) {\n"
+                "    for (views::View* maho_top_chrome :\n"
+                "         {static_cast<views::View*>(views().top_container),\n"
+                "          static_cast<views::View*>(views().top_container_separator)}) {\n"
+                "      if (!IsParentedTo(maho_top_chrome, views().browser_view)) {\n"
+                "        continue;\n"
+                "      }\n"
+                "      auto maho_it = layout.children.find(maho_top_chrome);\n"
+                "      if (maho_it == layout.children.end()) {\n"
+                "        layout.AddChild(maho_top_chrome, gfx::Rect(), false);\n"
+                "        continue;\n"
+                "      }\n"
+                "      maho_it->second.bounds = gfx::Rect();\n"
+                "      maho_it->second.visibility = false;\n"
+                "      maho_it->second.children.clear();\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  return layout;\n"
+            ),
+            description="Maho: collapse stock top chrome while the Arc sidebar rail is visible",
+            guard="Maho Arc layout: the sidebar rail owns navigation and the omnibox",
+        ),
+        Replacement(
             old=(
                 "#include \"chrome/browser/ui/views/frame/browser_view.h\"\n"
             ),
@@ -8426,6 +8658,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      }\n"
             ),
             description="Maho: square the content seam while the AI panel is open",
+            idempotent=True,
             guard="maho_ai_panel_showing\n",
         ),
         Replacement(
@@ -8663,6 +8896,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "Maho: preserve AI content-parent transparency when AddedToWidget "
                 "runs after the child is attached"
             ),
+            idempotent=True,
             guard="const bool hosts_maho_ai =",
         ),
         Replacement(
@@ -9122,7 +9356,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '  virtual void GetGroupedMatchingLoginsAsync(\n'
                 '      const PasswordFormDigest& form_digest,\n'
                 '      const PasswordFillRequestContext& context,\n'
-                '      BackendLoginsOrErrorReply callback) {\n'
+                '      LoginsOrErrorReply callback) {\n'
                 '    GetGroupedMatchingLoginsAsync(form_digest, std::move(callback));\n'
                 '  }\n\n'
                 '  virtual void ResolvePasswordFill(\n'
@@ -9136,7 +9370,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '  virtual void GetGroupedMatchingLoginsAsync(\n'
                 '      const PasswordFormDigest& form_digest,\n'
                 '      const PasswordFillRequestContext& context,\n'
-                '      BackendLoginsOrErrorReply callback);\n\n'
+                '      LoginsOrErrorReply callback);\n\n'
                 '  virtual void ResolvePasswordFill(\n'
                 '      const PasswordFillRequestContext& context,\n'
                 '      const PasswordFillSelection& selection,\n'
@@ -9146,7 +9380,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             idempotent=True,
             guard=(
                 '      const PasswordFillRequestContext& context,\n'
-                '      BackendLoginsOrErrorReply callback);\n'
+                '      LoginsOrErrorReply callback);\n'
             ),
         ),
         Replacement(
@@ -9159,17 +9393,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             old=(
                 '  virtual void GetGroupedMatchingLoginsAsync(\n'
                 '      const PasswordFormDigest& form_digest,\n'
-                '      BackendLoginsOrErrorReply callback) = 0;\n'
+                '      LoginsOrErrorReply callback) = 0;\n'
             ),
             new=(
                 '  virtual void GetGroupedMatchingLoginsAsync(\n'
                 '      const PasswordFormDigest& form_digest,\n'
-                '      BackendLoginsOrErrorReply callback) = 0;\n\n'
+                '      LoginsOrErrorReply callback) = 0;\n\n'
                 '  // Context-aware adapter preserving every legacy backend unchanged.\n'
                 '  virtual void GetGroupedMatchingLoginsAsync(\n'
                 '      const PasswordFormDigest& form_digest,\n'
                 '      const PasswordFillRequestContext& context,\n'
-                '      BackendLoginsOrErrorReply callback);\n\n'
+                '      LoginsOrErrorReply callback);\n\n'
                 '  virtual void ResolvePasswordFill(\n'
                 '      const PasswordFillRequestContext& context,\n'
                 '      const PasswordFillSelection& selection,\n'
@@ -9201,7 +9435,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 'void PasswordStoreBackend::GetGroupedMatchingLoginsAsync(\n'
                 '    const PasswordFormDigest& form_digest,\n'
                 '    const PasswordFillRequestContext& context,\n'
-                '    BackendLoginsOrErrorReply callback) {\n'
+                '    LoginsOrErrorReply callback) {\n'
                 '  GetGroupedMatchingLoginsAsync(form_digest, std::move(callback));\n'
                 '}\n\n'
                 'void PasswordStoreBackend::ResolvePasswordFill(\n'
@@ -9262,8 +9496,42 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
         Replacement(
+            old=(
+                'void PasswordStore::GetLogins(\n'
+                '    const PasswordFormDigest& form,\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
+            ),
+            new=(
+                'static void ConsumerReplyConverter(\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer,\n'
+                '    PasswordStoreInterface* store,\n'
+                '    LoginsResultOrError results_or_error) {\n'
+                '  if (consumer) {\n'
+                '    consumer->OnGetPasswordStoreResultsOrErrorFrom(\n'
+                '        store, std::move(results_or_error));\n'
+                '  }\n'
+                '}\n\n'
+                'void PasswordStore::GetLogins(\n'
+                '    const PasswordFormDigest& form,\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
+            ),
+            description="Maho: define ConsumerReplyConverter for context-aware replies",
+            guard="static void ConsumerReplyConverter",
+        ),
+        Replacement(
             old='void PasswordStore::GetAutofillableLogins(\n',
             new=(
+                'static void ConsumerReplyConverter(\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer,\n'
+                '    PasswordStoreInterface* store,\n'
+                '    LoginsResultOrError results_or_error) {\n'
+                '  if (consumer) {\n'
+                '    consumer->OnGetPasswordStoreResultsOrErrorFrom(\n'
+                '        store, std::move(results_or_error));\n'
+                '  }\n'
+                '}\n\n'
                 'void PasswordStore::GetLogins(\n'
                 '    const PasswordFormDigest& form,\n'
                 '    const PasswordFillRequestContext& context,\n'
@@ -9395,16 +9663,30 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="if (fill_request_context_)",
         ),
         Replacement(
-            old='  return result;\n}\n\nstd::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {\n',
+            old='  auto result = std::make_unique<FormFetcherImpl>(form_digest_, client_, false);\n',
             new=(
+                '  auto result = std::make_unique<FormFetcherImpl>(form_digest_, client_, false);\n'
                 '  result->fill_request_context_ = fill_request_context_;\n'
-                '  return result;\n}\n\nstd::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {\n'
             ),
             description="Maho: preserve document context when cloning FormFetcherImpl",
             guard="result->fill_request_context_ = fill_request_context_;",
         ),
     ],
     "components/password_manager/core/browser/password_manager_driver.h": [
+        Replacement(
+            old=(
+                '  // Produces the only callback that may receive a resolved secret. It is\n'
+                '  bound to this exact driver and captured document context.\n'
+            ),
+            new=(
+                '  // Produces the only callback that may receive a resolved secret. It is\n'
+                '  // bound to this exact driver and captured document context.\n'
+            ),
+            description=(
+                "Maho: repair resolver adapter comment continuation in applied driver"
+            ),
+            idempotent=True,
+        ),
         Replacement(
             old='#include <string>\n',
             new='#include <string>\n#include <utility>\n',
@@ -9465,7 +9747,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '    FillSuggestion(username, password, std::move(success_callback));\n'
                 '  }\n\n'
                 '  // Produces the only callback that may receive a resolved secret. It is\n'
-                '  bound to this exact driver and captured document context.\n'
+                '  // bound to this exact driver and captured document context.\n'
                 '  PasswordFillResolver CreatePasswordFillResolver(\n'
                 '      const PasswordFillRequestContext& context,\n'
                 '      std::u16string username,\n'
@@ -9506,6 +9788,16 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "components/password_manager/core/browser/password_form_digest.cc": [
+        Replacement(
+            old='#include "components/password_manager/core/browser/password_form_digest.h"\n',
+            new=(
+                '#include "components/password_manager/core/browser/password_form_digest.h"\n\n'
+                '#include <algorithm>\n'
+                '#include <utility>\n'
+            ),
+            description="Maho: include utilities for secure fill request values",
+            guard='#include <algorithm>\n#include <utility>\n',
+        ),
         Replacement(
             old="PasswordFormDigest& PasswordFormDigest::operator=(PasswordFormDigest&& other) =\n    default;\n",
             new=(
@@ -9586,27 +9878,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     "components/password_manager/content/browser/content_password_manager_driver.cc": [
-        Replacement(
-            old='void ContentPasswordManagerDriver::DidNavigate() {\n',
-            new=(
-                'void PasswordManagerDriver::FillSuggestion(\n'
-                '    const PasswordFillRequestContext& context,\n'
-                '    const std::u16string& username,\n'
-                '    const std::u16string& password,\n'
-                '    base::OnceCallback<void(bool)> success_callback) {\n'
-                '  if (!IsPasswordFillRequestContextCurrent(context)) {\n'
-                '    std::move(success_callback).Run(false);\n'
-                '    return;\n'
-                '  }\n'
-                '  FillSuggestion(username, password, std::move(success_callback));\n'
-                '}\n\n'
-                'void ContentPasswordManagerDriver::DidNavigate() {\n'
-            ),
-            description=(
-                "Maho: define context-aware driver default in production driver source"
-            ),
-            guard='void PasswordManagerDriver::FillSuggestion(\n',
-        ),
         Replacement(
             old='void ContentPasswordManagerDriver::DidNavigate() {\n',
             new=(
@@ -10111,19 +10382,22 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/views/command/maho_command_overlay_controller.cc",
 )
 
+# NOTE: maho_traffic_light_geometry is registered by the dedicated is_mac/else
+# replacement on chrome/browser/ui/BUILD.gn, which picks the .mm on macOS and
+# the stub elsewhere. Listing it here too would add it to the unconditional
+# top-level sources list as well and GN then fails with a duplicate entry.
 _CHROME_BROWSER_UI_MAC_SOURCES: Final[tuple[str, ...]] = (
-    "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_mac.mm",
     "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",
     "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm",
 )
 
 _CHROME_BROWSER_UI_NON_MAC_SOURCES: Final[tuple[str, ...]] = (
-    "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_stub.cc",
-    "//maho/browser/ui/views/maho_mini/maho_mini_window_stub.cc",
+    "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",
     "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_stub.cc",
 )
 
 _CHROME_BROWSER_UI_DEPS: Final[tuple[str, ...]] = (
+    "//ui/base/accelerators/global_accelerator_listener",
     "//maho/browser/mail_helper:maho_mail_service",
     "//maho/browser/ui/views/command:maho_command_overlay",
     "//maho/browser/ui/views/peek:maho_peek",
@@ -10171,6 +10445,17 @@ def normalize_chrome_browser_ui_build(text: str) -> tuple[str, int]:
     if source_anchor not in text or dep_anchor not in text:
         raise RuntimeError("Missing chrome/browser/ui:ui normalization anchor")
 
+    # Retired entries injected by earlier materializations must be stripped
+    # before the missing-source pass re-adds anything, otherwise a deleted
+    # source file keeps breaking ninja ("missing and no known rule").
+    retired_removed = 0
+    for retired in (
+        '    "//maho/browser/ui/views/maho_mini/maho_mini_window_stub.cc",\n',
+    ):
+        if retired in text:
+            text = text.replace(retired, '', 1)
+            retired_removed += 1
+
     sources = _CHROME_BROWSER_UI_SOURCES
     sources += (
         _CHROME_BROWSER_UI_MAC_SOURCES
@@ -10185,7 +10470,7 @@ def normalize_chrome_browser_ui_build(text: str) -> tuple[str, int]:
     if missing_deps:
         insertion = "".join(f'      "{entry}",\n' for entry in missing_deps)
         text = text.replace(dep_anchor, dep_anchor + insertion, 1)
-    return text, len(missing_sources) + len(missing_deps)
+    return text, len(missing_sources) + len(missing_deps) + retired_removed
 
 
 def normalize_chrome_browser_build(text: str) -> tuple[str, int]:

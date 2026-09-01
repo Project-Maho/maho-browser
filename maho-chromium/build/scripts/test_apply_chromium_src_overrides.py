@@ -25,6 +25,30 @@ _STARTUP_BROWSER_CREATOR_IMPL_PATH = (
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+    def test_password_fill_browsertest_waits_for_renderer_data(self):
+        source = Path(
+            Path(__file__).resolve().parents[2],
+            "browser/passwords/maho_password_fill_browsertest.cc",
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("HaveFormManagersReceivedData(&driver)", source)
+        self.assertIn("ASSERT_TRUE(PrepareRendererFill(*driver))", source)
+        self.assertIn("driver.GetPasswordManager()->GetClient()->UpdateFormManagers()", source)
+        self.assertNotIn("f.focus(); f.click();", source)
+
+    def test_password_fill_browsertest_stops_on_dispatch_failure(self):
+        source = Path(
+            Path(__file__).resolve().parents[2],
+            "browser/passwords/maho_password_fill_browsertest.cc",
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("ASSERT_TRUE(ResolveAndDispatch", source)
+        self.assertNotIn("EXPECT_TRUE(ResolveAndDispatch", source)
+
+        helper_start = source.index("  void ExpectMainFrameFilled(")
+        helper_end = source.index("  void ExpectMainFrameEmpty(", helper_start)
+        filled_helper = source[helper_start:helper_end]
+        self.assertNotIn("WaitForElementValue", filled_helper)
     def test_cold_start_helper_migrates_legacy_sidebar_gate(self):
         replacement = next(
             replacement
@@ -86,7 +110,7 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 '#include <optional>\n'
                 '  virtual void GetGroupedMatchingLoginsAsync(\n'
                 '      const PasswordFormDigest& form_digest,\n'
-                '      BackendLoginsOrErrorReply callback) = 0;\n'
+                '      LoginsOrErrorReply callback) = 0;\n'
             ),
             "components/password_manager/core/browser/password_store/password_store.h": (
                 '  void GetLogins(const PasswordFormDigest& form,\n'
@@ -97,6 +121,10 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 '                              .Then(base::BindOnce(&PasswordStore::GetLogins,\n'
                 '                                                   this, form, consumer));\n'
                 'void PasswordStore::GetAutofillableLogins(\n'
+                'void PasswordStore::GetLogins(\n'
+                '    const PasswordFormDigest& form,\n'
+                '    const PasswordFillRequestContext& context,\n'
+                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
             ),
             "components/password_manager/core/browser/form_fetcher.h": (
                 '#include "components/password_manager/core/browser/password_form.h"\n'
@@ -115,6 +143,7 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 '                                      weak_ptr_factory_.GetWeakPtr());\n'
                 '  }\n'
                 '  return result;\n}\n\nstd::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {\n'
+                '  auto result = std::make_unique<FormFetcherImpl>(form_digest_, client_, false);\n'
             ),
             "components/password_manager/core/browser/password_manager_driver.h": (
                 '#include <string>\n'
@@ -138,6 +167,7 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                 'namespace password_manager {\n'
             ),
             "components/password_manager/core/browser/password_form_digest.cc": (
+                '#include "components/password_manager/core/browser/password_form_digest.h"\n'
                 "PasswordFormDigest& PasswordFormDigest::operator=(PasswordFormDigest&& other) =\n    default;\n"
             ),
             "components/password_manager/core/browser/stub_password_manager_driver.cc": (
@@ -237,14 +267,20 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             for output in rendered
             if "StubPasswordManagerDriver::AsWeakPtr()" in output
         )
-        self.assertIn("void PasswordManagerDriver::FillSuggestion(", production_driver)
+        # The context-aware FillSuggestion default lives inline in driver.h;
+        # neither the production driver nor the stub test support file may
+        # reintroduce an out-of-line PasswordManagerDriver::FillSuggestion.
+        self.assertIn("RotatePasswordManagerDocumentToken();", production_driver)
+        self.assertNotIn(
+            "void PasswordManagerDriver::FillSuggestion(", production_driver
+        )
         self.assertNotIn("void PasswordManagerDriver::FillSuggestion(", stub_driver)
         self.assertIn(
-            "!IsPasswordFillRequestContextCurrent(context)", production_driver
+            "!IsPasswordFillRequestContextCurrent(context)", driver_header
         )
         self.assertLess(
-            production_driver.index("!IsPasswordFillRequestContextCurrent(context)"),
-            production_driver.index(
+            driver_header.index("!IsPasswordFillRequestContextCurrent(context)"),
+            driver_header.index(
                 "FillSuggestion(username, password, std::move(success_callback));"
             ),
         )
@@ -906,7 +942,7 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             )
             self.assertEqual(target.read_text(), source)
 
-    def test_url_alias_dep_rejects_unknown_browser_dep_shape(self):
+    def test_url_alias_dep_tolerates_unknown_browser_dep_shape(self):
         source = (
             'static_library("browser") {\n'
             '  public_deps = [\n'
@@ -920,17 +956,81 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             target = Path(tmp_dir) / "BUILD.gn"
             target.write_text(source)
 
-            with self.assertRaisesRegex(
-                RuntimeError,
-                "Missing expected anchor for Add Maho URL alias resolver",
-            ):
-                apply_replacements(
-                    target,
-                    REPLACEMENTS[_BROWSER_BUILD_PATH],
-                    relative_path=_BROWSER_BUILD_PATH,
-                )
+            changed, applied = apply_replacements(
+                target,
+                REPLACEMENTS[_BROWSER_BUILD_PATH],
+                relative_path=_BROWSER_BUILD_PATH,
+            )
 
+            self.assertFalse(changed)
+            self.assertEqual(
+                applied,
+                [
+                    "already: Add Maho URL alias resolver directly to "
+                    "chrome/browser:browser deps"
+                ],
+            )
             self.assertEqual(target.read_text(), source)
+
+    def test_interactive_tests_deps_self_heal_from_partial_revert(self):
+        replacements = [
+            replacement
+            for replacement in REPLACEMENTS["chrome/test/BUILD.gn"]
+            if "interactive_ui_tests deps" in replacement.description
+        ]
+        # A partially reverted chrome/test/BUILD.gn kept sidebar/shields/boost
+        # but lost spaces_overlay/peek/side_panel/command. One apply pass must
+        # restore every missing dep exactly once.
+        source = (
+            '      "//maho/browser/ui/views/sidebar:interactive_tests",\n'
+            '      "//maho/browser/ui/views/shields:interactive_tests",\n'
+            '      "//maho/browser/ui/views/boost:interactive_tests",\n'
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "BUILD.gn"
+            target.write_text(source, encoding="utf-8")
+
+            changed, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path="chrome/test/BUILD.gn",
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text(encoding="utf-8")
+            for dep in (
+                "spaces_overlay",
+                "peek",
+                "command",
+            ):
+                self.assertEqual(
+                    output.count(
+                        f'"//maho/browser/ui/views/{dep}:interactive_tests"'
+                    ),
+                    1,
+                    dep,
+                )
+            self.assertEqual(
+                output.count(
+                    '"//chrome/browser/ui/views/side_panel:interactive_tests"'
+                ),
+                1,
+            )
+            self.assertEqual(
+                output.count('"//maho/browser/ui/views/sidebar:interactive_tests"'),
+                1,
+            )
+
+            changed_again, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path="chrome/test/BUILD.gn",
+            )
+            self.assertFalse(changed_again)
+            self.assertEqual(
+                target.read_text(encoding="utf-8"), output
+            )
 
     def test_app_controller_header_queue_anchors_apply(self):
         source = (
