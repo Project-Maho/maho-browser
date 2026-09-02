@@ -267,22 +267,28 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             for output in rendered
             if "StubPasswordManagerDriver::AsWeakPtr()" in output
         )
-        # The context-aware FillSuggestion default lives inline in driver.h;
-        # neither the production driver nor the stub test support file may
-        # reintroduce an out-of-line PasswordManagerDriver::FillSuggestion.
+        # The context-aware FillSuggestion default moved to a new
+        # password_manager_driver.cc (the chromium-style plugin forbids inline
+        # virtual bodies in official builds); neither the production driver nor
+        # the stub test support file may reintroduce an out-of-line
+        # PasswordManagerDriver::FillSuggestion.
         self.assertIn("RotatePasswordManagerDocumentToken();", production_driver)
         self.assertNotIn(
             "void PasswordManagerDriver::FillSuggestion(", production_driver
         )
         self.assertNotIn("void PasswordManagerDriver::FillSuggestion(", stub_driver)
         self.assertIn(
-            "!IsPasswordFillRequestContextCurrent(context)", driver_header
+            "chromium-style plugin does not flag an inline virtual body",
+            driver_header,
         )
-        self.assertLess(
-            driver_header.index("!IsPasswordFillRequestContextCurrent(context)"),
-            driver_header.index(
-                "FillSuggestion(username, password, std::move(success_callback));"
-            ),
+        self.assertIn(
+            "base::OnceCallback<void(bool)> success_callback);", driver_header
+        )
+        self.assertIn(
+            '"password_manager_driver.cc"',
+            REPLACEMENTS[
+                "components/password_manager/core/browser/BUILD.gn"
+            ][0].new,
         )
         self.assertIn(
             "PasswordFillResolver::PasswordFillResolver(PasswordFillResolver&&) noexcept =\n    default;",

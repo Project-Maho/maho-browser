@@ -17,7 +17,13 @@
 #include "base/time/time.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_store/password_store_backend.h"
-#include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "components/password_manager/core/browser/password_store/password_store_consumer.h"
+#include "maho/chromium_src/components/password_manager/core/browser/password_fill_request.h"
+
+namespace password_manager {
+using BackendLoginsResult = LoginsResult;
+using BackendLoginsResultOrError = LoginsResultOrError;
+}
 
 namespace maho {
 namespace passwords {
@@ -25,7 +31,7 @@ namespace passwords {
 enum class PasswordAuthorizationAction;
 
 // Task 4: the Vault-side representation of one credential. It carries every
-// `password_manager::StoredCredential` field this backend round-trips, plus the
+// `password_manager::PasswordForm` field this backend round-trips, plus the
 // Vault identity (`id` = item UUID, `revision` = CAS revision) that the
 // mutation paths need.
 //
@@ -106,11 +112,11 @@ struct MahoPasswordForm {
   }
 };
 
-// Task 4: the `password_manager::StoredCredential` fields this backend does NOT
+// Task 4: the `password_manager::PasswordForm` fields this backend does NOT
 // round-trip. They fail closed to Chromium's own defaults on read instead of
 // being reconstructed from a guess, so "lossless" is an enumerated claim rather
 // than a blanket one. See the definition in the .cc for why each is excluded.
-std::vector<std::string> UnsupportedStoredCredentialFields();
+std::vector<std::string> UnsupportedPasswordFormFields();
 
 // Task 8 test seam. Production leaves this unset; tests use it to verify that
 // transient request, response, and UTF-8 secret buffers are overwritten before
@@ -123,7 +129,7 @@ void SetSecureZeroizeObserverForTesting(
 // Task 4: authoritative mapping between Chromium's integer `FormPrimaryKey` and
 // the Vault's string item UUID + CAS revision.
 //
-// Chromium's `StoredCredential::primary_key` is an `int` allocated by the login
+// Chromium's `PasswordForm::primary_key` is an `int` allocated by the login
 // database; the Vault's identity is a UUID string with an independent
 // monotonically-increasing revision. Neither can be derived from the other, so
 // this backend owns the bijection: the FIRST time a UUID is observed on a read,
@@ -142,7 +148,7 @@ public:
   operator=(const MahoCredentialIdentityMap &) = delete;
 
   // Returns the primary key for this exact Vault UUID/revision snapshot. A new
-  // revision receives a new key, so a StoredCredential retained by a caller
+  // revision receives a new key, so a PasswordForm retained by a caller
   // keeps the revision it originally observed for CAS.
   int Observe(const std::string &vault_id, uint64_t revision);
 
@@ -200,33 +206,34 @@ public:
   void Shutdown(base::OnceClosure shutdown_completed) override;
   password_manager::ActionableError GetError() override;
   void GetAllLoginsAsync(
-      password_manager::BackendLoginsOrErrorReply callback) override;
+      password_manager::LoginsOrErrorReply callback) override;
   void GetAllLoginsWithAffiliationAndBrandingAsync(
-      password_manager::BackendLoginsOrErrorReply callback) override;
+      password_manager::LoginsOrErrorReply callback) override;
   void GetAutofillableLoginsAsync(
-      password_manager::BackendLoginsOrErrorReply callback) override;
+      password_manager::LoginsOrErrorReply callback) override;
   void FillMatchingLoginsAsync(
-      password_manager::BackendLoginsOrErrorReply callback, bool include_psl,
+      password_manager::LoginsOrErrorReply callback, bool include_psl,
       const std::vector<password_manager::PasswordFormDigest> &forms) override;
   void GetGroupedMatchingLoginsAsync(
       const password_manager::PasswordFormDigest &form_digest,
-      password_manager::BackendLoginsOrErrorReply callback) override;
+      password_manager::LoginsOrErrorReply callback) override;
   void GetGroupedMatchingLoginsAsync(
       const password_manager::PasswordFormDigest &form_digest,
       const password_manager::PasswordFillRequestContext &context,
-      password_manager::BackendLoginsOrErrorReply callback) override;
+      password_manager::LoginsOrErrorReply callback) override;
   void ResolvePasswordFill(
       const password_manager::PasswordFillRequestContext &context,
       const password_manager::PasswordFillSelection &selection,
       password_manager::PasswordFillResolver resolver) override;
   void AddLoginAsync(
-      password_manager::StoredCredential cred,
+      const password_manager::PasswordForm &form,
       password_manager::PasswordChangesOrErrorReply callback) override;
   void UpdateLoginAsync(
-      password_manager::StoredCredential cred,
+      const password_manager::PasswordForm &form,
       password_manager::PasswordChangesOrErrorReply callback) override;
   void RemoveLoginAsync(
-      const base::Location &location, password_manager::StoredCredential cred,
+      const base::Location &location,
+      const password_manager::PasswordForm &form,
       password_manager::PasswordChangesOrErrorReply callback) override;
   void RemoveLoginsCreatedBetweenAsync(
       const base::Location &location, base::Time delete_begin,
@@ -309,7 +316,7 @@ private:
   // signon_realm + username_value + (when set) username_element tuple selects
   // the matching duplicate from `candidates`.
   static std::optional<MahoPasswordForm>
-  ResolveTarget(const password_manager::StoredCredential &cred,
+  ResolveTarget(const password_manager::PasswordForm &form,
                 const MahoCredentialIdentityMap &identity_map,
                 const std::vector<MahoPasswordForm> &candidates);
   // Task 3: the effective password provider is consulted PER OPERATION (never

@@ -6,6 +6,7 @@
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "maho_changelog_auto_opener.cc",
     "maho_changelog_auto_opener.h",
     "maho_changelog_auto_opener_unittest.cc",
   ]

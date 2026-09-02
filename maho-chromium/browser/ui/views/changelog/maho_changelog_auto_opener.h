@@ -112,20 +112,12 @@ class MahoChangelogAutoOpener : public BrowserCollectionObserver {
   }
 
   // BrowserCollectionObserver:
-  void OnBrowserCreated(BrowserWindowInterface* window) override {
-    if (handled_) {
-      return;
-    }
-    Browser* browser = window->GetBrowserForMigrationOnly();
-    if (MahoChangelogEvaluateAndOpenForBrowser(browser)) {
-      handled_ = true;
-      observation_.Reset();
-    }
-  }
+  void OnBrowserCreated(BrowserWindowInterface* window) override;
+
+  ~MahoChangelogAutoOpener() override;
 
  private:
-  explicit MahoChangelogAutoOpener(Profile* profile)
-      : observation_(this), profile_(profile->GetWeakPtr()) {}
+  explicit MahoChangelogAutoOpener(Profile* profile);
 
   base::ScopedObservation<ProfileBrowserCollection, BrowserCollectionObserver>
       observation_;
