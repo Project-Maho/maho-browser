@@ -20,6 +20,27 @@ namespace maho::ai {
 
 namespace {
 
+// base::Bind forbids capturing lambdas; these stateless-helper bindings hold
+// the test state the old lambdas captured.
+class MockClock {
+ public:
+  uint64_t Now() const { return now; }
+  uint64_t now = 0;
+};
+
+class TriggerRecorder {
+ public:
+  explicit TriggerRecorder(std::vector<AgentSessionTrigger>* sink)
+      : sink_(sink) {}
+  bool Record(const AgentSessionTrigger& trigger) {
+    sink_->push_back(trigger);
+    return true;
+  }
+
+ private:
+  std::vector<AgentSessionTrigger>* sink_;
+};
+
 class FakeChannelTransport : public ChannelTransport {
  public:
   FakeChannelTransport() = default;
@@ -414,21 +435,21 @@ TEST(MahoAgentChannelGatewayTest, GatewayLifecycleAndPollingWithFakeTransport) {
   FakeChannelTransport* transport_ptr = fake_transport.get();
 
   uint64_t current_time = 1700000000;
+  MockClock clock;
+  clock.now = current_time;
   MahoAgentChannelGateway gateway(
       std::move(fake_transport),
       nullptr,
-      base::BindRepeating([&current_time]() { return current_time; }));
+      base::BindRepeating(&MockClock::Now, base::Unretained(&clock)));
 
   ChannelConfig config("test-channel", ChannelProvider::kSlack, "Test Channel");
   config.token = ChannelToken("tok-live");
   gateway.RegisterChannel(config);
 
   std::vector<AgentSessionTrigger> triggered;
+  TriggerRecorder triggered_recorder(&triggered);
   gateway.SetTriggerCallback(base::BindRepeating(
-      [&triggered](const AgentSessionTrigger& t) {
-        triggered.push_back(t);
-        return true;
-      }));
+      &TriggerRecorder::Record, base::Unretained(&triggered_recorder)));
 
   EXPECT_TRUE(gateway.StartChannel("test-channel"));
   EXPECT_TRUE(gateway.IsChannelRunning("test-channel"));
@@ -460,7 +481,7 @@ TEST(MahoAgentChannelGatewayTest, GatewayLifecycleAndPollingWithFakeTransport) {
   EXPECT_EQ(health.status, ChannelHealthStatus::kHealthy);
 
   // Advance time past staleness threshold (e.g. +60s)
-  current_time += 60;
+  clock.now += 60;
   ChannelHealth stale_health = gateway.GetHealth("test-channel");
   EXPECT_EQ(stale_health.status, ChannelHealthStatus::kStale);
 
@@ -490,11 +511,9 @@ TEST(MahoAgentChannelGatewayTest, WeakPtrInvalidationOnSetTransport) {
   gateway.RegisterChannel(config);
 
   std::vector<AgentSessionTrigger> triggers;
+  TriggerRecorder triggers_recorder(&triggers);
   gateway.SetTriggerCallback(base::BindRepeating(
-      [&triggers](const AgentSessionTrigger& t) {
-        triggers.push_back(t);
-        return true;
-      }));
+      &TriggerRecorder::Record, base::Unretained(&triggers_recorder)));
 
   gateway.PollChannelOnce("ch-1");
   EXPECT_TRUE(static_cast<bool>(*saved_callback));
@@ -537,16 +556,14 @@ TEST(MahoAgentChannelGatewayTest, WeakPtrInvalidationOnGatewayDestruction) {
   };
 
   std::vector<AgentSessionTrigger> triggers;
+  TriggerRecorder triggers_recorder(&triggers);
   {
     MahoAgentChannelGateway gateway(
         std::make_unique<DeferredFakeTransport>(saved_callback), nullptr, {});
     ChannelConfig config("ch-2", ChannelProvider::kSlack, "Ch 2");
     gateway.RegisterChannel(config);
     gateway.SetTriggerCallback(base::BindRepeating(
-        [&triggers](const AgentSessionTrigger& t) {
-          triggers.push_back(t);
-          return true;
-        }));
+        &TriggerRecorder::Record, base::Unretained(&triggers_recorder)));
     gateway.PollChannelOnce("ch-2");
     EXPECT_TRUE(static_cast<bool>(*saved_callback));
     // gateway destroyed at end of block

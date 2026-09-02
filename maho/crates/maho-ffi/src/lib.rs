@@ -11038,8 +11038,11 @@ pub unsafe extern "C" fn maho_chat_send_text_with_image(
 // ============================================================
 
 use maho_agent::{AgentRuntime, MutexAgentStorage, SessionRuntime, SwiftideBackend};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+
+use crate::agent::callback_lease::UnifiedEventCallbackRegistration;
+use crate::agent::session::AgentRuntimeConfig;
 
 const AGENT_SKILL_INJECT_BUDGET_CHARS: usize = 2_000;
 
@@ -11076,7 +11079,7 @@ fn agent_error_callback_text(error: &maho_agent::AgentError) -> Cow<'static, str
 }
 
 pub struct MahoAgentSession {
-    runtime: Arc<SwiftideBackend>,
+    pub runtime: Arc<SwiftideBackend>,
     isolation: Arc<SessionRuntime>,
     callback_lease: Option<Arc<SessionCallbackLease>>,
     accepted_leased_turns: Arc<AcceptedLeasedTurns>,
@@ -11107,6 +11110,19 @@ pub struct MahoAgentSession {
         unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
     >,
     artifact_created_user_data: usize,
+    // Unified runtime-event plumbing (agent::events FFI seam). These MUST live
+    // on this struct — the only `MahoAgentSession` the exported create/send
+    // symbols construct — so every exported session-taking symbol locks the
+    // same field at the same offset. Before the F3-R4 unification these fields
+    // existed only on a second, module-local struct definition with a
+    // different layout, and the event-side FFI functions locked String/fn-
+    // pointer bytes of this struct as pthread mutexes (EINVAL -> panic=abort).
+    pub(crate) unified_event_registration: Arc<Mutex<Option<UnifiedEventCallbackRegistration>>>,
+    pub turn_controller: Arc<Mutex<maho_agent::turn_control::SessionTurnController>>,
+    pub(crate) wait_registry: Arc<Mutex<maho_agent::event_wait::WaitRegistry>>,
+    pub(crate) event_seq_counter: Arc<AtomicU64>,
+    pub(crate) notification_permission_granted: Arc<AtomicBool>,
+    runtime_config: Mutex<AgentRuntimeConfig>,
 }
 
 struct ActiveConversationGuard {
@@ -11224,189 +11240,24 @@ unsafe impl Send for SendableUserData {}
 #[allow(dead_code)]
 unsafe impl Sync for SendableUserData {}
 
-struct AcceptedLeasedTurns {
-    current: Mutex<Option<Arc<AtomicBool>>>,
-}
+pub use crate::agent::browser_bridge::MahoAgentToolResult;
+pub use crate::agent::secure_storage::{MahoAgentPermissionDecision, MahoAgentSecureKey};
+use crate::agent::callback_lease::{
+    clone_callback_lease, invoke_with_turn_callback_lease, AcceptedLeasedTurns,
+    CallbackReleasePolicy, SessionCallbackLease, TurnCallbackLease,
+};
 
-impl AcceptedLeasedTurns {
-    fn accept(self: &Arc<Self>) -> AcceptedLeasedTurn {
-        let latch = Arc::new(AtomicBool::new(false));
-        let mut current = self
-            .current
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *current = Some(Arc::clone(&latch));
-        AcceptedLeasedTurn {
-            owner: Arc::clone(self),
-            latch,
-        }
-    }
-
-    fn signal_current(&self) -> bool {
-        let current = self
-            .current
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(latch) = current.as_ref() else {
-            return false;
-        };
-        latch.store(true, AtomicOrdering::Release);
-        true
-    }
-
-    fn clear_if_current(&self, latch: &Arc<AtomicBool>) {
-        let mut current = self
-            .current
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if current
-            .as_ref()
-            .is_some_and(|active_latch| Arc::ptr_eq(active_latch, latch))
-        {
-            *current = None;
-        }
-    }
-}
-
-struct AcceptedLeasedTurn {
-    owner: Arc<AcceptedLeasedTurns>,
-    latch: Arc<AtomicBool>,
-}
-
-impl AcceptedLeasedTurn {
-    fn latch(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.latch)
-    }
-}
-
-impl Drop for AcceptedLeasedTurn {
-    fn drop(&mut self) {
-        self.owner.clear_if_current(&self.latch);
-    }
-}
-
-pub type MahoAgentReleaseCallback = unsafe extern "C" fn(user_data: *mut c_void);
-type OptReleaseCb = Option<unsafe extern "C" fn(user_data: *mut c_void)>;
-
-struct CallbackReleasePolicy {
-    callback: MahoAgentReleaseCallback,
-    user_data: *mut c_void,
-}
-
-struct CallbackRelease {
-    armed: AtomicBool,
-    callback: Option<SendableCallback<MahoAgentReleaseCallback>>,
-    user_data: SendableUserData,
-}
-
-impl CallbackRelease {
-    fn new(callback: OptReleaseCb, user_data: *mut c_void) -> Self {
-        Self {
-            armed: AtomicBool::new(false),
-            callback: callback.map(SendableCallback),
-            user_data: SendableUserData(user_data as usize),
-        }
-    }
-
-    fn arm(&self) {
-        self.armed.store(true, AtomicOrdering::Release);
-    }
-
-    fn release(&self) {
-        if !self.armed.load(AtomicOrdering::Acquire) {
-            return;
-        }
-        if let Some(ref callback) = self.callback {
-            // SAFETY: the FFI ownership contract transfers `user_data` to this lease exactly once.
-            // The caller's release callback must not unwind or retain the pointer after this call.
-            unsafe { (callback.0)(self.user_data.0 as *mut c_void) };
-        }
-    }
-}
-
-/// Owns one accepted turn's callback context until every callback closure is destroyed.
-struct TurnCallbackLease(CallbackRelease);
-
-impl TurnCallbackLease {
-    fn new(callback: MahoAgentReleaseCallback, user_data: *mut c_void) -> Self {
-        Self(CallbackRelease::new(Some(callback), user_data))
-    }
-
-    fn arm(&self) {
-        self.0.arm();
-    }
-}
-
-impl Drop for TurnCallbackLease {
-    fn drop(&mut self) {
-        self.0.release();
-    }
-}
-
-fn invoke_with_turn_callback_lease(lease: Option<Arc<TurnCallbackLease>>, callback: impl FnOnce()) {
-    callback();
-    drop(lease);
-}
-
-/// Owns a session callback context until the session and every runtime callback release it.
-struct SessionCallbackLease(CallbackRelease);
-
-impl SessionCallbackLease {
-    fn new(callback: OptReleaseCb, user_data: *mut c_void) -> Arc<Self> {
-        Arc::new(Self(CallbackRelease::new(callback, user_data)))
-    }
-
-    fn arm(&self) {
-        self.0.arm();
-    }
-}
-
-impl Drop for SessionCallbackLease {
-    fn drop(&mut self) {
-        self.0.release();
-    }
-}
-
-fn clone_callback_lease<T>(lease: &Option<Arc<T>>) -> Option<Arc<T>> {
-    lease.as_ref().map(Arc::clone)
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum MahoAgentPermissionDecision {
-    Allow = 0,
-    Deny = 1,
-}
-
-pub type MahoAgentPermissionCallback = extern "C" fn(
-    user_data: *mut std::ffi::c_void,
-    tool_name: *const c_char,
-    arguments: *const c_char,
-) -> MahoAgentPermissionDecision;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct MahoAgentSecureKey {
-    pub ptr: *mut std::os::raw::c_char,
-    pub len: usize,
-    pub free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char, usize)>,
-    pub base_url: *mut std::os::raw::c_char,
-    pub model: *mut std::os::raw::c_char,
-    pub cstring_free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char)>,
-}
-
+// F3-R4 single-source ABI types: the lease/decision/key/result types below are
+// the canonical definitions in `agent::*`. The crate previously carried
+// byte-identical DUPLICATE definitions here, and two parallel
+// `MahoAgentSession` structs — the exported create path built one while the
+// exported event symbols locked fields of the other at mismatched offsets
+// (EINVAL "failed to lock mutex" -> panic=abort SIGABRT at agent turn start).
+// Keep ONE definition per ABI type; alias or import, never re-define.
+pub type MahoAgentReleaseCallback = crate::agent::callback_lease::MahoAgentReleaseCallback;
+pub type MahoAgentPermissionCallback = crate::agent::secure_storage::MahoAgentPermissionCallback;
 pub type MahoAgentSecureStorageCallback =
-    extern "C" fn(user_data: *mut std::ffi::c_void, provider: *const c_char) -> MahoAgentSecureKey;
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct MahoAgentToolResult {
-    pub json_ptr: *mut std::os::raw::c_char,
-    pub error_ptr: *mut std::os::raw::c_char,
-    pub free_fn: Option<unsafe extern "C" fn(*mut std::os::raw::c_char)>,
-    pub error_code_ptr: *mut std::os::raw::c_char,
-    pub error_retryable: bool,
-}
+    crate::agent::secure_storage::MahoAgentSecureStorageCallback;
 
 struct FfiBrowserToolBridge {
     cb: SendableCallback<
@@ -12293,13 +12144,21 @@ unsafe fn maho_agent_create_session_impl(
                 }),
                 permission_callback: session_permission_callback,
                 browser_tool_callback: session_browser_tool_callback,
-                session_id: sid,
+                session_id: sid.clone(),
                 active_conversation_registry: core_ref.active_conversation_registry(),
                 core: core_ptr,
                 workspace_root: session_workspace_root,
                 active_space_id,
                 artifact_created_cb: None,
                 artifact_created_user_data: 0,
+                unified_event_registration: Arc::new(Mutex::new(None)),
+                turn_controller: Arc::new(Mutex::new(
+                    maho_agent::turn_control::SessionTurnController::new(&sid),
+                )),
+                wait_registry: Arc::new(Mutex::new(maho_agent::event_wait::WaitRegistry::new())),
+                event_seq_counter: Arc::new(AtomicU64::new(1)),
+                notification_permission_granted: Arc::new(AtomicBool::new(true)),
+                runtime_config: Mutex::new(AgentRuntimeConfig::default()),
             });
             if let Some(callback_lease) = session.callback_lease.as_ref() {
                 callback_lease.arm();
@@ -12971,6 +12830,43 @@ pub unsafe extern "C" fn maho_agent_set_approval_policy(
             if let Ok(p) = CStr::from_ptr(policy).to_str() {
                 session.runtime.set_approval_policy(p.to_string());
             }
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer to a `MahoAgentSession`.
+/// `permission_tier` must be null or a null-terminated UTF-8 C string
+/// ("read_only", "guard", "full_access"); unknown values fail closed to
+/// "guard". Plumbing only: no enforcement behavior changes in this row.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_set_runtime_config(
+    session: *mut MahoAgentSession,
+    permission_tier: *const c_char,
+    final_confirm: bool,
+    proactive_mode: bool,
+) {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return;
+            }
+            let session = &*session;
+            let raw_tier = if permission_tier.is_null() {
+                ""
+            } else {
+                CStr::from_ptr(permission_tier)
+                    .to_str()
+                    .unwrap_or_default()
+            };
+            let mut config = session
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            config.permission_tier = AgentRuntimeConfig::normalize_tier(raw_tier);
+            config.final_confirm = final_confirm;
+            config.proactive_mode = proactive_mode;
         },
         ()
     )
@@ -15632,6 +15528,7 @@ impl GoogleSignInSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering as AtomicOrdering;
 
     struct RoutineStatusTestContext {
         events: std::sync::Mutex<Vec<serde_json::Value>>,

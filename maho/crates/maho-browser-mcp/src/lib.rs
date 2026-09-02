@@ -12,6 +12,7 @@ pub mod paths;
 pub mod protocol;
 pub mod redacted;
 pub mod server;
+pub mod settings;
 pub mod win_token;
 
 #[cfg(windows)]

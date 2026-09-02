@@ -22,6 +22,7 @@ use crate::client::BrowserClient;
 use crate::error::McpBridgeError;
 use crate::paths::default_socket_path;
 use crate::protocol::ControllerKind;
+use crate::settings::{public_mcp_enabled, MCP_PUBLIC_ENABLED_KEY};
 
 const PUBLIC_DISCOVERY_METHOD: &str = "tools/list";
 const PUBLIC_CALL_METHOD: &str = "tools/call";
@@ -59,6 +60,10 @@ struct DiscoveryProjection {
 pub struct MahoBrowserMcpServer {
     client: Arc<BrowserClient>,
     mutation_approval: Option<MutationApprovalCallback>,
+    /// Snapshot of the `maho.browser.mcp_public_enabled` registry setting
+    /// taken at construction. Absent/false (the default) freezes public
+    /// dispatch fail-closed; kPublicMcp code is retained, not deleted.
+    public_mcp_enabled: bool,
 }
 
 impl MahoBrowserMcpServer {
@@ -73,6 +78,7 @@ impl MahoBrowserMcpServer {
         Ok(Self {
             client: Arc::new(client),
             mutation_approval: None,
+            public_mcp_enabled: public_mcp_enabled(),
         })
     }
 
@@ -89,6 +95,7 @@ impl MahoBrowserMcpServer {
         Ok(Self {
             client: Arc::new(client),
             mutation_approval: Some(mutation_approval),
+            public_mcp_enabled: public_mcp_enabled(),
         })
     }
 
@@ -97,6 +104,7 @@ impl MahoBrowserMcpServer {
         Self {
             client,
             mutation_approval: None,
+            public_mcp_enabled: public_mcp_enabled(),
         }
     }
 
@@ -108,6 +116,7 @@ impl MahoBrowserMcpServer {
         Self {
             client,
             mutation_approval,
+            public_mcp_enabled: public_mcp_enabled(),
         }
     }
 
@@ -138,6 +147,19 @@ impl MahoBrowserMcpServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if !self.public_mcp_enabled {
+            // kPublicMcp is frozen by default (default-off gate; the surface
+            // code is retained, not deleted). Refusals reuse the existing
+            // broker-unavailable fail-closed error path so external hosts see
+            // the same closed shape as an unbrokered mutation.
+            return Err(rmcp::ErrorData::invalid_request(
+                format!(
+                    "'{}' unavailable: public MCP dispatch is frozen by default; set {MCP_PUBLIC_ENABLED_KEY}=true in the browser registry settings to re-enable",
+                    request.name
+                ),
+                Some(json!({"status": ERR_BROKER_UNAVAILABLE})),
+            ));
+        }
         let discovery = self.discover_public_tools().await?;
         let descriptor = discovery
             .tools
@@ -618,5 +640,192 @@ mod tests {
         assert_eq!(projected.structured_content, Some(value));
         assert!(projected.meta.is_none());
         assert_eq!(projected.content.len(), 1);
+    }
+
+    // Plan row 15: kPublicMcp freeze gate. Default (setting absent) must
+    // refuse dispatch with the broker-unavailable fail-closed error path;
+    // maho.browser.mcp_public_enabled=true must restore the pre-existing
+    // dispatch path unchanged.
+    #[cfg(all(test, unix))]
+    mod public_mcp_gate {
+        use super::*;
+        use std::path::PathBuf;
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+
+        fn temp_socket() -> (tempfile::TempDir, PathBuf, UnixListener) {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let sock_path = dir.path().join("gate-test.sock");
+            let listener = UnixListener::bind(&sock_path).expect("bind");
+            (dir, sock_path, listener)
+        }
+
+        /// Materializes a real registry DB at a fixture path with the toggle
+        /// absent or seeded, mirroring how the browser stores settings.
+        fn registry_fixture(dir: &tempfile::TempDir, enabled: Option<bool>) -> PathBuf {
+            let db_path = dir.path().join("registry").join("maho.db");
+            std::fs::create_dir_all(db_path.parent().unwrap()).expect("registry dir");
+            match enabled {
+                Some(true) => crate::settings::seed_setting(
+                    &db_path,
+                    crate::settings::MCP_PUBLIC_ENABLED_KEY,
+                    "true",
+                ),
+                Some(false) => crate::settings::seed_setting(
+                    &db_path,
+                    crate::settings::MCP_PUBLIC_ENABLED_KEY,
+                    "false",
+                ),
+                None => {
+                    assert!(
+                        crate::settings::open_registry_for_test(&db_path).is_some(),
+                        "registry DB opens"
+                    );
+                }
+            }
+            db_path
+        }
+
+        /// Fake browser: completes the initialize handshake, then serves the
+        /// public discovery payload and echoes tool calls, exactly like the
+        /// pre-gate dispatch path expects.
+        fn spawn_serving_browser(listener: UnixListener, tools: Vec<Value>, call_result: Value) {
+            tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("accept");
+                let (reader, mut writer) = stream.into_split();
+                let mut reader = BufReader::new(reader);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let Ok(request) = serde_json::from_str::<Value>(&line) else {
+                        continue;
+                    };
+                    let id = request["id"].clone();
+                    let response = match request["method"].as_str().unwrap_or("") {
+                        "initialize" => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "protocolVersion": "2025-03-26",
+                                "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                                "capabilities": {"tools": {}}
+                            }
+                        }),
+                        "tools/list" => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": discovery(tools.clone())
+                        }),
+                        "tools/call" => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": call_result
+                        }),
+                        _ => json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "error": {"code": -32601, "message": "Method not found"}
+                        }),
+                    };
+                    if writer
+                        .write_all(format!("{response}\n").as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+
+        /// Constructs the server with `MAHO_DB_PATH` pinned to the fixture DB
+        /// while the shared settings lock is held, then restores the
+        /// environment so no other test observes host state.
+        fn server_with_registry(client: Arc<BrowserClient>, db_path: &PathBuf) -> MahoBrowserMcpServer {
+            let guard = crate::settings::SETTINGS_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            // SAFETY: env access is serialized by SETTINGS_TEST_LOCK.
+            unsafe { std::env::set_var(crate::settings::ENV_DB_PATH, db_path) };
+            let server = MahoBrowserMcpServer::new_with_client(client);
+            // SAFETY: env access is serialized by SETTINGS_TEST_LOCK.
+            unsafe { std::env::remove_var(crate::settings::ENV_DB_PATH) };
+            drop(guard);
+            server
+        }
+
+        #[tokio::test]
+        async fn default_absent_setting_refuses_public_dispatch_with_broker_unavailable() {
+            let (_sock_dir, sock_path, listener) = temp_socket();
+            let registry_dir = tempfile::tempdir().expect("registry tempdir");
+            let db_path = registry_fixture(&registry_dir, None);
+            // The fake browser serves the full pre-gate flow on purpose: if
+            // the gate is missing, dispatch SUCCEEDS and this test fails with
+            // the refusal expectation below (failing-first evidence).
+            spawn_serving_browser(
+                listener,
+                vec![descriptor("read_page", false)],
+                json!({"ok": true, "served": "read_page"}),
+            );
+            let client = Arc::new(
+                BrowserClient::connect_as(
+                    &sock_path,
+                    Duration::from_secs(5),
+                    ControllerKind::MahoBrowserMcp,
+                )
+                .await
+                .expect("client connects"),
+            );
+            let server = server_with_registry(client, &db_path);
+
+            let error = server
+                .dispatch_public(CallToolRequestParams::new("read_page"))
+                .await
+                .expect_err(
+                    "default (setting absent) must refuse public dispatch fail-closed",
+                );
+
+            assert_eq!(
+                error.code,
+                ErrorCode::INVALID_REQUEST,
+                "refusal reuses the broker-unavailable error class"
+            );
+            let data = error
+                .data
+                .expect("fail-closed status payload must be present");
+            assert_eq!(data["status"], ERR_BROKER_UNAVAILABLE);
+        }
+
+        #[tokio::test]
+        async fn enabled_setting_executes_preexisting_dispatch_path() {
+            let (_sock_dir, sock_path, listener) = temp_socket();
+            let registry_dir = tempfile::tempdir().expect("registry tempdir");
+            let db_path = registry_fixture(&registry_dir, Some(true));
+            let served = json!({"ok": true, "served": "read_page"});
+            spawn_serving_browser(listener, vec![descriptor("read_page", false)], served.clone());
+            let client = Arc::new(
+                BrowserClient::connect_as(
+                    &sock_path,
+                    Duration::from_secs(5),
+                    ControllerKind::MahoBrowserMcp,
+                )
+                .await
+                .expect("client connects"),
+            );
+            let server = server_with_registry(client, &db_path);
+
+            let result = server
+                .dispatch_public(CallToolRequestParams::new("read_page"))
+                .await
+                .expect(
+                    "maho.browser.mcp_public_enabled=true must restore the pre-existing dispatch path",
+                );
+
+            assert_eq!(result.structured_content, Some(served));
+        }
     }
 }

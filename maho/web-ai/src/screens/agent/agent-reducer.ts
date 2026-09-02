@@ -47,6 +47,20 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
       return updateAssistantToolResult(state, action.id, action.name, action.result, action.messageId, action.createdAt);
     case 'AGENT_ARTIFACT':
       return appendAssistantArtifact(state, action.artifact, action.messageId, action.createdAt);
+    case 'INTERACTION_REQUEST':
+      return upsertInteractionRequestBlock(state, {
+        kind: 'interaction_request',
+        id: action.requestId,
+        interactionKind: action.interactionKind,
+        question: action.question,
+        options: action.options,
+        artifactRef: action.artifactRef,
+        initialState: action.initialState,
+        status: 'pending',
+        answerLabel: null,
+      }, action.messageId, action.createdAt);
+    case 'INTERACTION_RESOLVE':
+      return resolveInteractionRequest(state, action.requestId, action.answerLabel);
     case 'AGENT_COMPLETE':
       return completeAssistantTurn(state, action.fullText, action.messageId, action.createdAt);
     case 'AGENT_ERROR':
@@ -243,6 +257,95 @@ function appendAssistantArtifact(
     phase: 'streaming',
     scrollRevision: state.scrollRevision + 1,
   };
+}
+
+/**
+ * Appends an interaction-request approval block. The arrival of a request must
+ * not disturb the turn phase — the run stays in its waiting/streaming phase
+ * while the kernel is suspended. A block with the same request id (replay
+ * redelivery) replaces the existing card instead of duplicating it.
+ */
+function upsertInteractionRequestBlock(
+  state: AgentState,
+  block: Extract<AgentBlock, { kind: 'interaction_request' }>,
+  messageId: string,
+  createdAt: Date,
+): AgentState {
+  const existing = state.messages.some(
+    (message) => message.role === 'assistant'
+      && message.blocks.some((entry) => entry.kind === 'interaction_request' && entry.id === block.id),
+  );
+
+  if (existing) {
+    return {
+      ...state,
+      messages: state.messages.map((message) => {
+        if (message.role !== 'assistant') return message;
+        return {
+          ...message,
+          blocks: message.blocks.map((entry) => {
+            if (entry.kind !== 'interaction_request' || entry.id !== block.id) return entry;
+            // Replay fidelity: a replayed redelivery must never resurrect a
+            // card the user already answered — the local resolution wins.
+            if (entry.status === 'resolved') {
+              return { ...block, status: 'resolved' as const, answerLabel: entry.answerLabel };
+            }
+            return block;
+          }),
+        };
+      }),
+      scrollRevision: state.scrollRevision + 1,
+    };
+  }
+
+  if (state.activeAssistantId !== null) {
+    return {
+      ...state,
+      messages: state.messages.map((message) => {
+        if (message.id === state.activeAssistantId && message.role === 'assistant') {
+          const finalizedBlocks = finalizeLastThinkingBlock(message.blocks, createdAt);
+          return { ...message, blocks: [...finalizedBlocks, block] };
+        }
+        return message;
+      }),
+      scrollRevision: state.scrollRevision + 1,
+    };
+  }
+
+  return {
+    ...state,
+    activeAssistantId: messageId,
+    messages: [
+      ...state.messages,
+      {
+        createdAt,
+        id: messageId,
+        role: 'assistant',
+        blocks: [block],
+      },
+    ],
+    scrollRevision: state.scrollRevision + 1,
+  };
+}
+
+function resolveInteractionRequest(
+  state: AgentState,
+  requestId: string,
+  answerLabel: string,
+): AgentState {
+  let updated = false;
+  const messages = state.messages.map((message) => {
+    if (message.role !== 'assistant') return message;
+    const blocks = message.blocks.map((entry) => {
+      if (entry.kind === 'interaction_request' && entry.id === requestId && entry.status === 'pending') {
+        updated = true;
+        return { ...entry, status: 'resolved' as const, answerLabel };
+      }
+      return entry;
+    });
+    return { ...message, blocks };
+  });
+  return updated ? { ...state, messages } : state;
 }
 
 function updateAssistantToolResult(

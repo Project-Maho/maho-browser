@@ -247,6 +247,11 @@ enum RuntimeEventKind {
   kToolAvailabilityChanged,
   // An output artifact was created by the agent (fs_write).
   kArtifactCreated,
+  // The agent is requesting interactive input: a multiple-choice question
+  // (ask_user_question) or an action confirmation (request_action_confirmation).
+  // Mirrors FFI MahoAgentEventKindV2::kInteractionRequest (kind 8) and carries
+  // an InteractionRequestInfo in |interaction_request|.
+  kInteractionRequest,
 };
 
 // A closed, non-secret category for a credential failure produced by the
@@ -348,6 +353,37 @@ struct ApprovalRequestInfo {
   ToolCallInfo? related_tool_call;
 };
 
+// One selectable option of an interaction request question. Mirrors
+// maho-agent interaction::InteractionOption.
+struct InteractionRequestOption {
+  string id;
+  string label;
+  string? description;
+};
+
+// How the agent requests user interaction (interaction::InteractionKind).
+enum InteractionRequestKind {
+  // ask_user_question — a question with selectable options.
+  kQuestion,
+  // request_action_confirmation — confirm or deny a described side effect.
+  kConfirmation,
+};
+
+// A structured interaction request from the agent. Mirrors maho-agent
+// interaction::InteractionRequest plus the FFI kind-8 wire payload.
+// |request_id| is the reply key for resolve/timeout/cancel.
+struct InteractionRequestInfo {
+  string request_id;
+  InteractionRequestKind kind;
+  // Question prompt (kQuestion) or effect description (kConfirmation).
+  string question;
+  array<InteractionRequestOption> options;
+  // Opaque review artifact reference, when the request carries one.
+  string? artifact_ref;
+  // Kernel-side lifecycle state ("pending" for live requests).
+  string? state;
+};
+
 // A single runtime event in the session event stream.
 struct RuntimeEvent {
   // What kind of event this is.
@@ -375,6 +411,8 @@ struct RuntimeEvent {
   ToolResultInfo? tool_result;
   ApprovalRequestInfo? approval_request;
   ApprovalResultInfo? approval_result;
+  // Set for kInteractionRequest: the structured request payload.
+  InteractionRequestInfo? interaction_request;
   BrowserContextPayload? browser_context;
   // Set for kArtifactCreated: metadata for the created artifact.
   ArtifactInfo? artifact;
@@ -495,6 +533,22 @@ struct AISettingsInfo {
   ReasoningEffort active_reasoning_effort;
   array<AIProviderOption> provider_options;
   array<ReasoningOption> reasoning_options;
+};
+
+// ==========================================================================
+// Session runtime configuration — permission tier and autonomy flags
+// (plan row 4). Display/change surface only: the CapabilityBroker remains
+// the sole enforcement point (plan rows 1/3/5).
+// ==========================================================================
+
+// Per-session agent runtime configuration. Mirrors the broker's
+// CapabilityRequestContext triple. |permission_tier| is one of
+// "read_only", "guard", "full_access"; unknown values fail closed to
+// "guard" broker-side.
+struct RuntimeConfigInfo {
+  string permission_tier;
+  bool final_confirm;
+  bool proactive_mode;
 };
 
 // ==========================================================================
@@ -630,6 +684,16 @@ interface PageHandler {
   // false without changing prefs when any supplied option is invalid.
   SetAISelection(string provider_id, string model_id,
                  ReasoningEffort reasoning_effort) => (bool accepted);
+
+  // Get the active session's runtime configuration (permission tier and
+  // autonomy flags). Returns broker defaults (guard/true/false) when no
+  // session is active.
+  GetRuntimeConfig() => (RuntimeConfigInfo config);
+
+  // Apply a runtime configuration change to the active session. Returns
+  // accepted=false when the handler or runtime is unavailable; the caller
+  // keeps its previous displayed state in that case.
+  SetRuntimeConfig(RuntimeConfigInfo config) => (bool accepted);
 
   // Get the current view mode (sidebar or floating)
   GetViewMode() => (ViewMode mode);

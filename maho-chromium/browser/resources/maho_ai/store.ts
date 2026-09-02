@@ -15,7 +15,14 @@ import {RoutineOperationsClient, RoutineSurfaceClient} from './routine-client.js
 import {
     AI_REASONING_EFFORT,
     DEFAULT_AI_REASONING_OPTIONS,
+    buildRuntimeConfigDispatch,
+    buildInteractionAnswerDispatch,
+    buildInteractionRequestRecord,
     AppState,
+    RuntimeConfigInfo,
+    InteractionAnswerPayload,
+    InteractionRequestInfoPayload,
+    RUNTIME_EVENT_KIND_INTERACTION_REQUEST,
     AIModelOptionPayload,
     AIModelOptionRecord,
     AIProviderOptionPayload,
@@ -44,6 +51,10 @@ import {
     TimelineEntry,
    VoiceStatus,
   } from './types.js';
+import {
+  SUGGESTED_TASK_RUNTIME_CONFIG,
+  type SuggestedTask,
+} from './views/suggestions.js';
 import {notifyListeners} from '../maho_common/react/store_utils.js';
 import type {Listener} from '../maho_common/react/store_utils.js';
 import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
@@ -91,6 +102,35 @@ function supportsAISelection(
     pageHandler: PageHandlerRemote): pageHandler is PageHandlerRemote&AISelectionRemote {
   return 'setAISelection' in pageHandler &&
       typeof pageHandler.setAISelection === 'function';
+}
+
+interface RuntimeConfigRemote {
+  getRuntimeConfig(): Promise<{config: RuntimeConfigInfo}>;
+  setRuntimeConfig(config: RuntimeConfigInfo): Promise<{accepted: boolean}>;
+}
+
+function supportsRuntimeConfig(
+    pageHandler: PageHandlerRemote): pageHandler is PageHandlerRemote&RuntimeConfigRemote {
+  return 'getRuntimeConfig' in pageHandler &&
+      typeof pageHandler.getRuntimeConfig === 'function' &&
+      'setRuntimeConfig' in pageHandler &&
+      typeof pageHandler.setRuntimeConfig === 'function';
+}
+
+// Interaction request answers (plan row 8). The generated mojom bindings gain
+// RespondToInteraction only after the deferred regeneration; the store
+// feature-detects the method the same way as the runtime config surface.
+interface InteractionRemote {
+  respondToInteraction(
+      sessionId: string,
+      requestId: string,
+      answer: InteractionAnswerPayload): Promise<void>;
+}
+
+function supportsInteraction(
+    pageHandler: PageHandlerRemote): pageHandler is PageHandlerRemote&InteractionRemote {
+  return 'respondToInteraction' in pageHandler &&
+      typeof pageHandler.respondToInteraction === 'function';
 }
 
 function normalizeIdentifier(value?: string|null): string|null {
@@ -194,6 +234,8 @@ function cloneState(state: AppState): AppState {
     toolResultsByCallId: {...state.toolResultsByCallId},
     approvalsById: {...state.approvalsById},
     approvalResultsById: {...state.approvalResultsById},
+    interactionsBySessionId: Object.fromEntries(
+        Object.entries(state.interactionsBySessionId).map(([key, value]) => [key, [...value]])),
     selectedInspector: {...state.selectedInspector},
     composer: {...state.composer, attachments: [...state.composer.attachments]},
     voice: {...state.voice},
@@ -215,6 +257,8 @@ function cloneState(state: AppState): AppState {
         Object.entries(state.contextsBySessionId).map(([key, value]) => [key, [...value]])),
     creditBalance: state.creditBalance ? {...state.creditBalance} : null,
     chatBlockedReason: state.chatBlockedReason,
+    runtimeConfig: {...state.runtimeConfig},
+    runtimeConfigSupported: state.runtimeConfigSupported,
   };
 }
 
@@ -271,6 +315,14 @@ export class MahoAiStore {
             import('./routine-client.js').RoutinePageHandler,
         callbackRouter);
     this.bindCallbacks();
+    // Feature-detect the runtime config surface (plan row 4): the generated
+    // mojom bindings expose it once the C++ handler lands; standalone/dev
+    // handlers without it keep the controls hidden.
+    if (supportsRuntimeConfig(this.pageHandler)) {
+      this.patch(state => {
+        state.runtimeConfigSupported = true;
+      });
+    }
   }
 
   setComposerDraftPersistenceForTesting(
@@ -375,6 +427,10 @@ export class MahoAiStore {
         console.warn('[maho-ai] initial loadAiExtensibility failed', err);
       }
 
+      void this.refreshRuntimeConfig().catch(err => {
+        console.warn('[maho-ai] initial runtime config fetch failed', err);
+      });
+
       void this.fetchCreditBalance().catch(err => {
         console.warn('[maho-ai] initial credit balance fetch failed', err);
       });
@@ -461,6 +517,16 @@ export class MahoAiStore {
   setDeveloperMode(enabled: boolean) {
     this.patch(state => {
       state.developerMode = enabled;
+    });
+  }
+
+  /**
+   * Mirrors the backend SuggestionSettings enabled flag (plan row 12). When
+   * disabled, the panel renders zero idle suggested-task cards.
+   */
+  setSuggestionsEnabled(enabled: boolean) {
+    this.patch(state => {
+      state.suggestionsEnabled = enabled;
     });
   }
 
@@ -1087,6 +1153,74 @@ export class MahoAiStore {
   }
 
   /**
+   * Starts a suggested task from an idle panel card (plan row 12): creates a
+   * new session, applies the guard/final_confirm/proactive flag set to it via
+   * the mojom SetRuntimeConfig path (plan rows 4/6), then submits the
+   * suggestion's prompt. If the flag dispatch is rejected the task is not
+   * started (the session is left empty and current).
+   */
+  async startSuggestedTask(suggestion: SuggestedTask): Promise<void> {
+    if (this.submissionInFlight) {
+      return;
+    }
+
+    this.submissionInFlight = true;
+    let sessionId: string|null = null;
+    try {
+      const mode = this.state.developerMode ?
+          InteractionMode.kDeveloper :
+          InteractionMode.kAssistant;
+      const {session} = await this.pageHandler.startSession(null, mode);
+      sessionId = session.sessionId;
+
+      this.patch(state => {
+        state.sessionsById[session.sessionId] = session;
+        state.sessionOrder = sortSessionIds(state.sessionsById);
+        state.currentSessionId = session.sessionId;
+        state.selectedInspector = {kind: 'session', id: session.sessionId};
+        state.turnPendingBySessionId[session.sessionId] = true;
+        state.eventsBySessionId[session.sessionId] = [];
+      });
+
+      await this.resumeSession(session.sessionId, false, false);
+
+      // SetRuntimeConfig applies to the active session, so the flag set is
+      // dispatched after the new session becomes current. A rejection means
+      // the broker did not take the guard flags — do not run the task.
+      const accepted = await this.setRuntimeConfig(SUGGESTED_TASK_RUNTIME_CONFIG);
+      if (!accepted) {
+        this.patch(state => {
+          state.turnPendingBySessionId[session.sessionId] = false;
+        });
+        console.warn(
+            '[maho-ai] Suggested task flags rejected; task not started');
+        return;
+      }
+
+      const request: SubmissionRequest = {
+        prompt: suggestion.prompt,
+        attachments: null,
+        attachBrowserContext: true,
+        mode,
+        intent: ChatIntent.kFreeform,
+        previousBlockedReason: this.state.chatBlockedReason,
+        isQuickAction: false,
+      };
+      await this.submitCapturedRequest(session.sessionId, request);
+    } catch (error) {
+      const failedSessionId = sessionId;
+      if (failedSessionId) {
+        this.patch(state => {
+          state.turnPendingBySessionId[failedSessionId] = false;
+        });
+      }
+      throw error;
+    } finally {
+      this.submissionInFlight = false;
+    }
+  }
+
+  /**
    * Resubmits the most recent user prompt of the active session so the user can
    * ask for a different answer without retyping it. The composer is untouched:
    * the prompt is recovered from the session's own event log.
@@ -1292,6 +1426,55 @@ export class MahoAiStore {
     await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
   }
 
+  /**
+   * Answers an agent interaction request (plan row 8): confirms or denies an
+   * action confirmation, or answers a question with a selected option or free
+   * text. Patches the card state optimistically, then dispatches the
+   * mojom-shaped RespondToInteraction call; reverts on failure. Returns
+   * whether the answer was dispatched.
+   */
+  async respondToInteraction(
+      requestId: string, answer: InteractionAnswerPayload): Promise<boolean> {
+    if (!supportsInteraction(this.pageHandler)) {
+      console.warn('[maho-ai] RespondToInteraction is unavailable on this page handler');
+      return false;
+    }
+
+    const sessionId = this.state.currentSessionId;
+    const session = sessionId ? this.state.sessionsById[sessionId] : null;
+    if (!sessionId || session?.isReadOnly) {
+      return false;
+    }
+
+    const target = (this.state.interactionsBySessionId[sessionId] || [])
+        .find(record => record.requestId === requestId);
+    if (!target || target.state !== 'pending') {
+      return false;
+    }
+
+    const dispatch = buildInteractionAnswerDispatch(answer);
+    const resolvedState = dispatch.answerKind === 'denied' ? 'denied' : 'resolved';
+    this.patch(state => {
+      state.interactionsBySessionId[sessionId] =
+          (state.interactionsBySessionId[sessionId] || []).map(record =>
+              record.requestId === requestId ? {...record, state: resolvedState} : record);
+    });
+
+    try {
+      await this.pageHandler.respondToInteraction(sessionId, requestId, dispatch);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[maho-ai] RespondToInteraction failed', message);
+      this.patch(state => {
+        state.interactionsBySessionId[sessionId] =
+            (state.interactionsBySessionId[sessionId] || []).map(record =>
+                record.requestId === requestId ? {...record, state: 'pending'} : record);
+      });
+      return false;
+    }
+  }
+
   async closePanel(): Promise<void> {
     await this.pageHandler.closePanel();
   }
@@ -1430,6 +1613,61 @@ export class MahoAiStore {
     }
   }
 
+  async refreshRuntimeConfig(): Promise<void> {
+    if (!supportsRuntimeConfig(this.pageHandler)) {
+      this.patch(state => {
+        state.runtimeConfigSupported = false;
+      });
+      return;
+    }
+    try {
+      const {config} = await this.pageHandler.getRuntimeConfig();
+      this.patch(state => {
+        state.runtimeConfigSupported = true;
+        state.runtimeConfig = buildRuntimeConfigDispatch(config);
+      });
+    } catch (err) {
+      console.warn('[maho-ai] refreshRuntimeConfig failed', err);
+    }
+  }
+
+  /**
+   * Applies a runtime config change (permission tier / final_confirm /
+   * proactive_mode) to the active session. Patches optimistically, then
+   * dispatches the mojom-shaped SetRuntimeConfig call; reverts on rejection
+   * or transport failure. Returns whether the change was accepted.
+   */
+  async setRuntimeConfig(change: Partial<RuntimeConfigInfo>): Promise<boolean> {
+    if (!supportsRuntimeConfig(this.pageHandler)) {
+      console.warn('[maho-ai] SetRuntimeConfig is unavailable on this page handler');
+      return false;
+    }
+
+    const previous = this.state.runtimeConfig;
+    const next = buildRuntimeConfigDispatch({...previous, ...change});
+    this.patch(state => {
+      state.runtimeConfig = next;
+    });
+
+    try {
+      const {accepted} = await this.pageHandler.setRuntimeConfig(next);
+      if (!accepted) {
+        this.patch(state => {
+          state.runtimeConfig = previous;
+        });
+        return false;
+      }
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[maho-ai] SetRuntimeConfig failed', message);
+      this.patch(state => {
+        state.runtimeConfig = previous;
+      });
+      return false;
+    }
+  }
+
   private applyAISettings(info: AISettingsInfoPayload): void {
     const aiSettings = normalizeAISettings(info);
     this.patch(state => {
@@ -1495,6 +1733,20 @@ export class MahoAiStore {
       state.approvalResultsById[event.approvalResult.approvalId] = event.approvalResult;
       if (isSelectedSession) {
         state.selectedInspector = {kind: 'approval', id: event.approvalResult.approvalId};
+      }
+    }
+    if (event.kind === RUNTIME_EVENT_KIND_INTERACTION_REQUEST) {
+      // The generated mojom bindings do not carry interactionRequest until the
+      // deferred regeneration; read it defensively off the wire event.
+      const payload = (event as Partial<RuntimeEvent> &
+          {interactionRequest?: InteractionRequestInfoPayload}).interactionRequest;
+      if (payload?.requestId) {
+        const record = buildInteractionRequestRecord(payload);
+        const existing = state.interactionsBySessionId[sessionId] || [];
+        // De-dupe by requestId so history replay and later lifecycle updates
+        // (expired/cancelled) replace the stored record in arrival order.
+        const filtered = existing.filter(entry => entry.requestId !== record.requestId);
+        state.interactionsBySessionId[sessionId] = [...filtered, record];
       }
     }
     if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {

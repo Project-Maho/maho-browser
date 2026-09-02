@@ -132,6 +132,17 @@ struct MahoAiRuntimeEvent {
   std::optional<uint32_t> queue_depth;
 };
 
+// Session-scoped runtime configuration triple (plan row-1 plumbing). Mirrors
+// the broker's CapabilityRequestContext fields and the maho-ffi
+// AgentRuntimeConfig defaults: tier "guard", final_confirm true,
+// proactive_mode false. |permission_tier| is one of "read_only", "guard",
+// "full_access"; unknown values fail closed to "guard" broker-side.
+struct MahoAiRuntimeConfig {
+  std::string permission_tier = "guard";
+  bool final_confirm = true;
+  bool proactive_mode = false;
+};
+
 // Abstract runtime adapter interface. Each concrete adapter owns its own
 // connection to the underlying runtime (e.g., the maho-agent FFI bridge)
 // and translates runtime-specific events into the common
@@ -177,6 +188,14 @@ class MahoAiRuntimeAdapter {
 
   virtual void RespondToInteraction(const std::string& interaction_id,
                                     const std::string& answer_json);
+
+  // Session runtime configuration (plan row-1 plumbing; enforcement stays at
+  // the CapabilityBroker). Defaults report "unsupported": adapters without an
+  // FFI session keep the WebUI's runtime-config feature detection off.
+  // GetRuntimeConfig returns false when unsupported; the caller then renders
+  // the broker defaults (guard / true / false).
+  virtual bool GetRuntimeConfig(MahoAiRuntimeConfig* out_config) const;
+  virtual bool SetRuntimeConfig(const MahoAiRuntimeConfig& config);
 
   virtual bool ReplayAfter(const std::string& run_id,
                            uint64_t after_seq,

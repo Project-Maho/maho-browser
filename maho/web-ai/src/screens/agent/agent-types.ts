@@ -1,4 +1,4 @@
-import type { AgentHandle, ArtifactInfo } from '../../bridge/types';
+import type { AgentHandle, AgentInteractionRequestOption, ArtifactInfo } from '../../bridge/types';
 import type { CredentialErrorCode } from '../credential-error';
 
 export type AgentPhase = 'idle' | 'creating' | 'streaming' | 'complete' | 'cancelled' | 'error';
@@ -31,6 +31,17 @@ export type AgentBlock =
       readonly kind: 'artifact';
       readonly id: string;
       readonly artifact: ArtifactInfo;
+    }
+  | {
+      readonly kind: 'interaction_request';
+      readonly id: string;
+      readonly interactionKind: 'question' | 'confirmation';
+      readonly question: string;
+      readonly options: readonly AgentInteractionRequestOption[];
+      readonly artifactRef: string | null;
+      readonly initialState: string | null;
+      readonly status: 'pending' | 'resolved';
+      readonly answerLabel: string | null;
     };
 
 export type AgentMessage =
@@ -74,6 +85,18 @@ export type AgentAction =
   | { readonly type: 'AGENT_TOOL_CALL'; readonly id: string; readonly name: string; readonly args: string; readonly messageId: string; readonly createdAt: Date }
   | { readonly type: 'AGENT_TOOL_RESULT'; readonly id: string; readonly name: string; readonly result: string; readonly messageId: string; readonly createdAt: Date }
   | { readonly type: 'AGENT_ARTIFACT'; readonly artifact: ArtifactInfo; readonly messageId: string; readonly createdAt: Date }
+  | {
+      readonly type: 'INTERACTION_REQUEST';
+      readonly requestId: string;
+      readonly interactionKind: 'question' | 'confirmation';
+      readonly question: string;
+      readonly options: readonly AgentInteractionRequestOption[];
+      readonly artifactRef: string | null;
+      readonly initialState: string | null;
+      readonly messageId: string;
+      readonly createdAt: Date;
+    }
+  | { readonly type: 'INTERACTION_RESOLVE'; readonly requestId: string; readonly answerLabel: string }
   | { readonly type: 'AGENT_COMPLETE'; readonly fullText: string; readonly messageId: string; readonly createdAt: Date }
   | { readonly type: 'AGENT_ERROR'; readonly message: string }
   | { readonly type: 'CANCEL' }

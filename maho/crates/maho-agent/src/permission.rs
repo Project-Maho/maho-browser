@@ -41,6 +41,152 @@ pub const CREDENTIAL_TYPING_APPROVAL_REQUIRED: &str =
     "credential_typing_approval_required";
 pub const CREDENTIAL_TYPING_DENIED: &str = "credential_typing_denied";
 
+// Fixed denial reason codes emitted by the runtime permission-tier and
+// final-confirmation gates (rows 3/5 wire the enforcement; this row only
+// defines the codes). These are machine-consumed public contract strings, so
+// the exact snake_case spelling is load-bearing and must stay in lockstep with
+// any C++ mirror when that gate is added.
+pub const FINAL_CONFIRM_REQUIRED: &str = "final_confirm_required";
+pub const PERMISSION_TIER_DENIED_WRITE: &str = "permission_tier_denied_write";
+pub const PERMISSION_TIER_DENIED_READ: &str = "permission_tier_denied_read";
+pub const PERMISSION_TIER_ROUTINE_EXCEEDS_SESSION: &str =
+    "permission_tier_routine_exceeds_session";
+
+// Redacts the argument payload attached to a runtime-tier or final-confirmation
+// denial. The raw arguments routinely carry file paths and form contents that
+// must never be echoed back on a denial, so — exactly like the mail-tool
+// argument path — the whole blob collapses to a fixed marker and fails closed
+// on malformed input.
+pub fn redact_denial_arguments(_raw: &str) -> String {
+    // JSON string literal, byte-identical to json!("[REDACTED]").to_string()
+    // without pulling in the macro's internal unwrap.
+    "\"[REDACTED]\"".to_string()
+}
+
+// ---- Runtime permission-tier policy mirror (plan row 3) -------------------
+//
+// Rust-side mirror of the C++ MahoCapabilityBroker::Evaluate tier gate. The
+// broker is the security boundary; this mirror exists so the internal-agent
+// decorator can fail before a capability ever crosses into the browser with
+// the exact same tier policy. The two MUST stay in lockstep:
+//
+//   read_only    -> writes denied, out-of-whitelist reads denied
+//   guard        -> free inside whitelist roots, ask-gate outside
+//   full_access  -> allowed (structural sandbox/origin/lease still apply)
+
+/// Canonical session permission tiers, ordered weakest to strongest. The
+/// derived Ord is load-bearing: routine admission takes
+/// min(session, routine) by this ordering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RuntimeTier {
+    ReadOnly,
+    Guard,
+    FullAccess,
+}
+
+impl RuntimeTier {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Guard => "guard",
+            Self::FullAccess => "full_access",
+        }
+    }
+}
+
+/// Outcome of the tier gate for one file-scoped request. `Allow` means the
+/// tier adds no restriction of its own; descriptor-level approval, lease,
+/// origin, and presence obligations are orthogonal and still apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TierFileDecision {
+    Allow,
+    RequireApproval,
+    Deny(&'static str),
+}
+
+/// Parses a raw runtime-config tier string into its canonical form, failing
+/// closed to [`RuntimeTier::Guard`] for empty or unknown input. Must stay
+/// byte-compatible with the C++ `ParseRuntimeConfigTier` in
+/// maho_capability_broker.cc and with the maho-ffi `normalize_tier`.
+pub fn parse_runtime_tier(raw: &str) -> RuntimeTier {
+    match raw {
+        "read_only" => RuntimeTier::ReadOnly,
+        "guard" => RuntimeTier::Guard,
+        "full_access" => RuntimeTier::FullAccess,
+        // Fail closed to the session default tier.
+        _ => RuntimeTier::Guard,
+    }
+}
+
+/// Component-boundary whitelist containment for the runtime-tier file gate.
+/// Roots are absolute directory prefixes (account dirs, Downloads, Documents,
+/// session dirs) supplied by the session. Fails closed: an empty path, a
+/// relative path, an empty root list, or a sibling-prefix collision
+/// (`/a/bc` vs root `/a/b`) is outside the whitelist.
+pub fn fs_path_inside_whitelist(path: &str, whitelist_roots: &[&str]) -> bool {
+    if path.is_empty() || !path.starts_with('/') {
+        return false;
+    }
+    whitelist_roots.iter().any(|root| {
+        let root = root.trim_end_matches('/');
+        if root.is_empty() || !root.starts_with('/') {
+            return false;
+        }
+        path == root || path.starts_with(&format!("{root}/"))
+    })
+}
+
+/// Tier gate for one file-scoped request (the Rust mirror of the broker's
+/// file/write branch). `path` is the local filesystem path the capability
+/// reads or writes; an empty path means the request is not file-scoped and
+/// the gate is inert. `is_write` mirrors the descriptor mutability class.
+pub fn authorize_tier_fs_request(
+    raw_tier: &str,
+    is_write: bool,
+    path: &str,
+    whitelist_roots: &[&str],
+) -> TierFileDecision {
+    // Not a file-scoped request: the tier file gate is inert and structural
+    // descriptor obligations elsewhere remain authoritative.
+    if path.is_empty() {
+        return TierFileDecision::Allow;
+    }
+    match parse_runtime_tier(raw_tier) {
+        // Full access removes only the tier ask, never the structural
+        // sandbox/origin/lease checks (enforced by the broker regardless).
+        RuntimeTier::FullAccess => TierFileDecision::Allow,
+        RuntimeTier::ReadOnly => {
+            if is_write {
+                TierFileDecision::Deny(PERMISSION_TIER_DENIED_WRITE)
+            } else if fs_path_inside_whitelist(path, whitelist_roots) {
+                TierFileDecision::Allow
+            } else {
+                TierFileDecision::Deny(PERMISSION_TIER_DENIED_READ)
+            }
+        }
+        RuntimeTier::Guard => {
+            if fs_path_inside_whitelist(path, whitelist_roots) {
+                TierFileDecision::Allow
+            } else {
+                TierFileDecision::RequireApproval
+            }
+        }
+    }
+}
+
+/// Routine admission clamp: a routine can never run with a tier above the
+/// session's rank. Returns min(session, routine) by [`RuntimeTier`] ordering;
+/// raw strings are parsed fail-closed like every other tier input.
+pub fn clamp_routine_tier(session_raw: &str, routine_raw: &str) -> RuntimeTier {
+    let session = parse_runtime_tier(session_raw);
+    let routine = parse_runtime_tier(routine_raw);
+    if routine > session {
+        session
+    } else {
+        routine
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialTypingAuthorizationAction {
     Allow,
@@ -386,6 +532,95 @@ pub fn authorize_action_consequence(
     }
 }
 
+/// Outcome of the final-confirmation gate (plan row 5) for one request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinalConfirmDecision {
+    /// Not gated: the request is either outside the consequence scope or
+    /// resolves to a free class (read/navigate/draft/fill-before-submit).
+    Allow,
+    /// Externally visible or irreversible: a user confirmation must be
+    /// obtained before commit. The payload is the fixed public reason code.
+    RequireApproval(&'static str),
+}
+
+/// Final-confirmation gate for one capability request (plan row 5; the Rust
+/// mirror of the broker's consequence gate). Under `final_confirm=true` a
+/// request that is externally visible or irreversible must obtain a user
+/// approval before it commits, covering BOTH classification paths:
+///
+///   (a) browser-action consequences resolved by
+///       [`classify_action_consequence`] — every class except Ordinary and
+///       NewOrigin gates, and a missing `validated_action_context` resolves
+///       to Unknown, which fails closed to gated;
+///   (b) mail write/account mutations (`mail_send`, `mail_queue_email`, ...)
+///       and credential typing (`allow_credentials` requests), which never
+///       reach the browser-action classifier and would silently bypass (a).
+///
+/// Read/navigate/draft/fill-before-submit stay free. `final_confirm=false`
+/// leaves today's behavior untouched: the gate is inert and never grants —
+/// mail writes keep their unconditional typed approval in
+/// [`authorize_mail_tool`], and every structural obligation elsewhere still
+/// applies. The approval ask itself routes through the existing approval
+/// handshake; this function only decides whether one is owed.
+pub fn authorize_final_confirm(
+    tool_name: &str,
+    raw_args: &str,
+    final_confirm: bool,
+) -> FinalConfirmDecision {
+    if !final_confirm {
+        return FinalConfirmDecision::Allow;
+    }
+    let raw_name = tool_name
+        .rsplit_once('/')
+        .map_or(tool_name, |(_, name)| name);
+    // Path (b): mail tools are invisible to the browser-action classifier;
+    // their write/account-mutation class is the externally visible one here.
+    if let Some(MailToolClass::WriteAccount) = classify_mail_tool(raw_name) {
+        return FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED);
+    }
+    // Path (b): credential typing. Same contract as
+    // authorize_credential_typing — an allow_credentials request must never
+    // be its own evidence of approval.
+    if matches!(raw_name, "browser_type" | "input.type") {
+        let requests_credentials = serde_json::from_str::<serde_json::Value>(raw_args)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("allow_credentials")
+                    .and_then(serde_json::Value::as_bool)
+            })
+            .unwrap_or(false);
+        if authorize_credential_typing(requests_credentials)
+            != CredentialTypingAuthorizationAction::Allow
+        {
+            return FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED);
+        }
+    }
+    // Path (a): same request scope as authorize_action_consequence — tools
+    // outside it carry no consequence class and stay free.
+    let applies = canonical_action_contract(raw_name)
+        .is_some_and(|contract| contract.kind == BrowserToolKind::Action)
+        || matches!(
+            raw_name,
+            "vault_request_credential_use" | "vault_fill_credential" | "vault_fill_totp"
+        )
+        || raw_name.contains("upload")
+        || raw_name.contains("download")
+        || raw_name.contains("share");
+    if !applies {
+        return FinalConfirmDecision::Allow;
+    }
+    match classify_action_consequence(tool_name, raw_args) {
+        // Ordinary passes; NewOrigin (navigation) is reversible and stays
+        // free per the row contract. Unknown — including the missing
+        // validated-context case — fails closed to gated.
+        ActionConsequence::Ordinary | ActionConsequence::NewOrigin => {
+            FinalConfirmDecision::Allow
+        }
+        _ => FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED),
+    }
+}
+
 pub type PermissionCallback = Box<
     dyn Fn(PermissionRequest) -> Pin<Box<dyn Future<Output = PermissionDecision> + Send>>
         + Send
@@ -644,6 +879,235 @@ mod tests {
             authorize_action_consequence("browser_scroll", ordinary, ApprovalPolicy::DenyAll),
             ConsequenceApprovalAction::Deny
         );
+    }
+
+    #[test]
+    fn runtime_tier_denial_codes_are_stable_public_contract_strings() {
+        // Machine-consumed public contract strings. Exact snake_case spelling is
+        // load-bearing; mirror any change on the C++ side when it is wired.
+        assert_eq!(FINAL_CONFIRM_REQUIRED, "final_confirm_required");
+        assert_eq!(PERMISSION_TIER_DENIED_WRITE, "permission_tier_denied_write");
+        assert_eq!(PERMISSION_TIER_DENIED_READ, "permission_tier_denied_read");
+        assert_eq!(
+            PERMISSION_TIER_ROUTINE_EXCEEDS_SESSION,
+            "permission_tier_routine_exceeds_session"
+        );
+    }
+
+    #[test]
+    fn tier_denial_payload_redacts_file_path_and_form_contents() {
+        let path = "/Users/victim/Documents/tax-return-2025.pdf";
+        let form = "4111 1111 1111 1111";
+        let payload = redact_denial_arguments(&format!(
+            r#"{{"path":"{path}","form":{{"card_number":"{form}"}}}}"#
+        ));
+        assert!(!payload.contains(path), "raw path leaked: {payload}");
+        assert!(!payload.contains(form), "form content leaked: {payload}");
+        assert!(payload.contains("[REDACTED]"), "missing marker: {payload}");
+    }
+
+    #[test]
+    fn tier_denial_payload_fails_closed_on_non_json_arguments() {
+        let path = "/private/etc/master.passwd";
+        let payload = redact_denial_arguments(&format!("not-json path={path}"));
+        assert!(!payload.contains(path), "raw path leaked: {payload}");
+        assert!(payload.contains("[REDACTED]"), "missing marker: {payload}");
+    }
+
+    #[test]
+    fn runtime_tier_read_only_denies_writes_and_out_of_whitelist_reads() {
+        let roots = ["/Users/u/Downloads", "/Users/u/MahoSessions/s-1"];
+        // Writes are denied everywhere, even inside the whitelist, and an
+        // approval token can never rescue a tier denial.
+        assert_eq!(
+            authorize_tier_fs_request("read_only", true, "/Users/u/Downloads/a.pdf", &roots),
+            TierFileDecision::Deny(PERMISSION_TIER_DENIED_WRITE)
+        );
+        assert_eq!(
+            authorize_tier_fs_request("read_only", true, "/etc/passwd", &roots),
+            TierFileDecision::Deny(PERMISSION_TIER_DENIED_WRITE)
+        );
+        // Out-of-whitelist reads are denied...
+        assert_eq!(
+            authorize_tier_fs_request("read_only", false, "/etc/passwd", &roots),
+            TierFileDecision::Deny(PERMISSION_TIER_DENIED_READ)
+        );
+        // ...while in-whitelist reads pass the tier gate.
+        assert_eq!(
+            authorize_tier_fs_request("read_only", false, "/Users/u/Downloads/a.pdf", &roots),
+            TierFileDecision::Allow
+        );
+    }
+
+    #[test]
+    fn runtime_tier_guard_is_free_inside_whitelist_and_ask_gates_outside() {
+        let roots = ["/Users/u/Downloads", "/Users/u/Documents"];
+        // Inside the whitelist the tier gate adds nothing.
+        assert_eq!(
+            authorize_tier_fs_request("guard", false, "/Users/u/Downloads/report.pdf", &roots),
+            TierFileDecision::Allow
+        );
+        assert_eq!(
+            authorize_tier_fs_request("guard", true, "/Users/u/Documents/notes.txt", &roots),
+            TierFileDecision::Allow
+        );
+        // Outside the whitelist every file operation ask-gates.
+        assert_eq!(
+            authorize_tier_fs_request("guard", true, "/etc/passwd", &roots),
+            TierFileDecision::RequireApproval
+        );
+        assert_eq!(
+            authorize_tier_fs_request("guard", false, "/Users/u/other/x", &roots),
+            TierFileDecision::RequireApproval
+        );
+        // An empty path is not file-scoped: the gate is inert (mirrors the
+        // C++ fs_path contract; structural descriptor gates stay in charge).
+        assert_eq!(
+            authorize_tier_fs_request("guard", true, "", &roots),
+            TierFileDecision::Allow
+        );
+    }
+
+    #[test]
+    fn routine_tier_clamps_to_session_rank_at_admission() {
+        assert_eq!(clamp_routine_tier("read_only", "full_access"), RuntimeTier::ReadOnly);
+        assert_eq!(clamp_routine_tier("guard", "full_access"), RuntimeTier::Guard);
+        assert_eq!(clamp_routine_tier("guard", "read_only"), RuntimeTier::ReadOnly);
+        assert_eq!(clamp_routine_tier("full_access", "full_access"), RuntimeTier::FullAccess);
+        // Unknown inputs fail closed to guard on both sides.
+        assert_eq!(clamp_routine_tier("full_access", "root"), RuntimeTier::Guard);
+        assert_eq!(clamp_routine_tier("bogus", "guard"), RuntimeTier::Guard);
+    }
+
+    #[test]
+    fn runtime_tier_strings_reflect_broker_gate_contract() {
+        // Reflection contract owned by this row: the exact tier strings row 1
+        // stores on the session runtime_config (and the C++
+        // ParseRuntimeConfigTier accepts) must round-trip and produce the
+        // DESIGN table outcome for the same file-scoped request.
+        for (raw, expected) in [
+            ("read_only", RuntimeTier::ReadOnly),
+            ("guard", RuntimeTier::Guard),
+            ("full_access", RuntimeTier::FullAccess),
+        ] {
+            assert_eq!(parse_runtime_tier(raw), expected);
+            assert_eq!(parse_runtime_tier(raw).as_str(), raw);
+        }
+        // Unknown / empty fail closed to guard, mirroring the broker.
+        assert_eq!(parse_runtime_tier(""), RuntimeTier::Guard);
+        assert_eq!(parse_runtime_tier("GUARD"), RuntimeTier::Guard);
+        // Full-access removes only the tier ask, never the structural gates:
+        // the mirror grants the tier dimension on the same request the C++
+        // broker permits, and the ask-gate dimension matches guard exactly.
+        let roots = ["/Users/u/Downloads"];
+        assert_eq!(
+            authorize_tier_fs_request("full_access", true, "/etc/passwd", &roots),
+            TierFileDecision::Allow
+        );
+        assert_eq!(
+            authorize_tier_fs_request("guard", true, "/etc/passwd", &roots),
+            TierFileDecision::RequireApproval
+        );
+    }
+
+    #[test]
+    fn final_confirm_gate_gates_submit_classified_actions_under_default_flag() {
+        // A browser-minted validated context classifying the click as a final
+        // form submit is externally visible: gated under final_confirm=true
+        // (the session default).
+        assert_eq!(
+            authorize_final_confirm(
+                "browser_click",
+                r#"{"ref":7,"validated_action_context":{"validated":true,"consequence":"submit"}}"#,
+                true,
+            ),
+            FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED)
+        );
+    }
+
+    #[test]
+    fn final_confirm_gate_keeps_read_and_out_of_scope_actions_free() {
+        // Read-class browser actions stay free under the default flag...
+        assert_eq!(
+            authorize_final_confirm("browser_scroll", r#"{"direction":"down"}"#, true),
+            FinalConfirmDecision::Allow
+        );
+        assert_eq!(
+            authorize_final_confirm("browser_hover", r#"{"ref":1}"#, true),
+            FinalConfirmDecision::Allow
+        );
+        // ...as do tools outside the consequence scope entirely.
+        assert_eq!(
+            authorize_final_confirm("web_search", r#"{"query":"maho"}"#, true),
+            FinalConfirmDecision::Allow
+        );
+    }
+
+    #[test]
+    fn final_confirm_gate_gates_mail_send_and_credential_typing() {
+        // Mail writes are NOT covered by the browser-action classification
+        // path; missing them here would be a silent bypass of the gate.
+        for tool in ["mail_send", "mail_queue_email", "mail_add_account"] {
+            assert_eq!(
+                authorize_final_confirm(tool, r#"{"to":"a@example.com"}"#, true),
+                FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED),
+                "{tool}"
+            );
+        }
+        // Credential typing rides the same gate...
+        assert_eq!(
+            authorize_final_confirm(
+                "browser_type",
+                r#"{"ref":8,"allow_credentials":true}"#,
+                true,
+            ),
+            FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED)
+        );
+        // ...while mail reads and validated fill-before-submit stay free.
+        assert_eq!(
+            authorize_final_confirm("mail_get_email", r#"{"email_id":"1"}"#, true),
+            FinalConfirmDecision::Allow
+        );
+        assert_eq!(
+            authorize_final_confirm(
+                "browser_type",
+                r#"{"ref":8,"text":"hi","validated_action_context":{"validated":true,"consequence":"ordinary"}}"#,
+                true,
+            ),
+            FinalConfirmDecision::Allow
+        );
+    }
+
+    #[test]
+    fn final_confirm_gate_fails_closed_on_missing_context_and_is_inert_when_disabled() {
+        // A missing validated_action_context on an action tool resolves to
+        // Unknown — the gate must fail closed instead of auto-passing.
+        assert_eq!(
+            classify_action_consequence("browser_click", r#"{"ref":9}"#),
+            ActionConsequence::Unknown
+        );
+        assert_eq!(
+            authorize_final_confirm("browser_click", r#"{"ref":9}"#, true),
+            FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED)
+        );
+        // final_confirm=false preserves today's behavior exactly: the gate
+        // is inert for every class and adds no new gating.
+        for (tool, args) in [
+            ("browser_click", r#"{"ref":9}"#),
+            (
+                "browser_click",
+                r#"{"ref":9,"validated_action_context":{"validated":true,"consequence":"submit"}}"#,
+            ),
+            ("mail_send", r#"{"to":"a@example.com"}"#),
+            ("browser_type", r#"{"ref":8,"allow_credentials":true}"#),
+            ("browser_scroll", r#"{"direction":"down"}"#),
+        ] {
+            assert_eq!(
+                authorize_final_confirm(tool, args, false),
+                FinalConfirmDecision::Allow,
+                "{tool}"
+            );
+        }
     }
 
     #[test]

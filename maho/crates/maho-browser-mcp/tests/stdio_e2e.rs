@@ -15,6 +15,52 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 
+/// Process-global test state: `MAHO_DB_PATH` mutations AND the process-wide
+/// SQLCipher key injection performed by fixture seeding — `set_sqlcipher_key`
+/// + `SqliteStorage::open` pairs must never interleave between tests, or a
+/// fixture DB gets encrypted with another test's key (same pattern as
+/// `paths.rs` tests).
+static GLOBAL_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Registry settings key that re-enables public dispatch — must stay in sync
+/// with `maho_browser_mcp::settings::MCP_PUBLIC_ENABLED_KEY`.
+const MCP_PUBLIC_ENABLED_KEY: &str = "maho.browser.mcp_public_enabled";
+
+/// Materializes a real registry DB with the public-MCP toggle seeded, the
+/// same way an operator would enable it. Returns the DB path for
+/// `MAHO_DB_PATH`.
+fn registry_db_fixture(enabled: bool) -> PathBuf {
+    let dir = tempfile::tempdir().expect("registry temporary directory creates");
+    let db_path = dir.keep().join("registry").join("maho.db");
+    std::fs::create_dir_all(db_path.parent().unwrap()).expect("registry dir creates");
+    let _guard = GLOBAL_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut key_bytes = [0u8; 16];
+    let mut status = 0;
+    assert!(
+        maho_core::oscrypt::derive_key(
+            &db_path
+                .parent()
+                .unwrap()
+                .join("maho_storage.key")
+                .to_string_lossy(),
+            &mut key_bytes,
+            &mut status,
+        ),
+        "registry key derives"
+    );
+    let hex_key: String = key_bytes.iter().map(|byte| format!("{byte:02X}")).collect();
+    maho_storage::sqlite::set_sqlcipher_key(&hex_key).expect("sqlcipher key sets");
+    let storage = maho_storage::sqlite::SqliteStorage::open(&db_path.to_string_lossy())
+        .expect("registry DB opens");
+    storage
+        .set_setting(
+            MCP_PUBLIC_ENABLED_KEY,
+            if enabled { "true" } else { "false" },
+        )
+        .expect("toggle seeds");
+    db_path
+}
+
 struct FakeBrowser {
     path: PathBuf,
     calls: Arc<Mutex<Vec<String>>>,
@@ -225,9 +271,13 @@ where
 #[tokio::test]
 async fn real_binary_lists_reads_and_denies_mutation_without_broker() {
     let browser = FakeBrowser::start().await;
+    // The dispatch surface is frozen by default (row 15); this test pins the
+    // pre-existing full-dispatch path with the toggle explicitly enabled.
+    let registry_db = registry_db_fixture(true);
     let binary = env!("CARGO_BIN_EXE_maho-browser-mcp");
     let mut child = tokio::process::Command::new(binary)
         .env("MAHO_MCP_SOCKET_PATH", &browser.path)
+        .env("MAHO_DB_PATH", &registry_db)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -271,6 +321,72 @@ async fn real_binary_lists_reads_and_denies_mutation_without_broker() {
     child.kill().await.expect("real stdio binary stops");
 }
 
+/// Row 15 freeze contract over the real binary: with no registry DB at all
+/// (fresh-install default), tools/list still serves the browser-owned
+/// catalog, but every tools/call refuses fail-closed with the existing
+/// broker-unavailable error shape.
+#[tokio::test]
+async fn default_frozen_binary_lists_but_refuses_dispatch() {
+    let browser = FakeBrowser::start().await;
+    // A registry path that cannot exist: the default must fail closed even
+    // when no DB has ever been created.
+    let absent_db = std::env::temp_dir().join("maho-gate-e2e-absent").join("maho.db");
+    let binary = env!("CARGO_BIN_EXE_maho-browser-mcp");
+    let mut child = tokio::process::Command::new(binary)
+        .env("MAHO_MCP_SOCKET_PATH", &browser.path)
+        .env("MAHO_DB_PATH", &absent_db)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("real stdio binary spawns");
+    let mut writer = child.stdin.take().expect("child stdin");
+    let mut reader = BufReader::new(child.stdout.take().expect("child stdout"));
+
+    write_request(&mut writer, initialize_request(1)).await;
+    assert!(read_response(&mut reader).await["result"].is_object());
+
+    write_request(
+        &mut writer,
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+    )
+    .await;
+    let listed = read_response(&mut reader).await;
+    let names: Vec<&str> = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(names, ["read_page", "act_page"], "discovery stays available while dispatch is frozen");
+
+    for (id, name) in [(3, "read_page"), (4, "act_page")] {
+        write_request(
+            &mut writer,
+            json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"tools/call",
+                "params":{"name":name,"arguments":{}}
+            }),
+        )
+        .await;
+        let refused = read_response(&mut reader).await;
+        assert_eq!(
+            refused["error"]["data"]["status"],
+            "broker_unavailable",
+            "frozen default must refuse '{name}' fail-closed"
+        );
+    }
+    assert!(
+        browser.calls.lock().expect("call log lock").is_empty(),
+        "frozen dispatch must not reach the browser"
+    );
+
+    drop(writer);
+    child.kill().await.expect("real stdio binary stops");
+}
+
 #[tokio::test]
 async fn explicit_broker_fixture_allows_mutation_over_mcp_transport() {
     let browser = FakeBrowser::start().await;
@@ -283,13 +399,24 @@ async fn explicit_broker_fixture_allows_mutation_over_mcp_transport() {
             .push(operation.to_string());
         MutationDecision::Allow
     });
-    let server = MahoBrowserMcpServer::connect_with_approval(
-        Path::new(&browser.path),
-        Duration::from_secs(5),
-        broker,
-    )
-    .await
-    .expect("broker-backed server connects");
+    let server = {
+        // Seed first: the fixture takes GLOBAL_STATE_LOCK itself (this block
+        // must not hold it while calling it — std Mutex is not reentrant).
+        let registry_db = registry_db_fixture(true);
+        let _guard = GLOBAL_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: env access serialized by ENV_LOCK; restored immediately.
+        unsafe { std::env::set_var("MAHO_DB_PATH", &registry_db) };
+        let server = MahoBrowserMcpServer::connect_with_approval(
+            Path::new(&browser.path),
+            Duration::from_secs(5),
+            broker,
+        )
+        .await
+        .expect("broker-backed server connects");
+        // SAFETY: env access serialized by ENV_LOCK.
+        unsafe { std::env::remove_var("MAHO_DB_PATH") };
+        server
+    };
     let (client_io, server_io) = tokio::io::duplex(16 * 1024);
     let service_task = tokio::spawn(async move {
         let service = server.serve(server_io).await.expect("MCP service starts");

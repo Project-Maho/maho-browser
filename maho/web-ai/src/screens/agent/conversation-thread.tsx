@@ -6,6 +6,7 @@ import type { AgentMessage, AgentPhase } from './agent-types';
 import type { ArtifactInfo } from '../../bridge/types';
 import { isRunActive } from './agent-types';
 import { MarkdownRenderer } from './markdown-renderer';
+import { ApprovalCard, type AgentInteractionAnswer } from './approval-card';
 import type { CredentialErrorCode } from '../credential-error';
 import { CredentialErrorCard } from '../credential-error-card';
 
@@ -17,6 +18,7 @@ interface ConversationThreadProps {
   scrollRef: RefObject<HTMLDivElement>;
   onScroll: () => void;
   onShareArtifact: (artifactId: string) => Promise<boolean>;
+  onAnswerInteraction: (requestId: string, answer: AgentInteractionAnswer) => Promise<void>;
 }
 
 export function ConversationThread({
@@ -27,6 +29,7 @@ export function ConversationThread({
   scrollRef,
   onScroll,
   onShareArtifact,
+  onAnswerInteraction,
 }: ConversationThreadProps) {
   return (
     <main class="agent-thread-shell">
@@ -39,7 +42,12 @@ export function ConversationThread({
         onScroll={onScroll}
       >
         {messages.map((message) => (
-          <ConversationMessage key={message.id} message={message} onShareArtifact={onShareArtifact} />
+          <ConversationMessage
+            key={message.id}
+            message={message}
+            onShareArtifact={onShareArtifact}
+            onAnswerInteraction={onAnswerInteraction}
+          />
         ))}
         {errorCredentialCode
           ? <CredentialErrorCard code={errorCredentialCode} />
@@ -53,9 +61,10 @@ export function ConversationThread({
 interface ConversationMessageProps {
   readonly message: AgentMessage;
   readonly onShareArtifact: (artifactId: string) => Promise<boolean>;
+  readonly onAnswerInteraction: (requestId: string, answer: AgentInteractionAnswer) => Promise<void>;
 }
 
-function ConversationMessage({ message, onShareArtifact }: ConversationMessageProps) {
+function ConversationMessage({ message, onShareArtifact, onAnswerInteraction }: ConversationMessageProps) {
   const isUser = message.role === 'user';
   const label = isUser ? 'You' : 'Maho';
 
@@ -108,6 +117,23 @@ function ConversationMessage({ message, onShareArtifact }: ConversationMessagePr
               return <MarkdownRenderer key={block.id} text={block.text} />;
             case 'artifact':
               return <ArtifactBlock key={block.id} artifact={block.artifact} onShare={onShareArtifact} />;
+            case 'interaction_request':
+              return (
+                <ApprovalCard
+                  key={block.id}
+                  request={{
+                    id: block.id,
+                    interactionKind: block.interactionKind,
+                    question: block.question,
+                    options: block.options,
+                    artifactRef: block.artifactRef,
+                    initialState: block.initialState,
+                    status: block.status,
+                    answerLabel: block.answerLabel,
+                  }}
+                  onAnswer={onAnswerInteraction}
+                />
+              );
             default:
               return null;
           }

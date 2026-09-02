@@ -165,8 +165,45 @@ export type AgentEvent =
   | { kind: 'tool_call'; id: string; name: string; args: string }
   | { kind: 'tool_result'; id: string; name: string; result: string }
   | { kind: 'artifact_created'; artifact: ArtifactInfo }
+  | {
+      kind: 'interaction_request';
+      /** Reply key for interaction resolve/timeout/cancel. */
+      id: string;
+      /** question = ask_user_question; confirmation = request_action_confirmation */
+      interactionKind: 'question' | 'confirmation';
+      /** Prompt text: the question, or the confirmation effect description. */
+      question: string;
+      /** Selectable options; empty for confirmations. */
+      options: AgentInteractionRequestOption[];
+      /** Kernel-side lifecycle state ("pending" for live requests), when present. */
+      state?: string;
+      /** Opaque review artifact reference, when the request carries one. */
+      artifactRef?: string | null;
+    }
   | { kind: 'complete'; fullText: string }
   | { kind: 'error'; message: string; credentialErrorCode?: string | null };
+
+/**
+ * Session runtime configuration mirroring the FFI AgentRuntimeConfig
+ * (maho_agent_set_runtime_config, plan row 1): the broker-enforced permission
+ * tier plus the final-confirm and proactive-mode gates. Tier strings mirror
+ * maho-agent RuntimeTier ("read_only" | "guard" | "full_access").
+ */
+export interface AgentRuntimeConfig {
+  permissionTier: 'read_only' | 'guard' | 'full_access';
+  finalConfirm: boolean;
+  proactiveMode: boolean;
+}
+
+/**
+ * One selectable option of an agent interaction request question. Mirrors
+ * maho-agent interaction::InteractionOption.
+ */
+export interface AgentInteractionRequestOption {
+  id: string;
+  label: string;
+  description?: string;
+}
 
 /**
  * Metadata for an agent output artifact. Paths never cross this boundary;
@@ -368,6 +405,22 @@ export interface MahoBridge {
   artifactShare(handle: AgentHandle, artifactId: string): Promise<boolean>;
   // Returns JSON array of AgentToolDescriptor for the session's registered tools.
   agentListTools(handle: AgentHandle): Promise<AgentToolDescriptor[]>;
+  /**
+   * Resolves a pending interaction request (FFI `maho_agent_interaction_resolve`).
+   * `answerJson` is the canonical kernel answer JSON, parsed by maho-agent
+   * `parse_interaction_answer`:
+   *   {"answer_kind":"confirmed"} | {"answer_kind":"denied"}
+   *   | {"answer_kind":"selected_option","0":"<optionId>"}
+   *   | {"answer_kind":"text","0":"<free text>"}
+   * Returns false if the request is unknown or already terminal.
+   */
+  agentResolveInteraction?(handle: AgentHandle, requestId: string, answerJson: string): Promise<boolean>;
+  /**
+   * Applies session runtime config (FFI `maho_agent_set_runtime_config`).
+   * Returns false if the broker rejected the config — fail-closed callers
+   * must not proceed with the pending action.
+   */
+  agentSetRuntimeConfig?(handle: AgentHandle, config: AgentRuntimeConfig): Promise<boolean>;
 
   // --- Native-only actions ---
   capturePhoto(): Promise<PhotoCapture | null>;

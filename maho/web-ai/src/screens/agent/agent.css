@@ -706,3 +706,216 @@
   outline: 2px solid var(--agent-focus-ring);
   outline-offset: 2px;
 }
+
+/* --- Agent interaction approval cards --- */
+
+.agent-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  padding: var(--space-3);
+}
+
+.agent-approval-card-disabled {
+  opacity: 0.65;
+}
+
+.agent-approval-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-accent);
+}
+
+.agent-approval-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agent-approval-question {
+  color: var(--color-on-surface);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.agent-approval-artifact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-2) var(--space-3);
+}
+
+.agent-approval-artifact-label {
+  color: var(--color-on-surface-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agent-approval-artifact-ref {
+  overflow-wrap: anywhere;
+  color: var(--color-on-surface);
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.agent-approval-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-approval-option {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-approval-option:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.agent-approval-option:focus-visible {
+  outline: 2px solid var(--agent-focus-ring);
+  outline-offset: 2px;
+}
+
+.agent-approval-option-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agent-approval-option-description {
+  color: var(--color-on-surface-secondary);
+  font-size: 11px;
+}
+
+.agent-approval-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.agent-approval-deny,
+.agent-approval-confirm {
+  appearance: none;
+  flex: 1 1 0;
+  min-height: 36px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agent-approval-deny {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+.agent-approval-confirm {
+  border: 1px solid transparent;
+  background: var(--color-accent-primary, #0a84ff);
+  color: #ffffff;
+}
+
+.agent-approval-deny:disabled,
+.agent-approval-confirm:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.agent-approval-deny:focus-visible,
+.agent-approval-confirm:focus-visible {
+  outline: 2px solid var(--agent-focus-ring);
+  outline-offset: 2px;
+}
+
+.agent-approval-status {
+  color: var(--color-on-surface-secondary);
+  font-size: 11px;
+}
+
+.agent-approval-error {
+  color: var(--color-error);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+/* --- Idle suggested-task cards (mobile parity of the desktop panel) --- */
+
+.agent-suggested-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: var(--agent-thread-max-width, 640px);
+  margin: 0 auto;
+  padding: 0 var(--space-4) var(--space-2);
+}
+
+.agent-suggested-title {
+  margin: 0;
+  color: var(--color-on-surface-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agent-suggested-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-suggested-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-suggested-card:hover {
+  background: var(--color-surface);
+}
+
+.agent-suggested-card:focus-visible {
+  outline: 2px solid var(--agent-focus-ring);
+  outline-offset: 2px;
+}
+
+.agent-suggested-card-title {
+  color: var(--color-on-surface);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agent-suggested-card-prompt {
+  color: var(--color-on-surface-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}

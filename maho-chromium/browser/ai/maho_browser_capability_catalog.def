@@ -20,7 +20,7 @@ MAHO_BROWSER_CAPABILITY(extract_structured_page_context, "page.extract_structure
 MAHO_BROWSER_CAPABILITY(browser_tab_list, "tab.list", "browser_tab_list", Tabs, ReadOnly, No, Browser, Profile, Low, Always, DesktopAgentAndBrowserMcp, FailClosed, "List all open browser tabs.")
 MAHO_BROWSER_CAPABILITY(browser_tab_get, "tab.get", "browser_tab_get", Tabs, ReadOnly, No, Browser, Tab, Low, Always, BrowserMcp, FailClosed, "Get details of a specific tab by ID.")
 MAHO_BROWSER_CAPABILITY(browser_tab_close, "tab.close", "browser_tab_close", Tabs, Mutable, Yes, Browser, Tab, Sensitive, Always, BrowserMcp, FailClosed, "Close a browser tab by ID.")
-MAHO_BROWSER_CAPABILITY(browser_tab_new, "tab.new", "browser_tab_new", Tabs, Mutable, Yes, Browser, Profile, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Open a new browser tab.")
+MAHO_BROWSER_CAPABILITY(browser_tab_new, "tab.new", "browser_tab_new", Tabs, Mutable, No, Browser, Profile, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Open a new browser tab.")
 MAHO_BROWSER_CAPABILITY(browser_tab_switch, "tab.switch", "browser_tab_switch", Tabs, Mutable, No, Browser, Tab, Low, Always, DesktopAgentAndBrowserMcp, FailClosed, "Activate a specific tab by ID.")
 MAHO_BROWSER_CAPABILITY(browser_history_search, "history.search", "browser_history_search", History, ReadOnly, No, Browser, Profile, Sensitive, Always, BrowserMcp, FailClosed, "Search browser history.")
 MAHO_BROWSER_CAPABILITY(browser_bookmarks_search, "bookmarks.search", "browser_bookmarks_search", Bookmarks, ReadOnly, No, Browser, Profile, Sensitive, Always, BrowserMcp, FailClosed, "Search bookmarks.")
@@ -80,8 +80,12 @@ MAHO_BROWSER_CAPABILITY(browser_network_stop_capture, "capture.network_stop", "b
 MAHO_BROWSER_CAPABILITY(browser_network_get_har, "capture.network_get_har", "browser_network_get_har", Capture, ReadOnly, No, Browser, Tab, Sensitive, Always, BrowserMcp, FailClosed, "Get current HAR capture data.")
 MAHO_BROWSER_CAPABILITY(browser_console_messages, "page.console_messages", "browser_console_messages", Page, ReadOnly, No, Browser, Tab, Sensitive, Always, BrowserMcp, FailClosed, "Retrieve console messages.")
 MAHO_BROWSER_CAPABILITY(browser_set_viewport_size, "page.set_viewport_size", "browser_set_viewport_size", Page, Mutable, No, Browser, Tab, Low, Always, BrowserMcp, FailClosed, "Set viewport size.")
+MAHO_BROWSER_CAPABILITY(page_accessibility_snapshot_v2, "page.accessibility_snapshot_v2", "page_accessibility_snapshot_v2", Page, ReadOnly, No, Browser, Tab, Sensitive, Always, BrowserMcp, FailClosed, "Get a compact, scoped, or differential accessibility snapshot.")
 MAHO_BROWSER_CAPABILITY(browser_history_search_desktop, "history.search_desktop", "browser_history_search_desktop", History, ReadOnly, No, Browser, Profile, Sensitive, Always, DesktopAgent, FailClosed, "Search browser history from the agent surface.")
 MAHO_BROWSER_CAPABILITY(screenshot_proof, "capture.screenshot_proof", "screenshot_proof", Capture, ReadOnly, No, Browser, Tab, Sensitive, Always, DesktopAgent, FailClosed, "Capture a proof screenshot for agent task verification.")
+MAHO_BROWSER_CAPABILITY(input_locator_click, "input.locator_click", "browser_locator_click", Input, Mutable, Yes, Browser, Tab, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Click an element by locator (ref, css, or role/name).")
+MAHO_BROWSER_CAPABILITY(input_locator_type, "input.locator_type", "browser_locator_type", Input, Mutable, Yes, Browser, Tab, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Type text into an element by locator (ref, css, or role/name).")
+MAHO_BROWSER_CAPABILITY(browser_act_and_observe, "browser.act_and_observe", "browser_act_and_observe", Input, Mutable, Yes, Browser, Tab, Sensitive, Always, DesktopAgentAndBrowserMcp, FailClosed, "Execute a browser action and observe state changes in one transaction.")
 
 // id, canonical_id, tool_name, category, broker, boundary, feature_gate,
 // surfaces, description. Mutability, authority, sensitivity and missing policy
@@ -95,7 +99,7 @@ MAHO_BROWSER_ACTION_CAPABILITY(browser_wait_for_navigation, "navigation.wait", "
 MAHO_BROWSER_ACTION_CAPABILITY(browser_navigate, "navigation.navigate", "browser_navigate", Navigation, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Navigate a tab to a URL.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_click, "input.click", "browser_click", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Click an element by accessibility ref.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_type, "input.type", "browser_type", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Type text into an element by accessibility ref.")
-MAHO_BROWSER_ACTION_CAPABILITY(browser_file_upload_select, "input.file_upload_select", "browser_file_upload_select", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Select one local AAB file for a pending file chooser.")
+MAHO_BROWSER_ACTION_CAPABILITY(browser_file_upload_select, "input.file_upload_select", "browser_file_upload_select", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Select a local file for a pending file chooser.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_select, "input.select", "browser_select", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Select a value by accessibility ref.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_scroll, "input.scroll", "browser_scroll", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Scroll the viewport or an element.")
 MAHO_BROWSER_ACTION_CAPABILITY(browser_hover, "input.hover", "browser_hover", Input, Browser, Tab, Always, DesktopAgentAndBrowserMcp, "Hover over an element by accessibility ref.")

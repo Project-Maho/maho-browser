@@ -520,6 +520,48 @@ maho_ai::mojom::RuntimeEventPtr DictToRuntimeEvent(
         ares->FindBool("page_derived_justification").value_or(false);
     event->approval_result = std::move(result);
   }
+  const base::DictValue* ird = dict.FindDict("interaction_request");
+  if (ird) {
+    auto interaction = maho_ai::mojom::InteractionRequestInfo::New();
+    const std::string* rid = ird->FindString("request_id");
+    interaction->request_id = rid ? *rid : "";
+    interaction->kind = static_cast<maho_ai::mojom::InteractionRequestKind>(
+        ird->FindInt("kind").value_or(static_cast<int>(
+            maho_ai::mojom::InteractionRequestKind::kQuestion)));
+    const std::string* q = ird->FindString("question");
+    interaction->question = q ? *q : "";
+    const base::ListValue* persisted_options = ird->FindList("options");
+    if (persisted_options) {
+      for (const auto& item : *persisted_options) {
+        if (!item.is_dict()) {
+          continue;
+        }
+        const auto& option_dict = item.GetDict();
+        const std::string* option_id = option_dict.FindString("id");
+        const std::string* option_label = option_dict.FindString("label");
+        if (!option_id || !option_label) {
+          continue;
+        }
+        auto option = maho_ai::mojom::InteractionRequestOption::New();
+        option->id = *option_id;
+        option->label = *option_label;
+        const std::string* description = option_dict.FindString("description");
+        if (description) {
+          option->description = *description;
+        }
+        interaction->options.push_back(std::move(option));
+      }
+    }
+    const std::string* ref = ird->FindString("artifact_ref");
+    if (ref) {
+      interaction->artifact_ref = *ref;
+    }
+    const std::string* state = ird->FindString("state");
+    if (state) {
+      interaction->state = *state;
+    }
+    event->interaction_request = std::move(interaction);
+  }
   const base::DictValue* bc = dict.FindDict("browser_context");
   if (bc) {
     auto ctx = maho_ai::mojom::BrowserContextPayload::New();
@@ -576,9 +618,146 @@ maho_ai::mojom::RuntimeEventKind InternalToMojoEventKind(
       return maho_ai::mojom::RuntimeEventKind::kToolAvailabilityChanged;
     case MahoAiRuntimeEventType::kArtifactCreated:
       return maho_ai::mojom::RuntimeEventKind::kArtifactCreated;
+    case MahoAiRuntimeEventType::kInteractionRequest:
+      return maho_ai::mojom::RuntimeEventKind::kInteractionRequest;
     default:
       return maho_ai::mojom::RuntimeEventKind::kError;
   }
+}
+
+// Maps a kInteractionRequest runtime event payload (the FFI kind-8 JSON passed
+// through by the unified adapter) into the typed Mojo InteractionRequestInfo.
+// Tolerates all three wire shapes: the live FFI payload
+// {request_id, kind, args}, the kernel serde InteractionRequest
+// {id, kind: {kind, question|effect_description, options}, state}, and the
+// flat journal shape {id, question|effect_description, options}.
+maho_ai::mojom::InteractionRequestInfoPtr InteractionRequestInfoFromPayload(
+    const base::DictValue& payload) {
+  auto info = maho_ai::mojom::InteractionRequestInfo::New();
+
+  const std::string* request_id = payload.FindString("request_id");
+  if (!request_id) {
+    request_id = payload.FindString("id");
+  }
+  if (!request_id) {
+    request_id = payload.FindString("interaction_id");
+  }
+  info->request_id = request_id ? *request_id : "";
+
+  const base::DictValue* kind_dict = payload.FindDict("kind");
+  bool confirmation = false;
+  std::string question;
+  const base::ListValue* options = payload.FindList("options");
+  if (kind_dict) {
+    const std::string* tag = kind_dict->FindString("kind");
+    confirmation = tag && *tag == "confirmation";
+    const std::string* nested_question = kind_dict->FindString("question");
+    if (nested_question) {
+      question = *nested_question;
+    } else {
+      const std::string* nested_effect =
+          kind_dict->FindString("effect_description");
+      if (nested_effect) {
+        question = *nested_effect;
+        confirmation = true;
+      }
+    }
+    if (!options) {
+      options = kind_dict->FindList("options");
+    }
+  } else {
+    const std::string* kind_str = payload.FindString("kind");
+    confirmation = kind_str && *kind_str == "confirmation";
+    const std::string* effect = payload.FindString("effect_description");
+    if (effect) {
+      question = *effect;
+      confirmation = true;
+    } else {
+      const std::string* top_question = payload.FindString("question");
+      if (top_question) {
+        question = *top_question;
+      }
+    }
+  }
+
+  // Live FFI kind-8 payloads carry the prompt fields inside a JSON-encoded
+  // `args` string; parse them out when the top level did not provide them.
+  const std::string* args = payload.FindString("args");
+  std::optional<std::string> artifact_ref;
+  if (args && !args->empty()) {
+    std::optional<base::DictValue> args_dict =
+        base::JSONReader::ReadDict(*args, base::JSON_PARSE_RFC);
+    if (args_dict) {
+      if (question.empty()) {
+        const std::string* args_question = args_dict->FindString("question");
+        if (args_question) {
+          question = *args_question;
+        } else {
+          const std::string* args_effect =
+              args_dict->FindString("effect_description");
+          if (args_effect) {
+            question = *args_effect;
+            confirmation = true;
+          }
+        }
+      }
+      if (!options) {
+        options = args_dict->FindList("options");
+      }
+      const std::string* args_ref = args_dict->FindString("artifact_ref");
+      if (!args_ref) {
+        args_ref = args_dict->FindString("artifact_id");
+      }
+      if (args_ref) {
+        artifact_ref = *args_ref;
+      }
+    }
+  }
+  if (!artifact_ref) {
+    const std::string* top_ref = payload.FindString("artifact_ref");
+    if (!top_ref) {
+      top_ref = payload.FindString("artifact_id");
+    }
+    if (top_ref) {
+      artifact_ref = *top_ref;
+    }
+  }
+  const std::string* state = payload.FindString("state");
+
+  info->kind = confirmation
+                   ? maho_ai::mojom::InteractionRequestKind::kConfirmation
+                   : maho_ai::mojom::InteractionRequestKind::kQuestion;
+  info->question = maho::credential_redaction::RedactCredentialText(question);
+  if (options) {
+    for (const auto& item : *options) {
+      if (!item.is_dict()) {
+        continue;
+      }
+      const auto& option_dict = item.GetDict();
+      const std::string* option_id = option_dict.FindString("id");
+      const std::string* option_label = option_dict.FindString("label");
+      if (!option_id || !option_label) {
+        continue;
+      }
+      auto option = maho_ai::mojom::InteractionRequestOption::New();
+      option->id = *option_id;
+      // Same sanitizer as the question: option text crosses the WebUI and
+      // persists, so agent-echoed secrets must not survive verbatim.
+      option->label = maho::credential_redaction::RedactCredentialText(
+          *option_label);
+      const std::string* description = option_dict.FindString("description");
+      if (description) {
+        option->description =
+            maho::credential_redaction::RedactCredentialText(*description);
+      }
+      info->options.push_back(std::move(option));
+    }
+  }
+  info->artifact_ref = artifact_ref;
+  if (state) {
+    info->state = *state;
+  }
+  return info;
 }
 
 }  // namespace
@@ -1098,6 +1277,11 @@ maho_ai::mojom::RuntimeEventPtr MahoAIPageHandler::ToMojoEvent(
 
   if (event.type == MahoAiRuntimeEventType::kArtifactCreated) {
     mojo_event->artifact = ArtifactInfoFromJson(event.text);
+  }
+
+  if (event.type == MahoAiRuntimeEventType::kInteractionRequest) {
+    mojo_event->interaction_request =
+        InteractionRequestInfoFromPayload(event.payload);
   }
 
   if (event.type == MahoAiRuntimeEventType::kToolRequest) {
@@ -2317,6 +2501,48 @@ void MahoAIPageHandler::SetAISelection(
   prefs_->SetString(maho::ai_prefs::kReasoningEffort,
                     ReasoningEffortToPref(reasoning_effort));
   std::move(callback).Run(true);
+}
+
+void MahoAIPageHandler::GetRuntimeConfig(GetRuntimeConfigCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Broker defaults (guard / true / false) whenever no session is active —
+  // the same triple CapabilityRequestContext defaults to.
+  auto config = maho_ai::mojom::RuntimeConfigInfo::New();
+  config->permission_tier = "guard";
+  config->final_confirm = true;
+  config->proactive_mode = false;
+
+  MahoAiRuntimeAdapter* adapter =
+      runtime_adapter_for_testing_
+          ? runtime_adapter_for_testing_.get()
+          : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+  MahoAiRuntimeConfig stored;
+  if (adapter && adapter->GetRuntimeConfig(&stored)) {
+    config->permission_tier = stored.permission_tier;
+    config->final_confirm = stored.final_confirm;
+    config->proactive_mode = stored.proactive_mode;
+  }
+  std::move(callback).Run(std::move(config));
+}
+
+void MahoAIPageHandler::SetRuntimeConfig(
+    maho_ai::mojom::RuntimeConfigInfoPtr config,
+    SetRuntimeConfigCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoAiRuntimeAdapter* adapter =
+      runtime_adapter_for_testing_
+          ? runtime_adapter_for_testing_.get()
+          : (runtime_router_ ? runtime_router_->GetActiveAdapter() : nullptr);
+  if (!config || !adapter) {
+    std::move(callback).Run(false);
+    return;
+  }
+  MahoAiRuntimeConfig requested;
+  requested.permission_tier = config->permission_tier;
+  requested.final_confirm = config->final_confirm;
+  requested.proactive_mode = config->proactive_mode;
+  // Tier normalization/fail-closure happens adapter-side (ParseRuntimeConfigTier).
+  std::move(callback).Run(adapter->SetRuntimeConfig(requested));
 }
 
 void MahoAIPageHandler::OnAISettingsPrefsChanged() {

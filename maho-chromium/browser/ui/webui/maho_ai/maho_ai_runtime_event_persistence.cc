@@ -119,6 +119,40 @@ base::DictValue SerializeRuntimeEventForPersistence(
                         event.approval_result->page_derived_justification);
     dict.Set("approval_result", std::move(approval_result));
   }
+  if (event.interaction_request) {
+    base::DictValue interaction_request;
+    interaction_request.Set("request_id",
+                            event.interaction_request->request_id);
+    interaction_request.Set(
+        "kind", static_cast<int>(event.interaction_request->kind));
+    interaction_request.Set(
+        "question", credential_redaction::RedactCredentialText(
+                        event.interaction_request->question));
+    base::ListValue options;
+    for (const auto& option : event.interaction_request->options) {
+      base::DictValue option_dict;
+      option_dict.Set("id", option->id);
+      // Same sanitizer as the question: agent-echoed secrets in option text
+      // must not persist to disk either.
+      option_dict.Set("label", credential_redaction::RedactCredentialText(
+                                   option->label));
+      if (option->description.has_value()) {
+        option_dict.Set("description",
+                        credential_redaction::RedactCredentialText(
+                            *option->description));
+      }
+      options.Append(std::move(option_dict));
+    }
+    interaction_request.Set("options", std::move(options));
+    if (event.interaction_request->artifact_ref.has_value()) {
+      interaction_request.Set("artifact_ref",
+                              *event.interaction_request->artifact_ref);
+    }
+    if (event.interaction_request->state.has_value()) {
+      interaction_request.Set("state", *event.interaction_request->state);
+    }
+    dict.Set("interaction_request", std::move(interaction_request));
+  }
   if (event.browser_context) {
     base::DictValue browser_context;
     browser_context.Set("status", static_cast<int>(event.browser_context->status));

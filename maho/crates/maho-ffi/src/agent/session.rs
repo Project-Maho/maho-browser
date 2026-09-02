@@ -3,14 +3,14 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use maho_agent::{AgentRuntime, SessionRuntime, SwiftideBackend};
+use maho_agent::{AgentRuntime, SwiftideBackend};
 use maho_core::maho_core::MahoCore;
 
 use crate::agent::browser_bridge::{maho_agent_create_session_impl, MahoAgentToolResult};
 use crate::agent::callback_lease::{
     clone_callback_lease, dispatch_unified_event, invoke_with_turn_callback_lease,
-    AcceptedLeasedTurns, CallbackReleasePolicy, MahoAgentReleaseCallback, SendableCallback,
-    SendableUserData, SessionCallbackLease, TurnCallbackLease, UnifiedEventCallbackRegistration,
+    CallbackReleasePolicy, MahoAgentReleaseCallback, SendableCallback, SendableUserData,
+    TurnCallbackLease,
 };
 use crate::agent::events::MahoAgentEventKindV2;
 use crate::agent::secure_storage::{MahoAgentPermissionDecision, MahoAgentSecureKey};
@@ -18,6 +18,37 @@ use crate::common::cstring_or_fallback;
 use crate::ffi_safe;
 
 const AGENT_SKILL_INJECT_BUDGET_CHARS: usize = 2_000;
+
+/// Session-scoped runtime configuration flags (plan row 1, plumbing only).
+/// The defaults mirror today's effective broker behavior so carrying them on
+/// the session changes no decisions; enforcement lands in later plan rows.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AgentRuntimeConfig {
+    pub(crate) permission_tier: String,
+    pub(crate) final_confirm: bool,
+    pub(crate) proactive_mode: bool,
+}
+
+impl Default for AgentRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            permission_tier: "guard".to_string(),
+            final_confirm: true,
+            proactive_mode: false,
+        }
+    }
+}
+
+impl AgentRuntimeConfig {
+    /// Fails closed: unknown or empty tiers normalize back to the "guard"
+    /// default; only the three canonical tiers pass through.
+    pub(crate) fn normalize_tier(raw_tier: &str) -> String {
+        match raw_tier {
+            "read_only" | "guard" | "full_access" => raw_tier.to_string(),
+            _ => "guard".to_string(),
+        }
+    }
+}
 
 pub(crate) const fn credential_error_envelope(error: maho_agent::CredentialError) -> &'static str {
     match error {
@@ -51,44 +82,17 @@ pub(crate) fn agent_error_callback_text(error: &maho_agent::AgentError) -> Cow<'
     }
 }
 
-pub struct MahoAgentSession {
-    pub runtime: Arc<SwiftideBackend>,
-    pub(crate) isolation: Arc<SessionRuntime>,
-    pub(crate) callback_lease: Option<Arc<SessionCallbackLease>>,
-    pub(crate) accepted_leased_turns: Arc<AcceptedLeasedTurns>,
-    pub(crate) permission_callback: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            tool_name: *const c_char,
-            arguments_json: *const c_char,
-        ) -> MahoAgentPermissionDecision,
-    >,
-    pub(crate) browser_tool_callback: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            tool_name: *const c_char,
-            args_json: *const c_char,
-        ) -> MahoAgentToolResult,
-    >,
-    pub(crate) session_id: String,
-    pub(crate) active_conversation_registry: Arc<Mutex<std::collections::HashMap<String, usize>>>,
-    pub(crate) core: std::ptr::NonNull<MahoCore>,
-    pub(crate) workspace_root: std::path::PathBuf,
-    pub(crate) active_space_id: Option<String>,
-    // Artifact-created delivery: installed post-construction via
-    // `maho_agent_set_artifact_created_callback` (ABI-stable setter, not a
-    // create/send param). Read during turn setup to add the ArtifactCreated
-    // event arm. `user_data` stored as usize (raw pointer is not Send).
-    pub(crate) artifact_created_cb: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
-    >,
-    pub(crate) artifact_created_user_data: usize,
-    pub(crate) unified_event_registration: Arc<Mutex<Option<UnifiedEventCallbackRegistration>>>,
-    pub turn_controller: Arc<Mutex<maho_agent::turn_control::SessionTurnController>>,
-    pub(crate) wait_registry: Arc<Mutex<maho_agent::event_wait::WaitRegistry>>,
-    pub(crate) event_seq_counter: Arc<std::sync::atomic::AtomicU64>,
-    pub(crate) notification_permission_granted: Arc<std::sync::atomic::AtomicBool>,
-}
+/// The agent FFI session type. UNIFICATION (F3-R4): this used to be a second,
+/// module-local struct definition whose layout diverged from the one the
+/// exported `maho_agent_create_session*` symbols construct in the crate root.
+/// The event-side FFI symbols exported from `agent::events` operate on THIS
+/// name; it now re-exports the single crate-root struct so every exported
+/// session-taking symbol shares one layout. Do not reintroduce a duplicate
+/// definition here — a second struct means the event FFI locks String/fn-
+/// pointer bytes of the create-side struct as pthread mutexes
+/// (EINVAL "failed to lock mutex" -> panic=abort SIGABRT; see
+/// .omo/evidence/f3-r4-mutex-panic-rca.md).
+pub use crate::MahoAgentSession;
 
 impl MahoAgentSession {
     pub fn create_for_test(session_id: &str) -> Box<Self> {
@@ -127,6 +131,7 @@ impl MahoAgentSession {
             wait_registry: Arc::new(Mutex::new(maho_agent::event_wait::WaitRegistry::new())),
             event_seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             notification_permission_granted: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            runtime_config: Mutex::new(AgentRuntimeConfig::default()),
         })
     }
 }
@@ -777,6 +782,42 @@ pub unsafe extern "C" fn maho_agent_set_approval_policy(
 
 /// # Safety
 /// `session` must be a valid pointer to a `MahoAgentSession`.
+/// `permission_tier` must be null or a null-terminated UTF-8 C string
+/// ("read_only", "guard", "full_access"); unknown values fail closed to
+/// "guard". Plumbing only: no enforcement behavior changes in this row.
+pub unsafe extern "C" fn maho_agent_set_runtime_config(
+    session: *mut MahoAgentSession,
+    permission_tier: *const c_char,
+    final_confirm: bool,
+    proactive_mode: bool,
+) {
+    ffi_safe!(
+        {
+            if session.is_null() {
+                return;
+            }
+            let session = &*session;
+            let raw_tier = if permission_tier.is_null() {
+                ""
+            } else {
+                CStr::from_ptr(permission_tier)
+                    .to_str()
+                    .unwrap_or_default()
+            };
+            let mut config = session
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            config.permission_tier = AgentRuntimeConfig::normalize_tier(raw_tier);
+            config.final_confirm = final_confirm;
+            config.proactive_mode = proactive_mode;
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer to a `MahoAgentSession`.
 pub unsafe extern "C" fn maho_agent_set_mail_authorization_state(
     session: *mut MahoAgentSession,
     feature_enabled: bool,
@@ -834,4 +875,82 @@ pub unsafe extern "C" fn maho_agent_session_set_preferred_provider(
         },
         false
     )
+}
+
+#[cfg(test)]
+mod runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn test_runtime_config_default_triple_is_guard_true_false() {
+        // The plumbing default must mirror today's effective behavior:
+        // permission_tier="guard", final_confirm=true, proactive_mode=false.
+        let cfg = AgentRuntimeConfig::default();
+        assert_eq!(cfg.permission_tier, "guard");
+        assert!(cfg.final_confirm);
+        assert!(!cfg.proactive_mode);
+
+        // Unknown / empty tiers fail safe back to the guard default.
+        assert_eq!(AgentRuntimeConfig::normalize_tier("bogus"), "guard");
+        assert_eq!(AgentRuntimeConfig::normalize_tier(""), "guard");
+        assert_eq!(AgentRuntimeConfig::normalize_tier("read_only"), "read_only");
+        assert_eq!(AgentRuntimeConfig::normalize_tier("guard"), "guard");
+        assert_eq!(AgentRuntimeConfig::normalize_tier("full_access"), "full_access");
+    }
+
+    #[test]
+    fn test_maho_agent_set_runtime_config_roundtrip() {
+        let mut session = MahoAgentSession::create_for_test("runtime-config-session");
+        let session_ptr: *mut MahoAgentSession = session.as_mut();
+
+        // Defaults are present before any setter call.
+        {
+            let cfg = session
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(cfg.permission_tier, "guard");
+            assert!(cfg.final_confirm);
+            assert!(!cfg.proactive_mode);
+        }
+
+        // set -> get roundtrip through the FFI symbol.
+        let tier = CString::new("read_only").unwrap();
+        unsafe {
+            maho_agent_set_runtime_config(session_ptr, tier.as_ptr(), false, true);
+        }
+
+        let cfg = session
+            .runtime_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(cfg.permission_tier, "read_only");
+        assert!(!cfg.final_confirm);
+        assert!(cfg.proactive_mode);
+    }
+
+    #[test]
+    fn test_maho_agent_set_runtime_config_unknown_tier_falls_back_to_guard() {
+        let mut session = MahoAgentSession::create_for_test("runtime-config-unknown-tier");
+        let session_ptr: *mut MahoAgentSession = session.as_mut();
+
+        let tier = CString::new("root").unwrap();
+        unsafe {
+            maho_agent_set_runtime_config(session_ptr, tier.as_ptr(), true, false);
+        }
+
+        let cfg = session
+            .runtime_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(cfg.permission_tier, "guard");
+    }
+
+    #[test]
+    fn test_maho_agent_set_runtime_config_null_session_is_safe() {
+        let tier = CString::new("guard").unwrap();
+        unsafe {
+            maho_agent_set_runtime_config(std::ptr::null_mut(), tier.as_ptr(), true, false);
+        }
+    }
 }

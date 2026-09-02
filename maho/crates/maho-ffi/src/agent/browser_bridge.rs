@@ -11,7 +11,7 @@ use crate::agent::callback_lease::{
     SendableUserData, SessionCallbackLease, TurnCallbackLease,
 };
 use crate::agent::secure_storage::{MahoAgentPermissionDecision, MahoAgentSecureKey};
-use crate::agent::session::MahoAgentSession;
+use crate::agent::session::{AgentRuntimeConfig, MahoAgentSession};
 use crate::common::to_json_cstring;
 use crate::ffi_safe;
 use crate::import_gate;
@@ -929,6 +929,7 @@ pub(crate) unsafe fn maho_agent_create_session_impl(
                 wait_registry: Arc::new(Mutex::new(maho_agent::event_wait::WaitRegistry::new())),
                 event_seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
                 notification_permission_granted: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                runtime_config: Mutex::new(AgentRuntimeConfig::default()),
             });
             if let Some(callback_lease) = session.callback_lease.as_ref() {
                 callback_lease.arm();

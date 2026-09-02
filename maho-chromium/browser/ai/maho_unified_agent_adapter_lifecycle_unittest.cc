@@ -86,6 +86,7 @@ struct FakeAgentState {
   raw_ptr<void> browser_tool_user_data = nullptr;
   bool set_preferred_provider_result = true;
   std::vector<std::optional<std::string>> preferred_providers;
+  std::vector<std::optional<std::string>> runtime_config_tiers;
   std::vector<std::string> artifact_roots;
   std::vector<std::string> lifecycle_calls;
 
@@ -212,6 +213,18 @@ bool FakeSetPreferredProvider(MahoAgentSession*, const char* provider) {
   g_fake_agent->preferred_providers.emplace_back(
       provider ? std::optional<std::string>(provider) : std::nullopt);
   return g_fake_agent->set_preferred_provider_result;
+}
+
+void FakeSetRuntimeConfig(MahoAgentSession*,
+                          const char* permission_tier,
+                          bool final_confirm,
+                          bool proactive_mode) {
+  if (!g_fake_agent) {
+    return;
+  }
+  g_fake_agent->runtime_config_tiers.emplace_back(
+      permission_tier ? std::optional<std::string>(permission_tier)
+                      : std::nullopt);
 }
 
 bool FakeSendMessage(MahoAgentSession*,
@@ -496,6 +509,7 @@ const MahoAgentFfi kFakeFfi = {
     &FakeSetApprovalPolicy,
     &FakeSetMailAuthorizationState,
     &FakeSetPreferredProvider,
+    &FakeSetRuntimeConfig,
     &FakeSendMessage,
     &FakeCancel,
     &FakeSessionFree,
@@ -811,6 +825,47 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, FullTurnFlow) {
   EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnComplete), 1u);
   EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kError), 0u);
   EXPECT_TRUE(fake_agent_->sends[0].released);
+}
+
+// Plan row-1 runtime_config store: fail-closed without a live session, tier
+// normalization identical to ParseRuntimeConfigTier, and forwarding to the
+// FFI session once one exists.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       RuntimeConfigNormalizesTierAndForwardsToLiveSession) {
+  MahoAiRuntimeConfig config;
+  EXPECT_FALSE(adapter_->GetRuntimeConfig(&config));
+  config.permission_tier = "full_access";
+  EXPECT_FALSE(adapter_->SetRuntimeConfig(config));
+  EXPECT_TRUE(fake_agent_->runtime_config_tiers.empty());
+
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(fake_agent_->created);
+
+  // Unknown tiers fail closed to "guard" exactly like the broker mirror.
+  MahoAiRuntimeConfig bogus;
+  bogus.permission_tier = "root";
+  EXPECT_TRUE(adapter_->SetRuntimeConfig(bogus));
+  ASSERT_EQ(fake_agent_->runtime_config_tiers.size(), 1u);
+  ASSERT_TRUE(fake_agent_->runtime_config_tiers.back().has_value());
+  EXPECT_EQ(*fake_agent_->runtime_config_tiers.back(), "guard");
+
+  // Canonical tiers forward verbatim and round-trip through Get.
+  MahoAiRuntimeConfig full;
+  full.permission_tier = "full_access";
+  full.final_confirm = false;
+  full.proactive_mode = true;
+  EXPECT_TRUE(adapter_->SetRuntimeConfig(full));
+  ASSERT_EQ(fake_agent_->runtime_config_tiers.size(), 2u);
+  EXPECT_EQ(*fake_agent_->runtime_config_tiers.back(), "full_access");
+
+  MahoAiRuntimeConfig stored;
+  EXPECT_TRUE(adapter_->GetRuntimeConfig(&stored));
+  EXPECT_EQ(stored.permission_tier, "full_access");
+  EXPECT_FALSE(stored.final_confirm);
+  EXPECT_TRUE(stored.proactive_mode);
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,

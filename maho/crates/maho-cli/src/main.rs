@@ -8,7 +8,10 @@ use maho_cli::browser_pipe;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use maho_agent::SwiftideBackend;
 use maho_cli::vault::{self, RecoveryUnlockResult};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use config::CliConfig;
 
@@ -111,6 +114,12 @@ pub enum Commands {
     Routine {
         #[command(subcommand)]
         command: RoutineCommands,
+    },
+
+    /// Run agent tasks against the shared workspace store
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommands,
     },
 
     #[command(about = "Vault recovery operations")]
@@ -304,6 +313,114 @@ pub enum RoutineCommands {
         #[arg(long)]
         workspace: Option<String>,
     },
+}
+
+/// Agent session subcommands (plan row 13 re-introduction of a CLI agent
+/// entry; sessions ride the same shared-workspace store transport the
+/// removed `maho run` path used — no new transport).
+#[derive(Subcommand, Debug, Clone)]
+pub enum AgentCommands {
+    /// Run one agent task in a session bound to the shared workspace store
+    Task {
+        /// Task goal for the agent to execute
+        goal: String,
+
+        /// Permission tier carried in the session runtime_config
+        /// (read-only | guard | full-access)
+        #[arg(long, value_enum, default_value_t = TierArg::Guard)]
+        tier: TierArg,
+
+        /// Require confirmation before externally visible or irreversible
+        /// actions (default); whichever of --final-confirm/--no-final-confirm
+        /// appears last wins
+        #[arg(long, overrides_with = "no_final_confirm", default_value_t = true)]
+        final_confirm: bool,
+
+        /// Opposite of --final-confirm: leave the final-confirmation gate inert
+        #[arg(long, overrides_with = "final_confirm")]
+        no_final_confirm: bool,
+
+        /// Run the session in proactive mode (max-effort autonomous
+        /// instruction block appended to the system prompt); whichever of
+        /// --proactive/--no-proactive appears last wins
+        #[arg(long, overrides_with = "no_proactive")]
+        proactive: bool,
+
+        /// Opposite of --proactive: keep the proactive instruction block off
+        #[arg(long, overrides_with = "proactive")]
+        no_proactive: bool,
+
+        /// Target workspace ID or name (defaults to the first workspace in
+        /// the shared registry, bootstrapping the default when empty)
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+}
+
+/// Permission tier for the `maho agent task` runtime_config. Unknown values
+/// are rejected at parse time (arg_enum); the canonical snake_case spelling
+/// mirrors the broker's `ParseRuntimeConfigTier` and the maho-ffi
+/// `normalize_tier` contract (fail-closed normalization stays session-side).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum TierArg {
+    /// File-scoped reads only; writes denied (canonical: read_only)
+    ReadOnly,
+    /// Routine actions run, consequential actions gated (session default)
+    Guard,
+    /// Full access; the tier adds no restriction of its own
+    FullAccess,
+}
+
+impl TierArg {
+    pub fn canonical(self) -> &'static str {
+        match self {
+            TierArg::ReadOnly => "read_only",
+            TierArg::Guard => "guard",
+            TierArg::FullAccess => "full_access",
+        }
+    }
+}
+
+/// Session runtime_config payload carried by `maho agent task` (plan row 13).
+/// Shape and defaults mirror the row-1 session runtime config
+/// (`AgentRuntimeConfig` in maho-ffi, broker `CapabilityRequestContext`):
+/// tier "guard", final_confirm true, proactive_mode false.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgentTaskRuntimeConfig {
+    pub permission_tier: String,
+    pub final_confirm: bool,
+    pub proactive_mode: bool,
+}
+
+impl Default for AgentTaskRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            permission_tier: "guard".to_string(),
+            final_confirm: true,
+            proactive_mode: false,
+        }
+    }
+}
+
+impl AgentTaskRuntimeConfig {
+    /// Builds the payload from parsed CLI parts. `--final-confirm` and
+    /// `--no-final-confirm` (likewise `--proactive`/`--no-proactive`) are a
+    /// mutually-overriding flag pair (POSIX last-one-wins via `overrides_with`;
+    /// an overridden flag reverts to its default), so the raw pair collapses
+    /// to one effective value per gate here.
+    pub fn from_parts(
+        tier: TierArg,
+        final_confirm: bool,
+        no_final_confirm: bool,
+        proactive: bool,
+        no_proactive: bool,
+    ) -> Self {
+        Self {
+            permission_tier: tier.canonical().to_string(),
+            final_confirm: final_confirm && !no_final_confirm,
+            proactive_mode: proactive && !no_proactive,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -935,7 +1052,7 @@ async fn main() -> Result<()> {
         // ─── Billing group ────────────────────────────────────────────────
         Commands::Billing { command } => match command {
             BillingCommands::Balance => cmd_balance(&relay_url).await,
-            BillingCommands::BuyCredits { amount } => cmd_buy_credits(&amount),
+            BillingCommands::BuyCredits { amount } => cmd_buy_credits(&relay_url, &amount).await,
         },
 
         // ─── Tab group ──────────────────────────────────────────────────────
@@ -1003,6 +1120,28 @@ async fn main() -> Result<()> {
             }
         },
 
+        // ─── Agent group ──────────────────────────────────────────────
+        Commands::Agent { command } => match command {
+            AgentCommands::Task {
+                goal,
+                tier,
+                final_confirm,
+                no_final_confirm,
+                proactive,
+                no_proactive,
+                workspace,
+            } => {
+                let config = AgentTaskRuntimeConfig::from_parts(
+                    tier,
+                    final_confirm,
+                    no_final_confirm,
+                    proactive,
+                    no_proactive,
+                );
+                cmd_agent_task(&goal, &config, workspace.as_deref(), json_output).await
+            }
+        },
+
         Commands::Vault { command } => match command {
             VaultCommands::Recover => match vault::recover_from_terminal()? {
                 RecoveryUnlockResult::Unlocked => {
@@ -1064,7 +1203,7 @@ async fn main() -> Result<()> {
         }
         Commands::BuyCredits { amount } => {
             deprecation_warning("buy-credits", "billing buy-credits");
-            cmd_buy_credits(&amount)
+            cmd_buy_credits(&relay_url, &amount).await
         }
     }
 }
@@ -1122,7 +1261,7 @@ fn cmd_logout() -> Result<()> {
 async fn cmd_whoami(relay_url: &str) -> Result<()> {
     let cfg = CliConfig::load()?;
     let me = auth::whoami(relay_url, &cfg).await?;
-    println!("Email: {}", me.email);
+    println!("Email: {}", me.email().unwrap_or(""));
     println!("Tier:  {}", me.tier.as_deref().unwrap_or("free"));
     Ok(())
 }
@@ -1150,11 +1289,22 @@ async fn cmd_balance(relay_url: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_buy_credits(amount: &str) -> Result<()> {
-    let url = credits::checkout_url_for_pack(amount);
+async fn cmd_buy_credits(relay_url: &str, amount: &str) -> Result<()> {
+    let cfg = CliConfig::load()?;
+    let _token = cfg.access_token.as_deref().ok_or_else(|| {
+        eprintln!("Not logged in. Run `maho login` first.");
+        anyhow::anyhow!("not logged in")
+    })?;
+
+    let me = auth::whoami(relay_url, &cfg).await?;
+    let user_id = me.user_id().ok_or_else(|| {
+        anyhow::anyhow!("authenticated relay account missing numeric user_id in /auth/me")
+    })?;
+
+    let url = credits::checkout_url_for_pack(amount, user_id)?;
     println!("Opening LemonSqueezy pay-what-you-want checkout (suggested amount: ${amount}; choose the final amount in checkout)...");
     println!("Checkout URL: {url}");
-    match credits::open_checkout_url(url) {
+    match credits::open_checkout_url(&url) {
         Ok(credits::OpenOutcome::OpenedInMahoBrowser) => {
             println!("Opened in Maho Browser.");
         }
@@ -1175,13 +1325,20 @@ fn cmd_buy_credits(amount: &str) -> Result<()> {
 
 // ─── Tab command handlers ─────────────────────────────────────────────────────
 
+/// Browser tool responses are wrapped in a capability-receipt envelope
+/// (`{"receipt": .., "result": {..}}`). Reach through it so callers can read the
+/// payload fields directly; a bare payload is returned unchanged.
+fn tool_payload(value: &serde_json::Value) -> &serde_json::Value {
+    value.get("result").unwrap_or(value)
+}
+
 async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: bool) -> Result<()> {
     match command {
         TabCommands::Info => {
             let client = browser::connect(socket_path).await?;
             let result =
                 browser::send_tool_call(&client, "browser_tab_list", serde_json::json!({})).await?;
-            let tabs = result.get("tabs").and_then(|t| t.as_array());
+            let tabs = tool_payload(&result).get("tabs").and_then(|t| t.as_array());
             let active = tabs.and_then(|arr| {
                 arr.iter()
                     .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
@@ -1224,7 +1381,7 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
                 return Ok(());
             }
 
-            let tabs = result.get("tabs").and_then(|t| t.as_array());
+            let tabs = tool_payload(&result).get("tabs").and_then(|t| t.as_array());
             if let Some(tabs) = tabs {
                 println!("{:<4} {:<40} {:<60} {}", "ID", "TITLE", "URL", "ACTIVE");
                 for tab in tabs {
@@ -1941,7 +2098,8 @@ async fn cmd_page(
             let mut args = serde_json::json!({});
             apply_tab_id(&mut args, &tab);
             let result = browser::send_tool_call(&client, "browser_screenshot_full", args).await?;
-            let data = result.get("data").and_then(|v| v.as_str()).unwrap_or("");
+            let payload = result.get("result").unwrap_or(&result);
+            let data = payload.get("data").and_then(|v| v.as_str()).unwrap_or("");
             if data.is_empty() {
                 bail!("browser returned no screenshot data");
             }
@@ -2063,7 +2221,149 @@ fn unsupported_routine_run_flags(
 }
 #[cfg(test)]
 mod tests {
-    use super::{mail_tool_request, unsupported_routine_run_flags, Cli, Commands, MailCommands};
+    use super::{
+        mail_tool_request, unsupported_routine_run_flags, AgentCommands, AgentTaskRuntimeConfig,
+        Cli, Commands, MailCommands, TierArg,
+    };
+
+    /// Plan row 13: valid `maho agent task` args parse the GOAL positional and
+    /// map the runtime-config flags onto the session runtime_config payload
+    /// with the product defaults (tier=guard, final_confirm=true, proactive=false).
+    #[test]
+    fn agent_task_parses_goal_with_default_runtime_config() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from(["maho", "agent", "task", "Summarize open tabs"])
+            .expect("valid agent task args must parse");
+        let Commands::Agent { command } = parsed.command else {
+            panic!("expected Commands::Agent variant");
+        };
+        // AgentCommands has a single variant today; destructure directly.
+        let AgentCommands::Task {
+            goal,
+            tier,
+            final_confirm,
+            no_final_confirm,
+            proactive,
+            no_proactive,
+            ..
+        } = command;
+        assert_eq!(goal, "Summarize open tabs");
+        assert_eq!(tier, TierArg::Guard);
+        let config =
+            AgentTaskRuntimeConfig::from_parts(tier, final_confirm, no_final_confirm, proactive, no_proactive);
+        assert_eq!(config, AgentTaskRuntimeConfig::default());
+        assert_eq!(config.permission_tier, "guard");
+        assert!(config.final_confirm);
+        assert!(!config.proactive_mode);
+    }
+
+    /// Plan row 13: the three runtime-config flags override the defaults, and
+    /// the kebab-case tier values normalize to the canonical snake_case
+    /// spellings shared with the broker / maho-ffi `normalize_tier`.
+    #[test]
+    fn agent_task_flags_override_runtime_config_defaults() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from([
+            "maho",
+            "agent",
+            "task",
+            "do it",
+            "--tier",
+            "read-only",
+            "--no-final-confirm",
+            "--proactive",
+        ])
+        .expect("overridden agent task args must parse");
+        let Commands::Agent { command: AgentCommands::Task { tier, final_confirm, no_final_confirm, proactive, no_proactive, .. } } = parsed.command else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        let config =
+            AgentTaskRuntimeConfig::from_parts(tier, final_confirm, no_final_confirm, proactive, no_proactive);
+        assert_eq!(config.permission_tier, "read_only");
+        assert!(!config.final_confirm);
+        assert!(config.proactive_mode);
+
+        let parsed = Cli::try_parse_from([
+            "maho",
+            "agent",
+            "task",
+            "do it",
+            "--tier",
+            "full-access",
+            "--final-confirm",
+        ])
+        .expect("full-access + explicit --final-confirm must parse");
+        let Commands::Agent { command: AgentCommands::Task { tier, final_confirm, no_final_confirm, proactive, no_proactive, .. } } = parsed.command else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        let config =
+            AgentTaskRuntimeConfig::from_parts(tier, final_confirm, no_final_confirm, proactive, no_proactive);
+        assert_eq!(config.permission_tier, "full_access");
+        assert!(config.final_confirm);
+        assert!(!config.proactive_mode);
+    }
+
+    /// Plan row 13: an unknown tier value must be rejected by clap (arg_enum),
+    /// not silently normalized — normalization is the broker/FFI concern.
+    #[test]
+    fn agent_task_rejects_unknown_tier_value() {
+        use clap::Parser as _;
+        let error = Cli::try_parse_from([
+            "maho",
+            "agent",
+            "task",
+            "do it",
+            "--tier",
+            "bogus",
+        ])
+        .err()
+        .expect("unknown tier value must fail parsing");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        assert!(error.to_string().contains("bogus"));
+    }
+
+    /// Plan row 13: `maho agent task --help` renders a usage line listing the
+    /// runtime-config flags.
+    #[test]
+    fn agent_task_help_renders_usage_line() {
+        use clap::Parser as _;
+        let error = Cli::try_parse_from(["maho", "agent", "task", "--help"])
+            .err()
+            .expect("--help exits through DisplayHelp");
+        assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
+        let help = error.to_string();
+        assert!(help.contains("Usage:"), "help must render a usage line\n{help}");
+        assert!(help.contains("agent task"), "usage must name the subcommand\n{help}");
+        assert!(help.contains("--tier"), "help must list --tier\n{help}");
+    }
+
+    /// Plan row 13: dry session creation through the shared-workspace store
+    /// path — no LLM call, no browser; the session must construct and report
+    /// its platform tool surface, and the runtime_config payload round-trips.
+    #[tokio::test]
+    async fn agent_task_creates_session_dry_with_runtime_config() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("maho.db");
+        let config = AgentTaskRuntimeConfig {
+            permission_tier: "read_only".to_string(),
+            final_confirm: false,
+            proactive_mode: true,
+        };
+        let backend = super::build_agent_task_session(&db_path, None, &config)
+            .await
+            .expect("dry agent task session must be created via the workspace store path");
+        let tools = maho_agent::AgentRuntime::list_tools(&backend)
+            .await
+            .expect("session must expose its platform tool surface");
+        assert!(!tools.is_empty(), "platform tool surface must be non-empty");
+
+        // The proactive runtime flag gates the row-9 instruction block through
+        // the same composition the session build applies.
+        let prompt = super::agent_task_system_prompt(&config);
+        assert!(prompt.contains(maho_agent::system_prompt::PROACTIVITY_INSTRUCTION_SENTINEL));
+        let quiet = super::agent_task_system_prompt(&AgentTaskRuntimeConfig::default());
+        assert!(!quiet.contains(maho_agent::system_prompt::PROACTIVITY_INSTRUCTION_SENTINEL));
+    }
 
     /// clap must give registered platform subcommands precedence over the
     /// agent-first prompt fallback (`maho <prompt>`). Regression: these used to
@@ -2546,6 +2846,118 @@ async fn cmd_mcp_remove(name: &str, workspace: Option<&str>, json_output: bool) 
         println!("Removed MCP server '{}' successfully.", name);
     }
     Ok(())
+}
+
+/// Plan row 13: `maho agent task` — run one agent task from the terminal.
+/// The session is created through the existing shared-workspace store path
+/// (`workspace::default_db_path` → `resolve_workspace_id` → `open_storage` →
+/// `MutexAgentStorage` → `SwiftideBackend`), the same transport the removed
+/// `maho run` path used. tier/final_confirm enforcement stays at the
+/// capability broker in the browser process (plan rows 3/5); the CLI carries
+/// the validated runtime_config payload and applies the row-9 proactive
+/// prompt gate.
+async fn cmd_agent_task(
+    goal: &str,
+    config: &AgentTaskRuntimeConfig,
+    workspace: Option<&str>,
+    json_output: bool,
+) -> Result<()> {
+    let db_path = maho_cli::workspace::default_db_path();
+    let backend = build_agent_task_session(&db_path, workspace, config).await?;
+    let session_id = format!("task-{}", uuid::Uuid::new_v4());
+
+    if !json_output {
+        let tier = &config.permission_tier;
+        let final_confirm = config.final_confirm;
+        let proactive_mode = config.proactive_mode;
+        println!(
+            "Running agent task (tier: {tier}, final_confirm: {final_confirm}, proactive: {proactive_mode})..."
+        );
+    }
+
+    let response = backend
+        .run_prompt_in_session(&session_id, goal)
+        .await
+        .map_err(|e| anyhow::anyhow!("Agent task failed: {e:?}"))?;
+
+    if json_output {
+        let out = AgentTaskOutput {
+            session_id: &session_id,
+            runtime_config: config,
+            response: &response,
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        println!("\n--- Agent Task Response ---\n{response}");
+    }
+    Ok(())
+}
+
+/// Builds the agent task session over the shared workspace store (plan row
+/// 13; mirrors the removed `maho run` backend construction, minus the
+/// deleted BYOK/browser-bridge surface). Dry-callable: no LLM turn and no
+/// browser connection happen here, so tests create real sessions.
+async fn build_agent_task_session(
+    db_path: &std::path::Path,
+    workspace: Option<&str>,
+    config: &AgentTaskRuntimeConfig,
+) -> Result<SwiftideBackend> {
+    let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(db_path, workspace).await?;
+
+    let storage = maho_cli::workspace::open_storage(db_path)
+        .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?;
+
+    let workspaces = storage
+        .list_workspaces()
+        .map_err(|e| anyhow::anyhow!("Failed to list workspaces: {e}"))?;
+
+    let ws = workspaces
+        .into_iter()
+        .find(|w| w.id == resolved_ws_id)
+        .ok_or_else(|| anyhow::anyhow!("Resolved workspace not found in database"))?;
+
+    let workspace_root = ws
+        .workspace_root
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+    let backend = SwiftideBackend::new(
+        Arc::new(maho_agent::MutexAgentStorage(Arc::new(Mutex::new(storage)))),
+        None,
+        workspace_root,
+        true, // allow insecure key storage for CLI convenience (pre-existing CLI posture)
+    );
+
+    if let Some(space_id) = &ws.space_id {
+        backend.set_active_space_id(Some(space_id.clone()));
+    }
+
+    // CLI agent sessions are non-interactive: routine tool calls auto-approve
+    // (pre-existing CLI posture from the removed `maho run` path). Consequence
+    // gating under tier/final_confirm stays at the capability broker.
+    backend.set_approval_policy("allow".to_string());
+
+    maho_agent::AgentRuntime::set_system_prompt(&backend, &agent_task_system_prompt(config));
+
+    Ok(backend)
+}
+
+/// System prompt for a task session: the row-9 proactive instruction block
+/// gated on `proactive_mode`. With the flag off the composition is byte-
+/// identical to the plain (empty-base) composition — nothing appended.
+fn agent_task_system_prompt(config: &AgentTaskRuntimeConfig) -> String {
+    maho_agent::system_prompt::compose_system_prompt_proactive("", &[], None, config.proactive_mode)
+}
+
+/// JSON projection for `maho agent task --json`. A typed struct (not the
+/// `json!` macro) keeps the workspace disallowed-`unwrap` lint span out of
+/// this file's new surface.
+#[derive(serde::Serialize)]
+struct AgentTaskOutput<'a> {
+    session_id: &'a str,
+    runtime_config: &'a AgentTaskRuntimeConfig,
+    response: &'a str,
 }
 
 async fn cmd_routine_list(socket_path: Option<&str>, json_output: bool) -> Result<()> {
@@ -3219,7 +3631,7 @@ fn dirs_path() -> std::path::PathBuf {
 /// because their outcome may be ambiguous and must never be replayed.
 async fn ensure_active_lease(client: &maho_browser_mcp::client::BrowserClient) -> Result<()> {
     let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
-    if let Some(tabs) = result.get("tabs").and_then(|t| t.as_array()) {
+    if let Some(tabs) = tool_payload(&result).get("tabs").and_then(|t| t.as_array()) {
         if let Some(active) = tabs
             .iter()
             .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
@@ -3321,7 +3733,7 @@ async fn handle_repl_line(
         "tabs" => {
             let result =
                 browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
-            if let Some(tabs) = result.get("tabs").and_then(|t| t.as_array()) {
+            if let Some(tabs) = tool_payload(&result).get("tabs").and_then(|t| t.as_array()) {
                 println!("{:<4} {:<40} {:<60} {}", "ID", "TITLE", "URL", "ACTIVE");
                 for tab in tabs {
                     let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -3344,7 +3756,7 @@ async fn handle_repl_line(
         "tab" if parts.get(1) == Some(&"info") => {
             let result =
                 browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
-            let tabs = result.get("tabs").and_then(|t| t.as_array());
+            let tabs = tool_payload(&result).get("tabs").and_then(|t| t.as_array());
             let active = tabs.and_then(|arr| {
                 arr.iter()
                     .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
@@ -3497,7 +3909,7 @@ async fn handle_repl_line(
                             serde_json::json!({}),
                         )
                         .await?;
-                        if let Some(tabs) = tab_list.get("tabs").and_then(|t| t.as_array()) {
+                        if let Some(tabs) = tool_payload(&tab_list).get("tabs").and_then(|t| t.as_array()) {
                             if let Some(active) = tabs
                                 .iter()
                                 .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
@@ -3742,7 +4154,7 @@ async fn handle_repl_line(
                     let result =
                         browser::send_tool_call(client, "browser_tab_list", serde_json::json!({}))
                             .await?;
-                    let active = result
+                    let active = tool_payload(&result)
                         .get("tabs")
                         .and_then(|t| t.as_array())
                         .and_then(|arr| {

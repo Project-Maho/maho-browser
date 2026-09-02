@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useReducer, useRef } from 'preact/hooks';
-import type { AgentEvent, AgentHandle, ComposerDraftScope, MahoBridge } from '../../bridge/types';
+import type { AgentEvent, AgentHandle, AgentRuntimeConfig, ComposerDraftScope, MahoBridge } from '../../bridge/types';
 import { useComposerDraft } from '../../storage/use-composer-draft';
 import { useAgentSession } from '../../hooks/use-agent-session';
 import { useBridge } from '../../hooks/use-bridge';
 import { agentReducer, initialAgentState } from './agent-reducer';
+import {
+  agentInteractionAnswerJson,
+  agentInteractionAnswerLabel,
+  type AgentInteractionAnswer,
+} from './approval-card';
 import './agent.css';
 import { Composer } from './composer';
 import { CompactStage } from './compact-stage';
@@ -12,6 +17,8 @@ import { ConversationThread } from './conversation-thread';
 import { freeSessionAfterTeardown, freeSessionForReset } from './session-cleanup';
 import { isRunActive } from './agent-types';
 import { useAgentAutoScroll } from './use-agent-auto-scroll';
+import { getSuggestedTaskCards, SUGGESTED_TASK_RUNTIME_CONFIG, type SuggestedTask } from './suggested-tasks';
+import { SuggestedTaskCards } from './suggested-task-cards';
 
 const AGENT_DRAFT_SCOPE: ComposerDraftScope = { kind: 'new_task' };
 
@@ -28,9 +35,11 @@ export interface AgentScreenProps {
   onBack?: () => void;
   goal?: string;
   bridge?: MahoBridge;
+  /** SuggestionSettings gate for the idle suggested-task cards (default on). */
+  suggestionsEnabled?: boolean;
 }
 
-export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenProps) {
+export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabled = true }: AgentScreenProps) {
   const bridgeFromHook = useBridge();
   const bridge = bridgeProp ?? bridgeFromHook;
   const [state, dispatch] = useReducer(agentReducer, undefined, initialAgentState);
@@ -72,7 +81,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
   }, []);
 
   const submitPrompt = useCallback(
-    async (rawPrompt: string) => {
+    async (rawPrompt: string, runtimeConfig?: AgentRuntimeConfig) => {
       const prompt = rawPrompt.trim();
       if (!prompt) return;
 
@@ -89,6 +98,22 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
         dispatch({ type: 'SESSION_READY', handle });
 
         if (cancelledTurnIdsRef.current.has(turnId)) return;
+        // Suggested-task flag dispatch (mobile parity of the desktop
+        // startSuggestedTask flow): create → apply flags → send. A rejection
+        // means the broker did not take the guard flags — do not run the task.
+        if (runtimeConfig) {
+          if (!bridge.agentSetRuntimeConfig) {
+            restoreUnsentDraft(prompt);
+            dispatch({ type: 'AGENT_ERROR', message: 'Agent runtime flags are not supported on this platform yet.' });
+            return;
+          }
+          const accepted = await bridge.agentSetRuntimeConfig(handle, runtimeConfig);
+          if (!accepted) {
+            restoreUnsentDraft(prompt);
+            dispatch({ type: 'AGENT_ERROR', message: 'The suggested task flags were rejected; the task was not started.' });
+            return;
+          }
+        }
         const sent = await bridge.agentSendMessage(handle, prompt);
         if (!sent) {
           restoreUnsentDraft(prompt);
@@ -140,6 +165,19 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
           messageId: createId('assistant'),
         });
         break;
+      case 'interaction_request':
+        dispatch({
+          type: 'INTERACTION_REQUEST',
+          requestId: event.id,
+          interactionKind: event.interactionKind,
+          question: event.question,
+          options: event.options,
+          artifactRef: event.artifactRef ?? null,
+          initialState: event.state ?? null,
+          messageId: createId('assistant'),
+          createdAt: new Date(),
+        });
+        break;
       case 'complete':
         dispatch({
           type: 'AGENT_COMPLETE',
@@ -156,9 +194,12 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
     }
   }, []);
 
+  // Poll whenever a session handle is attached — not only mid-turn — so the
+  // resume/bootstrap replay of historical events (interaction requests that
+  // still await an answer, or expired ones) re-materializes approval cards.
   useAgentSession({
     bridge,
-    handle: state.phase === 'streaming' ? state.handle : null,
+    handle: state.handle,
     onEvent: handleAgentEvent,
   });
 
@@ -217,6 +258,11 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
     window.location.hash = 'byok';
   }, []);
 
+  const suggestedCards = getSuggestedTaskCards({ enabled: suggestionsEnabled });
+  const startSuggestedTask = useCallback((task: SuggestedTask) => {
+    void submitPrompt(task.prompt, SUGGESTED_TASK_RUNTIME_CONFIG);
+  }, [submitPrompt]);
+
   const handleShareArtifact = useCallback(async (artifactId: string): Promise<boolean> => {
     const handle = handleRef.current;
     if (handle === null) {
@@ -224,6 +270,28 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
     }
     return bridge.artifactShare(handle, artifactId);
   }, [bridge]);
+
+  // Sends the user's resolution for a pending interaction request back to the
+  // kernel through the dedicated bridge method (mirrors the FFI
+  // maho_agent_interaction_resolve session-handle call). Failures throw so the
+  // approval card can surface them locally and stay retryable.
+  const handleInteractionAnswer = useCallback(
+    async (requestId: string, answer: AgentInteractionAnswer): Promise<void> => {
+      const handle = handleRef.current;
+      if (handle === null) {
+        throw new Error('Agent session is no longer available.');
+      }
+      if (!bridge.agentResolveInteraction) {
+        throw new Error('Agent interaction answers are not supported on this platform yet.');
+      }
+      const accepted = await bridge.agentResolveInteraction(handle, requestId, agentInteractionAnswerJson(answer));
+      if (!accepted) {
+        throw new Error('The agent could not accept this answer. The request may have expired.');
+      }
+      dispatch({ type: 'INTERACTION_RESOLVE', requestId, answerLabel: agentInteractionAnswerLabel(answer) });
+    },
+    [bridge],
+  );
 
   const showThread = state.messages.length > 0 || state.errorMessage !== null;
 
@@ -242,12 +310,14 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp }: AgentScreenPro
           messages={state.messages}
           onScroll={onScroll}
           onShareArtifact={handleShareArtifact}
+          onAnswerInteraction={handleInteractionAnswer}
           phase={state.phase}
           scrollRef={scrollRef}
         />
       ) : (
         <CompactStage hasSession={state.handle !== null || Boolean(goal?.trim())} />
       )}
+      {!showThread && <SuggestedTaskCards cards={suggestedCards} onStart={startSuggestedTask} />}
       <Composer
         draft={state.draft}
         hasMessages={showThread}

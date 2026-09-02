@@ -797,6 +797,36 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
                    BuildIntegerSchema("Maximum history results to return."));
     return BuildObjectSchema(std::move(properties), {});
   }
+  if (name == "page.accessibility_snapshot_v2" ||
+      name == "page_accessibility_snapshot_v2") {
+    AddOptionalTabId(properties);
+    properties.Set("mode",
+                   BuildStringSchema(
+                       "Observation mode: 'interactive' (default), 'compact', or 'full'."));
+    properties.Set("include_hidden",
+                   BuildBooleanSchema(
+                       "Whether to include hidden or invisible nodes; default false."));
+    base::DictValue scope_props;
+    scope_props.Set("selector",
+                    BuildStringSchema("Optional CSS selector to scope the snapshot."));
+    scope_props.Set("ref",
+                    BuildIntegerSchema("Optional accessibility ref to scope the snapshot."));
+    base::DictValue scope_schema;
+    scope_schema.Set("type", "object");
+    scope_schema.Set("description",
+                     "Optional subtree scoping by CSS selector or accessibility ref.");
+    scope_schema.Set("properties", std::move(scope_props));
+    properties.Set("scope", std::move(scope_schema));
+    properties.Set("since_snapshot_token",
+                   BuildStringSchema(
+                       "Optional snapshot token to compute differential changes against."));
+    properties.Set("max_bytes",
+                   BuildIntegerSchema(
+                       "Maximum serialized snapshot size in bytes; default 24000."));
+    properties.Set("max_depth",
+                   BuildIntegerSchema("Maximum tree depth to traverse."));
+    return BuildObjectSchema(std::move(properties), {});
+  }
   if (name == "browser_bookmarks_search") {
     properties.Set("query", BuildStringSchema("Text to search in bookmarks."));
     return BuildObjectSchema(std::move(properties), {"query"});
@@ -986,6 +1016,75 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
     return BuildObjectSchema(std::move(properties), {"width_px", "height_px"});
   }
 
+  // NOTE: page_accessibility_snapshot_v2 (both dotted and underscored
+  // spellings) is handled by the block above, which returns first — keep
+  // that block as the single source for its schema.
+  if (name == "browser_locator_click") {
+    AddOptionalTabId(properties);
+    base::DictValue locator;
+    locator.Set("ref", BuildStringSchema("Existing element ref (@e<N>)."));
+    locator.Set("css", BuildStringSchema("CSS selector for the target element."));
+    locator.Set("role", BuildStringSchema("ARIA role when using role+name lookup."));
+    locator.Set("name",
+                BuildStringSchema("Accessible name when using role+name lookup."));
+    locator.Set("exact",
+                BuildBooleanSchema("Require an exact role+name match (default true)."));
+    properties.Set("locator", BuildObjectSchema(std::move(locator), {}));
+    properties.Set("observe",
+                   BuildStringSchema("Post-action observation: diff or none."));
+    properties.Set("wait",
+                   BuildStringSchema("Wait strategy: auto, navigation, or selector."));
+    properties.Set("lease",
+                   BuildStringSchema("Lease mode: scoped keeps steal/approval policy."));
+    return BuildObjectSchema(std::move(properties), {"locator"});
+  }
+  if (name == "browser_locator_type") {
+    AddOptionalTabId(properties);
+    base::DictValue locator;
+    locator.Set("ref", BuildStringSchema("Existing element ref (@e<N>)."));
+    locator.Set("css", BuildStringSchema("CSS selector for the target element."));
+    locator.Set("role", BuildStringSchema("ARIA role when using role+name lookup."));
+    locator.Set("name",
+                BuildStringSchema("Accessible name when using role+name lookup."));
+    locator.Set("exact",
+                BuildBooleanSchema("Require an exact role+name match (default true)."));
+    properties.Set("locator", BuildObjectSchema(std::move(locator), {}));
+    properties.Set("text", BuildStringSchema("Text to type into the element."));
+    properties.Set("submit", BuildBooleanSchema("Press Enter after typing."));
+    properties.Set("observe",
+                   BuildStringSchema("Post-action observation: diff or none."));
+    properties.Set("wait",
+                   BuildStringSchema("Wait strategy: auto, navigation, or selector."));
+    properties.Set("lease",
+                   BuildStringSchema("Lease mode: scoped keeps steal/approval policy."));
+    return BuildObjectSchema(std::move(properties), {"locator", "text"});
+  }
+  if (name == "browser_act_and_observe") {
+    AddOptionalTabId(properties);
+    properties.Set(
+        "action", BuildStringSchema("Action: click, type, navigate, or observe."));
+    base::DictValue locator;
+    locator.Set("ref", BuildStringSchema("Existing element ref (@e<N>)."));
+    locator.Set("css", BuildStringSchema("CSS selector for the target element."));
+    locator.Set("role", BuildStringSchema("ARIA role when using role+name lookup."));
+    locator.Set("name",
+                BuildStringSchema("Accessible name when using role+name lookup."));
+    properties.Set("locator", BuildObjectSchema(std::move(locator), {}));
+    properties.Set("text", BuildStringSchema("Text for type actions."));
+    properties.Set("url", BuildStringSchema("URL for navigate actions."));
+    properties.Set("submit", BuildBooleanSchema("Press Enter after typing."));
+    properties.Set("wait",
+                   BuildStringSchema("Wait strategy: auto, navigation, or selector."));
+    properties.Set("observe",
+                   BuildStringSchema("Post-action observation: diff or none."));
+    properties.Set(
+        "since_snapshot_token",
+        BuildStringSchema("Snapshot token to diff against for observe actions."));
+    properties.Set("lease",
+                   BuildStringSchema("Lease mode: scoped keeps steal/approval policy."));
+    return BuildObjectSchema(std::move(properties), {"action"});
+  }
+
   return MissingCatalogInputSchema(name);
 }
 
@@ -1120,7 +1219,8 @@ bool MahoBrowserToolRegistry::ValidateCapabilityDescriptors(
 const MahoBrowserToolRegistry::CapabilityDescriptor *
 MahoBrowserToolRegistry::FindCapability(std::string_view tool_name) {
   for (const CapabilityDescriptor &descriptor : GetCapabilityDescriptors()) {
-    if (descriptor.tool_name == tool_name) {
+    if (descriptor.tool_name == tool_name ||
+        descriptor.canonical_id == tool_name) {
       return &descriptor;
     }
   }

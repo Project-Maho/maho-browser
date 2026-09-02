@@ -2052,13 +2052,26 @@ impl Tool for BrowserToolShim {
             }
         }
 
-        let args = if self.name == "browser_type" {
+        let args = if self.name == "browser_type" || self.name == "input.type" {
             match serde_json::from_str::<serde_json::Value>(tool_call.args().unwrap_or("{}")) {
                 Ok(serde_json::Value::Object(mut m)) => {
                     m.insert("allow_credentials".to_string(), serde_json::json!(true));
+                    if is_v2_tool(&self.name) && !m.contains_key("max_bytes") {
+                        m.insert("max_bytes".to_string(), serde_json::json!(24_000));
+                    }
                     serde_json::Value::Object(m).to_string()
                 }
                 _ => tool_call.args().unwrap_or("{}").to_string(),
+            }
+        } else if is_v2_tool(&self.name) {
+            match serde_json::from_str::<serde_json::Value>(tool_call.args().unwrap_or("{}")) {
+                Ok(serde_json::Value::Object(mut m)) => {
+                    if !m.contains_key("max_bytes") {
+                        m.insert("max_bytes".to_string(), serde_json::json!(24_000));
+                    }
+                    serde_json::Value::Object(m).to_string()
+                }
+                _ => serde_json::json!({ "max_bytes": 24_000 }).to_string(),
             }
         } else {
             tool_call.args().unwrap_or("{}").to_string()
@@ -2269,6 +2282,18 @@ impl BrowserToolShim {
                 | "browser_scroll"
                 | "browser_key_press"
                 | "browser_hover"
+                | "input.click"
+                | "input.type"
+                | "input.select"
+                | "input.scroll"
+                | "input.key_press"
+                | "input.hover"
+                | "input.locator_click"
+                | "input.locator_type"
+                | "locator_click"
+                | "locator_type"
+                | "browser_locator_click"
+                | "browser_locator_type"
         )
     }
 
@@ -2899,6 +2924,96 @@ fn truncate_at_char_boundary(s: &mut String, max_bytes: usize) {
     s.truncate(end);
 }
 
+const V2_TOOL_INSTRUCTIONS: &str = "default observation interactive; if a diff is returned, do NOT re-request a full snapshot; do not hunt numeric refs when locator works; full snapshot only for ambiguity/debug escalation; use wait/actionability, never fixed sleeps.";
+
+fn is_v2_locator_action(name: &str) -> bool {
+    matches!(
+        name,
+        "input.locator_click"
+            | "input.locator_type"
+            | "locator_click"
+            | "locator_type"
+            | "browser_locator_click"
+            | "browser_locator_type"
+    )
+}
+
+fn is_v2_snapshot(name: &str) -> bool {
+    matches!(
+        name,
+        "page.accessibility_snapshot_v2"
+            | "page_accessibility_snapshot_v2"
+            | "browser_accessibility_snapshot_v2"
+    )
+}
+
+fn is_v2_tool(name: &str) -> bool {
+    is_v2_locator_action(name) || is_v2_snapshot(name)
+}
+
+fn is_v1_browser_primitive(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_click"
+            | "browser_type"
+            | "browser_select"
+            | "browser_scroll"
+            | "browser_hover"
+            | "browser_key_press"
+            | "browser_accessibility_snapshot"
+            | "page.accessibility_snapshot"
+            | "input.click"
+            | "input.type"
+            | "input.select"
+            | "input.scroll"
+            | "input.hover"
+            | "input.key_press"
+    )
+}
+
+fn browser_tool_rank(name: &str, v2_advertised: bool) -> usize {
+    if !v2_advertised {
+        return 0;
+    }
+    if is_v2_locator_action(name) {
+        0
+    } else if is_v2_snapshot(name) {
+        1
+    } else if !is_v1_browser_primitive(name) {
+        2
+    } else {
+        3
+    }
+}
+
+fn v2_tool_description(tool_name: &str, original_description: &str) -> String {
+    if !is_v2_tool(tool_name) {
+        return original_description.to_string();
+    }
+    if original_description.contains("if a diff is returned, do NOT re-request a full snapshot") {
+        return original_description.to_string();
+    }
+    let base = match tool_name {
+        "page.accessibility_snapshot_v2"
+        | "page_accessibility_snapshot_v2"
+        | "browser_accessibility_snapshot_v2" => {
+            "Get a compact, scoped, or differential accessibility snapshot."
+        }
+        "input.locator_click" | "locator_click" | "browser_locator_click" => {
+            "Click an element matched by locator (ref, css, or role+name) with automatic actionability wait and return observation diff."
+        }
+        "input.locator_type" | "locator_type" | "browser_locator_type" => {
+            "Type text into an element matched by locator (ref, css, or role+name) with automatic actionability wait and return observation diff."
+        }
+        _ => original_description,
+    };
+    if base.is_empty() || (base == original_description && !original_description.is_empty()) {
+        format!("{original_description} {V2_TOOL_INSTRUCTIONS}")
+    } else {
+        format!("{base} {V2_TOOL_INSTRUCTIONS}")
+    }
+}
+
 fn browser_tool_shims(
     bridge: Arc<dyn BrowserToolBridge>,
     descriptors: Vec<crate::BrowserToolDescriptor>,
@@ -2907,7 +3022,12 @@ fn browser_tool_shims(
 ) -> Vec<BrowserToolShim> {
     let mut seen_capability_ids = std::collections::HashSet::new();
     let mut seen_names = std::collections::HashSet::new();
-    descriptors
+
+    let v2_advertised = descriptors
+        .iter()
+        .any(|d| is_v2_tool(&d.name) || is_v2_tool(&d.capability_id));
+
+    let mut shims: Vec<BrowserToolShim> = descriptors
         .into_iter()
         .filter_map(|descriptor| {
             let schema_valid = descriptor.input_schema.as_object().is_some_and(|schema| {
@@ -2929,6 +3049,22 @@ fn browser_tool_shims(
                         | "browser_hover"
                         | "browser_key_press"
                         | "browser_accessibility_snapshot"
+                        | "page.accessibility_snapshot"
+                        | "input.click"
+                        | "input.type"
+                        | "input.select"
+                        | "input.scroll"
+                        | "input.hover"
+                        | "input.key_press"
+                        | "input.locator_click"
+                        | "input.locator_type"
+                        | "locator_click"
+                        | "locator_type"
+                        | "browser_locator_click"
+                        | "browser_locator_type"
+                        | "page.accessibility_snapshot_v2"
+                        | "page_accessibility_snapshot_v2"
+                        | "browser_accessibility_snapshot_v2"
                 );
             if !schema_valid || !identity_valid || !unique || !action_allowed {
                 tracing::warn!(
@@ -2943,10 +3079,11 @@ fn browser_tool_shims(
                 );
                 return None;
             }
+            let description = v2_tool_description(&descriptor.name, &descriptor.description);
             Some(BrowserToolShim {
                 capability_id: descriptor.capability_id,
                 name: descriptor.name,
-                description: descriptor.description,
+                description,
                 parameters_schema: descriptor.input_schema,
                 sensitivity: if descriptor.policy.sensitive {
                     ToolSensitivity::Sensitive
@@ -2958,7 +3095,85 @@ fn browser_tool_shims(
                 context: context.clone(),
             })
         })
-        .collect()
+        .collect();
+
+    if v2_advertised {
+        shims.sort_by_key(|s| browser_tool_rank(&s.name, true));
+    }
+
+    shims
+}
+
+/// Plan row 11: the registered dispatch surface for composite (batch) page
+/// execution. The model emits one `composite_execute` call; the runner
+/// executes steps sequentially through `BridgeStepExecutor`, so every step
+/// crosses the capability broker individually, and progress streams over the
+/// row-1 Status event plumbing. Admission is gated by the session's
+/// runtime_config bound `CompositeExecutionConfig` (fail-closed default).
+#[derive(Clone)]
+pub struct CompositeExecuteTool {
+    bridge: Option<Arc<dyn BrowserToolBridge>>,
+    config: Arc<Mutex<crate::composite::CompositeExecutionConfig>>,
+    on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
+    clock: Arc<dyn crate::event_wait::Clock>,
+    turn_start_millis: u64,
+}
+
+#[async_trait]
+impl Tool for CompositeExecuteTool {
+    async fn invoke(
+        &self,
+        _agent_context: &dyn AgentContext,
+        tool_call: &ToolCall,
+    ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
+        let request: crate::composite::CompositeRequest =
+            serde_json::from_str(tool_call.args().unwrap_or("{}")).map_err(|error| {
+                swiftide_core::chat_completion::errors::ToolError::unknown(anyhow::anyhow!(
+                    "invalid composite_execute arguments: {error}"
+                ))
+            })?;
+
+        let config = *self.config.lock_unpoison();
+        let runner = crate::composite::CompositeRunner::new(config);
+        let executor = crate::composite::BridgeStepExecutor::new(self.bridge.clone());
+
+        let on_event = self.on_event.clone();
+        let clock = Arc::clone(&self.clock);
+        let turn_start_millis = self.turn_start_millis;
+        let result = runner
+            .execute_batch(&request, &executor, |progress| {
+                if let Some(ref callback) = on_event {
+                    let elapsed_secs = clock.now_millis().saturating_sub(turn_start_millis) / 1000;
+                    let message = serde_json::to_string(&progress).unwrap_or_default();
+                    callback(AgentStreamEvent::Status { elapsed_secs, message });
+                }
+            })
+            .await;
+
+        match result {
+            Ok(batch) => {
+                let output = serde_json::to_string(&batch).unwrap_or_default();
+                Ok(ToolOutput::Text(output))
+            }
+            Err(error) => Err(swiftide_core::chat_completion::errors::ToolError::unknown(
+                anyhow::anyhow!(error.to_string()),
+            )),
+        }
+    }
+
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed("composite_execute")
+    }
+
+    fn tool_spec(&self) -> ToolSpec {
+        let definition = crate::tool_registry::composite_execute_definition();
+        ToolSpec {
+            name: definition.name,
+            description: definition.description,
+            parameters_schema: serde_json::from_value(definition.parameters_schema)
+                .unwrap_or(None),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3150,6 +3365,8 @@ pub struct SwiftideBackend {
 
     browser_action_tools_state: Arc<Mutex<BrowserActionToolsState>>,
 
+    composite_config: Arc<Mutex<crate::composite::CompositeExecutionConfig>>,
+
     mail_authorization_state: Arc<Mutex<crate::MailAuthorizationState>>,
 
     preferred_provider: Arc<Mutex<Option<String>>>,
@@ -3215,6 +3432,8 @@ impl Clone for SwiftideBackend {
             approval_policy: Arc::clone(&self.approval_policy),
 
             browser_action_tools_state: Arc::clone(&self.browser_action_tools_state),
+
+            composite_config: Arc::clone(&self.composite_config),
 
             mail_authorization_state: Arc::clone(&self.mail_authorization_state),
 
@@ -3291,6 +3510,10 @@ impl SwiftideBackend {
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::default())),
 
             browser_action_tools_state: Arc::new(Mutex::new(BrowserActionToolsState::default())),
+
+            composite_config: Arc::new(Mutex::new(
+                crate::composite::CompositeExecutionConfig::default(),
+            )),
 
             mail_authorization_state: Arc::new(
                 Mutex::new(crate::MailAuthorizationState::default()),
@@ -3563,6 +3786,13 @@ impl SwiftideBackend {
 
     pub fn set_browser_action_tools_enabled(&self, enabled: bool) {
         self.set_browser_action_tools_state(BrowserActionToolsState::from_enabled(enabled));
+    }
+
+    /// Bind the composite execution gate to this session's runtime_config
+    /// (plan row 11). The default is fail-closed: `enabled: false` refuses
+    /// every batch before any executor is touched.
+    pub fn set_composite_config(&self, config: crate::composite::CompositeExecutionConfig) {
+        *self.composite_config.lock_unpoison() = config;
     }
 
     async fn get_managed_auth_token(&self) -> Result<Option<crate::ZeroizedString>, AgentError> {
@@ -4522,6 +4752,22 @@ impl SwiftideBackend {
         } else {
             dbg_log("[swiftide_backend] No browser_tool_bridge set");
         }
+
+        // Composite (batch) execution — plan row 11. Registered like every
+        // other platform tool; admission is gated by the session
+        // runtime_config at dispatch time (fail-closed default).
+        platform_tools.push(self.build_gated_tool(
+            Arc::new(CompositeExecuteTool {
+                bridge: self.browser_tool_bridge.lock_unpoison().clone(),
+                config: Arc::clone(&self.composite_config),
+                on_event: on_event.clone(),
+                clock: Arc::clone(&self.clock),
+                turn_start_millis: self.clock.now_millis(),
+            }),
+            false,
+            denied_flag.clone(),
+            session_id,
+        ));
 
         // profile.tools is a per-profile allowlist keyed by tool name (empty =
 
@@ -5883,6 +6129,10 @@ impl AgentRuntime for SwiftideBackend {
 
     fn set_browser_action_tools_state(&self, state: BrowserActionToolsState) {
         SwiftideBackend::set_browser_action_tools_state(self, state);
+    }
+
+    fn set_composite_config(&self, config: crate::composite::CompositeExecutionConfig) {
+        SwiftideBackend::set_composite_config(self, config);
     }
 
     fn set_mail_authorization_state(&self, state: crate::MailAuthorizationState) {

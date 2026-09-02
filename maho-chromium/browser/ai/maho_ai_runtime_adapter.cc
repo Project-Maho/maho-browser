@@ -12,6 +12,16 @@ void MahoAiRuntimeAdapter::RespondToInteraction(
     const std::string& interaction_id,
     const std::string& answer_json) {}
 
+bool MahoAiRuntimeAdapter::GetRuntimeConfig(
+    MahoAiRuntimeConfig* out_config) const {
+  return false;
+}
+
+bool MahoAiRuntimeAdapter::SetRuntimeConfig(
+    const MahoAiRuntimeConfig& config) {
+  return false;
+}
+
 bool MahoAiRuntimeAdapter::ReplayAfter(const std::string& run_id,
                                        uint64_t after_seq,
                                        RuntimeEventCallback on_event) {

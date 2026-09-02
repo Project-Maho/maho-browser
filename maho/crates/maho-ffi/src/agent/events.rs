@@ -1883,6 +1883,71 @@ mod tests {
         MahoAgentSession::create_for_test("test-session-1")
     }
 
+    /// F3-R4 regression guard: the exported runtime-config setter (crate-root
+    /// `maho_agent_set_runtime_config`) and the exported unified-event plumbing
+    /// (agent::events) MUST operate on one and the same session layout.
+    ///
+    /// Historically two struct definitions existed (crate root vs the old
+    /// agent::session duplicate). The exported create path built the root
+    /// struct while the event FFI locked fields of the other definition at
+    /// different offsets — inside the browser that locked String/fn-pointer
+    /// bytes as a pthread mutex: "failed to lock mutex: Invalid argument
+    /// (os error 22)" + panic=abort -> SIGABRT at every agent turn start,
+    /// before any LLM request. See .omo/evidence/f3-r4-mutex-panic-rca.md.
+    #[test]
+    fn test_runtime_config_and_unified_event_ffi_seams_share_one_session() {
+        let mut session = create_test_session();
+        let session_ptr = session.as_mut() as *mut MahoAgentSession;
+
+        // Seam 1 (crate root): exported runtime-config setter.
+        let tier = CString::new("read_only").unwrap();
+        unsafe {
+            crate::maho_agent_set_runtime_config(session_ptr, tier.as_ptr(), false, true);
+        }
+        {
+            let cfg = session
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(cfg.permission_tier, "read_only");
+            assert!(!cfg.final_confirm);
+            assert!(cfg.proactive_mode);
+        }
+
+        // Seam 2 (agent::events): exported unified-event registration + turn
+        // queueing on the SAME pointer must lock real mutexes and round-trip
+        // an event to the registered callback.
+        let unified_events = Arc::new(Mutex::new(Vec::<CapturedEnvelope>::new()));
+        unsafe {
+            assert!(maho_agent_register_unified_event_callback(
+                session_ptr,
+                Some(test_unified_callback),
+                Arc::as_ptr(&unified_events) as *mut c_void,
+            ));
+        }
+        {
+            let mut controller = session.turn_controller.lock().unwrap();
+            let _token = controller.start_turn("layout-unify-turn").unwrap();
+        }
+        let run_id_c = CString::new("run-layout-unify-1").unwrap();
+        let msg_c = CString::new(r#"{"message":"layout probe"}"#).unwrap();
+        let intent_queue_c = CString::new("queue").unwrap();
+        unsafe {
+            assert!(maho_agent_turn_submit(
+                session_ptr,
+                run_id_c.as_ptr(),
+                msg_c.as_ptr(),
+                intent_queue_c.as_ptr(),
+            ));
+        }
+        let captured = unified_events.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].abi_version, 2);
+        assert_eq!(captured[0].kind, MahoAgentEventKindV2::Status);
+        assert!(captured[0].payload_json.contains("turn_queued"));
+        assert!(captured[0].payload_json.contains("layout probe"));
+    }
+
     #[test]
     fn test_unified_event_envelope_dispatch_monotonic() {
         let events = Arc::new(Mutex::new(Vec::<CapturedEnvelope>::new()));

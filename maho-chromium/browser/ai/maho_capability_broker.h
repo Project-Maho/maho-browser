@@ -16,6 +16,9 @@
 
 namespace maho::ai {
 
+// NOTE: CapabilityRequestContext (below) carries the session runtime_config
+// triple (permission_tier / final_confirm / proactive_mode).
+
 struct CapabilityRequestContext {
   CapabilityRequestContext();
   CapabilityRequestContext(const CapabilityRequestContext&);
@@ -42,7 +45,54 @@ struct CapabilityRequestContext {
   std::vector<std::string> granted_origins;
   std::vector<std::string> blocked_domains;
   std::vector<int> adopted_tabs;
+
+  // Session runtime_config plumbing (plan row 1). The defaults mirror
+  // today's effective broker behavior, so carrying the triple on the
+  // request context changes no decision; enforcement reads these fields
+  // in later plan rows only.
+  std::string permission_tier = "guard";
+  bool final_confirm = true;
+  bool proactive_mode = false;
+
+  // Runtime permission-tier file gate inputs (plan row 3). `fs_path` is the
+  // local filesystem path this request reads or writes; empty means the
+  // request is not file-scoped and the tier gate is inert.
+  // `fs_whitelist_roots` are the session-supplied absolute directory roots
+  // (account dirs, Downloads, Documents, session dirs); an empty list means
+  // nothing is whitelisted (fail closed).
+  std::string fs_path;
+  std::vector<std::string> fs_whitelist_roots;
+
+  // Final-confirmation gate input (plan row 5). Browser-minted consequence
+  // classification for this request (e.g. "submit", "ordinary"); empty
+  // means the request is not consequence-scoped and the gate is inert,
+  // except for browser action tools whose missing classification is Unknown
+  // and fails closed to gated. Never model- or MCP-argument-supplied.
+  std::string action_consequence;
 };
+
+// Parses a raw session permission-tier string into its canonical form,
+// failing closed to "guard" for empty or unknown input (plan row 1
+// plumbing; enforcement consumes the parsed value in later rows).
+std::string ParseRuntimeConfigTier(std::string_view raw_tier);
+
+// Component-boundary whitelist containment for the runtime permission-tier
+// file gate (plan row 3). A path is inside when it equals a root or lives
+// underneath it at a path-component boundary. Fails closed: empty path,
+// relative path, empty root list, or empty roots never match.
+bool FsPathInsideRuntimeWhitelist(
+    const std::string& path,
+    const std::vector<std::string>& whitelist_roots);
+
+// Final-confirmation gate classification (plan row 5). Returns true when the
+// resolved consequence class must obtain a user confirmation before commit
+// under final_confirm=true: submit, purchase_or_transfer, account_security,
+// credential_fill, file_transfer, destructive. "ordinary" and "new_origin"
+// (navigation is reversible) are free; unknown, unrecognized, or empty input
+// fails closed to gated. The accepted strings mirror the Rust
+// classify_action_consequence vocabulary in
+// maho/crates/maho-agent/src/permission.rs.
+bool IsFinalConfirmGatedConsequence(std::string_view consequence);
 
 struct CapabilityObligations {
   CapabilityObligations();
@@ -95,6 +145,12 @@ enum class CapabilityDenyReason {
   kTransactionBindingMismatch,
   kInsufficientDeviceProtection,
   kInvalidRequestContext,
+  // Runtime permission-tier denials (plan row 3). The serialized names in
+  // CapabilityDenyReasonName are machine-consumed contract strings and must
+  // stay in lockstep with the Rust constants PERMISSION_TIER_DENIED_* in
+  // maho/crates/maho-agent/src/permission.rs.
+  kPermissionTierDeniedWrite,
+  kPermissionTierDeniedRead,
 };
 
 struct ApprovalRequest {
@@ -266,6 +322,10 @@ inline constexpr std::string_view CapabilityDenyReasonName(
       return "insufficient_device_protection";
     case CapabilityDenyReason::kInvalidRequestContext:
       return "invalid_request_context";
+    case CapabilityDenyReason::kPermissionTierDeniedWrite:
+      return "permission_tier_denied_write";
+    case CapabilityDenyReason::kPermissionTierDeniedRead:
+      return "permission_tier_denied_read";
   }
   return "none";
 }

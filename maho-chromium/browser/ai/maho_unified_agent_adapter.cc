@@ -4,6 +4,7 @@
 #pragma allow_unsafe_buffers
 #endif
 
+#include "maho/browser/ai/maho_capability_broker.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 
 #include <algorithm>
@@ -269,71 +270,51 @@ std::optional<std::string> PreferredProviderForRuntime(PrefService* prefs) {
 
 }  // namespace
 
+// Declarations of the maho-agent C entry points implemented in the prebuilt
+// libmaho_ffi.a. Declared (not defined) here so kProductionFfi forwards to
+// the real Rust implementations; the envelope mirror struct lives in this
+// header, and C linkage means only the symbol name participates in linking.
 extern "C" {
 bool maho_agent_register_unified_event_callback_leased(
     MahoAgentSession* session,
     void (*cb)(void*, const MahoUnifiedAgentEventEnvelope*),
     void* user_data,
     MahoAgentReleaseCallback on_release,
-    void* release_user_data) {
-  return false;
-}
-bool maho_agent_unregister_unified_event_callback(MahoAgentSession* session) {
-  return false;
-}
+    void* release_user_data);
+bool maho_agent_unregister_unified_event_callback(MahoAgentSession* session);
 bool maho_agent_interaction_resolve(MahoAgentSession* session,
                                     const char* request_id,
-                                    const char* answer_json) {
-  return false;
-}
+                                    const char* answer_json);
 bool maho_agent_interaction_timeout(MahoAgentSession* session,
-                                    const char* request_id) {
-  return false;
-}
+                                    const char* request_id);
 bool maho_agent_interaction_cancel(MahoAgentSession* session,
-                                   const char* request_id) {
-  return false;
-}
+                                   const char* request_id);
 bool maho_agent_get_events_after(MahoAgentSession* session,
                                  const char* run_id,
                                  uint64_t after_seq,
-                                 char** out_json) {
-  if (out_json) {
-    *out_json = nullptr;
-  }
-  return false;
-}
+                                 char** out_json);
 bool maho_agent_turn_submit(MahoAgentSession* session,
                             const char* run_ctx,
                             const char* message_json,
-                            const char* intent) {
-  return false;
-}
+                            const char* intent);
 bool maho_agent_turn_queue_depth(MahoAgentSession* session,
-                                 uint32_t* out_u32) {
-  return false;
-}
+                                 uint32_t* out_u32);
 char* maho_agent_wait_register(MahoAgentSession* session,
                                const char* run_id,
                                const char* filter_json,
-                               uint64_t timeout_ms) {
-  return nullptr;
-}
+                               uint64_t timeout_ms);
 bool maho_agent_wait_wake(MahoAgentSession* session,
                           const char* run_id,
-                          const char* event_json) {
-  return false;
-}
+                          const char* event_json);
 bool maho_agent_resolve_model(MahoAgentSession* session,
                               const char* category,
                               const char* preference_opt_json,
                               const char* available_opt_json,
-                              char** out_json) {
-  if (out_json) {
-    *out_json = nullptr;
-  }
-  return false;
-}
+                              char** out_json);
+void maho_agent_set_runtime_config(MahoAgentSession* session,
+                                   const char* permission_tier,
+                                   bool final_confirm,
+                                   bool proactive_mode);
 }
 
 namespace {
@@ -342,6 +323,7 @@ const MahoAgentFfi kProductionFfi = {
     &maho_agent_set_approval_policy,
     &maho_agent_set_mail_authorization_state,
     &maho_agent_session_set_preferred_provider,
+    &maho_agent_set_runtime_config,
     &maho_agent_send_message_leased,
     &maho_agent_cancel,
     &maho_agent_session_free,
@@ -815,6 +797,9 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
                                      "Failed to create agent session.");
       return;
     }
+    // A fresh FFI session carries the broker defaults; drop any config cached
+    // for a previous session so GetRuntimeConfig never reports stale flags.
+    runtime_config_ = MahoAiRuntimeConfig{};
 
     session_ffi_resources_ = std::move(session_resources);
 
@@ -2826,6 +2811,44 @@ void MahoUnifiedAgentAdapter::RespondToInteraction(
   event.payload.Set("interaction_id", interaction_id);
   event.payload.Set("answer", answer_json);
   EmitEvent(std::move(event));
+}
+
+bool MahoUnifiedAgentAdapter::GetRuntimeConfig(
+    MahoAiRuntimeConfig* out_config) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // No active session: report unsupported so the caller renders the broker
+  // defaults instead of a stale previous session's flags.
+  if (!agent_session_) {
+    return false;
+  }
+  *out_config = runtime_config_;
+  return true;
+}
+
+bool MahoUnifiedAgentAdapter::SetRuntimeConfig(
+    const MahoAiRuntimeConfig& config) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Session-scoped by contract: the WebUI creates the session first, then
+  // applies flags (row 12's startSuggestedTask flow). No live session means
+  // the runtime cannot take the config.
+  if (!agent_session_) {
+    return false;
+  }
+
+  MahoAiRuntimeConfig normalized = config;
+  // Fail closed exactly like the broker's ParseRuntimeConfigTier and the
+  // maho-ffi normalize_tier: unknown/empty tiers collapse to "guard".
+  normalized.permission_tier =
+      maho::ai::ParseRuntimeConfigTier(config.permission_tier);
+
+  if (agent_ffi_->set_runtime_config) {
+    agent_ffi_->set_runtime_config(agent_session_,
+                                   normalized.permission_tier.c_str(),
+                                   normalized.final_confirm,
+                                   normalized.proactive_mode);
+  }
+  runtime_config_ = normalized;
+  return true;
 }
 
 void MahoUnifiedAgentAdapter::CancelAllPendingInteractions() {

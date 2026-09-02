@@ -109,6 +109,9 @@ function makeBridge(): MahoBridge {
     agentListTools: (handle) => call('agentListTools', { handle }),
     agentListArtifacts: (handle) => call('agentListArtifacts', { handle }),
     artifactShare: (handle, artifactId) => call('artifactShare', { handle, artifactId }),
+    agentResolveInteraction: (handle, requestId, answerJson) =>
+      call('agentResolveInteraction', { handle, requestId, answerJson }),
+    agentSetRuntimeConfig: (handle, config) => call('agentSetRuntimeConfig', { handle, config }),
 
     // --- Native-only actions ---
     capturePhoto: () => call('capturePhoto'),

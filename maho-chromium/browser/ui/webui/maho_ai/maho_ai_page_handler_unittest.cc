@@ -255,6 +255,34 @@ class AcceptingRuntimeAdapter : public MahoAiRuntimeAdapter {
   std::vector<std::string> submitted_messages;
 };
 
+// Recording fake for the session runtime_config passthrough (plan row-1
+// plumbing): mirrors the adapter-side contract — Get/Set report unsupported
+// while no session is active, and Set records exactly what the handler
+// forwards (tier normalization is the unified adapter's concern, covered by
+// the broker's ParseRuntimeConfigTier unittests).
+class RecordingRuntimeConfigAdapter : public AcceptingRuntimeAdapter {
+ public:
+  bool GetRuntimeConfig(MahoAiRuntimeConfig* out_config) const override {
+    if (!has_session) {
+      return false;
+    }
+    *out_config = config;
+    return true;
+  }
+  bool SetRuntimeConfig(const MahoAiRuntimeConfig& value) override {
+    if (!has_session) {
+      return false;
+    }
+    ++set_calls;
+    config = value;
+    return true;
+  }
+
+  bool has_session = false;
+  int set_calls = 0;
+  MahoAiRuntimeConfig config;
+};
+
 class MahoAIPageHandlerTest : public BrowserWithTestWindowTest {
  protected:
   void SetUp() override {
@@ -1435,6 +1463,179 @@ TEST_F(MahoAIPageHandlerTest,
   EXPECT_EQ(maho_ai::mojom::ApprovalSensitivity::kSensitive,
             (*history_it)->approval_request->sensitivity);
   EXPECT_TRUE((*history_it)->approval_request->page_derived_justification);
+}
+
+// Plan row 6: FFI MahoAgentEventKindV2 kind-8 (InteractionRequest) events must
+// reach the WebUI bridge surface as a kInteractionRequest RuntimeEvent with a
+// structured InteractionRequestInfo payload (not the kError fall-through).
+TEST_F(MahoAIPageHandlerTest, InteractionRequestKind8MapsToStructuredMojomPayload) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  ASSERT_TRUE(handler);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+
+  base::DictValue payload;
+  payload.Set("request_id", "interaction-req-3");
+  payload.Set("kind", "question");
+  payload.Set("question", "Which deployment target should we use?");
+  base::ListValue options;
+  base::DictValue prod;
+  prod.Set("id", "opt_prod");
+  prod.Set("label", "Production");
+  options.Append(std::move(prod));
+  payload.Set("options", std::move(options));
+
+  MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+      handler.get(), session->session_id,
+      MahoAiRuntimeEventType::kInteractionRequest, std::move(payload));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_FALSE(page.events.empty());
+  auto event_it =
+      std::find_if(page.events.begin(), page.events.end(),
+                   [](const auto& event) {
+                     return event->kind == maho_ai::mojom::RuntimeEventKind::
+                                                kInteractionRequest;
+                   });
+  ASSERT_NE(page.events.end(), event_it);
+  EXPECT_EQ(maho_ai::mojom::RuntimeEventKind::kInteractionRequest,
+            (*event_it)->kind);
+  ASSERT_TRUE((*event_it)->interaction_request);
+  EXPECT_EQ("interaction-req-3", (*event_it)->interaction_request->request_id);
+  EXPECT_EQ(maho_ai::mojom::InteractionRequestKind::kQuestion,
+            (*event_it)->interaction_request->kind);
+  EXPECT_EQ("Which deployment target should we use?",
+            (*event_it)->interaction_request->question);
+  ASSERT_EQ(1u, (*event_it)->interaction_request->options.size());
+  EXPECT_EQ("opt_prod", (*event_it)->interaction_request->options[0]->id);
+  EXPECT_EQ("Production", (*event_it)->interaction_request->options[0]->label);
+}
+
+// The live FFI kind-8 wire carries the prompt fields inside a JSON-encoded
+// `args` string; the mapping must surface the effect description and the
+// optional review artifact reference.
+TEST_F(MahoAIPageHandlerTest,
+       InteractionRequestKind8ArgsStringCarriesEffectAndArtifactRef) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  ASSERT_TRUE(handler);
+  auto session = StartSession(handler.get());
+  ASSERT_TRUE(session);
+
+  base::DictValue payload;
+  payload.Set("request_id", "interaction-req-4");
+  payload.Set("kind", "confirmation");
+  payload.Set(
+      "args",
+      R"({"effect_description":"Drop database production_db_v2","artifact_ref":"artifact-review-1"})");
+
+  MahoAIPageHandlerTestPeer::EmitRuntimeEventWithPayload(
+      handler.get(), session->session_id,
+      MahoAiRuntimeEventType::kInteractionRequest, std::move(payload));
+  base::RunLoop().RunUntilIdle();
+
+  ASSERT_FALSE(page.events.empty());
+  auto event_it =
+      std::find_if(page.events.begin(), page.events.end(),
+                   [](const auto& event) {
+                     return event->kind == maho_ai::mojom::RuntimeEventKind::
+                                                kInteractionRequest;
+                   });
+  ASSERT_NE(page.events.end(), event_it);
+  ASSERT_TRUE((*event_it)->interaction_request);
+  EXPECT_EQ("interaction-req-4", (*event_it)->interaction_request->request_id);
+  EXPECT_EQ(maho_ai::mojom::InteractionRequestKind::kConfirmation,
+            (*event_it)->interaction_request->kind);
+  EXPECT_EQ("Drop database production_db_v2",
+            (*event_it)->interaction_request->question);
+  EXPECT_TRUE((*event_it)->interaction_request->options.empty());
+  ASSERT_TRUE((*event_it)->interaction_request->artifact_ref.has_value());
+  EXPECT_EQ("artifact-review-1",
+            (*event_it)->interaction_request->artifact_ref.value());
+}
+
+// Plan rows 1/4: the WebUI runtime-config surface is a thin passthrough to
+// the active runtime adapter. Without an adapter (or before a session
+// exists) Get reports the broker defaults and Set is refused, so the panel
+// keeps its previous displayed state.
+TEST_F(MahoAIPageHandlerTest, GetRuntimeConfigDefaultsAndSetRefusedWithoutRuntime) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  ASSERT_TRUE(handler);
+
+  auto config = maho_ai::mojom::RuntimeConfigInfo::New();
+  config->permission_tier = "sentinel-wrong";
+  config->final_confirm = false;
+  config->proactive_mode = true;
+  handler->GetRuntimeConfig(base::BindLambdaForTesting(
+      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) { config = result; }));
+  ASSERT_TRUE(config);
+  EXPECT_EQ("guard", config->permission_tier);
+  EXPECT_TRUE(config->final_confirm);
+  EXPECT_FALSE(config->proactive_mode);
+
+  auto requested = maho_ai::mojom::RuntimeConfigInfo::New();
+  requested->permission_tier = "read_only";
+  requested->final_confirm = false;
+  requested->proactive_mode = true;
+  bool accepted = true;
+  handler->SetRuntimeConfig(
+      std::move(requested),
+      base::BindLambdaForTesting([&](bool result) { accepted = result; }));
+  EXPECT_FALSE(accepted);
+}
+
+// With a runtime that owns a session, Set delegates (fields intact) and the
+// same values round-trip through Get; unsupported adapters keep Get on the
+// broker defaults.
+TEST_F(MahoAIPageHandlerTest, RuntimeConfigRoundTripsThroughActiveRuntime) {
+  MockPage page;
+  auto handler = CreateHandler(&page);
+  ASSERT_TRUE(handler);
+  RecordingRuntimeConfigAdapter adapter;
+  MahoAIPageHandlerTestPeer::SetRuntimeAdapterForTesting(handler.get(),
+                                                         &adapter);
+
+  // Adapter without a session: Get stays on broker defaults, Set refused.
+  auto defaults = maho_ai::mojom::RuntimeConfigInfo::New();
+  handler->GetRuntimeConfig(base::BindLambdaForTesting(
+      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) { defaults = result; }));
+  EXPECT_EQ("guard", defaults->permission_tier);
+  EXPECT_TRUE(defaults->final_confirm);
+  EXPECT_FALSE(defaults->proactive_mode);
+
+  auto refused = maho_ai::mojom::RuntimeConfigInfo::New();
+  refused->permission_tier = "full_access";
+  bool accepted = true;
+  handler->SetRuntimeConfig(
+      std::move(refused),
+      base::BindLambdaForTesting([&](bool result) { accepted = result; }));
+  EXPECT_FALSE(accepted);
+  EXPECT_EQ(0, adapter.set_calls);
+
+  // Session active: Set delegates with the fields intact and Get serves the
+  // stored value back.
+  adapter.has_session = true;
+  auto requested = maho_ai::mojom::RuntimeConfigInfo::New();
+  requested->permission_tier = "read_only";
+  requested->final_confirm = false;
+  requested->proactive_mode = true;
+  handler->SetRuntimeConfig(
+      std::move(requested),
+      base::BindLambdaForTesting([&](bool result) { accepted = result; }));
+  EXPECT_TRUE(accepted);
+  EXPECT_EQ(1, adapter.set_calls);
+  EXPECT_EQ("read_only", adapter.config.permission_tier);
+  EXPECT_FALSE(adapter.config.final_confirm);
+  EXPECT_TRUE(adapter.config.proactive_mode);
+
+  auto stored = maho_ai::mojom::RuntimeConfigInfo::New();
+  handler->GetRuntimeConfig(base::BindLambdaForTesting(
+      [&](maho_ai::mojom::RuntimeConfigInfoPtr result) { stored = result; }));
+  EXPECT_EQ("read_only", stored->permission_tier);
+  EXPECT_FALSE(stored->final_confirm);
+  EXPECT_TRUE(stored->proactive_mode);
 }
 
 TEST_F(MahoAIPageHandlerTest, ApprovalResultRoundTripsDecisionMetadata) {

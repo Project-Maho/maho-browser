@@ -23,6 +23,23 @@ pub const BASELINE_CONTRACT_TEXT: &str = "\
 /// Alias for BASELINE_CONTRACT_TEXT preserving shared module contract.
 pub const BASELINE_SYSTEM_PROMPT_CONTRACT: &str = BASELINE_CONTRACT_TEXT;
 
+/// Sentinel token delimiting the proactive-mode instruction block.
+pub const PROACTIVITY_INSTRUCTION_SENTINEL: &str = "<proactivity_instruction>";
+
+/// Fixed English-only proactive-mode instruction block appended to the composed system
+/// prompt when the session's `proactive_mode` runtime flag is enabled.
+pub const PROACTIVITY_INSTRUCTION_TEXT: &str = "\
+<proactivity_instruction>\n\
+PROACTIVE MODE - MAX-EFFORT CONTEXT GATHERING (FIXED CONTRACT):\n\
+You are running autonomously in proactive mode. Work like a detective at maximum effort: gather context exhaustively before acting.\n\
+- Breadth-first search (BFS): expand outward from the initial question level by level until the context space is exhausted.\n\
+- Launch parallel context_search subagents for independent threads of inquiry; never serialize work that can run concurrently.\n\
+- Collect at least 10 distinct contexts (sources, pages, files, or viewpoints) before drawing any conclusion.\n\
+- NEVER ask the user for information you can obtain yourself; resolve questions autonomously.\n\
+- Continuously prioritize high-value sources and kill low-value leads early instead of exhausting them.\n\
+- Prefer recent, live data over stale or cached material; verify recency before trusting any source.\n\
+</proactivity_instruction>";
+
 /// Structured composition representation for system prompt parts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemPromptComposition {
@@ -116,6 +133,26 @@ pub fn compose_system_prompt_with_briefing(
     }
 
     parts.join("\n\n")
+}
+
+/// Composes the system prompt with the proactive-mode instruction block gated on `proactive_mode`.
+///
+/// `proactive_mode` mirrors the session's runtime flag (`RuntimeConfig.proactive_mode`, see the
+/// maho-ffi runtime_config plumbing): when true, the fixed `<proactivity_instruction>` block is
+/// appended after all other content; when false, nothing is appended and the output is identical
+/// to [`compose_system_prompt_with_briefing`].
+pub fn compose_system_prompt_proactive(
+    workspace_prompt: &str,
+    skill_blocks: &[String],
+    l1_briefing: Option<&str>,
+    proactive_mode: bool,
+) -> String {
+    let mut prompt = compose_system_prompt_with_briefing(workspace_prompt, skill_blocks, l1_briefing);
+    if proactive_mode {
+        prompt.push_str("\n\n");
+        prompt.push_str(PROACTIVITY_INSTRUCTION_TEXT);
+    }
+    prompt
 }
 
 #[cfg(test)]
@@ -279,5 +316,123 @@ mod tests {
         let composed_empty = compose_system_prompt_with_briefing(workspace_prompt, &skills, Some("   "));
         assert_eq!(composed_empty, standard);
         assert!(!composed_empty.contains("[MEMORY L1 BRIEFING]"));
+    }
+
+    #[test]
+    fn test_proactive_mode_on_appends_sentinel_and_max_effort_wording() {
+        let workspace_prompt = "Custom instructions for agent.";
+        let skills = vec!["Skill: Search".to_string()];
+
+        let composed = compose_system_prompt_proactive(
+            workspace_prompt,
+            &skills,
+            Some("L1 briefing text."),
+            true,
+        );
+
+        // Sentinel block present, exactly once, with closing tag.
+        assert!(
+            composed.contains(PROACTIVITY_INSTRUCTION_SENTINEL),
+            "Proactive ON must contain the <proactivity_instruction> sentinel"
+        );
+        assert!(
+            composed.contains("</proactivity_instruction>"),
+            "Proactive ON must close the <proactivity_instruction> block"
+        );
+        assert_eq!(
+            composed.matches(PROACTIVITY_INSTRUCTION_SENTINEL).count(),
+            1,
+            "Sentinel must appear exactly once"
+        );
+
+        // Fixed max-effort detective-style contract wording (case-insensitive probes).
+        let lower = composed.to_lowercase();
+        for needle in [
+            "maximum effort",
+            "detective",
+            "breadth-first",
+            "bfs",
+            "parallel",
+            "context_search",
+            "at least 10",
+            "never ask the user",
+            "prioritize",
+            "kill",
+            "recent",
+            "live data",
+        ] {
+            assert!(
+                lower.contains(needle),
+                "Proactive block must mention '{needle}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_proactive_mode_off_omits_sentinel_block() {
+        let workspace_prompt = "Custom instructions for agent.";
+        let skills = vec!["Skill: Search".to_string()];
+
+        let composed_off =
+            compose_system_prompt_proactive(workspace_prompt, &skills, None, false);
+        let standard = compose_system_prompt_with_briefing(workspace_prompt, &skills, None);
+
+        assert!(
+            !composed_off.contains(PROACTIVITY_INSTRUCTION_SENTINEL),
+            "Proactive OFF must NOT contain the <proactivity_instruction> sentinel"
+        );
+        assert!(
+            !composed_off.contains("</proactivity_instruction>"),
+            "Proactive OFF must NOT contain the closing sentinel tag"
+        );
+        // OFF must be byte-identical to the non-proactive composition: nothing appended.
+        assert_eq!(
+            composed_off, standard,
+            "Proactive OFF output must equal the legacy composition"
+        );
+    }
+
+    #[test]
+    fn test_proactive_block_appended_after_all_content() {
+        let workspace_prompt = "Custom instructions for agent.";
+        let skills = vec!["Skill: Search".to_string()];
+
+        let composed =
+            compose_system_prompt_proactive(workspace_prompt, &skills, Some("Briefing."), true);
+
+        // Baseline contract still opens the prompt with unchanged authority.
+        assert!(
+            composed.starts_with(BASELINE_CONTRACT_TEXT),
+            "Baseline contract must remain the prefix in proactive mode"
+        );
+        let sentinel_pos = composed
+            .find(PROACTIVITY_INSTRUCTION_SENTINEL)
+            .expect("sentinel must be present when proactive is on");
+        let ws_pos = composed.find(workspace_prompt).unwrap();
+        let skill_pos = composed.find("Skill: Search").unwrap();
+        assert!(
+            ws_pos < sentinel_pos && skill_pos < sentinel_pos,
+            "Proactive block must be appended after skills and workspace prompt"
+        );
+        assert!(
+            composed.trim_end().ends_with("</proactivity_instruction>"),
+            "Proactive block must be the final content of the prompt"
+        );
+    }
+
+    #[test]
+    fn test_legacy_entry_points_default_to_proactive_off() {
+        let workspace_prompt = "Custom instructions for agent.";
+        let skills = vec!["Skill: Search".to_string()];
+
+        for composed in [
+            compose_system_prompt(workspace_prompt, &skills),
+            compose_system_prompt_with_briefing(workspace_prompt, &skills, Some("Briefing.")),
+        ] {
+            assert!(
+                !composed.contains(PROACTIVITY_INSTRUCTION_SENTINEL),
+                "Legacy entry points must never inject the proactive block"
+            );
+        }
     }
 }

@@ -173,6 +173,10 @@ struct MahoAgentFfi {
                                         bool read_allowed);
    bool (*set_preferred_provider)(MahoAgentSession* session,
                                   const char* provider);
+   void (*set_runtime_config)(MahoAgentSession* session,
+                              const char* permission_tier,
+                              bool final_confirm,
+                              bool proactive_mode);
    bool (*send_message_leased)(MahoAgentSession* session,
                        const char* message,
                        void (*on_token)(void*, const char*),
@@ -266,6 +270,13 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
                          bool approved) override;
   void RespondToInteraction(const std::string& interaction_id,
                             const std::string& answer_json) override;
+  // Session runtime_config (plan row-1 store). Set normalizes the tier
+  // fail-closed via ParseRuntimeConfigTier, forwards to the live FFI session,
+  // and caches the effective value; it returns false when no session is
+  // active (the caller keeps its previous displayed state). Get serves the
+  // cached session config (broker defaults before the first Set).
+  bool GetRuntimeConfig(MahoAiRuntimeConfig* out_config) const override;
+  bool SetRuntimeConfig(const MahoAiRuntimeConfig& config) override;
   bool ReplayAfter(const std::string& run_id,
                    uint64_t after_seq,
                    RuntimeEventCallback on_event) override;
@@ -522,6 +533,11 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   Browser* ResolveBoundBrowser();
 
   raw_ptr<struct MahoAgentSession> agent_session_ = nullptr;
+
+  // Cached session runtime_config (plan row-1 store). Reset to the broker
+  // defaults wherever |agent_session_| is freed, so a Get between sessions
+  // never reports a stale freed session's flags.
+  MahoAiRuntimeConfig runtime_config_;
 
   // maho-agent FFI entry points. Defaults to the production table in the
   // constructor; overridable in tests via set_agent_ffi_for_testing().

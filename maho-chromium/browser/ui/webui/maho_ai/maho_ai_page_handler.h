@@ -153,6 +153,13 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
                       const std::string& model_id,
                       maho_ai::mojom::ReasoningEffort reasoning_effort,
                       SetAISelectionCallback callback) override;
+  // Session runtime configuration (plan row-1 plumbing; the CapabilityBroker
+  // remains the sole enforcement point). Thin passthrough to the active
+  // runtime adapter; Get reports broker defaults (guard / true / false) when
+  // no session is active, Set returns accepted=false in that case.
+  void GetRuntimeConfig(GetRuntimeConfigCallback callback) override;
+  void SetRuntimeConfig(maho_ai::mojom::RuntimeConfigInfoPtr config,
+                        SetRuntimeConfigCallback callback) override;
   void GetViewMode(GetViewModeCallback callback) override;
   void SetViewMode(maho_ai::mojom::ViewMode mode) override;
 

@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "base/functional/callback.h"
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
@@ -42,6 +43,14 @@ struct AgentSuggestion {
   bool is_agent_query = true;
 };
 
+// Backend suggested-task card payload (plan row 12). Mirrors the
+// maho-agent suggestions.rs Suggestion{title, prompt} contract for UI ->
+// router input.
+struct AgentSuggestedTask {
+  std::string title;
+  std::string prompt;
+};
+
 // Router and classifier for agent queries initiated from the omnibox/command bar.
 //
 // Omnibox agent prefix syntax:
@@ -62,6 +71,14 @@ class MahoOmniboxAgentRouter {
   // Creates an AgentSuggestion if the input matches the agent prefix pattern.
   static std::optional<AgentSuggestion> CreateAgentSuggestion(std::string_view input);
   static std::optional<AgentSuggestion> CreateAgentSuggestion(std::u16string_view input);
+
+  // Surfaces backend suggested-task cards as omnibox agent suggestions
+  // (plan row 12). Read-only wiring: the returned suggestions feed router
+  // input only — nothing here executes a task or routes a session, and the
+  // existing agent-prefix trigger matching is untouched. An empty or fully
+  // blank input list yields an empty result.
+  static std::vector<AgentSuggestion> CreateSuggestedTaskSuggestions(
+      const std::vector<AgentSuggestedTask>& tasks);
 
   // Routes an agent query to the active AI runtime adapter.
   // Returns true if successfully routed/submitted to the adapter.

@@ -159,6 +159,34 @@ TEST(MahoAgentEventReplayBufferTest, DefaultCapacityLargeStreamAndGaps) {
   EXPECT_TRUE(at_tail.events().empty());
 }
 
+// Plan row 6: FFI kind-8 (InteractionRequest) payloads replay through the
+// same kind-agnostic sequenced path as every other event kind — byte-for-byte
+// payload fidelity, no special-casing, no gap.
+TEST(MahoAgentEventReplayBufferTest, InteractionRequestKind8PayloadsReplayLikeOtherKinds) {
+  MahoAgentEventReplayBuffer buffer(10);
+  const char* kInteractionPayload =
+      "{\"request_id\":\"interaction-req-3\",\"kind\":\"question\","
+      "\"args\":\"{\\\"question\\\":\\\"Which target?\\\","
+      "\\\"options\\\":[]\"}\"}";
+
+  EXPECT_TRUE(buffer.Append(1, "{\"event\":\"token\"}"));
+  EXPECT_TRUE(buffer.Append(2, kInteractionPayload));
+  EXPECT_TRUE(buffer.Append(3, "{\"event\":\"complete\"}"));
+
+  ReplayResult res = buffer.ReplayAfter(0);
+  EXPECT_TRUE(res.is_ok());
+  EXPECT_FALSE(res.is_gap());
+  ASSERT_EQ(res.events().size(), 3u);
+  EXPECT_EQ(res.events()[1].seq, 2u);
+  EXPECT_EQ(res.events()[1].payload, kInteractionPayload);
+
+  // Resume from the kind-8 event: only the tail replays.
+  ReplayResult tail = buffer.ReplayAfter(2);
+  EXPECT_TRUE(tail.is_ok());
+  ASSERT_EQ(tail.events().size(), 1u);
+  EXPECT_EQ(tail.events()[0].seq, 3u);
+}
+
 }  // namespace maho::ai
 
 #else

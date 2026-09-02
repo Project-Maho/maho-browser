@@ -7,6 +7,9 @@ import type {MahoAiStore} from '../../../store.js';
 import type {TimelineEntry, ViewMode} from '../../../types.js';
 
 import {TrustCeremony} from '../trust-ceremony/trust-ceremony.js';
+import {RuntimeConfigCard} from './runtime-config-card.js';
+import {InteractionApprovalCard} from './interaction-approval-card.js';
+import {SuggestedTaskCards} from './suggested-task-cards.js';
 
 export function CompactShell(
     {
@@ -75,6 +78,8 @@ export function CompactShell(
             onStartSession={onStartSession}
           />
           <TrustCeremony store={store} />
+          <RuntimeConfigCard store={store} />
+          <InteractionApprovalCard store={store} />
         </div>
         <ConversationThread
           bottomPadding={bottomPadding}
@@ -107,6 +112,9 @@ export function CompactShell(
         onStartSession={onStartSession}
       />
       <TrustCeremony store={store} />
+      <RuntimeConfigCard store={store} />
+      <InteractionApprovalCard store={store} />
+      <SuggestedTaskCards store={store} />
       <CompactStage onConnect={onConnect} />
     </div>
   );

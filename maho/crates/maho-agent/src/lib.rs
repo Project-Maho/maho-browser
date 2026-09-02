@@ -6,6 +6,7 @@ pub mod approval_audit;
 pub mod browser_action_contract;
 pub mod channels;
 pub mod cli_tool_executor;
+pub mod composite;
 pub mod context_compaction;
 pub mod context_gatherer;
 pub mod deep_research;
@@ -57,11 +58,11 @@ pub use fallback_ladder::{
 pub use fallback_ladder_browser::browser_tool_fallback_request;
 pub use maho_reasoning_openai::MahoReasoningOpenAI;
 pub use permission::{
-    authorize_action_consequence, authorize_mail_tool, classify_action_consequence,
-    classify_mail_tool, sanitize_tool_arguments, sanitize_tool_result, ActionConsequence,
-    ConsequenceApprovalAction, MailAuthorizationAction, MailAuthorizationState, MailToolClass,
-    PermissionCallback, PermissionDecision, PermissionRequest, MAIL_READ_TOOLS,
-    MAIL_WRITE_ACCOUNT_TOOLS,
+    authorize_action_consequence, authorize_final_confirm, authorize_mail_tool,
+    classify_action_consequence, classify_mail_tool, sanitize_tool_arguments,
+    sanitize_tool_result, ActionConsequence, ConsequenceApprovalAction, FinalConfirmDecision,
+    MailAuthorizationAction, MailAuthorizationState, MailToolClass, PermissionCallback,
+    PermissionDecision, PermissionRequest, MAIL_READ_TOOLS, MAIL_WRITE_ACCOUNT_TOOLS,
 };
 pub use runtime_isolation::SessionRuntime;
 pub use swiftide_backend::{BrowserActionToolsState, SwiftideBackend};
@@ -710,6 +711,10 @@ pub trait AgentRuntime: Send + Sync {
     }
 
     fn set_browser_action_tools_state(&self, _state: BrowserActionToolsState) {}
+
+    /// Bind the composite (batch) execution gate (plan row 11). Default is
+    /// unset: the composite gate stays fail-closed disabled.
+    fn set_composite_config(&self, _config: crate::composite::CompositeExecutionConfig) {}
 
     fn set_mail_authorization_state(&self, _state: MailAuthorizationState) {}
 

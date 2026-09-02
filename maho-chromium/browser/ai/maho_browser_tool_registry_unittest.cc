@@ -126,8 +126,15 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
   };
 
   base::ListValue tools = MahoBrowserToolRegistry::SerializePhase1ToolSchemas();
-  EXPECT_EQ(tools.size(), 34u);
-  EXPECT_EQ(ToolNames(tools), expected);
+  EXPECT_EQ(tools.size(), 40u);
+  std::set<std::string> expected_names(expected);
+  expected_names.insert("browser_act_and_observe");
+  expected_names.insert("browser_locator_click");
+  expected_names.insert("browser_locator_type");
+  expected_names.insert("browser_tab_list");
+  expected_names.insert("browser_tab_new");
+  expected_names.insert("browser_tab_switch");
+    EXPECT_EQ(ToolNames(tools), expected_names);
   EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 14u);
 
   size_t action_contract_entries = 0;
@@ -236,6 +243,7 @@ TEST(MahoBrowserToolRegistryTest,
 TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
   const std::set<std::string> expected = {
       "browser_accessibility_snapshot",
+      "browser_act_and_observe",
       "browser_bookmark_create",
       "browser_bookmarks_search",
       "browser_click",
@@ -245,6 +253,8 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "browser_history_search",
       "browser_hover",
       "browser_key_press",
+      "browser_locator_click",
+      "browser_locator_type",
       "browser_navigate",
       "browser_network_get_har",
       "browser_network_start_capture",
@@ -281,6 +291,7 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "mail_search_emails",
       "mail_send",
       "mail_update_draft",
+      "page_accessibility_snapshot_v2",
       "page_get_attribute",
       "page_get_text",
       "page_query_selector",
@@ -294,14 +305,14 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
     EXPECT_TRUE(actual.insert(std::string(descriptor->tool_name)).second)
         << descriptor->tool_name;
   }
-  EXPECT_EQ(capabilities.size(), 50u);
+  EXPECT_EQ(capabilities.size(), 54u);
   EXPECT_EQ(actual, expected);
 }
 
 TEST(MahoBrowserToolRegistryTest, PublicAndControlSchemasAreClosed) {
   base::ListValue public_tools =
       MahoBrowserToolRegistry::SerializePublicMcpCapabilities();
-  ASSERT_EQ(public_tools.size(), 50u);
+  ASSERT_EQ(public_tools.size(), 54u);
 
   auto expect_closed_schema = [](const base::DictValue &tool) {
     const std::string *name = tool.FindString("name");
@@ -435,7 +446,7 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
 
 TEST(MahoBrowserToolRegistryTest, CanonicalDescriptorsHaveCompletePolicy) {
   const auto &descriptors = MahoBrowserToolRegistry::GetCapabilityDescriptors();
-  EXPECT_EQ(descriptors.size(), 82u);
+  EXPECT_EQ(descriptors.size(), 86u);
   EXPECT_TRUE(
       MahoBrowserToolRegistry::ValidateCapabilityDescriptors(descriptors));
 
@@ -486,8 +497,8 @@ TEST(MahoBrowserToolRegistryTest, FeatureGatesFilterSurfaceProjection) {
       MahoBrowserToolRegistry::kBrowserMcp);
   const auto gated = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
       MahoBrowserToolRegistry::kBrowserMcp, false, false, false);
-  EXPECT_EQ(all.size(), 50u);
-  EXPECT_EQ(gated.size(), 36u);
+  EXPECT_EQ(all.size(), 54u);
+  EXPECT_EQ(gated.size(), 40u);
   for (const auto *descriptor : gated) {
     EXPECT_EQ(descriptor->feature_gate,
               MahoBrowserToolRegistry::FeatureGate::kAlways);
@@ -592,7 +603,7 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(diagnostics.FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 82);
+  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 86);
   ASSERT_TRUE(diagnostics.FindString("catalogHash"));
   EXPECT_EQ(diagnostics.FindString("catalogHash")->size(), 64u);
 
@@ -606,8 +617,8 @@ TEST(MahoBrowserToolRegistryTest,
   ASSERT_TRUE(surfaces);
   const base::DictValue* public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 36);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 36u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 40);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 40u);
   EXPECT_FALSE(surfaces->Find("desktopAgent"));
   EXPECT_FALSE(surfaces->Find("cliAgent"));
   EXPECT_FALSE(surfaces->Find("cliGeneric"));

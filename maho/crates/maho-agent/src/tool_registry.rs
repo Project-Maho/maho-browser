@@ -150,6 +150,46 @@ pub fn subagent_wait_definition() -> ToolDefinition {
     }
 }
 
+/// The composite (batch) execution tool descriptor — plan row 11. The
+/// registry only advertises the surface; admission is gated by the
+/// session's runtime_config (fail-closed, disabled by default) and every
+/// step is still authorized individually by the capability broker, so the
+/// descriptor itself needs no extra approval friction.
+pub fn composite_execute_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "composite_execute".to_string(),
+        description: "Execute an ordered batch of browser page operations in one call. Steps run sequentially with per-step failure isolation: a failed step is recorded on its own result and later steps still run. Each step is authorized individually by the capability broker. Gated by the session runtime_config flag (disabled by default).".to_string(),
+        parameters_schema: serde_json::from_str(
+            r##"{
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "batch_id": { "type": "string" },
+                    "steps": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "description": "Ordered page operations; executed sequentially.",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "tool": { "type": "string" },
+                                "args": { "type": "object" }
+                            },
+                            "required": ["tool", "args"]
+                        }
+                    }
+                },
+                "required": ["batch_id", "steps"]
+            }"##,
+        )
+        .unwrap_or_default(),
+        provenance: ToolProvenance::BuiltinBrowser,
+        sensitive: false,
+        permission: ToolPermission::AutoApprove,
+    }
+}
+
 pub fn get_platform_tools() -> Vec<ToolDefinition> {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
@@ -198,6 +238,7 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
             skill_creator_definition(),
             subagent_wait_definition(),
             fs_write_definition(),
+            composite_execute_definition(),
         ]
     }
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -259,6 +300,7 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
             skill_creator_definition(),
             subagent_wait_definition(),
             fs_write_definition(),
+            composite_execute_definition(),
         ]
     }
 }
@@ -268,12 +310,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn composite_execute_descriptor_shape_matches_contract() {
+        let def = composite_execute_definition();
+        assert_eq!(def.name, "composite_execute");
+        assert_eq!(def.permission, ToolPermission::AutoApprove);
+        assert!(!def.sensitive);
+        assert_eq!(def.provenance, ToolProvenance::BuiltinBrowser);
+        assert_eq!(
+            def.parameters_schema["required"],
+            serde_json::Value::from(vec!["batch_id", "steps"])
+        );
+        assert_eq!(def.parameters_schema["properties"]["steps"]["maxItems"], 8);
+    }
+
+    #[test]
     fn test_platform_tools_divergence() {
         let tools = get_platform_tools();
 
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            assert_eq!(tools.len(), 10);
+            assert_eq!(tools.len(), 11);
             assert!(tools.iter().any(|t| t.name == "camera"));
             assert!(tools.iter().any(|t| t.name == "photo_library"));
             assert!(tools.iter().any(|t| t.name == "clipboard"));
@@ -284,13 +340,14 @@ mod tests {
             assert!(tools.iter().any(|t| t.name == "skill_creator"));
             assert!(tools.iter().any(|t| t.name == "subagent_wait"));
             assert!(tools.iter().any(|t| t.name == "fs_write"));
+            assert!(tools.iter().any(|t| t.name == "composite_execute"));
             assert!(!tools.iter().any(|t| t.name == "fs_read"));
             assert!(!tools.iter().any(|t| t.name == "shell_exec"));
         }
 
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            assert_eq!(tools.len(), 10);
+            assert_eq!(tools.len(), 11);
             assert!(tools.iter().any(|t| t.name == "fs_read"));
             assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(tools.iter().any(|t| t.name == "shell_exec"));
@@ -301,6 +358,7 @@ mod tests {
             assert!(tools.iter().any(|t| t.name == "session_introspection"));
             assert!(tools.iter().any(|t| t.name == "skill_creator"));
             assert!(tools.iter().any(|t| t.name == "subagent_wait"));
+            assert!(tools.iter().any(|t| t.name == "composite_execute"));
             assert!(!tools.iter().any(|t| t.name == "camera"));
         }
     }

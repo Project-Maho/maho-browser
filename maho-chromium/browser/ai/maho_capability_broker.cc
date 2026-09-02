@@ -6,10 +6,59 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/logging.h"
 #include "base/no_destructor.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
 
 namespace maho::ai {
+
+std::string ParseRuntimeConfigTier(std::string_view raw_tier) {
+  if (raw_tier == "read_only" || raw_tier == "guard" ||
+      raw_tier == "full_access") {
+    return std::string(raw_tier);
+  }
+  // Fail closed to the session default tier.
+  return "guard";
+}
+
+bool IsFinalConfirmGatedConsequence(std::string_view consequence) {
+  // Free classes: ordinary work and navigation escalations (reversible —
+  // the user can navigate back). Everything else — submit,
+  // purchase_or_transfer, account_security, credential_fill, file_transfer,
+  // destructive, and any unknown/unrecognized value — fails closed to
+  // gated so a missing or malformed classification can never auto-pass.
+  return consequence != "ordinary" && consequence != "new_origin";
+}
+
+bool FsPathInsideRuntimeWhitelist(
+    const std::string& path,
+    const std::vector<std::string>& whitelist_roots) {
+  if (path.empty() || path.front() != '/') {
+    return false;
+  }
+  for (const std::string& root : whitelist_roots) {
+    std::string_view trimmed(root);
+    while (trimmed.size() > 1 && trimmed.back() == '/') {
+      trimmed.remove_suffix(1);
+    }
+    // A root that normalizes to the filesystem root ("/", "///") would
+    // whitelist everything absolute; mirror the Rust
+    // fs_path_inside_whitelist and fail closed instead.
+    if (trimmed == "/") {
+      continue;
+    }
+    if (trimmed.empty() || trimmed.front() != '/') {
+      continue;
+    }
+    if (path == trimmed ||
+        path.compare(0, trimmed.size(), trimmed) == 0 &&
+            path.size() > trimmed.size() &&
+            path[trimmed.size()] == '/') {
+      return true;
+    }
+  }
+  return false;
+}
 
 CapabilityRequestContext::CapabilityRequestContext() = default;
 CapabilityRequestContext::CapabilityRequestContext(const CapabilityRequestContext&) = default;
@@ -521,6 +570,8 @@ bool MahoCapabilityBroker::ValidateAllDescriptors() {
   const auto& descriptors = GetDescriptorsStorage();
   for (const CapabilityDescriptor& desc : descriptors) {
     if (!ValidateDescriptorInvariants(desc)) {
+      LOG(ERROR) << "Capability descriptor failed invariant validation: "
+                 << desc.canonical_id;
       return false;
     }
   }
@@ -701,8 +752,61 @@ CapabilityEvaluationResult MahoCapabilityBroker::Evaluate(
     }
   }
 
+  // 10.5 Runtime permission-tier gate (plan row 3). Applies only to
+  // file-scoped requests (non-empty fs_path). The structural checks above
+  // always run first: a tier can add a denial or an approval ask, but can
+  // never remove a sandbox, origin, lease, or presence obligation.
+  bool tier_forces_approval = false;
+  if (!context.fs_path.empty()) {
+    const std::string tier = ParseRuntimeConfigTier(context.permission_tier);
+    const bool inside_whitelist = FsPathInsideRuntimeWhitelist(
+        context.fs_path, context.fs_whitelist_roots);
+    if (tier == "read_only") {
+      if (descriptor->mutability == CapabilityMutability::kMutable) {
+        return CapabilityEvaluationResult::Deny(
+            CapabilityDenyReason::kPermissionTierDeniedWrite,
+            "Permission tier read_only denies local file writes");
+      }
+      if (!inside_whitelist) {
+        return CapabilityEvaluationResult::Deny(
+            CapabilityDenyReason::kPermissionTierDeniedRead,
+            "Permission tier read_only denies reads outside the session file whitelist");
+      }
+    } else if (tier == "guard" && !inside_whitelist) {
+      // Free inside whitelist roots; outside, ask-gate through the existing
+      // approval-token handshake below.
+      tier_forces_approval = true;
+    }
+    // full_access and in-whitelist requests fall through unchanged.
+  }
+
+  // 10.6 Final-confirmation gate (plan row 5). Under final_confirm=true,
+  // requests resolving to an externally visible or irreversible consequence
+  // class route through the approval-token ask-gate below. Browser action
+  // tools gate even without a declared classification: a missing validated
+  // context is Unknown and fails closed to gated. Other descriptors gate
+  // only when a consequence was declared (empty stays inert, mirroring
+  // fs_path). Mail tools are absent here on purpose: their writes gate
+  // through the typed mail-authorization approval path
+  // (maho_mail_tool_authorization.h), which already requires per-call
+  // approval under every policy. Like the tier gate, this can only add an
+  // ask, never remove a sandbox, origin, lease, or presence obligation.
+  bool final_confirm_forces_approval = false;
+  if (context.final_confirm) {
+    const bool is_action_tool =
+        descriptor->browser_action_contract &&
+        descriptor->browser_action_contract->kind ==
+            BrowserActionKind::kAction;
+    if (is_action_tool || !context.action_consequence.empty()) {
+      final_confirm_forces_approval = IsFinalConfirmGatedConsequence(
+          context.action_consequence.empty() ? "unknown"
+                                             : context.action_consequence);
+    }
+  }
+
   // 11. Approval requirement check
-  if (RequiresApproval(*descriptor)) {
+  if (RequiresApproval(*descriptor) || tier_forces_approval ||
+      final_confirm_forces_approval) {
     if (context.approval_token.empty()) {
       ApprovalRequest approval_req;
       approval_req.capability_id = std::string(descriptor->canonical_id);

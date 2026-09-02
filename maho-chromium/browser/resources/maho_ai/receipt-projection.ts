@@ -83,6 +83,25 @@ function outcomeStatus(value: unknown): ReceiptOutcomeStatus {
   return 'unknown';
 }
 
+// Projects an agent interaction request lifecycle state (maho-agent
+// interaction::InteractionState, plan row 8) onto a receipt outcome status so
+// terminal approvals speak the same language as execution receipts. Pending
+// and unrecognized states project to 'unknown': nothing has happened yet.
+export function interactionStateOutcome(state?: string|null):
+    ReceiptOutcomeStatus {
+  switch ((state ?? '').trim().toLowerCase()) {
+    case 'resolved':
+      return 'succeeded';
+    case 'denied':
+      return 'denied';
+    case 'expired':
+    case 'cancelled':
+      return 'disconnected';
+    default:
+      return 'unknown';
+  }
+}
+
 export function redactReceiptValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(redactReceiptValue);

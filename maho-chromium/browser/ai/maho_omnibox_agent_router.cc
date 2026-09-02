@@ -108,6 +108,28 @@ std::optional<AgentSuggestion> MahoOmniboxAgentRouter::CreateAgentSuggestion(
 }
 
 // static
+std::vector<AgentSuggestion>
+MahoOmniboxAgentRouter::CreateSuggestedTaskSuggestions(
+    const std::vector<AgentSuggestedTask>& tasks) {
+  std::vector<AgentSuggestion> suggestions;
+  suggestions.reserve(tasks.size());
+  for (const auto& task : tasks) {
+    if (task.title.empty() && task.prompt.empty()) {
+      continue;
+    }
+    AgentSuggestion suggestion;
+    suggestion.display_title = task.title.empty()
+        ? "Ask Maho Agent: " + task.prompt
+        : task.title;
+    suggestion.prompt = task.prompt;
+    suggestion.destination = "ai_panel";
+    suggestion.is_agent_query = true;
+    suggestions.push_back(std::move(suggestion));
+  }
+  return suggestions;
+}
+
+// static
 bool MahoOmniboxAgentRouter::RouteToAgentSession(
     MahoAiRuntimeAdapter* adapter,
     const std::string& prompt,

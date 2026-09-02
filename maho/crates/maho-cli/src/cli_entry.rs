@@ -75,6 +75,7 @@ fn is_existing_subcommand(value: &OsString) -> bool {
         "browser",
         "mcp",
         "routine",
+        "agent",
         "vault",
         "version",
         "tool",
