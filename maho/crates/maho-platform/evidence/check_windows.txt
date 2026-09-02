@@ -1,0 +1,9 @@
+    Checking memchr v2.8.2
+    Checking itoa v1.0.18
+   Compiling serde_core v1.0.228
+   Compiling zmij v1.0.21
+   Compiling thiserror v1.0.69
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.150
+    Checking maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.75s

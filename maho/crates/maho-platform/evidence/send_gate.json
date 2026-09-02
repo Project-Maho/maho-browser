@@ -1,0 +1,5 @@
+{
+  "action": "imessage.send",
+  "code": "platform_typed_approval_required",
+  "message": "typed approval required for action 'imessage.send'"
+}

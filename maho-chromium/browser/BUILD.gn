@@ -112,7 +112,6 @@ source_set("maho_password_authorization") {
   deps = [
     ":maho_core_holder",
     "//base",
-    "//chrome/browser/device_reauth",
     "//chrome/browser/profiles:profile",
     "//components/device_reauth",
     "//ui/base/clipboard",
@@ -171,6 +170,7 @@ source_set("maho_ai_client") {
     "ai/maho_ai_settings_migration.h",
   ]
   deps = [
+    "//maho/browser/ui/webui/maho_settings:mojo_bindings",
     "//base",
     "//chrome/browser/profiles:profile",
     "//components/prefs",
@@ -430,7 +430,9 @@ test("maho_browser_tool_executor_test") {
     "//base/test:test_support",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/tabs:tab_strip_impl",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser/mcp:maho_mcp",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
     "//testing/gtest",
     "//ui/accessibility",
     "//url",
@@ -559,6 +561,7 @@ source_set("maho_context_menus") {
     "//maho/browser:maho_core_holder",
     "//maho/browser:maho_space_profile_bridge",
     "//maho/browser:maho_tab_id_helper",
+    "//maho/browser/ui/views/boost:maho_boost_window",
     # TODO(nicolo): Re-enable when split_view is wired up.
     # "//maho/browser/ui/views/split_view:maho_split_view",
 
@@ -725,12 +728,21 @@ if (is_mac) {
 if (is_win) {
   source_set("maho_mini") {
     sources = [
+      "ui/views/maho_mini/maho_mini_window.cc",
       "ui/views/maho_mini/maho_mini_window.h",
-      "ui/views/maho_mini/maho_mini_window_stub.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.h",
     ]
     deps = [
       "//base",
-      "//chrome/browser/ui",
+      "//chrome/browser:browser",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/views/frame:frame",
+      "//ui/base",
+      "//ui/base/accelerators/global_accelerator_listener",
+      "//ui/gfx",
+      "//ui/views",
+      "//url",
     ]
   }
 }
@@ -738,12 +750,21 @@ if (is_win) {
 if (is_linux) {
   source_set("maho_mini") {
     sources = [
+      "ui/views/maho_mini/maho_mini_window.cc",
       "ui/views/maho_mini/maho_mini_window.h",
-      "ui/views/maho_mini/maho_mini_window_stub.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.h",
     ]
     deps = [
       "//base",
-      "//chrome/browser/ui",
+      "//chrome/browser:browser",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/views/frame:frame",
+      "//ui/base",
+      "//ui/base/accelerators/global_accelerator_listener",
+      "//ui/gfx",
+      "//ui/views",
+      "//url",
     ]
   }
 }
@@ -1000,6 +1021,20 @@ source_set("maho_browser_main_extra_parts") {
   ]
 }
 
+source_set("maho_private_context_policy") {
+  sources = [
+    "maho_private_context_policy.cc",
+    "maho_private_context_policy.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+  ]
+}
+
 source_set("maho_settings_navigation") {
   sources = [
     "ui/maho_settings_navigation.cc",
@@ -1050,7 +1085,9 @@ source_set("maho_tab_registry") {
     ":maho_space_profile_bridge",
     ":maho_tab_id_helper",
     "//base",
-    "//chrome/browser/lifetime:lifetime",
+    # browser_shutdown.h compiles into //chrome/browser at this upstream pin
+    # (the :lifetime target only carries termination_notification).
+    "//chrome/browser",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/tab_list:tab_list",
     "//chrome/browser/ui/browser_window:browser_window",

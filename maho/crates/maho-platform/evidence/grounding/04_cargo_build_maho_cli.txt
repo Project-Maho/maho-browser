@@ -1,0 +1,99 @@
+   Compiling objc2-core-foundation v0.3.2
+   Compiling core-graphics-types v0.2.0
+warning: unused import: `DeviceKeyPurpose`
+  --> crates/maho-core/src/security/platform/linux.rs:22:59
+   |
+22 |     DeviceKeyAlgorithm, DeviceKeyHandle, DeviceKeyPolicy, DeviceKeyPurpose, DeviceSignature,
+   |                                                           ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `HashSet`
+ --> crates/maho-core/src/skills_manager.rs:4:33
+  |
+4 | use std::collections::{HashMap, HashSet};
+  |                                 ^^^^^^^
+
+warning: `maho-core` (lib) generated 2 warnings (run `cargo fix --lib -p maho-core` to apply 2 suggestions)
+warning: multiple lines skipped by escaped newline
+   --> crates/maho-agent/src/swiftide_backend.rs:219:80
+    |
+219 |                       "BYOK API key produced invalid Authorization header bytes; \
+    |  ________________________________________________________________________________^
+220 | |
+221 | |                      request will be sent without auth and will likely receive 401"
+    | |_____________________^ skipping everything up to and including this point
+
+warning: struct `CameraTool` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:1309:8
+     |
+1309 | struct CameraTool;
+     |        ^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` on by default
+
+warning: struct `PhotoLibraryTool` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:1352:8
+     |
+1352 | struct PhotoLibraryTool;
+     |        ^^^^^^^^^^^^^^^^
+
+warning: struct `ClipboardTool` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:1395:8
+     |
+1395 | struct ClipboardTool;
+     |        ^^^^^^^^^^^^^
+
+warning: struct `BrowserActionToolMetadata` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:2493:8
+     |
+2493 | struct BrowserActionToolMetadata {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `mail_read_tool_metadata` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2499:4
+     |
+2499 | fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `mail_write_tool_metadata` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2629:4
+     |
+2629 | fn mail_write_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `tool_sensitivity_from_browser_contract` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2690:4
+     |
+2690 | fn tool_sensitivity_from_browser_contract(sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `browser_action_tool_metadata` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2697:4
+     |
+2697 | fn browser_action_tool_metadata(tool_name: &str) -> BrowserActionToolMetadata {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `browser_action_shim` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2882:4
+     |
+2882 | fn browser_action_shim(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+warning: `maho-agent` (lib) generated 10 warnings
+   Compiling core-graphics v0.25.0
+   Compiling objc2-foundation v0.3.2
+   Compiling objc2-core-video v0.3.2
+   Compiling objc2-image-io v0.3.2
+   Compiling objc2-core-media v0.3.2
+   Compiling objc2-core-graphics v0.3.2
+   Compiling objc2-core-image v0.3.2
+   Compiling objc2-core-ml v0.3.2
+   Compiling objc2-av-foundation v0.3.2
+   Compiling objc2-app-kit v0.3.2
+   Compiling objc2-contacts v0.3.2
+   Compiling objc2-vision v0.3.2
+   Compiling enigo v0.6.1
+   Compiling maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+   Compiling maho-cli v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 31.99s

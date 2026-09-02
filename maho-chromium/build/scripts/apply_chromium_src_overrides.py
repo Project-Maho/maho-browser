@@ -328,16 +328,6 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/chrome_content_browser_client.cc": [
         Replacement(
-            old='#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n',
-            new=(
-                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
-                '#include "content/public/browser/browser_url_handler.h"\n'
-                '#include "maho/browser/maho_url_scheme.h"\n'
-            ),
-            description="Maho: include maho_url_scheme.h and browser_url_handler.h in chrome_content_browser_client.cc",
-            guard='#include "maho/browser/maho_url_scheme.h"',
-        ),
-        Replacement(
             old=(
                 "bool g_disable_advanced_protection_caching_for_tests = false;\n"
             ),
@@ -755,6 +745,17 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard=(
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"'
             ),
+        ),
+
+        Replacement(
+            old='#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n',
+            new=(
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"\n'
+                '#include "content/public/browser/browser_url_handler.h"\n'
+                '#include "maho/browser/maho_url_scheme.h"\n'
+            ),
+            description="Maho: include maho_url_scheme.h and browser_url_handler.h in chrome_content_browser_client.cc",
+            guard='#include "maho/browser/maho_url_scheme.h"',
         ),
         Replacement(
             old=(
@@ -9734,18 +9735,14 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '      const std::u16string& username,\n'
                 '      const std::u16string& password,\n'
                 '      base::OnceCallback<void(bool)> success_callback) = 0;\n\n'
-                '  // Rechecks the captured document immediately before legacy dispatch.\n'
+                '  // Rechecks the captured document immediately before legacy\n'
+                '  // dispatch; defined in password_manager_driver.cc so the\n'
+                '  // chromium-style plugin does not flag an inline virtual body.\n'
                 '  virtual void FillSuggestion(\n'
                 '      const PasswordFillRequestContext& context,\n'
                 '      const std::u16string& username,\n'
                 '      const std::u16string& password,\n'
-                '      base::OnceCallback<void(bool)> success_callback) {\n'
-                '    if (!IsPasswordFillRequestContextCurrent(context)) {\n'
-                '      std::move(success_callback).Run(false);\n'
-                '      return;\n'
-                '    }\n'
-                '    FillSuggestion(username, password, std::move(success_callback));\n'
-                '  }\n\n'
+                '      base::OnceCallback<void(bool)> success_callback);\n\n'
                 '  // Produces the only callback that may receive a resolved secret. It is\n'
                 '  // bound to this exact driver and captured document context.\n'
                 '  PasswordFillResolver CreatePasswordFillResolver(\n'
@@ -9886,6 +9883,22 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: rotate password fill token after committed navigation",
             guard="  RotatePasswordManagerDocumentToken();",
+        ),
+    ],
+    "components/password_manager/core/browser/BUILD.gn": [
+        Replacement(
+            old=(
+                '    "browser_save_password_progress_logger.cc",\n'
+            ),
+            new=(
+                '    "password_manager_driver.cc",\n'
+                '    "browser_save_password_progress_logger.cc",\n'
+            ),
+            description=(
+                "Maho: add password_manager_driver.cc for the context-aware "
+                "FillSuggestion definition"
+            ),
+            guard='"password_manager_driver.cc",',
         ),
     ],
     "components/password_manager/core/browser/password_form_manager.cc": [
@@ -10322,6 +10335,7 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.cc",
     "//maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h",
     "//maho/browser/ui/views/split_view/maho_split_view_controller.cc",
+    "//maho/browser/ui/views/changelog/maho_changelog_auto_opener.cc",
     "//maho/browser/ui/views/split_view/maho_split_view_controller.h",
     "//maho/browser/ui/views/welcome/maho_welcome_window.cc",
     "//maho/browser/ui/views/welcome/maho_welcome_window.h",

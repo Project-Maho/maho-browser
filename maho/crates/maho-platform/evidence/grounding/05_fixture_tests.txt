@@ -1,0 +1,28 @@
+=== cargo test -p maho-platform ocr ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running unittests src/lib.rs (target/debug/deps/maho_platform-0b8ef3a087ca1aea)
+
+running 5 tests
+test ocr::tests::test_vision_bbox_to_pixels_full ... ok
+test ocr::tests::test_vision_bbox_to_pixels_quadrants_and_offsets ... ok
+test ocr::tests::test_ocr_image_nonexistent_file ... ok
+test ocr::tests::test_ocr_image_fixture_macos ... ok
+test ocr::tests::test_ocr_image_with_region_filter ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 1.71s
+
+exit: 0
+=== cargo test -p maho-platform find_text ===
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/maho_platform-0b8ef3a087ca1aea)
+
+running 5 tests
+test find_text::tests::test_find_text_empty_query ... ok
+test find_text::tests::test_find_text_nonexistent_file ... ok
+test find_text::tests::test_find_text_fixture_grounding ... ok
+test find_text::tests::test_find_text_no_match ... ok
+test find_text::tests::test_find_text_case_insensitive ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 1.65s
+
+exit: 0

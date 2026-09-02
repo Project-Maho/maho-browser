@@ -1,0 +1,40 @@
+=== RUNNING: target/debug/maho desktop find-text --text KOTRA --image /tmp/maho-gv-capture.png ===
+[
+  {
+    "text": "KOTRA 글로벌점프 300",
+    "x": 257,
+    "y": 647,
+    "w": 167,
+    "h": 17,
+    "source": "ocr"
+  },
+  {
+    "text": "KOTRA",
+    "x": 608,
+    "y": 647,
+    "w": 50,
+    "h": 17,
+    "source": "ocr"
+  }
+]
+EXIT_CODE: 0
+=== RUNNING: target/debug/maho desktop find-text --text KOTRA (live) ===
+[
+  {
+    "text": "KOTRA 글로벌점프 300",
+    "x": 257,
+    "y": 647,
+    "w": 167,
+    "h": 17,
+    "source": "ocr"
+  },
+  {
+    "text": "KOTRA",
+    "x": 608,
+    "y": 647,
+    "w": 50,
+    "h": 17,
+    "source": "ocr"
+  }
+]
+EXIT_CODE_LIVE: 0

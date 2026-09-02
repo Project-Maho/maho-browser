@@ -799,6 +799,8 @@ class TestMainFlags(unittest.TestCase):
             'require_windows_mail_helper',
             'build_windows_installer',
             'sign_windows_installer',
+            'find_codesign_identity_release_dist',
+            'find_appstore_provisioning_profile',
         ):
             patcher = patch.object(_bm, name)
             patcher.start()
@@ -811,36 +813,59 @@ class TestMainFlags(unittest.TestCase):
         _bm.build_lock = MagicMock(return_value=mock_lock_cm)
         _bm.build_maho_core.build_rust_prebuilt = MagicMock()
 
-        with patch.object(sys, 'argv', ['build_maho.py'] + argv), \
-             patch.object(sys, 'platform', platform), \
-             patch.object(_bm, 'ensure_overlay_mount'), \
-             patch.object(_bm, 'ensure_args_gn'), \
-             patch.object(_bm, 'sync_local_google_api_key'), \
-             patch.object(_bm, 'apply_tracked_chromium_overrides'), \
-             patch.object(_bm, 'apply_branding'), \
-             patch.object(_bm, 'run_lucide_icon_check'), \
-             patch.object(_bm, 'run_gn_gen'), \
-             patch.object(_bm, 'build_chromium_app') as mock_build_chromium, \
-             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho') as mock_build_cli, \
-             patch.object(_bm, 'embed_sparkle_framework', return_value=True), \
-             patch.object(_bm, 'embed_maho_cli', return_value=True) as mock_embed_cli, \
-             patch.object(_bm, 'embed_mail_helper', return_value=True), \
-             patch.object(_bm, 'stage_maho_cli_next_to_browser', return_value='/fake/out/maho') as mock_stage_cli, \
-             patch.object(_bm, 'sign_windows_binary', return_value=True) as mock_sign_win, \
-             patch.object(_bm, 'find_codesign_identity', return_value='FAKSHA') as mock_find, \
-             patch.object(_bm, 'codesign_app') as mock_sign, \
-             patch.object(_bm, 'launch_app') as mock_launch:
+        # ExitStack instead of a multi-item `with`: 21 context managers exceed
+        # CPython's statically-nested-block limit.
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(sys, 'argv', ['build_maho.py'] + argv))
+            stack.enter_context(patch.object(sys, 'platform', platform))
+            for name in ('ensure_overlay_mount', 'ensure_args_gn',
+                         'sync_local_google_api_key', 'apply_tracked_chromium_overrides',
+                         'apply_branding', 'run_lucide_icon_check', 'run_gn_gen',
+                         'embed_sparkle_framework', 'embed_mail_helper'):
+                stack.enter_context(patch.object(_bm, name))
+            mock_build_chromium = stack.enter_context(
+                patch.object(_bm, 'build_chromium_app'))
+            mock_build_cli = stack.enter_context(
+                patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'))
+            mock_embed_cli = stack.enter_context(
+                patch.object(_bm, 'embed_maho_cli', return_value=True))
+            mock_stage_cli = stack.enter_context(
+                patch.object(_bm, 'stage_maho_cli_next_to_browser',
+                             return_value='/fake/out/maho'))
+            mock_sign_win = stack.enter_context(
+                patch.object(_bm, 'sign_windows_binary', return_value=True))
+            mock_find = stack.enter_context(
+                patch.object(_bm, 'find_codesign_identity', return_value='FAKSHA'))
+            mock_find_dist = stack.enter_context(
+                patch.object(_bm, 'find_codesign_identity_release_dist',
+                             return_value='FAKSHA'))
+            mock_find_profile = stack.enter_context(
+                patch.object(_bm, 'find_appstore_provisioning_profile',
+                             return_value='/fake/profile.mobileprovision'))
+            mock_sign = stack.enter_context(patch.object(_bm, 'codesign_app'))
+            mock_launch = stack.enter_context(patch.object(_bm, 'launch_app'))
             _bm.main()
 
         self.mock_build_chromium = mock_build_chromium
+        self.mock_find_dist = mock_find_dist
+        self.mock_find_profile = mock_find_profile
         return mock_build_cli, mock_embed_cli, mock_find, mock_sign, mock_launch
 
     def test_default_darwin_codesigns_and_launches(self):
+        self.addCleanup(os.environ.pop, 'MAHO_MAC_PROVISIONING_PROFILE', None)
         mock_build_cli, mock_embed_cli, mock_find, mock_sign, mock_launch = self._run_main(['--skip-rust'])
         mock_build_cli.assert_called_once_with(None)
         mock_embed_cli.assert_called_once_with(_bm._MAHO_APP_PATH, '/fake/maho')
-        mock_find.assert_called_once()
-        mock_sign.assert_called_once()
+        # Debug policy: a stable Apple Distribution identity paired with the
+        # App Store provisioning profile, never the generic auto-detected
+        # identity (see find_codesign_identity_release_dist in build_maho.py).
+        mock_find.assert_not_called()
+        self.mock_find_dist.assert_called_once()
+        self.mock_find_profile.assert_called_once_with('com.maho.browser')
+        self.assertEqual(
+            os.environ.get('MAHO_MAC_PROVISIONING_PROFILE'),
+            '/fake/profile.mobileprovision')
+        mock_sign.assert_called_once_with('FAKSHA', _bm._MAHO_APP_PATH)
         mock_launch.assert_called_once()
 
     def test_skip_codesign_skips_sign_but_still_launches(self):
@@ -959,6 +984,15 @@ class TestMainFlags(unittest.TestCase):
         mock_sign_win.assert_not_called()
 
     def test_no_identity_prints_warning_does_not_crash(self):
+        class _Err:
+            def __init__(self):
+                self.buf = []
+            def write(self, s):
+                self.buf.append(s)
+            def getvalue(self):
+                return ''.join(self.buf)
+
+        err = _Err()
         mock_lock_cm = MagicMock()
         mock_lock_cm.__enter__ = MagicMock(return_value=None)
         mock_lock_cm.__exit__ = MagicMock(return_value=False)
@@ -971,12 +1005,47 @@ class TestMainFlags(unittest.TestCase):
              patch.object(_bm, 'build_chromium_app'), \
              patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'), \
              patch.object(_bm, 'embed_maho_cli', return_value=True), \
-             patch.object(_bm, 'find_codesign_identity', return_value=None), \
+             patch.object(_bm, 'find_codesign_identity_release_dist', return_value=None), \
+             patch.object(_bm, 'find_appstore_provisioning_profile', return_value=None), \
              patch.object(_bm, 'codesign_app') as mock_sign, \
-             patch.object(_bm, 'launch_app'):
+             patch.object(_bm, 'launch_app'), \
+             patch.object(_bm.subprocess, 'run') as mock_run, \
+             patch.object(_bm.sys, 'stderr', err):
             _bm.main()
 
         mock_sign.assert_not_called()
+        self.assertIn('falling back to ad-hoc signing', err.getvalue())
+        adhoc = [c for c in mock_run.call_args_list
+                 if c.args and isinstance(c.args[0], list) and c.args[0][:1] == ['codesign']]
+        self.assertEqual(len(adhoc), 1)
+        cmd = adhoc[0].args[0]
+        self.assertEqual(cmd[cmd.index('--sign') + 1], '-')
+        self.assertEqual(cmd[cmd.index('--identifier') + 1], 'com.maho.browser')
+        self.assertIn('-r=designated => identifier "com.maho.browser"', cmd)
+        self.assertTrue(adhoc[0].kwargs.get('check'))
+
+    def test_no_identity_adhoc_skipped_entirely_when_codesign_skipped(self):
+        mock_lock_cm = MagicMock()
+        mock_lock_cm.__enter__ = MagicMock(return_value=None)
+        mock_lock_cm.__exit__ = MagicMock(return_value=False)
+        _bm.build_lock = MagicMock(return_value=mock_lock_cm)
+        _bm.build_maho_core.build_rust_prebuilt = MagicMock()
+
+        with patch.object(sys, 'argv', ['build_maho.py', '--skip-rust', '--skip-codesign']), \
+             patch.object(sys, 'platform', 'darwin'), \
+             patch.object(_bm, 'apply_tracked_chromium_overrides'), \
+             patch.object(_bm, 'build_chromium_app'), \
+             patch.object(_bm, 'build_maho_cli', return_value='/fake/maho'), \
+             patch.object(_bm, 'embed_maho_cli', return_value=True), \
+             patch.object(_bm, 'codesign_app') as mock_sign, \
+             patch.object(_bm, 'launch_app'), \
+             patch.object(_bm.subprocess, 'run') as mock_run:
+            _bm.main()
+
+        mock_sign.assert_not_called()
+        codesign_runs = [c for c in mock_run.call_args_list
+                         if c.args and isinstance(c.args[0], list) and c.args[0][:1] == ['codesign']]
+        self.assertEqual(codesign_runs, [])
 
     def test_ninja_target_repeats(self):
         mock_lock_cm = MagicMock()
@@ -990,6 +1059,8 @@ class TestMainFlags(unittest.TestCase):
              patch.object(_bm, 'apply_tracked_chromium_overrides'), \
              patch.object(_bm, 'build_chromium_app') as mock_build, \
              patch.object(_bm, 'find_codesign_identity', return_value='FAKSHA'), \
+             patch.object(_bm, 'find_codesign_identity_release_dist', return_value='FAKSHA'), \
+             patch.object(_bm, 'find_appstore_provisioning_profile', return_value='/fake/profile.mobileprovision'), \
              patch.object(_bm, 'codesign_app') as mock_sign, \
              patch.object(_bm, 'launch_app') as mock_launch:
             _bm.main()
@@ -1195,6 +1266,17 @@ class TestMainDmgFatalPaths(unittest.TestCase):
             stack.enter_context(
                 patch.object(sys, 'argv', ['build_maho.py'] + argv))
             stack.enter_context(patch.object(sys, 'platform', 'darwin'))
+            # Guard against cross-test leakage of the debug-profile env var and
+            # against a real ad-hoc codesign if the distribution finder paths
+            # ever change again.
+            stack.enter_context(patch.dict('os.environ', {}, clear=False))
+            stack.enter_context(
+                patch.object(_bm, 'find_codesign_identity_release_dist',
+                             return_value='FAKSHA'))
+            stack.enter_context(
+                patch.object(_bm, 'find_appstore_provisioning_profile',
+                             return_value='/fake/profile.mobileprovision'))
+            stack.enter_context(patch.object(_bm.subprocess, 'run'))
             for name in (
                 'ensure_overlay_mount',
                 'apply_tracked_chromium_overrides',

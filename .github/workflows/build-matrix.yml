@@ -45,3 +45,16 @@ jobs:
 
       - name: Build
         run: python3 maho-chromium/build/scripts/build_maho.py
+
+      - name: Runtime smoke (built browser + CLI)
+        env:
+          MAHO_MATRIX_OS: ${{ matrix.os }}
+        run: |
+          case "$MAHO_MATRIX_OS" in
+            macos-arm64)
+              python3 maho/scripts/verify_desktop_runtime_smoke.py                 --browser chromium/src/out/Default/Maho.app/Contents/MacOS/Maho                 --cli chromium/src/out/Default/maho ;;
+            windows-x64)
+              python3 maho/scripts/verify_desktop_runtime_smoke.py                 --browser chromium/src/out/Default/chrome.exe                 --cli chromium/src/out/Default/maho.exe ;;
+            *)
+              xvfb-run -a python3 maho/scripts/verify_desktop_runtime_smoke.py                 --browser chromium/src/out/Default/chrome                 --cli chromium/src/out/Default/maho ;;
+          esac

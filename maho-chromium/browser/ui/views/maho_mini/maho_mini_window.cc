@@ -344,8 +344,62 @@ void RegisterGlobalShortcut(Profile* profile) {
     registered = true;
   }
 }
-#else
-void RegisterGlobalShortcut(Profile* profile) {}
+#else  // !IS_MAC: portable global shortcut via ui::GlobalAcceleratorListener.
+
+#include <string>
+
+#include "ui/base/accelerators/accelerator.h"
+#include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
+
+namespace maho {
+
+namespace {
+
+// Portable equivalent of the macOS \u2325\u2318N global hotkey.
+class MahoMiniShortcutObserver
+    : public ui::GlobalAcceleratorListener::Observer {
+ public:
+  void OnKeyPressed(const ui::Accelerator& accelerator) override {
+    Profile* profile = ProfileManager::GetLastUsedProfileIfLoaded();
+    if (!profile) {
+      return;
+    }
+    if (!profile->GetPrefs()->GetBoolean(
+            maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+      return;
+    }
+    maho::LaunchMahoMini(profile, maho::MahoMiniRequest{GURL()});
+  }
+
+  void ExecuteCommand(const std::string& accelerator_group_id,
+                      const std::string& command_id) override {}
+};
+
+MahoMiniShortcutObserver* ShortcutObserver() {
+  static MahoMiniShortcutObserver observer;
+  return &observer;
+}
+
+}  // namespace
+
+void RegisterGlobalShortcut(Profile* profile) {
+  static bool registered = false;
+  if (registered || !profile ||
+      !profile->GetPrefs()->GetBoolean(
+          maho::sidebar_prefs::kMahoMiniGlobalShortcutEnabled)) {
+    return;
+  }
+
+  auto* listener = ui::GlobalAcceleratorListener::GetInstance();
+  if (!listener) {
+    return;
+  }
+  const ui::Accelerator accelerator(ui::VKEY_N,
+                                    ui::EF_CONTROL_DOWN | ui::EF_ALT_DOWN);
+  if (listener->RegisterAccelerator(accelerator, ShortcutObserver())) {
+    registered = true;
+  }
+}
 #endif
 
 }  // namespace maho

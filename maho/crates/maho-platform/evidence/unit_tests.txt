@@ -1,0 +1,32 @@
+   Compiling maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.46s
+     Running unittests src/lib.rs (target/debug/deps/maho_platform-4f0c473c8267f3ab)
+
+running 18 tests
+test contacts::tests::filter_matches_phone_substring ... ok
+test contacts::tests::filter_empty_query_returns_all ... ok
+test contacts::tests::filter_matches_email ... ok
+test contacts::tests::filter_no_match_returns_empty ... ok
+test contacts::tests::filter_matches_name_case_insensitive ... ok
+test contacts::tests::serialization_round_trip ... ok
+test send::tests::test_compose_send_applescript_fallback_to ... ok
+test contacts::tests::resolve_from_exact_handle_match ... ok
+test contacts::tests::resolve_from_no_match_returns_empty ... ok
+test imessage::tests::test_classify_sqlite_error_table ... ok
+test send::tests::test_send_approved_runner_error ... ok
+test send::tests::test_send_approved_calls_runner_once ... ok
+test send::tests::test_escape_applescript_table ... ok
+test send::tests::test_send_dry_run_never_calls_runner ... ok
+test send::tests::test_compose_send_applescript_chat_guid ... ok
+test send::tests::test_send_unapproved_never_calls_runner ... ok
+test tests::test_error_code_mapping ... ok
+test imessage::tests::test_imessage_fixture_queries ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests maho_platform
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

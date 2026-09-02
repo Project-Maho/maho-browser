@@ -1,0 +1,122 @@
+    Checking objc2-core-foundation v0.3.2
+warning: unused import: `DeviceKeyPurpose`
+  --> crates/maho-core/src/security/platform/linux.rs:22:59
+   |
+22 |     DeviceKeyAlgorithm, DeviceKeyHandle, DeviceKeyPolicy, DeviceKeyPurpose, DeviceSignature,
+   |                                                           ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `HashSet`
+ --> crates/maho-core/src/skills_manager.rs:4:33
+  |
+4 | use std::collections::{HashMap, HashSet};
+  |                                 ^^^^^^^
+
+warning: `maho-core` (lib) generated 2 warnings (run `cargo fix --lib -p maho-core` to apply 2 suggestions)
+warning: multiple lines skipped by escaped newline
+   --> crates/maho-agent/src/swiftide_backend.rs:219:80
+    |
+219 |                       "BYOK API key produced invalid Authorization header bytes; \
+    |  ________________________________________________________________________________^
+220 | |
+221 | |                      request will be sent without auth and will likely receive 401"
+    | |_____________________^ skipping everything up to and including this point
+
+warning: struct `CameraTool` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:1309:8
+     |
+1309 | struct CameraTool;
+     |        ^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` on by default
+
+warning: struct `PhotoLibraryTool` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:1352:8
+     |
+1352 | struct PhotoLibraryTool;
+     |        ^^^^^^^^^^^^^^^^
+
+warning: struct `ClipboardTool` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:1395:8
+     |
+1395 | struct ClipboardTool;
+     |        ^^^^^^^^^^^^^
+
+warning: struct `BrowserActionToolMetadata` is never constructed
+    --> crates/maho-agent/src/swiftide_backend.rs:2493:8
+     |
+2493 | struct BrowserActionToolMetadata {
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `mail_read_tool_metadata` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2499:4
+     |
+2499 | fn mail_read_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `mail_write_tool_metadata` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2629:4
+     |
+2629 | fn mail_write_tool_metadata(tool_name: &str) -> Option<BrowserActionToolMetadata> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `tool_sensitivity_from_browser_contract` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2690:4
+     |
+2690 | fn tool_sensitivity_from_browser_contract(sensitivity: BrowserToolSensitivity) -> ToolSensitivity {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `browser_action_tool_metadata` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2697:4
+     |
+2697 | fn browser_action_tool_metadata(tool_name: &str) -> BrowserActionToolMetadata {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `browser_action_shim` is never used
+    --> crates/maho-agent/src/swiftide_backend.rs:2882:4
+     |
+2882 | fn browser_action_shim(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+warning: `maho-agent` (lib) generated 10 warnings
+    Checking objc2-foundation v0.3.2
+    Checking objc2-contacts v0.3.2
+    Checking maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+    Checking maho-cli v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-cli)
+warning: struct `CliBrowserToolBridge` is never constructed
+  --> crates/maho-cli/src/browser.rs:83:12
+   |
+83 | pub struct CliBrowserToolBridge {
+   |            ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: multiple associated items are never used
+   --> crates/maho-cli/src/browser.rs:91:12
+    |
+90  | impl CliBrowserToolBridge {
+    | ------------------------- associated items in this implementation
+91  |     pub fn new(client: BrowserClient) -> Self {
+    |            ^^^
+...
+99  |     fn check_not_invalidated(&self, operation: &str) -> Result<()> {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+...
+110 |     fn invalidate(&mut self) {
+    |        ^^^^^^^^^^
+...
+116 |     pub async fn grant_exact_origin(&mut self, origin: &str) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^^^^
+...
+133 |     pub async fn adopt_tab(&mut self, tab_id: i64) -> Result<()> {
+    |                  ^^^^^^^^^
+...
+151 |     pub async fn dispatch(&mut self, tool: &str, args: Value) -> Result<Value> {
+    |                  ^^^^^^^^
+...
+166 |     pub async fn tab_list(&mut self) -> Result<Value> {
+    |                  ^^^^^^^^
+
+warning: `maho-cli` (bin "maho") generated 2 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 34.28s

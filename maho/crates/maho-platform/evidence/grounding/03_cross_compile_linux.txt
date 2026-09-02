@@ -1,0 +1,27 @@
+=== cargo check -p maho-platform --target x86_64-unknown-linux-gnu ===
+    Checking maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+warning: unused import: `DEEP_LINK_ACCESSIBILITY`
+ --> crates/maho-platform/src/ax_tree.rs:3:20
+  |
+3 | use crate::error::{DEEP_LINK_ACCESSIBILITY, PlatformError};
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `DEEP_LINK_ACCESSIBILITY`
+  --> crates/maho-platform/src/desktop.rs:11:20
+   |
+11 | use crate::error::{DEEP_LINK_ACCESSIBILITY, PlatformError};
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `vision_bbox_to_pixels` is never used
+  --> crates/maho-platform/src/ocr.rs:10:15
+   |
+10 | pub(crate) fn vision_bbox_to_pixels(
+   |               ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: `maho-platform` (lib) generated 3 warnings (run `cargo fix --lib -p maho-platform` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.83s
+exit: 0
