@@ -9,6 +9,7 @@
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho_sidebar_action_popover_view.h"
 #include "maho_sidebar_space_dot_view.h"
@@ -76,6 +77,7 @@ class MahoSidebarFooterView : public views::View,
   // views::View:
   void OnThemeChanged() override;
   bool OnKeyPressed(const ui::KeyEvent& event) override;
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
 
   // views::ContextMenuController:
   void ShowContextMenuForViewImpl(views::View* source,
@@ -125,6 +127,14 @@ class MahoSidebarFooterView : public views::View,
   void ShowDropIndicator(int target_index);
   void HideDropIndicator();
   void PerformReorder(int from_index, int to_index);
+
+  int ClampDotIndex(int index) const;
+  MahoSidebarSpaceDotView* GetDotViewAt(int index) const;
+  void ResetWheelGestureLatch();
+
+  base::OneShotTimer wheel_cooldown_timer_;
+  int accumulated_wheel_delta_ = 0;
+  bool wheel_gesture_latched_ = false;
 
   MahoSidebarFooterModel model_;
   MahoSidebarPalette palette_;

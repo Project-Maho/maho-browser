@@ -3,6 +3,8 @@
 #include "maho_sidebar_footer_view.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,6 +23,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
+#include "ui/views/view_utils.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/vector_icons/vector_icons.h"
@@ -1050,6 +1053,123 @@ bool MahoSidebarFooterView::OnKeyPressed(const ui::KeyEvent& event) {
         MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
       }
     }
+    return true;
+  }
+
+  return false;
+}
+
+namespace {
+
+constexpr base::TimeDelta kWheelGestureCooldown = base::Milliseconds(300);
+constexpr int kPrecisionScrollThreshold = 40;
+
+}  // namespace
+
+int MahoSidebarFooterView::ClampDotIndex(int index) const {
+  if (!dot_container_ || dot_container_->children().empty()) {
+    return -1;
+  }
+  const int count = static_cast<int>(dot_container_->children().size());
+  return std::clamp(index, 0, count - 1);
+}
+
+MahoSidebarSpaceDotView* MahoSidebarFooterView::GetDotViewAt(int index) const {
+  if (!dot_container_) {
+    return nullptr;
+  }
+  const auto& children = dot_container_->children();
+  if (index < 0 || static_cast<size_t>(index) >= children.size()) {
+    return nullptr;
+  }
+  return views::AsViewClass<MahoSidebarSpaceDotView>(children[index]);
+}
+
+void MahoSidebarFooterView::ResetWheelGestureLatch() {
+  wheel_gesture_latched_ = false;
+  accumulated_wheel_delta_ = 0;
+}
+
+bool MahoSidebarFooterView::OnMouseWheel(const ui::MouseWheelEvent& event) {
+  if (!browser_ || !dot_container_) {
+    return false;
+  }
+
+  const auto& children = dot_container_->children();
+  const int count = static_cast<int>(children.size());
+  if (count <= 1) {
+    return false;
+  }
+
+  // If already latched during momentum scroll, reset timer and consume event.
+  if (wheel_gesture_latched_) {
+    wheel_cooldown_timer_.Start(
+        FROM_HERE, kWheelGestureCooldown,
+        base::BindOnce(&MahoSidebarFooterView::ResetWheelGestureLatch,
+                       weak_factory_.GetWeakPtr()));
+    return true;
+  }
+
+  // Interpret horizontal offset first; fallback to vertical for shift+scroll or wheel
+  int raw_delta = event.x_offset();
+  if (raw_delta == 0) {
+    raw_delta = event.y_offset();
+  }
+
+  if (raw_delta == 0) {
+    return false;
+  }
+
+  // Reset accumulation if direction flips
+  if ((accumulated_wheel_delta_ > 0) != (raw_delta > 0) &&
+      accumulated_wheel_delta_ != 0) {
+    accumulated_wheel_delta_ = 0;
+  }
+  accumulated_wheel_delta_ += raw_delta;
+
+  const int threshold = (std::abs(raw_delta) >= ui::MouseWheelEvent::kWheelDelta)
+                            ? ui::MouseWheelEvent::kWheelDelta
+                            : kPrecisionScrollThreshold;
+
+  if (std::abs(accumulated_wheel_delta_) < threshold) {
+    return true;
+  }
+
+  // Clamp current selected index safely
+  int current_index = ClampDotIndex(selected_dot_index_);
+  if (current_index < 0) {
+    current_index = 0;
+  }
+
+  int target_index = current_index;
+  if (accumulated_wheel_delta_ < 0) {
+    // Scroll right / down -> Next space
+    if (target_index < count - 1) {
+      target_index++;
+    }
+  } else {
+    // Scroll left / up -> Previous space
+    if (target_index > 0) {
+      target_index--;
+    }
+  }
+
+  if (target_index != selected_dot_index_) {
+    // Latch gesture to prevent rapid skipping across multiple spaces
+    wheel_gesture_latched_ = true;
+    wheel_cooldown_timer_.Start(
+        FROM_HERE, kWheelGestureCooldown,
+        base::BindOnce(&MahoSidebarFooterView::ResetWheelGestureLatch,
+                       weak_factory_.GetWeakPtr()));
+
+    selected_dot_index_ = target_index;
+    UpdateDotSelectionState();
+    auto* dot = GetDotViewAt(selected_dot_index_);
+    if (dot && !dot->space_id().empty()) {
+      MahoSidebarView::ActivateSpaceAndTab(browser_, dot->space_id());
+    }
+    ScrollToActiveSpace();
+    UpdateFadeMask();
     return true;
   }
 
