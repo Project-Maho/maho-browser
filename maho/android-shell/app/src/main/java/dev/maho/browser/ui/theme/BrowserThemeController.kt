@@ -49,7 +49,12 @@ object BrowserThemeController {
             Theme.Light -> "light"
         }
         val resolved = if (dark) "dark" else "light"
-        val script = """
+        val script = buildColorSchemeScript(mode, resolved)
+        webView.post { webView.evaluateJavascript(script, null) }
+    }
+
+    internal fun buildColorSchemeScript(mode: String, resolved: String): String =
+        """
             (function() {
               var media = window.matchMedia('(prefers-color-scheme: dark)');
               if (!window.__mahoApplyColorScheme) {
@@ -59,7 +64,6 @@ object BrowserThemeController {
                   var nextResolved = window.__mahoThemeMode === 'system'
                     ? (media.matches ? 'dark' : 'light')
                     : window.__mahoThemeMode;
-                  document.documentElement.style.colorScheme = nextResolved;
                   document.documentElement.setAttribute('data-maho-color-scheme', nextResolved);
                 };
                 var onSystemThemeChanged = function() {
@@ -74,8 +78,6 @@ object BrowserThemeController {
               document.documentElement.setAttribute('data-maho-resolved-color-scheme', '$resolved');
             })();
         """.trimIndent()
-        webView.post { webView.evaluateJavascript(script, null) }
-    }
 
     @Composable
     fun isDarkTheme(): Boolean {
