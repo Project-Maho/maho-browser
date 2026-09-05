@@ -186,9 +186,12 @@ def parse_criterion_directory(criterion_dir: Path) -> List[BenchmarkEstimate]:
         return estimates
 
     # Criterion layout: criterion_dir/<group_or_bench>/.../[new|base]/estimates.json
-    for path in sorted(criterion_dir.rglob("estimates.json")):
+    # Parse current measurements first so deduplication cannot select a baseline.
+    for path in sorted(
+        criterion_dir.rglob("estimates.json"),
+        key=lambda path: (path.parent.name != "new", path),
+    ):
         parent = path.parent
-        # Prefer 'new' reports over 'base'
         if parent.name not in ("new", "base"):
             continue
 
@@ -248,7 +251,7 @@ def parse_criterion_directory(criterion_dir: Path) -> List[BenchmarkEstimate]:
         except Exception as e:
             sys.stderr.write(f"Warning: Failed to parse {path}: {e}\n")
 
-    # Deduplicate by bench_id (preferring first found or newest)
+    # Keep the current measurement, falling back to a baseline-only report.
     seen = {}
     for est in estimates:
         if est.bench_id not in seen:
