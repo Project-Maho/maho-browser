@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,6 +58,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.maho.browser.models.TabId
 import dev.maho.browser.ui.theme.BrowserThemeController
+import dev.maho.browser.ui.tab.TabPreviewStore
 import dev.maho.browser.ui.webview.AgenticBrowsingWebViewRegistry
 
 @Composable
@@ -76,6 +78,7 @@ fun WebViewHost(
     onPinchSummarize: () -> Unit = {},
     isIncognito: Boolean = false,
     onNewTabRequested: ((String) -> Unit)? = null,
+    capturePreviewSignal: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -415,6 +418,12 @@ fun WebViewHost(
         }
     }
 
+    LaunchedEffect(webView, tabId, capturePreviewSignal) {
+        if (capturePreviewSignal > 0) {
+            captureTabPreview(webView, tabId)
+        }
+    }
+
     LaunchedEffect(isDesktopMode) {
         webView.settings.userAgentString = if (isDesktopMode) {
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
@@ -434,10 +443,14 @@ fun WebViewHost(
     }
 
     Box(modifier = modifier) {
-        AndroidView(
-            factory = { webView },
-            modifier = Modifier.fillMaxSize(),
-        )
+        // Keyed so a renderer-crash recovery swaps in the freshly created WebView;
+        // AndroidView runs its factory once per key.
+        key(webViewEpoch) {
+            AndroidView(
+                factory = { webView },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         val activeCustomView = customView
         if (activeCustomView != null) {
@@ -483,6 +496,28 @@ fun WebViewHost(
                 }
             }
         }
+    }
+}
+
+internal fun captureTabPreview(webView: WebView, tabId: TabId) {
+    if (webView.width <= 0 || webView.height <= 0) return
+    runCatching {
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            webView.width,
+            webView.height,
+            android.graphics.Bitmap.Config.RGB_565,
+        )
+        webView.draw(android.graphics.Canvas(bitmap))
+        if (!bitmap.isBlank()) {
+            TabPreviewStore.put(tabId, bitmap)
+        }
+    }
+}
+
+private fun android.graphics.Bitmap.isBlank(): Boolean {
+    val first = getPixel(width / 2, height / 4)
+    return (0 until 6).all { step ->
+        getPixel(width / 2, (height / 8) * (step + 1)) == first
     }
 }
 

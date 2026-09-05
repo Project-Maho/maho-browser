@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -249,13 +251,27 @@ fun TabCard(
             }
 
             Column(modifier = Modifier.padding(11.dp)) {
-                Column(
+                val preview = TabPreviewStore.get(tab.id) as? android.graphics.Bitmap
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(144.dp)
                         .clip(RoundedCornerShape(metrics.cardCorner))
                         .background(previewBrush)
-                        .border(1.dp, previewFrameColor, RoundedCornerShape(metrics.cardCorner))
+                        .border(1.dp, previewFrameColor, RoundedCornerShape(metrics.cardCorner)),
+                ) {
+                if (preview != null && !isIncognito) {
+                    androidx.compose.foundation.Image(
+                        bitmap = preview.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        alignment = Alignment.TopCenter,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
                         .padding(14.dp),
                     verticalArrangement = Arrangement.SpaceBetween,
                 ) {
@@ -306,6 +322,7 @@ fun TabCard(
                                 )
                             }
                     }
+                }
                 }
 
                 Spacer(modifier = Modifier.height(11.dp))
