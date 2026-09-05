@@ -193,10 +193,13 @@ class MahoWebViewClient(
     private val isSourceWhitelisted: (String) -> Boolean,
     private val onPageThemeApply: (WebView) -> Unit = {},
     private val onRenderProcessCrashed: (() -> Unit)? = null,
+    private val isIncognito: () -> Boolean = { false },
 ) : WebViewClient() {
     private val mainDocumentUrlState = MainDocumentUrlState()
 
     private fun capturePreviewWhenPainted(view: WebView, tabId: String) {
+        // A private page must never be read back into a preview bitmap.
+        if (isIncognito()) return
         // The preview must come from a painted frame, so wait for the state the page
         // will actually draw instead of capturing as soon as loading finishes.
         view.postVisualStateCallback(

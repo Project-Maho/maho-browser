@@ -226,6 +226,7 @@ fun WebViewHost(
                 onRenderProcessCrashed = {
                     isRendererCrashed = true
                 },
+                isIncognito = { currentIsIncognito.value },
             )
             webChromeClient = MahoWebChromeClient(
                 tabIdProvider = { currentTabId.value },
@@ -501,16 +502,20 @@ fun WebViewHost(
 
 internal fun captureTabPreview(webView: WebView, tabId: TabId) {
     if (webView.width <= 0 || webView.height <= 0) return
-    // A hardware-accelerated WebView draws nothing into a software Canvas, so read
-    // back the composited window surface instead.
+    // Only read back a WebView the user is actually looking at, otherwise the
+    // window already shows the tab deck or a sheet and we would store that.
+    if (!webView.isShown) return
     val window = (webView.context as? android.app.Activity)?.window ?: return
     runCatching {
         val location = IntArray(2)
         webView.getLocationInWindow(location)
+        // A card is 144dp tall, so a full-resolution ARGB_8888 frame would cost
+        // ~9MB per tab. Read back at card scale instead.
+        val scale = PREVIEW_MAX_WIDTH_PX.toFloat() / webView.width
         val bitmap = android.graphics.Bitmap.createBitmap(
-            webView.width,
-            webView.height,
-            android.graphics.Bitmap.Config.ARGB_8888,
+            PREVIEW_MAX_WIDTH_PX,
+            (webView.height * scale).toInt().coerceAtLeast(1),
+            android.graphics.Bitmap.Config.RGB_565,
         )
         android.view.PixelCopy.request(
             window,
@@ -524,12 +529,16 @@ internal fun captureTabPreview(webView: WebView, tabId: TabId) {
             { status ->
                 if (status == android.view.PixelCopy.SUCCESS && !bitmap.isBlank()) {
                     TabPreviewStore.put(tabId, bitmap)
+                } else {
+                    bitmap.recycle()
                 }
             },
             android.os.Handler(android.os.Looper.getMainLooper()),
         )
     }
 }
+
+private const val PREVIEW_MAX_WIDTH_PX = 360
 
 internal fun android.graphics.Bitmap.isBlank(): Boolean {
     // Sample a grid rather than one centre column: a real page is often uniform

@@ -93,7 +93,7 @@ async function run() {
 }
 
 run().then(() => {
-  const bad = results.filter((r) => r.status === 'FAIL');
+  const bad = results.filter((r) => r.status !== 'PASS');
   console.log(`RESULT ${results.filter(r=>r.status==='PASS').length} pass, ${bad.length} fail, ${results.filter(r=>r.status==='SKIP').length} skip`);
   process.exit(bad.length ? 1 : 0);
 }, (e) => { console.error('RUN ERROR', e && e.message ? e.message : e); process.exit(2); });
