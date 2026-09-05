@@ -781,15 +781,15 @@ bool IsRefConsumingTool(std::string_view tool_name) {
 
 base::DictValue SerializeTabInfo(const MahoMcpSession::TabInfo& tab_info) {
   base::DictValue tab;
-  tab.Set("id", tab_info.id != 0 ? tab_info.id : 1);
+  tab.Set("id", tab_info.id);
   tab.Set("title", tab_info.title);
   tab.Set("url", tab_info.url);
-  tab.Set("is_active", tab_info.is_active || tab_info.id == 0);
+  tab.Set("is_active", tab_info.is_active);
   if (!tab_info.stable_id.empty()) {
     tab.Set("stable_id", tab_info.stable_id);
   }
-  tab.Set("targetable", true);
-  tab.Set("tab_strip_index", tab_info.tab_strip_index >= 0 ? tab_info.tab_strip_index : 0);
+  tab.Set("targetable", tab_info.targetable);
+  tab.Set("tab_strip_index", tab_info.tab_strip_index);
   return tab;
 }
 

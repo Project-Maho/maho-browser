@@ -1718,10 +1718,11 @@ private:
 };
 
 TEST_F(MahoMcpSessionTest, BrowserTabListSerializesVisibleSidebarInventory) {
+  // Given one live tab and two unloaded sidebar entries.
   auto delegate = std::make_unique<FakeAsyncNetworkDelegate>();
 
   MahoMcpSession::TabInfo live_tab;
-  live_tab.id = 7;
+  live_tab.id = 1;
   live_tab.stable_id = "stable-live";
   live_tab.title = "Live tab";
   live_tab.url = "https://example.com/live";
@@ -1757,6 +1758,7 @@ TEST_F(MahoMcpSessionTest, BrowserTabListSerializesVisibleSidebarInventory) {
       "\n");
   ASSERT_EQ(session_->state(), MahoMcpSession::State::kActive);
 
+  // When the sidebar inventory crosses the MCP response boundary.
   auto responses = CallToolRaw("browser_tab_list", "{}", 2);
   ASSERT_EQ(responses.size(), 1u);
   base::Value parsed = ParseLine(responses[0]);
@@ -1774,21 +1776,25 @@ TEST_F(MahoMcpSessionTest, BrowserTabListSerializesVisibleSidebarInventory) {
   EXPECT_EQ(*receipt->FindString("capabilityId"), "tab.list");
   ASSERT_EQ(tabs->size(), 3u);
 
+  // Then unloaded entries never impersonate the live tab or become active.
   const auto &live = (*tabs)[0].GetDict();
-  EXPECT_EQ(live.FindInt("id").value(), 7);
+  EXPECT_EQ(live.FindInt("id").value(), 1);
   EXPECT_EQ(*live.FindString("stable_id"), "stable-live");
+  EXPECT_EQ(live.FindBool("is_active"), true);
   EXPECT_EQ(live.FindBool("targetable").value(), true);
   EXPECT_EQ(live.FindInt("tab_strip_index").value(), 0);
 
   const auto &suspended = (*tabs)[1].GetDict();
   EXPECT_EQ(suspended.FindInt("id").value(), 0);
   EXPECT_EQ(*suspended.FindString("stable_id"), "stable-suspended");
+  EXPECT_EQ(suspended.FindBool("is_active"), false);
   EXPECT_EQ(suspended.FindBool("targetable").value(), false);
   EXPECT_EQ(suspended.FindInt("tab_strip_index").value(), -1);
 
   const auto &sidebar_only = (*tabs)[2].GetDict();
   EXPECT_EQ(sidebar_only.FindInt("id").value(), 0);
   EXPECT_EQ(*sidebar_only.FindString("stable_id"), "stable-sidebar-only");
+  EXPECT_EQ(sidebar_only.FindBool("is_active"), false);
   EXPECT_EQ(sidebar_only.FindBool("targetable").value(), false);
   EXPECT_EQ(sidebar_only.FindInt("tab_strip_index").value(), -1);
 }
