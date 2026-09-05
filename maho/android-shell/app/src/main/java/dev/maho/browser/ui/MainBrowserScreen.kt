@@ -87,6 +87,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var isLoading by remember { mutableStateOf(false) }
     var homeQuery by rememberSaveable { mutableStateOf("") }
     var pendingHomeNavigationUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    var requestedNavigationUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingBrowsingTabId by rememberSaveable { mutableStateOf<TabId?>(null) }
     var webAgentInitialGoal by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -377,6 +378,8 @@ fun MainBrowserScreen(externalUrl: String? = null) {
             null
         }
 
+        requestedNavigationUrl = target
+
         if (targetTabId != null) {
             pendingHomeNavigationUrl = null
             pendingBrowsingTabId = targetTabId
@@ -469,10 +472,11 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     }.take(8)
     val activeSpaceName = activeSpace?.name ?: spaces.firstOrNull { it.isActive }?.name ?: "Space"
     val browsingTabId = activeTabId ?: pendingBrowsingTabId
-    val browsingInitialUrl = activeTab?.url?.takeIf { it.isNotBlank() }
-        ?: currentUrl.takeIf { it.isNotBlank() }
-        ?: pendingHomeNavigationUrl?.takeIf { it.isNotBlank() }
-        ?: "about:blank"
+    val browsingInitialUrl = resolveBrowsingUrl(
+        requestedUrl = requestedNavigationUrl ?: pendingHomeNavigationUrl,
+        activeTabUrl = activeTab?.url,
+        currentUrl = currentUrl,
+    )
     val isBrowsingRoute = shellRoute == ShellRoute.Browsing
     val isCleanHomeChrome = shellRoute == ShellRoute.Home &&
         overlayStack.isEmpty() &&
@@ -598,6 +602,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         }
         predictiveBackProgress = 0f
         if (webViewRef?.canGoBack() == true) {
+            requestedNavigationUrl = null
             webViewRef?.goBack()
         } else {
             activeTabId?.let { tabId ->
@@ -682,6 +687,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                 },
                                 onGoBack = {
                                     activeTabId?.let { tabId ->
+                                        requestedNavigationUrl = null
                                         BridgeNavigation.goBack(tabId)
                                         webViewRef?.goBack()
                                     }
@@ -881,6 +887,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             isIncognito = isIncognito,
                             onUrlChanged = { url ->
                                 currentUrl = url
+                                if (requestedNavigationUrl != null && url.isNotBlank()) {
+                                    requestedNavigationUrl = null
+                                }
                             },
                             onTitleChanged = { title ->
                                 currentTitle = title
@@ -912,6 +921,12 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     isReaderMode = isReaderMode,
                                     zoomLevel = zoomLevel,
                                 )
+                            },
+                            onNewTabRequested = { url ->
+                                val spaceId = activeSpaceId ?: spaces.firstOrNull()?.id
+                                if (spaceId != null) {
+                                    handleNewTab(spaceId, url)
+                                }
                             },
                             onSingleTap = {
                                 if (!bottomBarVisible) {
