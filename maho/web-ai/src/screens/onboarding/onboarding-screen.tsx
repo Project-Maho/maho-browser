@@ -204,8 +204,8 @@ export function OnboardingScreen() {
               <h2>{authMode === 'login' ? 'Sign in to Maho' : 'Create your Maho AI account'}</h2>
               <p>
                 {authMode === 'login'
-                  ? 'Sign in to Maho AI to continue setting up your browser.'
-                  : 'Create a Maho AI account to continue.'}
+                  ? 'Sign in to sync your browsing and use Maho AI. You can browse without an account.'
+                  : 'Create a Maho AI account to sync your browsing. You can browse without an account.'}
               </p>
             </div>
 
@@ -305,6 +305,18 @@ export function OnboardingScreen() {
             >
               {authLoading ? <Icon name="loader" class="animate-spin" size={18} /> : <GoogleMark />}
               <span>Continue with Google</span>
+            </button>
+
+            <button
+              type="button"
+              class="onboarding-btn-text"
+              disabled={authLoading}
+              onClick={() => {
+                setAuthError(null);
+                setStep('theme');
+              }}
+            >
+              Continue without an account
             </button>
           </div>
         )}

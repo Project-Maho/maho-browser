@@ -48,6 +48,19 @@ afterEach(() => {
   document.documentElement.style.removeProperty('--safe-area-bottom');
 });
 
+it('lets a user without an account continue past the auth step', async () => {
+  render(<OnboardingScreen />);
+  fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+  await screen.findByLabelText(/email address/i);
+
+  fireEvent.click(screen.getByRole('button', { name: /continue without an account/i }));
+
+  await screen.findByRole('heading', { name: /choose your theme/i });
+  expect(mockBridge.relaySignIn).not.toHaveBeenCalled();
+  expect(mockBridge.relaySignUp).not.toHaveBeenCalled();
+  expect(mockBridge.relaySignInWithGoogle).not.toHaveBeenCalled();
+});
+
 async function advanceThroughLogin() {
   fireEvent.click(screen.getByRole('button', { name: /continue/i }));
   const emailInput = await screen.findByLabelText(/email address/i);
