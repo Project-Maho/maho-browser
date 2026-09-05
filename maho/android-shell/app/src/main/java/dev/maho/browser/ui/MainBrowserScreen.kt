@@ -59,6 +59,7 @@ import dev.maho.browser.models.TabId
 import dev.maho.browser.models.TabViewModel
 import dev.maho.browser.ui.find.FindInPageSheet
 import dev.maho.browser.ui.summary.PinchSummaryView
+import dev.maho.browser.ui.webview.AgenticBrowsingWebViewRegistry
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import dev.maho.browser.ui.theme.resolveBrowserChromeTheme
 
@@ -76,7 +77,10 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var shellRoute by rememberSaveable { mutableStateOf(ShellRoute.Home) }
     var homeReturnTabId by rememberSaveable { mutableStateOf<TabId?>(null) }
     var showTabGrid by rememberSaveable { mutableStateOf(false) }
-    var capturePreviewSignal by remember { mutableStateOf(0) }
+    fun captureActiveTabPreview() {
+        val webView = AgenticBrowsingWebViewRegistry.current() ?: return
+        activeTabId?.let { captureTabPreview(webView, it) }
+    }
     var showFindSheet by rememberSaveable { mutableStateOf(false) }
     var showSearchSheet by rememberSaveable { mutableStateOf(false) }
     var showPinchSummary by rememberSaveable { mutableStateOf(false) }
@@ -669,7 +673,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     )
                                 },
                                 onTabsClick = {
-                                    capturePreviewSignal++
+                                    captureActiveTabPreview()
                                     showTabGrid = true
                                     revealBottomBar(lockMillis = 900)
                                 },
@@ -812,7 +816,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                 submitSearch(homeQuery, reuseActiveTab = false)
                             },
                             onTabsClick = {
-                                capturePreviewSignal++
+                                captureActiveTabPreview()
                                     showTabGrid = true
                                 revealBottomBar(lockMillis = 900)
                             },
@@ -888,7 +892,6 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             initialUrl = browsingInitialUrl,
                             isDesktopMode = isDesktopMode,
                             isIncognito = isIncognito,
-                            capturePreviewSignal = capturePreviewSignal,
                             onUrlChanged = { url ->
                                 currentUrl = url
                                 if (requestedNavigationUrl != null && url.isNotBlank()) {
