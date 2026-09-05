@@ -196,6 +196,19 @@ class MahoWebViewClient(
 ) : WebViewClient() {
     private val mainDocumentUrlState = MainDocumentUrlState()
 
+    private fun capturePreviewWhenPainted(view: WebView, tabId: String) {
+        // The preview must come from a painted frame, so wait for the state the page
+        // will actually draw instead of capturing as soon as loading finishes.
+        view.postVisualStateCallback(
+            tabId.hashCode().toLong(),
+            object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                    captureTabPreview(view, tabId)
+                }
+            },
+        )
+    }
+
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         mainDocumentUrlState.onPageStarted(url)
         onUrlChanged(url)
@@ -213,6 +226,7 @@ class MahoWebViewClient(
         val tabId = tabIdProvider()
         BridgeNavigation.reportLoadingChanged(tabId, false)
         BridgeNavigation.reportNavigationStateChanged(tabId, view.canGoBack(), view.canGoForward())
+        capturePreviewWhenPainted(view, tabId)
     }
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
