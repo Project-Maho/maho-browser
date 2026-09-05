@@ -1,8 +1,10 @@
 package dev.maho.browser.ui.tab
 
+import androidx.compose.runtime.snapshots.Snapshot
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TabPreviewStoreTest {
@@ -39,6 +41,26 @@ class TabPreviewStoreTest {
         TabPreviewStore.remove("tab-1")
 
         assertNull(TabPreviewStore.get("tab-1"))
+    }
+
+    @Test
+    fun readingAPreviewIsObservableSoTheTabCardRedrawsWhenOneArrives() {
+        TabPreviewStore.put("tab-1", 11)
+
+        val observedReads = mutableListOf<Any>()
+        val snapshot = Snapshot.takeMutableSnapshot(readObserver = { observedReads += it })
+        try {
+            snapshot.enter { TabPreviewStore.get("tab-1") }
+            snapshot.apply()
+        } finally {
+            snapshot.dispose()
+        }
+
+        assertTrue(
+            "a tab card that reads a preview must register a snapshot read, " +
+                "otherwise a later put() never recomposes it",
+            observedReads.isNotEmpty(),
+        )
     }
 
     @Test

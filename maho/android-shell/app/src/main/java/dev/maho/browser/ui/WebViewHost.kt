@@ -514,11 +514,16 @@ internal fun captureTabPreview(webView: WebView, tabId: TabId) {
     }
 }
 
-private fun android.graphics.Bitmap.isBlank(): Boolean {
-    val first = getPixel(width / 2, height / 4)
-    return (0 until 6).all { step ->
-        getPixel(width / 2, (height / 8) * (step + 1)) == first
+internal fun android.graphics.Bitmap.isBlank(): Boolean {
+    // Sample a grid rather than one centre column: a real page is often uniform
+    // straight down the middle, and treating that as blank threw the capture away.
+    val first = getPixel(width / 8, height / 8)
+    for (column in 1 until 8) {
+        for (row in 1 until 8) {
+            if (getPixel((width / 8) * column, (height / 8) * row) != first) return false
+        }
     }
+    return true
 }
 
 fun WebView.translatePage(targetLanguage: String = "en") {
