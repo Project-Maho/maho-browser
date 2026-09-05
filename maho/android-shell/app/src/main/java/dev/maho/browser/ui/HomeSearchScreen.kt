@@ -1,6 +1,7 @@
 package dev.maho.browser.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -156,10 +157,9 @@ private fun MahoHomeHeroLogo(isIncognito: Boolean, compact: Boolean = false) {
             modifier = Modifier.size(if (compact) 64.dp else 96.dp),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
+                Image(
                     painter = painterResource(id = R.drawable.ic_maho_star),
                     contentDescription = "Maho Star",
-                    tint = starColor,
                     modifier = Modifier.size(if (compact) 36.dp else 56.dp),
                 )
             }
