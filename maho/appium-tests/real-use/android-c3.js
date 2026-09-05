@@ -76,9 +76,11 @@ async function run() {
     await shot(driver, 'c3-first-doc');
 
     const link = await driver.$('android=new UiSelector().textContains("Learn more")');
-    if (await link.isExisting()) {
-      await link.click();
+    if (!(await link.isExisting())) {
+      record('C3-back-restores-previous-document', 'FAIL', 'no in-page link to build history from; back could not be exercised');
+      return;
     }
+    await link.click();
     const second = await waitForText(driver, 'Example Domains', 60000);
     await shot(driver, 'c3-second-doc');
     if (!second) {
@@ -86,8 +88,18 @@ async function run() {
       return;
     }
 
+    // 'Example Domain' is a substring of the second page's 'Example Domains',
+    // so the first document is identified by text unique to it.
+    const FIRST_DOC_MARKER = 'This domain is for use in documentation examples';
+    const beforeBack = await driver.getPageSource();
+    if (beforeBack.includes(FIRST_DOC_MARKER)) {
+      record('C3-back-restores-previous-document', 'FAIL',
+        'the first document was still showing before back was pressed; the check would pass without navigating');
+      return;
+    }
+
     await driver.back();
-    const restored = await waitForText(driver, 'Example Domain', 30000);
+    const restored = await waitForText(driver, FIRST_DOC_MARKER, 30000);
     await shot(driver, 'c3-after-back');
     record('C3-back-restores-previous-document', restored ? 'PASS' : 'FAIL',
       restored ? 'back navigation restored the first document' : 'back navigation did NOT restore the first document');

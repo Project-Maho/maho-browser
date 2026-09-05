@@ -97,7 +97,9 @@ async function run() {
 }
 
 run().then(() => {
-  const bad = results.filter((r) => r.status === 'FAIL');
-  console.log(`RESULT ${results.filter((r) => r.status === 'PASS').length} pass, ${bad.length} fail`);
-  process.exit(bad.length ? 1 : 0);
+  const passed = results.filter((r) => r.status === 'PASS').length;
+  const failed = results.filter((r) => r.status === 'FAIL').length;
+  const blocked = results.filter((r) => r.status === 'BLOCKED').length;
+  console.log(`RESULT ${passed} pass, ${failed} fail, ${blocked} blocked`);
+  process.exit(passed === results.length && results.length > 0 ? 0 : 1);
 }, (e) => { console.error('RUN ERROR', e && e.message ? e.message : e); process.exit(2); });

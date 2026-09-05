@@ -9,11 +9,12 @@ class BrowserThemeControllerTest {
     @Test
     fun colorSchemeScript_doesNotForceDarkOntoLightOnlyPages() {
         val script = BrowserThemeController.buildColorSchemeScript(mode = "dark", resolved = "dark")
+        val collapsed = script.replace(Regex("\\s+"), "")
 
         assertFalse(
-            "forcing documentElement.style.colorScheme makes light-only sites render " +
-                "light text on their own light background",
-            script.contains("document.documentElement.style.colorScheme = nextResolved"),
+            "assigning style.colorScheme makes light-only sites render light text " +
+                "on their own light background",
+            collapsed.contains("style.colorScheme="),
         )
     }
 
