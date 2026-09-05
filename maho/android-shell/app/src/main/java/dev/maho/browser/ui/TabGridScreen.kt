@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSpaces
 import dev.maho.browser.bridge.BridgeTabs
+import dev.maho.browser.ui.tab.orderTabsForDeck
 import dev.maho.browser.models.SpaceId
 import dev.maho.browser.models.SpaceViewModel
 import dev.maho.browser.models.TabId
@@ -104,9 +105,10 @@ fun TabGridScreen(
         refresh()
     }
 
-    val visibleTabs = tabs.filter { tab ->
-        activeSpaceId == null || tab.spaceId == activeSpaceId
-    }
+    val visibleTabs = orderTabsForDeck(
+        tabs.filter { tab -> activeSpaceId == null || tab.spaceId == activeSpaceId },
+        activeTabId,
+    ) { it.id }
     val activeSpaceName = spaces.firstOrNull { it.id == activeSpaceId }?.name ?: "Current space"
     val containerColor = if (isIncognito) shellColors.incognitoSurface else shellColors.overlaySurface
     val elevatedSurfaceColor = if (isIncognito) shellColors.incognitoBackground else shellColors.overlaySurfaceHigh

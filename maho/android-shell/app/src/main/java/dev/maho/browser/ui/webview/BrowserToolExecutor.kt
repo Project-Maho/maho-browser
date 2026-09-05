@@ -43,6 +43,8 @@ object AgenticBrowsingWebViewRegistry {
         }
     }
 
+    fun current(): WebView? = activeWebView.get()
+
     internal fun evaluate(script: String, timeoutMs: Long = 3_000L): AgenticPageEvaluation {
         val webView = activeWebView.get()
             ?: return AgenticPageEvaluation.Failure("no_active_page")

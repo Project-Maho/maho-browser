@@ -2,6 +2,14 @@ package dev.maho.browser.ui.tab
 
 import androidx.compose.runtime.mutableIntStateOf
 
+fun <T> orderTabsForDeck(tabs: List<T>, activeTabId: String?, idOf: (T) -> String): List<T> {
+    val active = tabs.firstOrNull { idOf(it) == activeTabId } ?: return tabs
+    return listOf(active) + tabs.filterNot { idOf(it) == idOf(active) }
+}
+
+fun orderTabsForDeck(tabIds: List<String>, activeTabId: String?): List<String> =
+    orderTabsForDeck(tabIds, activeTabId) { it }
+
 object TabPreviewStore {
 
     const val MAX_ENTRIES = 24

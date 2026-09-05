@@ -501,16 +501,33 @@ fun WebViewHost(
 
 internal fun captureTabPreview(webView: WebView, tabId: TabId) {
     if (webView.width <= 0 || webView.height <= 0) return
+    // A hardware-accelerated WebView draws nothing into a software Canvas, so read
+    // back the composited window surface instead.
+    val window = (webView.context as? android.app.Activity)?.window ?: return
     runCatching {
+        val location = IntArray(2)
+        webView.getLocationInWindow(location)
         val bitmap = android.graphics.Bitmap.createBitmap(
             webView.width,
             webView.height,
-            android.graphics.Bitmap.Config.RGB_565,
+            android.graphics.Bitmap.Config.ARGB_8888,
         )
-        webView.draw(android.graphics.Canvas(bitmap))
-        if (!bitmap.isBlank()) {
-            TabPreviewStore.put(tabId, bitmap)
-        }
+        android.view.PixelCopy.request(
+            window,
+            android.graphics.Rect(
+                location[0],
+                location[1],
+                location[0] + webView.width,
+                location[1] + webView.height,
+            ),
+            bitmap,
+            { status ->
+                if (status == android.view.PixelCopy.SUCCESS && !bitmap.isBlank()) {
+                    TabPreviewStore.put(tabId, bitmap)
+                }
+            },
+            android.os.Handler(android.os.Looper.getMainLooper()),
+        )
     }
 }
 
