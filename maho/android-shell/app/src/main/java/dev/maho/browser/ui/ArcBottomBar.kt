@@ -401,9 +401,9 @@ fun ArcBottomBar(
                             shape = RoundedCornerShape(22.dp),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 Surface(
                                     shape = CircleShape,
@@ -413,14 +413,14 @@ fun ArcBottomBar(
                                         painter = painterResource(id = pageGlyph.drawableRes),
                                         contentDescription = null,
                                         modifier = Modifier
-                                            .padding(7.dp)
+                                            .padding(6.dp)
                                             .size(15.dp),
                                         tint = if (isIncognito) shellColors.incognitoAccent else contentColor,
                                     )
                                 }
 
                                 Column(
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1f, fill = false),
                                     verticalArrangement = Arrangement.spacedBy(2.dp),
                                 ) {
                                     Text(
@@ -450,7 +450,11 @@ fun ArcBottomBar(
                                         text = if (isLoading) "…" else "Open",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = shellColors.textSecondary.copy(alpha = 0.9f),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier
+                                            .testTag("arcBottomBarOpenChip")
+                                            .padding(horizontal = 8.dp, vertical = 5.dp),
                                     )
                                 }
                             }
