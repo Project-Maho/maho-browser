@@ -51,6 +51,8 @@ class Replacement:
 # absent from this map is treated as enabled on all platforms.
 FILE_PLATFORMS: dict[str, frozenset[str]] = {
     "chrome/installer/mini_installer/chrome.release": frozenset({"win"}),
+    "chrome/install_static/chromium_install_modes.h": frozenset({"win"}),
+    "chrome/installer/setup/install_worker.cc": frozenset({"win"}),
     "chrome/app/app-Info.plist": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.h": frozenset({"mac"}),
     "chrome/browser/app_controller_mac.mm": frozenset({"mac"}),
@@ -228,6 +230,61 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: bundle the CLI and Mail helper in the Windows installer",
             guard="maho_mail_helper.exe: %(ChromeDir)s\\",
+        ),
+    ],
+    "chrome/install_static/chromium_install_modes.h": [
+        Replacement(
+            old='inline constexpr wchar_t kProductPathName[] = L"Chromium";',
+            new='inline constexpr wchar_t kProductPathName[] = L"Maho";',
+            description="Maho: install into the Maho product directory on Windows",
+            guard='kProductPathName[] = L"Maho";',
+        ),
+        Replacement(
+            old='        .base_app_name = L"Chromium",              // A distinct base_app_name.',
+            new='        .base_app_name = L"Maho",                  // A distinct base_app_name.',
+            description="Maho: register base_app_name as Maho",
+            guard='.base_app_name = L"Maho",',
+        ),
+        Replacement(
+            old='        .base_app_id = L"Chromium",                // A distinct base_app_id.',
+            new='        .base_app_id = L"Maho",                    // A distinct base_app_id.',
+            description="Maho: register base_app_id as Maho",
+            guard='.base_app_id = L"Maho",',
+        ),
+    ],
+    "chrome/installer/setup/install_worker.cc": [
+        Replacement(
+            old=(
+                "  not_in_use_list->AddMoveTreeWorkItem(\n"
+                "      src_path.Append(installer::kChromeExe),\n"
+                "      target_path.Append(installer::kChromeExe), temp_path,\n"
+                "      WorkItem::MoveTreeOptions{.lenient_deletion = true});\n"
+                "\n"
+                "  install_list->AddWorkItem(WorkItem::CreateConditionalWorkItem("
+            ),
+            new=(
+                "  not_in_use_list->AddMoveTreeWorkItem(\n"
+                "      src_path.Append(installer::kChromeExe),\n"
+                "      target_path.Append(installer::kChromeExe), temp_path,\n"
+                "      WorkItem::MoveTreeOptions{.lenient_deletion = true});\n"
+                "\n"
+                "  // Maho: relocate the bundled CLI and Mail helper out of Chrome-bin\n"
+                "  // into the install root. Setup only moves chrome.exe and the\n"
+                "  // version dir, so any other root executable would otherwise be\n"
+                "  // discarded together with the temporary directory.\n"
+                "  install_list->AddMoveTreeWorkItem(\n"
+                "      src_path.Append(L\"maho.exe\"),\n"
+                "      target_path.Append(L\"maho.exe\"), temp_path,\n"
+                "      WorkItem::MoveTreeOptions{.lenient_deletion = true});\n"
+                "  install_list->AddMoveTreeWorkItem(\n"
+                "      src_path.Append(L\"maho_mail_helper.exe\"),\n"
+                "      target_path.Append(L\"maho_mail_helper.exe\"), temp_path,\n"
+                "      WorkItem::MoveTreeOptions{.lenient_deletion = true});\n"
+                "\n"
+                "  install_list->AddWorkItem(WorkItem::CreateConditionalWorkItem("
+            ),
+            description="Maho: keep the bundled CLI and Mail helper during install",
+            guard="Maho: relocate the bundled CLI and Mail helper",
         ),
     ],
     "ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm": [
