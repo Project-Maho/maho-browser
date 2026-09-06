@@ -158,7 +158,8 @@ fun ArcBottomBar(
     val pageGlyph = when {
         isIncognito -> MahoIcon.VisibilityOff
         currentUrl.isBlank() -> MahoIcon.Search
-        else -> MahoIcon.Tab
+        currentUrl.startsWith("https://") -> MahoIcon.InfoLock
+        else -> MahoIcon.Globe
     }
     val tabGestureDescription = buildString {
         append("$tabCount tab")
@@ -290,43 +291,21 @@ fun ArcBottomBar(
                             color = controlColor,
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
                             ) {
-                                SwipeCue(
-                                    icon = MahoIcon.NavBack,
-                                    enabled = canSwipeToPreviousTab,
-                                    tint = contentColor,
+                                Icon(
+                                    painter = painterResource(id = MahoIcon.Tab.drawableRes),
+                                    contentDescription = "Tabs",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (isIncognito) shellColors.incognitoAccent else contentColor,
                                 )
-
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = controlHighlightColor,
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(id = MahoIcon.Tab.drawableRes),
-                                            contentDescription = "Tabs",
-                                            modifier = Modifier.size(16.dp),
-                                            tint = if (isIncognito) shellColors.incognitoAccent else contentColor,
-                                        )
-                                        Text(
-                                            text = tabCount.toString(),
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = contentColor,
-                                        )
-                                    }
-                                }
-
-                                SwipeCue(
-                                    icon = MahoIcon.NavForward,
-                                    enabled = canSwipeToNextTab,
-                                    tint = contentColor,
+                                Text(
+                                    text = tabCount.toString(),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = contentColor,
                                 )
                             }
                         }
@@ -379,16 +358,6 @@ fun ArcBottomBar(
                             tint = contentColor,
                         )
 
-                        BottomBarIconControl(
-                            modifier = Modifier
-                                .clickable(onClick = onGoForward)
-                                .testTag("arcBottomBarForwardButton"),
-                            color = controlColor,
-                            icon = MahoIcon.NavForward,
-                            contentDescription = "Forward",
-                            tint = contentColor,
-                        )
-
                         Surface(
                             modifier = Modifier
                                 .weight(1f)
@@ -401,9 +370,9 @@ fun ArcBottomBar(
                             shape = RoundedCornerShape(22.dp),
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
                             ) {
                                 Surface(
                                     shape = CircleShape,
@@ -413,24 +382,26 @@ fun ArcBottomBar(
                                         painter = painterResource(id = pageGlyph.drawableRes),
                                         contentDescription = null,
                                         modifier = Modifier
-                                            .padding(6.dp)
-                                            .size(15.dp),
+                                            .padding(5.dp)
+                                            .size(14.dp),
                                         tint = if (isIncognito) shellColors.incognitoAccent else contentColor,
                                     )
                                 }
 
                                 Column(
-                                    modifier = Modifier.weight(1f, fill = false),
-                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.Center,
                                 ) {
-                                    Text(
-                                        text = pageContext,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = shellColors.textSecondary,
-                                    )
+                                    if (currentTitle.isNotBlank() && currentUrl.isNotBlank() && pageContext != pageLabel) {
+                                        Text(
+                                            text = pageContext,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = shellColors.textSecondary,
+                                        )
+                                    }
                                     Text(
                                         text = pageLabel,
                                         style = MaterialTheme.typography.titleSmall,
@@ -441,24 +412,26 @@ fun ArcBottomBar(
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.width(2.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(999.dp),
-                                    color = controlHighlightColor,
-                                ) {
+                                if (isLoading) {
                                     Text(
-                                        text = if (isLoading) "…" else "Open",
+                                        text = "…",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = shellColors.textSecondary.copy(alpha = 0.9f),
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        modifier = Modifier
-                                            .testTag("arcBottomBarOpenChip")
-                                            .padding(horizontal = 8.dp, vertical = 5.dp),
+                                        color = shellColors.textSecondary,
+                                        modifier = Modifier.padding(end = 4.dp),
                                     )
                                 }
                             }
                         }
+
+                        BottomBarIconControl(
+                            modifier = Modifier
+                                .clickable(onClick = onGoForward)
+                                .testTag("arcBottomBarForwardButton"),
+                            color = controlColor,
+                            icon = MahoIcon.NavForward,
+                            contentDescription = "Forward",
+                            tint = contentColor,
+                        )
                     }
 
                     Box {
@@ -906,20 +879,6 @@ private fun BottomBarIconControl(
             )
         }
     }
-}
-
-@Composable
-private fun SwipeCue(
-    icon: MahoIcon,
-    enabled: Boolean,
-    tint: Color,
-) {
-    Icon(
-        painter = painterResource(id = icon.drawableRes),
-        contentDescription = null,
-        modifier = Modifier.size(14.dp),
-        tint = if (enabled) tint.copy(alpha = 0.72f) else tint.copy(alpha = 0.22f),
-    )
 }
 
 private fun displayHost(url: String): String {
