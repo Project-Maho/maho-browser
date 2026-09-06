@@ -17,7 +17,7 @@ async function wrapMojoCall<T>(call: () => Promise<{ ok: boolean; resultJson: st
   }
 }
 
-async function callBackend<T>(command: string, args?: any): Promise<T> {
+async function callBackend<T>(command: string, args?: unknown): Promise<T> {
   const argsJson = args !== undefined ? JSON.stringify(args) : '{}';
   const response = await handler.callBackend(command, argsJson);
   if (!response.ok) {
@@ -41,8 +41,11 @@ export const listAccounts = (): Promise<Types.AccountSummary[]> =>
 export const deleteAccount = (accountId: string): Promise<void> =>
   wrapMojoCall<void>(() => handler.deleteAccount(accountId), 'deleteAccount');
 
-export const testConnection = (request: Types.CreateAccountRequest): Promise<boolean> =>
-  wrapMojoCall<boolean>(() => handler.testConnection(JSON.stringify(request)), 'testConnection');
+export const testConnection = async (request: Types.CreateAccountRequest): Promise<boolean> => {
+  const response = await wrapMojoCall<{ok: boolean}>(
+    () => handler.testConnection(JSON.stringify(request)), 'testConnection');
+  return response.ok;
+};
 
 export const reconnectAccount = (accountId: string): Promise<void> =>
   wrapMojoCall<void>(() => handler.reconnectAccount(accountId), 'reconnectAccount');
@@ -111,6 +114,11 @@ export const openAttachment = async (capabilityToken: string): Promise<void> => 
   if (!res.ok) throw new Error(res.errorMsg || 'openAttachment failed');
 };
 
+export const saveAttachment = async (capabilityToken: string): Promise<void> => {
+  const res = await handler.saveAttachment(capabilityToken);
+  if (!res.ok) throw new Error(res.errorMsg || 'saveAttachment failed');
+};
+
 export const getForwardedAttachments = (accountId: string, emailUid: number, folderId: string): Promise<Types.ComposeAttachment[]> =>
   callBackend<Types.ComposeAttachment[]>('GetForwardedAttachments', { account_id: accountId, email_uid: emailUid, folder_id: folderId });
 
@@ -147,8 +155,14 @@ export function classifyEmail(arg1: string | Types.ClassifyRequest, arg2?: Types
 export const naturalLanguageSearch = (request: Types.NlSearchRequest): Promise<Types.SearchResult> =>
   wrapMojoCall<Types.SearchResult>(() => handler.naturalLanguageSearch(JSON.stringify(request)), 'naturalLanguageSearch');
 
-export const sendEmail = (request: Types.ComposeEmailRequest): Promise<void> =>
-  wrapMojoCall<void>(() => handler.sendEmail(JSON.stringify(request)), 'sendEmail');
+export const sendEmail = async (request: Types.ComposeEmailRequest): Promise<Types.SendEmailResult> => {
+  const result = await wrapMojoCall<unknown>(() => handler.sendEmail(JSON.stringify(request)), 'sendEmail');
+  if (typeof result !== 'object' || result === null || !('status' in result) ||
+      (result.status !== 'sent' && result.status !== 'queued' && result.status !== 'uncertain')) {
+    throw new Error('Delivery could not be confirmed. Verify with the recipient before sending again.');
+  }
+  return { status: result.status };
+};
 
 export const saveDraft = (request: Types.ComposeEmailRequest): Promise<string> =>
   wrapMojoCall<string>(() => handler.saveDraft(JSON.stringify(request)), 'saveDraft');
@@ -412,7 +426,8 @@ export const importPgpKey = (accountId: string, keyData: string): Promise<Types.
   wrapMojoCall<Types.PgpKeyInfo>(() => handler.importPgpKey(JSON.stringify({ account_id: accountId, key_data: keyData })), 'importPgpKey');
 
 export const exportPgpKey = (keyId: string, includePrivate: boolean): Promise<string> =>
-  wrapMojoCall<string>(() => handler.exportPgpKey(keyId, includePrivate), 'exportPgpKey');
+  wrapMojoCall<{ key_data: string }>(() => handler.exportPgpKey(keyId, includePrivate), 'exportPgpKey')
+    .then(response => response.key_data);
 
 export const listPgpKeys = (accountId: string): Promise<Types.PgpKeyInfo[]> =>
   wrapMojoCall<Types.PgpKeyInfo[]>(() => handler.listPgpKeys(accountId), 'listPgpKeys');
@@ -424,16 +439,24 @@ export const setDefaultPgpKey = (accountId: string, keyId: string): Promise<void
   wrapMojoCall<void>(() => handler.setDefaultPgpKey(accountId, keyId), 'setDefaultPgpKey');
 
 export const encryptEmailPgp = (accountId: string, recipientEmails: string[], plaintext: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.encryptEmailPgp(JSON.stringify({ account_id: accountId, recipient_emails: recipientEmails, plaintext })), 'encryptEmailPgp');
+  wrapMojoCall<{ armored: string }>(() => handler.encryptEmailPgp(JSON.stringify({ account_id: accountId, recipient_emails: recipientEmails, plaintext })), 'encryptEmailPgp')
+    .then(response => response.armored);
 
 export const encryptAttachmentPgp = (accountId: string, recipientEmails: string[], plaintext: number[]): Promise<number[]> =>
-  wrapMojoCall<number[]>(() => handler.encryptAttachmentPgp(JSON.stringify({ account_id: accountId, recipient_emails: recipientEmails, plaintext })), 'encryptAttachmentPgp');
+  wrapMojoCall<{ encrypted_data: string }>(() => handler.encryptAttachmentPgp(JSON.stringify({
+    account_id: accountId,
+    recipient_emails: recipientEmails,
+    plaintext: btoa(plaintext.map(byte => String.fromCharCode(byte)).join('')),
+  })), 'encryptAttachmentPgp')
+    .then(response => Array.from(atob(response.encrypted_data), byte => byte.charCodeAt(0)));
 
 export const decryptEmailPgp = (accountId: string, ciphertext: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.decryptEmailPgp(JSON.stringify({ account_id: accountId, ciphertext })), 'decryptEmailPgp');
+  wrapMojoCall<{ plaintext: string }>(() => handler.decryptEmailPgp(JSON.stringify({ account_id: accountId, ciphertext })), 'decryptEmailPgp')
+    .then(response => response.plaintext);
 
 export const signEmailPgp = (accountId: string, message: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.signEmailPgp(JSON.stringify({ account_id: accountId, message })), 'signEmailPgp');
+  wrapMojoCall<{ armored: string }>(() => handler.signEmailPgp(JSON.stringify({ account_id: accountId, message })), 'signEmailPgp')
+    .then(response => response.armored);
 
 export const verifyEmailPgp = (senderEmail: string, message: string, signature: string): Promise<Types.PgpVerifyResult> =>
   wrapMojoCall<Types.PgpVerifyResult>(() => handler.verifyEmailPgp(JSON.stringify({ sender_email: senderEmail, message, signature })), 'verifyEmailPgp');
@@ -463,7 +486,7 @@ export const deleteSavedSearch = (id: string): Promise<void> =>
   wrapMojoCall<void>(() => handler.deleteSavedSearch(id), 'deleteSavedSearch');
 
 export const importSmimeIdentity = (accountId: string, p12Data: number[], password: string): Promise<Types.SmimeIdentity> =>
-  wrapMojoCall<Types.SmimeIdentity>(() => handler.importSmimeIdentity(JSON.stringify({ account_id: accountId, p12_data: p12Data, password })), 'importSmimeIdentity');
+  wrapMojoCall<Types.SmimeIdentity>(() => handler.importSmimeIdentity(JSON.stringify({ account_id: accountId, p12_data: btoa(p12Data.map(byte => String.fromCharCode(byte)).join('')), password })), 'importSmimeIdentity');
 
 export const listSmimeIdentities = (accountId: string): Promise<Types.SmimeIdentity[]> =>
   wrapMojoCall<Types.SmimeIdentity[]>(() => handler.listSmimeIdentities(accountId), 'listSmimeIdentities');
@@ -475,16 +498,28 @@ export const setDefaultSmimeIdentity = (accountId: string, identityId: string): 
   wrapMojoCall<void>(() => handler.setDefaultSmimeIdentity(accountId, identityId), 'setDefaultSmimeIdentity');
 
 export const exportSmimeCert = (id: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.exportSmimeCert(id), 'exportSmimeCert');
+  wrapMojoCall<{ cert_pem: string }>(() => handler.exportSmimeCert(id), 'exportSmimeCert')
+    .then(response => response.cert_pem);
 
 export const signEmailSmime = (accountId: string, body: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.signEmailSmime(JSON.stringify({ account_id: accountId, body })), 'signEmailSmime');
+  wrapMojoCall<{ smime: string }>(() => handler.signEmailSmime(JSON.stringify({ account_id: accountId, body })), 'signEmailSmime')
+    .then(response => response.smime);
 
-export const encryptEmailSmime = (accountId: string, recipientCertsPem: string[], body: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.encryptEmailSmime(JSON.stringify({ account_id: accountId, recipient_certs_pem: recipientCertsPem, body })), 'encryptEmailSmime');
+export const encryptEmailSmime = (request: {
+  account_id: string;
+  recipient_emails: string[];
+  recipient_certs_pem: string[];
+  body: string;
+  body_html?: string;
+  attachments?: Types.ComposeAttachment[];
+  sign: boolean;
+}): Promise<string> =>
+  wrapMojoCall<{ smime: string }>(() => handler.encryptEmailSmime(JSON.stringify(request)), 'encryptEmailSmime')
+    .then(response => response.smime);
 
 export const decryptEmailSmime = (accountId: string, encryptedBody: string): Promise<string> =>
-  wrapMojoCall<string>(() => handler.decryptEmailSmime(JSON.stringify({ account_id: accountId, encrypted_body: encryptedBody })), 'decryptEmailSmime');
+  wrapMojoCall<{ decrypted: string }>(() => handler.decryptEmailSmime(JSON.stringify({ account_id: accountId, encrypted_body: encryptedBody })), 'decryptEmailSmime')
+    .then(response => response.decrypted);
 
 export const verifyEmailSmime = (signedBody: string): Promise<Types.SmimeVerifyResult> =>
   wrapMojoCall<Types.SmimeVerifyResult>(() => handler.verifyEmailSmime(signedBody), 'verifyEmailSmime');
@@ -555,16 +590,41 @@ export const autoImportCalendarEvents = (
 export const syncGoogleCalendar = (accountId: string): Promise<Types.GoogleCalendarSyncResult> =>
   wrapMojoCall<Types.GoogleCalendarSyncResult>(() => handler.syncGoogleCalendar(accountId, false), 'syncGoogleCalendar');
 
-export const googleCalendarFreeBusy = (accountId: string, emails: string[], timeMin: string, timeMax: string): Promise<any> =>
-  wrapMojoCall<any>(() => handler.googleCalendarFreeBusy(JSON.stringify({ account_id: accountId, emails, time_min: timeMin, time_max: timeMax })), 'googleCalendarFreeBusy');
+export const googleCalendarFreeBusy = (
+  accountId: string,
+  emails: string[],
+  timeMin: string,
+  timeMax: string,
+): Promise<Types.GoogleCalendarFreeBusyResponse> =>
+  wrapMojoCall<Types.GoogleCalendarFreeBusyResponse>(
+    () =>
+      handler.googleCalendarFreeBusy(
+        JSON.stringify({
+          account_id: accountId,
+          emails,
+          time_min: timeMin,
+          time_max: timeMax,
+        }),
+      ),
+    'googleCalendarFreeBusy',
+  );
 
 export const googleCalendarMoveEvent = (
   accountId: string,
   calendarId: string,
   eventId: string,
   destinationCalendarId: string,
-): Promise<any> =>
-  wrapMojoCall<any>(() => handler.googleCalendarMoveEvent(accountId, calendarId, eventId, destinationCalendarId), 'googleCalendarMoveEvent');
+): Promise<Types.CalendarEvent> =>
+  wrapMojoCall<Types.CalendarEvent>(
+    () =>
+      handler.googleCalendarMoveEvent(
+        accountId,
+        calendarId,
+        eventId,
+        destinationCalendarId,
+      ),
+    'googleCalendarMoveEvent',
+  );
 
 export const listAccountCalendars = (accountId: string): Promise<Types.GoogleCalendarEntry[]> =>
   wrapMojoCall<Types.GoogleCalendarEntry[]>(() => handler.listAccountCalendars(accountId), 'listAccountCalendars');

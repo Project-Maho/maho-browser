@@ -460,6 +460,7 @@ class MahoMcpBrowserDelegate {
     std::optional<double> ax_serialize_ms;
     std::optional<size_t> wire_bytes;
     std::optional<double> total_ms;
+    std::optional<base::DictValue> bot_challenge;
   };
 
   virtual AccessibilitySnapshotV2Result GetAccessibilitySnapshotV2(

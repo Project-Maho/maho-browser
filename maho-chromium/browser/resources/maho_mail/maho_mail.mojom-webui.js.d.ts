@@ -256,6 +256,7 @@ export class PageHandlerRemote {
 
   // === [W-C.OpenAttachment] ===
   openAttachment(capabilityToken: string): Promise<{ok: boolean, errorMsg: string}>;
+  saveAttachment(capabilityToken: string): Promise<{ok: boolean, errorMsg: string}>;
   getDownloadDir(): Promise<{path: string}>;
 
   // === [W-C.Additional.Refresh.Typed] ===

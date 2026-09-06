@@ -4,6 +4,7 @@ import type { EmailDetail } from "../../types";
 import { useSettings } from "../../hooks/useSettings";
 import { prepareIframeHtml } from "../../utils/emailHtmlProcessing";
 import { isDangerousAttachment } from "../../utils/attachmentSafety";
+import { MAHO_SINK_MARKER } from "../../utils/sanitizeHtml";
 import { AttachmentPreview } from "./EmailContent";
 import { ViewSettingsMenu } from "../email/ViewSettingsMenu";
 import { useTranslation as useI18nTranslation } from "react-i18next";
@@ -129,18 +130,28 @@ export function EmailBodyView({
 
         if (clickHandler) {
           iframe.contentDocument.removeEventListener("click", clickHandler);
+          iframe.contentDocument.removeEventListener("auxclick", clickHandler);
         }
         clickHandler = (e: Event) => {
           const target = e.target as HTMLElement | null;
-          const anchor = target?.closest<HTMLAnchorElement>("a.maho-email-link");
+          const anchor = target?.closest("a");
           if (!anchor) return;
           e.preventDefault();
-          const email = anchor.getAttribute("data-email");
-          if (email && onEmailAddressClick) {
-            onEmailAddressClick(email);
+          if (e.type === "auxclick" && "button" in e && e.button !== 1) return;
+          if (anchor.classList.contains("maho-email-link")) {
+            const email = anchor.getAttribute("data-email");
+            if (email) onEmailAddressClick?.(email);
+            return;
+          }
+          const href = anchor.getAttribute("href") ?? anchor.getAttribute("xlink:href");
+          if (!href || !URL.canParse(href)) return;
+          const url = new URL(href);
+          if (["http:", "https:", "mailto:"].includes(url.protocol)) {
+            window.open(url.href, "_blank", "noopener,noreferrer");
           }
         };
         iframe.contentDocument.addEventListener("click", clickHandler);
+        iframe.contentDocument.addEventListener("auxclick", clickHandler);
       }
     };
 
@@ -154,6 +165,7 @@ export function EmailBodyView({
       }
       if (clickHandler && iframe.contentDocument) {
         iframe.contentDocument.removeEventListener("click", clickHandler);
+        iframe.contentDocument.removeEventListener("auxclick", clickHandler);
       }
     };
   }, [processedHtmlInfo, onEmailAddressClick]);
@@ -189,7 +201,7 @@ export function EmailBodyView({
               </div>
               <iframe
                 ref={iframeRef}
-                srcDoc={wrappedHtml}
+                srcDoc={`${wrappedHtml}${MAHO_SINK_MARKER}`}
                 title="Email body"
                 className="w-full border-0"
                 sandbox="allow-same-origin"
@@ -223,7 +235,7 @@ export function EmailBodyView({
               </div>
               <iframe
                 ref={iframeRef}
-                srcDoc={wrappedHtml}
+                srcDoc={`${wrappedHtml}${MAHO_SINK_MARKER}`}
                 title="Email body"
                 className="w-full border-0"
                 sandbox="allow-same-origin"
@@ -302,13 +314,14 @@ export function EmailBodyView({
                     type="button"
                     onClick={async () => {
                       try {
-                        await api.downloadAttachment(
+                        const capabilityToken = await api.downloadAttachment(
                           email.account_id,
                           email.uid,
                           email.folder_id,
                           att.part_id,
                           att.filename ?? "attachment",
                         );
+                        await api.saveAttachment(capabilityToken);
                         toast("success", `Saved ${att.filename ?? "attachment"}`);
                       } catch (err) {
                         toast("error", err instanceof Error ? err.message : "Failed to download attachment");

@@ -124,14 +124,51 @@ MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
     ~AccessibilitySnapshotV2Result() = default;
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
-    AccessibilitySnapshotV2Result(const AccessibilitySnapshotV2Result&) =
-        default;
+    AccessibilitySnapshotV2Result(const AccessibilitySnapshotV2Result& other)
+    : snapshot_token(other.snapshot_token),
+      tab(other.tab),
+      tree(other.tree),
+      diff(other.diff),
+      captured_nodes(other.captured_nodes),
+      serialized_nodes(other.serialized_nodes),
+      bytes(other.bytes),
+      truncated(other.truncated),
+      renderer_snapshot_ms(other.renderer_snapshot_ms),
+      ax_serialize_ms(other.ax_serialize_ms),
+      wire_bytes(other.wire_bytes),
+      total_ms(other.total_ms) {
+  if (other.bot_challenge.has_value()) {
+    bot_challenge = other.bot_challenge->Clone();
+  }
+}
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::
     AccessibilitySnapshotV2Result(AccessibilitySnapshotV2Result&&) noexcept =
         default;
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result&
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::operator=(
-    const AccessibilitySnapshotV2Result&) = default;
+    const AccessibilitySnapshotV2Result& other) {
+  if (this == &other) {
+    return *this;
+  }
+  snapshot_token = other.snapshot_token;
+  tab = other.tab;
+  tree = other.tree;
+  diff = other.diff;
+  captured_nodes = other.captured_nodes;
+  serialized_nodes = other.serialized_nodes;
+  bytes = other.bytes;
+  truncated = other.truncated;
+  renderer_snapshot_ms = other.renderer_snapshot_ms;
+  ax_serialize_ms = other.ax_serialize_ms;
+  wire_bytes = other.wire_bytes;
+  total_ms = other.total_ms;
+  if (other.bot_challenge.has_value()) {
+    bot_challenge = other.bot_challenge->Clone();
+  } else {
+    bot_challenge.reset();
+  }
+  return *this;
+}
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result&
 MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result::operator=(
     AccessibilitySnapshotV2Result&&) noexcept = default;
@@ -233,6 +270,9 @@ bool IsTrustedMahoExecutablePath(const base::FilePath& executable) {
 #else
   return normalized == "/usr/bin/maho" ||
          normalized == "/usr/bin/maho-browser-mcp" ||
+         normalized == "/opt/maho/maho" ||
+         normalized == "/usr/lib/maho/maho" ||
+         normalized == "/usr/lib64/maho/maho" ||
          normalized == "/opt/maho/bin/maho" ||
          normalized == "/opt/maho/bin/maho-browser-mcp";
 #endif
@@ -599,6 +639,68 @@ const std::string* FindRequiredStringArgument(const base::DictValue* arguments,
     return nullptr;
   }
   return value;
+}
+
+std::string BuildSafeMailApprovalMetadata(const base::DictValue* arguments) {
+  if (!arguments) {
+    return "{}";
+  }
+  base::DictValue metadata;
+  const base::DictValue* payload = arguments;
+  std::optional<base::Value> parsed_payload;
+  for (const char* key : {"request_json", "params_json", "archive_json"}) {
+    if (const std::string* json_str = arguments->FindString(key)) {
+      parsed_payload = base::JSONReader::Read(*json_str, base::JSON_PARSE_RFC);
+      if (parsed_payload && parsed_payload->is_dict()) {
+        payload = &parsed_payload->GetDict();
+        break;
+      }
+    }
+  }
+
+  for (const char* field : {"action", "email_id", "draft_id", "account_id",
+                            "subject", "folder_id", "provider", "client_id",
+                            "state"}) {
+    if (const std::string* str = payload->FindString(field)) {
+      metadata.Set(field, *str);
+    } else if (const std::string* direct_str = arguments->FindString(field)) {
+      metadata.Set(field, *direct_str);
+    }
+  }
+  if (const base::ListValue* to = payload->FindList("to")) {
+    base::ListValue safe_to;
+    for (const auto& item : *to) {
+      if (item.is_string()) {
+        safe_to.Append(item.GetString());
+      }
+    }
+    metadata.Set("to", std::move(safe_to));
+  }
+  if (const base::ListValue* cc = payload->FindList("cc")) {
+    base::ListValue safe_cc;
+    for (const auto& item : *cc) {
+      if (item.is_string()) {
+        safe_cc.Append(item.GetString());
+      }
+    }
+    metadata.Set("cc", std::move(safe_cc));
+  }
+  if (const base::ListValue* bcc = payload->FindList("bcc")) {
+    base::ListValue safe_bcc;
+    for (const auto& item : *bcc) {
+      if (item.is_string()) {
+        safe_bcc.Append(item.GetString());
+      }
+    }
+    metadata.Set("bcc", std::move(safe_bcc));
+  }
+  if (const base::ListValue* attachments = payload->FindList("attachments")) {
+    metadata.Set("attachment_count", static_cast<int>(attachments->size()));
+  }
+
+  std::string json;
+  base::JSONWriter::Write(metadata, &json);
+  return json;
 }
 
 std::string RequiredStringArgumentMessage(const char* name) {
@@ -1866,15 +1968,27 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
           msg.id, -32008, std::string(authorization.reason_code)));
       return;
     }
-    if (authorization.action == ai::MailAuthorizationAction::kRequireApproval &&
-        (!g_browser_delegate || !g_browser_delegate->ConfirmMailToolApproval(
-                                    *tool_name, "[REDACTED]"))) {
-      *approval_outcome = "denied";
-      responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32008, "mail_typed_approval_denied"));
-      return;
-    }
     if (authorization.action == ai::MailAuthorizationAction::kRequireApproval) {
+      const std::string safe_metadata =
+          BuildSafeMailApprovalMetadata(arguments);
+      if (!g_browser_delegate || !g_browser_delegate->ConfirmMailToolApproval(
+                                     *tool_name, safe_metadata)) {
+        *approval_outcome = "denied";
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32008, "mail_typed_approval_denied"));
+        return;
+      }
+      const ai::MailAuthorizationDecision recheck =
+          g_browser_delegate
+              ? ai::AuthorizeMailTool(
+                    *tool_name,
+                    g_browser_delegate->GetMailAuthorizationContext())
+              : ai::MailAuthorizationDecision{};
+      if (recheck.action == ai::MailAuthorizationAction::kDeny) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32008, std::string(recheck.reason_code)));
+        return;
+      }
       *approval_outcome = "approved";
     }
   }
@@ -3539,6 +3653,10 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     }
     result.Set("stats", std::move(stats_dict));
 
+    if (v2_res.bot_challenge.has_value()) {
+      result.Set("bot_challenge", v2_res.bot_challenge->Clone());
+    }
+
     auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
@@ -3848,6 +3966,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
     std::optional<std::string> post_snapshot_token;
     std::optional<std::string> post_diff;
+    std::optional<base::DictValue> post_bot_challenge;
     if (observe_mode == "diff") {
       MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params post_params;
       post_params.tab_id = tab_id;
@@ -3859,6 +3978,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
           ++next_v2_snapshot_token_seq_);
       post_snapshot_token = post_res.snapshot_token;
       post_diff = post_res.diff;
+      if (post_res.bot_challenge.has_value()) {
+        post_bot_challenge = post_res.bot_challenge->Clone();
+      }
     }
 
     base::DictValue result;
@@ -3887,6 +4009,10 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         obs_dict.Set("diff", base::Value());
       }
       result.Set("observation", std::move(obs_dict));
+    }
+
+    if (post_bot_challenge.has_value()) {
+      result.Set("bot_challenge", std::move(*post_bot_challenge));
     }
 
     cleanup_scoped_lease();
