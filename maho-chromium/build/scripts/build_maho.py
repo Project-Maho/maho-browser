@@ -4,15 +4,20 @@
 import argparse
 import importlib.util
 import os
+import plistlib
+from datetime import datetime, timezone
 import re
 import shutil
 import subprocess
 import sys
+import time
 from subprocess import SubprocessError
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _MAHO_CHROMIUM_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
 _WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
+if os.path.basename(_WORKSPACE_ROOT) == 'src' and os.path.basename(os.path.dirname(_WORKSPACE_ROOT)) == 'chromium':
+    _WORKSPACE_ROOT = os.path.normpath(os.path.join(_WORKSPACE_ROOT, '..', '..'))
 _MAHO_SCRIPTS_DIR = os.path.join(_WORKSPACE_ROOT, 'maho', 'scripts')
 
 
@@ -249,6 +254,15 @@ def stage_maho_cli_next_to_browser(out_dir: str, cli_path: str) -> str | None:
 
 
 def find_codesign_identity(release: bool = False) -> str | None:
+    """Pick a codesigning identity deterministically.
+
+    TCC/Keychain grants are keyed by the designated requirement, which embeds
+    the signing identity — so flipping identities between builds resets every
+    permission grant and re-triggers "Maho wants to access..." prompts. The
+    search order below is fixed so consecutive builds sign with the same
+    identity. (Previously the first match from `security find-identity` was
+    used, whose order is not guaranteed to be stable.)
+    """
     try:
         res = subprocess.run(
             ['security', 'find-identity', '-v', '-p', 'codesigning'],
@@ -259,18 +273,85 @@ def find_codesign_identity(release: bool = False) -> str | None:
         if res.returncode != 0:
             return None
         sha_re = re.compile(r'^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"([^"]+)"')
-        fallback = None
+        by_name = {}
         for line in res.stdout.splitlines():
             m = sha_re.match(line)
             if m:
-                identity = m.group(1).upper()
-                if release and m.group(2).startswith('Developer ID Application:'):
+                by_name.setdefault(m.group(2), m.group(1).upper())
+        if release:
+            preferred = ('Developer ID Application:', 'Apple Distribution:')
+        else:
+            preferred = ('Apple Development:', 'Developer ID Application:')
+        for prefix in preferred:
+            for name, identity in sorted(by_name.items()):
+                if name.startswith(prefix):
                     return identity
-                if fallback is None:
-                    fallback = identity
-        return fallback
+        return next(iter(by_name.values()), None)
     except Exception:
         return None
+
+
+def find_codesign_identity_release_dist() -> str | None:
+    """Return the Apple Distribution identity (stable team-based DR)."""
+    try:
+        res = subprocess.run(
+            ['security', 'find-identity', '-v', '-p', 'codesigning'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if res.returncode != 0:
+            return None
+        sha_re = re.compile(r'^\s*\d+\)\s+([a-fA-F0-9]{40})\s+"([^"]+)"')
+        for line in res.stdout.splitlines():
+            m = sha_re.match(line)
+            if m and m.group(2).startswith('Apple Distribution:'):
+                return m.group(1).upper()
+        return None
+    except Exception:
+        return None
+
+
+def find_appstore_provisioning_profile(bundle_id: str) -> str | None:
+    """Locate an installed, unexpired App Store profile for `bundle_id`.
+
+    App Store distribution profiles pair with the Apple Distribution
+    certificate, which carries a stable team-based designated requirement —
+    exactly what macOS TCC needs to keep granted permissions across rebuilds.
+    """
+    profiles_dir = os.path.expanduser(
+        '~/Library/MobileDevice/Provisioning Profiles')
+    if not os.path.isdir(profiles_dir):
+        return None
+    now = datetime.now(timezone.utc)
+    for name in sorted(os.listdir(profiles_dir)):
+        if not name.endswith('.mobileprovision'):
+            continue
+        path = os.path.join(profiles_dir, name)
+        try:
+            res = subprocess.run(
+                ['security', 'cms', '-D', '-i', path],
+                capture_output=True, timeout=15)
+            if res.returncode != 0:
+                continue
+            plist = plistlib.loads(res.stdout)
+        except Exception:
+            continue
+        app_id = (plist.get('Entitlements') or {}).get(
+            'application-identifier', '')
+        if not app_id.endswith('.' + bundle_id):
+            continue
+        expiration = plist.get('ExpirationDate')
+        if expiration is not None and expiration.replace(
+                tzinfo=timezone.utc) <= now:
+            continue
+        # Skip development profiles: they are pinned to other certificates and
+        # would not satisfy a distribution-signed build anyway.
+        certs = plist.get('DeveloperCertificates') or []
+        if not certs:
+            continue
+        return path
+    return None
 
 
 def codesign_app(identity: str, app_path: str) -> bool:
@@ -454,8 +535,40 @@ def codesign_app(identity: str, app_path: str) -> bool:
         return False
 
 
+def _load_apple_notarization_env():
+    """Load APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER from .secrets vault if missing."""
+    import json
+    if os.environ.get('APPLE_API_KEY') and os.environ.get('APPLE_API_KEY_ID') and os.environ.get('APPLE_API_ISSUER'):
+        return
+
+    # Check .secrets/maho/app-store-connect-api-key.json
+    vault_paths = [
+        os.path.join(_WORKSPACE_ROOT, '.secrets', 'maho', 'app-store-connect-api-key.json'),
+        os.path.join(_WORKSPACE_ROOT, '..', '.secrets', 'maho', 'app-store-connect-api-key.json'),
+    ]
+    for p in vault_paths:
+        if os.path.isfile(p):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                key_id = data.get('key_id') or data.get('keyId')
+                issuer_id = data.get('issuer_id') or data.get('issuerId')
+                key_content = data.get('key')
+                if key_id and issuer_id and key_content:
+                    if not os.environ.get('APPLE_API_KEY_ID'):
+                        os.environ['APPLE_API_KEY_ID'] = key_id
+                    if not os.environ.get('APPLE_API_ISSUER'):
+                        os.environ['APPLE_API_ISSUER'] = issuer_id
+                    if not os.environ.get('APPLE_API_KEY'):
+                        os.environ['APPLE_API_KEY'] = key_content
+                    return
+            except Exception as e:
+                print(f"warning: failed to parse {p}: {e}", file=sys.stderr)
+
+
 def notarize_app(app_path: str) -> bool:
     import tempfile
+    _load_apple_notarization_env()
     api_key = os.environ.get('APPLE_API_KEY')
     key_id = os.environ.get('APPLE_API_KEY_ID')
     issuer_id = os.environ.get('APPLE_API_ISSUER')
@@ -482,19 +595,29 @@ def notarize_app(app_path: str) -> bool:
             f.write(api_key)
             key_path = f.name
 
-        print("Submitting to Apple Notary Service...")
         cmd = [
             'xcrun', 'notarytool', 'submit', zip_path,
             '--key-id', key_id,
             '--issuer', issuer_id,
             '--key', key_path,
-            '--wait'
+            '--wait',
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        print(res.stdout)
-        if res.returncode != 0:
-            print(f"error: notarization submission failed:\n{res.stderr}", file=sys.stderr)
-            return False
+
+        max_attempts = 3
+        res = None
+        for attempt in range(1, max_attempts + 1):
+            print(f"Submitting to Apple Notary Service (attempt {attempt}/{max_attempts})...")
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            print(res.stdout)
+            if res.returncode == 0:
+                break
+            err_msg = (res.stderr or "") + (res.stdout or "")
+            if attempt < max_attempts and any(w in err_msg.lower() for w in ("timeout", "network", "connect")):
+                print(f"warning: transient notary submission error, retrying in 5s:\n{res.stderr}", file=sys.stderr)
+                time.sleep(5)
+            else:
+                print(f"error: notarization submission failed:\n{res.stderr}", file=sys.stderr)
+                return False
 
         print("Stapling notarization ticket to app bundle...")
         subprocess.run(['xcrun', 'stapler', 'staple', app_path], check=True)
@@ -699,6 +822,7 @@ def notarize_dmg(dmg_path: str) -> bool:
     APPLE_API_KEY/_KEY_ID/_ISSUER credentials as notarize_app.
     """
     import tempfile
+    _load_apple_notarization_env()
     api_key = os.environ.get('APPLE_API_KEY')
     key_id = os.environ.get('APPLE_API_KEY_ID')
     issuer_id = os.environ.get('APPLE_API_ISSUER')
@@ -713,19 +837,28 @@ def notarize_dmg(dmg_path: str) -> bool:
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.p8') as f:
             f.write(api_key)
             key_path = f.name
-        print("Submitting disk image to Apple Notary Service...")
-        res = subprocess.run(
-            ['xcrun', 'notarytool', 'submit', dmg_path,
-             '--key-id', key_id, '--issuer', issuer_id, '--key', key_path, '--wait'],
-            capture_output=True, text=True,
-        )
-        print(res.stdout)
-        if res.returncode != 0:
-            print(f"error: notarization submission failed:\n{res.stderr}", file=sys.stderr)
-            return False
+        max_attempts = 3
+        res = None
+        for attempt in range(1, max_attempts + 1):
+            print(f"Submitting disk image to Apple Notary Service (attempt {attempt}/{max_attempts})...")
+            res = subprocess.run(
+                ['xcrun', 'notarytool', 'submit', dmg_path,
+                 '--key-id', key_id, '--issuer', issuer_id, '--key', key_path, '--wait'],
+                capture_output=True, text=True,
+            )
+            print(res.stdout)
+            if res.returncode == 0:
+                break
+            err_msg = (res.stderr or "") + (res.stdout or "")
+            if attempt < max_attempts and any(w in err_msg.lower() for w in ("timeout", "network", "connect")):
+                print(f"warning: transient notary submission error, retrying in 5s:\n{res.stderr}", file=sys.stderr)
+                time.sleep(5)
+            else:
+                print(f"error: notarization submission failed:\n{res.stderr}", file=sys.stderr)
+                return False
         print("Stapling notarization ticket to disk image...")
         subprocess.run(['xcrun', 'stapler', 'staple', dmg_path], check=True)
-        subprocess.run(['spctl', '-a', '-t', 'open', '--context', 'context:primary-signature', '-vv', dmg_path], check=False)
+        subprocess.run(['spctl', '-a', '-t', 'open', '--context', 'context:primary-signature', '-vv', dmg_path], check=True)
         print("DMG notarization and stapling succeeded!")
         return True
     except Exception as e:
@@ -907,18 +1040,38 @@ def run_gn_gen(chromium_src, out_dir, depot_tools_dir):
 
 def build_chromium_app(out_dir, targets, extra_args):
     env = os.environ.copy()
+    if sys.platform == 'win32':
+        # Ensure sccache server is active on port 4228 (avoiding WSL port 4226 collision)
+        env['SCCACHE_SERVER_PORT'] = '4228'
+        env['SCCACHE_IDLE_TIMEOUT'] = '0'
+        try:
+            subprocess.run(['sccache', '--start-server'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        except Exception:
+            pass
     path = env.get('PATH', '')
     env['PATH'] = os.pathsep.join([_DEPOT_TOOLS_DIR, path]) if path else _DEPOT_TOOLS_DIR
-    # Oversubscribe -j past core count: with the sccache remote cache, most edges
-    # are network fetches (CPU idle waiting), so extra jobs overlap fetches with
-    # real compiles. Override via MAHO_NINJA_JOBS; unset falls back to autoninja default.
-    jobs = os.environ.get('MAHO_NINJA_JOBS', '16')
+    # Keep the default low enough to avoid exhausting memory on local builds.
+    # MAHO_NINJA_JOBS and a caller-supplied -j continue to override it.
+    jobs = os.environ.get('MAHO_NINJA_JOBS', '4')
     caller_set_j = any(a == '-j' or a.startswith('-j') for a in extra_args)
     if not targets:
         # Never fall through to a bare autoninja: with no target ninja builds
         # the default (all), which pulls in the whole test tree.
         print('warning: no ninja targets requested; skipping chromium build')
         return
+
+    # When switching to or using siso, lingering .ninja_* files cause siso to fail.
+    # Clean them up safely before invoking autoninja.
+    out_dir_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir)
+    if os.path.exists(out_dir_path):
+        for ninja_file in ('.ninja_log', '.ninja_deps', '.ninja_lock'):
+            target_file = os.path.join(out_dir_path, ninja_file)
+            if os.path.exists(target_file):
+                try:
+                    os.unlink(target_file)
+                except OSError:
+                    pass
+
     # One invocation for every target. ninja reloads the entire build graph per
     # run, and that fixed cost measures ~25s on out/Default (68% .ninja parse,
     # 27% node stat). Passing the targets together pays it once instead of once
@@ -1041,6 +1194,18 @@ def apply_branding(platform):
                 raise RuntimeError(f'Maho Windows tile source is missing: {source}')
             shutil.copyfile(source, os.path.join(tiles_dir, destination_name))
             applied += 1
+    if platform == 'mac':
+        # chrome/BUILD.gn bundles app/theme/$branding_path_component/mac/{app.icns,
+        # Assets.car} as the app icon. macOS prefers the asset-catalog AppIcon in
+        # Assets.car over app.icns, so BOTH must be replaced — copying app.icns
+        # alone leaves the Chromium icon rendering in the Dock.
+        mac_theme_dir = os.path.join(theme_dir, 'mac')
+        for name in ('app.icns', 'Assets.car'):
+            source = os.path.join(branding_dir, 'mac', name)
+            if not os.path.isfile(source):
+                raise RuntimeError(f'Maho macOS branding asset is missing: {source}')
+            shutil.copyfile(source, os.path.join(mac_theme_dir, name))
+            applied += 1
     print(f'  Applied {applied} branding files to {theme_dir}')
 
 
@@ -1080,6 +1245,80 @@ def run_lucide_icon_check(skip):
     print('  Lucide icons OK.')
 
 
+def verify_remote_sccache(skip: bool = False) -> None:
+    """Verify that sccache is running and backed by the remote shared S3 cache.
+
+    Fails closed: if sccache is not installed, the daemon is not running,
+    the cache location is not remote S3, or the remote endpoint is unreachable,
+    aborts the build immediately with a clear error and resolution hints.
+    """
+    if skip:
+        print('warning: remote sccache check skipped (--skip-sccache-check)')
+        return
+
+    sccache_bin = shutil.which('sccache') or (
+        '/opt/homebrew/bin/sccache' if os.path.exists('/opt/homebrew/bin/sccache') else None
+    )
+    if not sccache_bin:
+        sys.exit(
+            'error: remote sccache verification failed: sccache binary not found on PATH '
+            'or /opt/homebrew/bin/sccache. Install sccache to build.'
+        )
+
+    try:
+        proc = subprocess.run(
+            [sccache_bin, '--show-stats'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        stats_output = proc.stdout if isinstance(proc.stdout, str) else ''
+    except Exception as e:
+        sys.exit(
+            f'error: remote sccache verification failed: cannot query sccache daemon ({e}).\n'
+            'Start or restart the sccache broker via launchctl:\n'
+            '  launchctl kickstart -k gui/$(id -u)/com.maho.sccache'
+        )
+
+    cache_location_match = re.search(r'Cache location\s+(.+)', stats_output, re.IGNORECASE)
+    if not cache_location_match:
+        sys.exit(
+            'error: remote sccache verification failed: "Cache location" not found in sccache stats.\n'
+            f'sccache output:\n{stats_output}'
+        )
+
+    location_str = cache_location_match.group(1).strip()
+    if not location_str.lower().startswith('s3'):
+        sys.exit(
+            f'error: remote sccache verification failed: cache location is not S3 ({location_str!r}).\n'
+            'A stray local server may have started on disk cache. Stop servers and restart the broker:\n'
+            '  sccache --stop-server\n'
+            '  launchctl kickstart -k gui/$(id -u)/com.maho.sccache'
+        )
+
+    endpoint = os.environ.get('SCCACHE_ENDPOINT', '100.126.171.58:9000')
+    if ':' in endpoint:
+        endpoint_host, port_str = endpoint.split(':', 1)
+        endpoint_port = int(port_str)
+    else:
+        endpoint_host = endpoint
+        endpoint_port = 9000
+
+    import socket
+    try:
+        sock = socket.create_connection((endpoint_host, endpoint_port), timeout=3.0)
+        sock.close()
+    except Exception as e:
+        sys.exit(
+            f'error: remote sccache verification failed: remote MinIO endpoint '
+            f'{endpoint_host}:{endpoint_port} is unreachable ({e}).\n'
+            'Ensure the remote host is reachable over Tailscale and the MahoMinio service is running.'
+        )
+
+    print(f'  Remote sccache OK: {location_str} ({endpoint_host}:{endpoint_port} reachable).')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Build maho-core and Chromium with one shared lock.')
     parser.add_argument('--target', help='Explicit Rust target triple for the prebuilt build.')
@@ -1089,6 +1328,11 @@ def main():
         '--skip-lucide-check',
         action='store_true',
         help='Skip the Lucide icon consistency check (emergency bypass).',
+    )
+    parser.add_argument(
+        '--skip-sccache-check',
+        action='store_true',
+        help='Skip the remote sccache verification check (emergency bypass).',
     )
     parser.add_argument(
         '--platform',
@@ -1152,6 +1396,7 @@ def main():
     build_class = classify_targets(args.ninja_target) if use_queue else None
     with build_lock(build_class) as assigned_out_dir:
         out_dir = assigned_out_dir or args.out_dir
+        verify_remote_sccache(args.skip_sccache_check)
         run_lucide_icon_check(args.skip_lucide_check)
         # Narrow builds link the existing Rust prebuilt; only full builds rebuild it.
         if not args.skip_rust and build_class != 'narrow':
@@ -1216,12 +1461,55 @@ def main():
                 if platform == 'mac' and not args.skip_codesign:
                     identity = args.codesign_identity
                     if not identity:
-                        identity = find_codesign_identity(args.release)
+                        if args.release:
+                            identity = find_codesign_identity(True)
+                        else:
+                            # Debug builds carry the same restricted
+                            # entitlements as release (application-identifier,
+                            # keychain-access-groups). A development
+                            # certificate cannot satisfy them without a
+                            # matching development profile, and AMFI then
+                            # SIGKILLs the browser at launch. Sign with Apple
+                            # Distribution plus the App Store provisioning
+                            # profile instead: the profile authorizes the
+                            # entitlements, and the certificate's team-based
+                            # designated requirement stays identical across
+                            # builds so macOS TCC grants (removable-volume
+                            # access etc.) persist instead of re-prompting
+                            # after every rebuild.
+                            identity = find_codesign_identity_release_dist()
+                            profile = find_appstore_provisioning_profile(
+                                'com.maho.browser')
+                            if identity and profile:
+                                os.environ['MAHO_MAC_PROVISIONING_PROFILE'] = (
+                                    profile)
+                            else:
+                                identity = None
+                                print(
+                                    'warning: no Apple Distribution identity '
+                                    'or App Store profile for com.maho.browser '
+                                    '— falling back to ad-hoc signing without '
+                                    'entitlements', file=sys.stderr)
                     if identity:
                         if codesign_app(identity, app_path):
                             # A release build IS the bundle: package the signed
                             # app into a dmg unless explicitly opted out.
                             want_dmg = (args.release or args.dmg) and not args.no_dmg
+                            if args.notarize:
+                                # When notarizing, notarize and staple the app
+                                # bundle FIRST so the ticket is baked into the
+                                # staged app before it is imaged into the read-only DMG.
+                                if not notarize_app(app_path):
+                                    print("error: app notarization/stapling failed; aborting",
+                                          file=sys.stderr)
+                                    sys.exit(1)
+                            elif args.release and platform == 'mac':
+                                print(
+                                    "warning: building --release on macOS without --notarize. "
+                                    "The resulting app/dmg is not notarized and will fail "
+                                    "Gatekeeper on user machines!",
+                                    file=sys.stderr,
+                                )
                             if want_dmg:
                                 version = read_maho_version()
                                 dmg_path = build_dmg(app_path, out_dir, version, identity)
@@ -1237,13 +1525,45 @@ def main():
                                     print("error: dmg notarization/stapling failed; aborting",
                                           file=sys.stderr)
                                     sys.exit(1)
-                            elif args.notarize:
-                                if not notarize_app(app_path):
-                                    print("error: notarization failed; aborting",
-                                          file=sys.stderr)
-                                    sys.exit(1)
                     else:
-                        print("warning: no valid code signing identity found; built app will not be signed", file=sys.stderr)
+                        if platform == 'mac':
+                            # Ad-hoc fallback with a STABLE designated
+                            # requirement. TCC keys permission grants on the
+                            # DR; the default ad-hoc DR embeds the cdhash,
+                            # which changes on every build and re-triggers
+                            # "Maho wants to access..." prompts. Pinning the
+                            # DR to the bundle identifier alone keeps grants
+                            # valid across rebuilds.
+                            subprocess.run(
+                                [
+                                    'codesign', '--force', '--deep', '--sign',
+                                    '-', '--identifier', 'com.maho.browser',
+                                    '-r=designated => identifier "com.maho.browser"',
+                                    # Permissive hardened-runtime exceptions
+                                    # (allow-jit etc.) are required — V8 needs
+                                    # JIT on Apple Silicon and the WebUIs break
+                                    # without them. This plist must stay free
+                                    # of restricted entitlements
+                                    # (application-identifier,
+                                    # keychain-access-groups): ad-hoc signing
+                                    # cannot satisfy those and AMFI then
+                                    # SIGKILLs the browser at launch.
+                                    '--entitlements',
+                                    os.path.join(
+                                        _MAHO_CHROMIUM_DIR, 'branding', 'mac',
+                                        'helper-entitlements.plist'),
+                                    app_path,
+                                ],
+                                check=True,
+                            )
+                            print(
+                                'Signed app bundle ad-hoc with stable '
+                                'designated requirement')
+                        else:
+                            print(
+                                'warning: no valid code signing identity '
+                                'found; built app will not be signed',
+                                file=sys.stderr)
 
                 if platform == 'linux' and maho_cli_path:
                     if stage_maho_cli_next_to_browser(out_dir, maho_cli_path) is None:

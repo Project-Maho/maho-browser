@@ -783,6 +783,63 @@ class TestApplyBranding(unittest.TestCase):
                     self.assertEqual(file.read(), first_output)
 
 
+class TestVerifyRemoteSccache(unittest.TestCase):
+
+    @patch('shutil.which', return_value='/opt/homebrew/bin/sccache')
+    @patch('subprocess.run')
+    @patch('socket.create_connection')
+    def test_verify_remote_sccache_success(self, mock_socket, mock_run, mock_which):
+        mock_run.return_value = MagicMock(
+            stdout="Compile requests 100\nCache location s3, name: sccache, prefix: /maho/\n"
+        )
+        mock_sock = MagicMock()
+        mock_socket.return_value = mock_sock
+
+        _bm.verify_remote_sccache(skip=False)
+        mock_socket.assert_called_once_with(('100.126.171.58', 9000), timeout=3.0)
+        mock_sock.close.assert_called_once()
+
+    def test_verify_remote_sccache_skip(self):
+        with patch('shutil.which') as mock_which:
+            _bm.verify_remote_sccache(skip=True)
+            mock_which.assert_not_called()
+
+    @patch('shutil.which', return_value=None)
+    @patch('os.path.exists', return_value=False)
+    def test_verify_remote_sccache_missing_binary(self, mock_exists, mock_which):
+        with self.assertRaises(SystemExit) as cm:
+            _bm.verify_remote_sccache(skip=False)
+        self.assertIn('sccache binary not found', str(cm.exception))
+
+    @patch('shutil.which', return_value='/usr/bin/sccache')
+    @patch('subprocess.run', side_effect=Exception('daemon dead'))
+    def test_verify_remote_sccache_daemon_down(self, mock_run, mock_which):
+        with self.assertRaises(SystemExit) as cm:
+            _bm.verify_remote_sccache(skip=False)
+        self.assertIn('cannot query sccache daemon', str(cm.exception))
+
+    @patch('shutil.which', return_value='/usr/bin/sccache')
+    @patch('subprocess.run')
+    def test_verify_remote_sccache_local_disk_fails(self, mock_run, mock_which):
+        mock_run.return_value = MagicMock(
+            stdout="Compile requests 100\nCache location disk, path: /tmp/sccache\n"
+        )
+        with self.assertRaises(SystemExit) as cm:
+            _bm.verify_remote_sccache(skip=False)
+        self.assertIn('cache location is not S3', str(cm.exception))
+
+    @patch('shutil.which', return_value='/usr/bin/sccache')
+    @patch('subprocess.run')
+    @patch('socket.create_connection', side_effect=OSError('network unreachable'))
+    def test_verify_remote_sccache_unreachable_endpoint(self, mock_socket, mock_run, mock_which):
+        mock_run.return_value = MagicMock(
+            stdout="Compile requests 100\nCache location s3, name: sccache, prefix: /maho/\n"
+        )
+        with self.assertRaises(SystemExit) as cm:
+            _bm.verify_remote_sccache(skip=False)
+        self.assertIn('remote MinIO endpoint', str(cm.exception))
+
+
 class TestMainFlags(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -793,6 +850,7 @@ class TestMainFlags(unittest.TestCase):
             'apply_tracked_chromium_overrides',
             'apply_branding',
             'run_lucide_icon_check',
+            'verify_remote_sccache',
             'run_gn_gen',
             'embed_sparkle_framework',
             'embed_mail_helper',
@@ -820,8 +878,8 @@ class TestMainFlags(unittest.TestCase):
             stack.enter_context(patch.object(sys, 'platform', platform))
             for name in ('ensure_overlay_mount', 'ensure_args_gn',
                          'sync_local_google_api_key', 'apply_tracked_chromium_overrides',
-                         'apply_branding', 'run_lucide_icon_check', 'run_gn_gen',
-                         'embed_sparkle_framework', 'embed_mail_helper'):
+                         'apply_branding', 'run_lucide_icon_check', 'verify_remote_sccache',
+                         'run_gn_gen', 'embed_sparkle_framework', 'embed_mail_helper'):
                 stack.enter_context(patch.object(_bm, name))
             mock_build_chromium = stack.enter_context(
                 patch.object(_bm, 'build_chromium_app'))
@@ -1254,9 +1312,83 @@ class TestBuildDmg(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestNotarizeDirectExecution(unittest.TestCase):
+
+    def setUp(self):
+        self.env = {
+            'APPLE_API_KEY': 'fake-key-content',
+            'APPLE_API_KEY_ID': 'FAKEKEYID1',
+            'APPLE_API_ISSUER': 'fake-issuer-uuid',
+        }
+
+    def test_notarize_app_missing_env_skips(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(_bm.notarize_app('/fake/Maho.app'))
+
+    def test_notarize_app_executes_submit_staple_and_verify(self):
+        calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout='id: 1234\nstatus: Accepted\n', stderr='')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app = os.path.join(tmp, 'Maho.app')
+            os.makedirs(app)
+            with patch.dict(os.environ, self.env, clear=True), \
+                 patch.object(_bm.subprocess, 'run', side_effect=fake_run):
+                self.assertTrue(_bm.notarize_app(app))
+
+        self.assertTrue(any(c[0] == 'ditto' for c in calls), 'must create zip via ditto')
+        self.assertTrue(any(c[:3] == ['xcrun', 'notarytool', 'submit'] for c in calls), 'must submit with notarytool')
+        self.assertTrue(any(c[:3] == ['xcrun', 'stapler', 'staple'] for c in calls), 'must staple app bundle')
+        self.assertTrue(any(c[:4] == ['spctl', '-a', '-t', 'exec'] for c in calls), 'must verify with spctl exec')
+
+    def test_notarize_app_retries_on_transient_network_timeout(self):
+        submit_count = 0
+
+        def fake_run(cmd, *args, **kwargs):
+            nonlocal submit_count
+            if cmd[:3] == ['xcrun', 'notarytool', 'submit']:
+                submit_count += 1
+                if submit_count == 1:
+                    return subprocess.CompletedProcess(cmd, 1, stdout='', stderr='HTTPClientError.connectTimeout')
+                return subprocess.CompletedProcess(cmd, 0, stdout='status: Accepted\n', stderr='')
+            return subprocess.CompletedProcess(cmd, 0, stdout='', stderr='')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            app = os.path.join(tmp, 'Maho.app')
+            os.makedirs(app)
+            with patch.dict(os.environ, self.env, clear=True), \
+                 patch('time.sleep'), \
+                 patch.object(_bm.subprocess, 'run', side_effect=fake_run):
+                self.assertTrue(_bm.notarize_app(app))
+
+        self.assertEqual(submit_count, 2, 'must retry after transient connect timeout')
+
+    def test_notarize_dmg_executes_submit_staple_and_verify(self):
+        calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout='id: 5678\nstatus: Accepted\n', stderr='')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dmg = os.path.join(tmp, 'Maho.dmg')
+            with open(dmg, 'wb') as f:
+                f.write(b'dmg-data')
+            with patch.dict(os.environ, self.env, clear=True), \
+                 patch.object(_bm.subprocess, 'run', side_effect=fake_run):
+                self.assertTrue(_bm.notarize_dmg(dmg))
+
+        self.assertTrue(any(c[:3] == ['xcrun', 'notarytool', 'submit'] for c in calls), 'must submit dmg with notarytool')
+        self.assertTrue(any(c[:3] == ['xcrun', 'stapler', 'staple'] for c in calls), 'must staple dmg')
+        self.assertTrue(any(c[:4] == ['spctl', '-a', '-t', 'open'] for c in calls), 'must verify dmg with spctl open')
+
+
 class TestMainDmgFatalPaths(unittest.TestCase):
 
-    def _run(self, argv, build_dmg_ret, notarize_ret=True):
+    def _run(self, argv, build_dmg_ret, notarize_ret=True, notarize_app_ret=True):
         mock_lock_cm = MagicMock()
         mock_lock_cm.__enter__ = MagicMock(return_value=None)
         mock_lock_cm.__exit__ = MagicMock(return_value=False)
@@ -1282,6 +1414,7 @@ class TestMainDmgFatalPaths(unittest.TestCase):
                 'apply_tracked_chromium_overrides',
                 'apply_branding',
                 'run_lucide_icon_check',
+                'verify_remote_sccache',
                 'build_chromium_app',
                 'embed_sparkle_framework',
                 'embed_mail_helper',
@@ -1300,6 +1433,8 @@ class TestMainDmgFatalPaths(unittest.TestCase):
             stack.enter_context(
                 patch.object(_bm, 'read_maho_version', return_value='1.0.0'))
             stack.enter_context(patch('os.path.isfile', return_value=True))
+            mock_notarize_app = stack.enter_context(
+                patch.object(_bm, 'notarize_app', return_value=notarize_app_ret))
             mock_dmg = stack.enter_context(
                 patch.object(_bm, 'build_dmg', return_value=build_dmg_ret))
             mock_notarize = stack.enter_context(
@@ -1310,29 +1445,52 @@ class TestMainDmgFatalPaths(unittest.TestCase):
                 exited = None
             except SystemExit as e:
                 exited = e.code
-        return mock_dmg, mock_notarize, mock_launch, exited
+        return mock_dmg, mock_notarize, mock_notarize_app, mock_launch, exited
 
     def test_exits_nonzero_when_dmg_gate_fails(self):
-        mock_dmg, mock_notarize, mock_launch, exited = self._run(
+        mock_dmg, mock_notarize, mock_notarize_app, mock_launch, exited = self._run(
             ['--skip-rust', '--dmg', '--no-launch'], build_dmg_ret=None)
         mock_dmg.assert_called_once()
         self.assertIsNotNone(exited)
         self.assertNotEqual(exited, 0)
         mock_notarize.assert_not_called()
+        mock_notarize_app.assert_not_called()
 
-    def test_exits_nonzero_when_notarize_fails(self):
-        mock_dmg, mock_notarize, mock_launch, exited = self._run(
+    def test_exits_nonzero_when_notarize_app_fails(self):
+        mock_dmg, mock_notarize, mock_notarize_app, mock_launch, exited = self._run(
+            ['--skip-rust', '--dmg', '--notarize', '--no-launch'],
+            build_dmg_ret='/out/Maho-1.0.0.dmg', notarize_app_ret=False)
+        mock_notarize_app.assert_called_once()
+        mock_dmg.assert_not_called()
+        mock_notarize.assert_not_called()
+        self.assertIsNotNone(exited)
+        self.assertNotEqual(exited, 0)
+
+    def test_exits_nonzero_when_notarize_dmg_fails(self):
+        mock_dmg, mock_notarize, mock_notarize_app, mock_launch, exited = self._run(
             ['--skip-rust', '--dmg', '--notarize', '--no-launch'],
             build_dmg_ret='/out/Maho-1.0.0.dmg', notarize_ret=False)
+        mock_notarize_app.assert_called_once()
+        mock_dmg.assert_called_once()
         mock_notarize.assert_called_once()
         self.assertIsNotNone(exited)
         self.assertNotEqual(exited, 0)
 
+    def test_notarize_calls_both_app_and_dmg_in_order(self):
+        mock_dmg, mock_notarize, mock_notarize_app, mock_launch, exited = self._run(
+            ['--skip-rust', '--dmg', '--notarize', '--no-launch'],
+            build_dmg_ret='/out/Maho-1.0.0.dmg')
+        mock_notarize_app.assert_called_once()
+        mock_dmg.assert_called_once()
+        mock_notarize.assert_called_once()
+        self.assertIsNone(exited)
+
     def test_no_exit_when_dmg_ok_and_no_notarize(self):
-        mock_dmg, mock_notarize, mock_launch, exited = self._run(
+        mock_dmg, mock_notarize, mock_notarize_app, mock_launch, exited = self._run(
             ['--skip-rust', '--dmg'], build_dmg_ret='/out/Maho-1.0.0.dmg')
         self.assertIsNone(exited)
         mock_notarize.assert_not_called()
+        mock_notarize_app.assert_not_called()
         mock_launch.assert_called_once()
 
 
