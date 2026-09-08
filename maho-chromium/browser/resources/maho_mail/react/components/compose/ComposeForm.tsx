@@ -34,10 +34,10 @@ export interface BodySplit {
 }
 
 export function splitBodyForTone(body: string, bodyHtml: string): BodySplit {
-  const sigRegexText = /\n\n--\n[\s\S]*?(?=\n\nOn |\n\n---------- Forwarded|$)/;
+  const sigRegexText = /\n\n--\n[\s\S]*?(?=\n\nOn [^\n]+ wrote:\n|\n\n---------- Forwarded|$)/;
   const sigRegexHtml = /<br><br><div data-maho-signature="true"[\s\S]*?<\/div>/;
-  const quoteRegexText = /\n\nOn [\s\S]*$|\n\n---------- Forwarded[\s\S]*$/;
-  const quoteRegexHtml = /<br><br><p>On [\s\S]*$|<br><br><p>---------- Forwarded[\s\S]*$/;
+  const quoteRegexText = /\n\nOn [^\n]+ wrote:\n[\s\S]*$|\n\n---------- Forwarded[\s\S]*$/;
+  const quoteRegexHtml = /<br><br><p>On [^\n<]+ wrote:[\s\S]*$|<br><br><p>---------- Forwarded[\s\S]*$/;
 
   let userText = body;
   let userHtml = bodyHtml;
