@@ -29,12 +29,16 @@ function writeCache(config: ToolbarConfig): void {
   }
 }
 
-function configsEqual(a: ToolbarConfig, b: ToolbarConfig): boolean {
+export function configsEqual(a: ToolbarConfig, b: ToolbarConfig): boolean {
   if (a.primary.length !== b.primary.length) return false;
   if (a.overflow.length !== b.overflow.length) return false;
   for (let i = 0; i < a.primary.length; i++) if (a.primary[i] !== b.primary[i]) return false;
   for (let i = 0; i < a.overflow.length; i++) if (a.overflow[i] !== b.overflow[i]) return false;
-  for (const id of Object.keys(a.shortcuts) as ActionId[]) {
+  const aKeys = Object.keys(a.shortcuts) as ActionId[];
+  const bKeys = Object.keys(b.shortcuts) as ActionId[];
+  if (aKeys.length !== bKeys.length) return false;
+  for (const id of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b.shortcuts, id)) return false;
     if (a.shortcuts[id] !== b.shortcuts[id]) return false;
   }
   return true;

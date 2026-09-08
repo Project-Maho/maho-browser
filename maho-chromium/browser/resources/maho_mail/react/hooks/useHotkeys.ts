@@ -67,13 +67,12 @@ export function useHotkeys(hotkeys: HotkeyConfig[]) {
           e.key.toLowerCase() === hotkey.key.toLowerCase() ||
           e.code === hotkey.key ||
           shiftedPrintableKey?.toLowerCase() === hotkey.key.toLowerCase();
-        const ctrlMatch = hotkey.ctrl
-          ? e.ctrlKey || e.metaKey
-          : !(e.ctrlKey || e.metaKey);
+        const ctrlMatch = hotkey.ctrl ? e.ctrlKey : !e.ctrlKey;
+        const metaMatch = hotkey.meta ? e.metaKey : !e.metaKey;
         const shiftMatch = hotkey.shift ? e.shiftKey : !e.shiftKey || shiftedPrintableKey?.toLowerCase() === hotkey.key.toLowerCase();
         const altMatch = hotkey.alt ? e.altKey : !e.altKey;
 
-        if (keyMatch && ctrlMatch && shiftMatch && altMatch) {
+        if (keyMatch && ctrlMatch && metaMatch && shiftMatch && altMatch) {
           e.preventDefault();
           hotkey.handler(e);
           return;

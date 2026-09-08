@@ -53,7 +53,6 @@ export function OnboardingTour({ forceShow, onComplete }: OnboardingTourProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, "true");
     if (forceShow) {
       setVisible(true);
       setStep(0);

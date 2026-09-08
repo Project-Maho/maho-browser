@@ -114,6 +114,18 @@ import {parseMailRoute} from "./mail_route";
 
 const COLLAPSED_SIDEBAR_WIDTH = 72;
 
+function setReactInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  if (setter) {
+    setter.call(input, value);
+  } else {
+    input.value = value;
+  }
+}
+
 function BootingState() {
   const { t } = useTranslation();
 
@@ -943,8 +955,9 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         handler: () => {
           const search = document.querySelector<HTMLInputElement>("[data-mail-search-input]");
           if (search) {
-            search.value = "? ";
+            setReactInputValue(search, "? ");
             search.focus();
+            search.dispatchEvent(new Event("input", { bubbles: true }));
             search.setSelectionRange(2, 2);
           }
         },

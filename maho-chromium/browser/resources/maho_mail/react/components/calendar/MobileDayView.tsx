@@ -16,7 +16,13 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
   const dayEvents = useMemo(() => {
     const startOfDayStr = format(date, "yyyy-MM-dd");
     return events
-      .filter((e) => e.dtstart.substring(0, 10) === startOfDayStr)
+      .filter((e) => {
+        if (!e.dtstart) return false;
+        // Convert dtstart to local Date first to match local day boundaries
+        const d = new Date(e.dtstart.includes("T") ? e.dtstart : `${e.dtstart}T00:00:00`);
+        if (isNaN(d.getTime())) return false;
+        return format(d, "yyyy-MM-dd") === startOfDayStr;
+      })
       .sort((a, b) => a.dtstart.localeCompare(b.dtstart));
   }, [events, date]);
 

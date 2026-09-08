@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { fromZonedTime } from "date-fns-tz";
 import { TimezoneConverter } from "./TimezoneConverter";
 import { SchedulingAssistant } from "./SchedulingAssistant";
 import {
@@ -193,8 +194,8 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
 
     const delayDebounce = setTimeout(() => {
       try {
-        const startIso = new Date(dtstart).toISOString();
-        const endIso = new Date(dtend).toISOString();
+        const startIso = fromZonedTime(dtstart, timeZone).toISOString();
+        const endIso = fromZonedTime(dtend, timeZone).toISOString();
         api.checkEventConflict(accountId, startIso, endIso, editEvent?.id || undefined)
           .then(setConflicts)
           .catch(console.error);
@@ -204,7 +205,7 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
     }, 400);
 
     return () => clearTimeout(delayDebounce);
-  }, [dtstart, dtend, allDay, accountId, editEvent, isOpen]);
+  }, [dtstart, dtend, allDay, accountId, editEvent, isOpen, timeZone]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,8 +213,8 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
 
     try {
       setLoading(true);
-      const startIso = new Date(dtstart).toISOString();
-      const endIso = dtend ? new Date(dtend).toISOString() : undefined;
+      const startIso = allDay ? new Date(dtstart).toISOString() : fromZonedTime(dtstart, timeZone).toISOString();
+      const endIso = dtend ? (allDay ? new Date(dtend).toISOString() : fromZonedTime(dtend, timeZone).toISOString()) : undefined;
       const parseAttendeesList = (str: string) => {
         return str.split(",").map(e => {
           const trimmed = e.trim();
@@ -345,8 +346,8 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
   const checkSlotBusy = (email: string, hour: number) => {
     const list = busySlotsMap[email] || [];
     const dateOnly = dtstart.split("T")[0] || new Date().toISOString().split("T")[0];
-    const slotStart = new Date(`${dateOnly}T${String(hour).padStart(2, "0")}:00:00Z`);
-    const slotEnd = new Date(`${dateOnly}T${String(hour + 1).padStart(2, "0")}:00:00Z`);
+    const slotStart = new Date(`${dateOnly}T${String(hour).padStart(2, "0")}:00:00`);
+    const slotEnd = new Date(`${dateOnly}T${String(hour + 1).padStart(2, "0")}:00:00`);
 
     return list.some(b => b.start < slotEnd && b.end > slotStart);
   };

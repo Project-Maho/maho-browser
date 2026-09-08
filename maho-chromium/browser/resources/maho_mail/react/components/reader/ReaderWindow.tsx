@@ -19,7 +19,7 @@ import {
   emitMailUpdated,
   closeSelf,
 } from "../../hooks/usePopoutWindow";
-import type { ComposeInitPayload } from "../../hooks/usePopoutWindow";
+import type { ComposeInitPayload } from "../../events";
 import { useSettings } from "../../hooks/useSettings";
 import { EmailBodyView } from "../layout/EmailBodyView";
 import { UndoSendToast } from "../common/UndoSendToast";
@@ -40,6 +40,37 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
   const [quickReplySending, setQuickReplySending] = useState(false);
   const [pendingSend, setPendingSend] = useState<ComposeEmailRequest | null>(null);
   const quickReplyRef = useRef<HTMLTextAreaElement>(null);
+  const pendingSendRef = useRef<ComposeEmailRequest | null>(null);
+  const emailDetailRef = useRef<EmailDetail | null>(null);
+
+  useEffect(() => {
+    pendingSendRef.current = pendingSend;
+  }, [pendingSend]);
+
+  useEffect(() => {
+    emailDetailRef.current = emailDetail;
+  }, [emailDetail]);
+
+  useEffect(() => {
+    const flushPendingSend = () => {
+      const toSend = pendingSendRef.current;
+      if (!toSend) return;
+      pendingSendRef.current = null;
+      setPendingSend(null);
+      void api.sendEmail(toSend).catch((err) => {
+        console.error("Failed to flush pending email on close:", err);
+      });
+      if (emailDetailRef.current) {
+        void emitMailUpdated(emailDetailRef.current.email.id, "send");
+      }
+    };
+
+    window.addEventListener("beforeunload", flushPendingSend);
+    return () => {
+      window.removeEventListener("beforeunload", flushPendingSend);
+      flushPendingSend();
+    };
+  }, []);
 
   const autoResizeTextarea = useCallback(() => {
     const el = quickReplyRef.current;
@@ -94,6 +125,7 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
         body: "",
         bodyHtml: "",
         accountId: email.account_id,
+        replyTo: ctx,
       };
       void openCompose(payload);
     } catch (err) {
@@ -116,8 +148,11 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
         body: ctx.original_body_text ?? "",
         bodyHtml: ctx.original_body_html ?? "",
         accountId: email.account_id,
+        forwardFrom: ctx,
+        forwardEmailUid: email.uid,
+        forwardFolderId: email.folder_id,
       };
-      void openCompose(payload);
+      void openCompose(payload as any);
     } catch (err) {
       toast("error", err instanceof Error ? err.message : "Failed to forward");
     }
@@ -158,14 +193,17 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
       subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
       body_text: quickReplyText,
     };
+    pendingSendRef.current = request;
     setPendingSend(request);
   };
 
   async function handleUndoSendComplete() {
-    if (!pendingSend || !emailDetail) return;
+    const toSend = pendingSendRef.current;
+    if (!toSend || !emailDetail) return;
+    pendingSendRef.current = null;
     try {
       setQuickReplySending(true);
-      await api.sendEmail(pendingSend);
+      await api.sendEmail(toSend);
       setQuickReplyText("");
       toast("success", "Reply sent");
       void emitMailUpdated(emailDetail.email.id, "send");
@@ -318,7 +356,11 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
       {pendingSend && (
         <UndoSendToast
           delaySeconds={undoSendDelay ?? 5}
-          onUndo={() => { setPendingSend(null); toast("success", "Send cancelled"); }}
+          onUndo={() => {
+            pendingSendRef.current = null;
+            setPendingSend(null);
+            toast("success", "Send cancelled");
+          }}
           onComplete={handleUndoSendComplete}
         />
       )}

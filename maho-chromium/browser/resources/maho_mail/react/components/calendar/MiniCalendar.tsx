@@ -49,8 +49,10 @@ export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
     const map: Record<string, boolean> = {};
     for (const e of events) {
       if (!e.dtstart) continue;
-      // Extract date part (YYYY-MM-DD)
-      const dateStr = e.dtstart.substring(0, 10);
+      // Convert dtstart to local Date first to match local day boundaries
+      const d = new Date(e.dtstart.includes("T") ? e.dtstart : `${e.dtstart}T00:00:00`);
+      if (isNaN(d.getTime())) continue;
+      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       map[dateStr] = true;
     }
     return map;

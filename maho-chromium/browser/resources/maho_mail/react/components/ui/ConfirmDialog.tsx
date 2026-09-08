@@ -32,7 +32,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
   const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
     return new Promise<boolean>((res) => {
       setOptions(opts);
-      setResolve(() => res);
+      setResolve((prevResolve: ((value: boolean) => void) | null) => {
+        prevResolve?.(false);
+        return res;
+      });
     });
   }, []);
 
