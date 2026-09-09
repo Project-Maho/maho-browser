@@ -6,9 +6,9 @@ export const DOMAIN_DEFINITIONS: DomainDefinition[] = [
   {id: 'identity', label: 'Identity', order: 2},
   {id: 'productivity', label: 'Productivity', order: 3},
   {id: 'protection', label: 'Protection', order: 4},
-  // Top-level "Mail" lives in Productivity and owns the enable toggle; this
-  // group holds the per-account detail panes revealed once Mail is enabled.
-  {id: 'mail', label: 'Mail details', order: 5},
+  // Top-level "Mail" owns the enable toggle; this group also holds the
+  // per-account detail panes revealed once Mail is enabled.
+  {id: 'mail', label: 'Mail', order: 5},
 ];
 
 export const DOMAIN_MAP: Record<DomainId, DomainDefinition> =

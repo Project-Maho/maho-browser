@@ -33,7 +33,7 @@ describe('Maho Mail Beta settings gate', () => {
     const mailPane = panesForSettings(false).find(pane => pane.key === 'mail');
     expect(mailPane).toMatchObject({
       contentKind: 'mail-overview',
-      domain: 'productivity',
+      domain: 'mail',
       navTitle: 'Mail',
     });
     expect(mailPane?.groupKeys).toBeUndefined();

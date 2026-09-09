@@ -276,6 +276,8 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
   },
   // Mail is a top-level navigation entry, not a row inside a Features pane.
   // It stays visible while Mail is disabled because it owns the enable toggle.
+  // It belongs to the mail domain (alongside the mail detail panes), not
+  // productivity, so the Mail section renders as its own nav section.
   {
     key: 'mail',
     scope: 'profile',
@@ -284,7 +286,7 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     navTitle: 'Mail',
     title: 'Mail',
     kind: 'live',
-    domain: 'productivity',
+    domain: 'mail',
     contentKind: 'mail-overview',
   },
   {
