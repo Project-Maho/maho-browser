@@ -6,8 +6,6 @@ source_set("maho_core_holder") {
   sources = [
     "maho_core_holder.cc",
     "maho_core_holder.h",
-    "mail_helper/maho_mail_arbitration_service.cc",
-    "mail_helper/maho_mail_arbitration_service.h",
   ]
   # The launcher (and its version header) live in the reusable
   # :maho_mail_launcher source_set rather than being compiled here directly,

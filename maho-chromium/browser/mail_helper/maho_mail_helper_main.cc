@@ -453,6 +453,16 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
 
   void PrepareShutdown(PrepareShutdownCallback callback) override {
     LOG(INFO) << "[MahoMailHelper] PrepareShutdown requested; draining backend.";
+    // No MahoMailPrepareShutdown / MahoMailDrainBackend FFI exists in
+    // mail-core (checked ffi.rs, cbindgen.toml, and both generated headers),
+    // so none is invented here. Best-effort drain with the available
+    // synchronous primitive: MahoMailStopSync() stops all sync + backfill
+    // workers (sets their stop flags and aborts their tokio tasks). It is
+    // non-blocking and safe inline on the Mojo thread -- the StopSync handler
+    // below already calls it the same way. The browser-side launcher bounds
+    // the overall graceful drain with its shutdown timer, so the callback
+    // always fires promptly after the drain is attempted.
+    MahoMailStopSync();
     std::move(callback).Run();
   }
 
@@ -2691,11 +2701,26 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
       return;
     }
     if (command == "StartIdleMonitor") {
-      std::move(callback).Run(true, "{}");
+      // No dedicated IDLE FFI exists: the IMAP IDLE loop is bundled in the
+      // per-account sync worker (mail-core sync.rs `start_sync_worker` spawns
+      // the `idle_loop` task alongside the sync loop). MahoMailStartSync is
+      // the real primitive that arms it; it validates account_id and reports
+      // failure honestly.
+      const std::string account_id = get_str("account_id");
+      const bool ok =
+          !account_id.empty() && MahoMailStartSync(account_id.c_str());
+      std::move(callback).Run(
+          ok, ok ? "{}" : "{\"error\":\"Failed to start idle monitor\"}");
       return;
     }
     if (command == "StopIdleMonitor") {
-      std::move(callback).Run(true, "{}");
+      // No per-account idle-stop FFI exists (only global MahoMailStopSync,
+      // which would halt every account's sync+backfill -- wrong scope for a
+      // per-account stop). Fail loudly instead of fake success.
+      std::move(callback).Run(
+          false,
+          "{\"error\":\"StopIdleMonitor not supported: no per-account "
+          "idle-stop backend primitive\"}");
       return;
     }
     if (command == "StartScheduler") {

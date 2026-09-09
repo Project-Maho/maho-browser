@@ -474,26 +474,34 @@ export function useCalendarClient({
   }, [currentDate, currentView, effectiveAccountId, fetchEvents]);
 
   useEffect(() => {
+    let cancelled = false;
     let unlistenFn: (() => void) | undefined;
     const setup = async () => {
-      unlistenFn = await listen<number>("calendar-auto-declined", (event) => {
+      const unlisten = await listen<number>("calendar-auto-declined", (event) => {
         const count = event.payload;
         toast("info", t("calendar.autoDeclined", "Auto-declined {{count}} conflicting events", { count }));
       });
+      if (cancelled) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
     };
     void setup();
     return () => {
+      cancelled = true;
       if (unlistenFn) unlistenFn();
     };
   }, [toast, t]);
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten1: (() => void) | undefined;
     let unlisten2: (() => void) | undefined;
     let unlisten3: (() => void) | undefined;
 
     const setup = async () => {
-      unlisten1 = await listen<{ event_id: string; rsvp_status: string; summary: string; error: string }>(
+      const u1 = await listen<{ event_id: string; rsvp_status: string; summary: string; error: string }>(
         "calendar-rsvp-reply-failed",
         ({ payload }) => {
           sonnerToast.error(
@@ -508,8 +516,13 @@ export function useCalendarClient({
           );
         },
       );
+      if (cancelled) {
+        u1();
+        return;
+      }
+      unlisten1 = u1;
 
-      unlisten2 = await listen<{ event_id: string; rsvp_status: string; summary: string }>(
+      const u2 = await listen<{ event_id: string; rsvp_status: string; summary: string }>(
         "calendar-rsvp-reply-queued",
         ({ payload }) => {
           sonnerToast.info(
@@ -524,8 +537,13 @@ export function useCalendarClient({
           );
         },
       );
+      if (cancelled) {
+        u2();
+        return;
+      }
+      unlisten2 = u2;
 
-      unlisten3 = await listen<{ event_id: string }>(
+      const u3 = await listen<{ event_id: string }>(
         "calendar-rsvp-reply-drained",
         () => {
           sonnerToast.success(
@@ -539,10 +557,16 @@ export function useCalendarClient({
           );
         },
       );
+      if (cancelled) {
+        u3();
+        return;
+      }
+      unlisten3 = u3;
     };
 
     void setup();
     return () => {
+      cancelled = true;
       if (unlisten1) unlisten1();
       if (unlisten2) unlisten2();
       if (unlisten3) unlisten3();
