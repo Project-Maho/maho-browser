@@ -7,5 +7,7 @@ symbol_level = 0
 target_os = "mac"
 target_cpu = "arm64"
 maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
 enable_traffic_annotation_auditor = true
 

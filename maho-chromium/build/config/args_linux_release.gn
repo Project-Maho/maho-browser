@@ -13,4 +13,6 @@ enable_google_update = false
 target_os = "linux"
 target_cpu = "x64"
 maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
 use_sysroot = true

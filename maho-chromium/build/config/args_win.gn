@@ -7,3 +7,5 @@ symbol_level = 0
 target_os = "win"
 target_cpu = "x64"
 maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
