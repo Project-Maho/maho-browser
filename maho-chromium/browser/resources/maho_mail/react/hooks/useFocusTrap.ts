@@ -29,7 +29,9 @@ export function useFocusTrap(
     const container = containerRef.current;
     if (!container) return;
 
-    requestAnimationFrame(() => {
+    let rafHandle: number | null = null;
+
+    const rafCallback = () => {
       if (container.contains(document.activeElement)) {
         return;
       }
@@ -44,7 +46,8 @@ export function useFocusTrap(
           focusable[0].focus();
         }
       }
-    });
+    };
+    rafHandle = requestAnimationFrame(rafCallback);
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Tab") return;
@@ -75,6 +78,10 @@ export function useFocusTrap(
 
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      if (rafHandle !== null) {
+        cancelAnimationFrame(rafHandle);
+        rafHandle = null;
+      }
 
       if (previousFocusRef.current && typeof previousFocusRef.current.focus === "function") {
         previousFocusRef.current.focus();
