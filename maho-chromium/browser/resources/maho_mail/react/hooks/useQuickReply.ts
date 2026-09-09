@@ -1,13 +1,15 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import * as api from "../api";
-import type { Email, EmailDetail, ComposeEmailRequest } from "../types";
+import type { Email, EmailDetail, ComposeEmailRequest, SendRequestedOptions } from "../types";
+import { parseRecipientsFn } from "./useComposeRecipients";
 
 type ToastFn = (type: "success" | "error", message: string) => void;
 
 interface UseQuickReplyOptions {
   email: Email | null;
   emailDetail: EmailDetail | null;
-  onSendRequested?: (request: ComposeEmailRequest) => void;
+  accountEmail?: string;
+  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void;
   toast: ToastFn;
   t: (key: string) => string;
 }
@@ -27,6 +29,7 @@ interface UseQuickReplyResult {
 
 export function useQuickReply({
   email,
+  accountEmail,
   onSendRequested,
   toast,
   t,
@@ -56,34 +59,50 @@ export function useQuickReply({
       const ccAddresses: string[] = [];
 
       if (replyAll) {
-        const allTo = email.to_addresses
-          .split(",")
-          .map((a) => a.trim())
-          .filter(Boolean);
+        const allTo = parseRecipientsFn(email.to_addresses);
         for (const addr of allTo) {
           if (!toAddresses.includes(addr)) toAddresses.push(addr);
         }
         if (email.cc_addresses) {
-          const allCc = email.cc_addresses
-            .split(",")
-            .map((a) => a.trim())
-            .filter(Boolean);
+          const allCc = parseRecipientsFn(email.cc_addresses);
           for (const addr of allCc) {
             if (!toAddresses.includes(addr)) ccAddresses.push(addr);
           }
         }
       }
 
+      const isSelf = (address: string) => (address.match(/<([^>]+)>/)?.[1] ?? address).trim().toLowerCase() === accountEmail?.toLowerCase();
+      let context;
+      try {
+        context = await api.getReplyContext(email.id);
+      } catch (error) {
+        toast("error", error instanceof Error ? error.message : t("email.quickReplyFailed"));
+        return;
+      }
+      const messageId = context.original_message_id ?? email.message_id;
+      const references = [...new Set([...(context.original_references?.split(/\s+/).filter(Boolean) ?? []), ...(messageId ? [messageId] : [])])].join(" ");
       const request: ComposeEmailRequest = {
         account_id: email.account_id,
-        to: toAddresses,
-        cc: ccAddresses.length > 0 ? ccAddresses : undefined,
+        to: (() => { const filtered = toAddresses.filter(address => !isSelf(address)); return filtered.length > 0 ? filtered : toAddresses; })(),
+        cc: ccAddresses.length > 0 ? ccAddresses.filter(address => !isSelf(address)) : undefined,
         subject: email.subject.startsWith("Re:") ? email.subject : `Re: ${email.subject}`,
         body_text: quickReplyText,
+        in_reply_to: messageId || undefined,
+        references: references || undefined,
       };
 
       if (onSendRequested) {
-        onSendRequested(request);
+        onSendRequested(request, {
+          composition: {
+            accountId: email.account_id,
+            to: request.to.join(", "),
+            cc: request.cc?.join(", "),
+            subject: request.subject,
+            body: quickReplyText,
+            inReplyTo: request.in_reply_to,
+            references: request.references,
+          },
+        });
         setQuickReplyText("");
         setQuickReplyExpanded(false);
         return;
@@ -101,7 +120,7 @@ export function useQuickReply({
         setQuickReplySending(false);
       }
     },
-    [email, quickReplyText, onSendRequested, toast, t],
+    [email, accountEmail, quickReplyText, onSendRequested, toast, t],
   );
 
   const resetQuickReply = useCallback(() => {
