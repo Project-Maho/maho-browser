@@ -134,7 +134,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
           adapterName: 'OpenCode',
           isActive: true,
           isReadOnly: false,
-          status: 1, // SessionStatus.kActive
+          status: SessionStatus.kIdle,
           createdAt: Date.now() / 1000,
           updatedAt: Date.now() / 1000,
           title: 'Test Session',
@@ -154,7 +154,7 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
         adapterName: 'OpenCode',
         isActive: true,
         isReadOnly: false,
-        status: 1,
+        status: SessionStatus.kIdle,
         createdAt: Date.now() / 1000,
         updatedAt: Date.now() / 1000,
         title: 'Test Session',
@@ -426,6 +426,50 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     expect(submitPrompt).toHaveBeenCalledTimes(2);
     expect(submitPrompt).toHaveBeenLastCalledWith(
         'test-session-123', 'second draft', false, InteractionMode.kAssistant, null, ChatIntent.kFreeform);
+  });
+
+  it('blocks resumed active turns until a live terminal event', async () => {
+    // Given
+    const submitPrompt = vi.spyOn(mockHandler, 'submitPrompt')
+                             .mockResolvedValue({accepted: true});
+    vi.mocked(mockHandler.resumeSession).mockResolvedValue({
+      session: {
+        ...createSession('resumed-active-session'),
+        isActive: true,
+        status: SessionStatus.kActive,
+      },
+      replayEvents: [],
+    });
+    await store.resumeSession('resumed-active-session', false);
+
+    const runtimeListener =
+        vi.mocked(mockRouter.onRuntimeEvent.addListener).mock.calls[0]?.[0];
+    expect(runtimeListener).toBeTypeOf('function');
+
+    // When
+    store.setComposerPrompt('prompt during active turn');
+    await store.submitPrompt();
+
+    // Then
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(store.getSnapshot().turnPendingBySessionId['resumed-active-session']).toBe(true);
+    expect(store.getSnapshot().composer.prompt).toBe('prompt during active turn');
+
+    // When
+    runtimeListener?.(createRuntimeEvent(
+        'resumed-active-session', RuntimeEventKind.kTurnComplete, 1, 'turn complete'));
+    expect(store.getSnapshot().turnPendingBySessionId['resumed-active-session']).toBe(false);
+
+    // Then
+    await store.submitPrompt();
+    expect(submitPrompt).toHaveBeenCalledOnce();
+    expect(submitPrompt).toHaveBeenLastCalledWith(
+        'resumed-active-session',
+        'prompt during active turn',
+        false,
+        InteractionMode.kAssistant,
+        null,
+        ChatIntent.kFreeform);
   });
 
   it('persists AI provider, model, and reasoning selection through the page handler', async () => {
