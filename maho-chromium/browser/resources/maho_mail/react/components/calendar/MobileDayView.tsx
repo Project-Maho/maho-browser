@@ -88,7 +88,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
           const startHour = startDate.getHours();
           const startMin = startDate.getMinutes();
 
-          const endDate = ev.dtend ? new Date(ev.dtend) : addDays(startDate, 1);
+          const endDate = ev.dtend ? new Date(ev.dtend) : new Date(startDate.getTime() + 60 * 60 * 1000);
           let durationHours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
           if (durationHours <= 0) durationHours = 1;
 

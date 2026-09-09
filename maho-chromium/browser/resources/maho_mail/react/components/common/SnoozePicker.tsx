@@ -9,8 +9,8 @@ interface SnoozePickerProps {
 
 const QUICK_OPTIONS = [
   { label: "Later today", hours: 3 },
-  { label: "Tomorrow morning", hours: 18 },
-  { label: "Tomorrow evening", hours: 30 },
+  { label: "Tomorrow morning", tomorrowHour: 9 },
+  { label: "Tomorrow evening", tomorrowHour: 18 },
   { label: "This weekend", days: "weekend" as const },
   { label: "Next week", days: 7 },
   { label: "Next month", days: 30 },
@@ -18,14 +18,17 @@ const QUICK_OPTIONS = [
 
 function computeSnoozeDate(option: (typeof QUICK_OPTIONS)[number]): string {
   const now = new Date();
-  if ("hours" in option && typeof option.hours === "number") {
+  if ("tomorrowHour" in option && typeof option.tomorrowHour === "number") {
+    now.setDate(now.getDate() + 1);
+    now.setHours(option.tomorrowHour, 0, 0, 0);
+  } else if ("hours" in option && typeof option.hours === "number") {
     now.setHours(now.getHours() + option.hours);
-  } else if (option.days === "weekend") {
+  } else if ("days" in option && option.days === "weekend") {
     const dayOfWeek = now.getDay();
     const daysUntilSaturday = (6 - dayOfWeek + 7) % 7 || 7;
     now.setDate(now.getDate() + daysUntilSaturday);
     now.setHours(9, 0, 0, 0);
-  } else if (typeof option.days === "number") {
+  } else if ("days" in option && typeof option.days === "number") {
     now.setDate(now.getDate() + option.days);
     now.setHours(9, 0, 0, 0);
   }
