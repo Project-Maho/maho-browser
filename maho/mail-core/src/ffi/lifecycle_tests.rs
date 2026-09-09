@@ -208,3 +208,42 @@ fn accounts_changed_event_emission_and_reconnect() {
         "exactly one accounts-changed event emitted for delete"
     );
 }
+
+#[tokio::test]
+async fn prepare_shutdown_drain_stops_all_workers_before_callback() {
+    // Mirrors MahoMailHelperImpl::PrepareShutdown (maho_mail_helper_main.cc):
+    // no MahoMailPrepareShutdown / MahoMailDrainBackend FFI exists in this
+    // crate, so the helper drains via MahoMailStopSync() and only then runs
+    // its Mojo shutdown callback. This test proves the drain half by invoking
+    // the exact FFI symbol the helper calls: every live sync worker
+    // (including its bundled IMAP IDLE loop task) and every live backfill
+    // worker must report stopped afterwards. Fully deterministic, no sleeps:
+    // the stop flags flip synchronously inside the FFI call.
+    let id = format!("shutdown-drain-{}", uuid::Uuid::new_v4());
+    let live = || crate::state::WorkerHandle {
+        stop: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        tasks: vec![tokio::spawn(std::future::pending::<()>())],
+        wake: None,
+    };
+    state::registry().insert_sync(id.clone(), live());
+    state::registry().insert_backfill(id.clone(), live());
+    assert!(
+        state::registry().is_sync_running(&id),
+        "sync worker live before drain"
+    );
+    assert!(
+        state::registry().is_backfill_running(&id),
+        "backfill worker live before drain"
+    );
+
+    assert!(MahoMailStopSync(), "drain FFI reports success");
+
+    assert!(
+        !state::registry().is_sync_running(&id),
+        "sync worker (incl. IDLE loop) drained before shutdown callback"
+    );
+    assert!(
+        !state::registry().is_backfill_running(&id),
+        "backfill worker drained before shutdown callback"
+    );
+}

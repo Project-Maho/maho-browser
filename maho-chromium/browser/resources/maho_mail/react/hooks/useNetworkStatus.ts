@@ -15,7 +15,11 @@ export function useNetworkStatus(): NetworkStatus {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [pendingMutationCount, setPendingMutationCount] = useState(0);
   const [staleMutationCount, setStaleMutationCount] = useState(0);
-  const [backendConnected, setBackendConnected] = useState(true);
+  const [accountStatuses, setAccountStatuses] = useState<Record<string, boolean>>({});
+
+  const accountStatusList = Object.values(accountStatuses);
+  const backendConnected =
+    accountStatusList.length === 0 ? true : accountStatusList.some(Boolean);
 
   const connectionStatus: ConnectionStatus = !isOnline
     ? "offline"
@@ -64,7 +68,12 @@ export function useNetworkStatus(): NetworkStatus {
   useEffect(() => {
     const unlisten = Promise.all([
       listen<{ account_id: string; connected: boolean }>("connection-status-changed", (event) => {
-        setBackendConnected(event.payload.connected);
+        setAccountStatuses((prev) => {
+          if (prev[event.payload.account_id] === event.payload.connected) {
+            return prev;
+          }
+          return { ...prev, [event.payload.account_id]: event.payload.connected };
+        });
         if (event.payload.connected) {
           refreshMutationCount();
         }

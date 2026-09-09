@@ -167,4 +167,102 @@ describe("useNetworkStatus", () => {
       expect(fn).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("keeps global connection online when one account disconnects while another remains connected", async () => {
+    vi.mocked(api.listAllPendingMutations).mockResolvedValue([]);
+
+    const { result } = renderHook(() => useNetworkStatus());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const connectionHandler = listeners.get("connection-status-changed");
+    expect(connectionHandler).toBeDefined();
+
+    // Account 1 and Account 2 both report connected
+    await act(async () => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: true } });
+      connectionHandler?.({ payload: { account_id: "acc-2", connected: true } });
+      await Promise.resolve();
+    });
+
+    expect(result.current.connectionStatus).toBe("online");
+
+    // Account 1 disconnects, but Account 2 is still connected
+    act(() => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: false } });
+    });
+
+    // Global backend connected status must remain online while ANY account is connected
+    expect(result.current.connectionStatus).toBe("online");
+
+    // Account 2 also disconnects: all accounts disconnected -> partial
+    act(() => {
+      connectionHandler?.({ payload: { account_id: "acc-2", connected: false } });
+    });
+
+    expect(result.current.connectionStatus).toBe("partial");
+
+    // Account 1 reconnects -> online
+    await act(async () => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: true } });
+      await Promise.resolve();
+    });
+
+    expect(result.current.connectionStatus).toBe("online");
+  });
+
+  it("handles multiple accounts flapping, duplicate events, and recovery", async () => {
+    vi.mocked(api.listAllPendingMutations).mockResolvedValue([]);
+
+    const { result } = renderHook(() => useNetworkStatus());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const connectionHandler = listeners.get("connection-status-changed");
+    expect(connectionHandler).toBeDefined();
+
+    // Acc 1 and Acc 2 connect
+    await act(async () => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: true } });
+      connectionHandler?.({ payload: { account_id: "acc-2", connected: true } });
+      await Promise.resolve();
+    });
+    expect(result.current.connectionStatus).toBe("online");
+
+    // Acc 1 duplicate connect event (idempotency check)
+    await act(async () => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: true } });
+      await Promise.resolve();
+    });
+    expect(result.current.connectionStatus).toBe("online");
+
+    // Acc 1 disconnects -> Acc 2 still online -> stays online
+    act(() => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: false } });
+    });
+    expect(result.current.connectionStatus).toBe("online");
+
+    // Acc 1 duplicate disconnect event
+    act(() => {
+      connectionHandler?.({ payload: { account_id: "acc-1", connected: false } });
+    });
+    expect(result.current.connectionStatus).toBe("online");
+
+    // Acc 2 disconnects -> all disconnected -> partial
+    act(() => {
+      connectionHandler?.({ payload: { account_id: "acc-2", connected: false } });
+    });
+    expect(result.current.connectionStatus).toBe("partial");
+
+    // Acc 2 reconnects -> back to online
+    await act(async () => {
+      connectionHandler?.({ payload: { account_id: "acc-2", connected: true } });
+      await Promise.resolve();
+    });
+    expect(result.current.connectionStatus).toBe("online");
+  });
 });

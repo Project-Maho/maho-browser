@@ -29,6 +29,36 @@ import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { useToolbarConfig } from "../../hooks/useToolbarConfig";
 import { ACTION_BY_ID, type ActionId, type ActionSpec } from "../../types/toolbar";
 
+export const CONTEXT_MENU_WIDTH = 200;
+export const CONTEXT_MENU_HEIGHT = 120;
+
+export interface ClampedPosition {
+  x: number;
+  y: number;
+  left: number;
+  top: number;
+}
+
+export function clampContextMenuPosition(
+  x: number,
+  y: number,
+  menuWidth: number = CONTEXT_MENU_WIDTH,
+  menuHeight: number = CONTEXT_MENU_HEIGHT,
+  viewportWidth: number = typeof window !== "undefined" ? window.innerWidth : 1024,
+  viewportHeight: number = typeof window !== "undefined" ? window.innerHeight : 768,
+): ClampedPosition {
+  const maxX = Math.max(0, viewportWidth - menuWidth);
+  const maxY = Math.max(0, viewportHeight - menuHeight);
+  const clampedX = Math.max(0, Math.min(x, maxX));
+  const clampedY = Math.max(0, Math.min(y, maxY));
+  return {
+    x: clampedX,
+    y: clampedY,
+    left: clampedX,
+    top: clampedY,
+  };
+}
+
 export interface EmailActionsToolbarProps {
   onReply: () => void;
   onReplyWithAI: () => void;
@@ -170,7 +200,8 @@ export function EmailActionsToolbar(props: EmailActionsToolbarProps) {
   function openContextMenu(e: React.MouseEvent, actionId: ActionId, zone: "primary" | "overflow") {
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, actionId, zone });
+    const clamped = clampContextMenuPosition(e.clientX, e.clientY);
+    setContextMenu({ x: clamped.x, y: clamped.y, actionId, zone });
   }
 
   function resolveLabel(spec: ActionSpec): string {
@@ -353,7 +384,10 @@ export function EmailActionsToolbar(props: EmailActionsToolbarProps) {
           role="menu"
           aria-label="Action options"
           className="fixed z-[60] min-w-[200px] rounded-lg border border-border bg-card py-1 shadow-xl"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          style={(() => {
+            const clamped = clampContextMenuPosition(contextMenu.x, contextMenu.y);
+            return { left: clamped.left, top: clamped.top };
+          })()}
         >
           <button
             type="button"

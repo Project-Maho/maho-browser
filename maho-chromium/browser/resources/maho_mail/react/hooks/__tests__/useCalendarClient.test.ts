@@ -175,3 +175,124 @@ describe("useCalendarClient RSVP reply event listeners", () => {
     });
   });
 });
+
+describe("useCalendarClient listener registration race on unmount", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("calls unlisten immediately if unmounted while listen() is still pending (no leak)", async () => {
+    type DeferredListen = {
+      event: string;
+      resolve: (unlisten: () => void) => void;
+      unlisten: ReturnType<typeof vi.fn>;
+    };
+
+    const pendingListens: DeferredListen[] = [];
+
+    vi.mocked(listen).mockImplementation((event: string) => {
+      const unlisten = vi.fn();
+      return new Promise<() => void>((resolve) => {
+        pendingListens.push({
+          event,
+          resolve,
+          unlisten,
+        });
+      });
+    });
+
+    const { unmount } = renderHook(() => useCalendarClient({ accountId: "acc-1" }));
+
+    // Both useEffect hooks have started setup() and are awaiting listen()
+    expect(pendingListens.length).toBe(2);
+    expect(pendingListens.map((p) => p.event)).toEqual([
+      "calendar-auto-declined",
+      "calendar-rsvp-reply-failed",
+    ]);
+
+    // Unmount before listen() promises resolve
+    unmount();
+
+    // Now resolve the in-flight listen() promises
+    const resolved = [...pendingListens];
+    for (const item of resolved) {
+      item.resolve(item.unlisten);
+    }
+
+    // Flush microtasks
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Without the fix, cleanup ran synchronously during unmount when unlisten was undefined,
+    // so when listen() resolved later, unlisten was never called, leaking the listener.
+    // With the fix, cancelled flag is checked after await and unlisten() is called immediately.
+    for (const item of resolved) {
+      expect(item.unlisten).toHaveBeenCalledTimes(1);
+    }
+
+    // Since the hook was unmounted, subsequent listeners in the RSVP chain must not be registered
+    expect(pendingListens.length).toBe(2);
+  });
+
+  it("cleans up registered listener and resolves pending subsequent listener without leaking", async () => {
+    type DeferredListen = {
+      event: string;
+      resolve: (unlisten: () => void) => void;
+      unlisten: ReturnType<typeof vi.fn>;
+    };
+
+    const pendingListens: DeferredListen[] = [];
+
+    vi.mocked(listen).mockImplementation((event: string) => {
+      const unlisten = vi.fn();
+      return new Promise<() => void>((resolve) => {
+        pendingListens.push({
+          event,
+          resolve,
+          unlisten,
+        });
+      });
+    });
+
+    const { unmount } = renderHook(() => useCalendarClient({ accountId: "acc-1" }));
+
+    expect(pendingListens.length).toBe(2);
+    const autoDeclined = pendingListens[0];
+    const rsvpFailed = pendingListens[1];
+
+    // Resolve the first two while still mounted
+    autoDeclined.resolve(autoDeclined.unlisten);
+    rsvpFailed.resolve(rsvpFailed.unlisten);
+
+    // Flush microtasks so rsvpFailed resolves and next listen ("calendar-rsvp-reply-queued") is called
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(pendingListens.length).toBe(3);
+    const rsvpQueued = pendingListens[2];
+    expect(rsvpQueued.event).toBe("calendar-rsvp-reply-queued");
+
+    // Unmount while rsvpQueued is still pending
+    unmount();
+
+    // Auto-declined and rsvpFailed were already registered, so their unlistens should have been called
+    expect(autoDeclined.unlisten).toHaveBeenCalledTimes(1);
+    expect(rsvpFailed.unlisten).toHaveBeenCalledTimes(1);
+
+    // Now resolve rsvpQueued after unmount
+    rsvpQueued.resolve(rsvpQueued.unlisten);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // rsvpQueued must be cleaned up immediately upon resolution
+    expect(rsvpQueued.unlisten).toHaveBeenCalledTimes(1);
+
+    // The third RSVP listener ("calendar-rsvp-reply-drained") must not have been requested
+    expect(pendingListens.length).toBe(3);
+  });
+});

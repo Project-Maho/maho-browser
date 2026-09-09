@@ -1,17 +1,16 @@
 import { Component, createRef, type ErrorInfo, type ReactNode } from "react";
 import * as Sentry from "@sentry/browser";
-import { withTranslation, type WithTranslation } from "react-i18next";
 
-interface ErrorBoundaryProps extends WithTranslation {
+export interface ErrorBoundaryProps {
   children: ReactNode;
 }
 
-interface ErrorBoundaryState {
+export interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
 }
 
-class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   private reloadButtonRef = createRef<HTMLButtonElement>();
 
   constructor(props: ErrorBoundaryProps) {
@@ -42,8 +41,6 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
   };
 
   render(): ReactNode {
-    const { t } = this.props;
-
     if (this.state.hasError) {
       return (
         <main className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -66,10 +63,10 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
                 </svg>
               </div>
               <h1 id="app-error-title" className="text-xl font-semibold text-foreground mb-2">
-                {t("errorBoundary.title")}
+                Something went wrong
               </h1>
               <p className="text-sm text-muted-foreground mb-4">
-                {t("errorBoundary.description")}
+                An unexpected error occurred. Please try reloading the application.
               </p>
               {this.state.error && (
                 <div className="mb-6 p-3 rounded-md bg-muted border border-border text-left overflow-auto">
@@ -84,7 +81,7 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
               onClick={this.handleReload}
               className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
             >
-              {t("errorBoundary.reload")}
+              Reload
             </button>
           </div>
         </main>
@@ -94,5 +91,3 @@ class ErrorBoundaryBase extends Component<ErrorBoundaryProps, ErrorBoundaryState
     return this.props.children;
   }
 }
-
-export const ErrorBoundary = withTranslation()(ErrorBoundaryBase);

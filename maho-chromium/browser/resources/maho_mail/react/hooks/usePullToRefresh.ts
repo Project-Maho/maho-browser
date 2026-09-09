@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface PullToRefreshOptions {
   onRefresh: () => void | Promise<void>;
@@ -28,19 +28,44 @@ export function usePullToRefresh({
 } {
   const startYRef = useRef<number | null>(null);
   const shouldTrackRef = useRef(false);
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
+  const maxPullRef = useRef(maxPull);
+  maxPullRef.current = maxPull;
+
   const [pullDistance, setPullDistance] = useState(0);
   const [isPulling, setIsPulling] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const isRefreshingRef = useRef(isRefreshing);
+  isRefreshingRef.current = isRefreshing;
+
+  const activeTargetRef = useRef<HTMLElement | null>(null);
+  const nativeMoveListenerRef = useRef<((event: TouchEvent) => void) | null>(null);
+
+  const cleanupNativeListener = useCallback(() => {
+    if (activeTargetRef.current && nativeMoveListenerRef.current) {
+      activeTargetRef.current.removeEventListener("touchmove", nativeMoveListenerRef.current);
+    }
+    activeTargetRef.current = null;
+    nativeMoveListenerRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    return cleanupNativeListener;
+  }, [cleanupNativeListener]);
 
   const reset = useCallback(() => {
+    cleanupNativeListener();
     startYRef.current = null;
     shouldTrackRef.current = false;
     setIsPulling(false);
     setPullDistance(0);
-  }, []);
+  }, [cleanupNativeListener]);
 
   const handleTouchStart = useCallback(
     (event: React.TouchEvent<HTMLElement>) => {
+      cleanupNativeListener();
+
       if (disabled || isRefreshing) {
         return;
       }
@@ -50,8 +75,51 @@ export function usePullToRefresh({
       startYRef.current = event.touches[0]?.clientY ?? null;
       setIsPulling(false);
       setPullDistance(0);
+
+      if (
+        shouldTrackRef.current &&
+        currentTarget &&
+        typeof (currentTarget as HTMLElement).addEventListener === "function"
+      ) {
+        const target = currentTarget as HTMLElement;
+        const onNativeTouchMove = (e: TouchEvent) => {
+          if (
+            disabledRef.current ||
+            isRefreshingRef.current ||
+            !shouldTrackRef.current ||
+            startYRef.current == null
+          ) {
+            return;
+          }
+
+          const currentY = e.touches[0]?.clientY ?? startYRef.current;
+          const delta = currentY - startYRef.current;
+
+          if (delta <= 0) {
+            setIsPulling(false);
+            setPullDistance(0);
+            return;
+          }
+
+          const easedDistance = Math.min(maxPullRef.current, delta * 0.55);
+          setIsPulling(true);
+          setPullDistance(easedDistance);
+
+          if (e.cancelable && !e.defaultPrevented) {
+            try {
+              e.preventDefault();
+            } catch {
+              // ignore passive / restricted listener invocation errors
+            }
+          }
+        };
+
+        target.addEventListener("touchmove", onNativeTouchMove, { passive: false });
+        activeTargetRef.current = target;
+        nativeMoveListenerRef.current = onNativeTouchMove;
+      }
     },
-    [disabled, isRefreshing],
+    [cleanupNativeListener, disabled, isRefreshing],
   );
 
   const handleTouchMove = useCallback(
@@ -72,7 +140,14 @@ export function usePullToRefresh({
       const easedDistance = Math.min(maxPull, delta * 0.55);
       setIsPulling(true);
       setPullDistance(easedDistance);
-      event.preventDefault();
+
+      if (event.cancelable && !event.defaultPrevented) {
+        try {
+          event.preventDefault();
+        } catch {
+          // ignore passive / restricted listener invocation errors
+        }
+      }
     },
     [disabled, isRefreshing, maxPull],
   );

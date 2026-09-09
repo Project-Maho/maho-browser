@@ -39,6 +39,45 @@ describe("useOptimisticMutation", () => {
     expect(data).toBe("success-data");
   });
 
+  it("settles cleanly without rethrowing on mutation failure for fire-and-forget callers", async () => {
+    const error = new Error("Network offline");
+    const mutate = vi.fn().mockRejectedValue(error);
+    const applyOptimistic = vi.fn();
+    const rollback = vi.fn();
+
+    const unhandledRejections: unknown[] = [];
+    const handleUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", handleUnhandledRejection);
+
+    try {
+      const { result } = renderHook(() =>
+        useOptimisticMutation({
+          mutate,
+          applyOptimistic,
+          rollback,
+        })
+      );
+
+      let executionResult: unknown;
+      await act(async () => {
+        executionResult = await result.current.execute("param-val");
+      });
+
+      expect(executionResult).toBeUndefined();
+      expect(unhandledRejections).toHaveLength(0);
+      expect(result.current.error).toBe(error);
+      expect(result.current.isLoading).toBe(false);
+      expect(applyOptimistic).toHaveBeenCalledWith("param-val");
+      expect(mutate).toHaveBeenCalledWith("param-val");
+      expect(rollback).toHaveBeenCalledWith("param-val", error);
+      expect(mockToast).toHaveBeenCalledWith("error", "Action failed: Network offline");
+    } finally {
+      process.off("unhandledRejection", handleUnhandledRejection);
+    }
+  });
+
   it("rolls back state and displays toast on mutation failure", async () => {
     const error = new Error("Network offline");
     const mutate = vi.fn().mockRejectedValue(error);
@@ -54,9 +93,11 @@ describe("useOptimisticMutation", () => {
     );
 
     await act(async () => {
-      await expect(result.current.execute("param-val")).rejects.toThrow("Network offline");
+      const res = await result.current.execute("param-val");
+      expect(res).toBeUndefined();
     });
 
+    expect(result.current.error).toBe(error);
     expect(applyOptimistic).toHaveBeenCalledWith("param-val");
     expect(mutate).toHaveBeenCalledWith("param-val");
     expect(rollback).toHaveBeenCalledWith("param-val", error);
@@ -103,9 +144,11 @@ describe("useOptimisticMutation", () => {
     );
 
     await act(async () => {
-      await expect(result.current.execute("v")).rejects.toThrow("boom");
+      const res = await result.current.execute("v");
+      expect(res).toBeUndefined();
     });
 
+    expect(result.current.error).toEqual(new Error("boom"));
     expect(onSuccess).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalled();
   });

@@ -20,7 +20,7 @@ export function useOptimisticMutation<TVariables = void, TData = void>(
   optionsRef.current = options;
 
   const execute = useCallback(
-    async (variables: TVariables) => {
+    async (variables: TVariables): Promise<TData | undefined> => {
       setIsLoading(true);
       setError(null);
 
@@ -50,7 +50,7 @@ export function useOptimisticMutation<TVariables = void, TData = void>(
         // 4. Show error toast
         toast("error", `Action failed: ${actualError.message}`);
         optionsRef.current.onError?.(actualError, variables);
-        throw actualError;
+        return undefined;
       } finally {
         setIsLoading(false);
       }

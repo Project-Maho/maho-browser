@@ -10,9 +10,13 @@ export interface TextareaProps
 }
 
 const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ className, label, error, onChange, id, ...props }, ref) => {
+  ({ className, label, error, onChange, id, "aria-describedby": ariaDescribedBy, ...props }, ref) => {
     const generatedId = React.useId();
     const effectiveId = id ?? generatedId;
+    const errorId = `${effectiveId}-error`;
+    const effectiveDescribedBy = [ariaDescribedBy, error ? errorId : undefined]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
     const handleChange = React.useCallback(
       (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -32,6 +36,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
         <textarea
           id={effectiveId}
           aria-invalid={!!error}
+          aria-describedby={effectiveDescribedBy}
           className={cn(
             "flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-destructive/20",
             className,
@@ -41,7 +46,7 @@ const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
           {...props}
         />
         {error && (
-          <p className="text-xs text-destructive">{error}</p>
+          <p id={errorId} className="text-xs text-destructive">{error}</p>
         )}
       </div>
     );
