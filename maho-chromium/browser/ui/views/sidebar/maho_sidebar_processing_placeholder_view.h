@@ -84,6 +84,9 @@ class MahoSidebarProcessingPlaceholderView : public views::View,
     reduced_motion_for_testing_ = reduced;
   }
   Phase phase_for_testing() const { return phase_; }
+  gfx::LinearAnimation* phase_animation_for_testing() {
+    return &phase_animation_;
+  }
   bool is_active_for_testing() const { return active_; }
   void TriggerAnimationEndedForTesting() { AnimationEnded(&phase_animation_); }
   void TriggerSafetyTimeoutForTesting() { ForceResolveOnTimeout(); }

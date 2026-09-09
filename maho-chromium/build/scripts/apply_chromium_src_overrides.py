@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from split_view_replacements import SPLIT_REPLACEMENTS
+
 
 # ---------------------------------------------------------------------------
 # Platform detection
@@ -103,9 +105,11 @@ _BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
 )
 
 
-_PINNED_CHROMIUM_REVISION: Final[str] = (
-    "ee4bd9e95294a95c855ef51dfa26f0576f192e69"
+_PINNED_CHROMIUM_REVISIONS: Final[tuple[str, ...]] = (
+    "ee4bd9e95294a95c855ef51dfa26f0576f192e69",
+    "72f18f12ad47a8d6dbfb4282a2ef8e507ae65428",
 )
+_PINNED_CHROMIUM_REVISION: Final[str] = _PINNED_CHROMIUM_REVISIONS[0]
 _PINNED_INCOMPATIBLE_TARGETS: Final[frozenset[str]] = frozenset(
     {
         "base/trace_event/builtin_categories.h",
@@ -126,6 +130,7 @@ _PINNED_INCOMPATIBLE_TARGETS: Final[frozenset[str]] = frozenset(
         "chrome/browser/ui/views/frame/contents_container_view.h",
         "chrome/browser/ui/views/frame/contents_layout_manager.cc",
         "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc",
+        "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc",
         "chrome/browser/ui/views/frame/multi_contents_view.cc",
         "chrome/browser/ui/views/frame/multi_contents_view.h",
         "chrome/browser/ui/views/page_action/page_action_properties_provider.cc",
@@ -160,12 +165,41 @@ def chromium_revision(chromium_src: Path) -> str:
 
 def is_revision_incompatible_target(relative_path: str, revision: str) -> bool:
     return (
-        revision == _PINNED_CHROMIUM_REVISION
+        any(revision.startswith(p[:12]) for p in _PINNED_CHROMIUM_REVISIONS)
         and relative_path in _PINNED_INCOMPATIBLE_TARGETS
     )
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "third_party/blink/public/common/loader/url_loader_throttle.h": [
+        Replacement(
+            old="  virtual void DetachFromCurrentSequence();\n",
+            new=(
+                "  virtual void DetachFromCurrentSequence();\n\n"
+                "  virtual const GURL* TakeDeferredStartRedirectUrl() { return nullptr; }\n"
+            ),
+            description="Maho: expose an owned deferred-start redirect without retaining a request pointer",
+            guard="TakeDeferredStartRedirectUrl",
+        ),
+    ],
+    "third_party/blink/common/loader/throttling_url_loader.cc": [
+        Replacement(
+            old="void ThrottlingURLLoader::StartNow() {\n",
+            new=(
+                "void ThrottlingURLLoader::StartNow() {\n"
+                "  for (const auto& entry : throttles_) {\n"
+                "    if (const GURL* url = entry.throttle->TakeDeferredStartRedirectUrl()) {\n"
+                "      CHECK(throttle_will_start_redirect_url_.is_empty());\n"
+                "      CHECK(url->is_valid());\n"
+                "      CHECK(!original_url_.SchemeIsHTTPOrHTTPS() || url->SchemeIsHTTPOrHTTPS());\n"
+                "      throttle_will_start_redirect_url_ = *url;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description="Maho: apply asynchronous filtering redirects before a deferred request starts",
+            guard="entry.throttle->TakeDeferredStartRedirectUrl()",
+        ),
+    ],
     "chrome/browser/ui/views/passwords/password_bubble_view_base.cc": [
         Replacement(
             old=(
@@ -2765,25 +2799,40 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Restore stable tab ID from session extra_data in CreateRestoredTab()",
         ),
     ],
-    # ── side_panel_helper.cc ──────────────────────────────────────────────────
+    # ── pinned_toolbar_actions_container.cc ───────────────────────────────────
+    "chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc": [
+        Replacement(
+            old=(
+                "PinnedActionToolbarButton* PinnedToolbarActionsContainer::AddPoppedOutButtonFor(\n"
+                "    actions::ActionId id) {\n"
+                "  CHECK(GetActionItemFor(id));\n"
+            ),
+            new=(
+                "PinnedActionToolbarButton* PinnedToolbarActionsContainer::AddPoppedOutButtonFor(\n"
+                "    actions::ActionId id) {\n"
+                "  if (!GetActionItemFor(id)) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+            ),
+            description="Tolerate missing ActionItem when adding popped out button",
+        ),
+    ],
     "chrome/browser/ui/views/side_panel/side_panel_helper.cc": [
         Replacement(
             old=(
-                "  if (webui_browser::IsWebUIBrowserEnabled()) {\n"
-                "    // TODO(webium): Consider supporting additional side panels beyond reading\n"
-                "    // list and bookmarks.\n"
-                "    return;\n"
-                "  }\n"
+                "// static\n"
+                "void SidePanelHelper::PopulateGlobalEntries(\n"
+                "    Browser* browser,\n"
+                "    SidePanelRegistry* window_registry) {\n"
             ),
             new=(
-                "  if (webui_browser::IsWebUIBrowserEnabled()) {\n"
-                "    // TODO(webium): Consider supporting additional side panels beyond reading\n"
-                "    // list and bookmarks.\n"
-                "    maho::RegisterMahoAiSidePanel(browser, window_registry);\n"
-                "    return;\n"
-                "  }\n"
+                "// static\n"
+                "void SidePanelHelper::PopulateGlobalEntries(\n"
+                "    Browser* browser,\n"
+                "    SidePanelRegistry* window_registry) {\n"
+                "  maho::RegisterMahoAiSidePanel(browser, window_registry);\n"
             ),
-            description="Register Maho AI side panel in Webium path",
+            description="Register Maho AI side panel in PopulateGlobalEntries",
         ),
     ],
     "chrome/browser/ui/views/side_panel/BUILD.gn": [
@@ -3388,12 +3437,13 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"\n'
                 '#include "maho/browser/mail_helper/maho_mail_service.h"\n'
                 '#include "maho/browser/passwords/maho_password_provider_utils.h"\n'
+                '#include "maho/browser/updates/maho_update_prefs.h"\n'
             ),
             description=(
-                "Include maho_ctrl_tab_prefs.h, maho_mail_service.h, and maho_password_provider_utils.h "
-                "in browser_prefs.cc for pref registration of Ctrl+Tab, Mail, and Password Manager kill switch"
+                "Include maho_ctrl_tab_prefs.h, maho_mail_service.h, maho_password_provider_utils.h, "
+                "and maho_update_prefs.h in browser_prefs.cc for pref registration"
             ),
-            guard='#include "maho/browser/passwords/maho_password_provider_utils.h"',
+            guard='#include "maho/browser/updates/maho_update_prefs.h"',
         ),
         Replacement(
             old=(
@@ -3437,9 +3487,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 'void RegisterLocalState(PrefRegistrySimple* registry) {\n'
                 '  maho::passwords::RegisterLocalStatePrefs(registry);\n'
+                '  maho::updates::RegisterLocalStatePrefs(registry);\n'
             ),
-            description="Register Maho passwords local state kill switch pref",
-            guard="maho::passwords::RegisterLocalStatePrefs(registry);",
+            description="Register Maho passwords and updates local state kill switch prefs",
+            guard="maho::updates::RegisterLocalStatePrefs(registry);",
         ),
     ],
     "chrome/browser/ui/views/frame/browser_view.h": [
@@ -4370,6 +4421,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      kBrowserDialogAnchorElementId, *this);\n"
                 "\n"
                 "  initialized_ = true;\n"
+                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
                 "  if (pending_maho_command_overlay_new_tab_) {\n"
                 "    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(\n"
                 "        FROM_HERE,\n"
@@ -4384,6 +4436,30 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "BrowserView finishes widget initialization"
             ),
             guard="pending_maho_command_overlay_new_tab_)",
+        ),
+        Replacement(
+            old=(
+                "void BrowserView::OnThemeChanged() {\n"
+                "  views::ClientView::OnThemeChanged();\n"
+                "  if (!initialized_) {\n"
+                "    return;\n"
+                "  }\n"
+                "\n"
+                "  FrameColorsChanged();\n"
+            ),
+            new=(
+                "void BrowserView::OnThemeChanged() {\n"
+                "  views::ClientView::OnThemeChanged();\n"
+                "  if (!initialized_) {\n"
+                "    return;\n"
+                "  }\n"
+                "  MaybeRefreshMahoContentSurfacesFromSidebar();\n"
+                "\n"
+                "  FrameColorsChanged();\n"
+            ),
+            description="Maho: refresh content surfaces on theme change",
+            guard="MaybeRefreshMahoContentSurfacesFromSidebar();\n\n  FrameColorsChanged();",
+            idempotent=True,
         ),
         # ── key-hook cleanup: remove stale AddPreTargetHandler/RemovePreTargetHandler
         # and own the OnKeyEvent Maho shortcut interception ────────────────────────
@@ -8107,6 +8183,22 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
     ],
+    "chrome/browser/ui/startup/bad_flags_prompt.cc": [
+        Replacement(
+            old=(
+                "void ShowBadFlagsPrompt(content::WebContents* web_contents) {\n"
+            ),
+            new=(
+                "void ShowBadFlagsPrompt(content::WebContents* web_contents) {\n"
+                "  // Maho: suppress unsupported command-line flags security warning infobars.\n"
+                "  if (web_contents) {\n"
+                "    return;\n"
+                "  }\n"
+            ),
+            description="Maho: suppress unsupported command-line flags security warning infobar",
+            guard="Maho: suppress unsupported command-line flags security warning infobars.",
+        ),
+    ],
     "chrome/app/chrome_main_delegate.cc": [
         Replacement(
             old=(
@@ -9554,42 +9646,8 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
         ),
         Replacement(
-            old=(
-                'void PasswordStore::GetLogins(\n'
-                '    const PasswordFormDigest& form,\n'
-                '    const PasswordFillRequestContext& context,\n'
-                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
-            ),
-            new=(
-                'static void ConsumerReplyConverter(\n'
-                '    base::WeakPtr<PasswordStoreConsumer> consumer,\n'
-                '    PasswordStoreInterface* store,\n'
-                '    LoginsResultOrError results_or_error) {\n'
-                '  if (consumer) {\n'
-                '    consumer->OnGetPasswordStoreResultsOrErrorFrom(\n'
-                '        store, std::move(results_or_error));\n'
-                '  }\n'
-                '}\n\n'
-                'void PasswordStore::GetLogins(\n'
-                '    const PasswordFormDigest& form,\n'
-                '    const PasswordFillRequestContext& context,\n'
-                '    base::WeakPtr<PasswordStoreConsumer> consumer) {\n'
-            ),
-            description="Maho: define ConsumerReplyConverter for context-aware replies",
-            guard="static void ConsumerReplyConverter",
-        ),
-        Replacement(
             old='void PasswordStore::GetAutofillableLogins(\n',
             new=(
-                'static void ConsumerReplyConverter(\n'
-                '    base::WeakPtr<PasswordStoreConsumer> consumer,\n'
-                '    PasswordStoreInterface* store,\n'
-                '    LoginsResultOrError results_or_error) {\n'
-                '  if (consumer) {\n'
-                '    consumer->OnGetPasswordStoreResultsOrErrorFrom(\n'
-                '        store, std::move(results_or_error));\n'
-                '  }\n'
-                '}\n\n'
                 'void PasswordStore::GetLogins(\n'
                 '    const PasswordFormDigest& form,\n'
                 '    const PasswordFillRequestContext& context,\n'
@@ -9933,6 +9991,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "components/password_manager/content/browser/content_password_manager_driver.cc": [
         Replacement(
+            old=(
+                "void PasswordManagerDriver::FillSuggestion(\n"
+                "    const PasswordFillRequestContext& context,\n"
+                "    const std::u16string& username,\n"
+                "    const std::u16string& password,\n"
+                "    base::OnceCallback<void(bool)> success_callback) {\n"
+                "  if (!IsPasswordFillRequestContextCurrent(context)) {\n"
+                "    std::move(success_callback).Run(false);\n"
+                "    return;\n"
+                "  }\n"
+                "  FillSuggestion(username, password, std::move(success_callback));\n"
+                "}\n\n"
+            ),
+            new="",
+            description="Maho: keep the driver default implementation in core only",
+            idempotent=True,
+        ),
+        Replacement(
             old='void ContentPasswordManagerDriver::DidNavigate() {\n',
             new=(
                 'void ContentPasswordManagerDriver::DidNavigate() {\n'
@@ -10211,6 +10287,8 @@ def repo_root() -> Path:
 
 
 def default_chromium_src() -> Path:
+    if repo_root().parent.name == "src" and repo_root().parent.parent.name == "chromium":
+        return repo_root().parent
     return repo_root().parent / "chromium" / "src"
 
 
@@ -10460,11 +10538,19 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
 _CHROME_BROWSER_UI_MAC_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",
     "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm",
+    "//maho/browser/mcp/maho_mcp_native_input_mac.mm",
 )
 
 _CHROME_BROWSER_UI_NON_MAC_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",
     "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_stub.cc",
+)
+
+# Windows-only overlay sources for chrome/browser/ui:ui. Linux takes neither
+# this nor the mac tuple: the input synthesizer's platform dispatch falls
+# back to nullopt there, so no native-input backend object is referenced.
+_CHROME_BROWSER_UI_WIN_SOURCES: Final[tuple[str, ...]] = (
+    "//maho/browser/mcp/maho_mcp_native_input_win.cc",
 )
 
 _CHROME_BROWSER_UI_DEPS: Final[tuple[str, ...]] = (
@@ -10528,11 +10614,12 @@ def normalize_chrome_browser_ui_build(text: str) -> tuple[str, int]:
             retired_removed += 1
 
     sources = _CHROME_BROWSER_UI_SOURCES
-    sources += (
-        _CHROME_BROWSER_UI_MAC_SOURCES
-        if host_platform() == "mac"
-        else _CHROME_BROWSER_UI_NON_MAC_SOURCES
-    )
+    if host_platform() == "mac":
+        sources += _CHROME_BROWSER_UI_MAC_SOURCES
+    elif host_platform() == "win":
+        sources += _CHROME_BROWSER_UI_WIN_SOURCES
+    else:
+        sources += _CHROME_BROWSER_UI_NON_MAC_SOURCES
     missing_sources = [entry for entry in sources if f'"{entry}"' not in text]
     missing_deps = [entry for entry in _CHROME_BROWSER_UI_DEPS if f'"{entry}"' not in text]
     if missing_sources:
@@ -11035,6 +11122,22 @@ def apply_replacements(
     return changed, applied
 
 
+SPLIT_VIEW_REPLACEMENTS: dict[str, list[Replacement]] = {
+    path: [
+        Replacement(
+            old, new, f"Maho split topology: {path} hunk {index}",
+            guard="bool TabStripModel::AddToExistingSplit("
+            if path == "chrome/browser/ui/tabs/tab_strip_model.cc" and index == 1
+            else None,
+        )
+        for index, (old, new) in enumerate(hunks, start=1)
+    ]
+    for path, hunks in SPLIT_REPLACEMENTS.items()
+}
+for _path, _replacements in SPLIT_VIEW_REPLACEMENTS.items():
+    REPLACEMENTS.setdefault(_path, []).extend(_replacements)
+
+
 # Co-locate maho schema JSONs under chrome/common/extensions/api. Do NOT
 # reference them via //maho/...: the json_schema_compiler bundle generator
 # derives its output dir from the common source dir, so a foreign root makes
@@ -11045,6 +11148,8 @@ MAHO_SCHEMA_FILE_COPIES: dict[str, str] = {
         "browser/extensions/api/maho_split_view.json",
     "chrome/common/extensions/api/maho_side_panel.json":
         "browser/extensions/api/maho_side_panel.json",
+    "components/password_manager/core/browser/password_manager_driver.cc":
+        "chromium_src/components/password_manager/core/browser/password_manager_driver.cc",
 }
 
 
@@ -11098,10 +11203,12 @@ def main() -> int:
     any_changed = False
     for relative_path, replacements in REPLACEMENTS.items():
         if is_revision_incompatible_target(relative_path, revision):
-            print(
-                f"skip [Chromium {revision} incompatible]: {relative_path}"
-            )
-            continue
+            replacements = SPLIT_VIEW_REPLACEMENTS.get(relative_path, [])
+            if not replacements:
+                print(
+                    f"skip [Chromium {revision} incompatible]: {relative_path}"
+                )
+                continue
         enabled_platforms = FILE_PLATFORMS.get(relative_path)
         if enabled_platforms is not None and args.platform not in enabled_platforms:
             print(

@@ -110,6 +110,7 @@ void ProcessSseBuffer(std::string* sse_buffer,
       }
 
       if (data == "[DONE]") {
+        sse_buffer->erase(0, cursor);
         return;
       }
 
@@ -720,22 +721,24 @@ void MahoAiLlmClient::OnRefreshComplete(
 void MahoAiLlmClient::FinishWithSuccess() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (completion_result_.full_text.empty()) {
-    completion_result_.full_text = "No response received from the AI service.";
-  }
-  if (on_complete_) {
-    std::move(on_complete_).Run(std::move(completion_result_));
+  if (completion_result_.full_text.empty() &&
+      completion_result_.tool_calls.empty()) {
+    FinishWithError("No response received from the AI service.");
+    return;
   }
   stream_consumer_.reset();
   url_loader_.reset();
+  if (on_complete_) {
+    std::move(on_complete_).Run(std::move(completion_result_));
+  }
 }
 
 void MahoAiLlmClient::FinishWithError(const std::string& error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
+  stream_consumer_.reset();
+  url_loader_.reset();
   if (on_error_) {
     std::move(on_error_).Run(error);
   }
-  stream_consumer_.reset();
-  url_loader_.reset();
 }

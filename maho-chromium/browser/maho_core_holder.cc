@@ -1,8 +1,10 @@
 #include "maho/browser/maho_core_holder.h"
+#include <future>
 
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,6 +14,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/no_destructor.h"
 #include "base/run_loop.h"
@@ -38,6 +41,11 @@ std::atomic<bool> g_blocker_quiesced{false};
 std::atomic<bool> g_vault_backend_quiesced{false};
 std::atomic<bool> g_core_tasks_quiesced{true};
 std::atomic<uint64_t> g_core_generation{0};
+struct CachedTabFacts {
+  uint64_t generation;
+  CoreTabFacts facts;
+};
+base::NoDestructor<std::map<std::string, CachedTabFacts>> g_tab_facts;
 
 base::Lock& GetVaultBackendCreationLock() {
   static base::NoDestructor<base::Lock> lock;
@@ -84,7 +92,8 @@ bool g_compile_coalesced = false;
 scoped_refptr<base::SequencedTaskRunner>& CoreTaskRunnerStorage() {
   static base::NoDestructor<scoped_refptr<base::SequencedTaskRunner>> runner(
       base::ThreadPool::CreateSequencedTaskRunner(
-          {base::TaskPriority::USER_VISIBLE, base::MayBlock()}));
+          {base::TaskPriority::USER_VISIBLE, base::MayBlock(),
+           base::TaskShutdownBehavior::BLOCK_SHUTDOWN}));
   return *runner;
 }
 
@@ -115,11 +124,149 @@ using ScopedCompiledEngine =
   return g_core.load(std::memory_order_acquire);
 }
 
+uint64_t GetCoreGeneration() {
+  return g_core_generation.load(std::memory_order_acquire);
+}
+
+std::optional<CoreTabFacts> GetCachedCoreTabFacts(std::string_view tab_id) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  auto it = g_tab_facts->find(std::string(tab_id));
+  if (it == g_tab_facts->end() ||
+      it->second.generation != GetCoreGeneration()) {
+    return std::nullopt;
+  }
+  return it->second.facts;
+}
+
+void PublishCoreTabFacts(uint64_t generation,
+                         std::vector<CoreTabFacts> facts) {
+  DCHECK(!content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI) ||
+         content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  if (generation != GetCoreGeneration()) {
+    return;
+  }
+  for (auto& fact : facts) {
+    if (!fact.exists) {
+      g_tab_facts->erase(fact.id);
+      continue;
+    }
+    const std::string id = fact.id;
+    g_tab_facts->insert_or_assign(
+        id, CachedTabFacts{generation, std::move(fact)});
+  }
+}
+
+std::vector<CoreTabFacts> ReadCoreTabFactsSnapshot(::MahoCore* core) {
+  DCHECK(GetCoreTaskRunner()->RunsTasksInCurrentSequence());
+  std::vector<CoreTabFacts> result;
+  if (!core) {
+    return result;
+  }
+  std::unique_ptr<char, decltype(&maho_string_free)> json(
+      maho_core_get_tab_view_models(core), &maho_string_free);
+  if (!json) {
+    return result;
+  }
+  auto tabs = base::JSONReader::Read(json.get(), base::JSON_PARSE_RFC);
+  if (!tabs || !tabs->is_list()) {
+    return result;
+  }
+  for (const auto& tab : tabs->GetList()) {
+    const std::string* id =
+        tab.is_dict() ? tab.GetDict().FindString("id") : nullptr;
+    if (id) {
+      result.push_back({*id, true,
+                        maho_core_is_tab_pinned(core, id->c_str()),
+                        maho_core_is_tab_close_protected(core, id->c_str())});
+    }
+  }
+  return result;
+}
+
+void DispatchCoreEvent(
+    std::string event_json,
+    base::OnceCallback<void(CoreEventResult)> reply) {
+  const uint64_t generation = GetCoreGeneration();
+  PostCoreTask<CoreEventResult>(
+      FROM_HERE,
+      base::BindOnce(
+          [](uint64_t generation, std::string json) {
+            CoreEventResult result;
+            result.generation = generation;
+            if (generation != GetCoreGeneration()) {
+              result.status = CoreEventStatus::kStale;
+              return result;
+            }
+            MahoCore* core = GetCore();
+            if (!core) {
+              return result;
+            }
+            auto event = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+            if (!event || !event->is_dict()) {
+              result.status = CoreEventStatus::kFailed;
+              return result;
+            }
+            auto& payload = event->GetDict();
+            const std::string* id = payload.FindString("tab_id");
+            if (!id) {
+              id = payload.FindString("id");
+            }
+            const std::string tab_id = id ? *id : std::string();
+            const std::string* kind = payload.FindString("kind");
+            if (kind && *kind == "close_tab" && !tab_id.empty() &&
+                maho_core_is_tab_close_protected(core, tab_id.c_str())) {
+              payload.Set("kind", "suspend_tab");
+              if (!base::JSONWriter::Write(*event, &json)) {
+                result.status = CoreEventStatus::kFailed;
+                return result;
+              }
+            }
+            result.updates_json = maho::core::HandleEvent(core, json.c_str());
+            auto updates = base::JSONReader::Read(
+                result.updates_json, base::JSON_PARSE_RFC);
+            if (!updates || !updates->is_list()) {
+              result.status = CoreEventStatus::kFailed;
+              return result;
+            }
+            if (!tab_id.empty()) {
+              std::unique_ptr<char, decltype(&maho_string_free)> tab(
+                  maho_core_get_tab_snapshot_by_id(core, tab_id.c_str()),
+                  &maho_string_free);
+              const bool exists = tab && std::string_view(tab.get()) != "null";
+              result.tab = CoreTabFacts{
+                  tab_id, exists,
+                  exists && maho_core_is_tab_pinned(core, tab_id.c_str()),
+                  exists && maho_core_is_tab_close_protected(
+                                core, tab_id.c_str())};
+            }
+            result.status = CoreEventStatus::kApplied;
+            return result;
+          },
+          generation, std::move(event_json)),
+      base::BindOnce(
+          [](base::OnceCallback<void(CoreEventResult)> reply,
+             CoreEventResult result) {
+            if (result.generation != GetCoreGeneration()) {
+              result.status = CoreEventStatus::kStale;
+            }
+            if (result.status == CoreEventStatus::kApplied && result.tab) {
+              PublishCoreTabFacts(result.generation, {*result.tab});
+            }
+            std::move(reply).Run(std::move(result));
+          },
+          std::move(reply)));
+}
+
 void SetCore(::MahoCore* core) {
   SetCoreForProfile(core, nullptr);
 }
 
 void SetCoreForProfile(::MahoCore* core, Profile* owner_profile) {
+  SetCoreForProfile(core, owner_profile, {});
+}
+
+void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
+                       std::vector<CoreTabFacts> facts) {
   uint64_t generation;
   {
     base::AutoLock lock(GetVaultBackendCreationLock());
@@ -135,15 +282,23 @@ void SetCoreForProfile(::MahoCore* core, Profile* owner_profile) {
     }
     g_core.store(core, std::memory_order_release);
   }
-  if (core) {
-    if (!content::BrowserThread::IsThreadInitialized(
-            content::BrowserThread::UI) ||
-        content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
-      NotifyCoreReady(generation);
-    } else {
-      content::GetUIThreadTaskRunner({})->PostTask(
-          FROM_HERE, base::BindOnce(&NotifyCoreReady, generation));
-    }
+  auto publish = base::BindOnce(
+      [](uint64_t generation, bool ready, std::vector<CoreTabFacts> facts) {
+        if (generation != GetCoreGeneration()) {
+          return;
+        }
+        g_tab_facts->clear();
+        PublishCoreTabFacts(generation, std::move(facts));
+        if (ready) {
+          NotifyCoreReady(generation);
+        }
+      },
+      generation, core != nullptr, std::move(facts));
+  if (!content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI) ||
+      content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
+    std::move(publish).Run();
+  } else {
+    content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(publish));
   }
 }
 
@@ -185,18 +340,23 @@ bool IsCoreTaskWorkQuiesced() {
 }
 
 void QuiesceCoreTasksAndWait() {
-  base::RunLoop drained;
+  std::promise<void> drained;
+  auto completion = drained.get_future();
   {
     base::AutoLock admission(GetCoreTaskAdmissionLock());
     if (g_core_tasks_quiesced.exchange(true, std::memory_order_acq_rel)) {
       return;
     }
-    if (!GetCoreTaskRunner()->PostTaskAndReply(
-            FROM_HERE, base::DoNothing(), drained.QuitClosure())) {
+    if (!GetCoreTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce(
+                           [](std::promise<void> done) { done.set_value(); },
+                           std::move(drained)))) {
       return;
     }
   }
-  drained.Run();
+  // Chromium services may already be torn down. Do not dispatch pending UI IPC
+  // while draining the core sequence during shutdown.
+  completion.wait();
 }
 
 base::CallbackListSubscription AddVaultLockStateChangeCallback(

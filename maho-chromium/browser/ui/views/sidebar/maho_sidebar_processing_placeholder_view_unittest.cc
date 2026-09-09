@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
 
 #include <algorithm>
 #include <memory>
@@ -14,6 +15,8 @@
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/color/color_provider.h"
 #include "ui/compositor/layer.h"
+#include "ui/gfx/animation/animation_test_api.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/test/views_test_base.h"
 
@@ -28,6 +31,32 @@ class MahoSidebarProcessingPlaceholderViewTest : public views::ViewsTestBase {
   MahoSidebarProcessingPlaceholderViewTest()
       : views::ViewsTestBase(
             base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  void SetUp() override {
+    views::ViewsTestBase::SetUp();
+    animation_scale_ =
+        std::make_unique<gfx::ScopedAnimationDurationScaleMode>(
+            gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+  }
+
+  void TearDown() override {
+    animation_scale_.reset();
+    views::ViewsTestBase::TearDown();
+  }
+
+ protected:
+  void AdvanceAnimation(gfx::AnimationContainer* container,
+                        base::TimeDelta delta) {
+    // Drive real animation callbacks at exact mock-clock boundaries instead of
+    // accumulating the default 60 Hz runner's rounding across chained phases.
+    gfx::AnimationContainerTestApi animation_api(container);
+    task_environment()->AdvanceClock(delta);
+    animation_api.IncrementTime(delta);
+    task_environment()->RunUntilIdle();
+  }
+
+ private:
+  std::unique_ptr<gfx::ScopedAnimationDurationScaleMode> animation_scale_;
 };
 
 TEST_F(MahoSidebarProcessingPlaceholderViewTest,
@@ -160,16 +189,24 @@ TEST_F(MahoSidebarProcessingPlaceholderViewTest,
       CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->Show();
   auto* view = widget->SetContentsView(std::make_unique<PlaceholderView>());
+  auto container = base::MakeRefCounted<gfx::AnimationContainer>();
+  view->phase_animation_for_testing()->SetContainer(container.get());
 
   view->Start(PlaceholderView::Mode::kSingleCycle,
               base::BindLambdaForTesting([&]() { single_cycle_done = true; }));
 
   // Single cycle timing: 300ms merge + 200ms working + 300ms success resolve +
   // 200ms restore = 1000ms
-  task_environment()->FastForwardBy(base::Milliseconds(990));
+  AdvanceAnimation(container.get(), base::Milliseconds(300));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kWorking);
+  AdvanceAnimation(container.get(), base::Milliseconds(200));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kResolvingSuccess);
+  AdvanceAnimation(container.get(), base::Milliseconds(300));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kRestoring);
+  AdvanceAnimation(container.get(), base::Milliseconds(190));
   EXPECT_FALSE(single_cycle_done);
 
-  task_environment()->FastForwardBy(base::Milliseconds(20));
+  AdvanceAnimation(container.get(), base::Milliseconds(10));
   EXPECT_TRUE(single_cycle_done);
 }
 
@@ -180,22 +217,32 @@ TEST_F(MahoSidebarProcessingPlaceholderViewTest,
       CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->Show();
   auto* view = widget->SetContentsView(std::make_unique<PlaceholderView>());
+  auto container = base::MakeRefCounted<gfx::AnimationContainer>();
+  view->phase_animation_for_testing()->SetContainer(container.get());
 
   view->Start(PlaceholderView::Mode::kLoop,
               base::BindLambdaForTesting([&]() { hidden_called = true; }));
 
   // Resolve early (at 100ms)
-  task_environment()->FastForwardBy(base::Milliseconds(100));
+  AdvanceAnimation(container.get(), base::Milliseconds(100));
   view->ResolveSuccess();
 
   // It should wait until 500ms since start before it transitions to
   // ResolvingSuccess. Merging (300ms) + Working (200ms floor) = 500ms floor.
   // After 500ms, kResolvingSuccess starts (300ms) and kRestoring (200ms).
   // Total time should be 1000ms.
-  task_environment()->FastForwardBy(base::Milliseconds(880));  // 980ms total
+  AdvanceAnimation(container.get(), base::Milliseconds(200));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kWorking);
+  AdvanceAnimation(container.get(), base::Milliseconds(199));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kWorking);
+  AdvanceAnimation(container.get(), base::Milliseconds(1));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kResolvingSuccess);
+  AdvanceAnimation(container.get(), base::Milliseconds(300));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kRestoring);
+  AdvanceAnimation(container.get(), base::Milliseconds(180));  // 980ms total
   EXPECT_FALSE(hidden_called);
 
-  task_environment()->FastForwardBy(base::Milliseconds(30));  // 1010ms total
+  AdvanceAnimation(container.get(), base::Milliseconds(20));  // 1000ms total
   EXPECT_TRUE(hidden_called);
 }
 
@@ -206,13 +253,16 @@ TEST_F(MahoSidebarProcessingPlaceholderViewTest,
       CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
   widget->Show();
   auto* view = widget->SetContentsView(std::make_unique<PlaceholderView>());
+  auto container = base::MakeRefCounted<gfx::AnimationContainer>();
+  view->phase_animation_for_testing()->SetContainer(container.get());
 
   view->Start(PlaceholderView::Mode::kLoop,
               base::BindLambdaForTesting([&]() { hidden_called = true; }));
 
   // Advance time past 500ms floor (e.g. to 2000ms)
   // Working should keep looping.
-  task_environment()->FastForwardBy(base::Milliseconds(2000));
+  AdvanceAnimation(container.get(), base::Milliseconds(300));
+  AdvanceAnimation(container.get(), base::Milliseconds(1700));
   EXPECT_EQ(view->phase_for_testing(), Phase::kWorking);
 
   // Now resolve
@@ -220,10 +270,12 @@ TEST_F(MahoSidebarProcessingPlaceholderViewTest,
   EXPECT_EQ(view->phase_for_testing(), Phase::kResolvingSuccess);
 
   // Remaining animation is 300ms resolve + 200ms restore = 500ms
-  task_environment()->FastForwardBy(base::Milliseconds(490));
+  AdvanceAnimation(container.get(), base::Milliseconds(300));
+  EXPECT_EQ(view->phase_for_testing(), Phase::kRestoring);
+  AdvanceAnimation(container.get(), base::Milliseconds(190));
   EXPECT_FALSE(hidden_called);
 
-  task_environment()->FastForwardBy(base::Milliseconds(20));
+  AdvanceAnimation(container.get(), base::Milliseconds(10));
   EXPECT_TRUE(hidden_called);
 }
 
@@ -323,6 +375,24 @@ TEST_F(MahoSidebarProcessingPlaceholderViewTest,
   task_environment()->FastForwardBy(base::Milliseconds(50));
   view->ResolveSuccess();
   EXPECT_TRUE(hidden_called);
+}
+
+TEST_F(MahoSidebarProcessingPlaceholderViewTest,
+       ClearWithoutBrowserResolvesFailureInsteadOfSuccess) {
+  auto widget =
+      CreateTestWidget(views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET);
+  widget->Show();
+  auto* tab_list =
+      widget->SetContentsView(std::make_unique<MahoSidebarTabListView>(nullptr));
+  tab_list->RebuildRowsForTesting(MahoSidebarTabListModel(), nullptr);
+  auto* processing = tab_list->action_processing_view_for_testing();
+  ASSERT_TRUE(processing);
+
+  // Command 101 is the Today entry of the real Clear menu.
+  static_cast<ui::SimpleMenuModel::Delegate*>(tab_list)->ExecuteCommand(101, 0);
+  task_environment()->FastForwardBy(base::Milliseconds(510));
+
+  EXPECT_EQ(processing->phase_for_testing(), Phase::kResolvingFailure);
 }
 
 }  // namespace
