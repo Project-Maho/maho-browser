@@ -112,6 +112,7 @@ export function AccountSetupFlow({ onComplete }: AccountSetupFlowProps) {
           <OAuthStep
             provider={selectedProvider}
             onBack={handleBack}
+            onSuccess={handleSuccess}
           />
         )}
         {step === 'credentials' && (

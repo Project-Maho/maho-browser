@@ -7,9 +7,16 @@ const apiMocks = vi.hoisted(() => ({
   startOAuth2: vi.fn<(provider: string) => Promise<string>>(),
   signInWithOAuth2: vi.fn<(provider: string) => Promise<{ account_id: string; email: string }>>(),
   syncFolders: vi.fn<(accountId: string) => Promise<readonly unknown[]>>(),
+  listAccounts: vi.fn<() => Promise<{ id: string }[]>>(),
 }));
 
 vi.mock("../../../../api", () => apiMocks);
+
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn((_event: string, _handler: (event: unknown) => void) =>
+    Promise.resolve(() => {}),
+  ),
+}));
 
 vi.mock("../../../ui", () => ({
   Button: ({ children, loading, onClick }: {
@@ -41,6 +48,7 @@ describe("OAuthStep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     apiMocks.startOAuth2.mockResolvedValue("state_from_cpp");
+    apiMocks.listAccounts.mockResolvedValue([{ id: "account-1" }]);
     apiMocks.signInWithOAuth2.mockResolvedValue({ account_id: "account-1", email: "user@example.com" });
     apiMocks.syncFolders.mockResolvedValue([]);
   });
@@ -90,5 +98,36 @@ describe("OAuthStep", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in with Google" }));
 
     expect(await screen.findByText("OAuth service unavailable")).toBeInTheDocument();
+  });
+
+  it("advances via onSuccess when accounts-changed fires after browser approval", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const onSuccess = vi.fn();
+    render(<OAuthStep provider="gmail" onBack={vi.fn()} onSuccess={onSuccess} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with Google" }));
+
+    await waitFor(() => {
+      expect(apiMocks.startOAuth2).toHaveBeenCalledTimes(1);
+    });
+    // Simulate the loopback listener onboarding the account in the
+    // background: the helper emits accounts-changed once done.
+    await waitFor(() => {
+      expect(vi.mocked(listen)).toHaveBeenCalledWith(
+        "accounts-changed",
+        expect.any(Function),
+      );
+    });
+    const handler = vi.mocked(listen).mock.calls[0]?.[1] as
+      | ((event: { event: string; payload: unknown }) => void)
+      | undefined;
+    expect(handler).toBeDefined();
+    await waitFor(async () => {
+      await handler?.({ event: "accounts-changed", payload: {} });
+    });
+    await waitFor(() => {
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+    });
+    expect(onSuccess).toHaveBeenCalledWith("account-1");
   });
 });
