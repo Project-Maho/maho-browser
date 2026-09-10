@@ -765,6 +765,40 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         self.assertIn("view->SetBackgroundVisible(true);", replacement.new)
         self.assertNotIn("SK_ColorTRANSPARENT", replacement.new)
 
+    def test_content_surface_palette_projection_not_gated_on_linux(self):
+        replacement = next(
+            item for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if item.description.startswith(
+                "Maho: define BrowserView content-surface palette projection"
+            )
+        )
+        self.assertNotIn("#if BUILDFLAG(IS_LINUX)\n  return;", replacement.new)
+        self.assertIn(
+            "maho_content_gradient_view_->SetVisible(has_native_ntp_surface);",
+            replacement.new,
+        )
+
+    def test_browser_view_added_to_widget_and_theme_changed_refresh_content_surfaces(self):
+        replacements = REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+        added_to_widget = next(
+            item for item in replacements
+            if item.description.startswith(
+                "Flush pending Maho new-tab command palette request"
+            )
+        )
+        self.assertIn(
+            "initialized_ = true;\n  MaybeRefreshMahoContentSurfacesFromSidebar();",
+            added_to_widget.new,
+        )
+        theme_changed = next(
+            item for item in replacements
+            if item.description == "Maho: refresh content surfaces on theme change"
+        )
+        self.assertIn(
+            "MaybeRefreshMahoContentSurfacesFromSidebar();",
+            theme_changed.new,
+        )
+
     def test_existing_space_tinted_web_contents_patch_migrates_to_neutral_base(self):
         replacement = next(
             item
@@ -871,6 +905,187 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
         self.assertIn("shared_glass_bounds.Union(contents_bounds)", layout_rendered)
         self.assertIn("layout.AddChild(views().maho_content_gradient_view",
                       layout_rendered)
+
+    def test_sidebar_container_non_client_hit_test_applied_to_pristine_browser_view(self):
+        source = (
+            "  gfx::Point point_in_browser_view_coords(point);\n"
+            "  views::View::ConvertPointToTarget(parent(), this,\n"
+            "                                    &point_in_browser_view_coords);\n"
+            "\n"
+            "  if (web_app_frame_toolbar_) {\n"
+            "\n"
+            "    // The vertical tabstrip is not part of the overlay in immersive mode and\n"
+            "    // must be tested separately.\n"
+            "    if (vertical_tab_strip_region_view_ &&\n"
+            "        vertical_tab_strip_region_view_->GetVisible()) {\n"
+        )
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if "NonClientHitTest" in item.description
+            or "immersive mode on macOS" in item.description
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(source)
+
+            changed, applied = apply_replacements(
+                target,
+                replacements,
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("maho_sidebar_container_", output)
+            self.assertEqual(output.count("static_cast<maho::MahoSidebarContainerView*>"), 2)
+            self.assertEqual(output.count("static_cast<maho::MahoMiniTopBarView*>"), 1)
+            self.assertEqual(output.count("->IsPositionInWindowCaption(test_point)"), 3)
+            self.assertIn("return HTCAPTION;", output)
+            self.assertIn("return HTCLIENT;", output)
+            self.assertIn("maho_mini_top_bar_", output)
+
+            changed_again, applied_again = apply_replacements(
+                target,
+                replacements,
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+            self.assertFalse(changed_again)
+            self.assertEqual(target.read_text(), output)
+            self.assertTrue(all(item.startswith("already:") for item in applied_again))
+
+    def test_sidebar_container_non_client_hit_test_migrates_already_patched_browser_view(self):
+        source = (
+            "  gfx::Point point_in_browser_view_coords(point);\n"
+            "  views::View::ConvertPointToTarget(parent(), this,\n"
+            "                                    &point_in_browser_view_coords);\n"
+            "\n"
+            "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
+            "    gfx::Point test_point(point);\n"
+            "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
+            "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
+            "              maho_mini_top_bar_)\n"
+            "              ->IsPositionInWindowCaption(test_point)) {\n"
+            "        return HTCAPTION;\n"
+            "      }\n"
+            "      return HTCLIENT;\n"
+            "    }\n"
+            "  }\n"
+            "\n"
+            "    // Maho: the vertical sidebar is not part of the overlay in immersive mode\n"
+            "    // and must be tested separately.\n"
+            "    if (maho_sidebar_container_ &&\n"
+            "        maho_sidebar_container_->GetVisible()) {\n"
+            "      gfx::Point test_point(point);\n"
+            "      if (ConvertedHitTest(parent(), maho_sidebar_container_,\n"
+            "                           &test_point)) {\n"
+            "        if (static_cast<maho::MahoSidebarContainerView*>(\n"
+            "                maho_sidebar_container_)\n"
+            "                ->IsPositionInWindowCaption(test_point)) {\n"
+            "          return HTCAPTION;\n"
+            "        }\n"
+            "        return HTCLIENT;\n"
+            "      }\n"
+            "    }\n"
+            "\n"
+            "    // The vertical tabstrip is not part of the overlay in immersive mode and\n"
+            "    // must be tested separately.\n"
+            "    if (vertical_tab_strip_region_view_ &&\n"
+            "        vertical_tab_strip_region_view_->GetVisible()) {\n"
+        )
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if "NonClientHitTest" in item.description
+            or "immersive mode on macOS" in item.description
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(source)
+
+            changed, applied = apply_replacements(
+                target,
+                replacements,
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+            self.assertTrue(changed)
+            self.assertIn(
+                "patched: Maho: Append sidebar container caption hit-test to already-patched NonClientHitTest",
+                applied,
+            )
+            output = target.read_text()
+            self.assertIn("maho_sidebar_container_", output)
+            self.assertIn("// Maho: the Maho sidebar sits inside the full-size window frame.", output)
+            self.assertEqual(output.count("static_cast<maho::MahoSidebarContainerView*>"), 2)
+            self.assertEqual(output.count("static_cast<maho::MahoMiniTopBarView*>"), 1)
+            self.assertEqual(output.count("->IsPositionInWindowCaption(test_point)"), 3)
+
+            changed_again, applied_again = apply_replacements(
+                target,
+                replacements,
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+            self.assertFalse(changed_again)
+            self.assertEqual(target.read_text(), output)
+            self.assertTrue(all(item.startswith("already:") for item in applied_again))
+
+    def test_sidebar_container_non_client_hit_test_applied_to_immersive_mode_mac(self):
+        source = (
+            "    // The vertical tabstrip is not part of the overlay in immersive mode and\n"
+            "    // must be tested separately.\n"
+            "    if (vertical_tab_strip_region_view_ &&\n"
+            "        vertical_tab_strip_region_view_->GetVisible()) {\n"
+        )
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if "immersive mode on macOS" in item.description
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(source)
+
+            changed, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("maho_sidebar_container_", output)
+            self.assertIn("->IsPositionInWindowCaption(test_point)", output)
+
+            changed_again, _ = apply_replacements(
+                target,
+                replacements,
+                relative_path=_BROWSER_VIEW_CC_PATH,
+            )
+            self.assertFalse(changed_again)
+            self.assertEqual(target.read_text(), output)
+
+    def test_sidebar_container_non_client_hit_test_fails_closed_on_missing_anchor(self):
+        drifted_source = (
+            "    // Upstream changed anchor comment\n"
+            "    if (vertical_tab_strip_region_view_ &&\n"
+            "        vertical_tab_strip_region_view_->GetVisible()) {\n"
+        )
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_VIEW_CC_PATH]
+            if "immersive mode on macOS" in item.description
+        ]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser_view.cc"
+            target.write_text(drifted_source)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Missing expected anchor for Maho: Consult sidebar container caption hit-test in immersive mode on macOS",
+            ):
+                apply_replacements(
+                    target,
+                    replacements,
+                    relative_path=_BROWSER_VIEW_CC_PATH,
+                )
 
     def test_maho_ai_content_parent_is_transparent(self):
         rendered = "\n".join(

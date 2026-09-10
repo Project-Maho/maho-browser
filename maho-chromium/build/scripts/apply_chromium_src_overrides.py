@@ -4917,9 +4917,103 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      return HTCLIENT;\n"
                 "    }\n"
                 "  }\n"
+                "\n"
+                "  // Maho: the Maho sidebar sits inside the full-size window frame.\n"
+                "  // Consult its caption hit-test so top-bar drag regions (traffic-light\n"
+                "  // spacer, button gaps, and library rail caption) return HTCAPTION for\n"
+                "  // native window dragging, while interactive controls return HTCLIENT.\n"
+                "  if (maho_sidebar_container_ && maho_sidebar_container_->GetVisible()) {\n"
+                "    gfx::Point test_point(point);\n"
+                "    if (ConvertedHitTest(parent(), maho_sidebar_container_, &test_point)) {\n"
+                "      if (static_cast<maho::MahoSidebarContainerView*>(\n"
+                "              maho_sidebar_container_)\n"
+                "              ->IsPositionInWindowCaption(test_point)) {\n"
+                "        return HTCAPTION;\n"
+                "      }\n"
+                "      return HTCLIENT;\n"
+                "    }\n"
+                "  }\n"
             ),
-            description="Maho: Consult Maho Mini top bar caption hit-test in NonClientHitTest",
+            description="Maho: Consult Maho Mini and sidebar caption hit-test in NonClientHitTest",
             guard="static_cast<maho::MahoMiniTopBarView*>(",
+        ),
+        Replacement(
+            old=(
+                "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
+                "    gfx::Point test_point(point);\n"
+                "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
+                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
+                "              maho_mini_top_bar_)\n"
+                "              ->IsPositionInWindowCaption(test_point)) {\n"
+                "        return HTCAPTION;\n"
+                "      }\n"
+                "      return HTCLIENT;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            new=(
+                "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
+                "    gfx::Point test_point(point);\n"
+                "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
+                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
+                "              maho_mini_top_bar_)\n"
+                "              ->IsPositionInWindowCaption(test_point)) {\n"
+                "        return HTCAPTION;\n"
+                "      }\n"
+                "      return HTCLIENT;\n"
+                "    }\n"
+                "  }\n"
+                "\n"
+                "  // Maho: the Maho sidebar sits inside the full-size window frame.\n"
+                "  // Consult its caption hit-test so top-bar drag regions (traffic-light\n"
+                "  // spacer, button gaps, and library rail caption) return HTCAPTION for\n"
+                "  // native window dragging, while interactive controls return HTCLIENT.\n"
+                "  if (maho_sidebar_container_ && maho_sidebar_container_->GetVisible()) {\n"
+                "    gfx::Point test_point(point);\n"
+                "    if (ConvertedHitTest(parent(), maho_sidebar_container_, &test_point)) {\n"
+                "      if (static_cast<maho::MahoSidebarContainerView*>(\n"
+                "              maho_sidebar_container_)\n"
+                "              ->IsPositionInWindowCaption(test_point)) {\n"
+                "        return HTCAPTION;\n"
+                "      }\n"
+                "      return HTCLIENT;\n"
+                "    }\n"
+                "  }\n"
+            ),
+            description="Maho: Append sidebar container caption hit-test to already-patched NonClientHitTest",
+            guard="// Maho: the Maho sidebar sits inside the full-size window frame.",
+        ),
+        Replacement(
+            old=(
+                "    // The vertical tabstrip is not part of the overlay in immersive mode and\n"
+                "    // must be tested separately.\n"
+                "    if (vertical_tab_strip_region_view_ &&\n"
+                "        vertical_tab_strip_region_view_->GetVisible()) {\n"
+            ),
+            new=(
+                "    // Maho: the vertical sidebar is not part of the overlay in immersive mode\n"
+                "    // and must be tested separately.\n"
+                "    if (maho_sidebar_container_ &&\n"
+                "        maho_sidebar_container_->GetVisible()) {\n"
+                "      gfx::Point test_point(point);\n"
+                "      if (ConvertedHitTest(parent(), maho_sidebar_container_,\n"
+                "                           &test_point)) {\n"
+                "        if (static_cast<maho::MahoSidebarContainerView*>(\n"
+                "                maho_sidebar_container_)\n"
+                "                ->IsPositionInWindowCaption(test_point)) {\n"
+                "          return HTCAPTION;\n"
+                "        }\n"
+                "        return HTCLIENT;\n"
+                "      }\n"
+                "    }\n"
+                "\n"
+                "    // The vertical tabstrip is not part of the overlay in immersive mode and\n"
+                "    // must be tested separately.\n"
+                "    if (vertical_tab_strip_region_view_ &&\n"
+                "        vertical_tab_strip_region_view_->GetVisible()) {\n"
+            ),
+            description="Maho: Consult sidebar container caption hit-test in immersive mode on macOS",
+            guard="Maho: the vertical sidebar is not part of the overlay in immersive mode",
         ),
         Replacement(
             old=(

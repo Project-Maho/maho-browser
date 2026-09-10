@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "build/build_config.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "ui/views/widget/widget.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
@@ -314,6 +315,14 @@ void MahoSidebarView::ApplySidebarBackground() {
 }
 
 bool MahoSidebarView::ShouldUseOpaqueSidebarBackground() const {
+#if BUILDFLAG(IS_LINUX)
+  // On Linux (Wayland / X11), desktop compositors typically do not provide
+  // macOS-style NSVisualEffectView vibrancy behind non-opaque window frames.
+  // Rendering the sidebar with translucent alpha allows the desktop wallpaper
+  // or underlying windows to show through. Force an opaque sidebar background
+  // on Linux so the resolved Space theme color paints cleanly.
+  return true;
+#else
   if (current_body_mode_ == MahoSidebarBodyMode::kLibrary &&
       (active_library_category_ ==
            MahoSidebarLibraryRailView::Category::kDownloads ||
@@ -330,6 +339,7 @@ bool MahoSidebarView::ShouldUseOpaqueSidebarBackground() const {
     }
   }
   return false;
+#endif
 }
 
 void MahoSidebarView::OnThemeChanged() {
@@ -387,8 +397,16 @@ void MahoSidebarView::OnPaintBackground(gfx::Canvas* canvas) {
         GetWidget()->GetRootView(), this,
         GetWidget()->GetRootView()->GetLocalBounds());
   }
+#if BUILDFLAG(IS_LINUX)
+  // Linux has no vibrancy behind the shared glass; painting the translucent
+  // surface stops across the extended browser bounds shows the desktop
+  // wallpaper through the whole window. Force the opaque stops on Linux.
+  const bool paint_opaque = ShouldUseOpaqueSidebarBackground();
+#else
+  const bool paint_opaque = palette_host_.opaque();
+#endif
   PaintMahoSidebarThemedBackground(canvas, palette_host_.palette(), bounds,
-                                   palette_host_.opaque(), radii,
+                                   paint_opaque, radii,
                                    /*gradient_span_dp=*/0, &browser_bounds);
 }
 
@@ -484,6 +502,11 @@ void MahoSidebarView::OnTabListScrolled() {
 bool MahoSidebarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
   if (top_bar_view_ && top_bar_view_->GetVisible()) {
+    // If the point is in the top margin above the top bar, treat as caption.
+    if (point.y() >= 0 && point.y() < top_bar_view_->y() &&
+        point.x() >= 0 && point.x() < width()) {
+      return true;
+    }
     gfx::Point point_in_top_bar = point;
     views::View::ConvertPointToTarget(this, top_bar_view_, &point_in_top_bar);
     if (top_bar_view_->HitTestPoint(point_in_top_bar)) {
@@ -1337,9 +1360,8 @@ void MahoSidebarView::RefreshAll() {
   }
   bool safe_mode = IsSidebarSafeMode();
 
-  base::ThreadPool::PostTaskAndReplyWithResult(
+  maho::PostCoreTask<SidebarStateBackgroundResult>(
       FROM_HERE,
-      {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&MahoSidebarStateAdapter::BuildStateOnBackground,
                      space_id_json, safe_mode),
       base::BindOnce(&MahoSidebarView::OnBackgroundStateReady,
@@ -1351,37 +1373,13 @@ void MahoSidebarView::RefreshAllSynchronously() {
     RefreshPrivateSidebar();
     return;
   }
-  std::string space_id_json;
-  if (auto* bridge = MahoSpaceProfileBridge::GetInstance()) {
-    space_id_json =
-        base::GetQuotedJSONString(bridge->GetActiveSpaceId(browser_));
-  }
-  const bool safe_mode = IsSidebarSafeMode();
-  // The state build is a synchronous FFI fetch + parse (~3-21ms), cheap enough
-  // to run inline. Doing so on a drop avoids RefreshAll()'s base::ThreadPool
-  // round-trip, whose USER_VISIBLE scheduling latency (worst under load) is what
-  // makes a dropped tab take hundreds of ms to settle into its final position.
-  auto result = MahoSidebarStateAdapter::BuildStateOnBackground(space_id_json,
-                                                                safe_mode);
-  ApplyViewState(
-      state_adapter_.BuildViewStateModelFromResult(browser_, std::move(result)));
+  ScheduleRefreshAll();
 }
 
 void MahoSidebarView::RefreshFavoritesSynchronouslyAfterDrop() {
   if (is_otr_ || is_private_) {
     return;
   }
-  std::string active_space_id_json;
-  if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
-    const std::string& active_space_id = bridge->GetActiveSpaceId(browser_);
-    if (!active_space_id.empty()) {
-      active_space_id_json = base::GetQuotedJSONString(active_space_id);
-    }
-  }
-  state_adapter_.SetFavoritesModel(
-      MahoSidebarStateAdapter::RefreshFavoritesModelForSpaceIdJson(
-          active_space_id_json));
-  UpdateFavorites(state_adapter_.BuildFavoritesModel(browser_));
   ScheduleRefreshAll();
 }
 
@@ -1397,6 +1395,15 @@ void MahoSidebarView::RefreshPrivateSidebar() {
 
 void MahoSidebarView::OnBackgroundStateReady(SidebarStateBackgroundResult result) {
   DVLOG(1) << "OnBackgroundStateReady start";
+  if (result.core_generation != maho::GetCoreGeneration()) {
+    refresh_dirty_ = false;
+    refresh_state_ = RefreshState::kIdle;
+    if (maho::GetCore()) {
+      ScheduleRefreshAll();
+    }
+    return;
+  }
+  maho::PublishCoreTabFacts(result.core_generation, std::move(result.tab_facts));
   if (background_state_ready_callback_for_testing_) {
     if (!background_state_ready_callback_for_testing_.Run(this, result)) {
       return;

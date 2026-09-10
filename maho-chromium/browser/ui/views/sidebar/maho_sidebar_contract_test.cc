@@ -18,6 +18,8 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "ui/base/hit_test.h"
 #include "content/public/browser/favicon_status.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
@@ -3930,6 +3932,81 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
   EXPECT_FALSE(IsInlineRowButton(action_row, u"Tidy"));
   EXPECT_FALSE(IsInlineRowButton(action_row, u"Clear"));
   EXPECT_EQ(list_view->action_processing_view_for_testing(), nullptr);
+}
+
+// Regression test: Native window dragging via NonClientHitTest in the sidebar.
+// The top bar empty area (traffic-light spacer, padding, and top margin) must
+// return HTCAPTION so native window drag works, while interactive buttons and
+// tabs must return HTCLIENT so clicks reach them.
+IN_PROC_BROWSER_TEST_F(MahoSidebarContractTest,
+                       SidebarWindowDragNonClientHitTestReturnsCaption) {
+  RunAllPendingTasks();
+  StopSidebarObservations();
+  ResolveViews();
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_NE(browser_view, nullptr);
+  views::View* root_target = browser_view->parent() ? browser_view->parent() : browser_view;
+  ASSERT_NE(root_target, nullptr);
+
+  MahoSidebarContainerView* container = GetContainerView();
+  ASSERT_NE(container, nullptr);
+  ASSERT_TRUE(container->GetVisible());
+  ASSERT_FALSE(container->bounds().IsEmpty());
+
+  MahoSidebarView* sidebar = GetSidebarView();
+  ASSERT_NE(sidebar, nullptr);
+  ASSERT_TRUE(sidebar->GetVisible());
+  ASSERT_FALSE(sidebar->bounds().IsEmpty());
+
+  MahoSidebarTopBarView* top_bar = sidebar->top_bar_view_for_testing();
+  ASSERT_NE(top_bar, nullptr);
+  ASSERT_TRUE(top_bar->GetVisible());
+  ASSERT_FALSE(top_bar->bounds().IsEmpty());
+
+  views::View* spacer = top_bar->traffic_light_spacer_for_testing();
+  ASSERT_NE(spacer, nullptr);
+
+  // 1. Point inside the top-bar traffic-light spacer must yield HTCAPTION.
+  gfx::Point spacer_point(spacer->width() / 2, spacer->height() / 2);
+  views::View::ConvertPointToTarget(spacer, root_target, &spacer_point);
+  EXPECT_EQ(HTCAPTION, browser_view->NonClientHitTest(spacer_point))
+      << "Empty top bar region (traffic-light spacer) must return HTCAPTION for native window dragging";
+
+  // 2. Point in the top margin above the top bar must yield HTCAPTION.
+  gfx::Point top_margin_point(sidebar->width() / 2, 2);
+  views::View::ConvertPointToTarget(sidebar, root_target, &top_margin_point);
+  EXPECT_EQ(HTCAPTION, browser_view->NonClientHitTest(top_margin_point))
+      << "Top margin above top bar must return HTCAPTION for native window dragging";
+
+  // 3. Point on an interactive button (both center and button padding) must yield HTCLIENT.
+  views::ImageButton* toggle_button = top_bar->sidebar_toggle_button_for_testing();
+  ASSERT_NE(toggle_button, nullptr);
+  ASSERT_TRUE(toggle_button->GetVisible());
+  ASSERT_FALSE(toggle_button->bounds().IsEmpty());
+
+  // 3a. Center of button must return HTCLIENT.
+  gfx::Point button_center_point(toggle_button->width() / 2, toggle_button->height() / 2);
+  views::View::ConvertPointToTarget(toggle_button, root_target, &button_center_point);
+  EXPECT_EQ(HTCLIENT, browser_view->NonClientHitTest(button_center_point))
+      << "Interactive button center must return HTCLIENT so clicks reach the control";
+
+  // 3b. Button padding (outside centered 16x16 icon but inside 20x20 button bounds) must return HTCLIENT.
+  gfx::Point button_padding_point(1, toggle_button->height() / 2);
+  views::View::ConvertPointToTarget(toggle_button, root_target, &button_padding_point);
+  EXPECT_EQ(HTCLIENT, browser_view->NonClientHitTest(button_padding_point))
+      << "Button padding must return HTCLIENT so entire interactive target receives clicks";
+
+  // 4. Point in the tab list / normal surface must yield HTCLIENT.
+  MahoSidebarTabListView* tab_list = GetTabListView();
+  ASSERT_NE(tab_list, nullptr);
+  ASSERT_TRUE(tab_list->GetVisible());
+  ASSERT_FALSE(tab_list->bounds().IsEmpty());
+
+  gfx::Point tab_point(tab_list->width() / 2, 20);
+  views::View::ConvertPointToTarget(tab_list, root_target, &tab_point);
+  EXPECT_EQ(HTCLIENT, browser_view->NonClientHitTest(tab_point))
+      << "Tab list surface must return HTCLIENT";
 }
 
 }  // namespace
