@@ -108,6 +108,33 @@ def test_invalid_gtest_selection_is_rejected_before_build_or_clone(
     clone.assert_not_called()
 
 
+def test_intentional_failure_route_reaches_config_after_mail_guard() -> None:
+    args = SimpleNamespace(
+        manifest=vm._DEFAULT_MANIFEST_PATH, suite="intentional-failure-fixture",
+    )
+    with mock.patch.object(vm, "_tart_config", side_effect=RuntimeError("config boundary")) as config:
+        with pytest.raises(RuntimeError, match="config boundary"):
+            vm.run(args)
+    config.assert_called_once()
+
+def test_selected_gtest_suite_limits_manifest_before_preflight() -> None:
+    args = SimpleNamespace(
+        manifest=vm._DEFAULT_MANIFEST_PATH,
+        suite="sidebar-actions",
+    )
+    with mock.patch.object(
+        vm, "_tart_config", side_effect=RuntimeError("config boundary")
+    ) as config:
+        with pytest.raises(RuntimeError, match="config boundary"):
+            vm.run(args)
+
+    manifest = config.call_args.args[0]
+    assert manifest.suite_names == ("sidebar-actions",)
+    assert set(vm._required_gtests_by_binary(manifest)) == {
+        "maho_sidebar_actions_test",
+    }
+
+
 def test_bad_suite_is_rejected_before_build_or_clone() -> None:
     args = SimpleNamespace(manifest=vm._DEFAULT_MANIFEST_PATH, suite="bogus")
     with mock.patch.object(vm, "_run_build_and_preflight") as build:
@@ -161,7 +188,15 @@ def command_result(
 
 
 def _default_build_fixture(tmp_path):
-    manifest = vm.load_manifest()
+    full_manifest = vm.load_manifest()
+    manifest = vm.Manifest(
+        full_manifest.base_image,
+        full_manifest.golden_image,
+        full_manifest.guest_workspace,
+        full_manifest.output_dir,
+        full_manifest.cdp_address,
+        (full_manifest.suite("interactive-smoke"),),
+    )
     output_path = tmp_path / "chromium/src/out/Default"
     output_path.mkdir(parents=True)
     deps = output_path / "interactive_ui_tests.runtime_deps"
@@ -170,6 +205,9 @@ def _default_build_fixture(tmp_path):
     binary.write_text("binary", encoding="utf-8")
     app = output_path / "Maho.app"
     app.mkdir()
+    maho_bin = app / "Contents/MacOS/Maho"
+    maho_bin.parent.mkdir(parents=True)
+    maho_bin.write_text("")
     required = vm._required_gtests(manifest)
     suites: dict[str, list[str]] = {}
     for test in required:
@@ -184,8 +222,8 @@ def _default_build_fixture(tmp_path):
     services.runner.deadline_after.return_value = 100.0
     services.runner.run.side_effect = (
         command_result(vm, succeeded=True, stdout="Waiting for build lock...\n"),
-        command_result(vm, succeeded=True, stdout="Mach-O 64-bit arm64"),
         command_result(vm, succeeded=True),
+        command_result(vm, succeeded=True, stdout="Mach-O 64-bit arm64"),
         command_result(vm, succeeded=True),
         command_result(vm, succeeded=True, stdout=listed),
     )
@@ -214,13 +252,13 @@ def test_waiting_for_build_lock_completes_default_build_and_writes_exact_proof(
     )
     assert dependencies == (binary.resolve(),)
     assert proof["canonical_build_argv"] == list(
-        vm._canonical_build_argv(tmp_path)
+        vm._canonical_build_argv(tmp_path, ninja_targets=tuple(vm._required_gtests_by_binary(manifest)))
     )
     assert proof["output_root"] == str(output_path.resolve())
     assert "output_volume" not in proof
-    assert proof["architecture"] == "Mach-O 64-bit arm64"
+    assert proof["preflight_binaries"][0]["architecture"] == "Mach-O 64-bit arm64"
     assert set(proof["required_tests"]) == set(required)
-    assert set(proof["listed_tests"]) == set(required)
+    assert set(proof["preflight_binaries"][0]["listed_tests"]) == set(required)
 @pytest.mark.parametrize(
     ("status", "terminal_status", "message"),
     (
@@ -255,7 +293,8 @@ def test_failed_or_cancelled_default_build_never_tries_an_alternate_output(
     assert message in str(caught.value)
     services.runner.run.assert_called_once()
     argv = services.runner.run.call_args.args[0]
-    assert argv == vm._canonical_build_argv(tmp_path)
+    binaries = vm._required_gtests_by_binary(manifest)
+    assert argv == vm._canonical_build_argv(tmp_path, ninja_targets=tuple(binaries))
     assert argv[argv.index("--out-dir") + 1] == "out/Default"
 
 
@@ -463,7 +502,7 @@ def test_regression_forbidden_prior_lifecycle_patterns_are_absent() -> None:
     assert '"smoke": ("python3", "-m", "pytest"' not in source
     assert '"rsync", "-az", "--delete"' not in source
     assert 'destination="~/maho-workspace"' not in source
-    assert "_canonical_build_argv(workspace)" in source
+    assert "_canonical_build_argv(workspace" in source
     assert "_build_interactive_command(" in source
     assert "_build_ai_mock_commands(" in source
     assert "_compare_run_snapshots(" in source
@@ -705,6 +744,56 @@ def test_selected_interactive_gtest_builds_one_exact_command_and_one_suite_resul
     assert results[0].details["expected"] == [selected]
 
 
+def test_mail_cli_blocked_receipt_is_preserved(tmp_path) -> None:
+    manifest = vm.load_manifest()
+    ledger = []
+
+    def execute(command, *args):
+        return vm._CapturedCommandResult(command, 2, "blocked", ""), command_result(
+            vm, succeeded=False, returncode=2, stdout="blocked"
+        )
+
+    def copy_summary(config, ip, remote, local, *args):
+        local.write_text(json.dumps({
+            "scenario": "mail_cli_lifecycle", "status": "BLOCKED", "blockers": ["fixture_api"],
+        }))
+
+    with mock.patch.object(vm, "_run_command", return_value=command_result(vm, succeeded=True)), \
+         mock.patch.object(vm, "_execute_guest_command", side_effect=execute), \
+         mock.patch.object(vm, "_copy_guest_file", side_effect=copy_summary):
+        with pytest.raises(vm._StageFailure) as raised:
+            vm._run_selected_suites(
+                manifest, "mail-cli", vm._GUEST_RUN_ROOT / "mail-run",
+                mock.Mock(), "192.0.2.1", ("ssh", "guest"), mock.Mock(),
+                vm._CancellationToken(), tmp_path, ledger.append,
+            )
+    assert raised.value.status is vm._TerminalStatus.SUITE_FAILED
+    assert ledger[-1][0].status == "failed"
+    assert ledger[-1][0].returncode == 2
+    assert str(tmp_path / "mail-cli-summary.json") in ledger[-1][0].artifact_paths
+    assert (tmp_path / "mail-cli.stdout.log").read_text() == "blocked"
+
+
+@pytest.mark.parametrize("skip_build,transport", [
+    (False, None), (False, "virtiofs-read-only"), (True, None),
+])
+def test_mail_cli_requires_prebuilt_read_only_before_side_effects(skip_build, transport):
+    args = SimpleNamespace(
+        manifest=vm._DEFAULT_MANIFEST_PATH, suite="mail-cli",
+        skip_build=skip_build, require_transport=transport,
+    )
+    with mock.patch.object(vm, "_tart_config") as config, \
+         mock.patch.object(vm, "_preflight_existing_build") as preflight, \
+         mock.patch.object(vm, "_run_build_and_preflight") as build, \
+         mock.patch.object(vm, "_new_clone") as clone:
+        with pytest.raises(vm.LifecycleError):
+            vm.run(args)
+    config.assert_not_called()
+    preflight.assert_not_called()
+    build.assert_not_called()
+    clone.assert_not_called()
+
+
 def test_full_interactive_suite_includes_palette_startup_and_interaction() -> None:
     manifest = vm.load_manifest()
     suite = manifest.suite("interactive-smoke")
@@ -717,7 +806,7 @@ def test_full_interactive_suite_includes_palette_startup_and_interaction() -> No
     assert len(command.expected_results) == len(suite.gtest_filter)
     assert command.expected_results == suite.gtest_filter
     assert (
-        "MahoCommandColdStartInteractiveUiTest.AutoPresentsVisiblePaletteWithActionResults"
+        "MahoAiSidePanelLifecycleTest.ShowPanel_EntryIsShowing"
         in command.expected_results
     )
     assert "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath" in (
@@ -752,6 +841,35 @@ def test_skip_build_preflight_does_not_invoke_canonical_build(tmp_path) -> None:
     source = Path(vm.__file__).read_text(encoding="utf-8")
     assert 'getattr(args, "skip_build", False)' in source
     assert "dependencies = _preflight_existing_build(" in source
+
+
+def test_prebuilt_preflight_does_not_resign_shared_artifacts(tmp_path: Path) -> None:
+    manifest = vm.load_manifest()
+    output = tmp_path / "chromium/src/out/Default"
+    (output / "Maho.app").mkdir(parents=True)
+    dependencies = (output / "interactive_ui_tests",)
+    with mock.patch.object(vm._subprocess, "run") as subprocess_run, \
+         mock.patch.object(vm, "_run_per_binary_preflight", return_value=(
+             True, [], dependencies,
+         )) as validate:
+        result = vm._preflight_existing_build(
+            tmp_path, manifest, vm.LifecycleServices(),
+            vm._CancellationToken(), tmp_path,
+        )
+    assert result == dependencies
+    validate.assert_called_once()
+    subprocess_run.assert_not_called()
+
+
+def test_prebuilt_preflight_propagates_signature_failure(tmp_path: Path) -> None:
+    failure = vm._StageFailure(vm._TerminalStatus.BUILD_FAILED, "invalid signature")
+    with mock.patch.object(vm, "_run_per_binary_preflight", side_effect=failure), \
+         pytest.raises(vm._StageFailure) as raised:
+        vm._preflight_existing_build(
+            tmp_path, vm.load_manifest(), vm.LifecycleServices(),
+            vm._CancellationToken(), tmp_path,
+        )
+    assert raised.value is failure
 
 
 def test_run_checkpoints_guest_ready_before_transport_and_preserves_facts(
@@ -1134,3 +1252,7 @@ def test_success_without_event_bound_during_snapshot_fails_isolation(tmp_path) -
     assert not (
         tmp_path / "test-results/macos-vm/missing-during/host-isolation.json"
     ).exists()
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, *sys.argv[1:]]))

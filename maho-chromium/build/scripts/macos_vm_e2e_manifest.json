@@ -17,7 +17,16 @@
         "MahoSidebarActionsInteractiveTest.HoverRevealsUtilityIconAndClickOpensUtilityPanel",
         "MahoSidebarActionsInteractiveTest.SearchPillHoverHighlightsTrailingActions",
         "MahoSidebarActionsInteractiveTest.CaptureFourWaySplitScreenshotUsesLiveTabContents",
-        "MahoSidebarActionsInteractiveTest.GroupSplitTabsProjectsFourMemberSplitGroup"
+        "MahoSidebarActionsInteractiveTest.GroupSplitTabsProjectsFourMemberSplitGroup",
+        "MahoMiniRuntimeProofTest.MahoMini_OpensPopupFromNormalBrowser",
+        "MahoMiniRuntimeProofTest.LaunchMahoMini_WithNoOpenBrowser",
+        "MahoMiniRuntimeProofTest.MahoMini_PopupNavigatesIndependently",
+        "MahoMiniRuntimeProofTest.MahoMini_PromoteClosesPopupAndMovesTabToNormalBrowser",
+        "MahoAiSidePanelLifecycleTest.MemoryThreadTabActionDoesNotWaitForCore",
+        "MahoAiSidePanelLifecycleTest.MemoryThreadStartupPublishesHydratedCore",
+        "MahoAiSidePanelLifecycleTest.MemoryThreadIdleBackoffAndImmediateWake",
+        "MahoAiSidePanelLifecycleTest.MemoryThreadOnePollWhileCoreBlocked",
+        "MahoAiSidePanelLifecycleTest.MemoryThreadReconnectPreservesOutgoing"
       ]
     },
     {
@@ -63,6 +72,120 @@
         "MahoLiveWeb4WayTest.CaptureFourWaySplitScreenshotUsesLiveWebPages"
       ],
       "host_relay": true
+    },
+    {
+      "name": "mail-cli",
+      "kind": "mail_cli",
+      "scenarios": [
+        "mail_cli_lifecycle"
+      ]
+    },
+    {
+      "name": "hybrid-visual",
+      "kind": "hybrid_visual",
+      "scenarios": [
+        "baseline"
+      ]
+    },
+    {
+      "name": "mcp-session",
+      "kind": "gtest",
+      "binary": "maho_mcp_session_test",
+      "gtest_filter": [
+        "MahoMcpSessionTest.AccessibilitySnapshotV2SerializesBotChallenge",
+        "MahoMcpSessionTest.AccessibilitySnapshotV2OmitsBotChallengeWhenClear",
+        "MahoMcpSessionTest.ActAndObserveAttachesBotChallenge"
+      ]
+    },
+    {
+      "name": "mcp-network-observer",
+      "kind": "gtest",
+      "binary": "maho_mcp_network_observer_test",
+      "gtest_filter": [
+        "MahoMcpNetworkObserverTest.HarBuild_EmptyCapture",
+        "MahoMcpNetworkObserverTest.HarBuild_SingleRequest",
+        "MahoMcpNetworkObserverTest.HarBuild_HeadersRedacted",
+        "MahoMcpNetworkObserverTest.HarBuild_UrlRedacted",
+        "MahoMcpNetworkObserverTest.Redacted_CompileTimeGate",
+        "MahoMcpNetworkObserverWebContentsTest.ResourceLoadCompleteRecordsSubresourceHarFields",
+        "MahoMcpNetworkObserverWebContentsTest.MainFrameDocumentResourceDoesNotDuplicateNavigationEntry",
+        "MahoMcpNetworkObserverWebContentsTest.LiveNavigationHeadersAndUrlAreRedacted",
+        "MahoMcpNetworkObserverWebContentsTest.DataUrlNavigationRedactsInlinePayload",
+        "MahoMcpNetworkObserverWebContentsTest.CapturesLiveCommittedNavigationDuringCapture",
+        "MahoMcpNavigationTrackerWebContentsTest.SubresourceChallengeTokensCollectedIndependentOfHarRecording",
+        "MahoMcpNavigationTrackerWebContentsTest.SubresourceEvidenceClearsOnDocumentReplacement",
+        "MahoMcpNavigationTrackerWebContentsTest.PassiveSubresourcePresenceDoesNotSetIsBlocked",
+        "MahoMcpNetworkObserverTest.MemoryThreadCaptureByteAndEntryBounds",
+        "MahoMcpNetworkObserverTest.MemoryThreadCaptureBytesBindBeforeEntryCount",
+        "MahoMcpNetworkObserverTest.MemoryThreadHarRedactionAndTruncation",
+        "MahoMcpNetworkObserverTest.MemoryThreadStopMovesSnapshotAndCancelDiscardsReply"
+      ]
+    },
+    {
+      "name": "sidebar-actions",
+      "kind": "gtest",
+      "binary": "maho_sidebar_actions_test",
+      "gtest_filter": [
+        "MahoAiLlmClientTest.ResetClearsIsRetryFlag",
+        "MahoAiLlmClientTest.ConstructorInitializesIsRetryToFalse",
+        "MahoAiLlmClientTest.ResetIsIdempotentForIsRetry",
+        "MahoAiLlmClientTest.OtrTokenStopsBeforeRequest",
+        "MahoAiLlmClientTest.EmptyResponseIsAnErrorNotSyntheticCompletion",
+        "MahoAiLlmClientTest.ToolCallOnlyResponseIsSuccessful",
+        "MahoAiLlmClientTest.TidyCompletionMayDestroyOwningClient",
+        "MahoAiLlmClientTest.ErrorCompletionMayDestroyOwningClient",
+        "MahoSidebarProcessingPlaceholderViewTest.MergeStartsAtButtonThirdsAndSettlesAtScaledEllipsis",
+        "MahoSidebarProcessingPlaceholderViewTest.WorkingSparkTraversesScaledTrackThreeTimesPerLoop",
+        "MahoSidebarProcessingPlaceholderViewTest.SuccessCheckUsesScaleOnePointFourFour",
+        "MahoSidebarProcessingPlaceholderViewTest.CrossFadeAlphasRemainComplementary",
+        "MahoSidebarProcessingPlaceholderViewTest.AdaptiveFastLoopAndSingleCycleCompleteInOneSecond",
+        "MahoSidebarProcessingPlaceholderViewTest.EarlyResolveWaitsForFiveHundredMillisecondFloor",
+        "MahoSidebarProcessingPlaceholderViewTest.SlowLoopExtendsOnlyWorkingAndCapturesCurrentPose",
+        "MahoSidebarProcessingPlaceholderViewTest.ExternalResolveIsIgnoredForSingleCycle",
+        "MahoSidebarProcessingPlaceholderViewTest.TimeoutThenLateResolveRunsHiddenOnce",
+        "MahoSidebarProcessingPlaceholderViewTest.SecondStartIsIgnored",
+        "MahoSidebarProcessingPlaceholderViewTest.ReducedMotionUsesStaticTextlessPose",
+        "MahoSidebarProcessingPlaceholderViewTest.ReducedMotionTidyHidesImmediatelyOnResult",
+        "MahoSidebarProcessingPlaceholderViewTest.ClearWithoutBrowserResolvesFailureInsteadOfSuccess"
+      ]
+    },
+    {
+      "name": "stealth-local",
+      "kind": "stealth",
+      "scenarios": [
+        "sentinel",
+        "coordinates",
+        "permission-denied",
+        "native-input",
+        "security",
+        "model-loop",
+        "recovery",
+        "fingerprint",
+        "challenge",
+        "misclick",
+        "telemetry"
+      ]
+    },
+    {
+      "name": "stealth-turnstile-online",
+      "kind": "stealth",
+      "scenarios": [
+        "turnstile-online"
+      ]
+    },
+    {
+      "name": "stealth-provider-online",
+      "kind": "stealth",
+      "scenarios": [
+        "model-provider-online"
+      ]
+    },
+    {
+      "name": "stealth-offline",
+      "kind": "aggregate",
+      "members": [
+        "stealth-local"
+      ]
     }
   ]
 }

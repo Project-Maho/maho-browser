@@ -12,7 +12,7 @@ import re
 import socket
 import subprocess
 import sys
-from typing import Any, Callable, ClassVar, Mapping, Sequence
+from typing import Any, Callable, ClassVar, Mapping, Sequence, Union
 
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -65,13 +65,34 @@ class AiMockSuite:
 
 
 @dataclass(frozen=True)
+class MailCliSuite:
+    name: str
+    scenarios: tuple[str, ...]
+    kind: ClassVar[str] = "mail_cli"
+
+
+@dataclass(frozen=True)
+class HybridVisualSuite:
+    name: str
+    scenarios: tuple[str, ...]
+    kind: ClassVar[str] = 'hybrid_visual'
+
+
+@dataclass(frozen=True)
+class StealthSuite:
+    name: str
+    scenarios: tuple[str, ...]
+    kind: ClassVar[str] = 'stealth'
+
+
+@dataclass(frozen=True)
 class AggregateSuite:
     name: str
     members: tuple[str, ...]
     kind: ClassVar[str] = "aggregate"
 
 
-Suite = GtestSuite | AiMockSuite | AggregateSuite
+Suite = Union[GtestSuite, AiMockSuite, MailCliSuite, HybridVisualSuite, StealthSuite, AggregateSuite]
 
 
 @dataclass(frozen=True)
@@ -324,6 +345,32 @@ def _parse_suites(value: object) -> tuple[Suite, ...]:
                     )
             suites.append(AiMockSuite(name=name, scenarios=scenarios))
             all_ai_scenarios.extend(scenarios)
+        elif kind == HybridVisualSuite.kind:
+            _expect_exact_keys(suite_data, {'name', 'kind', 'scenarios'}, location)
+            name = _parse_suite_name(suite_data['name'], f'{location}.name')
+            scenarios = _expect_string_list(suite_data['scenarios'], f'{location}.scenarios')
+            if name != 'hybrid-visual' or scenarios != ('baseline',):
+                raise _invalid(location, 'hybrid_visual requires only baseline')
+            suites.append(HybridVisualSuite(name=name, scenarios=scenarios))
+        elif kind == StealthSuite.kind:
+            _expect_exact_keys(suite_data, {'name', 'kind', 'scenarios'}, location)
+            name = _parse_suite_name(suite_data['name'], f'{location}.name')
+            scenarios = _expect_string_list(suite_data['scenarios'], f'{location}.scenarios')
+            if not scenarios:
+                raise _invalid(location, 'stealth requires at least one scenario')
+            for s in scenarios:
+                if s not in _ALL_STEALTH_SCENARIOS:
+                    raise _invalid(f'{location}.scenarios', f'unknown stealth scenario {s!r}')
+            if len(set(scenarios)) != len(scenarios):
+                raise _invalid(f'{location}.scenarios', 'duplicate scenarios not allowed')
+            suites.append(StealthSuite(name=name, scenarios=scenarios))
+        elif kind == MailCliSuite.kind:
+            _expect_exact_keys(suite_data, {"name", "kind", "scenarios"}, location)
+            name = _parse_suite_name(suite_data["name"], f"{location}.name")
+            scenarios = _expect_string_list(suite_data["scenarios"], f"{location}.scenarios")
+            if name != "mail-cli" or scenarios != _MAIL_CLI_SCENARIOS:
+                raise _invalid(location, "mail_cli requires mail-cli and exact mail_cli_lifecycle scenario")
+            suites.append(MailCliSuite(name=name, scenarios=scenarios))
         elif kind == AggregateSuite.kind:
             _expect_exact_keys(
                 suite_data,
@@ -513,15 +560,23 @@ from macos_vm_build_transport import (
     read_only_mount_contract as _read_only_mount_contract,
 )
 from macos_vm_guest_suites import (
+    MAIL_CLI_SCENARIOS as _MAIL_CLI_SCENARIOS,
     CapturedCommandResult as _CapturedCommandResult,
     GuestCommand as _GuestCommand,
     SuiteValidationError as _SuiteValidationError,
     build_ai_mock_commands as _build_ai_mock_commands,
     build_intentional_failure_command as _build_intentional_failure_command,
     build_interactive_command as _build_interactive_command,
+    build_mail_cli_command as _build_mail_cli_command,
+    build_hybrid_visual_command as _build_hybrid_visual_command,
+    validate_hybrid_visual_result as _validate_hybrid_visual_result,
+    build_stealth_command as _build_stealth_command,
+    validate_stealth_result as _validate_stealth_result,
+    ALL_STEALTH_SCENARIOS as _ALL_STEALTH_SCENARIOS,
     merge_gtest_summary_with_stdout as _merge_gtest_summary_with_stdout,
     validate_ai_mock_results as _validate_ai_mock_results,
     validate_interactive_result as _validate_interactive_result,
+    validate_mail_cli_result as _validate_mail_cli_result,
 )
 from macos_vm_isolation import (
     IsolationSnapshot as _HostIsolationSnapshot,
@@ -1010,7 +1065,6 @@ def _preflight_existing_build(
     output_root = workspace / "chromium/src" / _DEFAULT_BUILD_OUTPUT
     if cancellation.is_cancelled:
         raise _StageFailure(_TerminalStatus.CANCELLED, cancellation.reason)
-    _codesign_host_artifacts(output_root, binaries)
     app_signature_valid, observations, dependencies = _run_per_binary_preflight(
         workspace, binaries, services, cancellation
     )
@@ -1145,9 +1199,9 @@ def _maybe_start_host_relay(
         stderr=_subprocess.DEVNULL,
         start_new_session=True,
     )
-    deadline = _time.monotonic() + 5
+    deadline = services.clock.monotonic() + 5
     last_error: OSError | None = None
-    while _time.monotonic() < deadline:
+    while services.clock.monotonic() < deadline:
         if process.poll() is not None:
             break
         try:
@@ -1158,7 +1212,7 @@ def _maybe_start_host_relay(
             return process
         except OSError as error:
             last_error = error
-            _time.sleep(0.1)
+            services.clock.sleep(0.1)
     process.terminate()
     raise _StageFailure(
         _TerminalStatus.VM_START_FAILED,
@@ -1414,6 +1468,15 @@ def _guest_suite_preflight_argv(
     existence_checks.append(
         f"test -e {_shlex.quote(str(guest_output / _APP_BUNDLE))}"
     )
+    if any(isinstance(suite, (HybridVisualSuite, StealthSuite)) for suite in manifest.suites):
+        scripts = str(manifest.guest_workspace / 'maho-chromium/build/scripts')
+        code = (
+            'import sys; assert sys.version_info >= (3, 10), "baseline requires Python >=3.10"; '
+            f'sys.path.insert(0, {scripts!r}); '
+            'from macos_vm_build_transport import verify_baseline_cli; '
+            f'verify_baseline_cli({str(guest_output / "hybrid-baseline/Maho.app/Contents/Helpers/maho")!r})'
+        )
+        existence_checks.append('/opt/homebrew/bin/python3 -c ' + _shlex.quote(code))
     return _remote_argv(
         ssh_base,
         (
@@ -1528,13 +1591,38 @@ def _configure_transport(
                     (
                         "sh",
                         "-lc",
-                        f"sudo find {_shlex.quote(ws_mount_dir)} -mindepth 1 -maxdepth 1 "
+                        # Assemble guest workspace:
+                        # Drop stale entries first (except chromium which is handled below).
+                        f"sudo find {_shlex.quote(quoted_workspace)} -mindepth 1 -maxdepth 1 "
+                        "! -name chromium -exec rm -rf {} + && "
+                        # If ws_mount_dir contains maho-workspace, link its contents directly into quoted_workspace;
+                        # otherwise link entries of ws_mount_dir.
+                        f"SRC={_shlex.quote(ws_mount_dir)}; "
+                        f"[ -d \"$SRC/maho-workspace\" ] && SRC=\"$SRC/maho-workspace\"; "
+                        f"sudo find \"$SRC\" -mindepth 1 -maxdepth 1 "
                         "! -name chromium -exec ln -sfn {} "
                         f"{quoted_workspace}/ \\;",
                     ),
                 ),
                 status=_TerminalStatus.TRANSPORT_FAILED,
                 description="guest workspace symlink assembly failed",
+                timeout=60,
+                cancellation=cancellation,
+            )
+            _run_command(
+                services,
+                _remote_argv(
+                    ssh_base,
+                    (
+                        "sh",
+                        "-lc",
+                        # Fail-fast probe: verify that the entry script exists directly under quoted_workspace
+                        f"P={quoted_workspace}/maho-chromium/build/scripts/e2e_chromium_ai.js; "
+                        f"test -e \"$P\" || {{ ls -la {quoted_workspace}/; exit 71; }}",
+                    ),
+                ),
+                status=_TerminalStatus.TRANSPORT_FAILED,
+                description="guest workspace script probe failed",
                 timeout=60,
                 cancellation=cancellation,
             )
@@ -1765,6 +1853,8 @@ def _run_selected_suites(
                 "-p",
                 str(guest_run_dir),
                 str(guest_run_dir / "empty-source-profile"),
+                str(guest_run_dir / "ai-mock-tmp"),
+                str(guest_run_dir / "ai-mock-no-key-tmp"),
             ),
         ),
         status=_TerminalStatus.GUEST_NOT_READY,
@@ -1855,7 +1945,12 @@ def _run_selected_suites(
                 artifact_paths.extend(
                     _write_command_logs(run_directory, command, runtime_result)
                 )
-                summary_path = run_directory / "interactive-test-summary.json"
+                summary_filename = (
+                    PurePosixPath(command.summary_path).name
+                    if command.summary_path
+                    else "interactive-test-summary.json"
+                )
+                summary_path = run_directory / summary_filename
                 _copy_guest_file(
                     config,
                     ip_address,
@@ -1875,6 +1970,90 @@ def _run_selected_suites(
                     encoding="utf-8",
                 )
                 validation = _validate_interactive_result(captured, summary)
+            elif isinstance(suite, (MailCliSuite, HybridVisualSuite, StealthSuite)):
+                if isinstance(suite, StealthSuite):
+                    command = _build_stealth_command(
+                        str(manifest.guest_workspace), str(guest_run_dir), suite.name, suite.scenarios
+                    )
+                    summary_file = f"{suite.name}-summary.json"
+                elif isinstance(suite, HybridVisualSuite):
+                    command = _build_hybrid_visual_command(
+                        str(manifest.guest_workspace), str(guest_run_dir)
+                    )
+                    summary_file = "baseline-latency.json"
+                else:
+                    command = _build_mail_cli_command(
+                        str(manifest.guest_workspace), str(guest_run_dir)
+                    )
+                    summary_file = "mail-cli-summary.json"
+                captured, runtime_result = _execute_guest_command(
+                    command, ssh_base, services, cancellation, on_process_started
+                )
+                returncode = captured.returncode
+                artifact_paths.extend(
+                    _write_command_logs(run_directory, command, runtime_result)
+                )
+                summary_path = run_directory / summary_file
+                if isinstance(suite, (HybridVisualSuite, StealthSuite)):
+                    # Export fixed evidence paths even when the guest failed before
+                    # writing its summary. Never trust paths supplied by the guest.
+                    export_errors: list[str] = []
+                    export_names = (
+                        "cleanup.json", "transcript.json", "fixture-receipts.json",
+                        "browser.stderr.log", "cli.stderr.log", summary_file,
+                    )
+                    for name in export_names:
+                        remote_path = str(guest_run_dir / name)
+                        local_path = run_directory / name
+                        try:
+                            if name != summary_file:
+                                presence = _run_command(
+                                    services, _remote_argv(ssh_base, ("test", "-f", remote_path)),
+                                    status=_TerminalStatus.SUITE_FAILED,
+                                    description=f"guest evidence probe failed: {remote_path}",
+                                    timeout=60, cancellation=cancellation, required=False,
+                                )
+                                if presence.returncode == 1:
+                                    if name == "cleanup.json":
+                                        export_errors.append(f"missing cleanup receipt: {remote_path}")
+                                    continue
+                                if not presence.succeeded:
+                                    raise _StageFailure(
+                                        _TerminalStatus.SUITE_FAILED,
+                                        f"guest evidence probe failed: {remote_path}",
+                                    )
+                            _copy_guest_file(
+                                config, ip_address, remote_path, local_path,
+                                services, cancellation,
+                            )
+                            artifact_paths.append(str(local_path))
+                        except _StageFailure as error:
+                            if error.status is _TerminalStatus.CANCELLED:
+                                raise
+                            export_errors.append(str(error))
+                    if returncode != 0 or export_errors:
+                        suite_label = "stealth" if isinstance(suite, StealthSuite) else "baseline"
+                        message = f"{suite_label} guest returncode={returncode}"
+                        if export_errors:
+                            message += "; " + "; ".join(export_errors)
+                        raise _StageFailure(_TerminalStatus.SUITE_FAILED, message)
+                    if isinstance(suite, StealthSuite):
+                        validation = _validate_stealth_result(
+                            captured, json.loads(summary_path.read_text(encoding="utf-8"))
+                        )
+                    else:
+                        validation = _validate_hybrid_visual_result(
+                            captured, json.loads(summary_path.read_text(encoding="utf-8"))
+                        )
+                else:
+                    _copy_guest_file(
+                        config, ip_address, command.summary_path or "", summary_path,
+                        services, cancellation,
+                    )
+                    artifact_paths.append(str(summary_path))
+                    validation = _validate_mail_cli_result(
+                        captured, json.loads(summary_path.read_text(encoding="utf-8"))
+                    )
             elif isinstance(suite, AiMockSuite):
                 commands = _build_ai_mock_commands(
                     str(manifest.guest_workspace),
@@ -1905,7 +2084,7 @@ def _run_selected_suites(
                 raise AssertionError(f"unexpanded aggregate suite: {suite.name}")
             results[index] = _ReceiptSuiteResult(
                 name=suite.name,
-                status="success",
+                status="blocked" if getattr(validation, "status", None) == "BLOCKED" else "success",
                 started_at=suite_started,
                 finished_at=_utc_timestamp(),
                 returncode=0,
@@ -2107,6 +2286,25 @@ def run(
         )
     selected_gtest = getattr(args, "gtest", None)
     required_transport = getattr(args, "require_transport", None)
+    hybrid = args.suite != _INTENTIONAL_FAILURE_SUITE and any(
+        isinstance(suite, HybridVisualSuite) for suite in _expand_suite(manifest, args.suite)
+    )
+    stealth = args.suite != _INTENTIONAL_FAILURE_SUITE and any(
+        isinstance(suite, StealthSuite) for suite in _expand_suite(manifest, args.suite)
+    )
+    if hybrid:
+        if args.suite != 'hybrid-visual' or not getattr(args, 'skip_build', False) or required_transport != 'virtiofs-read-only':
+            raise LifecycleError('baseline requires --suite hybrid-visual --skip-build --require-transport virtiofs-read-only')
+        # Baseline must not list/execute/sign unrelated test binaries or rebuild Chromium.
+        manifest = _dataclasses.replace(manifest, suites=(manifest.suite('hybrid-visual'),))
+    if stealth:
+        if not getattr(args, 'skip_build', False) or required_transport != 'virtiofs-read-only':
+            raise LifecycleError(f'{args.suite} requires --skip-build --require-transport virtiofs-read-only')
+    if args.suite != _INTENTIONAL_FAILURE_SUITE and any(
+        isinstance(suite, MailCliSuite) for suite in _expand_suite(manifest, args.suite)
+    ):
+        if not getattr(args, "skip_build", False) or required_transport != "virtiofs-read-only":
+            raise LifecycleError("mail-cli requires --skip-build --require-transport virtiofs-read-only")
     if selected_gtest is not None:
         if any(character in selected_gtest for character in "*?[]:") or "." not in selected_gtest:
             raise LifecycleError(
@@ -2123,6 +2321,11 @@ def run(
             raise LifecycleError(
                 f"gtest {selected_gtest!r} is not a member of suite {args.suite!r}"
             )
+
+    if args.suite != _INTENTIONAL_FAILURE_SUITE:
+        requested_suite = manifest.suite(args.suite)
+        if isinstance(requested_suite, GtestSuite):
+            manifest = _dataclasses.replace(manifest, suites=(requested_suite,))
 
     workspace = _workspace_root(args)
     config = _tart_config(manifest, args)
@@ -2188,7 +2391,15 @@ def run(
         previous_handlers[signum] = _signal.signal(signum, cancel)
 
     try:
-        if getattr(args, "skip_build", False):
+        if hybrid or stealth:
+            from macos_vm_build_transport import verify_baseline_cli
+            output = workspace / 'chromium/src/out/Default'
+            provenance = verify_baseline_cli(output / 'hybrid-baseline/Maho.app/Contents/Helpers/maho')
+            if not (output / 'Maho.app/Contents/MacOS/Maho').is_file():
+                raise LifecycleError('existing browser executable missing')
+            dependencies = (output / 'hybrid-baseline',)
+            _atomic_json(writer.run_directory / 'build-preflight.json', {'build_mode': 'prebuilt-baseline', 'cli': provenance})
+        elif getattr(args, "skip_build", False):
             dependencies = _preflight_existing_build(
                 workspace,
                 manifest,

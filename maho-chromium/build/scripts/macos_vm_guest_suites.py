@@ -19,6 +19,212 @@ LOOPBACK_CDP_HOST = "127.0.0.1"
 NODE_MAJOR_VERSION = 24
 INTENTIONAL_FAILURE_EXIT_CODE = 1
 INTENTIONAL_FAILURE_MARKER = "INTENTIONAL_FAILURE_FIXTURE"
+MAIL_CLI_SCENARIOS = ("mail_cli_lifecycle",)
+PLAIN_GTEST_BINARIES = frozenset(
+    (
+        "maho_mcp_input_synthesizer_test",
+        "maho_mcp_firewall_test",
+        "maho_mcp_session_test",
+        "maho_mcp_lease_registry_test",
+        "maho_mcp_accessibility_handler_test",
+        "maho_mcp_screenshot_handler_test",
+        "maho_mcp_console_capture_test",
+    )
+)
+_PLAIN_GTEST_BINARIES = PLAIN_GTEST_BINARIES
+
+
+
+def build_hybrid_visual_command(guest_workspace: str, guest_run_dir: str) -> GuestCommand:
+    workspace = _absolute_guest_path(guest_workspace, 'guest workspace')
+    run_dir = _absolute_guest_path(guest_run_dir, 'guest run directory')
+    output = workspace / 'chromium/src/out/Default'
+    return GuestCommand(
+        suite='hybrid-visual',
+        argv=('/opt/homebrew/bin/python3', str(workspace / 'maho-chromium/build/scripts/hybrid_visual_pipeline.py'),
+              'baseline', '--cli', str(output / 'hybrid-baseline/Maho.app/Contents/Helpers/maho'), '--app', str(output / 'hybrid-baseline/Maho.app'),
+              '--evidence-dir', str(run_dir), '--iterations', '50', '--output', str(run_dir / 'baseline-latency.json')),
+        environment=(('MAHO_BASELINE_TART', '1'),),
+        stdout_path=str(run_dir / 'hybrid-visual.stdout.log'), stderr_path=str(run_dir / 'hybrid-visual.stderr.log'),
+        expected_results=('baseline',), summary_path=str(run_dir / 'baseline-latency.json'))
+
+
+def validate_hybrid_visual_result(
+    result: CapturedCommandResult, summary: Mapping[str, Any]
+) -> SuiteValidation:
+    from hybrid_visual_pipeline import validate_baseline
+    issues = []
+    if result.returncode != 0 or result.command.suite != 'hybrid-visual':
+        issues.append('baseline process failed or wrong suite')
+    try:
+        validate_baseline(summary)
+    except (ValueError, TypeError, KeyError) as error:
+        issues.append(str(error))
+    if issues:
+        raise SuiteValidationError('hybrid-visual', issues)
+    return SuiteValidation('hybrid-visual', ('baseline',), ('baseline',), (result.returncode,))
+
+
+STEALTH_SCENARIOS = (
+    'sentinel',
+    'coordinates',
+    'permission-denied',
+    'native-input',
+    'security',
+    'model-loop',
+    'recovery',
+    'fingerprint',
+    'challenge',
+    'misclick',
+    'telemetry',
+)
+
+STEALTH_ONLINE_SCENARIOS = (
+    'turnstile-online',
+    'model-provider-online',
+)
+
+ALL_STEALTH_SCENARIOS = STEALTH_SCENARIOS + STEALTH_ONLINE_SCENARIOS
+
+
+def build_stealth_command(
+    guest_workspace: str,
+    guest_run_dir: str,
+    suite_name: str,
+    scenarios: Sequence[str],
+) -> GuestCommand:
+    workspace = _absolute_guest_path(guest_workspace, 'guest workspace')
+    run_dir = _absolute_guest_path(guest_run_dir, 'guest run directory')
+    output = workspace / 'chromium/src/out/Default'
+    scenario_list = tuple(scenarios)
+    if not scenario_list:
+        raise SuiteContractError(f'stealth suite {suite_name} requires at least one scenario')
+    for scenario in scenario_list:
+        if scenario not in ALL_STEALTH_SCENARIOS:
+            raise SuiteContractError(f'unknown stealth scenario: {scenario}')
+
+    argv: list[str] = [
+        '/opt/homebrew/bin/python3',
+        str(workspace / 'maho-chromium/build/scripts/hybrid_visual_pipeline.py'),
+        'run',
+    ]
+    for scenario in scenario_list:
+        argv.extend(('--scenario', scenario))
+    argv.extend((
+        '--cli', str(output / 'hybrid-baseline/Maho.app/Contents/Helpers/maho'),
+        '--app', str(output / 'hybrid-baseline/Maho.app'),
+        '--evidence-dir', str(run_dir),
+        '--output', str(run_dir / f'{suite_name}-summary.json'),
+    ))
+
+    return GuestCommand(
+        suite=suite_name,
+        argv=tuple(argv),
+        environment=(('MAHO_STEALTH_TART', '1'),),
+        stdout_path=str(run_dir / f'{suite_name}.stdout.log'),
+        stderr_path=str(run_dir / f'{suite_name}.stderr.log'),
+        expected_results=scenario_list,
+        summary_path=str(run_dir / f'{suite_name}-summary.json'),
+    )
+
+
+def validate_stealth_result(
+    result: CapturedCommandResult, summary: Mapping[str, Any]
+) -> SuiteValidation:
+    issues = []
+    if result.returncode != 0:
+        issues.append(f'stealth process exited with {result.returncode}')
+    if not isinstance(summary, Mapping):
+        issues.append('stealth summary must be an object')
+    else:
+        if summary.get('browser_executed') is not True:
+            issues.append('stealth summary browser_executed must be true')
+
+        receipts = summary.get('receipts')
+        if not isinstance(receipts, Sequence) or isinstance(receipts, (str, bytes)) or len(receipts) == 0:
+            issues.append('stealth summary receipts must be a non-empty sequence')
+
+        status = summary.get('status')
+        if status not in ('PASS', 'MEASURED', 'SUCCESS', 'BLOCKED'):
+            issues.append(f'stealth status is not passing: {status}')
+        if status == 'FAIL':
+            issues.append('stealth summary reported status FAIL')
+
+        scenario = summary.get('scenario')
+        scenarios = summary.get('scenarios')
+
+        if scenario is not None and not isinstance(scenario, str):
+            issues.append(f'stealth scenario identity must be a string, got {type(scenario).__name__}')
+        if scenarios is not None:
+            if not isinstance(scenarios, Sequence) or isinstance(scenarios, (str, bytes)) or not all(isinstance(s, str) for s in scenarios):
+                issues.append('stealth scenarios identity must be a sequence of strings')
+
+        if not scenario and not scenarios:
+            issues.append('stealth summary missing scenario identity')
+        else:
+            if scenario and scenarios and isinstance(scenarios, Sequence) and not isinstance(scenarios, (str, bytes)):
+                if len(scenarios) == 1 and scenario != scenarios[0]:
+                    issues.append(f'stealth scalar scenario {scenario!r} conflicts with scenarios list {scenarios!r}')
+                elif scenario not in scenarios:
+                    issues.append(f'stealth scalar scenario {scenario!r} not in scenarios list {scenarios!r}')
+
+            actual_scenarios = set(scenarios if (isinstance(scenarios, Sequence) and not isinstance(scenarios, (str, bytes))) else ([scenario] if isinstance(scenario, str) else []))
+            expected_set = set(result.command.expected_results)
+            if not expected_set.issubset(actual_scenarios):
+                issues.append(f'stealth scenario identity mismatch: expected {sorted(expected_set)}, got {sorted(actual_scenarios)}')
+
+        results = summary.get('results')
+        if not isinstance(results, Mapping):
+            issues.append('stealth summary missing results mapping')
+        else:
+            for expected_sc in result.command.expected_results:
+                if expected_sc not in results:
+                    issues.append(f'expected scenario {expected_sc} missing from stealth results')
+                else:
+                    sc_res = results[expected_sc]
+                    if not isinstance(sc_res, Mapping):
+                        issues.append(f'scenario {expected_sc} result must be an object')
+                    else:
+                        sc_status = sc_res.get('status')
+                        if expected_sc in STEALTH_ONLINE_SCENARIOS:
+                            if sc_status not in ('PASS', 'BLOCKED'):
+                                issues.append(f'online scenario {expected_sc} invalid status: {sc_status}')
+                        else:
+                            if sc_status != 'PASS':
+                                issues.append(f'offline scenario {expected_sc} did not pass: {sc_status}')
+                        if sc_status == 'PASS':
+                            sc_receipts = sc_res.get('receipts')
+                            if sc_receipts is not None and (not isinstance(sc_receipts, Sequence) or len(sc_receipts) == 0):
+                                issues.append(f'scenario {expected_sc} passed but has empty receipts')
+    if issues:
+        raise SuiteValidationError(result.command.suite, issues)
+    expected = result.command.expected_results
+    passed = []
+    blocked = []
+    if isinstance(summary, Mapping) and isinstance(summary.get('results'), Mapping):
+        for sc in expected:
+            sc_stat = summary['results'].get(sc, {}).get('status')
+            if sc_stat == 'PASS':
+                passed.append(sc)
+            elif sc_stat == 'BLOCKED':
+                blocked.append(sc)
+    else:
+        passed = list(expected) if result.returncode == 0 else []
+
+    if blocked and not any(summary['results'].get(sc, {}).get('status') == 'FAIL' for sc in expected):
+        validation_status = "BLOCKED" if (not passed or len(blocked) + len(passed) == len(expected)) else "SUCCESS"
+    else:
+        validation_status = "SUCCESS" if len(passed) == len(expected) else "FAIL"
+
+    return SuiteValidation(
+        suite=result.command.suite,
+        expected=expected,
+        passed=tuple(passed),
+        returncodes=(result.returncode,),
+        status=validation_status,
+        blocked=tuple(blocked),
+    )
+
 
 AI_MOCK_SCENARIOS = (
     "ai_panel_renders",
@@ -92,6 +298,8 @@ class SuiteValidation:
     passed: tuple[str, ...]
     returncodes: tuple[int, ...]
     profile_paths: tuple[str, ...] = ()
+    status: str = "SUCCESS"
+    blocked: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         receipt: dict[str, object] = {
@@ -99,8 +307,10 @@ class SuiteValidation:
             "expected": list(self.expected),
             "passed": list(self.passed),
             "returncodes": list(self.returncodes),
-            "status": "SUCCESS",
+            "status": self.status,
         }
+        if self.blocked:
+            receipt["blocked"] = list(self.blocked)
         if self.profile_paths:
             receipt["profile_paths"] = list(self.profile_paths)
         return receipt
@@ -187,10 +397,29 @@ def build_interactive_command(
     run_dir = _absolute_guest_path(guest_run_dir, "guest run directory")
     tests = _validated_gtest_names(test_names)
     binary = workspace / "chromium/src/out/Default" / binary_name
-    summary = run_dir / "interactive-test-summary.json"
     bin_str = str(binary)
-    summary_str = str(summary)
     filter_arg = f"--gtest_filter={':'.join(tests)}"
+
+    if binary_name in _PLAIN_GTEST_BINARIES:
+        summary = run_dir / "gtest-summary.json"
+        summary_str = str(summary)
+        return GuestCommand(
+            suite=suite_name,
+            argv=(
+                bin_str,
+                filter_arg,
+                "--gtest_fail_if_no_test_selected",
+                f"--gtest_output=json:{summary_str}",
+            ),
+            environment=(),
+            stdout_path=str(run_dir / f"{suite_name}.stdout.log"),
+            stderr_path=str(run_dir / f"{suite_name}.stderr.log"),
+            summary_path=summary_str,
+            expected_results=tests,
+        )
+
+    summary = run_dir / "interactive-test-summary.json"
+    summary_str = str(summary)
     summary_arg = f"--test-launcher-summary-output={summary_str}"
 
     return GuestCommand(
@@ -201,6 +430,9 @@ def build_interactive_command(
             "--gtest_fail_if_no_test_selected",
             "--test-launcher-jobs=1",
             "--test-launcher-retry-limit=0",
+            # Guest VMs boot cold; the Chromium default 45s per-test timeout is
+            # too tight for the first navigation after login.
+            "--test-launcher-timeout=180000",
             summary_arg,
         ),
         environment=(),
@@ -211,7 +443,7 @@ def build_interactive_command(
     )
 
 
-def _gtest_summary_issues(
+def _launcher_summary_issues(
     summary: Mapping[str, Any], expected_tests: tuple[str, ...]
 ) -> list[str]:
     issues: list[str] = []
@@ -251,6 +483,101 @@ def _gtest_summary_issues(
         if status != "SUCCESS":
             issues.append(f"{test_name} status is {status!r}, expected 'SUCCESS'")
     return issues
+
+
+def _standard_gtest_summary_issues(
+    summary: Mapping[str, Any], expected_tests: tuple[str, ...]
+) -> list[str]:
+    issues: list[str] = []
+    testsuites = summary.get("testsuites")
+    if not isinstance(testsuites, list):
+        return ["testsuites must be a list"]
+
+    runs_by_test: dict[str, list[Mapping[str, Any]]] = {}
+    total_failures = summary.get("failures", 0)
+    total_errors = summary.get("errors", 0)
+    total_disabled = summary.get("disabled", 0)
+
+    for suite_index, suite in enumerate(testsuites):
+        if not isinstance(suite, Mapping):
+            return [f"testsuites[{suite_index}] must be an object"]
+        suite_name = suite.get("name")
+        cases = suite.get("testsuite")
+        if not isinstance(cases, list):
+            return [f"testsuite {suite_name!r} cases must be a list"]
+        for case in cases:
+            if not isinstance(case, Mapping):
+                return [f"testcase entry in suite {suite_name!r} must be an object"]
+            case_name = case.get("name")
+            classname = case.get("classname") or suite_name
+            if not isinstance(case_name, str) or not isinstance(classname, str):
+                return ["testcase name and classname must be strings"]
+            full_name = f"{classname}.{case_name}"
+            runs_by_test.setdefault(full_name, []).append(case)
+
+    actual_tests = set(runs_by_test.keys())
+    expected_set = set(expected_tests)
+    if actual_tests != expected_set:
+        issues.append(
+            "selected test set mismatch "
+            f"(missing={sorted(expected_set - actual_tests)}, "
+            f"extra={sorted(actual_tests - expected_set)})"
+        )
+
+    for test_name in expected_tests:
+        runs = runs_by_test.get(test_name)
+        if not runs:
+            continue
+        if len(runs) != 1:
+            issues.append(
+                f"{test_name} ran {len(runs)} times; expected exactly one run and no retries"
+            )
+            continue
+        run = runs[0]
+        status = run.get("status")
+        result = run.get("result")
+        failures = run.get("failures")
+        skipped = run.get("skipped")
+        if status != "RUN":
+            issues.append(f"{test_name} status is {status!r}, expected 'RUN'")
+        if result != "COMPLETED":
+            issues.append(f"{test_name} result is {result!r}, expected 'COMPLETED'")
+        if failures:
+            issues.append(f"{test_name} failed with {len(failures)} failure(s)")
+        if skipped:
+            issues.append(f"{test_name} was skipped")
+
+    for test_name in sorted(actual_tests - expected_set):
+        runs = runs_by_test[test_name]
+        if len(runs) != 1:
+            issues.append(
+                f"{test_name} ran {len(runs)} times; expected exactly one run and no retries"
+            )
+
+    if (isinstance(total_failures, int) and total_failures > 0) or (
+        isinstance(total_errors, int) and total_errors > 0
+    ):
+        if not any("failed" in issue for issue in issues):
+            issues.append(
+                f"summary reported failures={total_failures} errors={total_errors}"
+            )
+    if isinstance(total_disabled, int) and total_disabled > 0:
+        if not any("status is 'NOTRUN'" in issue or "skipped" in issue for issue in issues):
+            issues.append(f"summary reported disabled={total_disabled}")
+
+    return issues
+
+
+def _gtest_summary_issues(
+    summary: Mapping[str, Any], expected_tests: tuple[str, ...]
+) -> list[str]:
+    if "per_iteration_data" in summary:
+        return _launcher_summary_issues(summary, expected_tests)
+    if "testsuites" in summary:
+        return _standard_gtest_summary_issues(summary, expected_tests)
+    return [
+        "test summary must contain either per_iteration_data or testsuites"
+    ]
 
 
 def merge_gtest_summary_with_stdout(
@@ -298,6 +625,7 @@ def validate_interactive_result(
     """Validate both the interactive process result and its launcher summary."""
 
     command = result.command
+    suite = command.suite or "interactive-smoke"
     issues: list[str] = []
     if not command.suite or command.summary_path is None:
         issues.append("result is not associated with an interactive test command")
@@ -313,9 +641,9 @@ def validate_interactive_result(
     elif tests:
         issues.extend(_gtest_summary_issues(summary, tests))
     if issues:
-        raise SuiteValidationError("interactive-smoke", issues)
+        raise SuiteValidationError(suite, issues)
     return SuiteValidation(
-        suite="interactive-smoke",
+        suite=suite,
         expected=tests,
         passed=tests,
         returncodes=(result.returncode,),
@@ -565,6 +893,51 @@ def validate_ai_mock_results(
         returncodes=tuple(returncodes),
         profile_paths=tuple(profile_paths),
     )
+
+
+def build_mail_cli_command(guest_workspace: str, guest_run_dir: str) -> GuestCommand:
+    """Route only the Mail CLI contract, using the mounted host build."""
+    workspace = _absolute_guest_path(guest_workspace, "guest workspace")
+    run_dir = _absolute_guest_path(guest_run_dir, "guest run directory")
+    return GuestCommand(
+        suite="mail-cli",
+        argv=(
+            "python3",
+            str(workspace / "maho/appium-tests/desktop-mail/run-mail-cli-vm.py"),
+            "--workspace", str(workspace),
+            "--artifact-dir", str(run_dir),
+            "--scenario", MAIL_CLI_SCENARIOS[0],
+        ),
+        environment=(("MAHO_MAIL_CLI_TART", "1"),),
+        stdout_path=str(run_dir / "mail-cli.stdout.log"),
+        stderr_path=str(run_dir / "mail-cli.stderr.log"),
+        summary_path=str(run_dir / "mail-cli-summary.json"),
+        expected_results=MAIL_CLI_SCENARIOS,
+    )
+
+
+def validate_mail_cli_result(
+    result: CapturedCommandResult, summary: Mapping[str, Any]
+) -> SuiteValidation:
+    """Preparation is deliberately not accepted as browser QA success.
+
+    Enable success validation only with the concrete fixture/event and screenshot
+    contracts; an arbitrary SUCCESS JSON must not bypass missing browser proof.
+    """
+    issues = []
+    if result.command.suite != "mail-cli":
+        issues.append("result is not associated with mail-cli")
+    if result.returncode != 0:
+        issues.append(f"Mail CLI process exited with {result.returncode}")
+    if not isinstance(summary, Mapping):
+        issues.append("Mail CLI summary must be an object")
+    else:
+        if summary.get("scenario") != MAIL_CLI_SCENARIOS[0]:
+            issues.append("Mail CLI scenario mismatch")
+        if summary.get("status") == "BLOCKED":
+            issues.append(f"blocked: {summary.get('blockers', [])}")
+    issues.append("Mail CLI browser evidence validation is not yet implemented")
+    raise SuiteValidationError("mail-cli", issues)
 
 
 def build_intentional_failure_command(

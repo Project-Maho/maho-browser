@@ -1,5 +1,13 @@
 'use strict';
 
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+
+const CREEPJS_DIR = join(__dirname, 'creepjs');
+const CREEPJS_BUNDLE = readFileSync(join(CREEPJS_DIR, 'creep.js'), 'utf8');
+const CREEPJS_DOCUMENT = readFileSync(join(CREEPJS_DIR, 'index.html'), 'utf8');
+const CREEPJS_BODY = CREEPJS_DOCUMENT.match(/<body>([\s\S]*)<\/body>/)[1];
+
 // Deterministic HTML page templates for the local security fixtures.
 //
 // Every page carries a stable `data-maho-fixture-route="<name>"` marker on the
@@ -24,6 +32,13 @@ function layout(route, title, inner) {
 <h1>${title}</h1>
 ${inner}
 </main>
+<script>
+  fetch('/receipt', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: 'ready', value: '${route}', isTrusted: false })
+  }).catch(function() {});
+</script>
 </body>
 </html>`;
 }
@@ -142,7 +157,323 @@ function promptInjectionPage() {
   );
 }
 
-const PAGE_BUILDERS = {
+function creepjsPage() {
+  return layout(
+    'creepjs',
+    'CreepJS Offline Audit',
+    `<article id="creepjs-container" data-maho-fixture="creepjs">
+  <h2>Upstream CreepJS Audit</h2>
+  <div id="creepjs-status">Running upstream audit...</div>
+  <pre id="creepjs-output"></pre>
+  ${CREEPJS_BODY}
+  <script>
+    (function() {
+      var isWebdriver = Boolean(navigator.webdriver);
+      var cdcMarkers = [
+        '$cdc_asdjflasutopfhvcZLmcfl_',
+        'cdc_adoQpoasnfa76pfcZLmcfl_',
+        '$chrome_asyncScriptInfo',
+        '__webdriver_evaluate',
+        '__selenium_evaluate',
+        '__webdriver_script_function',
+        '__webdriver_script_func',
+        '__webdriver_script_fn'
+      ];
+      var detected = cdcMarkers.filter(function(marker) {
+        return marker in window || marker in document;
+      });
+      var maho = {
+        webdriver: isWebdriver,
+        cdc_markers_found: detected.length > 0,
+        detected_markers: detected,
+        other_automation_markers: {
+          selenium: '__selenium_evaluate' in window || '__selenium_evaluate' in document,
+          chrome_async_script: '$chrome_asyncScriptInfo' in window || '$chrome_asyncScriptInfo' in document
+        }
+      };
+      window.addEventListener('maho-creepjs-complete', function(event) {
+        var passed = !maho.webdriver && !maho.cdc_markers_found;
+        var result = {
+          suite: 'creepjs-offline',
+          passed: passed,
+          webdriver: maho.webdriver,
+          cdc_markers_found: maho.cdc_markers_found,
+          detected_markers: maho.detected_markers,
+          upstream_creepjs: {
+            revision: '10aa6724cd33a1015db1574211890518cd04f0cc',
+            audit: event.detail
+          },
+          maho_observations: maho,
+          timestamp: Date.now()
+        };
+        var out = document.querySelector('#creepjs-output');
+        if (out) out.textContent = JSON.stringify(result, null, 2);
+        var status = document.querySelector('#creepjs-status');
+        if (status) status.textContent = passed ? 'PASS' : 'FAIL';
+        fetch('/creepjs/results', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(result)
+        }).catch(function() {});
+      }, { once: true });
+    })();
+  </script>
+  <script>${CREEPJS_BUNDLE}</script>
+</article>`,
+  );
+}
+
+function creepjsResultsPage() {
+  return layout(
+    'creepjs/results',
+    'CreepJS Audit Results',
+    `<div id="results" data-maho-fixture-route="creepjs/results">Audit submitted</div>`,
+  );
+}
+
+function challengePage({ episodeId } = {}) {
+  const epId = episodeId || ('ep-' + Date.now());
+  return layout(
+    'challenge',
+    'Maho Challenge Fixture',
+    `<article id="challenge-widget" data-maho-fixture-route="challenge" data-episode-id="${epId}">
+  <h2>Verification Required</h2>
+  <div id="challenge-status">shown</div>
+  <div id="misclick-count">0</div>
+  <div id="challenge-container" style="position:relative; width:400px; height:200px; border:1px solid #ccc; margin:20px 0;">
+    <div id="challenge-misclick-zone" style="position:absolute; top:0; left:0; width:100%; height:100%;"></div>
+    <button id="challenge-target" type="button" style="position:absolute; top:75px; left:100px; width:200px; height:50px; z-index:2; cursor:pointer;">
+      Verify you are human
+    </button>
+  </div>
+  <div id="challenge-success" style="display:none; color:green; font-weight:bold;">
+    Verification Passed — Benign Page Access Granted
+  </div>
+  <div id="ordinary-content" style="margin-top:20px;">
+    <p>Protected Content Unlocked</p>
+  </div>
+  <script>
+    (function() {
+      var widget = document.querySelector('#challenge-widget');
+      var episodeId = widget ? widget.getAttribute('data-episode-id') : 'ep-unknown';
+      var status = document.querySelector('#challenge-status');
+      var misclickCount = document.querySelector('#misclick-count');
+      var successBox = document.querySelector('#challenge-success');
+      var target = document.querySelector('#challenge-target');
+      var misclickZone = document.querySelector('#challenge-misclick-zone');
+      var count = 0;
+
+      if (target) {
+        target.addEventListener('click', function(e) {
+          fetch('/challenge/verify', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              episodeId: episodeId,
+              target: 'challenge-target',
+              isTrusted: Boolean(e.isTrusted),
+              timestamp: Date.now()
+            })
+          }).then(function(res) {
+            return res.json();
+          }).then(function(data) {
+            if (data && data.verified) {
+              if (status) status.textContent = 'cleared';
+              if (successBox) successBox.style.display = 'block';
+              fetch('/receipt', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  kind: 'state',
+                  value: 'challenge-cleared',
+                  isTrusted: Boolean(e.isTrusted)
+                })
+              }).catch(function() {});
+            }
+          }).catch(function() {});
+        });
+      }
+
+      if (misclickZone) {
+        misclickZone.addEventListener('click', function(e) {
+          count++;
+          if (misclickCount) misclickCount.textContent = String(count);
+          fetch('/challenge/misclick', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              episodeId: episodeId,
+              target: 'challenge-misclick-zone',
+              count: count,
+              timestamp: Date.now()
+            })
+          }).catch(function() {});
+        });
+      }
+    })();
+  </script>
+</article>`,
+  );
+}
+
+function telemetryPage() {
+  return layout(
+    'telemetry',
+    'Native Input Telemetry',
+    `<style>
+  #telemetry-target { position:fixed; left:100px; top:100px; width:200px; height:120px; }
+  #telemetry-input { position:fixed; left:100px; top:260px; width:240px; height:32px; }
+</style>
+<button id="telemetry-target" type="button">Telemetry target</button>
+<label for="telemetry-input" style="position:fixed;left:100px;top:240px">Keyboard input</label>
+<input id="telemetry-input" type="text" autocomplete="off">
+<pre id="telemetry-output"></pre>
+<script id="telemetry-recorder">
+  (function() {
+    var moves = [];
+    var pointerdowns = [];
+    var pointerups = [];
+    var keyboard = [];
+    var activeKeys = {};
+    var submitted = false;
+
+    function now() {
+      return performance.now();
+    }
+
+    function recordMove(event) {
+      moves.push({ x: Number(event.clientX), y: Number(event.clientY), t: now() });
+    }
+
+    function recordPointer(event, destination) {
+      destination.push({ x: Number(event.clientX), y: Number(event.clientY), t: now() });
+    }
+
+    function recordKey(event) {
+      keyboard.push({
+        type: event.type,
+        key: event.key,
+        code: event.code,
+        altKey: Boolean(event.altKey),
+        ctrlKey: Boolean(event.ctrlKey),
+        metaKey: Boolean(event.metaKey),
+        shiftKey: Boolean(event.shiftKey),
+        t: now()
+      });
+      var identity = event.code || event.key;
+      if (event.type === 'keydown') activeKeys[identity] = true;
+      if (event.type === 'keyup') delete activeKeys[identity];
+      submitWhenComplete();
+    }
+
+    function metrics(targetCenter) {
+      var first = moves[0];
+      var last = moves[moves.length - 1];
+      var lineX = last.x - first.x;
+      var lineY = last.y - first.y;
+      var lineLength = Math.hypot(lineX, lineY);
+      var jitter = moves.reduce(function(maximum, point) {
+        var deviation = lineLength === 0
+          ? Math.hypot(point.x - first.x, point.y - first.y)
+          : Math.abs(lineX * (first.y - point.y) - (first.x - point.x) * lineY) / lineLength;
+        return Math.max(maximum, deviation);
+      }, 0);
+
+      var approachX = targetCenter.x - first.x;
+      var approachY = targetCenter.y - first.y;
+      var approachLength = Math.hypot(approachX, approachY);
+      var overshoot = moves.reduce(function(maximum, point) {
+        if (approachLength === 0) return maximum;
+        var beyond = ((point.x - targetCenter.x) * approachX +
+                      (point.y - targetCenter.y) * approachY) / approachLength;
+        return Math.max(maximum, beyond);
+      }, 0);
+
+      return {
+        jitter_css_px: jitter,
+        overshoot_px: overshoot,
+        dwell_ms: pointerups[pointerups.length - 1].t - pointerdowns[0].t
+      };
+    }
+
+    function submitWhenComplete() {
+      if (submitted || moves.length < 2 || pointerdowns.length < 3 ||
+          pointerups.length < 3 || Object.keys(activeKeys).length !== 0 ||
+          !keyboard.some(function(event) { return event.type === 'keyup'; })) return;
+      submitted = true;
+      var target = document.querySelector('#telemetry-target');
+      var rect = target.getBoundingClientRect();
+      var targetCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      var measured = metrics(targetCenter);
+      var trace = {
+        moves: moves.slice(),
+        pointerdowns: pointerdowns.slice(),
+        pointerups: pointerups.slice(),
+        down_timestamp: pointerdowns[0].t,
+        up_timestamp: pointerups[pointerups.length - 1].t,
+        keyboard: keyboard.slice(),
+        target_center: targetCenter,
+        jitter_css_px: measured.jitter_css_px,
+        overshoot_px: measured.overshoot_px,
+        dwell_ms: measured.dwell_ms
+      };
+      var output = document.querySelector('#telemetry-output');
+      if (output) output.textContent = JSON.stringify(trace, null, 2);
+      fetch('/telemetry/trace', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(trace)
+      }).catch(function() {});
+    }
+
+    window.__mahoTelemetryMetrics = metrics;
+    document.addEventListener('pointermove', recordMove, true);
+    document.addEventListener('mousemove', recordMove, true);
+    document.addEventListener('pointerdown', function(event) {
+      recordPointer(event, pointerdowns);
+    }, true);
+    document.addEventListener('pointerup', function(event) {
+      recordPointer(event, pointerups);
+      submitWhenComplete();
+    }, true);
+    document.addEventListener('keydown', recordKey, true);
+    document.addEventListener('keyup', recordKey, true);
+  })();
+</script>`,
+  );
+}
+
+function challengeTurnstilePage() {
+  const allowOnline = process.env.MAHO_ALLOW_ONLINE === '1';
+  const scriptTag = allowOnline
+    ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
+    : '<!-- Turnstile external script suppressed in offline mode -->';
+  const initialStatus = allowOnline ? 'awaiting-interaction' : 'offline-blocked';
+  return layout(
+    'challenge-turnstile',
+    'Cloudflare Turnstile Test Key Verification',
+    `<article id="turnstile-container" data-maho-fixture-route="challenge-turnstile" data-online-mode="${allowOnline}">
+  <h2>Turnstile Force-Interactive Test</h2>
+  ${scriptTag}
+  <div class="cf-turnstile" data-sitekey="3x00000000000000000000FF" data-callback="onTurnstileSuccess"></div>
+  <div id="turnstile-status">${initialStatus}</div>
+  <div id="turnstile-token"></div>
+  <script>
+    function onTurnstileSuccess(token) {
+      document.querySelector('#turnstile-status').textContent = 'solved';
+      document.querySelector('#turnstile-token').textContent = token;
+      fetch('/challenge/turnstile-verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ token: token, sitekey: '3x00000000000000000000FF' })
+      }).catch(function() {});
+    }
+  </script>
+</article>`,
+  );
+}
+
+const OFFLINE_PAGE_BUILDERS = {
   '/login': loginPage,
   '/password-change': passwordChangePage,
   '/totp': totpPage,
@@ -150,8 +481,33 @@ const PAGE_BUILDERS = {
   '/payment': paymentPage,
   '/post': postPage,
   '/prompt-injection': promptInjectionPage,
+  '/creepjs': creepjsPage,
+  '/creepjs/results': creepjsResultsPage,
+  '/challenge': challengePage,
+  '/telemetry': telemetryPage,
 };
 
-const ROUTES = Object.keys(PAGE_BUILDERS);
+const ONLINE_PAGE_BUILDERS = {
+  '/challenge/turnstile': challengeTurnstilePage,
+};
 
-module.exports = { PAGE_BUILDERS, ROUTES, TOTP_TEST_SECRET, FIXTURE_USERNAME };
+const PAGE_BUILDERS = {
+  ...OFFLINE_PAGE_BUILDERS,
+  ...ONLINE_PAGE_BUILDERS,
+};
+
+// ROUTES is strictly offline routes to prevent external script leaks in offline QA.
+const ROUTES = Object.keys(OFFLINE_PAGE_BUILDERS);
+const ONLINE_ROUTES = Object.keys(ONLINE_PAGE_BUILDERS);
+const ALL_ROUTES = Object.keys(PAGE_BUILDERS);
+
+module.exports = {
+  PAGE_BUILDERS,
+  OFFLINE_PAGE_BUILDERS,
+  ONLINE_PAGE_BUILDERS,
+  ROUTES,
+  ONLINE_ROUTES,
+  ALL_ROUTES,
+  TOTP_TEST_SECRET,
+  FIXTURE_USERNAME
+};

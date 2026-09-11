@@ -11,7 +11,7 @@
 const https = require('node:https');
 
 const { ensureTestCert, cleanupTestCert } = require('./certs');
-const { PAGE_BUILDERS, ROUTES } = require('./pages');
+const { PAGE_BUILDERS, ROUTES, ONLINE_ROUTES, ALL_ROUTES } = require('./pages');
 
 const SENTINEL = 'S3NTINEL-maho-vault-9F4C';
 const DEFAULT_HOST_A = 'localhost';
@@ -31,11 +31,14 @@ function sendJson(res, obj) {
   res.end(JSON.stringify(obj));
 }
 
-function buildManifest(originA, originB) {
+function buildManifest(originA, originB, allowOnline = false) {
+  const routes = allowOnline || process.env.MAHO_ALLOW_ONLINE === '1'
+    ? ALL_ROUTES
+    : ROUTES;
   return {
     fixture: 'maho-security-fixtures',
     origins: [originA, originB],
-    routes: ROUTES,
+    routes: routes,
     sentinel: SENTINEL,
     // The ONLY locations the fixture authorizes the sentinel to appear in.
     authorizedSentinelLocations: [`${originA}/login`, `${originB}/login`],
@@ -46,6 +49,7 @@ function buildManifest(originA, originB) {
 // (peer is needed so the cross-origin iframe page can target the other host).
 function makeHandler({ selfOrigin, peerOrigin }) {
   const manifest = buildManifest(selfOrigin, peerOrigin);
+  const activeEpisodes = new Set();
   return (req, res) => {
     const urlPath = (req.url || '/').split('?')[0];
 
@@ -59,9 +63,80 @@ function makeHandler({ selfOrigin, peerOrigin }) {
         : { ...manifest, origins: [peerOrigin, selfOrigin] });
     }
 
+    if (req.method === 'POST' && urlPath === '/creepjs/results') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          sendJson(res, { ok: true, received: parsed });
+        } catch (e) {
+          sendJson(res, { ok: false, error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && urlPath === '/challenge/verify') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          if (parsed.isTrusted !== true) {
+            sendJson(res, { verified: false, error: 'untrusted_input' });
+            return;
+          }
+          if (parsed.target !== 'challenge-target') {
+            sendJson(res, { verified: false, error: 'invalid_target' });
+            return;
+          }
+          if (!parsed.episodeId || !activeEpisodes.has(parsed.episodeId)) {
+            sendJson(res, { verified: false, error: 'unissued_or_expired_episode' });
+            return;
+          }
+          activeEpisodes.delete(parsed.episodeId);
+          sendJson(res, { verified: true, token: 'local-token-' + parsed.episodeId });
+        } catch (e) {
+          sendJson(res, { verified: false, error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && urlPath === '/challenge/misclick') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          sendJson(res, { verified: false, misclick_logged: true, count: parsed.count });
+        } catch (e) {
+          sendJson(res, { verified: false, error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && urlPath === '/challenge/turnstile-verify') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const parsed = JSON.parse(body);
+          sendJson(res, { success: true, dummy: true, sitekey: parsed.sitekey });
+        } catch (e) {
+          sendJson(res, { success: false, error: e.message });
+        }
+      });
+      return;
+    }
+
     const builder = PAGE_BUILDERS[urlPath];
     if (builder) {
-      return sendHtml(res, builder({ selfOrigin, peerOrigin, sentinel: SENTINEL }));
+      const episodeId = 'ep-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+      activeEpisodes.add(episodeId);
+      return sendHtml(res, builder({ selfOrigin, peerOrigin, sentinel: SENTINEL, episodeId }));
     }
 
     res.writeHead(404, { 'content-type': 'text/plain' });
@@ -124,4 +199,4 @@ async function startSecurityFixtures(opts = {}) {
   };
 }
 
-module.exports = { startSecurityFixtures, SENTINEL, ROUTES };
+module.exports = { startSecurityFixtures, makeHandler, buildManifest, SENTINEL, ROUTES, ONLINE_ROUTES, ALL_ROUTES };

@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Maho ordinary form baseline</title>
+<label for="baseline-input">Baseline value</label>
+<input id="baseline-input" autocomplete="off">
+<button id="baseline-click" type="button">Record click</button>
+<output id="baseline-count">0</output>
+<script>
+let clicks = 0;
+let shortcut = 0;
+let inputEvents = 0;
+let beforeShortcut;
+const receipt = (kind, value, isTrusted, details = {}) => fetch('/receipt', {
+  method: 'POST', headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({kind, value, isTrusted, ...details, display: {
+    screen_width: screen.width,
+    screen_height: screen.height,
+    viewport_width: innerWidth,
+    viewport_height: innerHeight,
+    device_pixel_ratio: devicePixelRatio,
+  }}),
+});
+document.querySelector('#baseline-input').addEventListener('input', event => {
+  ++inputEvents;
+  receipt('type', event.target.value, event.isTrusted);
+});
+document.querySelector('#baseline-input').addEventListener('keydown', event => {
+  if (event.key.toLowerCase() !== 'a' || !event.metaKey ||
+      event.target.value !== 'keyboard-check') return;
+  ++shortcut;
+  beforeShortcut = {
+    before_selection: [event.target.selectionStart, event.target.selectionEnd],
+    before_input_events: inputEvents,
+  };
+  if (shortcut === 2) event.preventDefault();
+});
+document.querySelector('#baseline-input').addEventListener('keyup', event => {
+  if (event.key === 'ArrowRight' && shortcut === 1 &&
+      event.target.value === 'keyboard-check') {
+    receipt('caret', 1, event.isTrusted, {
+      selection: [event.target.selectionStart, event.target.selectionEnd],
+    });
+    return;
+  }
+  if (event.key.toLowerCase() !== 'a' || !event.metaKey || !beforeShortcut) return;
+  receipt('shortcut', shortcut, event.isTrusted, {...beforeShortcut,
+    text: event.target.value,
+    selection: [event.target.selectionStart, event.target.selectionEnd],
+    input_events: inputEvents,
+  });
+  beforeShortcut = undefined;
+});
+document.querySelector('#baseline-click').addEventListener('click', event => {
+  document.querySelector('#baseline-count').value = String(++clicks);
+  receipt('click', clicks, event.isTrusted);
+});
+receipt('ready', document.title, false);
+</script>

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import asyncio
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -34,6 +37,38 @@ def successful_summary(test_names=GTESTS):
                 for name in test_names
             }
         ]
+    }
+
+
+def successful_standard_gtest_summary(test_names=GTESTS):
+    suites: dict[str, list[dict[str, str]]] = {}
+    for full_name in test_names:
+        suite_name, case_name = full_name.split(".", 1)
+        suites.setdefault(suite_name, []).append(
+            {
+                "name": case_name,
+                "status": "RUN",
+                "result": "COMPLETED",
+                "classname": suite_name,
+            }
+        )
+    return {
+        "tests": len(test_names),
+        "failures": 0,
+        "errors": 0,
+        "disabled": 0,
+        "name": "AllTests",
+        "testsuites": [
+            {
+                "name": suite_name,
+                "tests": len(cases),
+                "failures": 0,
+                "errors": 0,
+                "disabled": 0,
+                "testsuite": cases,
+            }
+            for suite_name, cases in suites.items()
+        ],
     }
 
 
@@ -82,6 +117,34 @@ class InteractiveCommandTest(unittest.TestCase):
             command.stderr_path, f"{RUN_DIR}/password-fill.stderr.log"
         )
         self.assertEqual(command.summary_path, f"{RUN_DIR}/interactive-test-summary.json")
+
+    def test_builds_exact_argv_for_plain_gtest_binary(self):
+        tests = ("MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation",)
+        command = guest_suites.build_interactive_command(
+            WORKSPACE,
+            RUN_DIR,
+            tests,
+            suite_name="password-fill",
+            binary_name="maho_mcp_input_synthesizer_test",
+        )
+
+        self.assertEqual(command.suite, "password-fill")
+        self.assertEqual(
+            command.argv[0],
+            f"{WORKSPACE}/chromium/src/out/Default/maho_mcp_input_synthesizer_test",
+        )
+        self.assertEqual(
+            command.argv[1],
+            "--gtest_filter=MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation",
+        )
+        self.assertIn("--gtest_fail_if_no_test_selected", command.argv)
+        self.assertIn(
+            f"--gtest_output=json:{RUN_DIR}/gtest-summary.json",
+            command.argv,
+        )
+        self.assertEqual(command.summary_path, f"{RUN_DIR}/gtest-summary.json")
+        self.assertEqual(command.expected_results, tests)
+        self.assertFalse(any(arg.startswith("--test-launcher-") for arg in command.argv))
 
     def test_rejects_unsafe_custom_binary_and_suite_names(self):
         for binary_name in ("../escape", "a/b", ".", "..", "x.runtime_deps"):
@@ -206,6 +269,143 @@ class InteractiveResultTest(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(guest_suites.SuiteValidationError):
                     guest_suites.validate_interactive_result(self.captured(), summary)
+
+    def test_accepts_exact_single_successful_runs_from_standard_gtest_summary(self):
+        plain_command = guest_suites.build_interactive_command(
+            WORKSPACE,
+            RUN_DIR,
+            ("MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation",),
+            suite_name="password-fill",
+            binary_name="maho_mcp_input_synthesizer_test",
+        )
+        captured = guest_suites.CapturedCommandResult(
+            command=plain_command,
+            returncode=0,
+            stdout="OK",
+            stderr="",
+        )
+        summary = successful_standard_gtest_summary(
+            ("MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation",)
+        )
+        validation = guest_suites.validate_interactive_result(captured, summary)
+
+        self.assertEqual(
+            validation.expected,
+            ("MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation",),
+        )
+        self.assertEqual(
+            validation.passed,
+            ("MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation",),
+        )
+        self.assertEqual(validation.returncodes, (0,))
+        self.assertEqual(validation.to_dict()["status"], "SUCCESS")
+        self.assertEqual(validation.to_dict()["suite"], "password-fill")
+
+    def test_rejects_missing_extra_duplicate_failed_and_skipped_standard_gtest_results(self):
+        test_name = "MahoMcpInputSynthesizerTest.MacSelectAllCommandTranslation"
+        plain_command = guest_suites.build_interactive_command(
+            WORKSPACE,
+            RUN_DIR,
+            (test_name,),
+            suite_name="password-fill",
+            binary_name="maho_mcp_input_synthesizer_test",
+        )
+        captured = guest_suites.CapturedCommandResult(
+            command=plain_command,
+            returncode=0,
+            stdout="OK",
+            stderr="",
+        )
+        fixtures = {
+            "missing": {"testsuites": []},
+            "extra": successful_standard_gtest_summary(
+                (test_name, "MahoMcpInputSynthesizerTest.ExtraTest")
+            ),
+            "duplicate": {
+                "testsuites": [
+                    {
+                        "name": "MahoMcpInputSynthesizerTest",
+                        "testsuite": [
+                            {
+                                "name": "MacSelectAllCommandTranslation",
+                                "status": "RUN",
+                                "result": "COMPLETED",
+                                "classname": "MahoMcpInputSynthesizerTest",
+                            },
+                            {
+                                "name": "MacSelectAllCommandTranslation",
+                                "status": "RUN",
+                                "result": "COMPLETED",
+                                "classname": "MahoMcpInputSynthesizerTest",
+                            },
+                        ],
+                    }
+                ]
+            },
+            "failed": {
+                "testsuites": [
+                    {
+                        "name": "MahoMcpInputSynthesizerTest",
+                        "testsuite": [
+                            {
+                                "name": "MacSelectAllCommandTranslation",
+                                "status": "RUN",
+                                "result": "COMPLETED",
+                                "classname": "MahoMcpInputSynthesizerTest",
+                                "failures": [{"failure": "assertion error"}],
+                            }
+                        ],
+                    }
+                ]
+            },
+            "skipped": {
+                "testsuites": [
+                    {
+                        "name": "MahoMcpInputSynthesizerTest",
+                        "testsuite": [
+                            {
+                                "name": "MacSelectAllCommandTranslation",
+                                "status": "RUN",
+                                "result": "SKIPPED",
+                                "classname": "MahoMcpInputSynthesizerTest",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "notrun": {
+                "testsuites": [
+                    {
+                        "name": "MahoMcpInputSynthesizerTest",
+                        "testsuite": [
+                            {
+                                "name": "MacSelectAllCommandTranslation",
+                                "status": "NOTRUN",
+                                "result": "SUPPRESSED",
+                                "classname": "MahoMcpInputSynthesizerTest",
+                            }
+                        ],
+                    }
+                ]
+            },
+            "invalid object": {"testsuites": "not-a-list"},
+            "empty summary": {},
+        }
+        for name, summary in fixtures.items():
+            with self.subTest(name=name):
+                with self.assertRaises(guest_suites.SuiteValidationError):
+                    guest_suites.validate_interactive_result(captured, summary)
+
+        failed_captured = guest_suites.CapturedCommandResult(
+            command=plain_command,
+            returncode=1,
+            stdout="",
+            stderr="process crashed",
+        )
+        with self.assertRaises(guest_suites.SuiteValidationError):
+            guest_suites.validate_interactive_result(
+                failed_captured, successful_standard_gtest_summary((test_name,))
+            )
 
 
 class AiMockCommandTest(unittest.TestCase):
@@ -448,6 +648,196 @@ class AiMockResultTest(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(guest_suites.SuiteValidationError):
                     guest_suites.validate_ai_mock_results(results)
+
+
+class MailCliContractTest(unittest.TestCase):
+    def test_evidence_registration_is_persisted_without_overwrite(self):
+        script = SCRIPT_DIR.parents[2] / "maho/appium-tests/desktop-mail/run-mail-cli-vm.py"
+        spec = importlib.util.spec_from_file_location("mail_cli_registration", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = Path(directory)
+            path = module.persist_evidence_commands(Path(WORKSPACE), artifacts, 42, "enabled")
+            self.assertEqual(path.name, "enabled-commands-summary.json")
+            original = path.read_bytes()
+            self.assertEqual(json.loads(original), module.evidence_commands(
+                Path(WORKSPACE), artifacts, 42, "enabled"
+            ))
+            with self.assertRaises(FileExistsError):
+                module.persist_evidence_commands(Path(WORKSPACE), artifacts, 43, "enabled")
+            self.assertEqual(path.read_bytes(), original)
+            with self.assertRaises(ValueError):
+                module.persist_evidence_commands(Path(WORKSPACE), artifacts, 42, "../escape")
+            self.assertEqual(list(artifacts.iterdir()), [path])
+
+    def test_resolved_evidence_commands_are_registered_not_executed(self):
+        script = SCRIPT_DIR.parents[2] / "maho/appium-tests/desktop-mail/run-mail-cli-vm.py"
+        spec = importlib.util.spec_from_file_location("mail_cli_evidence", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        receipt = module.evidence_commands(Path(WORKSPACE), Path(RUN_DIR), 42, "enabled")
+        prefix = [f"{WORKSPACE}/maho/target/debug/maho", "--json",
+                  "--socket-path", f"{RUN_DIR}/profile/maho.sock"]
+        self.assertEqual(receipt, {
+            "status": "NOT_EXECUTED", "state": "enabled", "runtime_ids": {"tab": 42},
+            "commands": [
+                [*prefix, "page", "context", "--tab", "42"],
+                [*prefix, "page", "screenshot", "--tab", "42", "--out", f"{RUN_DIR}/enabled.png"],
+            ],
+        })
+        for tab in (None, "<tab>", True, 0, -1):
+            with self.subTest(tab=tab), self.assertRaises(ValueError):
+                module.evidence_commands(Path(WORKSPACE), Path(RUN_DIR), tab, "enabled")
+        with self.assertRaises(ValueError):
+            module.evidence_commands(Path(WORKSPACE), Path(RUN_DIR), 42, "../escape")
+
+    def test_discovery_contract_uses_literal_scoped_cli_commands(self):
+        script = SCRIPT_DIR.parents[2] / "maho/appium-tests/desktop-mail/run-mail-cli-vm.py"
+        spec = importlib.util.spec_from_file_location("mail_cli_preparation", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        contract = module.discovery_contract(Path(WORKSPACE), Path(RUN_DIR))
+        prefix = [f"{WORKSPACE}/maho/target/debug/maho", "--json",
+                  "--socket-path", f"{RUN_DIR}/profile/maho.sock"]
+        self.assertEqual([entry["argv"] for entry in contract["commands"]], [
+            [*prefix, "tool", "list"], [*prefix, "tab", "list"],
+            [*prefix, "tab", "new", "--url", "chrome://maho-settings"],
+            [*prefix, "tab", "new", "--url", "chrome://maho-mail"],
+        ])
+        self.assertEqual(contract["status"], "NOT_EXECUTED")
+        self.assertEqual(contract["runtime_ids"], {})
+        self.assertEqual(contract["selectors"], [])
+        states = [item["state"] for item in contract["required_evidence"]]
+        self.assertEqual(len(states), len(set(states)))
+        self.assertIn("typed-approval-approved", states)
+        self.assertIn("helper-shutdown", states)
+
+    def test_exact_command_and_no_cdp(self):
+        command = guest_suites.build_mail_cli_command(WORKSPACE, RUN_DIR)
+        self.assertEqual(command.argv, (
+            "python3", f"{WORKSPACE}/maho/appium-tests/desktop-mail/run-mail-cli-vm.py",
+            "--workspace", WORKSPACE, "--artifact-dir", RUN_DIR,
+            "--scenario", "mail_cli_lifecycle",
+        ))
+        self.assertEqual(command.environment, (("MAHO_MAIL_CLI_TART", "1"),))
+        self.assertIsNone(command.cdp_host)
+        self.assertEqual(command.expected_results, ("mail_cli_lifecycle",))
+        self.assertEqual(command.summary_path, f"{RUN_DIR}/mail-cli-summary.json")
+
+    def test_missing_blocked_and_forged_success_never_pass(self):
+        command = guest_suites.build_mail_cli_command(WORKSPACE, RUN_DIR)
+        for summary in ({}, {"status": "BLOCKED"}, {
+            "scenario": "mail_cli_lifecycle", "status": "SUCCESS",
+        }):
+            with self.subTest(summary=summary):
+                with self.assertRaises(guest_suites.SuiteValidationError):
+                    guest_suites.validate_mail_cli_result(
+                        guest_suites.CapturedCommandResult(command, 0, "", ""), summary
+                    )
+
+    def test_entry_point_records_blocked_without_browser_execution(self):
+        script = SCRIPT_DIR.parents[2] / "maho/appium-tests/desktop-mail/run-mail-cli-vm.py"
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run([
+                sys.executable, str(script), "--workspace", WORKSPACE,
+                "--artifact-dir", directory, "--scenario", "mail_cli_lifecycle",
+            ], capture_output=True, text=True, timeout=10, check=False)
+            summary = json.loads((Path(directory) / "mail-cli-summary.json").read_text())
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(summary["status"], "BLOCKED")
+        self.assertFalse(summary["browser_executed"])
+        self.assertEqual(summary["actions"], [])
+        self.assertEqual(summary["screenshots"], [])
+        self.assertTrue(summary["blockers"])
+
+
+class MailFixtureProcessTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.workspace = SCRIPT_DIR.parents[2]
+        script = self.workspace / "maho/appium-tests/desktop-mail/run-mail-cli-vm.py"
+        spec = importlib.util.spec_from_file_location("mail_fixture_process", script)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    async def test_real_tls_controls_cursor_and_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.module.FixtureProcess(self.workspace, Path(directory))
+            writer = None
+            try:
+                address = await fixture.start()
+                cursor = fixture.cursor
+                greeting = fixture.transcript_after(
+                    cursor, "imap", "server", "* OK Maho deterministic IMAP ready")
+                context = ssl.create_default_context(cafile=str(
+                    self.workspace / "maho/appium-tests/desktop-mail/tls-assets/localhost-cert.pem"))
+                reader, writer = await asyncio.wait_for(asyncio.open_connection(
+                    address["host"], address["imapPort"], ssl=context,
+                    server_hostname="localhost"), 5)
+                event = await asyncio.wait_for(greeting, 5)
+                self.assertGreater(event["sequence"], cursor)
+                self.assertEqual(await asyncio.wait_for(reader.readline(), 5),
+                                 b"* OK Maho deterministic IMAP ready\r\n")
+                await fixture.control("block", name="imap.capability")
+                request = fixture.transcript_after(fixture.cursor, "imap", "client", "a CAPABILITY")
+                writer.write(b"a CAPABILITY\r\n")
+                await writer.drain()
+                await asyncio.wait_for(request, 5)
+                released = fixture.transcript_after(fixture.cursor, "imap", "server", "a OK CAPABILITY completed")
+                await fixture.control("release", name="imap.capability")
+                await asyncio.wait_for(released, 5)
+                snapshot = await fixture.control("snapshot")
+                self.assertIn("INBOX", snapshot["folders"])
+                self.assertEqual(snapshot["smtpAttempts"], [])
+                with self.assertRaises(RuntimeError):
+                    await fixture.control("not-a-command")
+                self.assertIn("folders", await fixture.control("snapshot"))
+            finally:
+                try:
+                    if writer is not None:
+                        writer.close()
+                        await asyncio.wait_for(writer.wait_closed(), 5)
+                finally:
+                    await fixture.close()
+            self.assertEqual(fixture.process.returncode, 0)
+            self.assertTrue(any(e.get("type") == "stopped" for e in fixture.events))
+            entries = json.loads((Path(directory) / "mail-fixture-summary.json").read_text())
+            self.assertEqual(entries[0]["argv"], fixture.argv)
+            self.assertEqual(entries[-1], {"exit_code": 0})
+
+    async def test_cancellation_reaps_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.module.FixtureProcess(self.workspace, Path(directory))
+            ready = asyncio.get_running_loop().create_future()
+            async def owned():
+                try:
+                    await fixture.start()
+                    ready.set_result(None)
+                    await asyncio.get_running_loop().create_future()
+                finally:
+                    await fixture.close()
+            task = asyncio.create_task(owned())
+            try:
+                await asyncio.wait_for(ready, 10)
+            finally:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 10)
+            self.assertEqual(fixture.process.returncode, 0)
+            self.assertTrue(fixture.reader.done())
+
+    async def test_guest_launch_contract(self):
+        contract = self.module.launch_contract(Path(WORKSPACE), Path(RUN_DIR))
+        self.assertEqual(contract["socket"], f"{RUN_DIR}/profile/maho.sock")
+        self.assertEqual(contract["browser"], [
+            f"{WORKSPACE}/chromium/src/out/Default/Maho.app/Contents/MacOS/Maho",
+            f"--user-data-dir={RUN_DIR}/profile", "--no-first-run",
+            "--no-default-browser-check", "--enable-logging=stderr"])
+        self.assertIn("/usr/bin/security", contract["trust"])
+        self.assertIn("add-trusted-cert", contract["trust"])
+        self.assertIn("trustRoot", contract["trust"])
+        self.assertEqual(contract["trust"][-1],
+                         f"{WORKSPACE}/maho/appium-tests/desktop-mail/tls-assets/localhost-cert.pem")
 
 
 class IntentionalFailureFixtureTest(unittest.TestCase):
