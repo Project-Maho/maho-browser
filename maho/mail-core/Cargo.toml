@@ -63,6 +63,7 @@ rand = "0.8"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",

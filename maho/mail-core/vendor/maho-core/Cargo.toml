@@ -45,6 +45,8 @@ futures = "0.3"
 urlencoding = "2"
 md-5 = "0.10"
 
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
