@@ -336,14 +336,15 @@ TEST(MahoCapabilityBrokerTest, LeaseAndApprovalLifecycle) {
   EXPECT_TRUE(step1_res.IsDenied());
   EXPECT_EQ(step1_res.deny_reason, CapabilityDenyReason::kMissingLease);
 
-  // Step 2: With lease, but missing approval
+  // Step 2: With the lease, the click is owed nothing else. Driving the
+  // browser is full access, so no approval is requested here — the lease is
+  // the obligation, not the user's permission.
   CapabilityRequestContext step2_ctx = step1_ctx;
   step2_ctx.lease_token = "lease-token-abc";
 
   CapabilityEvaluationResult step2_res = broker.Evaluate(step2_ctx);
-  EXPECT_TRUE(step2_res.RequiresApproval());
-  ASSERT_TRUE(step2_res.approval_request.has_value());
-  EXPECT_EQ(step2_res.approval_request->capability_id, "input.click");
+  EXPECT_TRUE(step2_res.IsPermitted());
+  EXPECT_FALSE(step2_res.approval_request.has_value());
 
   // Step 3: With valid lease and approval token
   CapabilityRequestContext step3_ctx = step2_ctx;
@@ -468,15 +469,20 @@ CapabilityRequestContext MakePageReadContext() {
 
 TEST(MahoCapabilityBrokerTest, FinalConfirmForcesApprovalForGatedConsequence) {
   MahoCapabilityBroker broker;
-  // page.read_current carries no descriptor-level approval requirement, so
-  // the ask below can only come from the final-confirm gate: a declared
-  // submit consequence is externally visible and must obtain a token.
-  CapabilityRequestContext ctx = MakePageReadContext();
+  // mail.accounts.list leaves the browser and carries no descriptor-level
+  // approval requirement, so the ask below can only come from the
+  // final-confirm gate: a declared submit consequence is externally visible
+  // and must obtain a token. The same classification inside the browser stays
+  // free — see FinalConfirmFailsClosedOnlyOffBrowser.
+  CapabilityRequestContext ctx;
+  ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
+  ctx.surface = CapabilitySurface::kDesktopAgent;
+  ctx.capability_id = "mail.accounts.list";
   ctx.action_consequence = "submit";
   CapabilityEvaluationResult res = broker.Evaluate(ctx);
   EXPECT_TRUE(res.RequiresApproval());
   ASSERT_TRUE(res.approval_request.has_value());
-  EXPECT_EQ(res.approval_request->capability_id, "page.read_current");
+  EXPECT_EQ(res.approval_request->capability_id, "mail.accounts.list");
 
   // The ask routes through the existing approval-token handshake: a granted
   // token satisfies it.
@@ -498,16 +504,22 @@ TEST(MahoCapabilityBrokerTest, FinalConfirmKeepsFreeConsequencesFree) {
   EXPECT_TRUE(broker.Evaluate(navigation).IsPermitted());
 }
 
-TEST(MahoCapabilityBrokerTest, FinalConfirmFailsClosedOnUnknownClassification) {
+TEST(MahoCapabilityBrokerTest, FinalConfirmFailsClosedOnlyOffBrowser) {
   MahoCapabilityBroker broker;
-  // An explicitly Unknown classification gates...
-  CapabilityRequestContext unknown_ctx = MakePageReadContext();
+  // Off-browser, an explicitly Unknown classification still fails closed into
+  // the approval-token ask-gate, and a granted token satisfies it.
+  CapabilityRequestContext unknown_ctx;
+  unknown_ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
+  unknown_ctx.surface = CapabilitySurface::kDesktopAgent;
+  unknown_ctx.capability_id = "mail.accounts.list";
   unknown_ctx.action_consequence = "unknown";
   EXPECT_TRUE(broker.Evaluate(unknown_ctx).RequiresApproval());
 
-  // ...and a browser action tool with NO classification at all is Unknown
-  // too (missing validated context) — the gate fails closed into the same
-  // approval-token ask-gate instead of auto-passing.
+  unknown_ctx.approval_token = "user-ok";
+  EXPECT_TRUE(broker.Evaluate(unknown_ctx).IsPermitted());
+
+  // Inside the browser the gate never applies: driving the browser is full
+  // access, so an unclassified click is still just a click...
   CapabilityRequestContext click_ctx;
   click_ctx.principal = CapabilityPrincipal::MakeInternalAgent("session-1");
   click_ctx.surface = CapabilitySurface::kDesktopAgent;

@@ -227,7 +227,9 @@ TEST(MahoBrowserToolRegistryTest,
   ASSERT_TRUE(click_metadata);
   EXPECT_EQ(*click_metadata->FindString("kind"), "action");
   EXPECT_EQ(*click_metadata->FindString("sensitivity"), "sensitive");
-  EXPECT_TRUE(click_metadata->FindBool("requires_approval").value());
+  // Browser manipulation is full access: a click stays sensitive and
+  // lease-gated, but never asks the user for permission.
+  EXPECT_FALSE(click_metadata->FindBool("requires_approval").value());
   EXPECT_TRUE(click_metadata->FindBool("requires_lease").value());
   EXPECT_EQ(*click_metadata->FindString("empty_allowlist_policy"),
             "fail_closed");
@@ -236,8 +238,17 @@ TEST(MahoBrowserToolRegistryTest,
   ASSERT_TRUE(hover);
   const base::DictValue *hover_metadata = hover->FindDict("approval_metadata");
   ASSERT_TRUE(hover_metadata);
-  EXPECT_TRUE(hover_metadata->FindBool("requires_approval").value());
+  EXPECT_FALSE(hover_metadata->FindBool("requires_approval").value());
   EXPECT_FALSE(hover_metadata->FindBool("requires_lease").value());
+
+  // Leaving the browser still gates: this one reaches the local filesystem.
+  const base::DictValue *upload =
+      FindSerializedTool(tools, "browser_file_upload_select");
+  ASSERT_TRUE(upload);
+  const base::DictValue *upload_metadata =
+      upload->FindDict("approval_metadata");
+  ASSERT_TRUE(upload_metadata);
+  EXPECT_TRUE(upload_metadata->FindBool("requires_approval").value());
 }
 
 TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {

@@ -104,8 +104,9 @@ public:
   int revalidate_calls = 0;
   std::string last_navigated_url;
   bool approve_browser_actions = true;
-  bool advance_generation_on_approval = false;
-  bool advance_navigation_epoch_on_approval = false;
+  // Simulates the target tab changing underneath a resolved target between
+  // resolution and dispatch, inside a single tool call.
+  bool advance_generation_on_revalidate = false;
   int browser_action_approval_calls = 0;
   int browser_type_call_count = 0;
   int browser_type_tab_id = 0;
@@ -227,6 +228,9 @@ public:
 
   bool RevalidateTarget(const ResolvedMahoMcpTarget &target) override {
     ++revalidate_calls;
+    if (advance_generation_on_revalidate) {
+      ++generation;
+    }
     if (!target.valid) {
       return false;
     }
@@ -1288,26 +1292,21 @@ TEST_F(MahoMcpSessionTest, RoutineTierLockUsesStructuredErrorData) {
   EXPECT_EQ(*message, delegate_->routine_run_payload);
 }
 
-TEST_F(MahoMcpSessionTest, RequiredBrowserActionDenialStopsBeforeDispatch) {
-  delegate_ = std::make_unique<ResolvingFakeDelegate>();
+// Leaving the browser still gates: selecting a local file for upload is a
+// filesystem boundary, so a denial must stop before the delegate is reached.
+TEST_F(MahoMcpSessionTest, BoundaryActionDenialStopsBeforeDispatch) {
+  InitResolvingSession();
   delegate_->approve_browser_actions = false;
-  MahoMcpSession::SetBrowserDelegate(delegate_.get());
-  const std::string init =
-      R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
-      R"("params":{"protocolVersion":"2025-03-26",)"
-      R"("clientInfo":{"name":"test-client","version":"0.1.0"}}})"
-      "\n";
-  ASSERT_EQ(session_->ProcessData(init).size(), 1u);
 
-  const auto responses =
-      CallToolRaw("browser_navigate", R"({"url":"https://example.com"})", 2);
+  const auto responses = CallToolRaw("browser_file_upload_select",
+                                     R"({"path":"/tmp/build.aab"})", 2);
   ASSERT_EQ(responses.size(), 1u);
   const auto parsed = ParseLine(responses[0]);
   const auto* error = parsed.GetDict().FindDict("error");
-  ASSERT_TRUE(error);
+  ASSERT_TRUE(error) << responses[0];
   EXPECT_EQ(error->FindInt("code").value(), kMahoMcpErrorApprovalDenied);
   EXPECT_EQ(delegate_->browser_action_approval_calls, 1);
-  EXPECT_TRUE(delegate_->last_navigated_url.empty());
+  EXPECT_EQ(delegate_->file_upload_call_count, 0);
 }
 
 #if !BUILDFLAG(IS_WIN)
@@ -3341,7 +3340,7 @@ TEST_F(MahoMcpSessionTest, SnapshotRefRejectsDocumentChange) {
 }
 
 TEST_F(MahoMcpSessionTest,
-       SnapshotRefRejectsDocumentChangeDuringApproval) {
+       SnapshotRefRejectsDocumentChangeBeforeDispatch) {
   InitResolvingSession(true);
   ASSERT_EQ(CallControlRaw("browser_acquire_lease", R"({"tab_id":7})", 316)
                 .size(),
@@ -3609,7 +3608,7 @@ TEST_F(MahoMcpSessionTest, GenerationChangeBeforeMutationFailsClosed) {
                            R"({"origin":"https://example.com"})", 325)
                 .size(),
             1u);
-  delegate_->advance_generation_on_approval = true;
+  delegate_->advance_generation_on_revalidate = true;
   auto responses =
       CallToolRaw("browser_navigate", R"({"url":"https://example.com/x"})",
                   326);
@@ -4944,6 +4943,29 @@ TEST_F(MahoMcpSessionTest, CssLocatorMapsExactNode) {
   EXPECT_TRUE(action->FindBool("dispatched").value_or(false));
   EXPECT_EQ(delegate_->browser_click_call_count, 1);
   EXPECT_EQ(delegate_->browser_click_ax_id, 101);
+}
+
+// Driving the browser is full access: a click dispatches even when every
+// approval would be refused, and the user is never prompted for it.
+TEST_F(MahoMcpSessionTest, BrowserManipulationNeverAsksForApproval) {
+  InitResolvingSession();
+  delegate_->approve_browser_actions = false;
+  delegate_->mock_locator_nodes = {
+      {.ax_id = 101, .role = "button", .name = "Submit", .css = "#submit"},
+  };
+
+  auto responses = CallToolRaw(
+      "input.locator_click", R"({"tab_id":7,"locator":{"css":"#submit"}})",
+      103);
+  ASSERT_EQ(responses.size(), 1u);
+  base::Value output = ParseExecutionOutput(responses[0]);
+  const base::DictValue* result = output.GetIfDict();
+  ASSERT_TRUE(result) << responses[0];
+  const base::DictValue* action = result->FindDict("action");
+  ASSERT_TRUE(action);
+  EXPECT_TRUE(action->FindBool("dispatched").value_or(false));
+  EXPECT_EQ(delegate_->browser_click_call_count, 1);
+  EXPECT_EQ(delegate_->browser_action_approval_calls, 0);
 }
 
 TEST_F(MahoMcpSessionTest, DetachedNodeError) {

@@ -86,6 +86,36 @@ inline constexpr bool RequiresApproval(const BrowserActionContract& contract) {
   return contract.approval == BrowserActionApproval::kRequired;
 }
 
+// Product policy: driving the browser is full access. Clicking, typing,
+// scrolling, navigating, reading a page, and managing tabs or leases never ask
+// the user for permission, no matter which controller issues the call. An
+// approval gate exists only where a capability leaves the browser:
+//
+//   * another resource broker:            mail.*, vault.*, routines.*
+//   * the consent/authority plane itself: control.*, policy.*
+//   * the local filesystem:               artifact.export,
+//                                         input.file_upload_select
+//   * OS-level (computer use) input:      browser.visual_click
+//
+// Caller identity never decides this; only the capability does. The predicate
+// is keyed on the canonical capability id so that both descriptor flavors
+// (maho::ai::CapabilityDescriptor and
+// MahoBrowserToolRegistry::CapabilityDescriptor) share one policy source.
+inline constexpr bool CapabilityLeavesBrowserBoundary(
+    std::string_view canonical_id) {
+  constexpr std::string_view kOffBrowserPrefixes[] = {
+      "mail.", "vault.", "routines.", "control.", "policy.",
+  };
+  for (std::string_view prefix : kOffBrowserPrefixes) {
+    if (canonical_id.starts_with(prefix)) {
+      return true;
+    }
+  }
+  return canonical_id == "artifact.export" ||
+         canonical_id == "input.file_upload_select" ||
+         canonical_id == "browser.visual_click";
+}
+
 inline constexpr bool RequiresLease(const BrowserActionContract& contract) {
   return contract.lease == BrowserActionLease::kRequired;
 }

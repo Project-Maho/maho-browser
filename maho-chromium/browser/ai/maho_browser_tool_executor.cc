@@ -1486,13 +1486,22 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
     destination_origin = *maybe_destination;
   }
 
-  if (maho::ai::RequiresApproval(contract)) {
-    const bool credential_typing_requested =
-        contract.tool_name == "browser_type" &&
-        arguments.FindBool("allow_credentials").value_or(false);
-    const auto credential_authorization =
-        maho::ai::AuthorizeCredentialTyping(credential_typing_requested);
+  // Credential typing crosses the Vault boundary on its own axis. Driving the
+  // browser needs no approval, so browser_type carries no contract ask any
+  // more; a request to type into a credential field must still authorize, and
+  // therefore opens this handshake by itself rather than riding on a
+  // contract-level approval. Broker-mandated asks (runtime tier file ask,
+  // final-confirm gate) surface through the same typed-approval handshake as
+  // contract-required tools; tools that ask for more than one reason still
+  // prompt exactly once.
+  const bool credential_typing_requested =
+      contract.tool_name == "browser_type" &&
+      arguments.FindBool("allow_credentials").value_or(false);
+  const auto credential_authorization =
+      maho::ai::AuthorizeCredentialTyping(credential_typing_requested);
 
+  if (credential_typing_requested || evaluation.RequiresApproval() ||
+      maho::ai::RequiresApproval(contract)) {
     if (!action_approval_callback_) {
       if (credential_authorization.action ==
           maho::ai::CredentialTypingAuthorizationAction::kRequireApproval) {

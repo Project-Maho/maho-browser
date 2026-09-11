@@ -1910,10 +1910,15 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     *approval_outcome = "approved";
   }
 
+  // Driving the browser is full access: an authority-changing capability only
+  // prompts when it leaves the browser boundary (vault, routines, or the
+  // consent/authority plane). Clicking, typing, navigating, closing a tab or
+  // taking a lease never asks, whichever controller issues the call.
   if (g_browser_delegate && descriptor->changes_authority &&
       !descriptor->browser_action_contract &&
-      mail_tool_class == ai::MailToolClass::kNotMail) {
-    if (!is_internal_cli && !g_browser_delegate->ConfirmBrowserActionApproval(
+      mail_tool_class == ai::MailToolClass::kNotMail &&
+      ai::CapabilityLeavesBrowserBoundary(descriptor->canonical_id)) {
+    if (!g_browser_delegate->ConfirmBrowserActionApproval(
             *tool_name, last_resolved_target_)) {
       *approval_outcome = "denied";
       responses.push_back(framer_.BuildErrorResponse(
@@ -1924,9 +1929,12 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     *approval_outcome = "approved";
   }
 
+  // A boundary gate is a property of the capability, not of the caller: the
+  // internal CLI reaches the local filesystem and OS-level input through the
+  // same prompt every other controller does.
   if (g_browser_delegate && descriptor->browser_action_contract &&
       ai::RequiresApproval(*descriptor->browser_action_contract)) {
-    if (!is_internal_cli && !credential_typing_approval_satisfied &&
+    if (!credential_typing_approval_satisfied &&
         !g_browser_delegate->ConfirmBrowserActionApproval(
             *tool_name, last_resolved_target_)) {
       *approval_outcome = "denied";

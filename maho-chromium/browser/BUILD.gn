@@ -423,11 +423,19 @@ test("maho_browser_tool_executor_test") {
     "ai/maho_browser_tool_test_main.cc",
   ]
   deps = [
+    ":maho_ai_runtime_adapter",
     ":maho_browser_ai_tools",
     "//base",
     "//base/test:test_support",
     "//chrome/browser/ui/tabs:tab_strip",
     "//chrome/browser/ui/tabs:tab_strip_impl",
+
+    # tab_strip_impl's objects reference TabStripModel/tabs::TabModel/
+    # TabStripModelObserver plus BrowserUserEducationInterface and
+    # ResourceCoordinatorTabHelper, which are defined in sibling browser impl
+    # targets. Those targets are not self-contained, so link the full browser
+    # test closure like the other maho test() targets do.
+    "//chrome/test:test_support",
     "//maho/browser/mail_helper:maho_mail_service_factory",
     "//maho/browser/mcp:maho_mcp",
     "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",

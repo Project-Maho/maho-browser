@@ -224,33 +224,30 @@ CapabilityDescriptor MakeCapabilityDescriptor(
   d.missing_policy = missing_policy;
   d.description = description;
 
-  if (d.sensitivity == CapabilitySensitivity::kCredential ||
-      (d.mutability == CapabilityMutability::kMutable &&
-       d.category != CapabilityCategory::kTabs &&
-       d.category != CapabilityCategory::kPage)) {
-    d.approval_requirement = CapabilityApprovalRequirement::kRequired;
-  } else {
-    d.approval_requirement = CapabilityApprovalRequirement::kNotRequired;
-  }
-  if (tool_name == "browser_tab_close" ||
-      tool_name == "browser_tab_new" ||
-      tool_name == "browser_bookmark_create" ||
-      tool_name == "browser_same_origin_fetch" ||
-      tool_name == "browser_set_blocked_domains" ||
-      tool_name == "browser_routines_run" ||
-      tool_name == "artifact.export") {
-    d.approval_requirement = CapabilityApprovalRequirement::kRequired;
-  }
+  // Browser manipulation is full access: tabs, pages, input, navigation,
+  // history, bookmarks and leases never carry a user-approval gate. Only a
+  // capability that leaves the browser boundary asks the user, and only when
+  // it mutates state or handles credential-class data.
+  const bool mutating_or_credential =
+      d.mutability == CapabilityMutability::kMutable ||
+      d.sensitivity == CapabilitySensitivity::kCredential;
+  d.approval_requirement =
+      (mutating_or_credential && CapabilityLeavesBrowserBoundary(canonical_id))
+          ? CapabilityApprovalRequirement::kRequired
+          : CapabilityApprovalRequirement::kNotRequired;
 
   if (tool_name.rfind("lease.", 0) == 0 ||
       tool_name.rfind("browser_heartbeat_lease", 0) == 0 ||
       tool_name == "browser_acquire_lease" ||
       tool_name == "browser_release_lease" ||
-      tool_name == "browser_same_origin_fetch") {
+      tool_name == "browser_same_origin_fetch" ||
+      tool_name == "browser_visual_click") {
     d.lease_requirement = CapabilityLeaseRequirement::kRequired;
   } else {
     d.lease_requirement = CapabilityLeaseRequirement::kNotRequired;
   }
+
+  d.browser_action_contract = FindBrowserActionContract(tool_name);
 
   if (d.resource_boundary == CapabilityBoundary::kTab) {
     d.origin_policy = CapabilityOriginPolicy::kActiveTabOrigin;
@@ -780,19 +777,24 @@ CapabilityEvaluationResult MahoCapabilityBroker::Evaluate(
     // full_access and in-whitelist requests fall through unchanged.
   }
 
-  // 10.6 Final-confirmation gate (plan row 5). Under final_confirm=true,
-  // requests resolving to an externally visible or irreversible consequence
-  // class route through the approval-token ask-gate below. Browser action
-  // tools gate even without a declared classification: a missing validated
-  // context is Unknown and fails closed to gated. Other descriptors gate
-  // only when a consequence was declared (empty stays inert, mirroring
-  // fs_path). Mail tools are absent here on purpose: their writes gate
-  // through the typed mail-authorization approval path
-  // (maho_mail_tool_authorization.h), which already requires per-call
-  // approval under every policy. Like the tier gate, this can only add an
-  // ask, never remove a sandbox, origin, lease, or presence obligation.
+  // 10.6 Final-confirmation gate (plan row 5). Driving the browser is full
+  // access, so this gate never reaches a capability that stays inside the
+  // browser: clicking, typing, scrolling and navigating are allowed outright
+  // however the consequence was classified, and final_confirm is scoped to
+  // capabilities that leave the browser boundary (another broker, the consent
+  // plane, the filesystem, OS-level input). Within that scope, requests
+  // resolving to an externally visible or irreversible consequence class route
+  // through the approval-token ask-gate below. A boundary action tool gates
+  // even without a declared classification: a missing validated context is
+  // Unknown and fails closed to gated. Other boundary descriptors gate only
+  // when a consequence was declared (empty stays inert, mirroring fs_path).
+  // Mail writes additionally gate through the typed mail-authorization path
+  // (maho_mail_tool_authorization.h), which requires per-call approval under
+  // every policy. Like the tier gate, this can only add an ask, never remove a
+  // sandbox, origin, lease, or presence obligation.
   bool final_confirm_forces_approval = false;
-  if (context.final_confirm) {
+  if (context.final_confirm &&
+      CapabilityLeavesBrowserBoundary(descriptor->canonical_id)) {
     const bool is_action_tool =
         descriptor->browser_action_contract &&
         descriptor->browser_action_contract->kind ==
