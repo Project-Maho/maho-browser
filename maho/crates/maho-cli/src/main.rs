@@ -8,7 +8,7 @@ use maho_cli::browser_pipe;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use maho_agent::SwiftideBackend;
+use maho_agent::{AgentStreamEvent, SwiftideBackend};
 use maho_cli::vault::{self, RecoveryUnlockResult};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -27,10 +27,6 @@ pub struct Cli {
     /// Output structured JSON for all commands
     #[arg(long, global = true)]
     pub json: bool,
-
-    /// Use an isolated browser profile
-    #[arg(long, global = true)]
-    pub isolated: bool,
 
     /// Override UDS socket path (for testing)
     #[arg(long, global = true)]
@@ -296,22 +292,15 @@ pub enum RoutineCommands {
         workspace: Option<String>,
     },
 
-    /// Run a routine by ID
+    /// Run a routine by ID.
+    ///
+    /// Routines execute inside the running browser under its own provider,
+    /// model, and permission settings, so there is deliberately no
+    /// --provider/--model/--workspace here. Use `maho agent task` for a
+    /// CLI-side session you can point at a specific model or provider.
     Run {
         /// The ID of the routine to run
         name: String,
-
-        /// LLM provider (e.g. anthropic, gemini, claude)
-        #[arg(long)]
-        provider: Option<String>,
-
-        /// LLM model name override
-        #[arg(long)]
-        model: Option<String>,
-
-        /// Workspace ID or name override
-        #[arg(long)]
-        workspace: Option<String>,
     },
 }
 
@@ -350,10 +339,68 @@ pub enum AgentCommands {
         #[arg(long, overrides_with = "proactive")]
         no_proactive: bool,
 
+        /// Resume an existing session by ID instead of starting a fresh
+        /// task-<uuid> session: stored conversation turns and title are
+        /// reused. Fails closed when the session does not exist.
+        #[arg(long, value_name = "SESSION_ID")]
+        resume: Option<String>,
+
+        /// Enable composite (batch) page execution for this session: the
+        /// model may emit one composite_execute call carrying an ordered
+        /// batch of page operations. Fail-closed default — without the flag
+        /// the composite gate refuses every batch before any executor runs.
+        #[arg(long)]
+        composite: bool,
+
+        /// Auto-approve every tool call (AllowAll) for automation/headless
+        /// runs, skipping the interactive approval prompt. Without it, a TTY
+        /// session prompts y/n per sensitive tool call and a headless session
+        /// fails closed (sensitive calls denied).
+        #[arg(long)]
+        approve_all: bool,
+
         /// Target workspace ID or name (defaults to the first workspace in
         /// the shared registry, bootstrapping the default when empty)
         #[arg(long)]
         workspace: Option<String>,
+
+        /// Model this session routes to, overriding the workspace profile's
+        /// preferred model (e.g. anthropic/claude-3-7-sonnet). The named
+        /// model is used exactly: routing performs no silent substitution.
+        #[arg(long, short = 'm', value_name = "MODEL")]
+        model: Option<String>,
+
+        /// LLM provider whose stored key this session uses (e.g. anthropic,
+        /// openai). A selected provider is probed alone — the session never
+        /// falls back to another provider's credential, so your data only
+        /// reaches the provider you named.
+        #[arg(long, short = 'p', value_name = "PROVIDER")]
+        provider: Option<String>,
+
+        /// Absolute directory the agent may read and write (repeatable).
+        /// Replaces the implicit workspace-root whitelist; every path
+        /// outside the set is gated by the tier as usual.
+        #[arg(long = "dir", value_name = "PATH")]
+        dirs: Vec<PathBuf>,
+
+        /// Stream the full agent event stream (tokens, thinking, artifacts,
+        /// proof) to stderr in addition to the default tool-progress view.
+        /// Ignored with --json, which stays final-only.
+        #[arg(long)]
+        stream: bool,
+    },
+
+    /// List agent sessions that `maho agent task --resume <SESSION_ID>` can
+    /// rebind to, most recently updated first
+    Sessions {
+        /// Maximum number of sessions to list
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Include browser-side conversations too, not just the `task-`
+        /// sessions minted by `maho agent task`
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -384,12 +431,27 @@ impl TierArg {
 /// Session runtime_config payload carried by `maho agent task` (plan row 13).
 /// Shape and defaults mirror the row-1 session runtime config
 /// (`AgentRuntimeConfig` in maho-ffi, broker `CapabilityRequestContext`):
-/// tier "guard", final_confirm true, proactive_mode false.
+/// tier "guard", final_confirm true, proactive_mode false, composite
+/// disabled. `composite_enabled` rides the same payload but is bound
+/// load-once at session open (Wave 3A) — it gates only the composite batch
+/// runner, never the per-call tier gate.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentTaskRuntimeConfig {
     pub permission_tier: String,
     pub final_confirm: bool,
     pub proactive_mode: bool,
+    /// Wave 3A (G8): composite (batch) page execution. Fail-closed default
+    /// — without `--composite` the runner refuses every batch.
+    pub composite_enabled: bool,
+    /// Per-session model override (`-m`). `None` leaves routing on the
+    /// workspace profile's `preferred_model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Per-session provider override (`-p`), normalized to the lowercase
+    /// key the backend's credential resolution uses. `None` leaves the
+    /// unselected-provider fall-through in force.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 impl Default for AgentTaskRuntimeConfig {
@@ -398,6 +460,9 @@ impl Default for AgentTaskRuntimeConfig {
             permission_tier: "guard".to_string(),
             final_confirm: true,
             proactive_mode: false,
+            composite_enabled: false,
+            model: None,
+            provider: None,
         }
     }
 }
@@ -407,20 +472,44 @@ impl AgentTaskRuntimeConfig {
     /// `--no-final-confirm` (likewise `--proactive`/`--no-proactive`) are a
     /// mutually-overriding flag pair (POSIX last-one-wins via `overrides_with`;
     /// an overridden flag reverts to its default), so the raw pair collapses
-    /// to one effective value per gate here.
+    /// to one effective value per gate here. `composite` is a plain opt-in
+    /// flag (no opposite): it fails closed when absent.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         tier: TierArg,
         final_confirm: bool,
         no_final_confirm: bool,
         proactive: bool,
         no_proactive: bool,
+        composite: bool,
+        model: Option<String>,
+        provider: Option<String>,
     ) -> Self {
         Self {
             permission_tier: tier.canonical().to_string(),
             final_confirm: final_confirm && !no_final_confirm,
             proactive_mode: proactive && !no_proactive,
+            composite_enabled: composite,
+            model: normalize_routing_override(model, false),
+            provider: normalize_routing_override(provider, true),
         }
     }
+}
+
+/// Trims a routing override and drops it when nothing is left, so a blank
+/// `-m ''` never reaches the backend as an empty preference (which routing
+/// would treat as "no preference" anyway, silently). Providers are
+/// additionally lowercased to match the backend's provider keying.
+fn normalize_routing_override(value: Option<String>, lowercase: bool) -> Option<String> {
+    let trimmed = value?.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(if lowercase {
+        trimmed.to_ascii_lowercase()
+    } else {
+        trimmed
+    })
 }
 
 #[derive(Subcommand)]
@@ -589,11 +678,6 @@ pub enum HistoryCommands {
     Export {
         #[arg(long)]
         out: Option<String>,
-    },
-    /// Import history from NDJSON
-    Import {
-        /// Path to NDJSON file
-        path: String,
     },
 }
 
@@ -821,11 +905,7 @@ pub enum BrowserCommands {
     Repl,
 
     /// Machine-readable persistent automation pipe over stdin/stdout NDJSON
-    Pipe {
-        /// Enable JSONL NDJSON stream protocol
-        #[arg(long)]
-        jsonl: bool,
-    },
+    Pipe,
 }
 
 #[derive(Subcommand, Clone)]
@@ -1077,14 +1157,12 @@ async fn main() -> Result<()> {
         // ─── Headless ─────────────────────────────────────────────────────
         Commands::Headless(args) => cmd_headless(args, socket_path.as_deref(), json_output).await,
 
-        // ─── Browser group (stub — Task 3.4) ──────────────────────────────
+        // ─── Browser group ─────────────────────────────────────
         Commands::Browser { command, timeout } => {
             browser::set_timeout_override(timeout)?;
             match command {
                 BrowserCommands::Repl => cmd_repl(socket_path.as_deref(), json_output).await,
-                BrowserCommands::Pipe { jsonl: _ } => {
-                    browser_pipe::run_pipe(socket_path.as_deref()).await
-                }
+                BrowserCommands::Pipe => browser_pipe::run_pipe(socket_path.as_deref()).await,
             }
         }
 
@@ -1096,26 +1174,7 @@ async fn main() -> Result<()> {
             RoutineCommands::List { workspace: _ } => {
                 cmd_routine_list(socket_path.as_deref(), json_output).await
             }
-            RoutineCommands::Run {
-                name,
-                provider,
-                model,
-                workspace,
-            } => {
-                let unsupported = unsupported_routine_run_flags(
-                    provider.is_some(),
-                    model.is_some(),
-                    workspace.is_some(),
-                );
-                if !unsupported.is_empty() {
-                    eprintln!(
-                        "Error: {} not supported by `maho routine run`. Routines execute inside \
-                         the running browser using its own provider, model, and permission \
-                         settings, so these flags cannot be applied to a browser-side routine.",
-                        unsupported.join(", ")
-                    );
-                    std::process::exit(2);
-                }
+            RoutineCommands::Run { name } => {
                 cmd_routine_run(&name, socket_path.as_deref(), json_output).await
             }
         },
@@ -1129,7 +1188,14 @@ async fn main() -> Result<()> {
                 no_final_confirm,
                 proactive,
                 no_proactive,
+                composite,
+                resume,
+                approve_all,
                 workspace,
+                model,
+                provider,
+                dirs,
+                stream,
             } => {
                 let config = AgentTaskRuntimeConfig::from_parts(
                     tier,
@@ -1137,8 +1203,26 @@ async fn main() -> Result<()> {
                     no_final_confirm,
                     proactive,
                     no_proactive,
+                    composite,
+                    model,
+                    provider,
                 );
-                cmd_agent_task(&goal, &config, workspace.as_deref(), json_output).await
+                cmd_agent_task(
+                    &goal,
+                    &config,
+                    AgentTaskSessionInputs {
+                        workspace: workspace.as_deref(),
+                        approve_all,
+                        resume: resume.as_deref(),
+                        dirs: &dirs,
+                    },
+                    json_output,
+                    stream,
+                )
+                .await
+            }
+            AgentCommands::Sessions { limit, all } => {
+                cmd_agent_sessions(limit, all, json_output).await
             }
         },
 
@@ -1275,7 +1359,7 @@ fn cmd_config_show() -> Result<()> {
 async fn cmd_balance(relay_url: &str) -> Result<()> {
     let cfg = CliConfig::load()?;
     let token = cfg.access_token.as_deref().ok_or_else(|| {
-        eprintln!("Not logged in. Run `maho login` first.");
+        eprintln!("Not logged in. Run `maho auth login` first.");
         anyhow::anyhow!("not logged in")
     })?;
 
@@ -1292,7 +1376,7 @@ async fn cmd_balance(relay_url: &str) -> Result<()> {
 async fn cmd_buy_credits(relay_url: &str, amount: &str) -> Result<()> {
     let cfg = CliConfig::load()?;
     let _token = cfg.access_token.as_deref().ok_or_else(|| {
-        eprintln!("Not logged in. Run `maho login` first.");
+        eprintln!("Not logged in. Run `maho auth login` first.");
         anyhow::anyhow!("not logged in")
     })?;
 
@@ -1317,7 +1401,9 @@ async fn cmd_buy_credits(relay_url: &str, amount: &str) -> Result<()> {
             eprintln!("Please open the URL above manually.");
         }
     }
-    println!("Once your purchase completes, run `maho balance` to verify your new balance.");
+    println!(
+        "Once your purchase completes, run `maho billing balance` to verify your new balance."
+    );
     Ok(())
 }
 
@@ -1784,16 +1870,6 @@ async fn cmd_history(
             writer.flush()?;
             Ok(())
         }
-        HistoryCommands::Import { path } => {
-            let _ = path;
-            eprintln!(
-                "`maho history import` is not supported: the browser MCP server exposes no \
-                 `browser_history_import` tool (history access is read-only via \
-                 `browser_history_search`). Importing history would require a new server-side \
-                 tool and is out of scope for the CLI."
-            );
-            std::process::exit(2);
-        }
     }
 }
 
@@ -1889,15 +1965,19 @@ fn mail_tool_request(command: MailCommands) -> (&'static str, serde_json::Value)
             folder_id,
             limit,
             offset,
-        } => (
-            "mail_list_emails",
-            serde_json::json!({
+        } => {
+            let mut args = serde_json::json!({
                 "account_id": account_id,
                 "folder_id": folder_id,
-                "limit": limit,
-                "offset": offset,
-            }),
-        ),
+            });
+            if let Some(limit) = limit {
+                args["limit"] = limit.into();
+            }
+            if let Some(offset) = offset {
+                args["offset"] = offset.into();
+            }
+            ("mail_list_emails", args)
+        }
         MailCommands::Get { email_id } => (
             "mail_get_email",
             serde_json::json!({ "email_id": email_id }),
@@ -1908,16 +1988,22 @@ fn mail_tool_request(command: MailCommands) -> (&'static str, serde_json::Value)
             folder_id,
             limit,
             offset,
-        } => (
-            "mail_search_emails",
-            serde_json::json!({
-                "query": query,
-                "account_id": account_id,
-                "folder_id": folder_id,
-                "limit": limit,
-                "offset": offset,
-            }),
-        ),
+        } => {
+            let mut args = serde_json::json!({ "query": query });
+            if let Some(account_id) = account_id {
+                args["account_id"] = account_id.into();
+            }
+            if let Some(folder_id) = folder_id {
+                args["folder_id"] = folder_id.into();
+            }
+            if let Some(limit) = limit {
+                args["limit"] = limit.into();
+            }
+            if let Some(offset) = offset {
+                args["offset"] = offset.into();
+            }
+            ("mail_search_emails", args)
+        }
         MailCommands::Thread {
             account_id,
             message_id,
@@ -2202,28 +2288,11 @@ async fn cmd_page(
     }
 }
 
-fn unsupported_routine_run_flags(
-    provider: bool,
-    model: bool,
-    workspace: bool,
-) -> Vec<&'static str> {
-    let mut flags = Vec::new();
-    if provider {
-        flags.push("--provider");
-    }
-    if model {
-        flags.push("--model");
-    }
-    if workspace {
-        flags.push("--workspace");
-    }
-    flags
-}
 #[cfg(test)]
 mod tests {
     use super::{
-        mail_tool_request, unsupported_routine_run_flags, AgentCommands, AgentTaskRuntimeConfig,
-        Cli, Commands, MailCommands, TierArg,
+        format_agent_stream_event, mail_tool_request, AgentCommands, AgentStreamEvent,
+        AgentTaskOutput, AgentTaskRuntimeConfig, Cli, Commands, MailCommands, TierArg,
     };
 
     /// Plan row 13: valid `maho agent task` args parse the GOAL positional and
@@ -2237,7 +2306,6 @@ mod tests {
         let Commands::Agent { command } = parsed.command else {
             panic!("expected Commands::Agent variant");
         };
-        // AgentCommands has a single variant today; destructure directly.
         let AgentCommands::Task {
             goal,
             tier,
@@ -2245,16 +2313,30 @@ mod tests {
             no_final_confirm,
             proactive,
             no_proactive,
+            composite,
             ..
-        } = command;
+        } = command
+        else {
+            panic!("expected AgentCommands::Task");
+        };
         assert_eq!(goal, "Summarize open tabs");
         assert_eq!(tier, TierArg::Guard);
-        let config =
-            AgentTaskRuntimeConfig::from_parts(tier, final_confirm, no_final_confirm, proactive, no_proactive);
+        let config = AgentTaskRuntimeConfig::from_parts(
+            tier,
+            final_confirm,
+            no_final_confirm,
+            proactive,
+            no_proactive,
+            composite,
+            None,
+            None,
+        );
         assert_eq!(config, AgentTaskRuntimeConfig::default());
         assert_eq!(config.permission_tier, "guard");
         assert!(config.final_confirm);
         assert!(!config.proactive_mode);
+        // Wave 3A: composite fails closed — absent --composite stays disabled.
+        assert!(!config.composite_enabled);
     }
 
     /// Plan row 13: the three runtime-config flags override the defaults, and
@@ -2274,14 +2356,38 @@ mod tests {
             "--proactive",
         ])
         .expect("overridden agent task args must parse");
-        let Commands::Agent { command: AgentCommands::Task { tier, final_confirm, no_final_confirm, proactive, no_proactive, .. } } = parsed.command else {
+        let Commands::Agent {
+            command:
+                AgentCommands::Task {
+                    tier,
+                    final_confirm,
+                    no_final_confirm,
+                    proactive,
+                    no_proactive,
+                    composite,
+                    ..
+                },
+        } = parsed.command
+        else {
             panic!("expected Commands::Agent(Task)");
         };
-        let config =
-            AgentTaskRuntimeConfig::from_parts(tier, final_confirm, no_final_confirm, proactive, no_proactive);
+        let config = AgentTaskRuntimeConfig::from_parts(
+            tier,
+            final_confirm,
+            no_final_confirm,
+            proactive,
+            no_proactive,
+            composite,
+            None,
+            None,
+        );
         assert_eq!(config.permission_tier, "read_only");
         assert!(!config.final_confirm);
         assert!(config.proactive_mode);
+        assert!(
+            !config.composite_enabled,
+            "composite stays fail-closed unless --composite is passed"
+        );
 
         let parsed = Cli::try_parse_from([
             "maho",
@@ -2293,14 +2399,241 @@ mod tests {
             "--final-confirm",
         ])
         .expect("full-access + explicit --final-confirm must parse");
-        let Commands::Agent { command: AgentCommands::Task { tier, final_confirm, no_final_confirm, proactive, no_proactive, .. } } = parsed.command else {
+        let Commands::Agent {
+            command:
+                AgentCommands::Task {
+                    tier,
+                    final_confirm,
+                    no_final_confirm,
+                    proactive,
+                    no_proactive,
+                    composite,
+                    ..
+                },
+        } = parsed.command
+        else {
             panic!("expected Commands::Agent(Task)");
         };
-        let config =
-            AgentTaskRuntimeConfig::from_parts(tier, final_confirm, no_final_confirm, proactive, no_proactive);
+        let config = AgentTaskRuntimeConfig::from_parts(
+            tier,
+            final_confirm,
+            no_final_confirm,
+            proactive,
+            no_proactive,
+            composite,
+            None,
+            None,
+        );
         assert_eq!(config.permission_tier, "full_access");
         assert!(config.final_confirm);
         assert!(!config.proactive_mode);
+        assert!(!config.composite_enabled);
+    }
+
+    /// Wave 3A (G8): `--composite` opts the session into composite (batch)
+    /// page execution; without the flag the gate stays disabled (fail-closed
+    /// default — an absent flag must never arm the batch runner).
+    #[test]
+    fn agent_task_parses_composite_flag() {
+        use clap::Parser as _;
+        let parsed =
+            Cli::try_parse_from(["maho", "agent", "task", "batch the page ops", "--composite"])
+                .expect("--composite must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task { composite, .. },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert!(composite, "--composite must arm the composite gate");
+    }
+
+    /// Wave 3C (G9): `--stream` opts the run into the full stderr event
+    /// stream; the default run stays progress-only (no flag).
+    #[test]
+    fn agent_task_stream_flag_parses() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from(["maho", "agent", "task", "watch the tools"])
+            .expect("default agent task args must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task { stream, .. },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert!(!stream, "stream must default to progress-only (off)");
+
+        let parsed = Cli::try_parse_from(["maho", "agent", "task", "watch the tools", "--stream"])
+            .expect("--stream must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task { stream, .. },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert!(stream, "--stream must opt into the full event stream");
+    }
+
+    /// Wave 3C (G9) fixture: an artifact event payload for stream tests.
+    fn stream_artifact_fixture() -> maho_types::artifact::ArtifactInfo {
+        maho_types::artifact::ArtifactInfo {
+            artifact_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            session_id: "task-1".to_string(),
+            display_name: "report.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 12,
+            storage_rel_path: "report.txt".to_string(),
+            created_at_ms: 0,
+            kind: None,
+        }
+    }
+
+    /// Wave 3C (G9): the default (progress-only) stderr view renders
+    /// tool-call started/finished and status ticks, and suppresses the
+    /// full-stream events (thinking, artifacts, proof/reason, tokens).
+    #[test]
+    fn agent_stream_progress_view_renders_tools_and_status_only() {
+        let tool_call = AgentStreamEvent::ToolCall {
+            id: "t1".to_string(),
+            name: "fs_write".to_string(),
+            // Arguments must never surface on the stderr stream.
+            args: "{\"content\":\"secret\"}".to_string(),
+        };
+        assert_eq!(
+            format_agent_stream_event(&tool_call, false).as_deref(),
+            Some("[tool] fs_write started")
+        );
+
+        let ok = AgentStreamEvent::ToolResult {
+            id: "t1".to_string(),
+            name: "fs_write".to_string(),
+            result: "{}".to_string(),
+            succeeded: true,
+        };
+        assert_eq!(
+            format_agent_stream_event(&ok, false).as_deref(),
+            Some("[tool] fs_write finished (ok)")
+        );
+
+        let failed = AgentStreamEvent::ToolResult {
+            id: "t2".to_string(),
+            name: "web_navigate".to_string(),
+            result: "boom".to_string(),
+            succeeded: false,
+        };
+        assert_eq!(
+            format_agent_stream_event(&failed, false).as_deref(),
+            Some("[tool] web_navigate finished (failed)")
+        );
+
+        let status = AgentStreamEvent::Status {
+            elapsed_secs: 30,
+            message: "Turn in progress: 30s elapsed".to_string(),
+        };
+        assert_eq!(
+            format_agent_stream_event(&status, false).as_deref(),
+            Some("[status +30s] Turn in progress: 30s elapsed")
+        );
+
+        for event in [
+            AgentStreamEvent::Token("hi ".to_string()),
+            AgentStreamEvent::Thinking("reasoning chunk".to_string()),
+            AgentStreamEvent::ArtifactCreated {
+                artifact: stream_artifact_fixture(),
+            },
+            AgentStreamEvent::ProofOrReason {
+                proof_locator: Some("browser_screenshot_element".to_string()),
+                reason: None,
+            },
+        ] {
+            assert!(
+                format_agent_stream_event(&event, false).is_none(),
+                "progress-only view must suppress {event:?}"
+            );
+        }
+    }
+
+    /// Wave 3C (G9): the --stream view adds thinking, artifacts, and the
+    /// terminal proof/reason lines; tokens stay raw-streamed by the sink and
+    /// never format to a line.
+    #[test]
+    fn agent_stream_full_view_adds_thinking_artifacts_and_proof() {
+        assert_eq!(
+            format_agent_stream_event(
+                &AgentStreamEvent::Thinking("reasoning chunk".to_string()),
+                true
+            )
+            .as_deref(),
+            Some("[thinking] reasoning chunk")
+        );
+
+        let artifact_event = AgentStreamEvent::ArtifactCreated {
+            artifact: stream_artifact_fixture(),
+        };
+        assert_eq!(
+            format_agent_stream_event(&artifact_event, true).as_deref(),
+            Some("[artifact] 00000000-0000-0000-0000-000000000001 (report.txt)")
+        );
+
+        assert_eq!(
+            format_agent_stream_event(
+                &AgentStreamEvent::ProofOrReason {
+                    proof_locator: Some("browser_screenshot_element".to_string()),
+                    reason: None,
+                },
+                true
+            )
+            .as_deref(),
+            Some("[proof] browser_screenshot_element")
+        );
+
+        assert_eq!(
+            format_agent_stream_event(
+                &AgentStreamEvent::ProofOrReason {
+                    proof_locator: None,
+                    reason: Some("all done".to_string()),
+                },
+                true
+            )
+            .as_deref(),
+            Some("[reason] all done")
+        );
+
+        assert!(
+            format_agent_stream_event(&AgentStreamEvent::Token("hi".to_string()), true).is_none(),
+            "tokens stream raw through the sink, never through the formatter"
+        );
+    }
+
+    /// SC9: `--json` output shape is pinned to exactly session_id,
+    /// runtime_config, response — the streaming work must not leak stream
+    /// fields into the final-only JSON projection.
+    #[test]
+    fn agent_task_json_output_shape_stays_final_only() {
+        let config = AgentTaskRuntimeConfig::default();
+        let out = AgentTaskOutput {
+            session_id: "task-abc",
+            runtime_config: &config,
+            response: "final answer",
+        };
+        let value = serde_json::to_value(&out).expect("AgentTaskOutput must serialize");
+        let object = value
+            .as_object()
+            .expect("projection must serialize to a JSON object");
+        let mut keys: Vec<_> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["response", "runtime_config", "session_id"]);
+        assert_eq!(object["session_id"], "task-abc");
+        assert_eq!(object["response"], "final answer");
+        assert_eq!(
+            object["runtime_config"],
+            serde_json::json!({
+                "permission_tier": "guard",
+                "final_confirm": true,
+                "proactive_mode": false,
+                "composite_enabled": false,
+            })
+        );
     }
 
     /// Plan row 13: an unknown tier value must be rejected by clap (arg_enum),
@@ -2308,16 +2641,9 @@ mod tests {
     #[test]
     fn agent_task_rejects_unknown_tier_value() {
         use clap::Parser as _;
-        let error = Cli::try_parse_from([
-            "maho",
-            "agent",
-            "task",
-            "do it",
-            "--tier",
-            "bogus",
-        ])
-        .err()
-        .expect("unknown tier value must fail parsing");
+        let error = Cli::try_parse_from(["maho", "agent", "task", "do it", "--tier", "bogus"])
+            .err()
+            .expect("unknown tier value must fail parsing");
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
         assert!(error.to_string().contains("bogus"));
     }
@@ -2332,8 +2658,14 @@ mod tests {
             .expect("--help exits through DisplayHelp");
         assert_eq!(error.kind(), clap::error::ErrorKind::DisplayHelp);
         let help = error.to_string();
-        assert!(help.contains("Usage:"), "help must render a usage line\n{help}");
-        assert!(help.contains("agent task"), "usage must name the subcommand\n{help}");
+        assert!(
+            help.contains("Usage:"),
+            "help must render a usage line\n{help}"
+        );
+        assert!(
+            help.contains("agent task"),
+            "usage must name the subcommand\n{help}"
+        );
         assert!(help.contains("--tier"), "help must list --tier\n{help}");
     }
 
@@ -2344,14 +2676,26 @@ mod tests {
     async fn agent_task_creates_session_dry_with_runtime_config() {
         let dir = tempfile::tempdir().expect("temp dir");
         let db_path = dir.path().join("maho.db");
+        seed_fixed_storage_key(dir.path());
         let config = AgentTaskRuntimeConfig {
             permission_tier: "read_only".to_string(),
             final_confirm: false,
             proactive_mode: true,
+            ..AgentTaskRuntimeConfig::default()
         };
-        let backend = super::build_agent_task_session(&db_path, None, &config)
-            .await
-            .expect("dry agent task session must be created via the workspace store path");
+        let backend = super::build_agent_task_session(
+            &db_path,
+            None,
+            &config,
+            false,
+            super::TaskSessionTarget::New {
+                title: super::agent_task_title("do the thing"),
+            },
+            &[],
+        )
+        .await
+        .expect("dry agent task session must be created via the workspace store path")
+        .1;
         let tools = maho_agent::AgentRuntime::list_tools(&backend)
             .await
             .expect("session must expose its platform tool surface");
@@ -2363,6 +2707,319 @@ mod tests {
         assert!(prompt.contains(maho_agent::system_prompt::PROACTIVITY_INSTRUCTION_SENTINEL));
         let quiet = super::agent_task_system_prompt(&AgentTaskRuntimeConfig::default());
         assert!(!quiet.contains(maho_agent::system_prompt::PROACTIVITY_INSTRUCTION_SENTINEL));
+    }
+
+    /// Wave 1D (D7): the session tier and the workspace-derived fs whitelist
+    /// roots are bound into the kernel dispatch gate, and the artifact root
+    /// defaults under the workspace so fs_write's fs_path resolves inside the
+    /// whitelist. Roots must come from the shared provisioning function
+    /// (R-N2), never an ad-hoc list.
+    #[tokio::test]
+    async fn agent_task_session_binds_tier_and_workspace_fs_roots() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("maho.db");
+        seed_fixed_storage_key(dir.path());
+        let config = AgentTaskRuntimeConfig {
+            permission_tier: "read_only".to_string(),
+            ..AgentTaskRuntimeConfig::default()
+        };
+        let backend = super::build_agent_task_session(
+            &db_path,
+            None,
+            &config,
+            false,
+            super::TaskSessionTarget::New {
+                title: "tier wiring".to_string(),
+            },
+            &[],
+        )
+        .await
+        .expect("dry agent task session must be created")
+        .1;
+
+        // The --tier value rides into the dispatch gate.
+        assert_eq!(backend.runtime_tier().as_deref(), Some("read_only"));
+
+        // Whitelist roots are exactly the shared provisioning function's
+        // output for the session workspace (workspace_root None here → the
+        // current-directory fallback, the same value both sides compute).
+        let workspace_root =
+            std::env::current_dir().expect("test process must have a working directory");
+        assert_eq!(
+            backend.fs_whitelist_roots(),
+            maho_agent::permission::default_fs_whitelist_roots(&workspace_root)
+        );
+
+        // The default artifact root sits under the workspace, so a tier-gated
+        // fs_write resolves its fs_path inside the whitelist.
+        assert_eq!(
+            backend.artifact_root(),
+            Some(workspace_root.join(".maho").join("artifacts"))
+        );
+    }
+
+    /// Wave 3A (G8): session open binds the composite gate ONCE from the
+    /// runtime-config payload. `--composite` arms the batch runner with the
+    /// shared step cap; the default (no flag) stays fail-closed — the bound
+    /// gate refuses every batch before any executor is touched.
+    #[tokio::test]
+    async fn agent_task_session_binds_composite_gate_fail_closed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("maho.db");
+        seed_fixed_storage_key(dir.path());
+
+        // Default posture: no --composite → the gate binds disabled.
+        let (_, backend) = super::build_agent_task_session(
+            &db_path,
+            None,
+            &AgentTaskRuntimeConfig::default(),
+            false,
+            super::TaskSessionTarget::New {
+                title: "composite default".to_string(),
+            },
+            &[],
+        )
+        .await
+        .expect("default dry session must be created");
+        let bound = backend.composite_config();
+        assert!(
+            !bound.enabled,
+            "fail-closed: no flag must leave the gate disabled"
+        );
+        assert_eq!(
+            bound.max_steps,
+            maho_agent::composite::DEFAULT_MAX_STEPS,
+            "the shared step cap rides the default config"
+        );
+        drop(backend);
+
+        // --composite posture: the gate binds enabled, still bounded by the
+        // shared step cap.
+        let config = AgentTaskRuntimeConfig {
+            composite_enabled: true,
+            ..AgentTaskRuntimeConfig::default()
+        };
+        let (_, backend) = super::build_agent_task_session(
+            &db_path,
+            None,
+            &config,
+            false,
+            super::TaskSessionTarget::New {
+                title: "composite armed".to_string(),
+            },
+            &[],
+        )
+        .await
+        .expect("composite dry session must be created");
+        let bound = backend.composite_config();
+        assert!(
+            bound.enabled,
+            "--composite must arm the gate at session open"
+        );
+        assert_eq!(bound.max_steps, maho_agent::composite::DEFAULT_MAX_STEPS);
+    }
+
+    /// Wave 1C (G10): the title is the goal's first ~80 chars — long goals
+    /// are cut at a char boundary, short goals pass through untouched, and
+    /// multi-byte goals never panic mid-codepoint.
+    #[test]
+    fn agent_task_title_truncates_long_goal_to_eighty_chars() {
+        let goal = "x".repeat(200);
+        let title = super::agent_task_title(&goal);
+        assert_eq!(title.chars().count(), 80);
+        assert!(goal.starts_with(&title));
+
+        let multibyte = "\u{1f52d}".repeat(100);
+        let title = super::agent_task_title(&multibyte);
+        assert_eq!(title.chars().count(), 80);
+        assert!(title.chars().all(|c| c == '\u{1f52d}'));
+    }
+
+    /// Wave 1C (G10): short goals become the title verbatim; embedded
+    /// newlines/tabs collapse so the panel history row stays single-line.
+    #[test]
+    fn agent_task_title_keeps_short_goal_and_collapses_whitespace() {
+        assert_eq!(
+            super::agent_task_title("Fix the login bug"),
+            "Fix the login bug"
+        );
+        assert_eq!(
+            super::agent_task_title("  multi\nline \t goal  "),
+            "multi line goal"
+        );
+    }
+
+    /// Wave 1C (G10): a fresh task session's conversation row is titled from
+    /// the goal up front, so the row is titled even before the first turn
+    /// persists (pre-existing untitled rows are NOT migrated — no backfill).
+    #[tokio::test]
+    async fn agent_task_new_session_is_titled_from_goal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("maho.db");
+        seed_fixed_storage_key(dir.path());
+        let goal = "Summarize the quarterly compliance report and draft follow-ups";
+        let (session_id, backend) = super::build_agent_task_session(
+            &db_path,
+            None,
+            &AgentTaskRuntimeConfig::default(),
+            false,
+            super::TaskSessionTarget::New {
+                title: super::agent_task_title(goal),
+            },
+            &[],
+        )
+        .await
+        .expect("new task session must be created");
+        assert!(
+            session_id.starts_with("task-"),
+            "fresh session id must be task-<uuid>, got {session_id}"
+        );
+        drop(backend);
+
+        let storage = maho_cli::workspace::open_storage(&db_path).expect("reopen store");
+        let conversations = storage
+            .list_conversations(maho_types::chat::ConversationListState::All, 100)
+            .expect("list conversations");
+        let created = conversations
+            .iter()
+            .find(|c| c.id == session_id)
+            .expect("titled session row must exist");
+        assert_eq!(created.title.as_deref(), Some(goal));
+    }
+
+    /// Wave 1C (G10): `--resume <session-id>` rebinds to the existing
+    /// conversation — same id, stored turns and title reused, and an unknown
+    /// id fails closed instead of silently forking a fresh session.
+    #[tokio::test]
+    async fn agent_task_resume_reuses_existing_session() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db_path = dir.path().join("maho.db");
+        seed_fixed_storage_key(dir.path());
+
+        // Seed a prior run: a titled session with one stored turn, exactly
+        // what a previous `maho agent task` leaves behind.
+        let (session_id, backend) = super::build_agent_task_session(
+            &db_path,
+            None,
+            &AgentTaskRuntimeConfig::default(),
+            false,
+            super::TaskSessionTarget::New {
+                title: super::agent_task_title("first run goal"),
+            },
+            &[],
+        )
+        .await
+        .expect("initial session must be created");
+        drop(backend);
+        {
+            let storage = maho_cli::workspace::open_storage(&db_path).expect("open store");
+            storage
+                .insert_conversation_turn("turn-1", &session_id, "user", "first run goal", None)
+                .expect("seed prior turn");
+        }
+
+        // Resume must resolve to the SAME session, keeping its turns and
+        // title (no re-titling on resume).
+        let (resumed_id, backend) = super::build_agent_task_session(
+            &db_path,
+            None,
+            &AgentTaskRuntimeConfig::default(),
+            false,
+            super::TaskSessionTarget::Resume {
+                session_id: session_id.clone(),
+            },
+            &[],
+        )
+        .await
+        .expect("resume must rebind to the existing session");
+        assert_eq!(resumed_id, session_id, "resume must reuse the session id");
+        drop(backend);
+
+        let storage = maho_cli::workspace::open_storage(&db_path).expect("reopen store");
+        let turns = storage
+            .load_conversation_session(&resumed_id)
+            .expect("load resumed session turns");
+        assert_eq!(turns.len(), 1, "resumed session must keep prior turns");
+        assert_eq!(turns[0].1, "first run goal");
+        let conversations = storage
+            .list_conversations(maho_types::chat::ConversationListState::All, 100)
+            .expect("list conversations");
+        let resumed = conversations
+            .iter()
+            .find(|c| c.id == resumed_id)
+            .expect("resumed session row must exist");
+        assert_eq!(resumed.title.as_deref(), Some("first run goal"));
+
+        // Unknown resume id: fail closed, never fork a fresh session.
+        let error = super::build_agent_task_session(
+            &db_path,
+            None,
+            &AgentTaskRuntimeConfig::default(),
+            false,
+            super::TaskSessionTarget::Resume {
+                session_id: "task-00000000-0000-0000-0000-000000000000".to_string(),
+            },
+            &[],
+        )
+        .await
+        .err()
+        .expect("resume of an unknown session must fail closed");
+        assert!(
+            error.to_string().contains("not found"),
+            "error must name the missing session: {error}"
+        );
+    }
+
+    /// Wave 1C (G10): `--resume <SESSION_ID>` parses onto the task command;
+    /// without the flag it stays None.
+    #[test]
+    fn agent_task_parses_resume_flag() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from([
+            "maho",
+            "agent",
+            "task",
+            "continue where we left off",
+            "--resume",
+            "task-abc",
+        ])
+        .expect("--resume must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task { resume, .. },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert_eq!(resume.as_deref(), Some("task-abc"));
+
+        let parsed = Cli::try_parse_from(["maho", "agent", "task", "fresh start"])
+            .expect("plain task args must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task { resume, .. },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert_eq!(resume, None);
+    }
+
+    /// Pre-seed a FIXED storage key file for a test profile.
+    ///
+    /// `workspace::open_storage` derives the SQLCipher key from
+    /// `<db dir>/maho_storage.key`, generating a RANDOM key file when absent
+    /// and injecting it into a process-global slot before every open. When
+    /// storage-opening tests run in parallel threads, one thread's key set
+    /// can land between another thread's set and open, so a DB gets opened
+    /// under the wrong key ("file is not a database" flakes). Seeding the
+    /// same fixed key content in every storage-using test makes every
+    /// derivation — and therefore the global slot — identical, so
+    /// interleavings are harmless.
+    fn seed_fixed_storage_key(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("maho_storage.key"),
+            b"maho-cli-agent-task-test-fixed-key-01",
+        )
+        .expect("seed fixed storage key file");
     }
 
     /// clap must give registered platform subcommands precedence over the
@@ -2397,6 +3054,41 @@ mod tests {
     }
 
     #[test]
+    fn mail_default_argv_omits_optional_wire_arguments() {
+        use clap::Parser as _;
+        for (argv, expected_tool, expected_args) in [
+            (
+                vec![
+                    "maho",
+                    "mail",
+                    "list",
+                    "--account-id",
+                    "acct",
+                    "--folder-id",
+                    "inbox",
+                ],
+                "mail_list_emails",
+                serde_json::json!({"account_id": "acct", "folder_id": "inbox"}),
+            ),
+            (
+                vec!["maho", "mail", "search", "receipt"],
+                "mail_search_emails",
+                serde_json::json!({"query": "receipt"}),
+            ),
+        ] {
+            let Commands::Mail { command } = Cli::try_parse_from(argv).expect("Mail argv").command
+            else {
+                panic!("expected Mail command");
+            };
+            let (tool, args) = mail_tool_request(command);
+            let wire = serde_json::to_string(&args).expect("request JSON");
+            let parsed: serde_json::Value = serde_json::from_str(&wire).expect("one request parse");
+            assert_eq!(tool, expected_tool);
+            assert_eq!(parsed, expected_args);
+        }
+    }
+
+    #[test]
     fn mail_thread_command_sends_account_id_and_message_id() {
         let (tool, args) = mail_tool_request(MailCommands::Thread {
             account_id: "acc1".to_string(),
@@ -2412,24 +3104,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn routine_run_reports_every_unsupported_flag() {
-        let flags = unsupported_routine_run_flags(true, true, true);
-        assert_eq!(flags, vec!["--provider", "--model", "--workspace"]);
-    }
-
-    #[test]
-    fn routine_run_allows_no_flags() {
-        assert!(unsupported_routine_run_flags(false, false, false).is_empty());
-    }
-
-    #[test]
-    fn routine_run_reports_only_the_flags_set() {
-        assert_eq!(
-            unsupported_routine_run_flags(true, false, true),
-            vec!["--provider", "--workspace"]
-        );
-    }
+    // The three `unsupported_routine_run_flags` tests that lived here pinned
+    // a runtime rejection helper for flags that were registered but could
+    // never work. The flags are now unregistered, so clap rejects them at
+    // parse time (same exit code) and the helper no longer exists; the
+    // replacement coverage is
+    // `routine_run_rejects_unimplementable_flags_at_parse_time` below.
 
     #[test]
     fn mail_search_command_routes_to_mail_search_emails() {
@@ -2474,6 +3154,352 @@ mod tests {
         assert_eq!(
             crate::resolve_maho_binary_path(&executable),
             Some(executable.clone())
+        );
+    }
+
+    // ─── P0-1: per-session model / provider override ──────────────────────
+
+    /// `-m/--model` and `-p/--provider` carry a per-session routing override
+    /// onto the task session (backend `set_available_models` /
+    /// `set_preferred_provider`). Both spellings must parse.
+    #[test]
+    fn agent_task_parses_model_and_provider_overrides() {
+        use clap::Parser as _;
+        for argv in [
+            [
+                "maho",
+                "agent",
+                "task",
+                "do it",
+                "--model",
+                "anthropic/claude-3-7-sonnet",
+                "--provider",
+                "anthropic",
+            ],
+            [
+                "maho",
+                "agent",
+                "task",
+                "do it",
+                "-m",
+                "anthropic/claude-3-7-sonnet",
+                "-p",
+                "anthropic",
+            ],
+        ] {
+            let parsed = Cli::try_parse_from(argv).expect("model/provider overrides must parse");
+            let Commands::Agent {
+                command:
+                    AgentCommands::Task {
+                        model, provider, ..
+                    },
+            } = parsed.command
+            else {
+                panic!("expected Commands::Agent(Task)");
+            };
+            assert_eq!(model.as_deref(), Some("anthropic/claude-3-7-sonnet"));
+            assert_eq!(provider.as_deref(), Some("anthropic"));
+        }
+    }
+
+    /// Absent flags leave routing untouched: the stored profile's
+    /// `preferred_model` and the unselected-provider fall-through stay in
+    /// force, so the payload carries `None` rather than a fabricated default.
+    #[test]
+    fn agent_task_model_and_provider_default_to_none() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from(["maho", "agent", "task", "do it"])
+            .expect("bare agent task must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task {
+                model, provider, ..
+            },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert!(model.is_none());
+        assert!(provider.is_none());
+    }
+
+    /// The overrides ride the runtime_config payload so `--json` round-trips
+    /// the model/provider actually bound to the session.
+    #[test]
+    fn runtime_config_carries_model_and_provider_overrides() {
+        let config = AgentTaskRuntimeConfig::from_parts(
+            TierArg::Guard,
+            true,
+            false,
+            false,
+            false,
+            false,
+            Some("anthropic/claude-3-7-sonnet".to_string()),
+            Some("Anthropic ".to_string()),
+        );
+        assert_eq!(config.model.as_deref(), Some("anthropic/claude-3-7-sonnet"));
+        // Provider is normalized (trimmed + lowercased) so `-p Anthropic`
+        // matches the backend's `normalize_provider` keying.
+        assert_eq!(config.provider.as_deref(), Some("anthropic"));
+
+        let bare = AgentTaskRuntimeConfig::from_parts(
+            TierArg::Guard,
+            true,
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        assert_eq!(bare, AgentTaskRuntimeConfig::default());
+        assert!(bare.model.is_none());
+        assert!(bare.provider.is_none());
+    }
+
+    /// An empty/whitespace-only override is a user error, not a silent
+    /// no-op: it must not reach the backend as an empty preference.
+    #[test]
+    fn blank_model_and_provider_overrides_are_dropped() {
+        let config = AgentTaskRuntimeConfig::from_parts(
+            TierArg::Guard,
+            true,
+            false,
+            false,
+            false,
+            false,
+            Some("   ".to_string()),
+            Some("".to_string()),
+        );
+        assert!(config.model.is_none());
+        assert!(config.provider.is_none());
+    }
+
+    // ─── P0-2: session listing ────────────────────────────────────────────
+
+    /// `maho agent sessions` makes `--resume <SESSION_ID>` discoverable.
+    #[test]
+    fn agent_sessions_subcommand_parses_with_defaults() {
+        use clap::Parser as _;
+        let parsed =
+            Cli::try_parse_from(["maho", "agent", "sessions"]).expect("agent sessions must parse");
+        let Commands::Agent {
+            command: AgentCommands::Sessions { limit, all },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Sessions)");
+        };
+        assert_eq!(limit, 20);
+        assert!(!all, "listing defaults to CLI task sessions only");
+
+        let parsed = Cli::try_parse_from(["maho", "agent", "sessions", "--limit", "5", "--all"])
+            .expect("agent sessions flags must parse");
+        let Commands::Agent {
+            command: AgentCommands::Sessions { limit, all },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Sessions)");
+        };
+        assert_eq!(limit, 5);
+        assert!(all);
+    }
+
+    /// Default listing shows exactly the sessions `agent task` mints (the
+    /// `task-` prefix), so every row is a valid `--resume` argument; `--all`
+    /// widens to browser-side conversations too.
+    #[test]
+    fn agent_sessions_filters_to_resumable_task_sessions() {
+        let ids = ["task-abc", "chat-7", "task-def"];
+        let resumable: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|id| crate::is_cli_task_session(id))
+            .collect();
+        assert_eq!(resumable, vec!["task-abc", "task-def"]);
+    }
+
+    // ─── P1-5: fs whitelist roots ─────────────────────────────────────────
+
+    /// `--dir` overrides the implicit single workspace root the agent would
+    /// otherwise whitelist, and repeats to build a multi-root whitelist.
+    #[test]
+    fn agent_task_parses_repeated_dir_overrides() {
+        use clap::Parser as _;
+        let parsed = Cli::try_parse_from([
+            "maho", "agent", "task", "refactor", "--dir", "/tmp/a", "--dir", "/tmp/b",
+        ])
+        .expect("repeated --dir must parse");
+        let Commands::Agent {
+            command: AgentCommands::Task { dirs, .. },
+        } = parsed.command
+        else {
+            panic!("expected Commands::Agent(Task)");
+        };
+        assert_eq!(
+            dirs,
+            vec![
+                std::path::PathBuf::from("/tmp/a"),
+                std::path::PathBuf::from("/tmp/b")
+            ]
+        );
+    }
+
+    /// Explicit `--dir` roots replace the derived workspace root; with none
+    /// passed the derived root is used unchanged. Roots that
+    /// `default_fs_whitelist_roots` would silently drop (relative paths)
+    /// fail loudly instead of handing the agent an empty, unexplained
+    /// whitelist.
+    #[test]
+    fn fs_whitelist_roots_honor_explicit_dirs() {
+        let workspace_root = std::path::Path::new("/tmp/workspace");
+
+        let derived = crate::resolve_fs_whitelist_roots(workspace_root, &[])
+            .expect("derived root must resolve");
+        assert_eq!(derived, vec!["/tmp/workspace".to_string()]);
+
+        let overridden = crate::resolve_fs_whitelist_roots(
+            workspace_root,
+            &[
+                std::path::PathBuf::from("/tmp/a"),
+                std::path::PathBuf::from("/tmp/b/"),
+            ],
+        )
+        .expect("explicit roots must resolve");
+        assert_eq!(overridden, vec!["/tmp/a".to_string(), "/tmp/b".to_string()]);
+
+        let err = crate::resolve_fs_whitelist_roots(
+            workspace_root,
+            &[std::path::PathBuf::from("relative/dir")],
+        )
+        .expect_err("a relative --dir must fail closed with an explanation");
+        assert!(
+            err.to_string().contains("relative/dir"),
+            "error must name the rejected root, got: {err}"
+        );
+    }
+
+    // ─── P0-3 / P1-1 / P1-2 / P1-4: removed no-op surface ─────────────────
+
+    /// P0-3: `--isolated` never had a consumer — every handler dropped it.
+    /// A hard parse error beats silently ignoring a security-adjacent flag.
+    #[test]
+    fn isolated_global_flag_is_rejected() {
+        use clap::Parser as _;
+        assert!(
+            Cli::try_parse_from(["maho", "--isolated", "version"]).is_err(),
+            "--isolated must not parse: nothing consumes it"
+        );
+    }
+
+    /// P1-1: `history import` had a hard-exit stub handler; it must no
+    /// longer be advertised as a peer of `list`/`search`/`export`.
+    #[test]
+    fn history_import_is_not_registered() {
+        use clap::Parser as _;
+        assert!(
+            Cli::try_parse_from(["maho", "history", "import", "./h.ndjson"]).is_err(),
+            "history import must not parse: the browser exposes no import tool"
+        );
+        assert!(
+            Cli::try_parse_from(["maho", "history", "export"]).is_ok(),
+            "the remaining history verbs must keep working"
+        );
+    }
+
+    /// P1-2: `browser pipe --jsonl` was parsed then discarded — NDJSON
+    /// framing is unconditional, so the flag promised a switch that did not
+    /// exist.
+    #[test]
+    fn browser_pipe_jsonl_flag_is_rejected() {
+        use clap::Parser as _;
+        assert!(
+            Cli::try_parse_from(["maho", "browser", "pipe", "--jsonl"]).is_err(),
+            "--jsonl must not parse: NDJSON framing is always on"
+        );
+        assert!(
+            Cli::try_parse_from(["maho", "browser", "pipe"]).is_ok(),
+            "browser pipe itself must keep working"
+        );
+    }
+
+    /// P1-4: `routine run --provider/--model/--workspace` were registered
+    /// then rejected with exit 2. Clap's own unknown-argument error keeps
+    /// the exit code while removing them from help.
+    #[test]
+    fn routine_run_rejects_unimplementable_flags_at_parse_time() {
+        use clap::Parser as _;
+        for flag in ["--provider", "--model", "--workspace"] {
+            assert!(
+                Cli::try_parse_from(["maho", "routine", "run", "r1", flag, "x"]).is_err(),
+                "routine run {flag} must not parse: routines execute browser-side"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["maho", "routine", "run", "r1"]).is_ok(),
+            "routine run itself must keep working"
+        );
+    }
+
+    // ─── P1-3: remediation advice must name real commands ─────────────────
+
+    /// Every `maho <sub>` spelling quoted in *runtime user-facing text* must
+    /// resolve to a visible command. The three offenders named `maho repl`,
+    /// `maho login`, and `maho balance` — one nonexistent, two hidden
+    /// deprecated aliases the CLI simultaneously warns it is removing — so
+    /// copy-pasting the CLI's own advice failed.
+    ///
+    /// Scans only lines that carry a string literal, since comments
+    /// legitimately discuss removed commands (e.g. "the removed `maho run`
+    /// path") as history rather than as advice.
+    #[test]
+    fn quoted_remediation_commands_resolve_to_visible_commands() {
+        use clap::CommandFactory as _;
+        let source = include_str!("main.rs");
+        let command = Cli::command();
+        let visible: Vec<String> = command
+            .get_subcommands()
+            .filter(|sub| !sub.is_hide_set())
+            .map(|sub| sub.get_name().to_string())
+            .collect();
+
+        let mut offenders = Vec::new();
+        for line in source.lines() {
+            let trimmed = line.trim_start();
+            // Comments and doc comments are not user-facing output.
+            if trimmed.starts_with("//") || !line.contains('"') {
+                continue;
+            }
+            for (index, _) in line.match_indices("`maho ") {
+                let rest = &line[index + "`maho ".len()..];
+                let Some(end) = rest.find('`') else { continue };
+                let quoted = &rest[..end];
+                // Only single-word invocations can be checked mechanically;
+                // multi-word ones name a group + subcommand already covered by
+                // the group's own registration.
+                let Some(word) = quoted.split_whitespace().next() else {
+                    continue;
+                };
+                if quoted.split_whitespace().count() != 1 {
+                    continue;
+                }
+                // Only concrete command names are checkable: skip flags, format
+                // placeholders (`{old}`), and doc metasyntax (`<cmd>`).
+                let is_concrete_name = word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                    && !word.starts_with('-');
+                if !is_concrete_name {
+                    continue;
+                }
+                if !visible.iter().any(|name| name == word) {
+                    offenders.push(word.to_string());
+                }
+            }
+        }
+        offenders.sort();
+        offenders.dedup();
+        assert!(
+            offenders.is_empty(),
+            "user-facing text quotes `maho <cmd>` spellings that are hidden or nonexistent: {offenders:?}"
         );
     }
 }
@@ -2521,6 +3547,43 @@ fn find_tool_by_id<'a>(result: &'a serde_json::Value, id: &str) -> Result<&'a se
             })
         })
         .ok_or_else(|| anyhow::anyhow!("unknown or unavailable capability '{id}'"))
+}
+
+/// C4-DEFECT-1: the global `--json` flag promises structured output for all
+/// commands, but the capability-resolution failures below returned a plain
+/// `Err` that anyhow rendered as a human sentence on stderr, leaving stdout
+/// empty. A machine consumer reading stdout got nothing parseable and no
+/// stable reason code.
+///
+/// Under `--json` this emits the structured object on stdout and exits with
+/// the caller's code; otherwise it returns the error unchanged so the human
+/// path (sentence on stderr, empty stdout) is byte-identical to before.
+///
+/// `reason` is a stable machine token, deliberately distinct from the
+/// `error.status` key used by the pre-existing runtime-unavailable payload
+/// on stderr — that contract is pinned by tests and is left untouched.
+fn emit_json_error_and_exit(
+    json_output: bool,
+    reason: &str,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    if !json_output {
+        return error;
+    }
+    let payload = serde_json::json!({
+        "ok": false,
+        "error": {
+            "reason": reason,
+            "message": error.to_string(),
+        }
+    });
+    match serde_json::to_string_pretty(&payload) {
+        Ok(rendered) => println!("{rendered}"),
+        // Serializing a two-string object cannot realistically fail, but if
+        // it ever did, falling back to the human path beats exiting silent.
+        Err(_) => return error,
+    }
+    std::process::exit(1);
 }
 
 fn packaged_tool_catalog() -> Result<serde_json::Value> {
@@ -2577,7 +3640,8 @@ async fn cmd_tool(
         }
         ToolCommands::Describe { id } => {
             let (result, source, runtime_available) = discover_tool_catalog(socket_path).await?;
-            let tool = find_tool_by_id(&result, &id)?;
+            let tool = find_tool_by_id(&result, &id)
+                .map_err(|e| emit_json_error_and_exit(json_output, "unknown_capability", e))?;
             if json_output {
                 let output = serde_json::json!({
                     "source": source,
@@ -2613,8 +3677,8 @@ async fn cmd_tool(
                     "Error: '{id}' is a session-binding tool and cannot be run as a one-shot \
                      `maho tool call` — its browser-side state (lease / network capture) would be \
                      orphaned when the command exits.\n\
-                     Run it inside a persistent session instead: `maho repl` holds the session \
-                     open so the state can be released."
+                     Run it inside a persistent session instead: `maho browser repl` holds the \
+                     session open so the state can be released."
                 );
                 std::process::exit(2);
             }
@@ -2649,7 +3713,8 @@ async fn cmd_tool(
             };
 
             let discovery = client.call("tools/list", serde_json::json!({})).await?;
-            let descriptor = find_tool_by_id(&discovery, &id)?;
+            let descriptor = find_tool_by_id(&discovery, &id)
+                .map_err(|e| emit_json_error_and_exit(json_output, "unknown_capability", e))?;
             let name = descriptor
                 .get("name")
                 .and_then(serde_json::Value::as_str)
@@ -2856,27 +3921,86 @@ async fn cmd_mcp_remove(name: &str, workspace: Option<&str>, json_output: bool) 
 /// capability broker in the browser process (plan rows 3/5); the CLI carries
 /// the validated runtime_config payload and applies the row-9 proactive
 /// prompt gate.
+/// The session-provisioning inputs for one `maho agent task` run: which
+/// workspace to bind, the approval posture, an optional `--resume` target,
+/// and the explicit `--dir` whitelist roots. Grouped so the run entry point
+/// keeps a readable signature as session inputs grow.
+struct AgentTaskSessionInputs<'a> {
+    workspace: Option<&'a str>,
+    approve_all: bool,
+    resume: Option<&'a str>,
+    dirs: &'a [PathBuf],
+}
+
 async fn cmd_agent_task(
     goal: &str,
     config: &AgentTaskRuntimeConfig,
-    workspace: Option<&str>,
+    session: AgentTaskSessionInputs<'_>,
     json_output: bool,
+    stream: bool,
 ) -> Result<()> {
+    let AgentTaskSessionInputs {
+        workspace,
+        approve_all,
+        resume,
+        dirs,
+    } = session;
     let db_path = maho_cli::workspace::default_db_path();
-    let backend = build_agent_task_session(&db_path, workspace, config).await?;
-    let session_id = format!("task-{}", uuid::Uuid::new_v4());
+    // Wave 1C (G10): a fresh run binds a new `task-<uuid>` conversation titled
+    // from the goal; `--resume <id>` rebinds to the existing session instead
+    // (stored turns and title reused, fail-closed on unknown ids).
+    let target = match resume {
+        Some(session_id) => TaskSessionTarget::Resume {
+            session_id: session_id.to_string(),
+        },
+        None => TaskSessionTarget::New {
+            title: agent_task_title(goal),
+        },
+    };
+    let (session_id, backend) =
+        build_agent_task_session(&db_path, workspace, config, approve_all, target, dirs).await?;
 
     if !json_output {
         let tier = &config.permission_tier;
         let final_confirm = config.final_confirm;
         let proactive_mode = config.proactive_mode;
+        let composite = config.composite_enabled;
         println!(
-            "Running agent task (tier: {tier}, final_confirm: {final_confirm}, proactive: {proactive_mode})..."
+            "Running agent task (tier: {tier}, final_confirm: {final_confirm}, proactive: {proactive_mode}, composite: {composite})..."
         );
+        // The session id is the only handle `--resume` accepts, and
+        // `maho agent sessions` is the only other way to recover it — print
+        // it up front so a scrolled-away run stays resumable. The whitelist
+        // roots are the write boundary the user just handed the agent, so
+        // they are stated before the first turn rather than discovered
+        // through a denial.
+        println!("  session: {session_id}");
+        let roots = backend.fs_whitelist_roots();
+        if roots.is_empty() {
+            println!("  writable dirs: (none — file operations fail closed)");
+        } else {
+            println!("  writable dirs: {}", roots.join(", "));
+        }
+        if let Some(model) = &config.model {
+            println!("  model: {model}");
+        }
+        if let Some(provider) = &config.provider {
+            println!("  provider: {provider}");
+        }
     }
 
+    // Wave 3C (G9): non-JSON runs surface live progress on stderr —
+    // tool-call started/finished plus status ticks by default, the full
+    // event stream with --stream. --json stays final-only (SC9): no stderr
+    // stream, output shape unchanged.
+    let on_event = if json_output {
+        None
+    } else {
+        Some(agent_task_event_sink(stream))
+    };
+
     let response = backend
-        .run_prompt_in_session(&session_id, goal)
+        .run_prompt_in_session(&session_id, goal, on_event)
         .await
         .map_err(|e| anyhow::anyhow!("Agent task failed: {e:?}"))?;
 
@@ -2893,19 +4017,135 @@ async fn cmd_agent_task(
     Ok(())
 }
 
+/// True for the session ids `maho agent task` mints, which are the ids
+/// `--resume` is meant to take. Browser-side conversations live in the same
+/// table, so the default listing filters on this prefix instead of dumping
+/// every chat the browser ever opened.
+fn is_cli_task_session(session_id: &str) -> bool {
+    session_id.starts_with("task-")
+}
+
+/// JSON projection for `maho agent sessions --json`.
+#[derive(serde::Serialize)]
+struct AgentSessionOutput {
+    session_id: String,
+    title: Option<String>,
+    updated_at: String,
+}
+
+/// P0-2: lists the sessions `maho agent task --resume <SESSION_ID>` accepts,
+/// read from the same shared workspace store `--resume` resolves against
+/// (`workspace::default_db_path` → `open_storage` → `list_conversations`),
+/// so a listed id is always a resolvable one.
+async fn cmd_agent_sessions(limit: usize, all: bool, json_output: bool) -> Result<()> {
+    let db_path = maho_cli::workspace::default_db_path();
+    let sessions = tokio::task::spawn_blocking(move || -> Result<Vec<AgentSessionOutput>> {
+        let storage = maho_cli::workspace::open_storage(&db_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?;
+        // Over-read before filtering so the `task-` filter cannot starve the
+        // requested limit when browser chats dominate the recent rows.
+        let scan_limit = if all {
+            limit
+        } else {
+            limit.saturating_mul(10).max(limit)
+        };
+        let conversations = storage
+            .list_conversations(maho_types::chat::ConversationListState::Active, scan_limit)
+            .map_err(|e| anyhow::anyhow!("Failed to list sessions: {e}"))?;
+        Ok(conversations
+            .into_iter()
+            .filter(|c| all || is_cli_task_session(&c.id))
+            .take(limit)
+            .map(|c| AgentSessionOutput {
+                session_id: c.id,
+                title: c.title,
+                updated_at: c.updated_at,
+            })
+            .collect())
+    })
+    .await??;
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        return Ok(());
+    }
+
+    if sessions.is_empty() {
+        println!("No agent sessions yet. `maho agent task \"<goal>\"` starts one.");
+        return Ok(());
+    }
+
+    for session in &sessions {
+        let title = session.title.as_deref().unwrap_or("(untitled)");
+        println!("{}  {}  {}", session.session_id, session.updated_at, title);
+    }
+    println!("\nResume one with: maho agent task \"<goal>\" --resume <SESSION_ID>");
+    Ok(())
+}
+
+/// Wave 1C (G10): how a task run binds to the store — either a fresh
+/// `task-<uuid>` conversation titled from the goal, or an explicit
+/// `--resume <session-id>` rebind to the existing conversation.
+#[derive(Debug, Clone)]
+enum TaskSessionTarget {
+    New { title: String },
+    Resume { session_id: String },
+}
+
+/// Wave 1C (G10): a fresh task session's conversation title — the goal's
+/// leading whitespace collapsed, cut to the first 80 chars at a char
+/// boundary (never panics on multi-byte goals).
+fn agent_task_title(goal: &str) -> String {
+    const MAX_AGENT_TASK_TITLE_CHARS: usize = 80;
+    goal.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_AGENT_TASK_TITLE_CHARS)
+        .collect()
+}
+
 /// Builds the agent task session over the shared workspace store (plan row
 /// 13; mirrors the removed `maho run` backend construction, minus the
 /// deleted BYOK/browser-bridge surface). Dry-callable: no LLM turn and no
-/// browser connection happen here, so tests create real sessions.
+/// browser connection happen here, so tests create real sessions. Returns
+/// the bound session id alongside the backend: `New` targets mint a titled
+/// `task-<uuid>` conversation row up front (so the title exists even before
+/// the first turn persists), `Resume` targets verify the session exists and
+/// fail closed otherwise.
 async fn build_agent_task_session(
     db_path: &std::path::Path,
     workspace: Option<&str>,
     config: &AgentTaskRuntimeConfig,
-) -> Result<SwiftideBackend> {
+    approve_all: bool,
+    target: TaskSessionTarget,
+    dirs: &[PathBuf],
+) -> Result<(String, SwiftideBackend)> {
     let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(db_path, workspace).await?;
 
     let storage = maho_cli::workspace::open_storage(db_path)
         .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?;
+
+    // Resolve the session binding while the raw store handle is still in
+    // hand (the backend wraps it opaquely from here on).
+    let session_id = match target {
+        TaskSessionTarget::New { title } => {
+            let id = format!("task-{}", uuid::Uuid::new_v4());
+            storage
+                .ensure_conversation_with_title(&id, &title)
+                .map_err(|e| anyhow::anyhow!("Failed to title new task session: {e}"))?;
+            id
+        }
+        TaskSessionTarget::Resume { session_id } => {
+            let exists = storage
+                .conversation_exists(&session_id)
+                .map_err(|e| anyhow::anyhow!("Failed to look up session {session_id}: {e}"))?;
+            if !exists {
+                anyhow::bail!("Session not found: {session_id}");
+            }
+            session_id
+        }
+    };
 
     let workspaces = storage
         .list_workspaces()
@@ -2925,7 +4165,7 @@ async fn build_agent_task_session(
     let backend = SwiftideBackend::new(
         Arc::new(maho_agent::MutexAgentStorage(Arc::new(Mutex::new(storage)))),
         None,
-        workspace_root,
+        workspace_root.clone(),
         true, // allow insecure key storage for CLI convenience (pre-existing CLI posture)
     );
 
@@ -2933,14 +4173,94 @@ async fn build_agent_task_session(
         backend.set_active_space_id(Some(space_id.clone()));
     }
 
-    // CLI agent sessions are non-interactive: routine tool calls auto-approve
-    // (pre-existing CLI posture from the removed `maho run` path). Consequence
-    // gating under tier/final_confirm stays at the capability broker.
-    backend.set_approval_policy("allow".to_string());
+    // Wave 1B + 1D: approval posture is explicit, never hard-coded, and the
+    // session tier caps it (read_only → DenySensitive even with --approve-all;
+    // full_access → AllowAll-with-audit; guard → TTY prompt / headless
+    // fail-closed / --approve-all escape hatch). The same tier is bound into
+    // the kernel dispatch gate below, so the fs-write/shell-exec class and
+    // the whitelist ask-gate are enforced regardless of the posture.
+    maho_cli::approval::apply_cli_approval(
+        &backend,
+        approve_all,
+        maho_cli::approval::stdin_is_tty(),
+        &config.permission_tier,
+    );
+
+    // Wave 1D (D7): bind the runtime tier + fs whitelist roots for the kernel
+    // tool dispatch gate, and default the artifact root under the workspace
+    // so fs_write's fs_path resolves inside the whitelist. Roots come from
+    // the shared provisioning function in maho-agent (R-N2) — never an
+    // ad-hoc list — so the Wave 2A panel stamping derives identical roots.
+    // `--dir` replaces the derived root with an explicit set, still routed
+    // through the same provisioning function per root.
+    backend.set_runtime_tier(Some(config.permission_tier.clone()));
+    backend.set_fs_whitelist_roots(resolve_fs_whitelist_roots(&workspace_root, dirs)?);
+
+    // Per-session routing overrides (`-p` / `-m`). A selected provider is
+    // probed alone by the backend's credential resolution, so the session
+    // never reaches a provider the caller did not name. Constraining the
+    // availability list to the named model makes routing select exactly it
+    // (no silent substitution to a category default); leaving it untouched
+    // preserves the stored profile's preferred_model and fallback ladder.
+    if config.provider.is_some() {
+        backend.set_preferred_provider(config.provider.clone());
+    }
+    if let Some(model) = &config.model {
+        backend.set_available_models(vec![model.clone()]);
+    }
+
+    // Wave 3A (G8): the composite (batch) gate is bound ONCE here at session
+    // open from the runtime-config payload — load-once applies to COMPOSITE
+    // ONLY, never to the per-call tier gate (R-D5). Fail-closed default:
+    // without `--composite` the runner refuses every batch before any
+    // executor is touched.
+    backend.set_composite_config(maho_agent::composite::CompositeExecutionConfig {
+        enabled: config.composite_enabled,
+        ..maho_agent::composite::CompositeExecutionConfig::default()
+    });
+    if backend.artifact_root().is_none() {
+        backend.set_artifact_root(Some(workspace_root.join(".maho").join("artifacts")));
+    }
 
     maho_agent::AgentRuntime::set_system_prompt(&backend, &agent_task_system_prompt(config));
 
-    Ok(backend)
+    Ok((session_id, backend))
+}
+
+/// The fs whitelist roots bound into the kernel dispatch gate. With no
+/// `--dir` the session keeps the historical single workspace-derived root;
+/// with `--dir` the explicit set replaces it, each root run through the same
+/// shared provisioning function (R-N2) so the CLI never hand-rolls a root
+/// list. `default_fs_whitelist_roots` drops a relative anchor silently
+/// (yielding a fail-closed empty whitelist with no explanation), so an
+/// explicit root it refuses is reported here instead of leaving the user to
+/// wonder why every file operation is denied.
+fn resolve_fs_whitelist_roots(
+    workspace_root: &std::path::Path,
+    dirs: &[PathBuf],
+) -> Result<Vec<String>> {
+    if dirs.is_empty() {
+        return Ok(maho_agent::permission::default_fs_whitelist_roots(
+            workspace_root,
+        ));
+    }
+
+    let mut roots = Vec::with_capacity(dirs.len());
+    for dir in dirs {
+        let resolved = maho_agent::permission::default_fs_whitelist_roots(dir);
+        let Some(root) = resolved.into_iter().next() else {
+            bail!(
+                "--dir {} is not an absolute path, so it cannot be whitelisted \
+                 (a relative root would leave the agent with an empty, \
+                 fail-closed whitelist). Pass an absolute directory.",
+                dir.display()
+            );
+        };
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
 }
 
 /// System prompt for a task session: the row-9 proactive instruction block
@@ -2958,6 +4278,61 @@ struct AgentTaskOutput<'a> {
     session_id: &'a str,
     runtime_config: &'a AgentTaskRuntimeConfig,
     response: &'a str,
+}
+
+/// Wave 3C (G9): one stderr line per non-token stream event for
+/// `maho agent task`. The default (progress-only) view renders tool-call
+/// started/finished and status ticks; `--stream` (full) adds thinking,
+/// artifacts, and the terminal proof/reason. Tokens are raw-streamed by the
+/// sink itself, so they never format to a line here. Tool args and results
+/// are intentionally not rendered on stderr (the panel sanitizes them; the
+/// CLI stream carries tool names and outcomes only).
+fn format_agent_stream_event(event: &AgentStreamEvent, full: bool) -> Option<String> {
+    match event {
+        AgentStreamEvent::Token(_) => None,
+        AgentStreamEvent::Thinking(text) => full.then(|| format!("[thinking] {text}")),
+        AgentStreamEvent::ToolCall { name, .. } => Some(format!("[tool] {name} started")),
+        AgentStreamEvent::ToolResult {
+            name, succeeded, ..
+        } => Some(format!(
+            "[tool] {name} finished ({})",
+            if *succeeded { "ok" } else { "failed" }
+        )),
+        AgentStreamEvent::ArtifactCreated { artifact } => full.then(|| {
+            format!(
+                "[artifact] {} ({})",
+                artifact.artifact_id, artifact.storage_rel_path
+            )
+        }),
+        AgentStreamEvent::Status {
+            elapsed_secs,
+            message,
+        } => Some(format!("[status +{elapsed_secs}s] {message}")),
+        AgentStreamEvent::ProofOrReason {
+            proof_locator,
+            reason,
+        } => full.then(|| {
+            if let Some(locator) = proof_locator {
+                format!("[proof] {locator}")
+            } else {
+                format!("[reason] {}", reason.as_deref().unwrap_or(""))
+            }
+        }),
+    }
+}
+
+/// Wave 3C (G9): the stderr event sink for a non-JSON `maho agent task`
+/// run. In `--stream` mode tokens stream raw (no newline); every other
+/// event renders through `format_agent_stream_event`.
+fn agent_task_event_sink(full: bool) -> Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static> {
+    Arc::new(move |event: AgentStreamEvent| match &event {
+        AgentStreamEvent::Token(token) if full => eprint!("{token}"),
+        other => {
+            if let Some(line) = format_agent_stream_event(other, full) {
+                eprintln!("{line}");
+            }
+        }
+    })
 }
 
 async fn cmd_routine_list(socket_path: Option<&str>, json_output: bool) -> Result<()> {
@@ -3534,7 +4909,9 @@ async fn cmd_headless_batch(args: HeadlessArgs, socket_path: Option<&str>) -> Re
                         fields.insert("ok".to_string(), serde_json::Value::Bool(true));
                         serde_json::Value::Object(fields)
                     }
-                    Err(e) => serde_json::json!({ "url": url, "ok": false, "error": e.to_string() }),
+                    Err(e) => {
+                        serde_json::json!({ "url": url, "ok": false, "error": e.to_string() })
+                    }
                 };
                 if let Ok(line) = serde_json::to_string(&row) {
                     if let Ok(mut w) = writer.lock() {
@@ -3568,7 +4945,7 @@ Commands:
   wait url <pattern>    Wait for active tab URL to match pattern
   click <ref>|@<name>   Click by ref, or by name (re-resolved live)
   type <ref> <text>     Type text into element (also: type @<name>=<text>)
-  upload <path>         Select an .aab file for the active upload chooser
+  upload <path>         Select a local file for the active pending chooser
   select <ref> <value>  Choose an option by value (also: select @<name>=<value>)
   refs [filter]         List interactive elements: <ref> <role> <name>[=<value>]
   key <name> [mods]     Press a key (e.g. Enter, ArrowDown; mods: shift,ctrl,alt,meta)
@@ -3663,6 +5040,23 @@ async fn mutate(
         Err(e) if format!("{e}").contains("lease required") => {
             ensure_active_lease(client).await?;
             browser::send_tool_call(client, tool, args).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Dispatch a mutating tool call without reconnect-and-replay transport,
+/// while still auto-acquiring the active-tab lease on pre-dispatch lease rejection.
+async fn mutate_no_replay(
+    client: &maho_browser_mcp::client::BrowserClient,
+    tool: &str,
+    args: serde_json::Value,
+) -> Result<serde_json::Value> {
+    match browser::send_tool_call_no_replay(client, tool, args.clone()).await {
+        Ok(v) => Ok(v),
+        Err(e) if format!("{e}").contains("lease required") => {
+            ensure_active_lease(client).await?;
+            browser::send_tool_call_no_replay(client, tool, args).await
         }
         Err(e) => Err(e),
     }
@@ -3800,21 +5194,30 @@ async fn handle_repl_line(
             println!("{}", browser::truncate(text, 2000));
         }
         "screenshot" => {
+            let rest = line[cmd.len()..].trim();
             let result =
                 browser::send_tool_call(client, "browser_screenshot_full", serde_json::json!({}))
                     .await?;
-            let data = result.get("data").and_then(|v| v.as_str()).unwrap_or("");
+            let payload = tool_payload(&result);
+            let data = payload.get("data").and_then(|v| v.as_str()).unwrap_or("");
             if data.is_empty() {
                 println!("No screenshot data received.");
                 return Ok(());
             }
             use base64::Engine;
             let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let path = format!("/tmp/maho-repl-{ts}.png");
+            let path = if !rest.is_empty() {
+                rest.to_string()
+            } else {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                format!("/tmp/maho-repl-{ts}.png")
+            };
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             std::fs::write(&path, &bytes)?;
             println!("{path}");
         }
@@ -3909,11 +5312,13 @@ async fn handle_repl_line(
                             serde_json::json!({}),
                         )
                         .await?;
-                        if let Some(tabs) = tool_payload(&tab_list).get("tabs").and_then(|t| t.as_array()) {
-                            if let Some(active) = tabs
-                                .iter()
-                                .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
-                            {
+                        if let Some(tabs) = tool_payload(&tab_list)
+                            .get("tabs")
+                            .and_then(|t| t.as_array())
+                        {
+                            if let Some(active) = tabs.iter().find(|t| {
+                                t.get("is_active") == Some(&serde_json::Value::Bool(true))
+                            }) {
                                 if let Some(url) = active.get("url").and_then(|v| v.as_str()) {
                                     if browser_pipe::matches_url_pattern(url, target) {
                                         matched = true;
@@ -4039,7 +5444,7 @@ async fn handle_repl_line(
                     mutate(
                         client,
                         "browser_type",
-                        serde_json::json!({ "ref": n, "text": text }),
+                        serde_json::json!({ "ref": n, "text": text, "allow_credentials": true }),
                     )
                     .await?;
                     println!("ok");
@@ -4050,10 +5455,10 @@ async fn handle_repl_line(
         "upload" => {
             let path = line[cmd.len()..].trim_start();
             if path.is_empty() {
-                println!("Usage: upload <absolute-path-to-.aab>");
+                println!("Usage: upload <absolute-path>");
                 return Ok(());
             }
-            mutate(
+            mutate_no_replay(
                 client,
                 "browser_file_upload_select",
                 serde_json::json!({ "path": path }),

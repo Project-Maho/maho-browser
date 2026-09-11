@@ -57,6 +57,7 @@ fn default_tool_timeout(tool: &str) -> Duration {
             | "browser_screenshot_element"
             | "browser_scroll"
             | "browser_hover"
+            | "browser_file_upload_select"
             | "vault_fill_credential"
             | "vault_fill_totp"
     ) {
@@ -281,6 +282,19 @@ pub async fn send_tool_call(client: &BrowserClient, tool: &str, args: Value) -> 
         return refactor::execute_semantic_call(client, tool, args).await;
     }
     send_tool_call_with(client, tool, args, true).await
+}
+
+/// Call an MCP tool on the connected browser without reconnecting on failure,
+/// preventing automatic re-execution of side-effecting operations.
+pub async fn send_tool_call_no_replay(
+    client: &BrowserClient,
+    tool: &str,
+    args: Value,
+) -> Result<Value> {
+    if refactor::is_semantic_call(&args) {
+        return refactor::execute_semantic_call(client, tool, args).await;
+    }
+    send_tool_call_with(client, tool, args, false).await
 }
 
 /// Stable failure classes for the Routine MCP boundary.

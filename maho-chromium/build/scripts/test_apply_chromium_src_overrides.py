@@ -22,6 +22,17 @@ _PASSWORD_BACKEND_FACTORY_BUILD_PATH = (
 _STARTUP_BROWSER_CREATOR_IMPL_PATH = (
     "chrome/browser/ui/startup/startup_browser_creator_impl.cc"
 )
+_BROWSER_CC_PATH = "chrome/browser/ui/browser.cc"
+
+_UPSTREAM_RUN_FILE_CHOOSER = (
+    "void Browser::RunFileChooser(\n"
+    "    content::RenderFrameHost* render_frame_host,\n"
+    "    scoped_refptr<content::FileSelectListener> listener,\n"
+    "    const blink::mojom::FileChooserParams& params) {\n"
+    "  FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),\n"
+    "                                   params);\n"
+    "}\n"
+)
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
@@ -1482,6 +1493,101 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                     target,
                     [replacement],
                     relative_path=_APP_CONTROLLER_MM_PATH,
+                )
+    def test_browser_cc_run_file_chooser_interception_applies_cleanly(self):
+        replacement = next(
+            replacement
+            for replacement in REPLACEMENTS[_BROWSER_CC_PATH]
+            if replacement.description.startswith(
+                "Maho: intercept RunFileChooser under an automation lease"
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser.cc"
+            target.write_text(_UPSTREAM_RUN_FILE_CHOOSER)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_BROWSER_CC_PATH,
+            )
+
+            self.assertTrue(changed)
+            output = target.read_text()
+            self.assertIn("namespace maho {", output)
+            self.assertIn("MahoBeginAutomationFileChooser(", output)
+            self.assertIn(
+                "if (maho::MahoBeginAutomationFileChooser(",
+                output,
+            )
+            self.assertIn(
+                "FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),",
+                output,
+            )
+            self.assertEqual(output.count("void Browser::RunFileChooser("), 1)
+            self.assertEqual(
+                output.count("bool MahoBeginAutomationFileChooser("), 1
+            )
+
+    def test_browser_cc_run_file_chooser_interception_is_idempotent(self):
+        replacement = next(
+            replacement
+            for replacement in REPLACEMENTS[_BROWSER_CC_PATH]
+            if replacement.description.startswith(
+                "Maho: intercept RunFileChooser under an automation lease"
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser.cc"
+            target.write_text(_UPSTREAM_RUN_FILE_CHOOSER)
+
+            changed, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_BROWSER_CC_PATH,
+            )
+            self.assertTrue(changed)
+
+            changed_again, _ = apply_replacements(
+                target,
+                [replacement],
+                relative_path=_BROWSER_CC_PATH,
+            )
+            self.assertFalse(changed_again)
+            output = target.read_text()
+            self.assertEqual(output.count("void Browser::RunFileChooser("), 1)
+            self.assertEqual(
+                output.count("bool MahoBeginAutomationFileChooser("), 1
+            )
+
+    def test_browser_cc_run_file_chooser_interception_rejects_drifted_anchor(self):
+        replacement = next(
+            replacement
+            for replacement in REPLACEMENTS[_BROWSER_CC_PATH]
+            if replacement.description.startswith(
+                "Maho: intercept RunFileChooser under an automation lease"
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "browser.cc"
+            target.write_text(
+                "void Browser::RunFileChooser(\n"
+                "    content::WebContents* web_contents) {\n"
+                "  // Upstream signature drifted: the hook no longer matches.\n"
+                "}\n"
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Missing expected anchor for Maho: intercept RunFileChooser",
+            ):
+                apply_replacements(
+                    target,
+                    [replacement],
+                    relative_path=_BROWSER_CC_PATH,
                 )
 
 

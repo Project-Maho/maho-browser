@@ -9,6 +9,7 @@
 #include "maho/browser/ai/maho_capability_broker.h"
 #include "maho/browser/ai/maho_capability_principal.h"
 #include "maho/browser/ai/maho_capability_types.h"
+#include "maho/browser/ai/maho_ai_runtime_adapter.h"
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
@@ -171,7 +172,8 @@ MahoBrowserToolExecutor::MahoBrowserToolExecutor(
     BrowserActionApprovalCallback action_approval_callback,
     maho::MahoMcpBrowserDelegate* browser_action_delegate_for_testing,
     maho::MahoMcpLeaseRegistry* browser_action_lease_registry_for_testing,
-    std::string browser_action_lease_holder_id)
+    std::string browser_action_lease_holder_id,
+    const MahoAiRuntimeConfig* runtime_config)
     : browser_(browser),
       browser_tools_v1_enabled_(browser_tools_v1_enabled),
       ai_gate_(ai_gate),
@@ -180,8 +182,31 @@ MahoBrowserToolExecutor::MahoBrowserToolExecutor(
       browser_action_lease_registry_for_testing_(
           browser_action_lease_registry_for_testing),
       browser_action_lease_holder_id_(std::move(browser_action_lease_holder_id)),
+      runtime_config_(runtime_config),
       page_context_extractor_(
           std::make_unique<MahoAiPageContextExtractor>(browser, ai_gate)) {}
+
+// static
+void MahoBrowserToolExecutor::StampRuntimeConfig(
+    maho::ai::CapabilityRequestContext* req_ctx,
+    const MahoAiRuntimeConfig* runtime_config,
+    const base::DictValue& arguments) {
+  if (runtime_config) {
+    // Live read (D9): the adapter may retighten flags between tool calls and
+    // every Evaluate must see the current values. proactive_mode never
+    // alters a broker decision today; it rides along so the request context
+    // stays complete.
+    req_ctx->permission_tier = runtime_config->permission_tier;
+    req_ctx->final_confirm = runtime_config->final_confirm;
+    req_ctx->proactive_mode = runtime_config->proactive_mode;
+    req_ctx->fs_whitelist_roots = runtime_config->fs_whitelist_roots;
+  }
+  if (const std::string* fs_path = arguments.FindString("path")) {
+    // File-scope marker for the runtime tier gate (plan row 3). Every request
+    // that carries no path keeps fs_path empty, which leaves the gate inert.
+    req_ctx->fs_path = *fs_path;
+  }
+}
 
 MahoBrowserToolExecutor::~MahoBrowserToolExecutor() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -948,6 +973,42 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
   } else if (tool_name == "browser_key_press") {
     action_result = maho::MahoMcpBrowserActionHandler::HandleKeyPress(
         delegate, tab_id, &arguments);
+  } else if (tool_name == "browser_file_upload_select") {
+    const std::string* path_str = arguments.FindString("path");
+    if (!path_str || path_str->empty()) {
+      base::DictValue err = BuildBrowserActionErrorResult(
+          tool_name, kActionFailedError, "Invalid params: path required");
+      AttachFallbackDecision(err, fallback_decision);
+      std::move(callback).Run(std::move(err));
+      return;
+    }
+    delegate->SelectFileForPendingChooserAsync(
+        tab_id, *path_str,
+        base::BindOnce(
+            [](base::WeakPtr<MahoBrowserToolExecutor> self, std::string tool,
+               ToolResultCallback cb, BrowserActionFallbackDecision fallback,
+               maho::ai::BrowserActionContract cont, bool success) {
+              if (!success) {
+                base::DictValue result = BuildBrowserActionErrorResult(
+                    tool, kActionFailedError,
+                    "Action failed: file upload could not be dispatched");
+                AttachFallbackDecision(result, fallback);
+                std::move(cb).Run(std::move(result));
+                return;
+              }
+              base::DictValue res;
+              res.Set("file_selected", true);
+              base::DictValue success_dict =
+                  BuildBrowserActionSuccessResult(tool, std::move(res));
+              AttachFallbackDecision(success_dict, fallback);
+              if (self) {
+                self->RecordBrowserActionFallbackSuccess(cont, fallback);
+              }
+              std::move(cb).Run(std::move(success_dict));
+            },
+            weak_factory_.GetWeakPtr(), tool_name, std::move(callback),
+            std::move(fallback_decision), contract));
+    return;
   } else {
     std::move(callback).Run(BuildBrowserActionErrorResult(
         tool_name, kActionFailedError,
@@ -1016,6 +1077,7 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
   if (maybe_approval) {
     req_ctx.approval_token = *maybe_approval;
   }
+  StampRuntimeConfig(&req_ctx, runtime_config_.get(), arguments);
 
   maho::ai::MahoCapabilityBroker broker;
   maho::ai::CapabilityEvaluationResult evaluation = broker.Evaluate(req_ctx);
@@ -1024,6 +1086,21 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
         tool_name, kActionDeniedError,
         "Capability policy denied action: " + std::string(evaluation.message)));
     return;
+  }
+
+  // A broker-mandated approval ask (guard-tier file ask, final-confirm gate)
+  // must not be silently dropped: screenshot proof has no contract-level
+  // approval handshake, so the ask routes through the action approval
+  // callback and fails closed when none is wired.
+  if (evaluation.RequiresApproval()) {
+    std::string ask_error;
+    if (!RunBrokerApprovalAsk(tool_name, /*kind=*/"capture",
+                              /*sensitivity=*/"sensitive", *active_origin,
+                              &ask_error)) {
+      std::move(callback).Run(BuildBrowserActionErrorResult(
+          tool_name, kActionDeniedError, ask_error));
+      return;
+    }
   }
 
   // Lease acquisition
@@ -1460,6 +1537,7 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
   if (maybe_approval) {
     req_ctx.approval_token = *maybe_approval;
   }
+  StampRuntimeConfig(&req_ctx, runtime_config_.get(), arguments);
 
   maho::ai::MahoCapabilityBroker broker;
   maho::ai::CapabilityEvaluationResult evaluation = broker.Evaluate(req_ctx);
@@ -1560,6 +1638,34 @@ bool MahoBrowserToolExecutor::AuthorizeBrowserAction(
   }
 
   if (!EnsureBrowserActionLease(contract, tab_id, error)) {
+    return false;
+  }
+  return true;
+}
+
+bool MahoBrowserToolExecutor::RunBrokerApprovalAsk(
+    const std::string& tool_name,
+    const std::string& kind,
+    const std::string& sensitivity,
+    const std::string& active_origin,
+    std::string* error) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!action_approval_callback_) {
+    *error = "Broker policy requires approval for " + tool_name +
+             ", but no approval authorization is wired.";
+    return false;
+  }
+  BrowserActionAuthorization metadata;
+  metadata.tool_name = tool_name;
+  metadata.kind = kind;
+  metadata.sensitivity = sensitivity;
+  metadata.requires_approval = true;
+  metadata.active_origin = active_origin;
+  BrowserActionApprovalDecision decision =
+      action_approval_callback_.Run(metadata);
+  if (!decision.approved) {
+    *error = decision.error.empty() ? "Broker-mandated approval was denied."
+                                    : std::move(decision.error);
     return false;
   }
   return true;

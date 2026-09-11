@@ -69,6 +69,13 @@ base::DictValue BuildIntegerSchema(std::string description) {
   return schema;
 }
 
+base::DictValue BuildNumberSchema(std::string description) {
+  base::DictValue schema;
+  schema.Set("type", "number");
+  schema.Set("description", std::move(description));
+  return schema;
+}
+
 base::DictValue BuildBooleanSchema(std::string description) {
   base::DictValue schema;
   schema.Set("type", "boolean");
@@ -387,7 +394,7 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
     required.Append("text");
   } else if (tool_name == "browser_file_upload_select") {
     properties.Set("path",
-                   BuildStringSchema("Absolute path to the AAB file to select."));
+                   BuildStringSchema("Absolute path to the local file to select."));
     required.Append("path");
   } else if (tool_name == "browser_select") {
     properties.Set(
@@ -413,6 +420,29 @@ base::DictValue BuildBrowserActionInputSchema(std::string_view tool_name,
         "modifiers",
         BuildStringListSchema("Optional modifiers: shift, ctrl, alt, meta."));
     required.Append("key");
+  } else if (tool_name == "browser_visual_click" ||
+             tool_name == "browser.visual_click") {
+    properties.Set("frame_token",
+                   BuildStringSchema("Server-issued visual frame token."));
+    base::DictValue point;
+    point.Set("x", BuildNumberSchema("X coordinate in CSS pixels."));
+    point.Set("y", BuildNumberSchema("Y coordinate in CSS pixels."));
+    properties.Set("click_point_css",
+                   BuildObjectSchema(std::move(point), {"x", "y"}));
+    base::DictValue rect;
+    rect.Set("x", BuildNumberSchema("X origin in CSS pixels."));
+    rect.Set("y", BuildNumberSchema("Y origin in CSS pixels."));
+    rect.Set("width", BuildNumberSchema("Width in CSS pixels."));
+    rect.Set("height", BuildNumberSchema("Height in CSS pixels."));
+    properties.Set("target_rect_css",
+                   BuildObjectSchema(std::move(rect), {}));
+    properties.Set("x", BuildNumberSchema("Optional direct X coordinate."));
+    properties.Set("y", BuildNumberSchema("Optional direct Y coordinate."));
+    properties.Set("ref",
+                   BuildIntegerSchema("Optional accessibility ref of target element."));
+    properties.Set("lease_epoch",
+                   BuildIntegerSchema("Expected lease epoch."));
+    required.Append("frame_token");
   }
 
   return BuildObjectSchema(std::move(properties), std::move(required));
@@ -602,6 +632,8 @@ const char *FeatureGateName(MahoBrowserToolRegistry::FeatureGate value) {
     return "routines";
   case MahoBrowserToolRegistry::FeatureGate::kVault:
     return "vault";
+  case MahoBrowserToolRegistry::FeatureGate::kNativeInput:
+    return "native_input";
   case MahoBrowserToolRegistry::FeatureGate::kUnknown:
     return "unknown";
   }
@@ -645,6 +677,7 @@ MakeBrowserActionDescriptor(std::string_view canonical_id,
 
 std::vector<CapabilityDescriptor> BuildCapabilityDescriptors() {
   std::vector<CapabilityDescriptor> descriptors;
+#define kAction kInput
 #define MAHO_BROWSER_CAPABILITY(id, canonical_id, tool_name, category,         \
                                 mutability, authority_change, broker,          \
                                 boundary, sensitivity, feature_gate, surfaces, \
@@ -656,7 +689,8 @@ std::vector<CapabilityDescriptor> BuildCapabilityDescriptors() {
        std::string_view(#authority_change) == "Yes", Broker::k##broker,        \
        Boundary::k##boundary, Sensitivity::k##sensitivity,                     \
        FeatureGate::k##feature_gate, k##surfaces,                              \
-       MissingPolicy::k##missing_policy, description, nullptr});
+       MissingPolicy::k##missing_policy, description,                          \
+       maho::ai::FindBrowserActionContract(tool_name)});
 #define MAHO_BROWSER_ACTION_CAPABILITY(id, canonical_id, tool_name, category,  \
                                        broker, boundary, feature_gate,         \
                                        surfaces, description)                  \
@@ -667,6 +701,7 @@ std::vector<CapabilityDescriptor> BuildCapabilityDescriptors() {
 #include "maho/browser/ai/maho_browser_capability_catalog.def"
 #undef MAHO_BROWSER_ACTION_CAPABILITY
 #undef MAHO_BROWSER_CAPABILITY
+#undef kAction
   for (CapabilityDescriptor& descriptor : descriptors) {
     if (descriptor.surfaces & MahoBrowserToolRegistry::kDesktopAgent) {
       descriptor.surfaces |= MahoBrowserToolRegistry::kCliAgent;
@@ -679,7 +714,8 @@ std::vector<CapabilityDescriptor> BuildCapabilityDescriptors() {
 }
 
 bool FeatureEnabled(const CapabilityDescriptor &descriptor, bool mail_enabled,
-                    bool routines_enabled, bool vault_enabled) {
+                    bool routines_enabled, bool vault_enabled,
+                    bool native_input_enabled) {
   switch (descriptor.feature_gate) {
   case FeatureGate::kUnknown:
     return false;
@@ -691,6 +727,8 @@ bool FeatureEnabled(const CapabilityDescriptor &descriptor, bool mail_enabled,
     return routines_enabled;
   case FeatureGate::kVault:
     return vault_enabled;
+  case FeatureGate::kNativeInput:
+    return native_input_enabled;
   }
   return false;
 }
@@ -1242,12 +1280,13 @@ std::vector<const MahoBrowserToolRegistry::CapabilityDescriptor *>
 MahoBrowserToolRegistry::GetCapabilitiesForSurface(Surface surface,
                                                    bool mail_enabled,
                                                    bool routines_enabled,
-                                                   bool vault_enabled) {
+                                                   bool vault_enabled,
+                                                   bool native_input_enabled) {
   std::vector<const CapabilityDescriptor *> capabilities;
   for (const CapabilityDescriptor &descriptor : GetCapabilityDescriptors()) {
     if (HasSurface(descriptor, surface) &&
         FeatureEnabled(descriptor, mail_enabled, routines_enabled,
-                       vault_enabled)) {
+                       vault_enabled, native_input_enabled)) {
       capabilities.push_back(&descriptor);
     }
   }
@@ -1302,10 +1341,12 @@ MahoBrowserToolRegistry::SerializeControlPlaneCapability(
 
 // static
 base::ListValue MahoBrowserToolRegistry::SerializePublicMcpCapabilities(
-    bool mail_enabled, bool routines_enabled, bool vault_enabled) {
+    bool mail_enabled, bool routines_enabled, bool vault_enabled,
+    bool native_input_enabled) {
   base::ListValue tools;
   for (const CapabilityDescriptor *descriptor : GetCapabilitiesForSurface(
-           kPublicMcp, mail_enabled, routines_enabled, vault_enabled)) {
+           kPublicMcp, mail_enabled, routines_enabled, vault_enabled,
+           native_input_enabled)) {
     std::optional<base::DictValue> tool =
         SerializePublicMcpCapability(*descriptor);
     if (tool.has_value()) {
@@ -1319,9 +1360,11 @@ base::DictValue MahoBrowserToolRegistry::SerializeDiagnostics(
     Surface surface,
     bool mail_enabled,
     bool routines_enabled,
-    bool vault_enabled) {
+    bool vault_enabled,
+    bool native_input_enabled) {
   const auto descriptors = GetCapabilitiesForSurface(
-      surface, mail_enabled, routines_enabled, vault_enabled);
+      surface, mail_enabled, routines_enabled, vault_enabled,
+      native_input_enabled);
   std::vector<std::string_view> sorted_ids;
   std::string canonical_bytes;
   for (const CapabilityDescriptor* descriptor : descriptors) {
@@ -1345,6 +1388,7 @@ base::DictValue MahoBrowserToolRegistry::SerializeDiagnostics(
   gates.Set("mailBeta", mail_enabled);
   gates.Set("routines", routines_enabled);
   gates.Set("vault", vault_enabled);
+  gates.Set("nativeInput", native_input_enabled);
 
   const char* surface_name = "publicMcp";
   switch (surface) {
@@ -1389,11 +1433,12 @@ base::DictValue MahoBrowserToolRegistry::SerializeDiagnostics(
 }
 
 base::ListValue MahoBrowserToolRegistry::SerializeAgentCapabilities(
-    bool mail_enabled, bool routines_enabled, bool vault_enabled) {
+    bool mail_enabled, bool routines_enabled, bool vault_enabled,
+    bool native_input_enabled) {
   base::ListValue tools;
   for (const CapabilityDescriptor *descriptor :
        GetCapabilitiesForSurface(kDesktopAgent, mail_enabled, routines_enabled,
-                                 vault_enabled)) {
+                                 vault_enabled, native_input_enabled)) {
     if (!HasCompletePublicMetadata(*descriptor)) {
       continue;
     }

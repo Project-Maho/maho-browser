@@ -6185,6 +6185,48 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Maho: Disable window features for Maho Mini windows",
             guard="if (is_maho_mini()) {",
         ),
+        Replacement(
+            old=(
+                "void Browser::RunFileChooser(\n"
+                "    content::RenderFrameHost* render_frame_host,\n"
+                "    scoped_refptr<content::FileSelectListener> listener,\n"
+                "    const blink::mojom::FileChooserParams& params) {\n"
+                "  FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),\n"
+                "                                   params);\n"
+                "}\n"
+            ),
+            new=(
+                "namespace maho {\n"
+                "// Defined in maho/browser/maho_browser_main_extra_parts.cc.\n"
+                "// Returns true when the chooser was consumed by automation\n"
+                "// (native dialog suppressed; input.file_upload_select completes it).\n"
+                "bool MahoBeginAutomationFileChooser(\n"
+                "    content::RenderFrameHost* render_frame_host,\n"
+                "    scoped_refptr<content::FileSelectListener> listener,\n"
+                "    blink::mojom::FileChooserParams::Mode mode);\n"
+                "}  // namespace maho\n"
+                "\n"
+                "void Browser::RunFileChooser(\n"
+                "    content::RenderFrameHost* render_frame_host,\n"
+                "    scoped_refptr<content::FileSelectListener> listener,\n"
+                "    const blink::mojom::FileChooserParams& params) {\n"
+                "  // Maho: suppress the native file-selection dialog while an\n"
+                "  // automation lease owns this tab; the MCP browser delegate\n"
+                "  // completes the chooser via input.file_upload_select instead.\n"
+                "  if (maho::MahoBeginAutomationFileChooser(\n"
+                "          render_frame_host, listener, params.mode)) {\n"
+                "    return;\n"
+                "  }\n"
+                "  FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),\n"
+                "                                   params);\n"
+                "}\n"
+            ),
+            description=(
+                "Maho: intercept RunFileChooser under an automation lease so "
+                "input.file_upload_select completes the pending chooser instead of the native dialog"
+            ),
+            guard="maho::MahoBeginAutomationFileChooser(",
+        ),
     ],
     # ── unload_controller.cc ─────────────────────────────────────────────────
     "chrome/browser/ui/unload_controller.cc": [

@@ -140,6 +140,43 @@ async fn repl_help_prints_help() {
         stdout.contains("screenshot"),
         "expected 'screenshot' in help, got: {stdout}"
     );
+    assert!(
+        stdout.contains("upload <path>         Select a local file for the active pending chooser"),
+        "expected generalized upload in help, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_upload_usage_on_missing_arg() {
+    let (_dir, sock_path, server) = make_mock_server(vec![]).await;
+
+    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "upload\n.quit\n");
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: upload <absolute-path>"),
+        "expected generalized usage error, got: {stdout}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_upload_dispatches_arbitrary_path() {
+    let upload_resp = json!({ "ok": true, "file_selected": true });
+    let (_dir, sock_path, server) = make_mock_server(vec![upload_resp]).await;
+
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "upload /tmp/package.msix\n.quit\n",
+    );
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ok"),
+        "expected 'ok' for upload, got: {stdout}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -312,7 +349,11 @@ async fn repl_wait_selector() {
     let wait_resp = json!({ "found": true });
     let (_dir, sock_path, server) = make_mock_server(vec![wait_resp]).await;
 
-    let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, "wait selector #main\n.quit\n");
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "wait selector #main\n.quit\n",
+    );
     server.abort();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -321,7 +362,6 @@ async fn repl_wait_selector() {
         "expected 'ok' in stdout, got: {stdout}"
     );
 }
-
 
 // ─── D4: public `grant <origin>` REPL path (browser_grant_exact_origin) ──────
 
@@ -435,3 +475,55 @@ async fn repl_help_lists_grant() {
         "expected 'grant <origin>' in help, got: {stdout}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_upload_dispatches_exact_path_matrix() {
+    let test_paths = vec![
+        "/tmp/app-release.aab",
+        "/tmp/package.msix",
+        "/tmp/installer.dmg",
+        "/tmp/archive.zip",
+        "/tmp/photo.png",
+        "/tmp/document.pdf",
+        "/tmp/한글_테스트_파일.txt",
+        "/tmp/path with spaces/file name.bin",
+        "/tmp/executable_no_ext",
+    ];
+
+    for path in test_paths {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let upload_resp = json!({ "ok": true, "file_selected": true });
+        let (_dir, sock_path, server) =
+            make_mock_server_capturing(vec![upload_resp], captured.clone()).await;
+
+        let input = format!("upload {}\n.quit\n", path);
+        let output = run_cli_with_stdin(&["browser", "repl"], &sock_path, &input);
+        server.abort();
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("ok"),
+            "expected 'ok' for upload of {path}, got: {stdout}"
+        );
+
+        let requests = captured.lock().unwrap();
+        let upload_req = requests
+            .iter()
+            .find(|req| req["method"] == "tools/call")
+            .unwrap_or_else(|| panic!("upload must issue tools/call for {path}"));
+
+        assert_eq!(
+            upload_req["params"]["name"], "browser_file_upload_select",
+            "tool name must be browser_file_upload_select"
+        );
+        assert_eq!(
+            upload_req["params"]["arguments"]["path"], path,
+            "path argument must match exact input path"
+        );
+        assert!(
+            upload_req["params"]["arguments"].get("file_path").is_none(),
+            "legacy file_path argument must not be sent"
+        );
+    }
+}
+

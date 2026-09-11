@@ -135,7 +135,7 @@ TEST(MahoBrowserToolRegistryTest, CharacterizesCurrentDesktopProjection) {
   expected_names.insert("browser_tab_new");
   expected_names.insert("browser_tab_switch");
     EXPECT_EQ(ToolNames(tools), expected_names);
-  EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 14u);
+  EXPECT_EQ(maho::ai::kMahoBrowserActionContractCount, 15u);
 
   size_t action_contract_entries = 0;
   for (const MahoBrowserToolRegistry::ToolSchema &schema :
@@ -217,6 +217,10 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(VaultToolCount(tools), 0u);
   for (const maho::ai::BrowserActionContract &contract :
        maho::ai::kMahoBrowserActionContracts) {
+    if (std::string_view(contract.tool_name) == "browser_visual_click") {
+      // browser_visual_click is MCP-scoped and NativeInput gated.
+      continue;
+    }
     EXPECT_EQ(names.count(std::string(contract.tool_name)), 1u)
         << contract.tool_name;
   }
@@ -457,7 +461,7 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
 
 TEST(MahoBrowserToolRegistryTest, CanonicalDescriptorsHaveCompletePolicy) {
   const auto &descriptors = MahoBrowserToolRegistry::GetCapabilityDescriptors();
-  EXPECT_EQ(descriptors.size(), 86u);
+  EXPECT_EQ(descriptors.size(), 87u);
   EXPECT_TRUE(
       MahoBrowserToolRegistry::ValidateCapabilityDescriptors(descriptors));
 
@@ -614,7 +618,7 @@ TEST(MahoBrowserToolRegistryTest,
   EXPECT_EQ(diagnostics.FindInt("catalogVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("schemaVersion"), 1);
   EXPECT_EQ(diagnostics.FindInt("resultVersion"), 1);
-  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 86);
+  EXPECT_EQ(diagnostics.FindInt("canonicalCount"), 87);
   ASSERT_TRUE(diagnostics.FindString("catalogHash"));
   EXPECT_EQ(diagnostics.FindString("catalogHash")->size(), 64u);
 
@@ -1038,6 +1042,94 @@ TEST(MahoBrowserToolRegistryTest,
   std::set<std::string> phase1_names = ToolNames(phase1_tools);
   EXPECT_EQ(phase1_names.count("browser_history_search_desktop"), 1u);
   EXPECT_EQ(phase1_names.count("browser_history_search"), 0u);
+}
+
+TEST(MahoBrowserToolRegistryTest, HybridNative_VisualClickCatalogRegistration) {
+  // 1. Descriptor presence and contract binding
+  const auto* desc =
+      MahoBrowserToolRegistry::FindCapability("browser_visual_click");
+  ASSERT_TRUE(desc);
+  EXPECT_EQ(desc->canonical_id, "browser.visual_click");
+  EXPECT_EQ(desc->category, MahoBrowserToolRegistry::Category::kInput);
+  EXPECT_EQ(desc->feature_gate,
+            MahoBrowserToolRegistry::FeatureGate::kNativeInput);
+  EXPECT_EQ(desc->sensitivity,
+            MahoBrowserToolRegistry::Sensitivity::kSensitive);
+  EXPECT_TRUE(MahoBrowserToolRegistry::HasSurface(
+      *desc, MahoBrowserToolRegistry::kBrowserMcp));
+  EXPECT_FALSE(MahoBrowserToolRegistry::HasSurface(
+      *desc, MahoBrowserToolRegistry::kDesktopAgent));
+  EXPECT_TRUE(desc->changes_authority);
+
+  // Contract verification
+  ASSERT_TRUE(desc->browser_action_contract);
+  EXPECT_EQ(desc->browser_action_contract->kind,
+            maho::ai::BrowserActionKind::kAction);
+  EXPECT_TRUE(desc->browser_action_contract->changes_authority);
+  EXPECT_EQ(desc->browser_action_contract->approval,
+            maho::ai::BrowserActionApproval::kRequired);
+  EXPECT_EQ(desc->browser_action_contract->lease,
+            maho::ai::BrowserActionLease::kRequired);
+}
+
+TEST(MahoBrowserToolRegistryTest, HybridNative_DefaultOffFeatureGating) {
+  // Default: native input is disabled, tool does not appear in public surface
+  const auto default_caps = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+      MahoBrowserToolRegistry::kBrowserMcp, /*mail_enabled=*/true,
+      /*routines_enabled=*/true, /*vault_enabled=*/true,
+      /*native_input_enabled=*/false);
+  bool found_default = false;
+  for (const auto* d : default_caps) {
+    if (d->tool_name == "browser_visual_click") {
+      found_default = true;
+      break;
+    }
+  }
+  EXPECT_FALSE(found_default);
+
+  // Enabled: native input is true, tool appears in public surface
+  const auto enabled_caps = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
+      MahoBrowserToolRegistry::kBrowserMcp, /*mail_enabled=*/true,
+      /*routines_enabled=*/true, /*vault_enabled=*/true,
+      /*native_input_enabled=*/true);
+  bool found_enabled = false;
+  for (const auto* d : enabled_caps) {
+    if (d->tool_name == "browser_visual_click") {
+      found_enabled = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_enabled);
+}
+
+TEST(MahoBrowserToolRegistryTest,
+     HybridNative_VisualClickInputSchemaProperties) {
+  const auto* desc =
+      MahoBrowserToolRegistry::FindCapability("browser_visual_click");
+  ASSERT_TRUE(desc);
+
+  auto serialized =
+      MahoBrowserToolRegistry::SerializePublicMcpCapability(*desc);
+  ASSERT_TRUE(serialized);
+  const base::DictValue* schema = serialized->FindDict("inputSchema");
+  ASSERT_TRUE(schema);
+
+  const base::DictValue* properties = schema->FindDict("properties");
+  ASSERT_TRUE(properties);
+  EXPECT_TRUE(properties->contains("frame_token"));
+  EXPECT_TRUE(properties->contains("click_point_css"));
+  EXPECT_TRUE(properties->contains("target_rect_css"));
+
+  const base::ListValue* required = schema->FindList("required");
+  ASSERT_TRUE(required);
+  bool has_frame_token = false;
+  for (const auto& r : *required) {
+    if (r.is_string() && r.GetString() == "frame_token") {
+      has_frame_token = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(has_frame_token);
 }
 
 } // namespace

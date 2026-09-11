@@ -4,7 +4,7 @@
     "catalogHash": "23250AC36966FCB786EA7D35DCCC51EC29A91B6F1F5AB16A3EA6DD243BF7B663",
     "schemaVersion": 1,
     "resultVersion": 1,
-    "canonicalCount": 86,
+    "canonicalCount": 87,
     "gates": {
       "mailBeta": true,
       "routines": true,
@@ -54,11 +54,12 @@
         ]
       },
       "publicMcp": {
-        "count": 54,
+        "count": 55,
         "ids": [
           "bookmarks.create",
           "bookmarks.search",
           "browser.act_and_observe",
+          "browser.visual_click",
           "capture.network_get_har",
           "capture.network_start",
           "capture.network_stop",
@@ -155,11 +156,12 @@
         ]
       },
       "cliGeneric": {
-        "count": 54,
+        "count": 55,
         "ids": [
           "bookmarks.create",
           "bookmarks.search",
           "browser.act_and_observe",
+          "browser.visual_click",
           "capture.network_get_har",
           "capture.network_start",
           "capture.network_stop",
@@ -352,6 +354,91 @@
         "requiredBoundary": "tab",
         "sensitivity": "sensitive",
         "featureGate": "always",
+        "missingPolicy": "fail_closed"
+      }
+    },
+    {
+      "name": "browser_visual_click",
+      "description": "Click on a visual target using frame-derived screen coordinates.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "frame_token": {
+            "type": "string",
+            "description": "Server-issued visual frame token."
+          },
+          "click_point_css": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number",
+                "description": "X coordinate in CSS pixels."
+              },
+              "y": {
+                "type": "number",
+                "description": "Y coordinate in CSS pixels."
+              }
+            },
+            "required": [
+              "x",
+              "y"
+            ]
+          },
+          "target_rect_css": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "x": {
+                "type": "number",
+                "description": "X origin in CSS pixels."
+              },
+              "y": {
+                "type": "number",
+                "description": "Y origin in CSS pixels."
+              },
+              "width": {
+                "type": "number",
+                "description": "Width in CSS pixels."
+              },
+              "height": {
+                "type": "number",
+                "description": "Height in CSS pixels."
+              }
+            }
+          },
+          "x": {
+            "type": "number",
+            "description": "Optional direct X coordinate."
+          },
+          "y": {
+            "type": "number",
+            "description": "Optional direct Y coordinate."
+          },
+          "ref": {
+            "type": "integer",
+            "description": "Optional accessibility ref of target element."
+          },
+          "lease_epoch": {
+            "type": "integer",
+            "description": "Expected lease epoch."
+          }
+        },
+        "required": [
+          "frame_token"
+        ]
+      },
+      "capabilityId": "browser.visual_click",
+      "schemaVersion": 1,
+      "resultVersion": 1,
+      "policy": {
+        "mutability": "mutable",
+        "changesAuthority": true,
+        "requiredBroker": "browser",
+        "requiredBoundary": "tab",
+        "sensitivity": "sensitive",
+        "featureGate": "native_input",
         "missingPolicy": "fail_closed"
       }
     },
@@ -562,14 +649,14 @@
     },
     {
       "name": "browser_file_upload_select",
-      "description": "Select one local AAB file for a pending file chooser.",
+      "description": "Select one local file for a pending file chooser.",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "file_path": {
+          "path": {
             "type": "string",
-            "description": "Absolute path to local AAB file."
+            "description": "Absolute path to the local file to select."
           },
           "tab_id": {
             "type": "integer",
@@ -577,7 +664,7 @@
           }
         },
         "required": [
-          "file_path"
+          "path"
         ]
       },
       "capabilityId": "input.file_upload_select",

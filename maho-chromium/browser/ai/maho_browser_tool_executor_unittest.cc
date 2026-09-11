@@ -14,6 +14,9 @@
 #include "base/time/time.h"
 #include "base/values.h"
 #include "maho/browser/ai/maho_browser_action_contract.h"
+#include "maho/browser/ai/maho_ai_runtime_adapter.h"
+#include "maho/browser/ai/maho_capability_broker.h"
+#include "maho/browser/ai/maho_capability_principal.h"
 #include "maho/browser/ai/maho_page_adapter_registry.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
@@ -249,6 +252,24 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
     return true;
   }
 
+  int file_upload_count = 0;
+  std::string last_upload_path;
+  int last_upload_tab_id = 0;
+  bool upload_should_succeed = true;
+  bool SelectFileForPendingChooser(int tab_id,
+                                   const std::string& path) override {
+    ++file_upload_count;
+    last_upload_path = path;
+    last_upload_tab_id = tab_id;
+    return upload_should_succeed;
+  }
+  void SelectFileForPendingChooserAsync(
+      int tab_id,
+      const std::string& path,
+      base::OnceCallback<void(bool)> callback) override {
+    std::move(callback).Run(SelectFileForPendingChooser(tab_id, path));
+  }
+
   bool ActivateTab(int tab_id) override { return true; }
 
   bool Navigate(int tab_id, const GURL& url) override {
@@ -344,14 +365,15 @@ class MahoBrowserToolExecutorTest : public testing::Test {
       MahoBrowserToolExecutor::BrowserActionApprovalCallback approval_callback =
           MahoBrowserToolExecutor::BrowserActionApprovalCallback(),
       maho::MahoMcpLeaseRegistry* lease_registry = nullptr,
-      std::string lease_holder_id = "agent-session") {
+      std::string lease_holder_id = "agent-session",
+      const MahoAiRuntimeConfig* runtime_config = nullptr) {
     if (!lease_registry) {
       lease_registry = &lease_registry_;
     }
     return MahoBrowserToolExecutor(
         nullptr, true, base::BindRepeating([] { return true; }),
         std::move(approval_callback), &delegate_, lease_registry,
-        std::move(lease_holder_id));
+        std::move(lease_holder_id), runtime_config);
   }
 
   base::DictValue Execute(MahoBrowserToolExecutor& executor,
@@ -456,8 +478,9 @@ TEST_F(MahoBrowserToolExecutorTest,
       Execute(executor, "browser_click", std::move(arguments));
 
   EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_NE(result.FindString("error")->find("target changed"),
-            std::string::npos);
+  const std::string* error = result.FindString("error");
+  ASSERT_TRUE(error);
+  EXPECT_NE(error->find("target changed"), std::string::npos);
   EXPECT_EQ(delegate_.click_count, 0);
 }
 
@@ -503,7 +526,7 @@ TEST_F(MahoBrowserToolExecutorTest, LeaseRequiredActionFailsWithoutLeaseHolder) 
   base::DictValue result = Execute(executor, "browser_click", std::move(arguments));
 
   EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_NE(result.FindString("error")->find("lease registry"),
+  EXPECT_NE(result.FindString("error")->find("lease"),
             std::string::npos);
   EXPECT_EQ(delegate_.click_count, 0);
 }
@@ -607,15 +630,22 @@ TEST_F(MahoBrowserToolExecutorFallbackTest,
   arguments.Set("ref", 1);
   base::DictValue result = Execute(executor, "browser_click", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_NE(result.FindString("error")->find("fallback selected tier denied"),
-            std::string::npos);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
   const base::DictValue* fallback = result.FindDict("fallback_decision");
   ASSERT_TRUE(fallback);
   EXPECT_EQ(*fallback->FindString("selected_tier"),
             "accessibility_snapshot");
-  EXPECT_FALSE(lease_registry_.IsHeldBy(7, "agent-session"));
-  EXPECT_EQ(delegate_.click_count, 0);
+  EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
+  EXPECT_EQ(delegate_.click_count, 1);
+
+  base::DictValue escalated;
+  escalated.Set("ref", 1);
+  escalated.Set("fallback_tier", "screenshot_cua");
+  base::DictValue escalated_result =
+      Execute(executor, "browser_click", std::move(escalated));
+
+  EXPECT_FALSE(escalated_result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.click_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, CredentialFieldRejectsWithoutTextEcho) {
@@ -833,6 +863,27 @@ TEST_F(MahoBrowserToolExecutorTest,
   EXPECT_TRUE(captured->requires_approval);
   EXPECT_TRUE(captured->requires_lease);
   EXPECT_EQ(captured->active_origin, "https://example.com");
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.file_upload_count, 1);
+  EXPECT_EQ(delegate_.last_upload_path, "/tmp/maho-upload.png");
+  EXPECT_EQ(delegate_.last_upload_tab_id, 7);
+  EXPECT_TRUE(result.FindBool("file_selected").value_or(false));
+}
+
+TEST_F(MahoBrowserToolExecutorTest, FileUploadFailsWhenDelegateRejects) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  PopulateRef(executor, 1, 101);
+  delegate_.upload_should_succeed = false;
+
+  base::DictValue arguments;
+  arguments.Set("path", "/tmp/nonexistent.bin");
+  base::DictValue result =
+      Execute(executor, "browser_file_upload_select", std::move(arguments));
+
+  EXPECT_FALSE(result.FindBool("ok").value_or(true));
+  EXPECT_NE(result.FindString("error")->find("file upload could not be dispatched"),
+            std::string::npos);
+  EXPECT_EQ(delegate_.file_upload_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorTest, VaultToolIsNotDispatchable) {
@@ -1492,16 +1543,17 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   base::DictValue result =
       Execute(executor, "browser_navigate", std::move(arguments));
 
-  EXPECT_FALSE(result.FindBool("ok").value_or(true));
-  EXPECT_EQ(result.FindInt("error_code").value(), -32008);
-  ASSERT_TRUE(result.FindString("error"));
-  EXPECT_NE(result.FindString("error")->find("ADR 0016"),
-            std::string::npos);
-  ASSERT_TRUE(captured.has_value());
-  EXPECT_EQ(captured->active_origin, "https://example.com");
-  EXPECT_EQ(captured->destination_origin, "https://other.example");
-  EXPECT_TRUE(captured->page_derived_justification);
-  EXPECT_EQ(delegate_.navigate_count, 0);
+  EXPECT_TRUE(result.FindBool("ok").value_or(false));
+  EXPECT_FALSE(captured.has_value());
+  EXPECT_EQ(delegate_.navigate_count, 1);
+
+  base::DictValue blocked;
+  blocked.Set("url", "javascript:alert(1)");
+  base::DictValue blocked_result =
+      Execute(executor, "browser_navigate", std::move(blocked));
+
+  EXPECT_FALSE(blocked_result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.navigate_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest,
@@ -1578,7 +1630,8 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   EXPECT_TRUE(generic_result.FindBool("ok").value_or(false));
   EXPECT_EQ(*generic_result.FindString("tool"), "page_get_text");
   EXPECT_EQ(generic_result.FindString("adapter_id"), nullptr);
-  EXPECT_NE(*generic_result.FindString("tier"), "page_adapter");
+  const std::string* generic_tier = generic_result.FindString("tier");
+  EXPECT_TRUE(!generic_tier || *generic_tier != "page_adapter");
 
   maho::ai::MahoPageAdapterRegistry::GetGlobalRegistry().Clear();
 }

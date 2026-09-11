@@ -1,4 +1,6 @@
 #include "maho/browser/maho_browser_main_extra_parts.h"
+// allow: SIZE_OK - regression lane may only add inert startup observations;
+// splitting this existing linked startup TU requires separate ownership/build work.
 
 #include <algorithm>
 #include <limits>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
@@ -23,6 +26,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/threading/scoped_blocking_call.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/supports_user_data.h"
 #include "base/path_service.h"
 #include "base/power_monitor/power_monitor.h"
@@ -152,7 +156,33 @@
 
 namespace {
 MahoBrowserMainExtraParts* g_instance = nullptr;
+base::RepeatingCallback<void(
+    MahoBrowserMainExtraParts::CoreStartupStageForTesting)>&
+CoreStartupObserverForTesting() {
+  static base::NoDestructor<base::RepeatingCallback<void(
+      MahoBrowserMainExtraParts::CoreStartupStageForTesting)>> observer;
+  return *observer;
 }
+}
+
+void MahoBrowserMainExtraParts::SetCoreStartupObserverForTesting(
+    base::RepeatingCallback<void(CoreStartupStageForTesting)> observer) {
+  CoreStartupObserverForTesting() = std::move(observer);
+}
+
+struct MahoBrowserMainExtraParts::CoreStartupResult {
+  std::unique_ptr<MahoCore, decltype(&maho::core::Destroy)> core{
+      nullptr, &maho::core::Destroy};
+  maho::ProfileCatalogResult catalog;
+  std::vector<maho::CoreTabFacts> tab_facts;
+  std::optional<maho::SpaceProfileHydrationState> spaces;
+  std::string spaces_json;
+  std::string version;
+  bool vault_uninitialized = false;
+  bool has_enabled_rules = false;
+  int content_blocking_mode = 0;
+  std::string error;
+};
 
 MahoBrowserMainExtraParts::MahoBrowserMainExtraParts()
     : mail_notification_coordinators_(
@@ -603,31 +633,6 @@ std::string DecodeActiveSpaceId(char* active_id_cstr) {
   return active_id;
 }
 
-void PopulateBridgeFromCore(MahoCore* core) {
-  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-  if (!core || !bridge->HydrateFromCore()) {
-    return;
-  }
-
-  auto apply_initial_theme = []() {
-    const MahoSpaceThemeState::ChangedSpaceIds changed_spaces =
-        MahoSpaceThemeState::UpdateFromCore();
-    auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
-    for (Browser* browser : bridge->GetBrowsersForSpaces(changed_spaces)) {
-      maho::MahoSidebarView::RefreshSpaceThemeForBrowser(browser);
-    }
-  };
-  if (content::BrowserThread::CurrentlyOn(content::BrowserThread::UI)) {
-    apply_initial_theme();
-  } else {
-    content::GetUIThreadTaskRunner({})->PostTask(
-        FROM_HERE, base::BindOnce(apply_initial_theme));
-  }
-
-  LOG(INFO) << "Maho bridge populated: " << bridge->GetRegisteredSpaceCount()
-            << " spaces";
-}
-
 void NormalizeMcpSnapshotRoles(ui::AXTreeUpdate* update) {
   for (auto& node : update->nodes) {
     if (node.role == ax::mojom::Role::kComboBoxSelect) {
@@ -824,7 +829,7 @@ void MahoBrowserMainExtraParts::MaybeInitializeForBrowser(
 
   EnsureMailNotificationCoordinator(profile);
 
-  if (core_ || regular_services_initializing_) {
+  if (startup_state_ != StartupState::kUninitialized) {
     LOG(INFO)
         << "MAHO_INIT_AUDIT: class=" << ClassToString(cls)
         << ", decision=already_initialized, stage=MaybeInitializeForBrowser";
@@ -980,6 +985,10 @@ bool MahoBeginAutomationFileChooser(
   if (!render_frame_host) {
     return false;
   }
+  if (mode != blink::mojom::FileChooserParams::Mode::kOpen &&
+      mode != blink::mojom::FileChooserParams::Mode::kOpenMultiple) {
+    return false;
+  }
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
   if (!web_contents) {
@@ -1013,6 +1022,27 @@ bool MahoBeginAutomationFileChooser(
 
 namespace {
 
+bool ValidateUploadPathOnWorker(const base::FilePath& path) {
+  if (!base::PathExists(path)) {
+    return false;
+  }
+  if (base::DirectoryExists(path)) {
+    return false;
+  }
+  base::File::Info info;
+  if (!base::GetFileInfo(path, &info)) {
+    return false;
+  }
+  if (info.is_directory || info.is_symbolic_link) {
+    return false;
+  }
+  base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  if (!file.IsValid()) {
+    return false;
+  }
+  return true;
+}
+
 // Completes the pending automation chooser for |web_contents| with |path|.
 // Returns false when no chooser is pending.
 bool MahoCompleteAutomationFileChooser(content::WebContents* web_contents,
@@ -1022,8 +1052,17 @@ bool MahoCompleteAutomationFileChooser(content::WebContents* web_contents,
   if (!pending) {
     return false;
   }
-  scoped_refptr<content::FileSelectListener> listener = pending->TakeListener();
   const blink::mojom::FileChooserParams::Mode mode = pending->mode();
+  if (mode != blink::mojom::FileChooserParams::Mode::kOpen &&
+      mode != blink::mojom::FileChooserParams::Mode::kOpenMultiple) {
+    scoped_refptr<content::FileSelectListener> listener = pending->TakeListener();
+    web_contents->RemoveUserData(PendingAutomationFileChooser::UserDataKey());
+    if (listener) {
+      listener->FileSelectionCanceled();
+    }
+    return false;
+  }
+  scoped_refptr<content::FileSelectListener> listener = pending->TakeListener();
   web_contents->RemoveUserData(PendingAutomationFileChooser::UserDataKey());
   if (!listener) {
     return false;
@@ -4579,13 +4618,75 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
   bool SelectFileForPendingChooser(int tab_id,
                                    const std::string& path) override {
+    if (path.empty() || path.find('\0') != std::string::npos) {
+      return false;
+    }
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
     const base::FilePath supplied = base::FilePath::FromUTF8Unsafe(path);
     if (!wc || !supplied.IsAbsolute() || supplied.ReferencesParent()) {
       return false;
     }
+    base::ScopedAllowBlockingForTesting allow_blocking;
+    if (!ValidateUploadPathOnWorker(supplied)) {
+      return false;
+    }
     return MahoCompleteAutomationFileChooser(wc, supplied);
+  }
+
+  void SelectFileForPendingChooserAsync(
+      int tab_id,
+      const std::string& path,
+      base::OnceCallback<void(bool)> callback) override {
+    if (path.empty() || path.find('\0') != std::string::npos) {
+      std::move(callback).Run(false);
+      return;
+    }
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    const base::FilePath supplied = base::FilePath::FromUTF8Unsafe(path);
+    if (!wc || !supplied.IsAbsolute() || supplied.ReferencesParent()) {
+      std::move(callback).Run(false);
+      return;
+    }
+    auto* pending = static_cast<PendingAutomationFileChooser*>(
+        wc->GetUserData(PendingAutomationFileChooser::UserDataKey()));
+    if (!pending) {
+      std::move(callback).Run(false);
+      return;
+    }
+    const blink::mojom::FileChooserParams::Mode mode = pending->mode();
+    if (mode != blink::mojom::FileChooserParams::Mode::kOpen &&
+        mode != blink::mojom::FileChooserParams::Mode::kOpenMultiple) {
+      std::move(callback).Run(false);
+      return;
+    }
+
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE,
+        {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(&ValidateUploadPathOnWorker, supplied),
+        base::BindOnce(&MahoMcpBrowserDelegateImpl::OnUploadPathValidated,
+                       weak_factory_.GetWeakPtr(), tab_id, supplied,
+                       std::move(callback)));
+  }
+
+  void OnUploadPathValidated(int tab_id,
+                             const base::FilePath& path,
+                             base::OnceCallback<void(bool)> callback,
+                             bool valid) {
+    if (!valid) {
+      std::move(callback).Run(false);
+      return;
+    }
+    content::WebContents* wc =
+        (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      std::move(callback).Run(false);
+      return;
+    }
+    bool success = MahoCompleteAutomationFileChooser(wc, path);
+    std::move(callback).Run(success);
   }
 
   maho::MahoMcpFieldMetadata GetFieldMetadata(int tab_id,
@@ -5382,8 +5483,8 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
       artifact_registry->PrepareArtifactRoot();
     }
   }
-  if (is_initial_profile && profile && is_regular && !core_ &&
-      !regular_services_initializing_) {
+  if (is_initial_profile && profile && is_regular &&
+      startup_state_ == StartupState::kUninitialized) {
     PrefService* prefs = profile->GetPrefs();
     const bool login_gate_bypassed =
         base::CommandLine::ForCurrentProcess()->HasSwitch(
@@ -5483,8 +5584,17 @@ void MahoBrowserMainExtraParts::LockVaultForLifecycle() {
 }
 
 void MahoBrowserMainExtraParts::ShutdownCoreAndServices() {
+  if (startup_state_ == StartupState::kClosing ||
+      startup_state_ == StartupState::kClosed) {
+    return;
+  }
+  startup_state_ = StartupState::kClosing;
+  ++startup_generation_;
+  weak_factory_.InvalidateWeakPtrs();
   mail_notification_coordinators_->Clear();
+  sync_relay_client_.reset();
   if (!core_) {
+    startup_state_ = StartupState::kClosed;
     return;
   }
   // Idempotent teardown, in strict order so no late updater callback can touch
@@ -5515,11 +5625,12 @@ void MahoBrowserMainExtraParts::ShutdownCoreAndServices() {
   // core goes away. This also restores the fail-closed broadcast baseline so a
   // later core cannot inherit a stale "unlocked" state.
   maho::NotifyVaultLockStateChanged(/*locked=*/true);
-  maho::core::SaveState(core_);
   maho::QuiesceCoreTasksAndWait();
+  maho::core::SaveState(core_);
   maho::SetCore(nullptr);
   maho::core::Destroy(core_);
   core_ = nullptr;
+  startup_state_ = StartupState::kClosed;
 }
 
 void MahoBrowserMainExtraParts::MaybeLaunchMailHelper(Profile* profile) {
@@ -5569,11 +5680,11 @@ void MahoBrowserMainExtraParts::OnMailHelperCrashpadReady(
 void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
     Profile* profile) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (core_ || regular_services_initializing_) {
+  if (startup_state_ != StartupState::kUninitialized) {
     return;
   }
-  regular_services_initializing_ = true;
-  regular_profile_ = profile;
+  startup_state_ = StartupState::kLoading;
+  ++startup_generation_;
   EnsureMailNotificationCoordinator(profile);
 
   // Core initialization remains one-time; notification ownership is per
@@ -5597,7 +5708,7 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&CreateDirectoryOnThreadPool, storage_path_),
       base::BindOnce(&MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady,
-                     weak_factory_.GetWeakPtr(), profile));
+                     weak_factory_.GetWeakPtr(), profile->GetWeakPtr()));
 }
 
 void MahoBrowserMainExtraParts::EnsureMailNotificationCoordinator(
@@ -5634,20 +5745,22 @@ void MahoBrowserMainExtraParts::EnsureMailNotificationCoordinator(
 }
 
 void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
-    Profile* profile,
+    base::WeakPtr<Profile> profile,
     bool storage_directory_ready) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!regular_services_initializing_) {
+  if (startup_state_ != StartupState::kLoading) {
     return;
   }
   if (!profile || !profile->IsRegularProfile()) {
-    regular_services_initializing_ = false;
+    startup_state_ = StartupState::kFailed;
     return;
   }
   if (!storage_directory_ready) {
     LOG(WARNING) << "Maho storage directory creation failed: "
                  << storage_path_.value();
+    startup_state_ = StartupState::kFailed;
+    return;
   }
 
   base::FilePath key_path = storage_path_.AppendASCII("maho_storage.key");
@@ -5673,54 +5786,119 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
 }
 
 void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
-    Profile* profile,
+    base::WeakPtr<Profile> profile,
     bool storage_key_ready) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  if (!regular_services_initializing_) {
+  if (startup_state_ != StartupState::kLoading) {
+    return;
+  }
+  if (!profile || !storage_key_ready) {
+    startup_state_ = StartupState::kFailed;
+    LOG(ERROR) << "Maho storage key derivation/setting failed; password "
+                  "manager/persistent storage will be disabled.";
     return;
   }
 
-  if (storage_key_ready) {
-    TRACE_EVENT0("browser", "Maho::CreateWithStorage");
-    core_ = maho::core::CreateWithStorage(storage_path_.AsUTF8Unsafe());
-  } else {
-    LOG(ERROR) << "Maho storage key derivation/setting failed; password "
-                  "manager/persistent storage will be disabled.";
+  const bool posted = maho::GetCoreTaskRunner()->PostTaskAndReplyWithResult(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::FilePath path,
+             base::RepeatingCallback<void(CoreStartupStageForTesting)> observer) {
+            CoreStartupResultPtr result(
+                new CoreStartupResult,
+                base::OnTaskRunnerDeleter(maho::GetCoreTaskRunner()));
+            if (observer) {
+              observer.Run(CoreStartupStageForTesting::kStorageOpen);
+            }
+            result->core.reset(maho::core::CreateWithStorage(path.AsUTF8Unsafe()));
+            if (!result->core) {
+              result->error = "core_creation_failed";
+              return result;
+            }
+            if (observer) {
+              observer.Run(CoreStartupStageForTesting::kHydrationBegin);
+            }
+            if (!maho::core::LoadState(result->core.get()) ||
+                maho_core_readiness_status(result->core.get()) != 2u) {
+              result->error = "core_hydration_failed";
+              return result;
+            }
+            auto get_string = [&](auto getter) {
+              std::unique_ptr<char, decltype(&maho_string_free)> value(
+                  getter(result->core.get()), &maho_string_free);
+              return value ? std::string(value.get()) : std::string();
+            };
+            result->spaces_json = get_string(maho_core_get_space_view_models);
+            result->catalog = maho::ParseProfileCatalog(
+                get_string(maho_core_list_profiles),
+                get_string(maho_core_get_active_profile_id),
+                result->spaces_json, 0);
+            result->spaces = maho::BuildSpaceProfileHydrationStateFromCatalog(
+                result->catalog, get_string(maho_core_get_active_space_id));
+            if (!result->spaces) {
+              result->error = "core_snapshot_failed";
+              return result;
+            }
+            result->vault_uninitialized = IsVaultUninitialized(result->core.get());
+            result->tab_facts = maho::ReadCoreTabFactsSnapshot(result->core.get());
+            result->content_blocking_mode =
+                maho::core::GetContentBlockingMode(result->core.get());
+            result->has_enabled_rules = maho::HasEnabledTrafficRuleInJson(
+                get_string(maho_core_get_atc_rules));
+            result->version = maho::core::Version();
+            if (observer) {
+              observer.Run(CoreStartupStageForTesting::kHydrationComplete);
+            }
+            return result;
+          },
+          storage_path_, CoreStartupObserverForTesting()),
+      base::BindOnce(&MahoBrowserMainExtraParts::OnCoreStartupComplete,
+                     weak_factory_.GetWeakPtr(), std::move(profile),
+                     startup_generation_));
+  if (!posted) {
+    startup_state_ = StartupState::kFailed;
+    LOG(ERROR) << "Maho core startup task admission failed";
   }
+}
 
-  if (core_) {
-    maho::SetCoreForProfile(core_, profile);
+void MahoBrowserMainExtraParts::OnCoreStartupComplete(
+    base::WeakPtr<Profile> weak_profile,
+    uint64_t generation,
+    CoreStartupResultPtr result) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (startup_state_ != StartupState::kLoading ||
+      generation != startup_generation_) {
+    return;
+  }
+  Profile* profile = weak_profile.get();
+  if (!profile || !result->error.empty() || !result->core || !result->spaces) {
+    startup_state_ = StartupState::kFailed;
+    LOG(ERROR) << "Maho core initialization failed: " << result->error;
+    return;
+  }
+  auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
+  if (!bridge->HydrateFromSnapshot(std::move(result->catalog),
+                                   std::move(*result->spaces))) {
+    startup_state_ = StartupState::kFailed;
+    LOG(ERROR) << "Maho core startup snapshot publication failed";
+    return;
+  }
+  const auto changed_spaces =
+      MahoSpaceThemeState::UpdateFromSnapshot(result->spaces_json);
+  core_ = result->core.release();
+  startup_state_ = StartupState::kReady;
+  {
+    maho::SetCoreForProfile(core_, profile, std::move(result->tab_facts));
     maho::core::InstallLogCallback();
-    {
-      TRACE_EVENT0("browser", "Maho::LoadState");
-      maho::core::LoadState(core_);
-    }
-    LOG(INFO) << "Maho core readiness after LoadState: "
-              << static_cast<int>(maho_core_readiness_status(core_));
     StartObservingPowerSuspend();
-    LOG(INFO) << "Maho core initialized, version: " << maho::core::Version();
-    PopulateBridgeFromCore(core_);
-    maho::MahoTabRegistry::Get();
-
-    // Initialize the MahoAtcState with the initial set of rules from the core.
-    maho::PostCoreTask<bool>(
-        FROM_HERE, base::BindOnce([]() {
-          MahoCore* core = maho::GetCore();
-          if (!core) {
-            return false;
-          }
-          char* json_str = maho_core_get_atc_rules(core);
-          if (!json_str) {
-            return false;
-          }
-          std::string json(json_str);
-          maho_string_free(json_str);
-          return maho::HasEnabledTrafficRuleInJson(json);
-        }),
-        base::BindOnce([](bool has_enabled_rules) {
-          maho::MahoAtcState::SetHasEnabledRules(has_enabled_rules);
-        }));
+    LOG(INFO) << "Maho core initialized, version: " << result->version;
+    maho::MahoTabRegistry::Get()->ReannounceUnannouncedTabs();
+    bridge->NotifyChanged();
+    for (Browser* browser : bridge->GetBrowsersForSpaces(changed_spaces)) {
+      maho::MahoSidebarView::RefreshSpaceThemeForBrowser(browser);
+    }
+    maho::MahoAtcState::SetHasEnabledRules(result->has_enabled_rules);
 
     routines_scheduler_ = std::make_unique<maho::MahoRoutinesScheduler>(core_);
     routines_scheduler_->Start();
@@ -5733,14 +5911,15 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
                 profile)) {
       maho::MahoContentBlockerUpdateService::SetDesignatedUpdater(
           update_service);
-      update_service->OnModeChanged(maho::core::GetContentBlockingMode(core_) ==
-                                    0);
+      update_service->OnModeChanged(result->content_blocking_mode == 0);
     }
 
     // Max-tier gated + fire-and-forget inside the FFI (no-op otherwise).
-    maho_routines_fire_event(core_, "{\"kind\":\"on_startup\"}");
-  } else {
-    LOG(ERROR) << "Maho core initialization failed";
+    maho::PostCoreClosure(FROM_HERE, base::BindOnce([] {
+      if (MahoCore* core = maho::GetCore()) {
+        maho_routines_fire_event(core, "{\"kind\":\"on_startup\"}");
+      }
+    }));
   }
 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
@@ -5771,7 +5950,7 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
   // uninitialized Vault re-opens setup; an unreadable status never does.
   if (maho::welcome::RequiresVaultSetupRepair(
           prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
-          IsVaultUninitialized(core_))) {
+          result->vault_uninitialized)) {
     LOG(WARNING) << "Maho Vault holds no key material for an onboarded "
                     "profile; re-opening Vault setup so password saves are "
                     "not silently discarded.";
@@ -5841,5 +6020,4 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
 
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
                "stage=profile_init_complete";
-  regular_services_initializing_ = false;
 }

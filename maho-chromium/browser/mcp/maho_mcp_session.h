@@ -28,6 +28,7 @@
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
+#include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
@@ -55,6 +56,7 @@ inline constexpr int kMahoMcpErrorLeaseRequired = -32007;
 inline constexpr int kMahoMcpErrorApprovalDenied = -32008;
 inline constexpr int kMahoMcpErrorStaleReference = -32009;
 inline constexpr int kMahoMcpErrorActionNotApplied = -32010;
+inline constexpr int kMahoMcpErrorNativeInputUnavailable = -32011;
 
 inline constexpr char kMahoMcpMessageTabNotFound[] = "tab not found";
 inline constexpr char kMahoMcpMessageNoEligibleActiveTab[] =
@@ -67,6 +69,8 @@ inline constexpr char kMahoMcpMessageStaleReference[] =
     "new ref";
 inline constexpr char kMahoMcpMessageActionNotApplied[] =
     "action dispatched but not applied";
+inline constexpr char kMahoMcpMessageNativeInputUnavailable[] =
+    "native input unavailable";
 
 // Outcome of resolving a tool's target through the private-context policy.
 enum class MahoMcpTargetError {
@@ -154,6 +158,13 @@ class MahoMcpSessionToken;
 
 class MahoMcpBrowserDelegate;
 
+struct MahoMcpFeatureGates {
+  bool mail_enabled = false;
+  bool routines_enabled = false;
+  bool vault_enabled = false;
+  bool native_input_enabled = false;
+};
+
 // Browser-validated identity class for a transport connection. Known Maho
 // labels are selected only when the authenticated peer executable matches.
 enum class MahoMcpControllerKind {
@@ -195,6 +206,49 @@ class MahoMcpSession {
     kActive,
     kClosed,
   };
+
+  enum class HybridState {
+    kFast,
+    kVisualPending,
+    kVisualActive,
+  };
+
+  static const char* HybridStateToString(HybridState state);
+
+  HybridState hybrid_state() const { return hybrid_state_; }
+  int hybrid_strikes() const { return hybrid_strikes_; }
+  bool hybrid_probe_required() const { return hybrid_probe_required_; }
+  const std::string& hybrid_document_url() const { return hybrid_document_url_; }
+  int hybrid_target_tab_id() const { return hybrid_target_tab_id_; }
+
+  void RecordActionStrike(bool is_sentinel = false);
+  void RecordActionSuccess(bool is_native = false);
+  void ApproveVisualFallback();
+  void DenyVisualFallback();
+  void RecordReplacementDocument(int tab_id, const std::string& new_url);
+  void RecordSameDocumentChange();
+  bool ExecuteProbe(bool probe_succeeded);
+  void ResetHybridState();
+  void SetHybridTargetTab(int tab_id, int64_t generation = 0);
+  void OnLeaseReleased(int tab_id);
+
+  NativeInputAvailability CheckNativeInputAvailability() const;
+  void SetNativeInputAvailabilityOverrideForTesting(
+      std::optional<NativeInputAvailability> override_val) {
+    native_input_availability_override_ = std::move(override_val);
+  }
+  void SetNativeInputDispatcherForTesting(NativeInputDispatcher* dispatcher) {
+    native_dispatcher_override_ = dispatcher;
+  }
+  void SetVisualFrameForTesting(VisualFrame frame) {
+    last_visual_frame_ = std::move(frame);
+  }
+  void SetFeatureGatesOverrideForTesting(
+      std::optional<MahoMcpFeatureGates> override_gates) {
+    feature_gates_override_ = std::move(override_gates);
+  }
+  NativeInputDispatcher* GetNativeDispatcher() const;
+  MahoMcpFeatureGates GetEffectiveFeatureGates() const;
 
 #if BUILDFLAG(IS_WIN)
   // On Windows, constructs a session that validates the client's auth token
@@ -373,6 +427,18 @@ class MahoMcpSession {
   // Map of tab_id -> scroll_y
   std::unordered_map<int, int> scroll_y_positions_;
 
+  // Hybrid state machine (Tier 1 fast engine -> Tier 2 visual fallback).
+  HybridState hybrid_state_ = HybridState::kFast;
+  int hybrid_strikes_ = 0;
+  int hybrid_target_tab_id_ = 0;
+  int64_t hybrid_target_generation_ = 0;
+  std::string hybrid_document_url_;
+  bool hybrid_probe_required_ = false;
+  std::optional<NativeInputAvailability> native_input_availability_override_;
+  raw_ptr<NativeInputDispatcher> native_dispatcher_override_{nullptr};
+  std::optional<VisualFrame> last_visual_frame_;
+  std::optional<MahoMcpFeatureGates> feature_gates_override_;
+
   // R-8: target resolved for the in-flight tool call. Capture binds a copy of
   // it and revalidates (generation + kMCP) before success serialization.
   ResolvedMahoMcpTarget last_resolved_target_;
@@ -383,17 +449,13 @@ class MahoMcpSession {
   SEQUENCE_CHECKER(sequence_checker_);
 };
 
-struct MahoMcpFeatureGates {
-  bool mail_enabled = false;
-  bool routines_enabled = false;
-  bool vault_enabled = false;
-};
-
 class MahoMcpBrowserDelegate {
  public:
   using ExportArtifactCallback =
       base::OnceCallback<void(bool success, std::string error)>;
   virtual ~MahoMcpBrowserDelegate() = default;
+  virtual std::optional<NativeInputAvailability>
+  CheckNativeInputAvailability();
   virtual void PublishControlActivity(
       const std::string& activity_id,
       const std::string& controller_session_id,
@@ -578,10 +640,14 @@ class MahoMcpBrowserDelegate {
   virtual bool Type(int tab_id,
                     ui::AXNodeID ax_id,
                     const std::string& text) = 0;
-  // Supplies one .aab file to a chooser the target page has already opened.
+  // Supplies one local file to a chooser the target page has already opened.
   // Production performs path policy validation at the WebContents boundary.
   virtual bool SelectFileForPendingChooser(int tab_id,
                                            const std::string& path);
+  virtual void SelectFileForPendingChooserAsync(
+      int tab_id,
+      const std::string& path,
+      base::OnceCallback<void(bool)> callback);
   virtual void ClickVerified(
       int tab_id,
       ui::AXNodeID ax_id,

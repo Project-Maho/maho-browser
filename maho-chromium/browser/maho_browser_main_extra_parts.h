@@ -3,12 +3,16 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
+
+#include "base/functional/callback.h"
 
 #include "base/callback_list.h"
 #include "base/files/file_path.h"
 #include "base/memory/weak_ptr.h"
 #include "base/power_monitor/power_observer.h"
 #include "base/time/time.h"
+#include "base/task/sequenced_task_runner.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_browser_main_extra_parts.h"
 #include "base/memory/raw_ptr_exclusion.h"
@@ -19,6 +23,15 @@ class BrowserWindowInterface;
 struct MahoCore;
 
 namespace maho {
+class MahoMcpBrowserDelegate;
+
+// Instantiates the production delegate, replacing only Mail's active-profile
+// lookup and native approval UI. Callbacks run on the owning UI sequence.
+std::unique_ptr<MahoMcpBrowserDelegate> CreateMailDelegateForTesting(
+    base::RepeatingCallback<Profile*()> profile_resolver,
+    base::RepeatingCallback<bool(const std::string&, const std::string&)>
+        approval_presenter);
+
 class MahoMcpSocketServer;
 class MahoMcpPipeServer;
 class MahoMcpSessionToken;
@@ -36,6 +49,15 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
    ~MahoBrowserMainExtraParts() override;
 
    static MahoBrowserMainExtraParts* GetInstance();
+   enum class CoreStartupStageForTesting {
+     kStorageOpen,
+     kHydrationBegin,
+     kHydrationComplete,
+   };
+   // Install before startup and remove after startup work has settled. The
+   // observer does not replace creation, hydration, publication or teardown.
+   static void SetCoreStartupObserverForTesting(
+       base::RepeatingCallback<void(CoreStartupStageForTesting)> observer);
     void MaybeInitializeForBrowser(BrowserWindowInterface* browser);
 
     MahoCore* GetCore() const { return core_; }
@@ -54,16 +76,30 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     }
 
    private:
+    enum class StartupState {
+      kUninitialized,
+      kLoading,
+      kReady,
+      kFailed,
+      kClosing,
+      kClosed,
+    };
+    struct CoreStartupResult;
+    using CoreStartupResultPtr =
+        std::unique_ptr<CoreStartupResult, base::OnTaskRunnerDeleter>;
     void PostEarlyInitialization() override;
     void PostProfileInit(Profile* profile, bool is_initial_profile) override;
     void PostMainMessageLoopRun() override;
     void OnSuspend() override;
     void InitializeRegularServicesOnce(Profile* profile);
     void EnsureMailNotificationCoordinator(Profile* profile);
-    void OnRegularStorageDirectoryReady(Profile* profile,
+    void OnRegularStorageDirectoryReady(base::WeakPtr<Profile> profile,
                                         bool storage_directory_ready);
-    void OnStorageKeySetupComplete(Profile* profile,
+    void OnStorageKeySetupComplete(base::WeakPtr<Profile> profile,
                                    bool storage_key_ready);
+    void OnCoreStartupComplete(base::WeakPtr<Profile> profile,
+                               uint64_t generation,
+                               CoreStartupResultPtr result);
     void MaybeLaunchMailHelper(Profile* profile);
     void OnMailHelperCrashpadReady(Profile* profile,
                                    const base::FilePath& crashpad_database,
@@ -77,9 +113,9 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
 
    base::FilePath storage_path_;
      RAW_PTR_EXCLUSION MahoCore* core_ = nullptr;
-     RAW_PTR_EXCLUSION Profile* regular_profile_ = nullptr;
      bool observing_power_suspend_ = false;
-     bool regular_services_initializing_ = false;
+     StartupState startup_state_ = StartupState::kUninitialized;
+     uint64_t startup_generation_ = 0;
 
     std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
     std::unique_ptr<maho::MahoMailNotificationCoordinatorRegistry>
