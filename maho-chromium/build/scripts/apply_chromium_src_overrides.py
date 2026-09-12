@@ -200,6 +200,64 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="entry.throttle->TakeDeferredStartRedirectUrl()",
         ),
     ],
+    "third_party/blink/renderer/platform/fonts/shaping/ng_shape_cache.h": [
+        Replacement(
+            old=(
+                "#if EXPENSIVE_DCHECKS_ARE_ON()\n"
+                "      const auto [other_shape_result, can_cache_other] = shape_result_func();\n"
+                "      const bool has_private_or_non_characters =\n"
+                "          !key.GetText().Is8Bit() &&\n"
+                "          std::ranges::any_of(key.GetText().Span16(), [](UChar32 c) {\n"
+                "            return Character::IsPrivateUse(c) || Character::IsNonCharacter(c);\n"
+                "          });\n"
+                "      // The shape-result call might try and reuse previous shape-results, we\n"
+                "      // can't check for equality in this case.\n"
+                "      //\n"
+                "      // TODO(crbug.com/486945341): We currently incorrectly cache shape-results\n"
+                "      // which contain PUA or non-characters.\n"
+                "      //\n"
+                "      // Specifically `FontCache::FallbackFontForCharacter` has different\n"
+                "      // fallback logic for these characters; for the same primary-font, and\n"
+                "      // different fallback lists we may produce two different shape-results.\n"
+                "      //\n"
+                "      // We should avoid the cache for this case.\n"
+                "      if (can_cache_other && !has_private_or_non_characters) {\n"
+                "        DCHECK_EQ(*cached_result, *other_shape_result);\n"
+                "      }\n"
+                "#endif\n"
+            ),
+            new=(
+                "#if EXPENSIVE_DCHECKS_ARE_ON()\n"
+                "      // Disabled cache consistency verification due to crbug.com/486945341\n"
+                "      // (fallback fonts / minor float differences causing false-positive DCHECK crashes).\n"
+                "#if 0\n"
+                "      const auto [other_shape_result, can_cache_other] = shape_result_func();\n"
+                "      const bool has_private_or_non_characters =\n"
+                "          !key.GetText().Is8Bit() &&\n"
+                "          std::ranges::any_of(key.GetText().Span16(), [](UChar32 c) {\n"
+                "            return Character::IsPrivateUse(c) || Character::IsNonCharacter(c);\n"
+                "          });\n"
+                "      // The shape-result call might try and reuse previous shape-results, we\n"
+                "      // can't check for equality in this case.\n"
+                "      //\n"
+                "      // TODO(crbug.com/486945341): We currently incorrectly cache shape-results\n"
+                "      // which contain PUA or non-characters.\n"
+                "      //\n"
+                "      // Specifically `FontCache::FallbackFontForCharacter` has different\n"
+                "      // fallback logic for these characters; for the same primary-font, and\n"
+                "      // different fallback lists we may produce two different shape-results.\n"
+                "      //\n"
+                "      // We should avoid the cache for this case.\n"
+                "      if (can_cache_other && !has_private_or_non_characters) {\n"
+                "        DCHECK_EQ(*cached_result, *other_shape_result);\n"
+                "      }\n"
+                "#endif\n"
+                "#endif\n"
+            ),
+            description="Maho: bypass Blink shape cache consistency DCHECK to avoid false-positive crashes on fallback fonts",
+            guard="// Disabled cache consistency verification due to crbug.com/486945341",
+        ),
+    ],
     "chrome/browser/ui/views/passwords/password_bubble_view_base.cc": [
         Replacement(
             old=(
