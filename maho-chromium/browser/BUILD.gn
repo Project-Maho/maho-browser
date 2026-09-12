@@ -998,6 +998,7 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_content_blocker_update_service",
     ":maho_content_blocker_update_service_factory",
     ":maho_extension_state_bridge",
+    ":maho_ai_provider_oauth",
     ":maho_auth_utils",
     ":maho_routines_scheduler",
     ":maho_tab_id_helper",
@@ -1245,6 +1246,28 @@ source_set("maho_agent_channel_gateway") {
   deps = [
     ":maho_ai_runtime_adapter_interface",
     "//components/prefs",
+  ]
+}
+
+source_set("maho_ai_provider_oauth") {
+  sources = [
+    "ui/webui/maho_ai_provider_oauth.cc",
+    "ui/webui/maho_ai_provider_oauth.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//content/public/browser",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//url",
   ]
 }
 

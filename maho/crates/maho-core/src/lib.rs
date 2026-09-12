@@ -29,6 +29,7 @@ pub mod llm_client;
 pub mod llm_manager;
 pub mod llm_provider;
 pub mod maho_core;
+pub mod memory;
 pub mod memory_manager;
 pub mod note_manager;
 pub mod notification_manager;
@@ -36,10 +37,12 @@ pub mod oscrypt;
 pub mod permission_manager;
 pub mod profile_import;
 pub mod profile_manager;
+pub mod provider_oauth;
 pub mod providers;
 pub mod reading_list_manager;
 pub mod routine_runs;
 pub mod routines;
+pub mod security;
 pub mod settings_manager;
 pub mod sharing_manager;
 pub mod shortcut_manager;
@@ -58,3 +61,22 @@ pub mod vault_crypto;
 pub mod vault_manager;
 pub mod vault_runtime;
 pub mod workspace_manager;
+
+/// Test-only SQLCipher key installer for this crate's `--lib` test binary.
+///
+/// `maho_storage::sqlite::set_sqlcipher_key` writes a process-global slot that
+/// every `SqliteStorage::open` in the process reads. `cargo test` runs the lib
+/// tests as parallel threads in ONE process, so a test that injects its own key
+/// mid-run silently re-keys databases other tests already opened: the victim
+/// either sees `KeyNotConfigured` or `file is not a database` depending on
+/// scheduling. Every key-dependent lib test installs the SAME key through this
+/// function, which writes the slot exactly once, so the global value is stable
+/// for the whole binary and no test can observe another test's key.
+#[cfg(test)]
+pub(crate) fn install_test_sqlcipher_key() {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        maho_storage::sqlite::set_sqlcipher_key("maho-core-lib-test-key")
+            .expect("install process-wide test SQLCipher key");
+    });
+}
