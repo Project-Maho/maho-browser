@@ -136,7 +136,7 @@ describe('typed credential error presentation', () => {
     expect(futurePresentation).toEqual(genericPresentation);
   });
 
-  it('keeps current raw-text behavior for an untyped generic runtime error', () => {
+  it('keeps the full raw error text available for an untyped generic runtime error', () => {
     // Given: an ordinary runtime error with no credential category.
     const event = createErrorEvent(null, 'Execution failed while contacting the runtime.');
     const entry = {event, sessionId: event.sessionId};
@@ -144,11 +144,11 @@ describe('typed credential error presentation', () => {
     // When: compact conversation items are collected.
     const items = collectConversationItems([entry]);
 
-    // Then: the existing generic error summary remains unchanged.
+    // Then: the headline stays generic and the untruncated text is carried as detail.
     expect(getCredentialErrorPresentation(event)).toBeNull();
     expect(items).toHaveLength(1);
-    expect(items[0]?.text).toBe(
-        'Something went wrong — Execution failed while contacting the runtime.');
+    expect(items[0]?.text).toBe('Something went wrong');
+    expect(items[0]?.errorDetail).toBe('Execution failed while contacting the runtime.');
   });
 
   it.each(credentialCases)(

@@ -13,7 +13,8 @@ import {
   type SessionInfo,
 } from '../../maho_ai.mojom-webui.js';
 import {MahoAiStore} from '../../store.js';
-import {ViewMode, type TimelineEntry} from '../../types.js';
+import {RuntimeEventKind, ViewMode, type TimelineEntry} from '../../types.js';
+import {collectConversationItems} from '../../views/conversation_thread.js';
 import {TooltipProvider} from '@ui/tooltip';
 
 Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
@@ -109,12 +110,16 @@ describe('Compact conversation layout', () => {
     expect(topOverlay.className).not.toContain('absolute pinned');
     expect(topOverlay.querySelector('button[aria-label="Close panel"]')).not.toBeNull();
 
-    // And: conversation thread main element is flex-1 with an independently scrollable container.
-    expect(threadMain.tagName.toLowerCase()).toBe('main');
-    expect(threadMain.className).toContain('flex min-h-0 flex-1 flex-col');
+    // And: the single runtime flow below the header owns vertical scrolling.
+    expect(threadMain.tagName.toLowerCase()).toBe('div');
+    expect(threadMain.dataset.testid).toBe('runtime-flow');
+    expect(threadMain.className).toContain('flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto');
 
-    const scrollContainer = threadMain.firstElementChild as HTMLElement;
-    expect(scrollContainer.className).toContain('overflow-y-auto');
+    const conversation = threadMain.querySelector('main') as HTMLElement;
+    const footer = threadMain.querySelector('[data-testid="runtime-footer"]');
+    expect(conversation.className).toContain('flex min-h-0 flex-1 flex-col');
+    expect(footer).not.toBeNull();
+    expect(threadMain.lastElementChild).toBe(footer);
   });
 
   it('omits the Tidy Tabs affordance from the compact topbar', () => {
@@ -138,5 +143,25 @@ describe('Compact conversation layout', () => {
     // Then: no Tidy Tabs button or aria-label exists in the rendered DOM.
     expect(container.querySelector('[aria-label="Tidy tabs"]')).toBeNull();
     expect(container.textContent).not.toContain('Tidy tabs');
+  });
+
+  it('treats sessions with only status events as empty conversations', () => {
+    // Given: a session with only a kSessionStatus event ("started") from C++ StartSession
+    const statusEntry: TimelineEntry = {
+      sessionId: 'session-new',
+      event: {
+        kind: RuntimeEventKind.kSessionStatus,
+        sequence: 1,
+        sessionId: 'session-new',
+        text: 'started',
+        timestamp: 1,
+      },
+    };
+
+    // When: items are collected
+    const items = collectConversationItems([statusEntry]);
+
+    // Then: no conversation items are returned, keeping hasMessages false
+    expect(items).toHaveLength(0);
   });
 });

@@ -1,12 +1,7 @@
 import {useCallback, useEffect, useRef} from 'react';
 
-import {
-  PageCallbackRouter,
-  PageHandlerFactory,
-  PageHandlerRemote,
-} from '../../maho_ai.mojom-webui.js';
 import type {MahoAiStore} from '../../store.js';
-import {bindMojoPageHandler} from '../../../maho_common/react/use_mojo.js';
+import {getMahoAiPageConnection} from '../../page_connection.js';
 
 const WORKLET_NAME = 'maho-voice-capture';
 const RMS_GAIN = 5.5;
@@ -92,13 +87,7 @@ export interface UseVoiceInputOptions {
   onFinalTranscript: (transcript: string, controls: VoiceFinalControls) => void;
 }
 
-const voiceMojo = bindMojoPageHandler(
-    PageCallbackRouter, PageHandlerRemote, PageHandlerFactory);
-
-export function closeVoiceMojo(): void {
-  (voiceMojo.router.$ as {close?: () => void}).close?.();
-  (voiceMojo.handler.$ as {close?: () => void}).close?.();
-}
+const voiceMojo = getMahoAiPageConnection();
 
 function hasVoiceCaptureSupport(): boolean {
   return typeof navigator !== 'undefined' &&

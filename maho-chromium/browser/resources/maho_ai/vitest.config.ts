@@ -35,6 +35,10 @@ export default defineConfig({
         replacement: featurePath('standalone/maho_ai.mojom-webui.js'),
       },
       {
+        find: /^\.\.\/\.\.\/\.\.\/maho_ai\.mojom-webui\.js$/,
+        replacement: featurePath('standalone/maho_ai.mojom-webui.js'),
+      },
+      {
         find: /^react$/,
         replacement: sharedNodeModulePath('react'),
       },
@@ -71,6 +75,10 @@ export default defineConfig({
         replacement: featurePath('../maho_common/react/icons/lucide.ts'),
       },
       {
+        find: /^@theme\/(.+)$/,
+        replacement: featurePath('../maho_common/react/theme/$1'),
+      },
+      {
         find: /^lucide-react$/,
         replacement: sharedNodeModulePath('lucide-react/dist/esm/lucide-react.js'),
       },
@@ -93,6 +101,42 @@ export default defineConfig({
       {
         find: /^@radix-ui\/react-popover$/,
         replacement: sharedNodeModulePath('@radix-ui/react-popover'),
+      },
+      {
+        find: /^@radix-ui\/react-dialog$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-dialog'),
+      },
+      {
+        find: /^@radix-ui\/react-tabs$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-tabs'),
+      },
+      {
+        find: /^@radix-ui\/react-switch$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-switch'),
+      },
+      {
+        find: /^@radix-ui\/react-checkbox$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-checkbox'),
+      },
+      {
+        find: /^@radix-ui\/react-label$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-label'),
+      },
+      {
+        find: /^@radix-ui\/react-select$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-select'),
+      },
+      {
+        find: /^@radix-ui\/react-slider$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-slider'),
+      },
+      {
+        find: /^@radix-ui\/react-toggle-group$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-toggle-group'),
+      },
+      {
+        find: /^@radix-ui\/react-toggle$/,
+        replacement: sharedNodeModulePath('@radix-ui/react-toggle'),
       },
       {
         find: /^@radix-ui\/react-tooltip$/,

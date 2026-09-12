@@ -42,9 +42,12 @@ export function TrustCeremony({store}: {store: MahoAiStore}) {
     }
     setSubmitting(true);
     try {
-      await store.approveMcpServerTrust(activeWorkspace.id, untrustedServer.name, tools);
-      setCustomTools('');
-      setShowAdvanced(false);
+      const trusted = await store.approveMcpServerTrust(
+          activeWorkspace.id, untrustedServer.name, tools);
+      if (trusted) {
+        setCustomTools('');
+        setShowAdvanced(false);
+      }
     } finally {
       setSubmitting(false);
     }

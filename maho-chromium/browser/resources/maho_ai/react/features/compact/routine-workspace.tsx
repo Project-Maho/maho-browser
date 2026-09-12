@@ -44,7 +44,22 @@ function formatTrigger(trigger: string | null): string {
     const count = trigger.split(':')[1] || '20';
     return `When ${count}+ tabs are open`;
   }
-  return trigger;
+  return trigger.replace(/[_.-]+/g, ' ').replace(/^./, c => c.toUpperCase());
+}
+
+function formatRunSource(source: string): string {
+  if (source === 'manual') return 'Manual run';
+  if (source === 'schedule') return 'Scheduled run';
+  if (source === 'event') return 'Event-triggered run';
+  if (!source) return 'Run';
+  return source.replace(/[_.-]+/g, ' ').replace(/^./, c => c.toUpperCase());
+}
+
+// Human reason for a failed routines call; the raw backend text stays in the
+// console instead of the panel.
+function humanizeReason(reason: unknown, fallback: string): string {
+  console.error('[maho-ai] routines operation failed:', reason);
+  return fallback;
 }
 
 function latestStatus(
@@ -138,7 +153,8 @@ export function RoutineWorkspace(
         })
         .catch(reason => {
           if (active) {
-            setError(String(reason));
+            setError(humanizeReason(
+                reason, 'Routines could not be loaded. Check your connection and try again.'));
           }
         });
     return () => {
@@ -176,7 +192,8 @@ export function RoutineWorkspace(
       await refresh(generation);
     } catch (reason) {
       if (generation === clientGeneration.current) {
-        setError(String(reason));
+        setError(humanizeReason(
+            reason, 'That action could not be completed. Try again.'));
       }
     } finally {
       if (generation === clientGeneration.current) {
@@ -231,9 +248,19 @@ export function RoutineWorkspace(
       {workspaceHeader}
 
       {error ? (
-        <div role="alert" className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
+        <div role="alert" data-routine-error className="mb-3 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs text-destructive">
           <ShieldAlert className="size-4 shrink-0" />
           <p className="flex-1">{error}</p>
+          <Button
+            className="h-6 shrink-0 px-2 text-2xs"
+            data-routine-retry
+            disabled={busy}
+            onClick={() => void runMutation(async () => {})}
+            size="sm"
+            type="button"
+            variant="outline">
+            Retry
+          </Button>
         </div>
       ) : null}
 
@@ -244,11 +271,15 @@ export function RoutineWorkspace(
           {history.map(record => (
             <div
               className="flex items-start justify-between gap-2 rounded-lg border border-border/70 bg-card px-2.5 py-1.5 text-2xs shadow-2xs"
+              data-routine-history-run={record.resultId.toString()}
               key={record.resultId.toString()}>
               <div className="min-w-0 flex-1">
-                <span className="font-medium text-foreground">{record.routineId}</span>
+                <span className="font-medium text-foreground">
+                  {routines.find(routine => routine.id === record.routineId)?.name ??
+                      record.routineId}
+                </span>
                 <span className="ml-2 text-muted-foreground">
-                  {record.source} · {record.success ? 'Succeeded' : 'Failed'}
+                  {formatRunSource(record.source)} · {record.success ? 'Succeeded' : 'Failed'}
                 </span>
                 <p className="mt-0.5 line-clamp-1 text-muted-foreground">{record.content}</p>
               </div>

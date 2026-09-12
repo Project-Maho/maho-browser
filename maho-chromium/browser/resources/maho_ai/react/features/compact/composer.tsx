@@ -24,6 +24,7 @@ import {
   isSessionReadOnly,
 } from '../../../types.js';
 import {cn} from '@lib/utils';
+import {toast} from 'sonner';
 import {Button} from '@ui/button';
 import {Input} from '@ui/input';
 import {
@@ -31,13 +32,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@ui/popover';
-
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@ui/tooltip';
-import {Check, ChevronDown, Globe, Plus, Square, Send, Search, AlertCircle, Mic} from '@icons/lucide';
+import {AlertCircle, ArrowUp, Check, ChevronDown, Globe, Mic, Plus, Search, Square} from '@icons/lucide';
 import {Alert, AlertDescription} from '@ui/alert';
 import {ComposerTextarea} from '../../components/composer-textarea.js';
 
@@ -63,12 +63,12 @@ export interface ComposerHandlers {
 }
 
 const pickerRowClassName =
-    'group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors outline-none hover:bg-surface-hover focus-visible:bg-surface-selected focus-visible:ring-1 focus-visible:ring-ring data-[focused=true]:bg-surface-selected disabled:cursor-default disabled:opacity-40';
+    'group grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-xs text-foreground transition-colors outline-none hover:bg-surface-hover focus-visible:bg-surface-selected focus-visible:ring-1 focus-visible:ring-ring data-[focused=true]:bg-surface-selected disabled:cursor-default disabled:opacity-40';
 const pickerStatusClassName =
-    'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-muted-foreground';
-const pickerSectionClassName = 'grid gap-1.5';
+    'grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg px-1.5 py-1.5 text-left text-xs text-muted-foreground';
+const pickerSectionClassName = 'grid gap-1';
 const pickerSectionLabelClassName =
-    'px-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground';
+    'px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/80';
 const aiSelectionRowClassName =
     'group flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs text-foreground transition-colors outline-none hover:bg-surface-hover focus-visible:bg-surface-selected focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-45';
 const aiSelectionLabelClassName =
@@ -141,26 +141,29 @@ function AISelectionLevel({children, label, value}: {
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="relative min-w-0 flex-1">
-      <button
-        aria-expanded={open}
-        className="flex h-8 w-full min-w-0 items-center justify-between gap-1 rounded-lg px-2 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-surface-hover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-        data-ai-selection-level={label}
-        type="button"
-        onClick={() => setOpen(!open)}>
-        <span className="truncate">{value}</span>
-        <ChevronDown aria-hidden="true" className="size-3 shrink-0" />
-      </button>
-      {open ? (
-        <div
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
           className={cn(
-              'absolute bottom-[calc(100%+6px)] z-50 grid max-h-72 min-w-48 gap-1 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-[var(--shadow-overlay)]',
-              label === 'thinking' ? 'right-0' : 'left-0')}
-          onClick={() => setOpen(false)}>
-          {children}
-        </div>
-      ) : null}
-    </div>
+              'inline-flex h-6 min-w-0 max-w-[9rem] shrink items-center gap-0.5 rounded-md panel-chip pl-[7px] pr-[5px]',
+              'text-[11px] font-medium tracking-[-0.004em] outline-none',
+              'focus-visible:ring-1 focus-visible:ring-ring',
+              open && 'bg-surface-selected text-foreground')}
+          data-ai-selection-level={label}
+          type="button">
+          <span className="truncate">{value}</span>
+          <ChevronDown aria-hidden="true" className="size-2.5 shrink-0 opacity-55" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+          align={label === 'thinking' ? 'end' : 'start'}
+          aria-label={`${label} options`}
+          className="max-h-72 min-w-48 w-auto overflow-y-auto rounded-xl panel-card-raised p-1.5"
+          onClick={() => setOpen(false)}
+          side="top">
+        {children}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -183,30 +186,36 @@ export function AISelectionLevels({handlers, state}: {
     },
   });
   return (
-    <section aria-label="AI selection" className="flex min-w-0 items-center gap-0.5">
-      <AISelectionLevel label="provider" value={provider?.label || 'Provider'}>
-        {state.aiSettings.providerOptions.map(option => (
-          <button key={option.id} className={itemClassName}
-            data-ai-selection-provider={option.id}
-            disabled={option.modelOptions.length === 0} type="button"
-            onClick={() => commit({providerId: option.id, modelId: option.modelOptions[0]?.id || ''})}>
-            <span className="truncate">{option.label}</span>
-            <AISelectionCheck active={option.id === provider?.id} />
-          </button>
-        ))}
+    <section aria-label="AI selection" className="flex min-w-0 items-center justify-end gap-px">
+      <AISelectionLevel label="provider" value={provider?.label || 'Not configured'}>
+        {state.aiSettings.providerOptions.length > 0 ? (
+          state.aiSettings.providerOptions.map(option => (
+            <button key={option.id} className={itemClassName}
+              data-ai-selection-provider={option.id}
+              disabled={option.modelOptions.length === 0} type="button"
+              onClick={() => commit({providerId: option.id, modelId: option.modelOptions[0]?.id || ''})}>
+              <span className="truncate">{option.label}</span>
+              <AISelectionCheck active={option.id === provider?.id} />
+            </button>
+          ))
+        ) : (
+          <div className="p-2 text-xs text-muted-foreground">No providers configured</div>
+        )}
       </AISelectionLevel>
-      <div className="h-4 w-px shrink-0 bg-border/70" />
-      <AISelectionLevel label="model" value={model ? getModelLabel(model) : 'Model'}>
-        {provider?.modelOptions.map(option => (
-          <button key={option.id} className={itemClassName}
-            data-ai-selection-model={option.id} type="button"
-            onClick={() => commit({modelId: option.id})}>
-            <span className="truncate">{getModelLabel(option)}</span>
-            <AISelectionCheck active={option.id === model?.id} />
-          </button>
-        ))}
+      <AISelectionLevel label="model" value={model ? getModelLabel(model) : (provider ? 'Model' : 'Not configured')}>
+        {provider && provider.modelOptions.length > 0 ? (
+          provider.modelOptions.map(option => (
+            <button key={option.id} className={itemClassName}
+              data-ai-selection-model={option.id} type="button"
+              onClick={() => commit({modelId: option.id})}>
+              <span className="truncate">{getModelLabel(option)}</span>
+              <AISelectionCheck active={option.id === model?.id} />
+            </button>
+          ))
+        ) : (
+          <div className="p-2 text-xs text-muted-foreground">No models available</div>
+        )}
       </AISelectionLevel>
-      <div className="h-4 w-px shrink-0 bg-border/70" />
       <AISelectionLevel label="thinking" value={reasoning?.label || 'Thinking'}>
         {state.aiSettings.reasoningOptions.map(option => (
           <button key={option.effort} className={itemClassName}
@@ -230,6 +239,10 @@ function commitAISelection(
   void request.handlers.onSetAISelection(request.selection).then(accepted => {
     if (accepted) {
       request.onSelectionCommitted?.();
+    } else {
+      // The store refreshed the settings, so the picker snapped back; say so
+      // instead of dying silently (P1-1).
+      toast.error('Model change was not applied — the provider refused it.');
     }
   });
 }
@@ -420,7 +433,7 @@ function PickerStatus(
       <span className="flex size-4 items-center justify-center text-muted-foreground">
         <Globe className="size-4" />
       </span>
-      <span className="truncate text-sm text-inherit">{title}</span>
+      <span className="truncate text-xs text-inherit">{title}</span>
     </div>
   );
 }
@@ -456,7 +469,7 @@ function PickerOptionRow(
       <span className="flex size-4 items-center justify-center text-muted-foreground">
         {faviconUrl ? <Favicon pageUrl={faviconUrl} /> : <Globe className="size-4" />}
       </span>
-      <span className="truncate text-sm font-medium text-inherit">{title}</span>
+      <span className="truncate text-xs font-medium text-inherit">{title}</span>
       {metaLabel ? (
         <span className="inline-flex h-5 items-center rounded-full bg-secondary px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
           {metaLabel}
@@ -529,7 +542,7 @@ function TabsSection(
           type="button"
           onClick={handlers.onLoadOpenTabs}>
           <span className="flex size-4 items-center justify-center text-muted-foreground"><Globe className="size-4" /></span>
-          <span className="truncate text-sm font-medium">Load open tabs</span>
+          <span className="truncate text-xs font-medium">Load open tabs</span>
         </button>
       ) : null}
 
@@ -667,7 +680,13 @@ function PinnedTabsSection(
   );
 }
 
-export function Composer({handlers, state}: {handlers: ComposerHandlers; state: AppState}) {
+export function Composer(
+    {commandDisclosure, handlers, permissionControl, state}: {
+      commandDisclosure?: ReactNode;
+      handlers: ComposerHandlers;
+      permissionControl?: ReactNode;
+      state: AppState;
+    }) {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const [draftSearchQuery, setDraftSearchQuery] = useState(state.historySearch.query);
@@ -754,10 +773,54 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
 
   const quotaExhausted = state.chatBlockedReason === 'quota-exhausted';
 
+  const hasPrompt = state.composer.prompt.trim().length > 0;
+
   return (
-    <section className={cn(
-        'grid gap-2 rounded-[1.35rem] glass p-2 shadow-[var(--shadow-overlay)]',
-        readOnly && 'opacity-90')}>
+    <section
+      className={cn(
+        'grid min-w-0 gap-1.5 rounded-[18px] panel-card-raised p-1.5 [container-type:inline-size]',
+        'transition-shadow duration-200 focus-within:shadow-[var(--panel-shadow-raised),0_0_0_1px_var(--panel-accent-soft)]',
+        readOnly && 'opacity-90')}
+      data-composer>
+        {state.composer.attachments.length > 0 ? (
+          <section
+            aria-label="Attached context"
+            className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {state.composer.attachments.map(attachment => {
+              const isImage = attachment.kind === 'file' &&
+                  !!attachment.mimeType?.startsWith('image/') &&
+                  !!attachment.dataUrl;
+              return (
+                <span
+                  key={attachment.id}
+                  className={cn(
+                      'inline-flex h-6 max-w-[min(100%,200px)] shrink-0 items-center gap-1 rounded-md panel-card px-1.5 text-[11px] text-foreground',
+                      isImage && 'h-7 pl-0.5 pr-1.5')}
+                  title={attachment.detail || attachment.label}>
+                  {isImage ? (
+                    <img
+                      alt=""
+                      aria-hidden="true"
+                      className="size-6 rounded-[5px] object-cover"
+                      src={attachment.dataUrl}
+                    />
+                  ) : null}
+                  <span className="truncate font-medium text-inherit">{attachment.label}</span>
+                  <button
+                    aria-label={`Remove ${attachment.label}`}
+                    className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:bg-background/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    type="button"
+                    onClick={() => handlers.onRemoveAttachment(attachment)}>
+                    <svg aria-hidden="true" fill="none" focusable="false" height="10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="10" xmlns="http://www.w3.org/2000/svg">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </span>
+              );
+            })}
+          </section>
+        ) : null}
       {quotaExhausted && (
         <Alert variant="warning" className="mb-0 rounded-xl border-warning/40 bg-warning/10 py-2">
           <AlertCircle className="h-4 w-4 text-warning" />
@@ -773,24 +836,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
           </AlertDescription>
         </Alert>
       )}
-      <div className="min-h-0">
-        <ComposerTextarea
-          className="min-h-[72px] max-h-80 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 shadow-none focus-visible:ring-0"
-          focusRequest={state.composer.focusRequest}
-          onBlur={handlers.onComposerBlur}
-          onPasteFiles={files => handlers.onAttachFiles(files)}
-          onSubmit={handlers.onSubmit}
-          onValueChange={handlers.onPromptChange}
-          placeholder={readOnly ?
-            'This archived session is view-only. Start a new live session to continue.' :
-            'Ask a question about this page...'}
-          readOnly={readOnly}
-          rows={1}
-          value={state.composer.prompt}
-        />
-      </div>
-      <AISelectionLevels handlers={handlers} state={state} />
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-end gap-1">
         <Popover
           open={pickerOpen}
           onOpenChange={open => {
@@ -806,8 +852,8 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                   aria-label="Add context or start a new session"
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 shrink-0 rounded-full">
-                  <Plus className="size-4" />
+                  className="size-7 shrink-0 rounded-lg panel-chip">
+                  <Plus className="size-3.5" />
                 </Button>
               </PopoverTrigger>
             </TooltipTrigger>
@@ -815,20 +861,20 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
           </Tooltip>
           <PopoverContent
               align="start"
-              className="w-[min(22rem,calc(100vw-1.5rem))] rounded-2xl border-border bg-popover p-2 shadow-[var(--shadow-overlay)]"
+              className="w-[min(22rem,calc(100vw-1.5rem))] rounded-[18px] panel-card-raised p-1.5"
               side="top">
             <section
                 ref={pickerRef}
                 aria-label="Context picker"
-                className="grid gap-2"
+                className="grid gap-1.5"
                 onKeyDown={handlePickerKeyDown}>
-              <div className="grid gap-2 p-1">
-                <form className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2" onSubmit={handleSearchSubmit}>
-                  <span aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+              <div className="grid gap-1.5">
+                <form className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1" onSubmit={handleSearchSubmit}>
+                  <span aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground">
                     <Search className="size-3.5" />
                   </span>
                   <Input
-                    className="h-9 border-border bg-input/90 pl-9 pr-3 text-sm shadow-none focus-visible:ring-1"
+                    className="h-7 rounded-lg border-panel-hairline bg-transparent pl-7 pr-2 text-xs shadow-none focus-visible:ring-1"
                     disabled={readOnly}
                     placeholder="Search tabs and history"
                     type="search"
@@ -843,7 +889,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                   />
                   {canSubmitSearch ? (
                     <Button
-                      className="h-9 rounded-xl px-3 text-xs font-semibold"
+                      className="h-7 shrink-0 rounded-lg px-2 text-[11px] font-semibold panel-chip"
                       disabled={readOnly || state.historySearch.loading}
                       type="submit"
                       variant="ghost"
@@ -852,7 +898,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                    </Button>
                   ) : (hasSearchQuery || trimmedDraftSearchQuery) ? (
                     <Button
-                      className="h-9 rounded-xl px-3 text-xs font-semibold"
+                      className="h-7 shrink-0 rounded-lg px-2 text-[11px] font-semibold panel-chip"
                       disabled={readOnly}
                       type="button"
                       variant="ghost"
@@ -867,7 +913,7 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                 </form>
               </div>
 
-              <div className="grid gap-2">
+              <div className="grid gap-1.5">
                 <HistorySection
                   handlers={handlers}
                   hasQuery={hasSearchQuery}
@@ -921,70 +967,51 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                     <span className="flex size-4 items-center justify-center text-muted-foreground">
                       <Plus className="size-4" />
                     </span>
-                    <span className="truncate text-sm font-medium">Upload file from computer</span>
+                    <span className="truncate text-xs font-medium">Upload file from computer</span>
                   </button>
                 </div>
+              </div>
+              <div className="border-t border-panel-hairline px-1 pt-1.5">
+                {commandDisclosure}
               </div>
             </section>
            </PopoverContent>
         </Popover>
-        {state.composer.attachments.length > 0 ? (
-          <section
-            aria-label="Attached context"
-            className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto py-0.5">
-            {state.composer.attachments.map(attachment => {
-              const isImage = attachment.kind === 'file' &&
-                  !!attachment.mimeType?.startsWith('image/') &&
-                  !!attachment.dataUrl;
-              return (
-                <span
-                  key={attachment.id}
-                  className={cn(
-                      'inline-flex h-6 max-w-[min(100%,220px)] items-center gap-1 rounded-full bg-secondary/80 px-2 text-xs text-foreground shadow-sm',
-                      isImage && 'h-8 pl-0.5 pr-2')}
-                  title={attachment.detail || attachment.label}>
-                  {isImage ? (
-                    <img
-                      alt=""
-                      aria-hidden="true"
-                      className="size-7 rounded-md object-cover"
-                      src={attachment.dataUrl}
-                    />
-                  ) : null}
-                  <span className="truncate font-medium text-inherit">{attachment.label}</span>
-                  <button
-                    aria-label={`Remove ${attachment.label}`}
-                    className="inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background/80 hover:text-foreground focus-visible:bg-background/80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    type="button"
-                    onClick={() => handlers.onRemoveAttachment(attachment)}>
-                    <svg aria-hidden="true" fill="none" focusable="false" height="10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" width="10" xmlns="http://www.w3.org/2000/svg">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
-                </span>
-              );
-            })}
-          </section>
+        <div className="relative min-w-0 flex-1">
+        <ComposerTextarea
+          className={cn(
+            'max-h-72 min-h-7 resize-none border-0 bg-transparent px-1.5 py-1 text-[13px] leading-[1.5] tracking-[-0.005em] shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0 overflow-y-auto')}
+          focusRequest={state.composer.focusRequest}
+          onBlur={handlers.onComposerBlur}
+          onPasteFiles={files => handlers.onAttachFiles(files)}
+          onSubmit={handlers.onSubmit}
+          onValueChange={handlers.onPromptChange}
+          placeholder={readOnly ?
+            'This archived session is view-only. Start a new live session to continue.' :
+            'Ask Maho a task, @ for context'}
+          readOnly={readOnly}
+          rows={1}
+          value={state.composer.prompt}
+        />
+        </div>
+        {!voiceHidden ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Start voice input"
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0 rounded-lg panel-chip"
+                disabled={canCancel || state.voice.active}
+                onClick={handlers.onOpenVoice}>
+                <Mic className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Voice input</TooltipContent>
+          </Tooltip>
         ) : null}
 
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          {!voiceHidden ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Start voice input"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 rounded-full"
-                  disabled={canCancel || state.voice.active}
-                  onClick={handlers.onOpenVoice}>
-                  <Mic className="size-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Voice input</TooltipContent>
-            </Tooltip>
-          ) : null}
+        <div className="ml-auto flex min-w-0 shrink items-center gap-1">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -992,14 +1019,18 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
                    'Stop current turn' :
                    (state.currentSessionId ? 'Send prompt' : 'Start session')}
                 className={cn(
-                    'size-9 shrink-0 rounded-full shadow-sm transition-transform active:scale-95',
-                    canCancel && 'border border-warning/40 bg-warning/15 text-warning hover:bg-warning/25 hover:text-warning')}
+                    'size-7 shrink-0 rounded-lg transition-all duration-200 active:scale-95',
+                    canCancel
+                        ? 'border border-warning/40 bg-warning/15 text-warning hover:bg-warning/25 hover:text-warning'
+                        : hasPrompt
+                            ? 'bg-panel-accent text-white shadow-[0_0_0_3px_var(--panel-accent-soft)] hover:brightness-110'
+                            : 'bg-transparent text-muted-foreground/60 shadow-none hover:bg-surface-hover')}
                 disabled={canCancel ? false : submitDisabled}
-                variant="default"
+                variant="ghost"
                 size="icon"
                 onClick={canCancel ? handlers.onCancel : handlers.onSubmit}>
                 <span className="inline-flex items-center justify-center">
-                  {canCancel ? <Square className="size-3 fill-current" /> : <Send className="size-4" />}
+                  {canCancel ? <Square className="size-2.5 fill-current" /> : <ArrowUp className="size-3.5" />}
                 </span>
               </Button>
             </TooltipTrigger>
@@ -1007,6 +1038,12 @@ export function Composer({handlers, state}: {handlers: ComposerHandlers; state: 
               {canCancel ? 'Stop' : (state.currentSessionId ? 'Send' : 'Start session')}
             </TooltipContent>
           </Tooltip>
+        </div>
+      </div>
+      <div className="flex min-w-0 items-center gap-1">
+        {permissionControl}
+        <div className="ml-auto flex min-w-0 shrink items-center">
+          <AISelectionLevels handlers={handlers} state={state} />
         </div>
       </div>
     </section>

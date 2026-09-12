@@ -2,8 +2,10 @@ import React from 'react';
 import {formatTimestamp} from '../../lib/format-timestamp.js';
 import {cn} from '@lib/utils';
 import {Button} from '@ui/button';
+import {RefreshCw} from '@icons/lucide';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
 import {CredentialErrorNotice} from '../../components/credential-error-notice.js';
+import {ErrorDetail} from '../../components/error-detail.js';
 
 function chipClassName(tone: NonNullable<ConversationItem['chips']>[number]['tone']): string {
   switch (tone) {
@@ -26,11 +28,13 @@ export function ConversationSystemItem(
       item,
       onOpenSettings,
       onRespondToApproval,
+      onRetry,
       readOnly,
     }: {
       item: ConversationItem;
       onOpenSettings: (paneKey: string) => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
+      onRetry?: () => void;
       readOnly: boolean;
     }) {
   const approval = item.approval;
@@ -48,6 +52,7 @@ export function ConversationSystemItem(
       <article className="w-full max-w-full motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none">
         <CredentialErrorNotice
           onOpenSettings={onOpenSettings}
+          onRetry={onRetry}
           presentation={item.credentialError}
           surface="compact"
         />
@@ -67,24 +72,27 @@ export function ConversationSystemItem(
           {isApproval ? (
             <div className="grid min-w-0 flex-1 gap-0.5">
               <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">Approval</span>
-              <span className="text-sm leading-6 text-foreground">{item.text}</span>
+              <span className="min-w-0 text-sm leading-6 text-foreground [overflow-wrap:anywhere]">{item.text}</span>
             </div>
           ) : (
             <div className="grid min-w-0 flex-1 gap-0.5">
               {item.toolName ? (
-                <span className="truncate font-mono text-[11px] font-semibold text-muted-foreground">{item.toolName}</span>
+                <span className="min-w-0 font-mono text-[11px] font-semibold text-muted-foreground [overflow-wrap:anywhere]">{item.toolName}</span>
               ) : (
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                   {item.tone === 'danger' ? 'Issue' : 'Activity'}
                 </span>
               )}
-              <span className="text-sm leading-6 text-foreground/90">{item.text}</span>
+              <span className="min-w-0 text-sm leading-6 text-foreground/90 [overflow-wrap:anywhere]">{item.text}</span>
             </div>
           )}
           <span className="ml-auto text-[11px] text-muted-foreground">{formatTimestamp(item.timestamp)}</span>
         </div>
         {!isApproval && item.note ? (
-          <div className="text-xs leading-5 text-muted-foreground">{item.note}</div>
+          <div className="min-w-0 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">{item.note}</div>
+        ) : null}
+        {!isApproval && item.errorDetail ? (
+          <ErrorDetail text={item.errorDetail} />
         ) : null}
         {item.chips?.length ? (
           <div className="flex flex-wrap gap-1.5">
@@ -127,12 +135,13 @@ export function ConversationSystemItem(
               {isPendingApproval ? (
                 <>
                   <Button
-                    className="bg-success text-foreground hover:bg-success/90"
+                    className="border-warning/40 bg-warning/10 text-warning hover:bg-warning/20"
                     disabled={readOnly}
                     size="sm"
-                    variant="default"
+                    title="Approves this request only. Maho will ask again next time."
+                    variant="outline"
                     onClick={() => onRespondToApproval(approval.approvalId, true)}>
-                    Accept
+                    Allow once
                   </Button>
                   <Button
                     disabled={readOnly}
@@ -149,6 +158,30 @@ export function ConversationSystemItem(
               )}
             </div>
           </>
+        ) : null}
+        {!isApproval && item.tone === 'danger' ? (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {onRetry ? (
+              <Button
+                className="gap-1.5 h-7 px-2.5 text-xs"
+                data-action="retry"
+                disabled={readOnly}
+                size="sm"
+                variant="outline"
+                onClick={onRetry}>
+                <RefreshCw className="size-3.5" />
+                Retry
+              </Button>
+            ) : null}
+            <Button
+              className="h-7 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+              disabled={readOnly}
+              size="sm"
+              variant="ghost"
+              onClick={() => onOpenSettings('maho-ai')}>
+              Open AI settings
+            </Button>
+          </div>
         ) : null}
       </div>
     </article>

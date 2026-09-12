@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs/promises';
+import nodeFs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -21,6 +22,29 @@ const generatedStylesheet = path.resolve(
 const hostname = process.env.MAHO_AI_STANDALONE_HOST || '127.0.0.1';
 const port = Number(process.env.MAHO_AI_STANDALONE_PORT || '4071');
 const opencodeBaseUrl = new URL(process.env.OPENCODE_BASE_URL || 'http://127.0.0.1:4096/');
+const shadowRoot = path.join(os.homedir(), 'node_modules');
+
+// Mirrors the alias map in ../bundle_react.mjs. esbuild walks node_modules
+// upward from the importer and only consults nodePaths after that walk fails,
+// so an outer workspace node_modules shadows website/node_modules and a SECOND
+// copy of React lands in the bundle. Two React copies means two dispatcher
+// instances, and every hook throws "Invalid hook call" /
+// "Cannot read properties of null (reading 'useRef')" -> the panel renders as a
+// blank #app. Pin every shadowable specifier to the canonical copy.
+function dedupeAlias() {
+  if (!nodeFs.existsSync(shadowRoot)) {
+    return {};
+  }
+  return Object.fromEntries(
+      nodeFs.readdirSync(shadowRoot)
+          .flatMap((entry) => entry.startsWith('@')
+              ? nodeFs.readdirSync(path.join(shadowRoot, entry))
+                    .map((sub) => `${entry}/${sub}`)
+              : [entry])
+          .filter((pkg) => !pkg.startsWith('.') &&
+              nodeFs.existsSync(path.join(websiteNodeModules, pkg)))
+          .map((pkg) => [pkg, path.join(websiteNodeModules, pkg)]));
+}
 
 function aliasPlugin() {
   return {
@@ -122,6 +146,7 @@ function proxyRequest(request, response) {
 function createBuildContext(entryPoint, outfile) {
   return context({
     absWorkingDir: mahoAiDir,
+    alias: dedupeAlias(),
     bundle: true,
     entryPoints: [entryPoint],
     format: 'esm',

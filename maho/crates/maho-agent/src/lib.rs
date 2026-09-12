@@ -24,6 +24,7 @@ pub mod mcp_client;
 #[path = "mcp_client_ios_stub.rs"]
 pub mod mcp_client;
 pub mod model_routing;
+pub mod omo;
 pub mod page_adapters;
 pub mod permission;
 pub mod retry_policy;
@@ -37,6 +38,7 @@ pub mod system_prompt;
 pub mod tool_registry;
 pub mod turn_control;
 pub mod vault_tools;
+pub mod visual_cua;
 pub mod web_search;
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -47,6 +49,10 @@ pub use approval::{
     ToolSensitivity, ToolSensitivityDowngrade, ToolSensitivityResolution,
 };
 pub use approval_audit::{ApprovalAuditEventKind, ApprovalAuditRecord};
+pub use context_gatherer::{
+    AccountContextEntry, AccountContextSlot, ContextBlock, ContextBlockProvenance,
+    ContextBlockSource, ContextGatherRequest, ContextGatherResponse,
+};
 pub use deep_research::{
     run_deep_research, AgentResearchStepper, Citation, DeepResearchError, DeepResearchReport,
     ResearchBudget, ResearchEntitlement, ResearchPolicy, ResearchStepper, StopReason,
@@ -56,29 +62,28 @@ pub use fallback_ladder::{
     FallbackSafetyState, FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval,
 };
 pub use fallback_ladder_browser::browser_tool_fallback_request;
-pub use maho_reasoning_openai::MahoReasoningOpenAI;
-pub use permission::{
-    authorize_action_consequence, authorize_final_confirm, authorize_mail_tool,
-    classify_action_consequence, classify_mail_tool, sanitize_tool_arguments,
-    sanitize_tool_result, ActionConsequence, ConsequenceApprovalAction, FinalConfirmDecision,
-    MailAuthorizationAction, MailAuthorizationState, MailToolClass, PermissionCallback,
-    PermissionDecision, PermissionRequest, MAIL_READ_TOOLS, MAIL_WRITE_ACCOUNT_TOOLS,
-};
-pub use runtime_isolation::SessionRuntime;
-pub use swiftide_backend::{BrowserActionToolsState, SwiftideBackend};
 pub use image_search::{
     FreeImageSearchBackend, ImageSearchClient, ImageSearchEntitlementRouter, ImageSearchError,
     ImageSearchProvenance, ImageSearchQuery, ImageSearchResponse, ImageSearchResult,
 };
 pub use introspection::{
-    collect_introspection, execute_introspection_tool, ActiveRunSummary,
-    ModelRoutingSummary, SessionIntrospectionReport,
+    collect_introspection, execute_introspection_tool, ActiveRunSummary, ModelRoutingSummary,
+    SessionIntrospectionReport,
 };
-pub use subagents::ActiveSubagentSummary;
+pub use maho_reasoning_openai::MahoReasoningOpenAI;
+pub use permission::{
+    authorize_action_consequence, authorize_final_confirm, authorize_mail_tool,
+    classify_action_consequence, classify_mail_tool, sanitize_tool_arguments, sanitize_tool_result,
+    ActionConsequence, ConsequenceApprovalAction, FinalConfirmDecision, MailAuthorizationAction,
+    MailAuthorizationState, MailToolClass, PermissionCallback, PermissionDecision,
+    PermissionRequest, MAIL_READ_TOOLS, MAIL_WRITE_ACCOUNT_TOOLS,
+};
+pub use runtime_isolation::SessionRuntime;
 pub use skill_creator::{
     activate_skill_proposal, propose_skill_from_journal, request_skill_approval_interaction,
     update_skill, SkillActivationStatus, SkillCreatorError, SkillProposal, SkillProposalOutcome,
 };
+pub use subagents::ActiveSubagentSummary;
 pub use subagents::{
     execute_subagent_wait_tool, merge_subagent_summary_to_parent, SubagentChildRun, SubagentError,
     SubagentResult, SubagentSpec, SubagentStatus, SubagentSupervisor, MAX_ACTIVE_SUBAGENTS,
@@ -86,13 +91,11 @@ pub use subagents::{
 };
 pub use suggestions::{
     generate_suggestions_from_journal, install_routine, suggest_routine, suggest_routine_proposal,
-    RoutineManifest, RoutineValidationError, Suggestion, SuggestionSettings, validate_routine_manifest,
-    MAX_PASSIVE_SUGGESTIONS,
+    validate_routine_manifest, RoutineManifest, RoutineValidationError, Suggestion,
+    SuggestionSettings, MAX_PASSIVE_SUGGESTIONS,
 };
-pub use context_gatherer::{
-    AccountContextEntry, AccountContextSlot, ContextBlock, ContextBlockProvenance, ContextBlockSource,
-    ContextGatherRequest, ContextGatherResponse,
-};
+pub use swiftide_backend::{BrowserActionToolsState, SwiftideBackend};
+pub use visual_cua::*;
 pub use web_search::{
     FreeWebSearchBackend, PremiumWebSearchBackend, SearchEntitlement, SearchTier, WebSearchClient,
     WebSearchEntitlementRouter, WebSearchError, WebSearchProvenance, WebSearchQuery,
@@ -337,10 +340,7 @@ pub trait AgentStorage: Send + Sync {
     ) -> Result<Option<String>, AgentError> {
         Ok(None)
     }
-    async fn get_memory_block(
-        &self,
-        _label: &str,
-    ) -> Result<Option<String>, AgentError> {
+    async fn get_memory_block(&self, _label: &str) -> Result<Option<String>, AgentError> {
         Ok(None)
     }
     async fn retrieve_memories(
@@ -712,6 +712,96 @@ pub trait AgentRuntime: Send + Sync {
 
     fn set_browser_action_tools_state(&self, _state: BrowserActionToolsState) {}
 
+    // Session-state accessors reached through `session.runtime` by maho-ffi.
+    // Defaults are inert so a backend that does not own this state still
+    // compiles; SwiftideBackend overrides every one of them.
+    fn set_approval_policy(&self, _policy: String) {}
+
+    fn set_runtime_tier(&self, _tier: Option<String>) {}
+
+    fn runtime_tier(&self) -> Option<String> {
+        None
+    }
+
+    fn set_fs_whitelist_roots(&self, _roots: Vec<String>) {}
+
+    fn fs_whitelist_roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn set_preferred_provider(&self, _provider: Option<String>) {}
+
+    fn set_artifact_root(&self, _artifact_root: Option<std::path::PathBuf>) {}
+
+    async fn list_artifacts(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        Ok(Vec::new())
+    }
+
+    async fn artifact_storage_rel_path(
+        &self,
+        _session_id: &str,
+        _artifact_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        Ok(None)
+    }
+
+    fn resolve_interaction(
+        &self,
+        req_id: &str,
+        _answer: crate::interaction::InteractionAnswer,
+    ) -> Result<(), crate::interaction::InteractionError> {
+        Err(crate::interaction::InteractionError::NotFound(
+            crate::interaction::InteractionRequestId::new(req_id),
+        ))
+    }
+
+    fn timeout_interaction(
+        &self,
+        req_id: &str,
+    ) -> Result<(), crate::interaction::InteractionError> {
+        Err(crate::interaction::InteractionError::NotFound(
+            crate::interaction::InteractionRequestId::new(req_id),
+        ))
+    }
+
+    fn cancel_interaction(&self, req_id: &str) -> Result<(), crate::interaction::InteractionError> {
+        Err(crate::interaction::InteractionError::NotFound(
+            crate::interaction::InteractionRequestId::new(req_id),
+        ))
+    }
+
+    fn interaction_broker(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<crate::interaction::InteractionBroker>> {
+        static DUMMY: std::sync::OnceLock<
+            std::sync::Arc<std::sync::Mutex<crate::interaction::InteractionBroker>>,
+        > = std::sync::OnceLock::new();
+        DUMMY
+            .get_or_init(|| {
+                std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::interaction::InteractionBroker::new(),
+                ))
+            })
+            .clone()
+    }
+
+    fn run_journal(&self) -> std::sync::Arc<std::sync::Mutex<crate::run_journal::RunJournal>>;
+
+    /// Points the runtime's journal at this session's on-disk file.
+    ///
+    /// Object-safe counterpart of the backend-specific helpers. Backends that treat the
+    /// agent process as the source of session state keep the default no-op.
+    fn attach_session_journal(&self, _session_id: &str, _storage_path: &std::path::Path) {}
+
+    fn set_active_space_id(&self, _space_id: Option<String>) {}
+
+    fn latest_run_id(&self, _session_id: &str) -> Option<crate::run_journal::AgentRunId> {
+        None
+    }
+
     /// Bind the composite (batch) execution gate (plan row 11). Default is
     /// unset: the composite gate stays fail-closed disabled.
     fn set_composite_config(&self, _config: crate::composite::CompositeExecutionConfig) {}
@@ -770,6 +860,12 @@ impl AgentRuntime for MockAgentRuntime {
         _callback: Box<dyn Fn(&str) -> Result<SecureKeyBundle, AgentError> + Send + Sync + 'static>,
     ) -> Result<(), AgentError> {
         Ok(())
+    }
+
+    fn run_journal(&self) -> std::sync::Arc<std::sync::Mutex<crate::run_journal::RunJournal>> {
+        std::sync::Arc::new(std::sync::Mutex::new(
+            crate::run_journal::RunJournal::default(),
+        ))
     }
 }
 

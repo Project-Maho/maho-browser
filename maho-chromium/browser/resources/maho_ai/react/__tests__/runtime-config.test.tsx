@@ -114,7 +114,7 @@ function createHarness({supported, config}: HarnessOptions): {
 
   if (supported) {
     mockHandler.getRuntimeConfig = vi.fn().mockResolvedValue({
-      config: config ? {...config} : {permissionTier: 'guard', finalConfirm: true, proactiveMode: false},
+      config: config ? {...config} : {permissionTier: 'guard', finalConfirm: true, proactiveMode: false, mailReadAllowed: false},
     });
     mockHandler.setRuntimeConfig =
         vi.fn().mockResolvedValue({accepted: true});
@@ -162,6 +162,7 @@ describe('runtime config presentation helpers', () => {
       permissionTier: 'guard',
       finalConfirm: true,
       proactiveMode: false,
+      mailReadAllowed: false,
     });
   });
 
@@ -181,11 +182,12 @@ describe('runtime config presentation helpers', () => {
       proactiveMode: true,
     });
     expect(Object.keys(dispatch).sort()).toEqual(
-        ['finalConfirm', 'permissionTier', 'proactiveMode']);
+        ['finalConfirm', 'mailReadAllowed', 'permissionTier', 'proactiveMode']);
     expect(dispatch).toEqual({
       permissionTier: 'full_access',
       finalConfirm: false,
       proactiveMode: true,
+      mailReadAllowed: false,
     });
   });
 });
@@ -244,6 +246,7 @@ describe('RuntimeConfigCard rendering and dispatch', () => {
           permissionTier: 'full_access',
           finalConfirm: true,
           proactiveMode: false,
+          mailReadAllowed: false,
         });
       });
 
@@ -266,11 +269,13 @@ describe('RuntimeConfigCard rendering and dispatch', () => {
           permissionTier: 'guard',
           finalConfirm: true,
           proactiveMode: true,
+          mailReadAllowed: false,
         });
         expect(mockHandler.setRuntimeConfig).toHaveBeenNthCalledWith(2, {
           permissionTier: 'guard',
           finalConfirm: false,
           proactiveMode: true,
+          mailReadAllowed: false,
         });
       });
 
@@ -288,6 +293,7 @@ describe('RuntimeConfigCard rendering and dispatch', () => {
       permissionTier: 'guard',
       finalConfirm: true,
       proactiveMode: false,
+      mailReadAllowed: false,
     });
   });
 });

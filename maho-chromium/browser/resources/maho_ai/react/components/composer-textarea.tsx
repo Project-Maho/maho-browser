@@ -1,5 +1,5 @@
 import * as React from 'react';
-import {useCallback, useLayoutEffect, useRef} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useRef} from 'react';
 
 import {
   captureEditableState,
@@ -40,6 +40,17 @@ export function ComposerTextarea(
   const pendingSnapshotRef = useRef<EditableSnapshot | null>(null);
   const pendingValueRef = useRef<string | null>(null);
 
+  const adjustHeight = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      return;
+    }
+    textarea.style.height = 'auto';
+    if (textarea.scrollHeight > 0) {
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+  }, []);
+
   useLayoutEffect(() => {
     if (lastFocusRequestRef.current === focusRequest) {
       return;
@@ -51,21 +62,46 @@ export function ComposerTextarea(
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current;
-    if (!textarea || textarea.value === value) {
+    if (!textarea) {
       return;
     }
 
-    const restoreFocus = document.activeElement === textarea;
-    const snapshot = captureEditableState(textarea);
-    if (compositionActiveRef.current) {
-      pendingSnapshotRef.current = snapshot;
-      pendingValueRef.current = value;
+    if (textarea.value !== value) {
+      const restoreFocus = document.activeElement === textarea;
+      const snapshot = captureEditableState(textarea);
+      if (compositionActiveRef.current) {
+        pendingSnapshotRef.current = snapshot;
+        pendingValueRef.current = value;
+        return;
+      }
+
+      textarea.value = value;
+      restoreEditableState(textarea, snapshot, restoreFocus);
+    }
+    adjustHeight();
+  }, [value, adjustHeight]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea || typeof ResizeObserver === 'undefined') {
       return;
     }
-
-    textarea.value = value;
-    restoreEditableState(textarea, snapshot, restoreFocus);
-  }, [value]);
+    const parent = textarea.parentElement;
+    if (!parent) {
+      return;
+    }
+    let lastWidth = parent.clientWidth;
+    const observer = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        if (entry.contentRect.width !== lastWidth) {
+          lastWidth = entry.contentRect.width;
+          adjustHeight();
+        }
+      }
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [adjustHeight]);
 
   const commitPendingValue = useCallback(() => {
     const textarea = textareaRef.current;
@@ -78,7 +114,8 @@ export function ComposerTextarea(
     restoreEditableState(textarea, pendingSnapshotRef.current, restoreFocus);
     pendingSnapshotRef.current = null;
     pendingValueRef.current = null;
-  }, []);
+    adjustHeight();
+  }, [adjustHeight]);
 
   return (
     <Textarea
@@ -92,13 +129,17 @@ export function ComposerTextarea(
       onBlur={onBlur}
       onCompositionEnd={event => {
         compositionActiveRef.current = false;
+        adjustHeight();
         onValueChange(event.currentTarget.value);
         queueMicrotask(commitPendingValue);
       }}
       onCompositionStart={() => {
         compositionActiveRef.current = true;
       }}
-      onInput={event => onValueChange(event.currentTarget.value)}
+      onInput={event => {
+        adjustHeight();
+        onValueChange(event.currentTarget.value);
+      }}
       onPaste={event => {
         const files = Array.from(event.clipboardData?.files || []);
         if (!files.length || !onPasteFiles) {

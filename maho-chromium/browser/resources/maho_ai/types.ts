@@ -177,13 +177,19 @@ export interface RuntimeConfigInfo {
   permissionTier: string;
   finalConfirm: boolean;
   proactiveMode: boolean;
+  // Mail read consent (pref maho.ai.mail_read_allowed). Carried on the same
+  // runtime-config wire so the panel and chrome://maho-settings resolve mail
+  // access from one source of truth instead of two independent surfaces.
+  mailReadAllowed: boolean;
 }
 
 // Broker defaults (CapabilityRequestContext): guard / true / false.
+// Mail reads are denied by default, matching the kMailReadAllowed pref.
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfigInfo = {
   permissionTier: 'guard',
   finalConfirm: true,
   proactiveMode: false,
+  mailReadAllowed: false,
 };
 
 export function normalizePermissionTier(value?: string|null):
@@ -200,6 +206,7 @@ export function buildRuntimeConfigDispatch(config: Partial<RuntimeConfigInfo>):
     permissionTier: normalizePermissionTier(config.permissionTier),
     finalConfirm: config.finalConfirm === true,
     proactiveMode: config.proactiveMode === true,
+    mailReadAllowed: config.mailReadAllowed === true,
   };
 }
 

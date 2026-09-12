@@ -191,7 +191,7 @@ describe('InteractionApprovalCard — action confirmations', () => {
 
   beforeEach(async () => {
     // The store notifies subscribers through requestAnimationFrame; the
-    // synchronous stub keeps renders deterministic (see outputs-section test).
+    // synchronous stub keeps renders deterministic.
     globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
       cb(0);
       return 0;

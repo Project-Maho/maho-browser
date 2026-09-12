@@ -7,13 +7,14 @@ import type {MahoAiStore} from '../store.js';
 import {bindComposerDraftLifecycle} from './features/compact/composer-draft-persistence.js';
 import {createFileAttachment, isSessionReadOnly, RuntimeEventKind, ViewMode} from '../types.js';
 import type {AISelectionRequest, AppState, QuickAction, TimelineEntry} from '../types.js';
-import {getToolProgressLabel} from '../views/conversation_thread.js';
+import {collectConversationItems, getPendingThreadLabel} from '../views/conversation_thread.js';
 import {bootstrapStore, createMahoAiStore} from './store.js';
 import {runWithBootGuard} from './boot-guard.js';
 import {CompactShell} from './features/compact/compact-shell.js';
 import {CompactTopbar} from './features/compact/compact-topbar.js';
 import {RoutineWorkspace} from './features/compact/routine-workspace.js';
-import {SuggestionChips} from './features/compact/compact-stage.js';
+import {CommandHints} from './features/compact/command-hints.js';
+import {RuntimeConfigCard} from './features/compact/runtime-config-card.js';
 import {VoiceInputModal} from './features/compact/voice-input-modal.js';
 import {SlashEditors} from './features/compact/slash-editors.js';
 import {
@@ -23,6 +24,7 @@ import {
 import {DeveloperWorkspace} from './features/developer/developer-workspace.js';
 import {useAppState} from './hooks/use-app-state.js';
 import {useVoiceInput, type VoiceFinalControls} from './hooks/use-voice-input.js';
+import {ControlActivityTimeline} from './components/control-activity-timeline.js';
 import {cn} from '@lib/utils';
 import {Alert, AlertDescription, AlertTitle} from '@ui/alert';
 import {Toaster} from '@ui/sonner';
@@ -32,57 +34,62 @@ import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
 
 const PAGE_HANDLER_TIMEOUT_MS = 3000;
 
-function getPendingThreadLabel(entries: TimelineEntry[], pending: boolean): string | null {
-  if (!pending) {
-    return null;
-  }
-
-  let latestToolName: string | undefined = undefined;
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const event = entries[index]?.event;
-    if (!event) {
-      continue;
-    }
-
-    if (event.kind === RuntimeEventKind.kAssistantToken ||
-        event.kind === RuntimeEventKind.kAssistantThinking ||
-        event.kind === RuntimeEventKind.kTurnComplete) {
-      return null;
-    }
-
-    if (!latestToolName && event.kind === RuntimeEventKind.kToolRequest) {
-      latestToolName = event.toolCall?.toolName || undefined;
-    }
-
-    if (event.kind === RuntimeEventKind.kUserPrompt) {
-      break;
-    }
-  }
-
-  return getToolProgressLabel(latestToolName);
-}
-
-function BootErrorCard({message}: {message: string}) {
+function BootErrorCard(
+    {message, onRetry}: {message: string; onRetry?: () => void}) {
   return (
     <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
       <AlertCircle className="size-4" />
       <AlertTitle>Maho AI failed to start</AlertTitle>
       <AlertDescription>
-        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">{message}</pre>
+        <div className="flex flex-col gap-2">
+          <p>Maho AI could not reach its runtime. Retry, or open settings to check the connection.</p>
+          {onRetry ? (
+            <button
+              className="self-start rounded-lg border border-destructive/50 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-destructive/15"
+              data-boot-retry
+              onClick={onRetry}
+              type="button">
+              Retry
+            </button>
+          ) : null}
+          <details data-boot-details>
+            <summary className="cursor-pointer select-none text-xs font-medium">
+              Details
+            </summary>
+            <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">{message}</pre>
+          </details>
+        </div>
       </AlertDescription>
     </Alert>
   );
 }
 
-function PageHandlerTimeoutCard() {
+function PageHandlerTimeoutCard({onRetry}: {onRetry?: () => void}) {
   return (
     <Alert className="border-destructive/60 bg-destructive/10 text-destructive shadow-sm" variant="destructive">
       <AlertCircle className="size-4" />
       <AlertTitle>Maho AI failed to start</AlertTitle>
       <AlertDescription>
-        <pre className="m-0 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">{'Page handler did not respond within ' +
-          String(PAGE_HANDLER_TIMEOUT_MS / 1000) +
-          's. Reload the panel or restart the browser.'}</pre>
+        <div className="flex flex-col gap-2">
+          <p>The page handler did not respond within {String(PAGE_HANDLER_TIMEOUT_MS / 1000)}s. Retry, or restart the browser.</p>
+          {onRetry ? (
+            <button
+              className="self-start rounded-lg border border-destructive/50 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-destructive/15"
+              data-boot-retry
+              onClick={onRetry}
+              type="button">
+              Retry
+            </button>
+          ) : null}
+          <details data-boot-details>
+            <summary className="cursor-pointer select-none text-xs font-medium">
+              Details
+            </summary>
+            <pre className="m-0 mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">{'Page handler did not respond within ' +
+              String(PAGE_HANDLER_TIMEOUT_MS / 1000) +
+              's. Reload the panel or restart the browser.'}</pre>
+          </details>
+        </div>
       </AlertDescription>
     </Alert>
   );
@@ -124,7 +131,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
       tagName === 'select';
 }
 
-function MahoAiApp({store}: {store: MahoAiStore}) {
+export function MahoAiApp({store}: {store: MahoAiStore}) {
   useEffect(() => {
     return () => {
       store.dispose();
@@ -213,6 +220,14 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     });
   }, []);
 
+  const retryBootstrap = useCallback(() => {
+    void bootstrapStore(store)
+      .then(() => setHandlerTimedOut(false))
+      .catch((error: unknown) => {
+        console.error('[maho-ai] Bootstrap retry failed:', error);
+      });
+  }, [store]);
+
   const handleComposerSubmit = useCallback(() => {
     const stateSnapshot = store.getSnapshot();
     const prompt = stateSnapshot.composer.prompt.trim();
@@ -297,10 +312,6 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
     }
 
     runSubmission(store.submitPrompt());
-  }, [runSubmission, store]);
-
-  const handleQuickActionSelect = useCallback((action: QuickAction) => {
-    runSubmission(store.submitQuickAction(action));
   }, [runSubmission, store]);
 
   const handleRegenerate = useCallback(() => {
@@ -414,7 +425,13 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
       void store.resumeSession(sessionId);
     },
     onRespondToApproval: (approvalId: string, approved: boolean) => {
-      void store.respondToApproval(approvalId, approved);
+      void store.respondToApproval(approvalId, approved).then(dispatched => {
+        if (!dispatched) {
+          toast.error(
+              approved ? "Couldn't send your approval — the action was not allowed."
+                       : "Couldn't send your denial — the action was not stopped.");
+        }
+      });
     },
     onSearch: (query: string) => store.setSessionSearchQuery(query),
     onSelectInspector: (kind: AppState['selectedInspector']['kind'], id?: string) =>
@@ -431,19 +448,22 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
   const sessionEvents = state.currentSessionId ?
       (state.eventsBySessionId[state.currentSessionId] || []) :
       [];
-  const hasMessages = sessionEvents.length > 0;
+  const conversationItems = useMemo(
+      () => collectConversationItems(sessionEvents),
+      [sessionEvents]);
+  const hasMessages = conversationItems.length > 0;
   const currentSession = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const readOnly = isSessionReadOnly(currentSession);
   const pendingTurn = !!(state.currentSessionId && state.turnPendingBySessionId[state.currentSessionId]);
   const thinkingLabel = getPendingThreadLabel(sessionEvents, pendingTurn);
 
   if (handlerTimedOut && !state.bootError) {
-    return <PageHandlerTimeoutCard />;
+    return <PageHandlerTimeoutCard onRetry={retryBootstrap} />;
   }
 
   return (
     <div className="maho-ai-page-surface flex h-screen min-h-0 flex-col overflow-hidden rounded-l-xl border border-border bg-background/90 text-foreground shadow-[var(--shadow-overlay)] backdrop-blur-2xl">
-      <section className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-3 p-3 max-[520px]:gap-2 max-[520px]:p-2">
+      <section className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-2 p-2.5 max-[400px]:p-2">
         <div hidden={compactSurface !== 'routines'}>
           <CompactTopbar
             store={store}
@@ -451,6 +471,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
             onGetViewMode={modeHandlers.onGetViewMode}
             onOpenRoutines={() => setCompactSurface('routines')}
             onOpenSettings={modeHandlers.onOpenSettings}
+            onResumeSession={modeHandlers.onResumeSession}
             onSetViewMode={modeHandlers.onSetViewMode}
             onStartSession={() => {
               setCompactSurface('chat');
@@ -463,12 +484,15 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
             onBackToChat={() => setCompactSurface('chat')}
           />
         </div>
-        <div className="contents" hidden={compactSurface !== 'chat'}>
-        {state.bootError ? <BootErrorCard message={state.bootError} /> : (
+        {compactSurface === 'chat' ? (state.bootError ? <BootErrorCard message={state.bootError} onRetry={retryBootstrap} /> : (
           <>
             <div className={cn(
-                'min-h-0 overflow-hidden',
-                state.developerMode ? 'block' : 'grid grid-rows-[auto_minmax(0,1fr)] gap-3')}>
+                'min-h-0 min-w-0 overflow-hidden',
+                state.developerMode
+                    ? 'block'
+                    : 'grid grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] gap-2')}>
+              <SlashEditors store={store} />
+              <ControlActivityTimeline />
               {state.developerMode ? (
                 <DeveloperWorkspace
                   onConnect={modeHandlers.onConnectMcp}
@@ -493,6 +517,7 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                   onOpenSettings={modeHandlers.onOpenSettings}
                   onRegenerate={handleRegenerate}
                   onRespondToApproval={modeHandlers.onRespondToApproval}
+                  onResumeSession={modeHandlers.onResumeSession}
                   onSetViewMode={modeHandlers.onSetViewMode}
                   onStartSession={() => {
                     setCompactSurface('chat');
@@ -503,21 +528,21 @@ function MahoAiApp({store}: {store: MahoAiStore}) {
                 />
               )}
             </div>
-            <div className="sticky bottom-0 z-10 pt-1">
-              <SlashEditors store={store} />
-              <SuggestionChips
-                attachmentCount={state.composer.attachments.length}
-                developerMode={state.developerMode}
-                disabled={readOnly || pendingTurn}
-                hasMessages={hasMessages}
-                prompt={state.composer.prompt}
-                onSelect={handleQuickActionSelect}
+            <div className="z-10 min-w-0 shrink-0" data-composer-dock>
+              <Composer
+                commandDisclosure={
+                  <CommandHints
+                    disabled={readOnly || pendingTurn}
+                    onPick={command => store.setComposerPrompt(command)}
+                  />
+                }
+                handlers={composerHandlers}
+                permissionControl={<RuntimeConfigCard store={store} />}
+                state={state}
               />
-              <Composer handlers={composerHandlers} state={state} />
             </div>
           </>
-        )}
-        </div>
+        )) : null}
       </section>
       {state.voice.active ? (
         <VoiceInputModal

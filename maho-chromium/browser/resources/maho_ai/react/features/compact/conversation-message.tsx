@@ -43,27 +43,27 @@ function AssistantActions(
   };
 
   return (
-    <div className="flex gap-1 px-1 text-muted-foreground">
+    <div className="flex gap-0.5 px-0.5 text-muted-foreground opacity-0 transition-opacity duration-200 group-hover/message:opacity-100 focus-within:opacity-100">
       <Button
         aria-label={copyStatus === 'idle' ? 'Copy response' : COPY_STATUS_LABEL[copyStatus]}
-        className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground"
+        className="size-6 rounded-md panel-chip"
         variant="ghost"
-        size="sm"
+        size="icon"
         type="button"
         onClick={() => void copyResponse()}>
         {copyStatus === 'copied' ?
-          <Check aria-hidden="true" className="size-4" /> :
-          <Copy aria-hidden="true" className="size-4" />}
+          <Check aria-hidden="true" className="size-3" /> :
+          <Copy aria-hidden="true" className="size-3" />}
       </Button>
       {onRegenerate ? (
         <Button
           aria-label="Regenerate response"
-          className="h-7 rounded-full border border-transparent px-2 text-muted-foreground hover:border-border hover:bg-surface-hover hover:text-foreground"
+          className="size-6 rounded-md panel-chip"
           variant="ghost"
-          size="sm"
+          size="icon"
           type="button"
           onClick={onRegenerate}>
-          <RefreshCw aria-hidden="true" className="size-4" />
+          <RefreshCw aria-hidden="true" className="size-3" />
         </Button>
       ) : null}
       <span aria-live="polite" className="sr-only" role="status">
@@ -95,16 +95,16 @@ export const ConversationMessage = React.memo(
             {item: ConversationItem; onRegenerate?: () => void}) {
   const isUser = item.role === 'user';
   const messageClassName = cn(
-      'relative min-w-0 [overflow-wrap:anywhere] text-sm leading-6',
+      'relative min-w-0 [overflow-wrap:anywhere] text-[13px] leading-[1.55] tracking-[-0.005em]',
       isUser ?
-        'max-w-[82%] rounded-2xl rounded-tr-md bg-secondary px-4 py-3 text-foreground' :
+        'max-w-[85%] rounded-[16px] rounded-br-[6px] panel-card px-3 py-2 text-foreground' :
         'w-full max-w-full px-1 text-foreground',
       item.markdown && markdownMessageClassName);
 
   return (
     <article className={cn(
-        'group/message grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none',
-        isUser ? 'justify-items-end' : 'justify-items-start')}>
+        'group/message grid w-full min-w-0 max-w-full grid-cols-[minmax(0,1fr)] gap-1.5',
+        isUser ? 'justify-items-end motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-reduce:animate-none' : 'justify-items-start')}>
       {item.markdown ?
         <Markdown className={messageClassName} text={item.text} /> :
         <div className={messageClassName}>{item.text}</div>}

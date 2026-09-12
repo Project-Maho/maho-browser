@@ -154,7 +154,7 @@ describe('Approval interaction in rendered DOM', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders approval prompt and dispatches true (Allow/Accept) to store.respondToApproval and PageHandler', async () => {
+  it('renders approval prompt and dispatches true (Allow once) to store.respondToApproval and PageHandler', async () => {
     await store.bootstrap();
 
     const event = createApprovalRequestEvent('approval-123', 'session-1');
@@ -174,12 +174,14 @@ describe('Approval interaction in rendered DOM', () => {
           readOnly={false}
         />));
 
-    const acceptButton = requireButton(container, 'Accept');
-    expect(acceptButton).toBeDefined();
-    expect(acceptButton.disabled).toBe(false);
+    const allowOnceButton = requireButton(container, 'Allow once');
+    expect(allowOnceButton).toBeDefined();
+    expect(allowOnceButton.disabled).toBe(false);
+    expect(Array.from(container.querySelectorAll('button'))
+        .some(button => button.textContent?.trim() === 'Accept')).toBe(false);
 
     await act(async () => {
-      acceptButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      allowOnceButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
 
     expect(respondToApprovalSpy).toHaveBeenCalledOnce();
@@ -222,7 +224,7 @@ describe('Approval interaction in rendered DOM', () => {
     expect(mockHandler.respondToApproval).toHaveBeenCalledWith('session-1', 'approval-456', false);
   });
 
-  it('disables Accept and Reject buttons when readOnly is true and prevents dispatch', async () => {
+  it('disables Allow once and Reject buttons when readOnly is true and prevents dispatch', async () => {
     await store.bootstrap();
 
     const event = createApprovalRequestEvent('approval-789', 'session-1');
@@ -241,14 +243,14 @@ describe('Approval interaction in rendered DOM', () => {
           readOnly={true}
         />));
 
-    const acceptButton = requireButton(container, 'Accept');
+    const allowOnceButton = requireButton(container, 'Allow once');
     const rejectButton = requireButton(container, 'Reject');
 
-    expect(acceptButton.disabled).toBe(true);
+    expect(allowOnceButton.disabled).toBe(true);
     expect(rejectButton.disabled).toBe(true);
 
     await act(async () => {
-      acceptButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      allowOnceButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
       rejectButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
 

@@ -27,23 +27,25 @@ export function useAutoScroll<T extends HTMLElement>(dependency: unknown) {
     if (!stickToBottom.current) {
       return;
     }
-    if (rafHandle.current !== null) {
-      return;
+    if (rafHandle.current === null) {
+      rafHandle.current = requestAnimationFrame(() => {
+        rafHandle.current = null;
+        const current = ref.current;
+        if (current) {
+          current.scrollTop = current.scrollHeight;
+        }
+      });
     }
-    rafHandle.current = requestAnimationFrame(() => {
-      rafHandle.current = null;
-      const current = ref.current;
-      if (current) {
-        current.scrollTop = current.scrollHeight;
-      }
-    });
+  }, [dependency]);
+
+  useEffect(() => {
     return () => {
       if (rafHandle.current !== null) {
         cancelAnimationFrame(rafHandle.current);
         rafHandle.current = null;
       }
     };
-  }, [dependency]);
+  }, []);
 
   return ref;
 }

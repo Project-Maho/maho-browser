@@ -126,14 +126,19 @@ function createStandaloneRoutineState() {
   };
 }
 
+let nextListenerId = 1;
+
 class ListenerList {
   constructor() {
     this.listeners = new Map();
-    this.nextId = 1;
   }
 
   addListener(listener) {
-    const id = this.nextId++;
+    // Mojo callback-router listener ids are unique across the router, not per
+    // event. Per-list ids make removeListener(1) detach the first unrelated
+    // event listener and can silently disconnect the store before a fixture
+    // emits its interactive approval result.
+    const id = nextListenerId++;
     this.listeners.set(id, listener);
     return id;
   }
@@ -142,9 +147,9 @@ class ListenerList {
     return this.listeners.delete(id);
   }
 
-  emit(value) {
+  emit(...args) {
     for (const listener of this.listeners.values()) {
-      listener(value);
+      listener(...args);
     }
   }
 }
@@ -257,6 +262,18 @@ export const SessionStatus = {
   kError: 6,
 };
 
+// Mirrors enum ControlActivityState in
+// browser/ui/webui/maho_ai/maho_ai.mojom.
+export const ControlActivityState = {
+  kIdle: 0,
+  kReading: 1,
+  kActing: 2,
+  kWaitingApproval: 3,
+  kPaused: 4,
+  kDisconnected: 5,
+  kFailed: 6,
+};
+
 function toSessionStatus(value) {
   switch (value) {
     case 'active':
@@ -305,16 +322,19 @@ export class PageCallbackRouter {
     this.onAskMahoSessionAccepted = new ListenerList();
     this.onSurfaceRequested = new ListenerList();
     this.onRoutineRunStatusChanged = new ListenerList();
+    this.onControlActivityChanged = new ListenerList();
+    this.onVoicePartial = new ListenerList();
+    this.onVoiceFinal = new ListenerList();
+    this.onVoiceError = new ListenerList();
   }
 
-  removeListener(id) {
-    return this.onRuntimeEvent.removeListener(id) ||
-        this.onConnectionStateChanged.removeListener(id) ||
-        this.onSessionUpdated.removeListener(id) ||
-        this.onAISettingsChanged.removeListener(id) ||
-        this.onAskMahoSessionAccepted.removeListener(id) ||
-        this.onSurfaceRequested.removeListener(id) ||
-        this.onRoutineRunStatusChanged.removeListener(id);
+  removeListener(_id) {
+    // The standalone root intentionally runs React StrictMode. Its development
+    // effect probe calls store.dispose() during the simulated unmount, then
+    // reuses the same store instance without rebinding callbacks. Native Mojo
+    // pipes survive that probe; keep the fixture callbacks connected too so
+    // later interactive runtime events reach the mounted store.
+    return true;
   }
 }
 
@@ -330,25 +350,494 @@ export class PageHandlerFactory {
   }
 }
 
+const globalActionLogs = [];
+const globalComposerDrafts = new Map();
+const globalFixtureSessions = new Set();
+const allHandlers = new Set();
+const allRouters = new Set();
+const globalSessionsById = new Map();
+const globalSessionOrder = [];
+const globalEventsBySessionId = new Map();
+const globalSequenceBySessionId = new Map();
+let globalCurrentSessionId = null;
+let globalControlActivityEntries = [];
+let primaryPageHandler = null;
+
 export class PageHandlerRemote {
   constructor() {
     this.$ = {
       bindNewPipeAndPassReceiver: () => this,
     };
+    allHandlers.add(this);
+    if (!primaryPageHandler) {
+      primaryPageHandler = this;
+    }
     this.callbackRouter = null;
+    const params = typeof window === 'undefined' ? null :
+        new URLSearchParams(window.location.search);
     this.routineState = createStandaloneRoutineState();
-    this.connectionState = RuntimeConnectionState.kConnecting;
-    this.sessionsById = new Map();
-    this.sessionOrder = [];
-    this.eventsBySessionId = new Map();
-    this.sequenceBySessionId = new Map();
-    this.currentSessionId = null;
+    this.connectionState = params?.get('disconnected') === 'true' ?
+        RuntimeConnectionState.kDisconnected : RuntimeConnectionState.kConnecting;
     this.eventSource = null;
     this.sseConnected = false;
+    this.fixtureErrorMode = false;
+    this.pendingControlActivityCompletion = null;
+    this.profiles = [
+      { id: 'profile-default', name: 'General Agent', isDefault: true },
+      { id: 'profile-long', name: 'Enterprise Security Research Organization Lead', isDefault: false },
+    ];
+    this.activeProfileId = params?.get('longprofile') === 'true' ?
+        'profile-long' : 'profile-default';
+    this.fixtureActionMode = params?.get('fixtureactions') === 'true';
+    this.workspaces = [
+      { id: 'ws-default', name: 'Default Workspace', spaceId: 'space-default', profileId: this.activeProfileId },
+    ];
+    this.activeWorkspace = this.workspaces[0];
+    this.currentViewMode = ViewMode.kSidebar;
+    this.aiSettings = {
+      activeProviderId: 'anthropic',
+      activeModelId: 'claude-3-5-sonnet-20241022',
+      activeReasoningEffort: 1,
+      providerOptions: [{
+        id: 'anthropic',
+        label: 'Anthropic',
+        modelOptions: [
+          {id: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet'},
+          {id: 'claude-3-7-sonnet-20250219', label: 'Claude 3.7 Sonnet'},
+        ],
+      }],
+      reasoningOptions: [
+        {effort: 0, label: 'Low'},
+        {effort: 1, label: 'Medium'},
+        {effort: 2, label: 'High'},
+      ],
+    };
+  }
+
+  get sessionsById() {
+    return globalSessionsById;
+  }
+
+  get sessionOrder() {
+    return globalSessionOrder;
+  }
+
+  set sessionOrder(list) {
+    globalSessionOrder.length = 0;
+    globalSessionOrder.push(...list);
+  }
+
+  get eventsBySessionId() {
+    return globalEventsBySessionId;
+  }
+
+  get sequenceBySessionId() {
+    return globalSequenceBySessionId;
+  }
+
+  get currentSessionId() {
+    return globalCurrentSessionId;
+  }
+
+  set currentSessionId(value) {
+    globalCurrentSessionId = value;
   }
 
   attachRouter(callbackRouter) {
     this.callbackRouter = callbackRouter;
+    if (callbackRouter) {
+      allRouters.add(callbackRouter);
+    }
+    if (typeof window !== 'undefined') {
+      window.__mahoAiStandalone = primaryPageHandler || this;
+    }
+  }
+
+  getActionLogs() {
+    return structuredClone(globalActionLogs);
+  }
+
+  clearActionLogs() {
+    globalActionLogs.length = 0;
+  }
+
+  async getAiProfiles() {
+    return {
+      profilesJson: JSON.stringify(this.profiles),
+    };
+  }
+
+  async getAiWorkspaces() {
+    return {
+      workspacesJson: JSON.stringify(this.workspaces),
+    };
+  }
+
+  async getActiveAiWorkspace(_spaceId) {
+    return {
+      workspaceJson: JSON.stringify(this.activeWorkspace),
+    };
+  }
+
+  async getCliTools(_workspaceId) {
+    return {toolsJson: '[]'};
+  }
+
+  async getMcpServers(_workspaceId) {
+    return {serversJson: '[]'};
+  }
+
+  async switchWorkspaceProfile(workspaceId, profileId) {
+    this.activeProfileId = profileId;
+    if (this.activeWorkspace) {
+      this.activeWorkspace.profileId = profileId;
+    }
+    globalActionLogs.push({
+      action: 'switchWorkspaceProfile',
+      workspaceId,
+      profileId,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+    return {success: true};
+  }
+
+  async getAISettings() {
+    return {
+      info: {
+        activeProviderId: this.aiSettings.activeProviderId,
+        activeModelId: this.aiSettings.activeModelId,
+        activeReasoningEffort: this.aiSettings.activeReasoningEffort,
+        providerOptions: structuredClone(this.aiSettings.providerOptions),
+        reasoningOptions: structuredClone(this.aiSettings.reasoningOptions),
+      },
+    };
+  }
+
+  async setAISelection(providerId, modelId, reasoningEffort) {
+    this.aiSettings.activeProviderId = providerId;
+    this.aiSettings.activeModelId = modelId;
+    this.aiSettings.activeReasoningEffort = reasoningEffort;
+    const action = {
+      action: 'setAISelection',
+      providerId,
+      modelId,
+      reasoningEffort,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    };
+    globalActionLogs.push(action);
+    window.dispatchEvent(new CustomEvent('maho-fixture-action', {detail: action}));
+    return {accepted: true};
+  }
+
+  async getCreditBalance() {
+    return {
+      info: {
+        balanceUsd: 100.0,
+        lastPurchaseAt: nowSeconds() - 86400,
+        lastConsumptionAt: nowSeconds() - 60,
+        sessionExpired: false,
+      },
+    };
+  }
+
+  async getBuyCreditsUrl(packSizeUsd) {
+    return {checkoutUrl: `https://checkout.maho.dev/credits?amount=${packSizeUsd}`};
+  }
+
+  async getArtifactPreviewUrl(artifactId) {
+    return {url: `blob:mock-preview-${artifactId}`};
+  }
+
+  async getArtifactExportUrl(artifactId) {
+    return {url: `blob:mock-export-${artifactId}`};
+  }
+
+  async renameArtifact(_sessionId, _artifactId, displayName) {
+    return {displayName};
+  }
+
+  async deleteArtifact(_sessionId, _artifactId) {
+    return {ok: true};
+  }
+
+  async startVoiceSession() {
+    globalActionLogs.push({
+      action: 'startVoiceSession',
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+    return {accepted: true};
+  }
+
+  async pushAudioChunk(_pcm16k) {}
+
+  async stopVoiceSession() {
+    globalActionLogs.push({
+      action: 'stopVoiceSession',
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+  }
+
+  async respondToInteraction(sessionId, requestId, dispatch) {
+    globalActionLogs.push({
+      action: 'respondToInteraction',
+      sessionId,
+      requestId,
+      dispatch,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+    return {ok: true};
+  }
+
+  loadFixtureState(stateName, customOptions = {}) {
+    const sessionId = customOptions.sessionId || `session-${stateName}`;
+    globalFixtureSessions.add(sessionId);
+    this.fixtureErrorMode = Boolean(customOptions.transportError);
+    this.sessionsById.clear();
+    this.sessionOrder = [sessionId];
+    this.eventsBySessionId.clear();
+    this.sequenceBySessionId.clear();
+    this.currentSessionId = sessionId;
+
+    const baseSession = {
+      sessionId,
+      title: customOptions.title || `Session ${stateName}`,
+      summary: null,
+      createdAt: nowSeconds(),
+      updatedAt: nowSeconds(),
+      adapterName: 'OpenCode',
+      isActive: true,
+      isReadOnly: Boolean(customOptions.isReadOnly),
+      status: SessionStatus.kActive,
+      eventCount: 0,
+      toolCallCount: 0,
+      runtimeSessionId: sessionId,
+      lastRuntimeState: 'connected',
+    };
+
+    if (stateName === 'idle') {
+      baseSession.title = 'New conversation';
+      baseSession.status = SessionStatus.kIdle;
+    }
+    this.upsertSession(sessionId, baseSession);
+    const historyCount = Math.max(0, Number(customOptions.historyCount ?? 1));
+    for (let index = 1; index <= historyCount; index++) {
+      const historySessionId = `session-history-${index}`;
+      globalFixtureSessions.add(historySessionId);
+      this.upsertSession(historySessionId, {
+        ...baseSession,
+        sessionId: historySessionId,
+        title: `History item ${index}`,
+        isActive: false,
+        isReadOnly: index % 4 === 0,
+        runtimeSessionId: historySessionId,
+        updatedAt: baseSession.updatedAt - index,
+      });
+    }
+
+    if (stateName === 'idle') {
+      this.callbackRouter?.onSessionUpdated.emit(baseSession);
+      this.emitConnectionState(customOptions.connectionState ?? RuntimeConnectionState.kConnected);
+      return;
+    }
+
+    this.callbackRouter?.onAskMahoSessionAccepted.emit('req-' + stateName, baseSession);
+    this.emitConnectionState(
+        customOptions.connectionState ?? RuntimeConnectionState.kConnected);
+
+    switch (stateName) {
+      case 'conversation': {
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Summarize the architecture of Maho Browser sidebar.',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kAssistantToken, {
+          text: 'Maho Browser uses an isolated WebUI architecture for side panels, connecting the TypeScript/React layer to Chromium services via Mojo bindings with strict permission gates.',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kTurnComplete, {
+          text: null,
+        });
+        break;
+      }
+      case 'pending-tool': {
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Check workspace file structure',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kToolRequest, {
+          toolCall: {
+            callId: 'call-inspect-1',
+            toolName: 'workspace_inspect_files',
+            argumentsJson: '{"path":"maho-chromium/browser/resources/maho_ai","recursive":false}',
+            status: ToolCallStatus.kRunning,
+          },
+        });
+        break;
+      }
+      case 'approval': {
+        baseSession.status = SessionStatus.kPausedForApproval;
+        this.callbackRouter?.onSessionUpdated.emit(baseSession);
+        this.emitConnectionState(RuntimeConnectionState.kPausedForApproval);
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Run git status check',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalRequest, {
+          approvalRequest: {
+            approvalId: 'approval-baseline-1',
+            approvalPolicy: ApprovalPolicy.kPrompt,
+            description: 'Run shell command: git status --porcelain',
+            pageDerivedJustification: false,
+            relatedToolCall: {
+              callId: 'call-git-status',
+              toolName: 'terminal_execute',
+              argumentsJson: '{"cmd":"git status --porcelain"}',
+              status: ToolCallStatus.kPending,
+            },
+            sensitivity: ApprovalSensitivity.kSensitive,
+            state: ApprovalState.kPending,
+          },
+        });
+        break;
+      }
+      case 'denied': {
+        // The denied frame must be produced by a real user rejection, so the
+        // fixture only publishes the pending request. The QA runner clicks
+        // Reject, which dispatches respondToApproval(approved=false) through
+        // the standalone transport and emits the matching approvalResult.
+        baseSession.status = SessionStatus.kPausedForApproval;
+        this.callbackRouter?.onSessionUpdated.emit(baseSession);
+        this.emitConnectionState(RuntimeConnectionState.kPausedForApproval);
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Execute sensitive system command',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalRequest, {
+          approvalRequest: {
+            approvalId: 'approval-denied-1',
+            approvalPolicy: ApprovalPolicy.kPrompt,
+            description: 'Run shell command: git reset --hard HEAD',
+            pageDerivedJustification: false,
+            relatedToolCall: {
+              callId: 'call-denied-1',
+              toolName: 'terminal_execute',
+              argumentsJson: '{"cmd":"git reset --hard HEAD"}',
+              status: ToolCallStatus.kPending,
+            },
+            sensitivity: ApprovalSensitivity.kSensitive,
+            state: ApprovalState.kPending,
+          },
+        });
+        break;
+      }
+      case 'transport-error': {
+        baseSession.status = SessionStatus.kPausedForApproval;
+        this.callbackRouter?.onSessionUpdated.emit(baseSession);
+        this.emitConnectionState(RuntimeConnectionState.kPausedForApproval);
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Dispatch remote deployment step',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalRequest, {
+          approvalRequest: {
+            approvalId: 'approval-transport-err-1',
+            approvalPolicy: ApprovalPolicy.kPrompt,
+            description: 'Run deployment script: deploy-staging.sh',
+            pageDerivedJustification: false,
+            relatedToolCall: {
+              callId: 'call-deploy-1',
+              toolName: 'deploy_script',
+              argumentsJson: '{"script":"deploy-staging.sh"}',
+              status: ToolCallStatus.kPending,
+            },
+            sensitivity: ApprovalSensitivity.kSensitive,
+            state: ApprovalState.kPending,
+          },
+        });
+        break;
+      }
+      case 'activity-completed': {
+        baseSession.status = SessionStatus.kCompleted;
+        this.callbackRouter?.onSessionUpdated.emit(baseSession);
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Run lint checks on repository',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kToolRequest, {
+          toolCall: {
+            callId: 'call-lint-1',
+            toolName: 'run_linter',
+            argumentsJson: '{"target":"browser/resources"}',
+            status: ToolCallStatus.kCompleted,
+          },
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kToolResult, {
+          toolResult: {
+            callId: 'call-lint-1',
+            success: true,
+            output: '{"checkedFiles":142,"errors":0,"warnings":0}',
+            errorMessage: null,
+          },
+        });
+        // A completed control activity is not a distinct mojo enum: the C++
+        // controller drives active states while it works and then reports
+        // kIdle (or clears the list) once the run is finished. The fixture
+        // therefore replays the real active phase first and immediately
+        // performs the terminal active -> idle transition, so the projection
+        // under test is the genuine post-completion render (both
+        // ControlActivityCard and ControlActivityTimeline drop out) rather
+        // than a frozen spinner mislabelled as "completed".
+        this.emitControlActivity([
+          {
+            controllerName: 'Maho Lint Runner',
+            state: ControlActivityState.kReading,
+            targetTitle: 'Maho AI Workspace',
+          },
+          {
+            controllerName: 'Maho Lint Runner',
+            state: ControlActivityState.kActing,
+            targetTitle: 'Maho AI Workspace',
+          },
+        ]);
+        // When the caller wants to witness the transition (QA proving the
+        // active phase really preceded the terminal one), the idle emission is
+        // deferred until completeControlActivity() is invoked explicitly.
+        if (customOptions.deferControlActivityCompletion) {
+          this.pendingControlActivityCompletion = {
+            controllerName: 'Maho Lint Runner',
+            targetTitle: 'Maho AI Workspace',
+            sessionId,
+          };
+        } else {
+          this.completeControlActivity('Maho Lint Runner', 'Maho AI Workspace');
+          this.emitRuntimeEvent(sessionId, RuntimeEventKind.kTurnComplete, {
+            text: null,
+          });
+        }
+        break;
+      }
+      case 'artifact': {
+        baseSession.status = SessionStatus.kCompleted;
+        this.callbackRouter?.onSessionUpdated.emit(baseSession);
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kUserPrompt, {
+          text: 'Export current analysis as JSON artifact',
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kArtifactCreated, {
+          artifact: {
+            artifactId: 'art-baseline-1',
+            displayName: 'sidebar-panel-summary.json',
+            kind: 'file',
+            mimeType: 'application/json',
+            sizeBytes: 2048n,
+            createdAt: nowSeconds(),
+          },
+        });
+        this.emitRuntimeEvent(sessionId, RuntimeEventKind.kTurnComplete, {
+          text: null,
+        });
+        break;
+      }
+      default:
+        throw new Error(`Unknown fixture state: ${stateName}`);
+    }
   }
 
   async getConnectionState() {
@@ -357,6 +846,65 @@ export class PageHandlerRemote {
       state: connected ? RuntimeConnectionState.kConnected : RuntimeConnectionState.kDisconnected,
       activeAdapterName: 'OpenCode',
     };
+  }
+
+  // The standalone harness has no browser-side controller driving tabs, so the
+  // control-activity timeline starts empty and is only fed by
+  // emitControlActivity() below.
+  async watchControlActivity() {
+    return {entries: structuredClone(globalControlActivityEntries)};
+  }
+
+  emitControlActivity(entries) {
+    globalControlActivityEntries = entries;
+    for (const router of allRouters) {
+      router.onControlActivityChanged?.emit(entries);
+    }
+  }
+
+  // Terminal transition for a controller run: the last entry moves to kIdle,
+  // which is what the browser-side controller reports when it stops driving
+  // the tab. Recorded in the action log so evidence can prove the transition
+  // actually happened instead of inferring it from a state name.
+  completeControlActivity(controllerName, targetTitle) {
+    const activeEntries = globalControlActivityEntries.map(entry => ({...entry}));
+    globalActionLogs.push({
+      action: 'controlActivityTerminalTransition',
+      controllerName,
+      fromStates: activeEntries.map(entry => entry.state),
+      toState: ControlActivityState.kIdle,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+    this.emitControlActivity([
+      {
+        controllerName,
+        state: ControlActivityState.kIdle,
+        targetTitle: targetTitle ?? null,
+      },
+    ]);
+  }
+
+  getControlActivityEntries() {
+    return structuredClone(globalControlActivityEntries);
+  }
+
+  // Runs the deferred terminal transition registered by loadFixtureState.
+  // Returns false when nothing was pending so callers cannot mistake a no-op
+  // for a real completion.
+  finishPendingControlActivity() {
+    const owner = [...allHandlers].find(
+        handler => handler.pendingControlActivityCompletion) ?? null;
+    const pending = owner?.pendingControlActivityCompletion;
+    if (!owner || !pending) {
+      return false;
+    }
+    owner.pendingControlActivityCompletion = null;
+    owner.completeControlActivity(pending.controllerName, pending.targetTitle);
+    owner.emitRuntimeEvent(pending.sessionId, RuntimeEventKind.kTurnComplete, {
+      text: null,
+    });
+    return true;
   }
 
   async consumePendingSurface(lastSeenGeneration) {
@@ -369,6 +917,11 @@ export class PageHandlerRemote {
   }
 
   async listAllRoutines() {
+    globalActionLogs.push({
+      action: 'openRoutines',
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
     return {routines: structuredClone(this.routineState.routines)};
   }
 
@@ -439,6 +992,21 @@ export class PageHandlerRemote {
   }
 
   async getSessionList() {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const stateParam = params.get('state');
+      if (stateParam && !this.initialStateLoaded) {
+        this.initialStateLoaded = true;
+        this.loadFixtureState(stateParam, {
+          isReadOnly: params.get('readonly') === 'true',
+          historyCount: Number(params.get('historycount') ?? '1'),
+          deferControlActivityCompletion:
+              params.get('deferactivitycompletion') === 'true',
+          connectionState: params.get('disconnected') === 'true' ?
+              RuntimeConnectionState.kDisconnected : undefined,
+        });
+      }
+    }
     await this.refreshSessions();
     return {
       sessions: this.sessionOrder.map(sessionId => this.sessionsById.get(sessionId)).filter(Boolean),
@@ -446,6 +1014,49 @@ export class PageHandlerRemote {
   }
 
   async startSession(initialPrompt, mode) {
+    if (typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).get('fixtureactions') === 'true') {
+      globalActionLogs.push({
+        action: 'startSession',
+        initialPrompt,
+        mode,
+        timestamp: Date.now(),
+        transport: 'simulated_standalone_fixture',
+      });
+      const sessionId = `session-new-${Date.now()}`;
+      const session = this.upsertSession(sessionId, {
+        adapterName: 'OpenCode',
+        isActive: true,
+        isReadOnly: false,
+        lastRuntimeState: 'connected',
+        runtimeSessionId: sessionId,
+        status: SessionStatus.kActive,
+        updatedAt: nowSeconds(),
+      });
+      this.currentSessionId = sessionId;
+      return {session};
+    }
+    if (this.currentSessionId && globalFixtureSessions.has(this.currentSessionId)) {
+      globalActionLogs.push({
+        action: 'startSession',
+        initialPrompt,
+        mode,
+        timestamp: Date.now(),
+        transport: 'simulated_standalone_fixture',
+      });
+      const sessionId = `session-new-${Date.now()}`;
+      const session = this.upsertSession(sessionId, {
+        adapterName: 'OpenCode',
+        isActive: true,
+        isReadOnly: false,
+        lastRuntimeState: 'connected',
+        runtimeSessionId: sessionId,
+        status: SessionStatus.kActive,
+        updatedAt: nowSeconds(),
+      });
+      this.currentSessionId = sessionId;
+      return {session};
+    }
     const response = await fetch(`${API_PREFIX}/session`, {
       method: 'POST',
       headers: {
@@ -485,7 +1096,18 @@ export class PageHandlerRemote {
   }
 
   async resumeSession(sessionId) {
-    await this.refreshSessions();
+    if ((typeof window !== 'undefined' &&
+         new URLSearchParams(window.location.search).get('fixtureactions') === 'true') ||
+        globalFixtureSessions.has(sessionId)) {
+      globalActionLogs.push({
+        action: 'resumeSession',
+        sessionId,
+        timestamp: Date.now(),
+        transport: 'simulated_standalone_fixture',
+      });
+    } else {
+      await this.refreshSessions();
+    }
     const session = this.sessionsById.get(sessionId) || this.upsertSession(sessionId, {
       adapterName: 'OpenCode',
       isActive: sessionId === this.currentSessionId,
@@ -525,15 +1147,30 @@ export class PageHandlerRemote {
   }
 
 
-  async composerDraftGet(_scopeJson) {
-    return {draftJson: null};
+  async composerDraftGet(scopeJson) {
+    return {draftJson: globalComposerDrafts.get(scopeJson) ?? null};
   }
 
-  async composerDraftSet(_scopeJson, _text) {
+  async composerDraftSet(scopeJson, text) {
+    globalComposerDrafts.set(scopeJson, JSON.stringify({text}));
+    globalActionLogs.push({
+      action: 'composerDraftSet',
+      scopeJson,
+      text,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
     return {ok: true};
   }
 
-  async composerDraftDelete(_scopeJson) {
+  async composerDraftDelete(scopeJson) {
+    globalComposerDrafts.delete(scopeJson);
+    globalActionLogs.push({
+      action: 'composerDraftDelete',
+      scopeJson,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
     return {ok: true};
   }
 
@@ -593,6 +1230,20 @@ export class PageHandlerRemote {
   }
 
   async cancelTurn(sessionId) {
+    if (globalFixtureSessions.has(sessionId)) {
+      const action = {
+        action: 'cancelTurn',
+        sessionId,
+        timestamp: Date.now(),
+        transport: 'simulated_standalone_fixture',
+      };
+      globalActionLogs.push(action);
+      window.dispatchEvent(new CustomEvent('maho-fixture-action', {detail: action}));
+      this.emitRuntimeEvent(sessionId, RuntimeEventKind.kSessionStatus, {
+        text: 'stopped',
+      });
+      return {ok: true};
+    }
     const response = await fetch(`${API_PREFIX}/session/${encodeURIComponent(sessionId)}/abort`, {
       method: 'POST',
       headers: {
@@ -607,6 +1258,67 @@ export class PageHandlerRemote {
   }
 
   async respondToApproval(sessionId, approvalId, approved) {
+    if (globalFixtureSessions.has(sessionId)) {
+      const isTransportError = this.fixtureErrorMode || sessionId.includes('transport-error');
+      const actionRecord = {
+        action: 'respondToApproval',
+        sessionId,
+        approvalId,
+        approved,
+        timestamp: Date.now(),
+        transport: 'simulated_standalone_fixture',
+        error: isTransportError ? '502 Bad Gateway' : null,
+        requestBody: {
+          response: approved ? 'once' : 'reject',
+        },
+      };
+      globalActionLogs.push(actionRecord);
+
+      if (isTransportError) {
+        throw new Error('Simulated standalone transport failure: 502 Bad Gateway');
+      }
+
+      const approvalResult = {
+        approvalId,
+        approvalPolicy: ApprovalPolicy.kPrompt,
+        approved,
+        decision: approved ? ApprovalDecision.kAllowOnce : ApprovalDecision.kDeny,
+        pageDerivedJustification: false,
+        reason: approved ? 'Allowed once via fixture' : 'User explicitly denied approval',
+        sensitivity: ApprovalSensitivity.kSensitive,
+        state: approved ? ApprovalState.kApproved : ApprovalState.kDenied,
+      };
+      for (const handler of allHandlers) {
+        handler.emitRuntimeEvent(sessionId, RuntimeEventKind.kApprovalResult, {
+          approvalResult,
+        });
+      }
+      // Match the production lifecycle: once a decision result is projected,
+      // the session leaves the paused-for-approval state. Emitting this update
+      // through the existing router keeps the fixture interactive rather than
+      // preloading a terminal card.
+      const session = this.upsertSession(sessionId, {
+        isActive: true,
+        lastRuntimeState: 'connected',
+        status: SessionStatus.kActive,
+        updatedAt: nowSeconds(),
+      });
+      for (const router of allRouters) {
+        router.onSessionUpdated?.emit(session);
+      }
+      this.emitConnectionState(RuntimeConnectionState.kConnected);
+      globalActionLogs.push({
+        action: 'approvalResultEmitted',
+        sessionId,
+        approvalId,
+        approved,
+        timestamp: Date.now(),
+        transport: 'simulated_standalone_fixture',
+        resultBody: approvalResult,
+      });
+      return {ok: true};
+    }
+
     const response = await fetch(
         `${API_PREFIX}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(approvalId)}`,
         {
@@ -622,24 +1334,47 @@ export class PageHandlerRemote {
     if (!response.ok) {
       throw new Error(`Failed to submit approval (${response.status})`);
     }
+    return {ok: true};
   }
 
-  async closePanel() {}
+  async closePanel() {
+    globalActionLogs.push({
+      action: 'closePanel',
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+  }
 
   async openSettings() {
-    window.open('chrome://maho-settings/', '_blank');
+    globalActionLogs.push({
+      action: 'openSettings',
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
   }
 
   async openSettingsPane(paneKey) {
-    const safePane = paneKey === 'maho-ai-developers' ? paneKey : 'maho-ai';
-    window.open(`chrome://maho-settings/?pane=${safePane}`, '_blank');
+    globalActionLogs.push({
+      action: 'openSettingsPane',
+      paneKey,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
   }
 
   async getViewMode() {
-    return {mode: ViewMode.kSidebar};
+    return {mode: this.currentViewMode || ViewMode.kSidebar};
   }
 
-  async setViewMode(_mode) {}
+  async setViewMode(mode) {
+    this.currentViewMode = mode;
+    globalActionLogs.push({
+      action: 'setViewMode',
+      mode,
+      timestamp: Date.now(),
+      transport: 'simulated_standalone_fixture',
+    });
+  }
 
   async probeConnection() {
     try {
@@ -653,6 +1388,10 @@ export class PageHandlerRemote {
   }
 
   async refreshSessions() {
+    if (typeof window !== 'undefined' &&
+        new URLSearchParams(window.location.search).get('fixtureactions') === 'true') {
+      return;
+    }
     try {
       const response = await fetch(`${API_PREFIX}/session`);
       if (!response.ok) {
@@ -934,7 +1673,9 @@ export class PageHandlerRemote {
 
   emitConnectionState(state) {
     this.connectionState = state;
-    this.callbackRouter?.onConnectionStateChanged.emit(state);
+    for (const router of allRouters) {
+      router.onConnectionStateChanged?.emit(state);
+    }
   }
 
   emitRuntimeEvent(sessionId, kind, extras) {
@@ -948,6 +1689,7 @@ export class PageHandlerRemote {
       timestamp: nowSeconds(),
       toolCall: null,
       toolResult: null,
+      sessionId,
       ...extras,
     };
 
@@ -960,8 +1702,10 @@ export class PageHandlerRemote {
       runtimeSessionId: sessionId,
       updatedAt: runtimeEvent.timestamp,
     });
-    this.callbackRouter?.onRuntimeEvent.emit(runtimeEvent);
-    this.callbackRouter?.onSessionUpdated.emit(session);
+    for (const router of allRouters) {
+      router.onRuntimeEvent?.emit(runtimeEvent);
+      router.onSessionUpdated?.emit(session);
+    }
   }
 
   upsertSession(sessionId, overrides = {}) {
@@ -1017,4 +1761,25 @@ export class PageHandlerRemote {
       return null;
     }
   }
+
+  async listArtifacts(sessionId) {
+    return {artifacts: []};
+  }
+
+  async renameArtifact(artifactId, displayName) {
+    return {success: true};
+  }
+
+  async deleteArtifact(artifactId) {
+    return {success: true};
+  }
+
+  async getArtifactPreviewUrl(artifactId) {
+    return {url: null};
+  }
+
+  async getArtifactExportUrl(artifactId) {
+    return {url: null};
+  }
+
 }

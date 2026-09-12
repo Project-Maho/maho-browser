@@ -230,6 +230,22 @@ export enum ApprovalDecision {
   kDeny,
 }
 
+export enum ControlActivityState {
+  kIdle,
+  kReading,
+  kActing,
+  kWaitingApproval,
+  kPaused,
+  kDisconnected,
+  kFailed,
+}
+
+export interface ControlActivitySnapshot {
+  controllerName: string;
+  state: ControlActivityState;
+  targetTitle: string;
+}
+
 export interface ApprovalRequestInfo {
   approvalId: string;
   description: string;
@@ -262,7 +278,12 @@ export interface ArtifactInfo {
 
 export interface RuntimeEvent {
   kind: RuntimeEventKind;
-  sequence: number;
+  sequence: number|bigint;
+  sequenceStart?: number|bigint;
+  replayWindow?: {
+    omittedTurns: number|bigint;
+    omittedThroughSequence: number|bigint;
+  }|null;
   timestamp: number;
   text?: string | null;
   toolCall?: ToolCallInfo | null;
@@ -393,6 +414,7 @@ export class PageHandlerRemote {
   composerDraftSet(scopeJson: string, text: string): Promise<{ok: boolean}>;
   composerDraftDelete(scopeJson: string): Promise<{ok: boolean}>;
   cancelTurn(sessionId: string): Promise<void>;
+  watchControlActivity(): Promise<{entries: ControlActivitySnapshot[]}>;
   respondToApproval(
       sessionId: string,
       approvalId: string,

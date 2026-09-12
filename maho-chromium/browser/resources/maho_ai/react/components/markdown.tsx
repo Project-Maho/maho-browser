@@ -20,7 +20,7 @@ const markdownParser = new Marked({
   } as never,
 });
 
-export function Markdown({className, text}: {className?: string; text: string}) {
+export const Markdown = React.memo(function Markdown({className, text}: {className?: string; text: string}) {
   const safeText = text ?? '';
   const html = React.useMemo(() => {
     try {
@@ -36,4 +36,4 @@ export function Markdown({className, text}: {className?: string; text: string}) 
           className={className}
           dangerouslySetInnerHTML={{__html: html}} />
   );
-}
+});

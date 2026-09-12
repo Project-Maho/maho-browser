@@ -10,7 +10,76 @@ import {
   getInteractionTitle,
   isInteractionActionable,
 } from '../../../views/interaction.js';
+import {
+  parseJsonRecord,
+  summarizeInlineText,
+  summarizePath,
+} from '../../../views/conversation_thread.js';
 import {useAppState} from '../../hooks/use-app-state.js';
+
+function humanizeFieldKey(key: string): string {
+  return key.replace(/[_.-]+/g, ' ').trim().replace(/^./, c => c.toUpperCase());
+}
+
+interface ArtifactRefField {
+  readonly label: string;
+  readonly value: string;
+}
+
+// Projects a raw artifact reference onto the handful of fields a user needs
+// to judge blast radius: path tails, action verbs, and sizes. JSON refs
+// contribute their primitive fields; anything else falls back to a truncated
+// inline summary. The untouched raw text stays available in the disclosure.
+function summarizeArtifactRef(artifactRef: string): ArtifactRefField[] {
+  const record = parseJsonRecord(artifactRef);
+  if (!record) {
+    return [];
+  }
+  const fields: ArtifactRefField[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (fields.length >= 6) {
+      break;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const trimmed = value.trim();
+      const valueText = trimmed.includes('/') ? summarizePath(trimmed) ?? trimmed : trimmed;
+      fields.push({label: humanizeFieldKey(key), value: summarizeInlineText(valueText)});
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      fields.push({label: humanizeFieldKey(key), value: String(value)});
+    }
+  }
+  return fields;
+}
+
+function ArtifactRefSummary({artifactRef}: {readonly artifactRef: string}) {
+  const fields = summarizeArtifactRef(artifactRef);
+  return (
+    <div className="grid min-w-0 max-w-full gap-1.5 rounded-lg bg-surface-hover/60 p-2 text-[11px] leading-4 text-muted-foreground">
+      {fields.length > 0 ? (
+        <dl aria-label="Artifact summary" className="grid min-w-0 max-w-full gap-0.5">
+          {fields.map(field => (
+            <div className="flex min-w-0 max-w-full gap-2" key={field.label}>
+              <dt className="w-20 shrink-0 font-medium text-foreground/80">{field.label}</dt>
+              <dd className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">{field.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className="min-w-0 max-w-full break-words [overflow-wrap:anywhere]">{summarizeInlineText(artifactRef, 120)}</p>
+      )}
+      <details className="min-w-0 max-w-full">
+        <summary className="cursor-pointer select-none font-medium transition-colors hover:text-foreground">
+          Technical details
+        </summary>
+        <pre
+          aria-label="Review artifact"
+          className="m-0 mt-1 box-border block w-full min-w-0 max-w-full max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-4 text-muted-foreground [overflow-wrap:anywhere]">
+          {artifactRef}
+        </pre>
+      </details>
+    </div>
+  );
+}
 
 // The optional free-text field doubles as the answer for whichever action the
 // user takes: Confirm with text answers with the instruction itself, letting
@@ -34,21 +103,17 @@ function InteractionCard(
   return (
     <section
       aria-label="Agent approval request"
-      className="rounded-xl border border-border/80 bg-card/90 p-3 text-xs shadow-[var(--shadow-raised)]"
+      className="min-w-0 max-w-full rounded-xl border border-border/80 bg-card/90 p-3 text-xs shadow-[var(--shadow-raised)]"
       data-request-id={record.requestId}
       data-state={record.state}>
-      <div className="flex flex-col gap-2">
+      <div className="flex min-w-0 max-w-full flex-col gap-2">
         <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           {getInteractionTitle(record)}
         </p>
-        <p className="text-sm leading-5 text-foreground">{record.prompt}</p>
-        {record.artifactRef ? (
-          <pre
-            aria-label="Review artifact"
-            className="max-h-32 overflow-auto rounded-lg bg-surface-hover/60 p-2 font-mono text-[11px] leading-4 text-muted-foreground">
-            {record.artifactRef}
-          </pre>
-        ) : null}
+        <p className="min-w-0 max-w-full break-words text-sm leading-5 text-foreground [overflow-wrap:anywhere]">
+          {record.prompt}
+        </p>
+        {record.artifactRef ? <ArtifactRefSummary artifactRef={record.artifactRef} /> : null}
         {record.kind === 'question' && record.options.length > 0 ? (
           <div aria-label="Answer options" className="flex flex-col gap-1.5" role="group">
             {record.options.map(option => (
@@ -62,9 +127,15 @@ function InteractionCard(
                 key={option.id}
                 onClick={() =>
                   respond({answerKind: 'selected_option', optionId: option.id})}
-                title={option.description ?? undefined}
                 type="button">
                 {option.label}
+                {option.description ? (
+                  <span
+                    className="mt-0.5 block text-[11px] font-normal leading-4 text-muted-foreground"
+                    data-option-description={option.id}>
+                    {option.description}
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -77,6 +148,11 @@ function InteractionCard(
           placeholder="Add an instruction for the agent"
           type="text"
           value={instruction} />
+        {record.kind === 'confirmation' ? (
+          <p className="text-[11px] leading-4 text-muted-foreground" data-consequence>
+            Confirming lets the agent perform this action. Deny to stop it.
+          </p>
+        ) : null}
         {record.kind === 'confirmation' ? (
           <div className="flex gap-2">
             <button
@@ -139,7 +215,7 @@ export function InteractionApprovalCard({store}: {store: MahoAiStore}) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex min-w-0 max-w-full flex-col gap-2">
       {records.map(record => (
         <InteractionCard key={record.requestId} record={record} store={store} />
       ))}

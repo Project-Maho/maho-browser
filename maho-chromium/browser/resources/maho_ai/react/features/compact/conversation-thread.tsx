@@ -8,6 +8,7 @@ import {collectConversationItems} from '../../../views/conversation_thread.js';
 import type {ConversationItem} from '../../../views/conversation_thread.js';
 import {Markdown} from '../../components/markdown.js';
 import {ArtifactCard} from '../../components/artifact-card.js';
+import {ToolExecutionGroup, ToolStep} from '../../components/tool-execution-group.js';
 import {ConversationMessage} from './conversation-message.js';
 import {ConversationSystemItem} from './conversation-system-item.js';
 import {PendingThought} from './pending-thought.js';
@@ -82,10 +83,79 @@ export function ConversationThread(
     }
     return null;
   }, [items]);
+  // Only the latest failed turn can be retried; older failures are historical
+  // and resubmitting would erroneously replay the newest prompt instead (M3).
+  const lastErrorKey = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; --i) {
+      const it = items[i];
+      if (it.role === 'system' && (it.credentialError || it.tone === 'danger')) {
+        return it.key;
+      }
+    }
+    return null;
+  }, [items]);
   const autoScrollDependency = useMemo(
       () => ({bottomPadding, items, thinkingLabel, topPadding}),
       [bottomPadding, items, thinkingLabel, topPadding]);
   const listRef = useAutoScroll<HTMLDivElement>(autoScrollDependency);
+
+  const groupedItems = useMemo(() => {
+    type GroupedThreadItem =
+      | { kind: 'item'; item: ConversationItem }
+      | { kind: 'tool_group'; groupKey: string; steps: ToolStep[]; startTime: number; endTime: number; isRunning: boolean };
+
+    const result: GroupedThreadItem[] = [];
+    let currentToolSteps: ToolStep[] = [];
+    let groupStartTime = 0;
+    let groupEndTime = 0;
+    let groupIsRunning = false;
+    let groupKey = '';
+
+    const flushToolGroup = () => {
+      if (currentToolSteps.length === 0) return;
+      result.push({
+        kind: 'tool_group',
+        groupKey,
+        steps: [...currentToolSteps],
+        startTime: groupStartTime,
+        endTime: groupEndTime,
+        isRunning: groupIsRunning,
+      });
+      currentToolSteps = [];
+      groupIsRunning = false;
+    };
+
+    for (const item of items) {
+      if (item.kind === 'activity') {
+        const isError = item.tone === 'danger' || item.chips?.some(c => c.tone === 'danger') || false;
+        const step: ToolStep = {
+          key: item.key,
+          text: item.text,
+          isError,
+          toolName: item.toolName,
+          note: item.note,
+          errorDetail: item.errorDetail,
+          timestamp: item.timestamp,
+        };
+        if (currentToolSteps.length === 0) {
+          groupKey = `tool-group-${item.key}`;
+          groupStartTime = item.timestamp;
+          groupEndTime = item.timestamp;
+        } else {
+          groupEndTime = Math.max(groupEndTime, item.timestamp);
+        }
+        if (item.tone === 'accent' && (!item.chips || item.chips.length === 0)) {
+          groupIsRunning = true;
+        }
+        currentToolSteps.push(step);
+      } else {
+        flushToolGroup();
+        result.push({kind: 'item', item});
+      }
+    }
+    flushToolGroup();
+    return result;
+  }, [items]);
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
@@ -93,7 +163,19 @@ export function ConversationThread(
           ref={listRef}
           className="flex min-h-0 flex-1 flex-col justify-start gap-4 overflow-y-auto px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden max-[520px]:gap-3 max-[520px]:px-3"
           style={{paddingBottom: bottomPadding, paddingTop: topPadding}}>
-        {items.map(item => {
+        {groupedItems.map(entry => {
+          if (entry.kind === 'tool_group') {
+            return (
+              <ToolExecutionGroup
+                key={entry.groupKey}
+                steps={entry.steps}
+                startTime={entry.startTime}
+                endTime={entry.endTime}
+                isRunning={entry.isRunning}
+              />
+            );
+          }
+          const item = entry.item!;
           if (item.kind === 'thinking') {
             return <ThinkingBubble key={item.key} item={item} />;
           }
@@ -117,6 +199,7 @@ export function ConversationThread(
             );
           }
           if (item.role === 'system') {
+            const isLatestError = item.key === lastErrorKey;
             return (
               <ConversationSystemItem
                 key={item.key}
@@ -124,6 +207,7 @@ export function ConversationThread(
                 readOnly={readOnly}
                 onOpenSettings={onOpenSettings}
                 onRespondToApproval={onRespondToApproval}
+                onRetry={isLatestError && !readOnly && !thinkingLabel ? onRegenerate : undefined}
               />
             );
           }
@@ -140,6 +224,13 @@ export function ConversationThread(
           );
         })}
         {thinkingLabel ? <PendingThought label={thinkingLabel} /> : null}
+      </div>
+      <div
+          aria-live="polite"
+          className="sr-only"
+          data-turn-status
+          role="status">
+        {thinkingLabel ? `Maho is working: ${thinkingLabel}` : ''}
       </div>
     </main>
   );

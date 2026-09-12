@@ -7,6 +7,12 @@
 }
 
 @layer utilities {
+  @container (max-width: 330px) {
+    [aria-label^="Select profile:"] {
+      max-width: 5.5rem;
+    }
+  }
+
   @keyframes voice-fade-in {
     from {
       opacity: 0;

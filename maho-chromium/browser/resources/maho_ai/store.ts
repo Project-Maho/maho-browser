@@ -1,12 +1,12 @@
 import {
   InteractionMode,
   PageCallbackRouter,
-  PageHandlerFactory,
   PageHandlerRemote,
   RuntimeConnectionState,
   RuntimeEvent,
   RuntimeEventKind,
   SessionInfo,
+  SessionStatus,
   TabInfo,
   TidyFolder,
   ViewMode,
@@ -57,7 +57,7 @@ import {
 } from './views/suggestions.js';
 import {notifyListeners} from '../maho_common/react/store_utils.js';
 import type {Listener} from '../maho_common/react/store_utils.js';
-import {bindMojoPageHandler} from '../maho_common/react/use_mojo.js';
+import {getMahoAiPageConnection} from './page_connection.js';
 import {toast} from 'sonner';
 import {
   ComposerDraftPersistence,
@@ -224,8 +224,7 @@ function cloneState(state: AppState): AppState {
     ...state,
     sessionsById: {...state.sessionsById},
     sessionOrder: [...state.sessionOrder],
-    eventsBySessionId: Object.fromEntries(
-        Object.entries(state.eventsBySessionId).map(([key, value]) => [key, [...value]])),
+    eventsBySessionId: {...state.eventsBySessionId},
     historiesBySessionId: {...state.historiesBySessionId},
     artifactsBySessionId: Object.fromEntries(
         Object.entries(state.artifactsBySessionId).map(([key, value]) => [key, [...value]])),
@@ -269,8 +268,7 @@ function sortSessionIds(sessionsById: AppState['sessionsById']): string[] {
 }
 
 export function createMahoAiStore(): MahoAiStore {
-  const {router, handler} = bindMojoPageHandler(
-      PageCallbackRouter, PageHandlerRemote, PageHandlerFactory);
+  const {router, handler} = getMahoAiPageConnection();
   return new MahoAiStore(handler, router);
 }
 
@@ -280,6 +278,12 @@ export class MahoAiStore {
   private listenerIds: number[] = [];
   private readonly acceptedAskMahoSessionIds = new Set<string>();
   private readonly pendingRuntimeEventsBySessionId = new Map<string, RuntimeEvent[]>();
+  private readonly replayTextEncoder = new TextEncoder();
+  private readonly replayTextBytes = new WeakMap<RuntimeEvent, number>();
+  private readonly replayWindowThroughBySessionId = new Map<string, bigint>();
+  private readonly replayContextSequence =
+      new WeakMap<NonNullable<RuntimeEvent['browserContext']>, bigint>();
+  private readonly replayInteractionSequences = new Map<string, Map<string, bigint>>();
   private selectionRevision = 0;
   private submissionInFlight = false;
   private composerDraftScope: ComposerDraftScope = {kind: 'new_task'};
@@ -608,11 +612,22 @@ export class MahoAiStore {
         state.sessionsById[session.sessionId] = session;
         state.sessionOrder = sortSessionIds(state.sessionsById);
       }
-      this.updateContextSnapshot(state, sessionId, replayEvents);
-      if (replayEvents.length) {
-        state.eventsBySessionId[sessionId] = replayEvents
-            .filter(event => this.isLiveTimelineEvent(event))
-            .map(event => ({sessionId, event}));
+      this.mergeReplayEvents(state, sessionId, replayEvents);
+      if (session) {
+        state.turnPendingBySessionId[sessionId] ??=
+            session.isActive &&
+            (session.status === SessionStatus.kActive ||
+             session.status === SessionStatus.kPausedForApproval);
+        const pending = this.pendingRuntimeEventsBySessionId.get(sessionId) || [];
+        this.pendingRuntimeEventsBySessionId.delete(sessionId);
+        const through = (state.eventsBySessionId[sessionId] || []).reduce(
+            (latest, entry) => BigInt(entry.event.sequence) > latest ?
+                BigInt(entry.event.sequence) : latest, -1n);
+        for (const event of pending) {
+          if (BigInt(event.sequence) > through) {
+            this.applyRuntimeEvent(state, sessionId, event);
+          }
+        }
       }
     });
 
@@ -629,11 +644,10 @@ export class MahoAiStore {
   async loadHistory(sessionId: string, pageSize = 200): Promise<void> {
     const {events, totalCount} = await this.pageHandler.getSessionHistory(sessionId, 0, pageSize);
     this.patch(state => {
-      this.updateContextSnapshot(state, sessionId, events);
-      const entries = events.filter(event => this.isLiveTimelineEvent(event))
-                            .map(event => ({sessionId, event}));
-      state.eventsBySessionId[sessionId] = entries;
-      state.historiesBySessionId[sessionId] = {loaded: true, totalCount, loadedCount: entries.length};
+      this.mergeReplayEvents(state, sessionId, events);
+      state.historiesBySessionId[sessionId] = {
+        loaded: true, totalCount, loadedCount: events.length,
+      };
     });
     void this.loadArtifacts(sessionId);
   }
@@ -646,15 +660,12 @@ export class MahoAiStore {
 
     const {events} = await this.pageHandler.getSessionHistory(sessionId, hist.loadedCount, pageSize);
     this.patch(state => {
-      const incoming = events.filter(event => this.isLiveTimelineEvent(event))
-                             .map(event => ({sessionId, event}));
-      const existing = state.eventsBySessionId[sessionId] || [];
-      state.eventsBySessionId[sessionId] = [...incoming, ...existing];
+      this.mergeReplayEvents(state, sessionId, events);
       const current = state.historiesBySessionId[sessionId];
       if (current) {
         state.historiesBySessionId[sessionId] = {
           ...current,
-          loadedCount: current.loadedCount + incoming.length,
+          loadedCount: current.loadedCount + events.length,
         };
       }
     });
@@ -1159,9 +1170,9 @@ export class MahoAiStore {
    * suggestion's prompt. If the flag dispatch is rejected the task is not
    * started (the session is left empty and current).
    */
-  async startSuggestedTask(suggestion: SuggestedTask): Promise<void> {
+  async startSuggestedTask(suggestion: SuggestedTask): Promise<boolean> {
     if (this.submissionInFlight) {
-      return;
+      return false;
     }
 
     this.submissionInFlight = true;
@@ -1170,6 +1181,8 @@ export class MahoAiStore {
       const mode = this.state.developerMode ?
           InteractionMode.kDeveloper :
           InteractionMode.kAssistant;
+      const previousSessionId = this.state.currentSessionId;
+      const previousInspector = this.state.selectedInspector;
       const {session} = await this.pageHandler.startSession(null, mode);
       sessionId = session.sessionId;
 
@@ -1189,12 +1202,19 @@ export class MahoAiStore {
       // the broker did not take the guard flags — do not run the task.
       const accepted = await this.setRuntimeConfig(SUGGESTED_TASK_RUNTIME_CONFIG);
       if (!accepted) {
+        // Roll the created session back out of the store so the refused
+        // launch does not leave an empty orphan session behind.
         this.patch(state => {
-          state.turnPendingBySessionId[session.sessionId] = false;
+          delete state.sessionsById[session.sessionId];
+          delete state.eventsBySessionId[session.sessionId];
+          delete state.turnPendingBySessionId[session.sessionId];
+          state.sessionOrder = sortSessionIds(state.sessionsById);
+          state.currentSessionId = previousSessionId;
+          state.selectedInspector = previousInspector;
         });
         console.warn(
             '[maho-ai] Suggested task flags rejected; task not started');
-        return;
+        return false;
       }
 
       const request: SubmissionRequest = {
@@ -1207,6 +1227,7 @@ export class MahoAiStore {
         isQuickAction: false,
       };
       await this.submitCapturedRequest(session.sessionId, request);
+      return true;
     } catch (error) {
       const failedSessionId = sessionId;
       if (failedSessionId) {
@@ -1416,14 +1437,24 @@ export class MahoAiStore {
     });
   }
 
-  async respondToApproval(approvalId: string, approved: boolean): Promise<void> {
+  async respondToApproval(approvalId: string, approved: boolean): Promise<boolean> {
     const sessionId = this.state.currentSessionId;
     const session = sessionId ? this.state.sessionsById[sessionId] : null;
     if (!sessionId || session?.isReadOnly) {
-      return;
+      console.warn(
+          '[maho-ai] RespondToApproval skipped: no writable session for approval',
+          approvalId);
+      return false;
     }
 
-    await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
+    try {
+      await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn('[maho-ai] RespondToApproval failed', message);
+      return false;
+    }
   }
 
   /**
@@ -1575,6 +1606,21 @@ export class MahoAiStore {
           })
     );
 
+    const runtimeConfigChanged =
+        (this.callbackRouter as {onRuntimeConfigChanged?: {
+          addListener(listener: (config: RuntimeConfigInfo) => void): number;
+        }}).onRuntimeConfigChanged;
+    if (runtimeConfigChanged) {
+      this.registerCallbackListener(
+        runtimeConfigChanged.addListener((config: RuntimeConfigInfo) => {
+          this.patch(state => {
+            state.runtimeConfigSupported = true;
+            state.runtimeConfig = buildRuntimeConfigDispatch(config);
+          });
+        })
+      );
+    }
+
     this.registerCallbackListener(
       this.callbackRouter.onAskMahoSessionAccepted.addListener((requestId: string, sessionInfo: SessionInfo) => {
         void this.ingestAskMahoSessionAccepted(requestId, sessionInfo);
@@ -1676,6 +1722,112 @@ export class MahoAiStore {
     });
   }
 
+  private isPlainReplayDelta(event: RuntimeEvent): boolean {
+    return (event.kind === RuntimeEventKind.kAssistantToken ||
+            event.kind === RuntimeEventKind.kAssistantThinking) &&
+        event.text != null && !event.toolCall && !event.toolResult &&
+        !event.approvalRequest && !event.approvalResult && !event.browserContext &&
+        !event.artifact &&
+        !('interactionRequest' in event && event.interactionRequest != null) &&
+        !('credentialErrorCode' in event && event.credentialErrorCode != null);
+  }
+
+  private pruneReplayWindow(state: AppState, sessionId: string, through: bigint): void {
+    if (through <= (this.replayWindowThroughBySessionId.get(sessionId) ?? -1n)) {
+      return;
+    }
+    this.replayWindowThroughBySessionId.set(sessionId, through);
+    const existing = state.eventsBySessionId[sessionId] || [];
+    const removedArtifacts = new Set<string>();
+    for (const {event} of existing) {
+      if (BigInt(event.sequence) > through) {
+        continue;
+      }
+      if (event.toolCall) delete state.toolCallsById[event.toolCall.callId];
+      if (event.toolResult) delete state.toolResultsByCallId[event.toolResult.callId];
+      if (event.approvalRequest) delete state.approvalsById[event.approvalRequest.approvalId];
+      if (event.approvalResult) delete state.approvalResultsById[event.approvalResult.approvalId];
+      if (event.artifact) {
+        removedArtifacts.add(event.artifact.artifactId);
+        this.artifactUrlCache.delete(`preview:${event.artifact.artifactId}`);
+        this.artifactUrlCache.delete(`export:${event.artifact.artifactId}`);
+      }
+    }
+    state.eventsBySessionId[sessionId] =
+        existing.filter(entry => BigInt(entry.event.sequence) > through);
+    state.contextsBySessionId[sessionId] =
+        (state.contextsBySessionId[sessionId] || []).filter(
+            context => (this.replayContextSequence.get(context) ?? -1n) > through);
+    state.artifactsBySessionId[sessionId] =
+        (state.artifactsBySessionId[sessionId] || []).filter(
+            artifact => !removedArtifacts.has(artifact.artifactId));
+    const interactions = this.replayInteractionSequences.get(sessionId);
+    state.interactionsBySessionId[sessionId] =
+        (state.interactionsBySessionId[sessionId] || []).filter(record => {
+          if ((interactions?.get(record.requestId) ?? -1n) > through) {
+            return true;
+          }
+          interactions?.delete(record.requestId);
+          return false;
+        });
+    if (interactions?.size === 0) {
+      this.replayInteractionSequences.delete(sessionId);
+    }
+  }
+
+  private mergeReplayEvents(
+      state: AppState, sessionId: string, incoming: RuntimeEvent[]): void {
+    for (const event of incoming) {
+      if (event.replayWindow) {
+        this.pruneReplayWindow(
+            state, sessionId, BigInt(event.replayWindow.omittedThroughSequence));
+      }
+    }
+    const existing = state.eventsBySessionId[sessionId] || [];
+    const existingThrough = existing.reduce(
+        (latest, entry) => BigInt(entry.event.sequence) > latest ?
+            BigInt(entry.event.sequence) : latest, -1n);
+    const incomingThrough = incoming.reduce(
+        (latest, event) => BigInt(event.sequence) > latest ?
+            BigInt(event.sequence) : latest, -1n);
+    const omittedThrough = this.replayWindowThroughBySessionId.get(sessionId) ?? -1n;
+    const byStart = new Map<string, RuntimeEvent>();
+    for (const event of [...incoming, ...existing.map(entry => entry.event)]) {
+      if (BigInt(event.sequence) <= omittedThrough) {
+        continue;
+      }
+      const start = event.sequenceStart || event.sequence;
+      const key = `${start}:${event.kind}:${event.requestId ?? ''}`;
+      const previous = byStart.get(key);
+      if (!previous || BigInt(event.sequence) >= BigInt(previous.sequence)) {
+        byStart.set(key, event);
+      }
+    }
+    const ordered = [...byStart.values()].sort((a, b) =>
+      Number(BigInt(a.sequenceStart || a.sequence) - BigInt(b.sequenceStart || b.sequence)) ||
+      Number(BigInt(b.sequence) - BigInt(a.sequence)));
+    const covered = new Map<string, bigint>();
+    const merged = ordered.filter(event => {
+      if (!this.isPlainReplayDelta(event)) {
+        return true;
+      }
+      const key = `${event.kind}:${event.requestId ?? ''}`;
+      if ((covered.get(key) ?? -1n) >= BigInt(event.sequence)) {
+        return false;
+      }
+      covered.set(key, BigInt(event.sequence));
+      return true;
+    });
+    state.eventsBySessionId[sessionId] = [];
+    for (const event of merged) {
+      this.applyRuntimeEvent(state, sessionId, event, true);
+    }
+    if (incomingThrough >= existingThrough ||
+        !(state.contextsBySessionId[sessionId] || []).length) {
+      this.updateContextSnapshot(state, sessionId, merged);
+    }
+  }
+
   private appendEventInternal(state: AppState, sessionId: string, event: RuntimeEvent) {
     if (!isRenderableTimelineEvent(event)) {
       return;
@@ -1684,32 +1836,43 @@ export class MahoAiStore {
     const existing = state.eventsBySessionId[sessionId] || [];
     const previous = existing[existing.length - 1];
 
-    if (event.kind === RuntimeEventKind.kAssistantToken && previous?.event.kind === RuntimeEventKind.kAssistantToken) {
-      previous.event = {
-        ...previous.event,
-        text: `${previous.event.text || ''}${event.text || ''}`,
-        timestamp: event.timestamp,
-      };
-      state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
-      return;
-    }
-
-    if (event.kind === RuntimeEventKind.kAssistantThinking && previous?.event.kind === RuntimeEventKind.kAssistantThinking) {
-      previous.event = {
-        ...previous.event,
-        text: `${previous.event.text || ''}${event.text || ''}`,
-        timestamp: event.timestamp,
-      };
-      state.eventsBySessionId[sessionId] = [...existing.slice(0, -1), previous];
-      return;
+    if (previous && previous.event.kind === event.kind &&
+        previous.event.requestId === event.requestId &&
+        BigInt(previous.event.sequence) + 1n === BigInt(event.sequenceStart || event.sequence) &&
+        this.isPlainReplayDelta(previous.event) && this.isPlainReplayDelta(event)) {
+      const previousBytes = this.replayTextBytes.get(previous.event) ??
+          this.replayTextEncoder.encode(previous.event.text || '').byteLength;
+      const incomingBytes = this.replayTextEncoder.encode(event.text || '').byteLength;
+      if (previousBytes + incomingBytes <= 64 * 1024) {
+        const mergedEvent: RuntimeEvent = {
+          ...previous.event,
+          text: `${previous.event.text || ''}${event.text || ''}`,
+          timestamp: event.timestamp,
+          sequence: event.sequence,
+          sequenceStart: previous.event.sequenceStart || previous.event.sequence,
+        };
+        this.replayTextBytes.set(mergedEvent, previousBytes + incomingBytes);
+        state.eventsBySessionId[sessionId] =
+            [...existing.slice(0, -1), {...previous, event: mergedEvent}];
+        return;
+      }
     }
 
     const nextEntry: TimelineEntry = {sessionId, event};
     state.eventsBySessionId[sessionId] = [...existing, nextEntry];
   }
 
-  private applyRuntimeEvent(state: AppState, sessionId: string, event: RuntimeEvent): void {
-    const isSelectedSession = state.currentSessionId === sessionId;
+  private applyRuntimeEvent(
+      state: AppState, sessionId: string, event: RuntimeEvent, replay = false): void {
+    if (event.replayWindow) {
+      this.pruneReplayWindow(
+          state, sessionId, BigInt(event.replayWindow.omittedThroughSequence));
+    }
+    if (BigInt(event.sequence) <=
+        (this.replayWindowThroughBySessionId.get(sessionId) ?? -1n)) {
+      return;
+    }
+    const isSelectedSession = !replay && state.currentSessionId === sessionId;
     this.appendEventInternal(state, sessionId, event);
     if (event.toolCall?.callId) {
       state.toolCallsById[event.toolCall.callId] = event.toolCall;
@@ -1742,6 +1905,10 @@ export class MahoAiStore {
           {interactionRequest?: InteractionRequestInfoPayload}).interactionRequest;
       if (payload?.requestId) {
         const record = buildInteractionRequestRecord(payload);
+        const sequences =
+            this.replayInteractionSequences.get(sessionId) || new Map<string, bigint>();
+        this.replayInteractionSequences.set(sessionId, sequences);
+        sequences.set(record.requestId, BigInt(event.sequence));
         const existing = state.interactionsBySessionId[sessionId] || [];
         // De-dupe by requestId so history replay and later lifecycle updates
         // (expired/cancelled) replace the stored record in arrival order.
@@ -1749,7 +1916,8 @@ export class MahoAiStore {
         state.interactionsBySessionId[sessionId] = [...filtered, record];
       }
     }
-    if (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError) {
+    if (!replay &&
+        (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError)) {
       state.turnPendingBySessionId[sessionId] = false;
       if (isSelectedSession && event.kind === RuntimeEventKind.kError) {
         const errorText = event.text || '';
@@ -1761,10 +1929,13 @@ export class MahoAiStore {
       }
     }
     if (event.kind === RuntimeEventKind.kBrowserContextInjected && event.browserContext) {
-      const existing = state.contextsBySessionId[sessionId] || [];
-      state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
+      this.replayContextSequence.set(event.browserContext, BigInt(event.sequence));
+      if (!replay) {
+        const existing = state.contextsBySessionId[sessionId] || [];
+        state.contextsBySessionId[sessionId] = [...existing, event.browserContext];
+      }
     }
-    if (event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
+    if (!replay && event.kind === RuntimeEventKind.kToolAvailabilityChanged) {
       const activeSpaceId = state.activeWorkspace?.spaceId ?? null;
       void this.loadAiExtensibility(activeSpaceId);
     }
@@ -1888,17 +2059,20 @@ export class MahoAiStore {
     }
   }
 
-  async approveMcpServerTrust(workspaceId: string, serverName: string, tools: string[]): Promise<void> {
+  async approveMcpServerTrust(workspaceId: string, serverName: string, tools: string[]): Promise<boolean> {
     try {
       const {success} = await this.pageHandler.approveMcpServerTrust(workspaceId, serverName, tools);
       if (success) {
         toast.success('MCP server trusted');
         await this.loadAiExtensibility(this.state.activeWorkspace?.spaceId);
-      } else {
-        toast.error('Failed to trust MCP server');
+        return true;
       }
+      toast.error('Failed to trust MCP server');
+      return false;
     } catch (err) {
       console.error('[maho-ai] approveMcpServerTrust failed', err);
+      toast.error('Failed to trust MCP server');
+      return false;
     }
   }
 
@@ -1929,6 +2103,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] registerMcpServer failed', err);
+      toast.error('Failed to register MCP server');
       return false;
     }
   }
@@ -1944,6 +2119,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] removeMcpServer failed', err);
+      toast.error('Failed to remove MCP server');
     }
   }
 
@@ -1960,6 +2136,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] registerCliTool failed', err);
+      toast.error('Failed to register CLI tool');
       return false;
     }
   }
@@ -1991,6 +2168,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] createAiProfile failed', err);
+      toast.error('Failed to create agent profile');
       return false;
     }
   }

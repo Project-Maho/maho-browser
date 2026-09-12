@@ -159,9 +159,91 @@ describe('Error recovery and action interaction in rendered DOM', () => {
             readOnly={false}
           />));
 
-      // Then: displays error text and Issue badge
-      expect(container.textContent).toContain('Something went wrong — Execution failed while contacting the runtime.');
+      // Then: displays the complete error text and Issue badge
+      expect(container.textContent).toContain('Something went wrong');
+      expect(container.textContent).toContain('Execution failed while contacting the runtime.');
       expect(container.textContent).toContain('Issue');
+    });
+
+    it('renders the whole error payload untruncated and copies it to the clipboard', async () => {
+      const longDetail =
+          'Execution error: Error from LLM when running completions Permanent error: ' +
+          'POST http://127.0.0.1:18801/v1/chat/completions returned 404 Not Found for model ' +
+          'claude-opus-4-6-thinking (request id req-abcdef0123456789)';
+      const event = createErrorEvent(null, longDetail);
+      const items = collectConversationItems([{sessionId: 'session-1', event}]);
+      const item = items[0];
+      expect(item).toBeDefined();
+      expect(item!.errorDetail).toBe(longDetail);
+
+      const writeText = vi.fn<(value: string) => Promise<void>>(() => Promise.resolve());
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {writeText},
+      });
+
+      act(() => root.render(
+          <ConversationSystemItem
+            item={item!}
+            onOpenSettings={vi.fn()}
+            onRespondToApproval={vi.fn()}
+            readOnly={false}
+          />));
+
+      const detail = container.querySelector('[data-testid="error-detail"]');
+      expect(detail?.textContent).toBe(longDetail);
+
+      const copyButton = container.querySelector<HTMLButtonElement>('[data-action="copy-error"]');
+      expect(copyButton).not.toBeNull();
+
+      await act(async () => {
+        copyButton!.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      });
+
+      expect(writeText).toHaveBeenCalledWith(longDetail);
+    });
+
+    it('renders Retry button and dispatches onRetry callback on click', async () => {
+      const event = createErrorEvent(null, 'Connection refused to proxy 127.0.0.1:18801');
+      const items = collectConversationItems([{sessionId: 'session-1', event}]);
+      const item = items[0];
+      expect(item).toBeDefined();
+
+      const onRetry = vi.fn();
+
+      act(() => root.render(
+          <ConversationSystemItem
+            item={item!}
+            onOpenSettings={vi.fn()}
+            onRespondToApproval={vi.fn()}
+            onRetry={onRetry}
+            readOnly={false}
+          />));
+
+      const retryButton = requireButton(container, 'Retry');
+      await act(async () => {
+        retryButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      });
+
+      expect(onRetry).toHaveBeenCalledOnce();
+      expect(container.textContent).toContain('Connection error — Unable to reach AI proxy or endpoint.');
+      expect(container.textContent).toContain('Connection refused to proxy 127.0.0.1:18801');
+    });
+
+    it('does not misclassify 401 unauthorized or quota errors as connection unreachable', () => {
+      const authEvent = createErrorEvent(null, 'Proxy response 401 Unauthorized: Invalid API key');
+      const authItems = collectConversationItems([{sessionId: 'session-1', event: authEvent}]);
+      expect(authItems[0]?.text).toBe('Something went wrong');
+      expect(authItems[0]?.errorDetail)
+          .toBe('Proxy response 401 Unauthorized: Invalid API key');
+      expect(authItems[0]?.text).not.toContain('Connection error');
+
+      const quotaEvent = createErrorEvent(null, 'Proxy quota exceeded: 429 Too Many Requests');
+      const quotaItems = collectConversationItems([{sessionId: 'session-1', event: quotaEvent}]);
+      expect(quotaItems[0]?.text).toBe('Something went wrong');
+      expect(quotaItems[0]?.errorDetail)
+          .toBe('Proxy quota exceeded: 429 Too Many Requests');
+      expect(quotaItems[0]?.text).not.toContain('Connection error');
     });
   });
 });

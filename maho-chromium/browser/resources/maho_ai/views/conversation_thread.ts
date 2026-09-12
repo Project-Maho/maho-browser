@@ -46,6 +46,7 @@ export interface ConversationItem {
   };
   chips?: ConversationChip[];
   credentialError?: CredentialErrorPresentation;
+  errorDetail?: string;
   kind?: 'activity'|'approval'|'artifact'|'thinking';
   artifact?: ArtifactInfo;
   key: string;
@@ -58,7 +59,7 @@ export interface ConversationItem {
   toolName?: string;
 }
 
-function summarizeInlineText(text: string, maxLength = 64): string {
+export function summarizeInlineText(text: string, maxLength = 64): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) {
     return normalized;
@@ -71,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function parseJsonRecord(text?: string): Record<string, unknown>|null {
+export function parseJsonRecord(text?: string): Record<string, unknown>|null {
   if (!text) {
     return null;
   }
@@ -89,7 +90,7 @@ function getStringField(record: Record<string, unknown>|null, key: string): stri
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function summarizePath(value?: string): string|undefined {
+export function summarizePath(value?: string): string|undefined {
   if (!value) {
     return undefined;
   }
@@ -147,6 +148,37 @@ export function getToolProgressLabel(toolName?: string): string {
   return 'Working…';
 }
 
+export function getPendingThreadLabel(
+    entries: TimelineEntry[], pending: boolean): string|null {
+  if (!pending) {
+    return null;
+  }
+
+  let latestToolName: string|undefined = undefined;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const event = entries[index]?.event;
+    if (!event) {
+      continue;
+    }
+
+    if (event.kind === RuntimeEventKind.kAssistantToken ||
+        event.kind === RuntimeEventKind.kAssistantThinking ||
+        event.kind === RuntimeEventKind.kTurnComplete) {
+      return null;
+    }
+
+    if (!latestToolName && event.kind === RuntimeEventKind.kToolRequest) {
+      latestToolName = event.toolCall?.toolName || undefined;
+    }
+
+    if (event.kind === RuntimeEventKind.kUserPrompt) {
+      break;
+    }
+  }
+
+  return getToolProgressLabel(latestToolName);
+}
+
 function humanizeToolRequest(toolCall?: ToolCallInfo|null): string {
   if (!toolCall) {
     return 'Working with a tool…';
@@ -158,8 +190,15 @@ function humanizeToolRequest(toolCall?: ToolCallInfo|null): string {
   const pattern = getStringField(args, 'pattern');
   const query = getStringField(args, 'query');
   const libraryId = getStringField(args, 'libraryId');
-  const description = getStringField(args, 'description');
+  const description = getStringField(args, 'description') ||
+      getStringField(args, 'tool_summary') ||
+      getStringField(args, 'summary') ||
+      getStringField(args, 'title');
   const normalizedName = normalizeToolName(toolCall.toolName);
+
+  if (description) {
+    return summarizeInlineText(description, 60);
+  }
 
   if (normalizedName === 'read_current_page') {
     return 'Reading current page';
@@ -270,7 +309,8 @@ function humanizeApprovalResult(result: ApprovalResultInfo): string {
 }
 
 function createEventKey(entry: TimelineEntry, index: number): string {
-  return `${entry.event.sequence?.toString() || `t${entry.event.timestamp}`}-${entry.event.kind}-${index}`;
+  const seq = entry.event.sequenceStart?.toString() || entry.event.sequence?.toString() || `t${entry.event.timestamp}`;
+  return `${seq}-${entry.event.kind}-${index}`;
 }
 
 function getToolStatusChip(status?: ToolCallStatus): ConversationChip {
@@ -306,6 +346,28 @@ function buildApprovalChips(
 function getApprovalToolAction(toolName?: string): string|undefined {
   const display = getToolDisplayName(toolName);
   return display ? `Calling ${display}` : undefined;
+}
+
+function isConnectionErrorMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  // Never misclassify HTTP client errors (auth/quota/rate limit) as transport unreachable
+  if (lower.includes('401') || lower.includes('unauthorized') ||
+      lower.includes('403') || lower.includes('forbidden') ||
+      lower.includes('429') || lower.includes('quota') ||
+      lower.includes('rate limit')) {
+    return false;
+  }
+  return lower.includes('connection refused') ||
+         lower.includes('failed to connect') ||
+         lower.includes('error sending request') ||
+         lower.includes('connect error') ||
+         lower.includes('network error') ||
+         lower.includes('dns error') ||
+         lower.includes('connection timed out') ||
+         lower.includes('connect timeout') ||
+         lower.includes('502 bad gateway') ||
+         lower.includes('503 service unavailable') ||
+         lower.includes('504 gateway timeout');
 }
 
 export function collectConversationItems(entries: TimelineEntry[]): ConversationItem[] {
@@ -625,6 +687,7 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
         if (credentialError) {
           items.push({
             credentialError,
+            errorDetail: text || undefined,
             key,
             markdown: false,
             role: 'system',
@@ -634,16 +697,21 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           });
           break;
         }
-        items.push({
-          kind: 'activity',
-          key,
-          markdown: false,
-          role: 'system',
-          text: text ? `Something went wrong — ${summarizeInlineText(text, 68)}` :
-              'The runtime reported an error.',
-          timestamp: event.timestamp,
-          tone: 'danger',
-        });
+        {
+          const isConn = text ? isConnectionErrorMessage(text) : false;
+          items.push({
+            errorDetail: text || undefined,
+            kind: 'activity',
+            key,
+            markdown: false,
+            role: 'system',
+            text: isConn ?
+                'Connection error — Unable to reach AI proxy or endpoint.' :
+                (text ? 'Something went wrong' : 'The runtime reported an error.'),
+            timestamp: event.timestamp,
+            tone: 'danger',
+          });
+        }
         break;
       case RuntimeEventKind.kSessionStatus:
       case RuntimeEventKind.kConnectionStateChanged:

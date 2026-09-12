@@ -2,14 +2,11 @@ import type {RefObject} from 'react';
 import {CompactStage} from './compact-stage.js';
 import {CompactTopbar} from './compact-topbar.js';
 import {ConversationThread} from './conversation-thread.js';
-import {OutputsSection} from './outputs-section.js';
 import type {MahoAiStore} from '../../../store.js';
 import type {TimelineEntry, ViewMode} from '../../../types.js';
 
 import {TrustCeremony} from '../trust-ceremony/trust-ceremony.js';
-import {RuntimeConfigCard} from './runtime-config-card.js';
 import {InteractionApprovalCard} from './interaction-approval-card.js';
-import {SuggestedTaskCards} from './suggested-task-cards.js';
 
 export function CompactShell(
     {
@@ -24,6 +21,7 @@ export function CompactShell(
       onOpenRoutines = () => {},
       onRegenerate,
       onRespondToApproval,
+      onResumeSession,
       onSetViewMode,
       onStartSession,
       readOnly,
@@ -42,6 +40,7 @@ export function CompactShell(
       onOpenRoutines?: () => void;
       onRegenerate?: () => void;
       onRespondToApproval: (approvalId: string, approved: boolean) => void;
+      onResumeSession?: (sessionId: string) => void;
       onSetViewMode: (mode: ViewMode) => void;
       onStartSession: () => void;
       readOnly: boolean;
@@ -67,55 +66,61 @@ export function CompactShell(
       <div className="flex h-full min-h-0 flex-col">
         <div
             ref={topOverlayRef}
-            className="relative z-20 grid shrink-0 gap-3 px-3 pb-2 pt-3 max-[520px]:gap-2 max-[520px]:px-2 max-[520px]:pb-2 max-[520px]:pt-2">
+            className="relative z-20 grid shrink-0 gap-2 px-1 pb-2 pt-1">
           <CompactTopbar
             store={store}
             onClosePanel={onClosePanel}
             onGetViewMode={onGetViewMode}
             onOpenSettings={onOpenSettings}
             onOpenRoutines={onOpenRoutines}
+            onResumeSession={onResumeSession}
             onSetViewMode={onSetViewMode}
             onStartSession={onStartSession}
           />
           <TrustCeremony store={store} />
-          <RuntimeConfigCard store={store} />
-          <InteractionApprovalCard store={store} />
         </div>
-        <ConversationThread
-          bottomPadding={bottomPadding}
-          entries={entries}
-          onOpenSettings={onOpenSettings}
-          onRegenerate={onRegenerate}
-          onRespondToApproval={onRespondToApproval}
-          onRenameArtifact={renameArtifact}
-          onDeleteArtifact={deleteArtifact}
-          onGetArtifactPreviewUrl={previewArtifactUrl}
-          onGetArtifactExportUrl={exportArtifactUrl}
-          readOnly={readOnly}
-          thinkingLabel={thinkingLabel}
-          topPadding={topPadding}
-        />
-        <OutputsSection store={store} />
+        <div
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            data-testid="runtime-flow">
+          <ConversationThread
+            bottomPadding={bottomPadding}
+            entries={entries}
+            onOpenSettings={onOpenSettings}
+            onRegenerate={onRegenerate}
+            onRespondToApproval={onRespondToApproval}
+            onRenameArtifact={renameArtifact}
+            onDeleteArtifact={deleteArtifact}
+            onGetArtifactPreviewUrl={previewArtifactUrl}
+            onGetArtifactExportUrl={exportArtifactUrl}
+            readOnly={readOnly}
+            thinkingLabel={thinkingLabel}
+            topPadding={topPadding}
+          />
+          <div
+              className="grid min-w-0 shrink-0 gap-3 px-4 pb-3 max-[520px]:gap-2 max-[520px]:px-3"
+              data-testid="runtime-footer">
+            <InteractionApprovalCard store={store} />
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 max-[520px]:gap-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-2">
       <CompactTopbar
         store={store}
         onClosePanel={onClosePanel}
         onGetViewMode={onGetViewMode}
         onOpenSettings={onOpenSettings}
         onOpenRoutines={onOpenRoutines}
+        onResumeSession={onResumeSession}
         onSetViewMode={onSetViewMode}
         onStartSession={onStartSession}
       />
       <TrustCeremony store={store} />
-      <RuntimeConfigCard store={store} />
       <InteractionApprovalCard store={store} />
-      <SuggestedTaskCards store={store} />
-      <CompactStage onConnect={onConnect} />
+      <CompactStage />
     </div>
   );
 }

@@ -19,6 +19,31 @@ Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
   value: true,
 });
 
+const originalResizeObserver = globalThis.ResizeObserver;
+const originalScrollIntoView = window.HTMLElement.prototype.scrollIntoView;
+
+// The selection popups are Radix popovers; opening one needs ResizeObserver
+// and renders its options into the portal target rather than the test root.
+function installPopoverEnvironment(): void {
+  globalThis.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  } as unknown as typeof ResizeObserver;
+  window.HTMLElement.prototype.scrollIntoView = vi.fn();
+  if (!document.getElementById('app')) {
+    const appRoot = document.createElement('div');
+    appRoot.id = 'app';
+    document.body.appendChild(appRoot);
+  }
+}
+
+function cleanupPopoverEnvironment(): void {
+  globalThis.ResizeObserver = originalResizeObserver;
+  window.HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+  document.querySelectorAll('#app').forEach(el => el.remove());
+}
+
 function requireElement<T extends Element>(element: T | null, description: string): T {
   if (element) {
     return element;
@@ -94,6 +119,7 @@ describe('AISelectionDropdownContent', () => {
   let root: Root;
 
   beforeEach(() => {
+    installPopoverEnvironment();
     container = document.createElement('div');
     document.body.append(container);
     root = createRoot(container);
@@ -102,6 +128,7 @@ describe('AISelectionDropdownContent', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    cleanupPopoverEnvironment();
   });
 
   it('shows provider, model, and thinking level as three compact controls', () => {
@@ -140,7 +167,7 @@ describe('AISelectionDropdownContent', () => {
     });
     await act(async () => {
       requireElement(
-          container.querySelector('button[data-ai-selection-provider="anthropic"]'),
+          document.querySelector('button[data-ai-selection-provider="anthropic"]'),
           'Anthropic provider option')
           .dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
@@ -152,7 +179,7 @@ describe('AISelectionDropdownContent', () => {
     });
     await act(async () => {
       requireElement(
-          container.querySelector('button[data-ai-selection-model="gpt-4.1"]'),
+          document.querySelector('button[data-ai-selection-model="gpt-4.1"]'),
           'GPT-4.1 model option')
           .dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
@@ -164,7 +191,7 @@ describe('AISelectionDropdownContent', () => {
     });
     await act(async () => {
       requireElement(
-          container.querySelector(`button[data-ai-selection-reasoning="${AI_REASONING_EFFORT.kHigh}"]`),
+          document.querySelector(`button[data-ai-selection-reasoning="${AI_REASONING_EFFORT.kHigh}"]`),
           'high reasoning option')
           .dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });

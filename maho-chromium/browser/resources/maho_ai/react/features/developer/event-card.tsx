@@ -12,6 +12,7 @@ import {formatTimestamp} from '../../lib/format-timestamp.js';
 import {Markdown} from '../../components/markdown.js';
 import {Badge} from '@ui/badge';
 import {CredentialErrorNotice} from '../../components/credential-error-notice.js';
+import {ErrorDetail} from '../../components/error-detail.js';
 import {getCredentialErrorPresentation} from '../../../views/credential_error.js';
 
 function EventShell(
@@ -188,9 +189,11 @@ export function EventCard(
             presentation={credentialError}
             surface="developer"
           />
+        ) : getEventText(event) ? (
+          <ErrorDetail label="Runtime error" text={getEventText(event)} />
         ) : (
           <div className="text-sm leading-6 text-muted-foreground break-words">
-            {getEventText(event) || 'The runtime reported an error.'}
+            The runtime reported an error.
           </div>
         )}
         meta={meta}
