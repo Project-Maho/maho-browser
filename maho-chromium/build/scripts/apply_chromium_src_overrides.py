@@ -11244,18 +11244,29 @@ def normalize_chrome_browser_ui_build(text: str) -> tuple[str, int]:
     # Retired entries injected by earlier materializations must be stripped
     # before the missing-source pass re-adds anything, otherwise a deleted
     # source file keeps breaking ninja ("missing and no known rule").
+    # mac-only overlay sources must also be stripped on non-mac hosts: a
+    # mac-mirrored BUILD.gn carries them, and a win host that skips the
+    # strip keeps the mac backend in sources while the non-mac stub that
+    # satisfies ApplyVibrancyToUtilityPanel never gets added.
     retired_removed = 0
-    for retired in (
+    retired = (
         '    "//maho/browser/ui/views/maho_mini/maho_mini_window_stub.cc",\n',
-    ):
-        if retired in text:
-            text = text.replace(retired, '', 1)
+    )
+    if host_platform() != "mac":
+        retired += (
+            '    "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm",\n',
+            '    "//maho/browser/mcp/maho_mcp_native_input_mac.mm",\n',
+        )
+    for retired_entry in retired:
+        if retired_entry in text:
+            text = text.replace(retired_entry, '', 1)
             retired_removed += 1
 
     sources = _CHROME_BROWSER_UI_SOURCES
     if host_platform() == "mac":
         sources += _CHROME_BROWSER_UI_MAC_SOURCES
     elif host_platform() == "win":
+        sources += _CHROME_BROWSER_UI_NON_MAC_SOURCES
         sources += _CHROME_BROWSER_UI_WIN_SOURCES
     else:
         sources += _CHROME_BROWSER_UI_NON_MAC_SOURCES
@@ -11617,6 +11628,29 @@ def normalize_browser_view_mru_decl(text: str) -> tuple[str, int]:
     return text, 0
 
 
+def normalize_chrome_content_browser_client_includes(text: str) -> tuple[str, int]:
+    """Consolidate the BrowserURLHandler include beside search.h.
+
+    Pristine upstream trees keep `chrome/browser/search/search.h` and
+    `content/public/browser/browser_url_handler.h` far apart, so the
+    ad-block throttle include anchor (which expects the two lines
+    adjacent) can never match. Move the URL-handler include directly
+    below the search include before the replacement loop runs. Trees
+    that already carry the Maho ad-block includes keep their shape.
+    """
+    search_inc = '#include "chrome/browser/search/search.h"\n'
+    url_inc = '#include "content/public/browser/browser_url_handler.h"\n'
+    if text.count(url_inc) != 1 or search_inc not in text:
+        return text, 0
+    if search_inc + url_inc in text:
+        return text, 0
+    if '#include "maho/browser/net/maho_ad_block_throttle.h"' in text:
+        return text, 0
+    text = text.replace(url_inc, "", 1)
+    text = text.replace(search_inc, search_inc + url_inc, 1)
+    return text, 1
+
+
 def apply_replacements(
     target_file: Path,
     replacements: list[Replacement],
@@ -11627,6 +11661,15 @@ def apply_replacements(
     changed = False
     applied: list[str] = []
     exact_rel = ""
+
+    if target_file.name == "chrome_content_browser_client.cc":
+        text, normalized_count = normalize_chrome_content_browser_client_includes(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Consolidate BrowserURLHandler include beside search.h "
+                "in chrome_content_browser_client.cc"
+            )
 
     if target_file.name == "chrome_web_ui_configs.cc":
         text, normalized_count = normalize_maho_test_webui_config(text)
