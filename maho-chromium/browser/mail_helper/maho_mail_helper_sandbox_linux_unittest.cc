@@ -13,6 +13,7 @@
 #include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -23,6 +24,7 @@
 
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/strings/string_util.h"
 #include "base/threading/thread.h"
 #include "sandbox/linux/system_headers/linux_seccomp.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,11 +52,11 @@ ChildResult RunSandboxedChild(const base::FilePath& mail_root,
     return {};
   }
   if (child == 0) {
+    alarm(10);
     if (!InitializeLinuxMailHelperSandbox(mail_root,
                                           oauth_loopback_listener_fd)) {
       _exit(kSandboxInitializationFailed);
     }
-    alarm(10);
     _exit(callback());
   }
 
@@ -388,6 +390,43 @@ TEST(MahoMailHelperSandboxLinuxTest,
 }
 
 TEST(MahoMailHelperSandboxLinuxTest,
+     AllowsSocketTimeoutOptionsAfterSandboxEngagement) {
+  base::ScopedTempDir temp;
+  const base::FilePath mail_root = CreateMailRoot(&temp);
+
+  const ChildResult result = RunSandboxedChild(mail_root, [] {
+    int socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (socket_fd < 0) {
+      return kSandboxProbeFailed;
+    }
+    struct timeval timeout = {.tv_sec = 15, .tv_usec = 0};
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   sizeof(timeout)) != 0 ||
+        setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout,
+                   sizeof(timeout)) != 0) {
+      close(socket_fd);
+      return kSandboxProbeFailed;
+    }
+    close(socket_fd);
+
+    int ipv6_socket = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (ipv6_socket >= 0) {
+      if (setsockopt(ipv6_socket, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                     sizeof(timeout)) != 0 ||
+          setsockopt(ipv6_socket, SOL_SOCKET, SO_SNDTIMEO, &timeout,
+                     sizeof(timeout)) != 0) {
+        close(ipv6_socket);
+        return kSandboxProbeFailed;
+      }
+      close(ipv6_socket);
+    }
+    return 0;
+  });
+  EXPECT_TRUE(result.exited);
+  EXPECT_EQ(0, result.exit_code);
+}
+
+TEST(MahoMailHelperSandboxLinuxTest,
      DeniesArbitraryUnixSocketTransportWithEperm) {
   base::ScopedTempDir temp;
   const base::FilePath mail_root = CreateMailRoot(&temp);
@@ -397,9 +436,8 @@ TEST(MahoMailHelperSandboxLinuxTest,
   ASSERT_GE(listener, 0);
   sockaddr_un address = {};
   address.sun_family = AF_UNIX;
-  ASSERT_GT(snprintf(address.sun_path, sizeof(address.sun_path), "%s",
-                     socket_path.value().c_str()),
-            0);
+  ASSERT_LT(socket_path.value().size(), sizeof(address.sun_path));
+  base::strlcpy(base::span(address.sun_path), socket_path.value());
   ASSERT_EQ(0, bind(listener, reinterpret_cast<sockaddr*>(&address),
                     sizeof(address)));
   ASSERT_EQ(0, listen(listener, 1));

@@ -282,6 +282,13 @@ def get_target_triple(target=None):
     sys.exit(f'Unsupported platform: {sys.platform}')
 
 
+def effective_cargo_target_dir(default_crate_dir, rust_target) -> str:
+    target_dir = os.environ.get('CARGO_TARGET_DIR')
+    if target_dir:
+        return os.path.join(target_dir, rust_target)
+    return os.path.join(default_crate_dir, 'target', rust_target)
+
+
 def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     """Build the maho-stt-ffi static lib and copy it to prebuilt/.
 
@@ -298,7 +305,8 @@ def build_stt_ffi_prebuilt(rust_target, cpu_dir):
     print(f'Building maho-stt-ffi for {rust_target}...')
     _cargo_build(['cargo'], MAHO_ROOT, rust_target, 'maho-stt-ffi')
 
-    release_dir = os.path.join(MAHO_ROOT, 'target', rust_target, 'release')
+    target_dir = effective_cargo_target_dir(MAHO_ROOT, rust_target)
+    release_dir = os.path.join(target_dir, 'release')
     src_lib = os.path.join(release_dir, lib_name)
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
@@ -340,7 +348,8 @@ def build_mail_ffi_prebuilt(rust_target, cpu_dir):
     _cargo_build(
         ['cargo'], crate_dir, rust_target, env=cargo_env)
 
-    src_lib = os.path.join(crate_dir, 'target', rust_target, 'release', lib_name)
+    target_dir = effective_cargo_target_dir(crate_dir, rust_target)
+    src_lib = os.path.join(target_dir, 'release', lib_name)
     dst_lib = os.path.join(output_dir, lib_name)
     if not os.path.exists(src_lib):
         sys.exit(f'Build artifact not found: {src_lib}')
@@ -554,7 +563,8 @@ def build_rust_prebuilt(target=None, incremental=False):
                       'Install it (e.g. Strawberry Perl / NASM).')
     _cargo_build(['cargo'], MAHO_ROOT, rust_target, 'maho-ffi', cargo_env)
 
-    src_lib = os.path.join(MAHO_ROOT, 'target', rust_target, 'release', lib_name)
+    target_dir = effective_cargo_target_dir(MAHO_ROOT, rust_target)
+    src_lib = os.path.join(target_dir, 'release', lib_name)
     dst_lib = os.path.join(output_dir, lib_name)
 
     if not os.path.exists(src_lib):

@@ -278,6 +278,231 @@ class MahoMailServiceTest : public testing::Test {
       base::test::TaskEnvironment::TimeSource::MOCK_TIME};
 };
 
+// Parks actual Mojo handshake replies, not launcher state transitions.
+class StartupMailHelper : public ParkingMailHelper {
+ public:
+  void GetVersion(GetVersionCallback callback) override {
+    version_reply = std::move(callback);
+  }
+  void Initialize(const std::string&, const std::string&,
+                  InitializeCallback callback) override {
+    initialize_reply = std::move(callback);
+  }
+  void InjectKeys(const std::string&, const std::string&,
+                  InjectKeysCallback callback) override {
+    keys_reply = std::move(callback);
+  }
+
+  GetVersionCallback version_reply;
+  InitializeCallback initialize_reply;
+  InjectKeysCallback keys_reply;
+};
+
+class MahoMailStartupTest : public MahoMailServiceTest {
+ protected:
+  void SetUp() override {
+    service_.SetLauncherFactoryForTesting(base::BindLambdaForTesting([&] {
+      auto launcher = std::make_unique<MahoMailHelperLauncher>();
+      launcher_ = launcher.get();
+      launcher->SetHelperFactoryForTesting(base::BindLambdaForTesting([&] {
+        auto helper = std::make_unique<StartupMailHelper>();
+        auto remote = helper->BindNewPipe();
+        helpers_.push_back(std::move(helper));
+        return remote;
+      }));
+      return launcher;
+    }));
+    service_.EnsureHelperLaunched("test", "/profile", base::FilePath());
+    task_environment_.RunUntilIdle();
+    ASSERT_EQ(1u, helpers_.size());
+    ASSERT_TRUE(helper().version_reply);
+  }
+
+  void TearDown() override {
+    // Close the receiver endpoints before derived helper members destroy their
+    // parked responders; the base-class receiver otherwise outlives them.
+    for (auto& helper : helpers_) {
+      helper->DropConnection();
+    }
+    launcher_ = nullptr;
+  }
+
+  StartupMailHelper& helper() { return *helpers_.back(); }
+  void ReplyVersion() {
+    ASSERT_TRUE(helper().version_reply);
+    std::move(helper().version_reply).Run("test");
+    task_environment_.RunUntilIdle();
+    ASSERT_TRUE(helper().initialize_reply);
+  }
+  void ReplyInitialize() {
+    ASSERT_TRUE(helper().initialize_reply);
+    std::move(helper().initialize_reply).Run(true);
+    task_environment_.RunUntilIdle();
+    ASSERT_TRUE(helper().keys_reply);
+  }
+  void ReplyKeys() {
+    ASSERT_TRUE(helper().keys_reply);
+    std::move(helper().keys_reply).Run(true);
+    task_environment_.RunUntilIdle();
+    ASSERT_EQ(MahoMailService::LifecycleState::kReady,
+              service_.lifecycle_state_for_testing());
+  }
+  void ExpectStarting() {
+    EXPECT_EQ(MahoMailService::LifecycleState::kStarting,
+              service_.lifecycle_state_for_testing());
+    EXPECT_EQ(nullptr, launcher_->GetHelper());
+  }
+  void ExpectRetryAtDeadline() {
+    task_environment_.FastForwardBy(base::Seconds(5));
+    ExpectStarting();
+    EXPECT_EQ(1u, helpers_.size());
+    task_environment_.FastForwardBy(base::Milliseconds(499));
+    EXPECT_EQ(1u, helpers_.size());
+    task_environment_.FastForwardBy(base::Milliseconds(1));
+    ASSERT_EQ(2u, helpers_.size());
+    EXPECT_TRUE(helper().version_reply);
+  }
+
+  std::vector<std::unique_ptr<StartupMailHelper>> helpers_;
+  raw_ptr<MahoMailHelperLauncher> launcher_ = nullptr;
+  MahoMailService service_;
+};
+
+TEST_F(MahoMailStartupTest, SilentVersionRetriesThenReachesCrashCap) {
+  constexpr int kBackoffMs[] = {500, 1000, 2000, 4000, 8000};
+  for (size_t attempt = 0; attempt < 6; ++attempt) {
+    ASSERT_EQ(attempt + 1, helpers_.size());
+    ASSERT_TRUE(helper().version_reply);
+    task_environment_.FastForwardBy(base::Seconds(5));
+    if (attempt == 5) {
+      EXPECT_TRUE(launcher_->has_given_up());
+      EXPECT_EQ(MahoMailService::LifecycleState::kFailed,
+                service_.lifecycle_state_for_testing());
+      break;
+    }
+    ExpectStarting();
+    task_environment_.FastForwardBy(base::Milliseconds(kBackoffMs[attempt] - 1));
+    EXPECT_EQ(attempt + 1, helpers_.size());
+    task_environment_.FastForwardBy(base::Milliseconds(1));
+  }
+  task_environment_.FastForwardBy(base::Minutes(2));
+  EXPECT_EQ(6u, helpers_.size());
+}
+
+TEST_F(MahoMailStartupTest, SilentInitializeRetries) {
+  ReplyVersion();
+  ExpectRetryAtDeadline();
+}
+
+TEST_F(MahoMailStartupTest, SilentKeyInjectionRetries) {
+  ReplyVersion();
+  ReplyInitialize();
+  ExpectRetryAtDeadline();
+}
+
+TEST_F(MahoMailStartupTest, DeadlineCoversWholeStartupNotEachStage) {
+  task_environment_.FastForwardBy(base::Seconds(4));
+  ReplyVersion();
+  task_environment_.FastForwardBy(base::Seconds(1));
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+  ASSERT_EQ(2u, helpers_.size());
+  ExpectStarting();
+}
+
+TEST_F(MahoMailStartupTest, ReadinessCancelsDeadlineWithoutTimingOutMailReads) {
+  ReplyVersion();
+  ReplyInitialize();
+  ReplyKeys();
+  // OnHelperReady issues ListAccounts; it remains parked beyond the startup
+  // deadline. Startup recovery must not impose a deadline on ordinary reads.
+  ASSERT_EQ(1, helper().read_calls());
+  task_environment_.FastForwardBy(base::Minutes(2));
+  EXPECT_EQ(1u, helpers_.size());
+  EXPECT_EQ(MahoMailService::LifecycleState::kReady,
+            service_.lifecycle_state_for_testing());
+  helper().ReplyListAccounts(true, "[]");
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(MahoMailService::LifecycleState::kReady,
+            service_.lifecycle_state_for_testing());
+}
+
+TEST_F(MahoMailStartupTest, ShutdownCancelsStartupAndLateReply) {
+  launcher_ = nullptr;
+  task_environment_.FastForwardBy(base::Seconds(4));
+  service_.SetEnabledForTesting(false);
+  task_environment_.RunUntilIdle();
+  std::move(helper().version_reply).Run("test");
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(helper().initialize_reply);
+  helper().ReplyPrepareShutdown();
+  task_environment_.RunUntilIdle();
+  helper().ReplyShutdown();
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(MahoMailService::LifecycleState::kDisabled,
+            service_.lifecycle_state_for_testing());
+  task_environment_.FastForwardBy(base::Minutes(2));
+  EXPECT_EQ(1u, helpers_.size());
+}
+
+TEST_F(MahoMailStartupTest, RelaunchCancelsOldDeadlineAndIgnoresLateInitialize) {
+  ReplyVersion();
+  task_environment_.FastForwardBy(base::Seconds(4));
+  helper().DropConnection();
+  task_environment_.RunUntilIdle();
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+  ASSERT_EQ(2u, helpers_.size());
+  std::move(helpers_.front()->initialize_reply).Run(true);
+  task_environment_.RunUntilIdle();
+  EXPECT_FALSE(helper().keys_reply);
+  task_environment_.FastForwardBy(base::Milliseconds(500));
+  EXPECT_EQ(2u, helpers_.size());
+  ReplyVersion();
+  ReplyInitialize();
+  ReplyKeys();
+  task_environment_.FastForwardBy(base::Minutes(2));
+  EXPECT_EQ(2u, helpers_.size());
+  EXPECT_EQ(MahoMailService::LifecycleState::kReady,
+            service_.lifecycle_state_for_testing());
+}
+
+TEST_F(MahoMailServiceTest, AttachmentFilenameRejectsPlatformPathSyntax) {
+  MahoMailService service;
+  for (const std::string& filename :
+       {"report.pdf:stream", "report\n.pdf", "report.pdf.", "report.pdf ",
+        "CON.txt", "NUL", "report?.pdf", "report|.pdf", "aux.txt",
+        "COM1.pdf", "lpt9.txt", "COM\xc2\xb9.txt", "CON .txt",
+        "report\x7f.pdf", "report*.pdf", "report<.pdf"}) {
+    SCOPED_TRACE(filename);
+    bool replied = false;
+    service.DownloadAttachment(
+        "account", 42, "inbox", "1.2", filename,
+        base::BindLambdaForTesting([&](bool ok, std::string result) {
+          replied = true;
+          EXPECT_FALSE(ok);
+          EXPECT_EQ("invalid mail identifier", result);
+        }));
+    EXPECT_TRUE(replied);
+  }
+}
+
+TEST_F(MahoMailServiceTest, AttachmentFilenameAllowsOrdinaryExtensions) {
+  MahoMailService service;
+  for (const std::string& filename :
+       {"report.pdf", "photo.JPG", "archive.tar.gz", "my report.txt",
+        "COM10.txt", "console.pdf"}) {
+    SCOPED_TRACE(filename);
+    bool replied = false;
+    service.DownloadAttachment(
+        "account", 42, "inbox", "1.2", filename,
+        base::BindLambdaForTesting([&](bool ok, std::string result) {
+          replied = true;
+          EXPECT_FALSE(ok);
+          EXPECT_EQ(kUnavailable, result);
+        }));
+    EXPECT_TRUE(replied);
+  }
+}
+
 class MahoMailUnreadAggregationTest : public testing::Test {
  protected:
   base::test::TaskEnvironment task_environment_;
@@ -408,6 +633,60 @@ class LifecycleHarness {
   MahoMailService service_;
   std::vector<raw_ptr<ControllableLauncher>> launchers_;
 };
+
+TEST_F(MahoMailServiceTest, QueuedListAccountsDrainedOnTerminalFailure) {
+  LifecycleHarness harness;
+  harness.service()->EnsureHelperLaunched("v", "/profile", base::FilePath());
+  int calls = 0;
+  for (int i = 0; i < 3; ++i) {
+    harness.service()->ListAccounts(base::BindLambdaForTesting(
+        [&](bool ok, std::string result) {
+          ++calls;
+          EXPECT_FALSE(ok);
+          EXPECT_EQ(kUnavailable, result);
+        }));
+  }
+  harness.launcher(1)->NotifyFailureForTesting(true);
+  EXPECT_EQ(0, calls);
+  harness.launcher(1)->NotifyFailureForTesting(false);
+  EXPECT_EQ(3, calls);
+  EXPECT_EQ(1u, harness.launcher_count());
+}
+
+TEST_F(MahoMailServiceTest, ListAccountsOnFailedRelaunchesOnce) {
+  LifecycleHarness harness;
+  harness.service()->EnsureHelperLaunched("v", "/profile", base::FilePath());
+  harness.launcher(1)->NotifyFailureForTesting(false);
+  for (int i = 0; i < 3; ++i) {
+    harness.service()->ListAccounts(base::BindOnce([](bool, std::string) {}));
+  }
+  ASSERT_EQ(2u, harness.launcher_count());
+  EXPECT_EQ(1, harness.launcher(2)->launch_calls());
+  harness.launcher(2)->NotifyFailureForTesting(false);
+  harness.service()->ListAccounts(base::BindOnce([](bool, std::string) {}));
+  EXPECT_EQ(2u, harness.launcher_count());
+  task_environment_.FastForwardBy(base::Seconds(60));
+  harness.service()->ListAccounts(base::BindOnce([](bool, std::string) {}));
+  EXPECT_EQ(3u, harness.launcher_count());
+}
+
+TEST_F(MahoMailServiceTest, ListAccountsOnStoppedDoesNotUndoBrowserShutdown) {
+  LifecycleHarness harness;
+  harness.service()->EnsureHelperLaunched("v", "/profile", base::FilePath());
+  harness.service()->Shutdown();
+  harness.launcher(1)->CompleteDrain();
+  ASSERT_EQ(MahoMailService::LifecycleState::kStopped,
+            harness.service()->lifecycle_state_for_testing());
+  int calls = 0;
+  harness.service()->ListAccounts(base::BindLambdaForTesting(
+      [&](bool ok, std::string result) {
+        ++calls;
+        EXPECT_FALSE(ok);
+        EXPECT_EQ(kUnavailable, result);
+      }));
+  EXPECT_EQ(1, calls);
+  EXPECT_EQ(1u, harness.launcher_count());
+}
 
 TEST_F(MahoMailServiceTest, IntegrationReplyBarrierSubscribesBeforeRelease) {
   test::MailReplyBarrier barrier;
@@ -607,6 +886,13 @@ TEST_F(MahoMailServiceTest, InjectKeysTransitionsToReady) {
 
   launcher.InjectDatabaseKeys("sql_key", "cred_key");
   task_environment_.RunUntilIdle();
+  // Keys injected before the Initialize handshake completes must be cached
+  // without flipping readiness (the H-4 fix); readiness arrives only after
+  // the handshake and the deferred key injection both succeed.
+  EXPECT_EQ(nullptr, launcher.GetHelper());
+
+  launcher.CompleteHandshakeForTesting();
+  task_environment_.RunUntilIdle();
   EXPECT_NE(nullptr, launcher.GetHelper());
 }
 
@@ -621,6 +907,7 @@ TEST_F(MahoMailServiceTest, HelperReadyRefreshesRestoredAccounts) {
   EXPECT_EQ(helper.read_calls(), 0);
 
   launcher_ptr->InjectDatabaseKeys("sql_key", "cred_key");
+  launcher_ptr->CompleteHandshakeForTesting();
   task_environment_.RunUntilIdle();
 
   EXPECT_EQ(helper.read_calls(), 1);

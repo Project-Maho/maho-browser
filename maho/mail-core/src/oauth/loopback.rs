@@ -12,13 +12,15 @@
 //! the CSRF `state`, and drives the existing [`complete_oauth`] exchange.
 //!
 //! Uses blocking `std::net` on a dedicated `std::thread` (no tokio in this
-//! path); `TcpStream::set_read_timeout` caps the request read at ~300s,
-//! mirroring the Tauri app's `accept()` timeout.
+//! path). Loopback listeners skip unrelated connections with a five-second
+//! socket read timeout, while the overall flow allows 30 minutes for consent.
 
 use std::io::Write;
 use std::net::{Shutdown, TcpListener, TcpStream};
 #[cfg(target_os = "linux")]
-use std::os::fd::{BorrowedFd, FromRawFd, IntoRawFd};
+use std::os::fd::FromRawFd;
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::error::{MailFfiError, Result};
@@ -28,6 +30,7 @@ use crate::oauth::{
 use crate::state;
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(target_os = "linux")]
 const LOOPBACK_LISTENER_FD_ENV: &str = "MAHO_MAIL_OAUTH_LOOPBACK_FD";
 
@@ -62,11 +65,20 @@ pub fn sign_in_with_oauth_loopback_with_options(
     Ok(started)
 }
 
+#[cfg(target_os = "linux")]
+static LOOPBACK_LISTENER: OnceLock<TcpListener> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+type LoopbackListenerHandle = &'static TcpListener;
+
+#[cfg(not(target_os = "linux"))]
+type LoopbackListenerHandle = TcpListener;
+
 fn prepare_loopback_oauth(
     provider: &str,
     client_id: &str,
     options: StartOAuthOptions,
-) -> Result<(TcpListener, StartOAuthResponse)> {
+) -> Result<(LoopbackListenerHandle, StartOAuthResponse)> {
     let listener = oauth_loopback_listener()?;
     let port = listener
         .local_addr()
@@ -79,7 +91,15 @@ fn prepare_loopback_oauth(
 }
 
 #[cfg(target_os = "linux")]
-fn oauth_loopback_listener() -> Result<TcpListener> {
+fn oauth_loopback_listener() -> Result<LoopbackListenerHandle> {
+    if let Some(listener) = LOOPBACK_LISTENER.get() {
+        return Ok(listener);
+    }
+    static INIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = INIT_LOCK.lock().unwrap();
+    if let Some(listener) = LOOPBACK_LISTENER.get() {
+        return Ok(listener);
+    }
     let raw_fd = std::env::var(LOOPBACK_LISTENER_FD_ENV)
         .map_err(|_| MailFfiError::OAuth("sandboxed loopback listener is unavailable".to_string()))?
         .parse::<i32>()
@@ -87,23 +107,29 @@ fn oauth_loopback_listener() -> Result<TcpListener> {
             MailFfiError::OAuth("sandboxed loopback listener fd is invalid".to_string())
         })?;
     // SAFETY: the browser helper creates and retains this descriptor for the
-    // process lifetime before entering seccomp. Duplicate it so each OAuth
-    // attempt owns only its independent listener handle.
-    let owned = unsafe { BorrowedFd::borrow_raw(raw_fd) }
-        .try_clone_to_owned()
-        .map_err(|e| MailFfiError::OAuth(format!("loopback listener clone failed: {e}")))?;
-    // SAFETY: `owned` is a duplicated listening TCP socket and ownership is
-    // transferred exactly once into TcpListener.
-    Ok(unsafe { TcpListener::from_raw_fd(owned.into_raw_fd()) })
+    // process lifetime before entering seccomp. FromRawFd consumes raw_fd into
+    // the process-global OnceLock which lives for the process lifetime and is
+    // never dropped, retaining the original descriptor number required by seccomp.
+    let listener = unsafe { TcpListener::from_raw_fd(raw_fd) };
+    if let Err(listener) = LOOPBACK_LISTENER.set(listener) {
+        std::mem::forget(listener);
+    }
+    LOOPBACK_LISTENER.get().ok_or_else(|| {
+        MailFfiError::OAuth("failed to retrieve process-global loopback listener".to_string())
+    })
 }
 
 #[cfg(not(target_os = "linux"))]
-fn oauth_loopback_listener() -> Result<TcpListener> {
+fn oauth_loopback_listener() -> Result<LoopbackListenerHandle> {
     TcpListener::bind("127.0.0.1:0")
         .map_err(|e| MailFfiError::OAuth(format!("loopback bind failed: {e}")))
 }
 
-fn run_callback_listener(listener: TcpListener, provider: String, expected_state: String) {
+fn run_callback_listener(
+    listener: LoopbackListenerHandle,
+    provider: String,
+    expected_state: String,
+) {
     let result = accept_and_complete(&listener, &expected_state);
     state::cancellation_store().remove(&expected_state);
     state::pending_pkce().take(&expected_state);
@@ -113,6 +139,137 @@ fn run_callback_listener(listener: TcpListener, provider: String, expected_state
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+pub(crate) struct DispatchRegistry<T> {
+    listeners: std::sync::Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<T>>>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl<T> DispatchRegistry<T> {
+    pub(crate) fn new() -> Self {
+        Self {
+            listeners: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    pub(crate) fn register(&self, state: String, sender: std::sync::mpsc::Sender<T>) {
+        if let Ok(mut map) = self.listeners.lock() {
+            map.insert(state, sender);
+        }
+    }
+
+    pub(crate) fn unregister(&self, state: &str) {
+        if let Ok(mut map) = self.listeners.lock() {
+            map.remove(state);
+        }
+    }
+
+    pub(crate) fn dispatch(&self, state: &str, item: T) -> std::result::Result<(), T> {
+        let sender = {
+            let map = match self.listeners.lock() {
+                Ok(m) => m,
+                Err(_) => return Err(item),
+            };
+            map.get(state).cloned()
+        };
+        if let Some(tx) = sender {
+            tx.send(item).map_err(|e| e.0)
+        } else {
+            Err(item)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+static DISPATCH_REGISTRY: std::sync::LazyLock<DispatchRegistry<(TcpStream, String)>> =
+    std::sync::LazyLock::new(DispatchRegistry::new);
+
+#[cfg(target_os = "linux")]
+struct DispatchGuard<'a>(&'a str);
+
+#[cfg(target_os = "linux")]
+impl<'a> Drop for DispatchGuard<'a> {
+    fn drop(&mut self) {
+        DISPATCH_REGISTRY.unregister(self.0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    DISPATCH_REGISTRY.register(expected_state.to_string(), tx);
+    let _guard = DispatchGuard(expected_state);
+
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| MailFfiError::OAuth(format!("set_nonblocking failed: {e}")))?;
+
+    let start_time = std::time::Instant::now();
+
+    loop {
+        if state::cancellation_store().is_cancelled(expected_state) {
+            return Err(MailFfiError::OAuth("OAuth sign-in cancelled".to_string()));
+        }
+        if start_time.elapsed() >= CALLBACK_TIMEOUT {
+            return Err(MailFfiError::OAuth(
+                "OAuth sign-in timed out waiting for redirect".to_string(),
+            ));
+        }
+
+        match rx.try_recv() {
+            Ok((stream, request)) => {
+                return finish_oauth_request(stream, &request, expected_state);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err(MailFfiError::OAuth("dispatch channel disconnected".to_string()));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                stream
+                    .set_nonblocking(false)
+                    .map_err(|e| MailFfiError::OAuth(format!("failed to set stream blocking: {e}")))?;
+                stream
+                    .set_read_timeout(Some(CONNECTION_READ_TIMEOUT))
+                    .map_err(|e| MailFfiError::OAuth(format!("callback set_read_timeout failed: {e}")))?;
+
+                let request = match read_http_request(&mut stream) {
+                    Ok(request) => request,
+                    Err(e) => {
+                        log::debug!("[mail-ffi] skipping unreadable OAuth connection: {e}");
+                        write_error_response(&mut stream, "Invalid OAuth callback request", 400);
+                        continue;
+                    }
+                };
+                let callback_state = match extract_state_from_request(&request) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        write_error_response(&mut stream, "No state parameter in callback", 400);
+                        continue;
+                    }
+                };
+
+                if callback_state == expected_state {
+                    return finish_oauth_request(stream, &request, expected_state);
+                } else if let Err((mut stream, _)) =
+                    DISPATCH_REGISTRY.dispatch(&callback_state, (stream, request))
+                {
+                    write_error_response(&mut stream, "OAuth state mismatch (possible CSRF)", 400);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                return Err(MailFfiError::OAuth(format!("callback accept failed: {e}")));
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
 fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<String> {
     listener
         .set_nonblocking(true)
@@ -120,7 +277,7 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
 
     let start_time = std::time::Instant::now();
 
-    let mut stream = loop {
+    loop {
         if state::cancellation_store().is_cancelled(expected_state) {
             return Err(MailFfiError::OAuth("OAuth sign-in cancelled".to_string()));
         }
@@ -131,8 +288,30 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
         }
 
         match listener.accept() {
-            Ok((stream, _)) => {
-                break stream;
+            Ok((mut stream, _)) => {
+                stream
+                    .set_nonblocking(false)
+                    .map_err(|e| MailFfiError::OAuth(format!("failed to set stream blocking: {e}")))?;
+                stream
+                    .set_read_timeout(Some(CONNECTION_READ_TIMEOUT))
+                    .map_err(|e| MailFfiError::OAuth(format!("callback set_read_timeout failed: {e}")))?;
+
+                let request = match read_http_request(&mut stream) {
+                    Ok(request) => request,
+                    Err(e) => {
+                        log::debug!("[mail-ffi] skipping unreadable OAuth connection: {e}");
+                        write_error_response(&mut stream, "Invalid OAuth callback request", 400);
+                        continue;
+                    }
+                };
+                let callback_state = match extract_state_from_request(&request) {
+                    Ok(callback_state) if callback_state == expected_state => callback_state,
+                    _ => {
+                        write_error_response(&mut stream, "Missing or mismatched OAuth state", 400);
+                        continue;
+                    }
+                };
+                return finish_oauth_request(stream, &request, &callback_state);
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(50));
@@ -141,25 +320,15 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
                 return Err(MailFfiError::OAuth(format!("callback accept failed: {e}")));
             }
         }
-    };
-
-    stream
-        .set_nonblocking(false)
-        .map_err(|e| MailFfiError::OAuth(format!("failed to set stream blocking: {e}")))?;
-    stream
-        .set_read_timeout(Some(CALLBACK_TIMEOUT))
-        .map_err(|e| MailFfiError::OAuth(format!("callback set_read_timeout failed: {e}")))?;
-
-    let request = read_http_request(&mut stream)?;
-
-    let callback_state = extract_state_from_request(&request)?;
-    if callback_state != expected_state {
-        write_error_response(&mut stream, "OAuth state mismatch (possible CSRF)", 400);
-        return Err(MailFfiError::OAuth(
-            "OAuth state mismatch (possible CSRF)".to_string(),
-        ));
     }
-    let code = match extract_code_from_request(&request) {
+}
+
+fn finish_oauth_request(
+    mut stream: TcpStream,
+    request: &str,
+    callback_state: &str,
+) -> Result<String> {
+    let code = match extract_code_from_request(request) {
         Ok(c) => c,
         Err(e) => {
             write_error_response(&mut stream, &format!("OAuth failed: {e}"), 400);
@@ -167,13 +336,21 @@ fn accept_and_complete(listener: &TcpListener, expected_state: &str) -> Result<S
         }
     };
 
+    #[cfg(test)]
+    if let Some(result) = loopback_tests::complete_callback(callback_state, &code) {
+        if result.is_ok() {
+            write_success_response(&mut stream);
+        }
+        return result;
+    }
+
     let ctx = state::ctx()?;
     let mut conn = ctx
         .pool
         .get()
         .map_err(|e| MailFfiError::Pool(e.to_string()))?;
 
-    match complete_oauth(&mut conn, &ctx.credential_key, &callback_state, &code) {
+    match complete_oauth(&mut conn, &ctx.credential_key, callback_state, &code) {
         Ok(account) => {
             write_success_response(&mut stream);
             Ok(account.email)
@@ -294,7 +471,8 @@ fn read_http_request<R: std::io::Read>(reader: &mut R) -> Result<String> {
             break;
         }
         data.extend_from_slice(&buf[..n]);
-        if data.windows(4).any(|w| w == b"\r\n\r\n") || data.len() >= MAX_REQUEST_BYTES {
+        let scan_start = data.len().saturating_sub(n + 3);
+        if data[scan_start..].windows(4).any(|w| w == b"\r\n\r\n") || data.len() >= MAX_REQUEST_BYTES {
             break;
         }
     }

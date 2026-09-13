@@ -184,6 +184,7 @@ interface PageHandler {
   // Consumes an opaque, one-use capability returned by DownloadAttachment.
   // Raw filesystem paths are never accepted from the renderer.
   OpenAttachment(string capability_token) => (bool ok, string error_msg);
+  SaveAttachment(string capability_token) => (bool ok, string error_msg, string saved_path);
   GetDownloadDir() => (string path);
 
   // === [W-C.Additional.Refresh.Typed] ===

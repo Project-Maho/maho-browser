@@ -479,12 +479,13 @@ void MahoMailNotificationCoordinator::OnPermissionForClick(
 }
 
 MailBehaviorSnapshot MahoMailNotificationCoordinator::CurrentBehavior() const {
-  if (behavior_callback_) {
-    return behavior_callback_.Run();
-  }
-  MailBehaviorSnapshot snapshot;
+  MailBehaviorSnapshot snapshot =
+      behavior_callback_ ? behavior_callback_.Run() : MailBehaviorSnapshot();
   if (prefs_ && prefs_->FindPreference(kNotificationsEnabledPref)) {
+    // The service snapshot may still have defaults before its first behavior
+    // read. A persisted opt-out must also gate notification delivery.
     snapshot.desktop_notifications =
+        snapshot.desktop_notifications &&
         prefs_->GetBoolean(kNotificationsEnabledPref);
   }
   return snapshot;

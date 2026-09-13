@@ -336,7 +336,7 @@ void MahoMailPageHandler::OAuthComplete(const std::string& state,
 void MahoMailPageHandler::ReconnectAccount(const std::string& account_id, ReconnectAccountCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   maho::MahoMailService* service = GetMailService();
-  if (!service) {
+  if (!backend_for_testing_ && !service) {
     std::move(callback).Run(false, "Mail service unavailable");
     return;
   }
@@ -344,9 +344,7 @@ void MahoMailPageHandler::ReconnectAccount(const std::string& account_id, Reconn
   options.Set("reauthorize_account_id", account_id);
   std::string options_json;
   base::JSONWriter::Write(options, &options_json);
-  service->OAuthLoopbackSignIn(
-      "gmail", options_json,
-      base::BindOnce(
+  auto completion = base::BindOnce(
           [](base::WeakPtr<MahoMailPageHandler> self, Profile* profile,
              ReconnectAccountCallback cb, bool ok, std::string result) {
             if (!ok) {
@@ -380,7 +378,13 @@ void MahoMailPageHandler::ReconnectAccount(const std::string& account_id, Reconn
             params.transition_type = ui::PAGE_TRANSITION_LINK;
             self->web_contents_->GetController().LoadURLWithParams(params);
           },
-          weak_factory_.GetWeakPtr(), profile_, std::move(callback)));
+          weak_factory_.GetWeakPtr(), profile_, std::move(callback));
+  if (backend_for_testing_) {
+    backend_for_testing_->OAuthLoopbackSignIn(
+        "gmail", options_json, std::move(completion));
+  } else {
+    service->OAuthLoopbackSignIn("gmail", options_json, std::move(completion));
+  }
 }
 
 void MahoMailPageHandler::OnAuthRequired(const std::string& account_id,
@@ -2576,6 +2580,25 @@ void MahoMailPageHandler::OnAttachmentCapabilityConsumed(
       base::BindOnce(
           [](OpenAttachmentCallback callback, bool ok, std::string error) {
             std::move(callback).Run(ok, std::move(error));
+          },
+          std::move(callback)));
+}
+
+void MahoMailPageHandler::SaveAttachment(
+    const std::string& capability_token,
+    SaveAttachmentCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service = GetMailService();
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable", std::string());
+    return;
+  }
+  service->SaveAttachment(
+      capability_token,
+      base::BindOnce(
+          [](SaveAttachmentCallback callback, bool ok, std::string error,
+             std::string saved_path) {
+            std::move(callback).Run(ok, std::move(error), std::move(saved_path));
           },
           std::move(callback)));
 }

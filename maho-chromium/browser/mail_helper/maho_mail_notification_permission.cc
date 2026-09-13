@@ -7,17 +7,17 @@
 
 namespace maho {
 
+// Linux has no per-app OS permission gate; user control stays with Maho's own
+// notification preferences. Return kGranted for both status and request.
 void InstallMahoMailNotificationPermissionCallbacks() {
   SetMahoMailNotificationPermissionCallbacks(
       base::BindRepeating(
           [](base::OnceCallback<void(MailOsNotificationPermission)> callback) {
-            std::move(callback).Run(
-                MailOsNotificationPermission::kUnsupported);
+            std::move(callback).Run(MailOsNotificationPermission::kGranted);
           }),
       base::BindRepeating(
           [](base::OnceCallback<void(MailOsNotificationPermission)> callback) {
-            std::move(callback).Run(
-                MailOsNotificationPermission::kUnsupported);
+            std::move(callback).Run(MailOsNotificationPermission::kGranted);
           }));
 }
 

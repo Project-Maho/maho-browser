@@ -34,6 +34,16 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
   class Backend {
    public:
     virtual ~Backend() = default;
+    virtual void GetAccount(
+        const std::string& account_id,
+        base::OnceCallback<void(bool, std::string)> callback) = 0;
+    virtual void ReconnectAccount(
+        const std::string& account_id,
+        base::OnceCallback<void(bool, std::string)> callback) = 0;
+    virtual void OAuthLoopbackSignIn(
+        const std::string& provider,
+        const std::string& options_json,
+        base::OnceCallback<void(bool, std::string)> callback) = 0;
     virtual void ExportPgpKey(
         const std::string& key_id,
         bool include_private,
@@ -265,6 +275,8 @@ class MahoMailPageHandler : public maho_mail::mojom::PageHandler,
                                       std::unique_ptr<maho::MahoMailAttachmentRegistry::ConsumedAttachment>
                                           attachment,
                                       std::string error);
+  void SaveAttachment(const std::string& capability_token,
+                      SaveAttachmentCallback callback) override;
   void GetDownloadDir(GetDownloadDirCallback callback) override;
 
   // === [W-C.Additional.Refresh.Typed] ===

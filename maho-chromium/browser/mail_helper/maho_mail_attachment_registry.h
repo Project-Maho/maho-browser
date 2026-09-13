@@ -68,9 +68,10 @@ class MahoMailAttachmentRegistry {
     base::FilePath TakePath();
 
     base::FilePath path_;
-    // On Windows this handle denies write/delete sharing until OpenItem's
-    // completion callback. POSIX launchers bind their platform request to this
-    // validated inode instead of reopening |path_|.
+    // On Windows this handle denies write and delete/rename sharing
+    // (opened with FLAG_WIN_EXCLUSIVE_WRITE and without FLAG_WIN_SHARE_DELETE)
+    // until OpenItem's completion callback. POSIX launchers bind their platform
+    // request to this validated inode instead of reopening |path_|.
     base::File protection_file_;
   };
 
@@ -89,9 +90,11 @@ class MahoMailAttachmentRegistry {
 
   // Copies a helper-issued file into profile-local staging and returns an
   // opaque capability token. The source must canonicalize beneath the trusted
-  // helper download root.
+  // helper download root. |filename| is the single-component display name
+  // validated by the service, independent of the helper cache basename.
   void StageDownloadedFile(const MailAttachmentMessageIdentity& message,
                            const base::FilePath& source_path,
+                           const std::string& filename,
                            ResultCallback callback);
 
   // Atomically consumes a token, validates an open file handle, and copies
@@ -100,6 +103,14 @@ class MahoMailAttachmentRegistry {
   void Consume(const std::string& token,
                const std::string& requesting_profile_identity,
                ConsumeCallback callback);
+
+  // Saves validated bytes to a browser-selected directory. Reply order matches
+  // SaveAttachment's Mojo contract: success, error, saved path.
+  using SaveCallback = base::OnceCallback<void(bool, std::string, std::string)>;
+  void SaveToDownloads(const std::string& token,
+                       const std::string& requesting_profile_identity,
+                       const base::FilePath& downloads_directory,
+                       SaveCallback callback);
 
   static void DeleteConsumedAttachment(
       std::unique_ptr<ConsumedAttachment> attachment,
@@ -138,6 +149,7 @@ class MahoMailAttachmentRegistry {
 
     std::string profile_identity;
     MailAttachmentMessageIdentity message;
+    base::FilePath filename;
     base::FilePath staged_path;
     base::Time expires_at;
     uint64_t generation = 0;
@@ -153,6 +165,7 @@ class MahoMailAttachmentRegistry {
 
     bool ok = false;
     std::string error;
+    base::FilePath filename;
     base::FilePath staged_path;
     FileIdentity file_identity;
   };
@@ -176,6 +189,7 @@ class MahoMailAttachmentRegistry {
   static StageResult StageOnWorker(const base::FilePath& helper_download_root,
                                    const base::FilePath& staging_root,
                                    const base::FilePath& source_path,
+                                   const std::string& filename,
                                    const std::string& token);
   static ConsumeResult ValidateOnWorker(const base::FilePath& staging_root,
                                         const base::FilePath& launch_root,

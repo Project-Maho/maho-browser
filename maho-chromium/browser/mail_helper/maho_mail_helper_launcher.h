@@ -4,9 +4,11 @@
 #define MAHO_BROWSER_MAIL_HELPER_MAHO_MAIL_HELPER_LAUNCHER_H_
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/files/file_path.h"
+#include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
@@ -116,6 +118,15 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
   void BindHelperForTesting(mojo::PendingRemote<mojom::MahoMailHelper> remote,
                             bool ready);
 
+  // Test-only: completes the version/Initialize handshake that
+  // BindHelperForTesting bypasses, driving the same state transition as
+  // OnInitialized(true) — keys cached before this point are injected now, and
+  // readiness is only reached after both handshake and injection succeed.
+  void CompleteHandshakeForTesting() {
+    initialized_ = true;
+    ReinjectKeysIfPresent();
+  }
+
   void SetShutdownTimeoutForTesting(base::TimeDelta timeout) {
     shutdown_timeout_ = timeout;
   }
@@ -132,8 +143,17 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
     }
   }
 
+  // Replaces only process creation; tests retain the production handshake and
+  // failure/relaunch policy on a real Mojo pipe.
+  void SetHelperFactoryForTesting(
+      base::RepeatingCallback<mojo::PendingRemote<mojom::MahoMailHelper>()>
+          factory) {
+    helper_factory_for_testing_ = std::move(factory);
+  }
+
   private:
    void LaunchInternal();
+   void BeginHandshake(mojo::PendingRemote<mojom::MahoMailHelper> remote);
    void OnVersionReported(const std::string& helper_version);
    void OnInitialized(bool success);
    void OnConnectionError();
@@ -165,14 +185,20 @@ class MahoMailHelperLauncher : public mojom::MahoMailHelperClient {
    bool shutting_down_ = false;
    bool gave_up_ = false;
    bool ready_ = false;
+   bool initialized_ = false;
+   bool keys_sent_ = false;
 
   int respawn_count_ = 0;
   base::TimeTicks crash_window_start_;
 
+  base::RepeatingCallback<mojo::PendingRemote<mojom::MahoMailHelper>()>
+      helper_factory_for_testing_;
   base::Process process_;
   mojo::Remote<mojom::MahoMailHelper> helper_;
   mojo::Receiver<mojom::MahoMailHelperClient> client_receiver_{this};
 
+  // One deadline for version, initialization, and key injection together.
+  base::OneShotTimer startup_timer_;
   base::OneShotTimer relaunch_timer_;
   base::OneShotTimer shutdown_timer_;
   base::TimeDelta shutdown_timeout_ = base::Seconds(5);

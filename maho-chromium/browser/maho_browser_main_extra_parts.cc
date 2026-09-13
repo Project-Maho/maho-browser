@@ -2009,7 +2009,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
         base::BindOnce(
             [](maho::MahoMcpBrowserDelegate::ExportArtifactCallback callback,
                std::string error) {
-              std::move(callback).Run(error.empty(), std::move(error));
+              const bool success = error.empty();
+              std::move(callback).Run(success, std::move(error));
             },
             std::move(callback)));
   }

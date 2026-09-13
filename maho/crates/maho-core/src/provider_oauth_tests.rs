@@ -153,10 +153,11 @@ fn callback_with_mismatched_state_is_rejected_before_code_exchange() {
     let mut response = String::new();
     stream.read_to_string(&mut response).expect("read response");
 
-    let outcome = rx.recv_timeout(SIGNAL_TIMEOUT).expect("callback signal");
-    let message = outcome.expect("state mismatch must fail");
-    assert!(message.contains("state mismatch"), "{message}");
     assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+    assert!(cancel_provider_oauth(&started.state), "mismatch must leave sign-in pending");
+    let outcome = rx.recv_timeout(SIGNAL_TIMEOUT).expect("callback signal");
+    let message = outcome.expect("cancelled sign-in must fail");
+    assert!(message.contains("cancelled"), "{message}");
 }
 
 #[test]
@@ -180,6 +181,106 @@ fn callback_reports_provider_denial() {
     let outcome = rx.recv_timeout(SIGNAL_TIMEOUT).expect("callback signal");
     let message = outcome.expect("denied sign-in must fail");
     assert!(message.contains("access_denied"), "{message}");
+}
+
+fn oauth_loopback_completes_after_unrelated(first_request: Option<&str>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let token_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let token_address = token_listener.local_addr().unwrap();
+    token_listener.set_nonblocking(true).unwrap();
+    let token_server = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async move {
+            tokio::time::timeout(SIGNAL_TIMEOUT, async move {
+                let listener = tokio::net::TcpListener::from_std(token_listener).unwrap();
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                let length: usize = headers.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse().unwrap())
+                }).unwrap();
+                let mut body = vec![0; length];
+                stream.read_exact(&mut body).await.unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["code"], "browser-code");
+                assert_eq!(body["code_verifier"], "test-verifier");
+                let tokens = r#"{"access_token":"test-access","refresh_token":"test-refresh"}"#;
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{tokens}", tokens.len());
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }).await
+        })
+    });
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = random_token();
+    let mut cfg = config();
+    // Inject only the token endpoint, not the exchange or callback machinery.
+    cfg.token_url = format!("http://{token_address}/token");
+    put_pending(state.clone(), PendingFlow {
+        verifier: "test-verifier".to_string(),
+        redirect_uri: format!("http://{address}/callback"),
+        config: cfg,
+    });
+    let (tx, rx) = mpsc::channel();
+    let expected_state = state.clone();
+    let worker = std::thread::spawn(move || {
+        let result = accept_and_exchange(&listener, &expected_state, &AtomicBool::new(false));
+        take_pending(&expected_state);
+        tx.send(result).unwrap();
+    });
+
+    let mut stray = TcpStream::connect(address).unwrap();
+    stray.set_read_timeout(Some(SIGNAL_TIMEOUT)).unwrap();
+    if let Some(request) = first_request {
+        stray.write_all(request.as_bytes()).unwrap();
+    }
+    stray.shutdown(Shutdown::Write).unwrap();
+    let mut rejected = String::new();
+    stray.read_to_string(&mut rejected).unwrap();
+    drop(stray);
+
+    let browser_response = (|| -> std::io::Result<String> {
+        let mut browser = TcpStream::connect(address)?;
+        browser.set_read_timeout(Some(SIGNAL_TIMEOUT))?;
+        let request = format!("GET /callback?code=browser-code&state={state} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        browser.write_all(request.as_bytes())?;
+        let mut response = String::new();
+        browser.read_to_string(&mut response)?;
+        Ok(response)
+    })();
+    let result = rx.recv_timeout(SIGNAL_TIMEOUT).expect("completion signal");
+    worker.join().unwrap();
+    let tokens = result.expect("stray connection must not end sign-in");
+    token_server.join().unwrap().expect("token exchange signal");
+    assert_eq!(tokens.access_token, "test-access");
+    assert_eq!(tokens.refresh_token, "test-refresh");
+    assert!(rejected.starts_with("HTTP/1.1 400"), "{rejected}");
+    assert!(browser_response.unwrap().starts_with("HTTP/1.1 200"));
+}
+
+#[test]
+fn oauth_loopback_completes_after_empty_preconnect() {
+    oauth_loopback_completes_after_unrelated(None);
+}
+
+#[test]
+fn oauth_loopback_completes_after_mismatched_state() {
+    oauth_loopback_completes_after_unrelated(Some(
+        "GET /callback?code=forged&state=wrong-state HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    ));
+}
+
+#[test]
+fn oauth_loopback_completes_after_favicon_request() {
+    oauth_loopback_completes_after_unrelated(Some(
+        "GET /favicon.ico HTTP/1.1\r\nHost: localhost\r\n\r\n",
+    ));
 }
 
 #[test]

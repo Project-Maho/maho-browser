@@ -214,7 +214,7 @@ pub(crate) fn insert_outbox_item(
     Ok(item)
 }
 
-fn queue_to_outbox(conn: &rusqlite::Connection, request: &ComposeEmailRequest) -> Result<()> {
+fn queue_to_outbox(conn: &rusqlite::Connection, request: &ComposeEmailRequest) -> Result<OutboxItem> {
     let to_json = serde_json::to_string(&request.to)?;
     let cc_json = request
         .cc
@@ -229,7 +229,7 @@ fn queue_to_outbox(conn: &rusqlite::Connection, request: &ComposeEmailRequest) -
         .as_ref()
         .map(|a| serde_json::to_string(a).unwrap_or_default());
 
-    let _item = insert_outbox_item(
+    insert_outbox_item(
         conn,
         &request.account_id,
         &to_json,
@@ -241,9 +241,22 @@ fn queue_to_outbox(conn: &rusqlite::Connection, request: &ComposeEmailRequest) -
         request.in_reply_to.as_deref(),
         request.references.as_deref(),
         attachments_json.as_deref(),
-    )?;
+    )
+}
 
-    Ok(())
+fn queue_uncertain_delivery(
+    conn: &rusqlite::Connection,
+    request: &ComposeEmailRequest,
+    error: &str,
+) -> Result<String> {
+    let transaction = conn.unchecked_transaction()?;
+    let item = queue_to_outbox(&transaction, request)?;
+    transaction.execute(
+        "UPDATE outbox SET status='uncertain', last_error=?1 WHERE id=?2",
+        rusqlite::params![error, item.id],
+    )?;
+    transaction.commit()?;
+    Ok(serde_json::json!({"status": "uncertain", "id": item.id}).to_string())
 }
 
 fn is_network_error(err: &MailFfiError) -> bool {
@@ -312,7 +325,10 @@ static FLUSHING_ACCOUNTS: std::sync::Mutex<Option<std::collections::HashSet<Stri
     std::sync::Mutex::new(None);
 
 fn try_start_flush(account_id: &str) -> bool {
-    let mut guard = FLUSHING_ACCOUNTS.lock().unwrap();
+    let mut guard = match FLUSHING_ACCOUNTS.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
     let set = guard.get_or_insert_with(std::collections::HashSet::new);
     if set.contains(account_id) {
         false
@@ -323,13 +339,35 @@ fn try_start_flush(account_id: &str) -> bool {
 }
 
 fn stop_flush(account_id: &str) {
-    let mut guard = FLUSHING_ACCOUNTS.lock().unwrap();
+    let mut guard = match FLUSHING_ACCOUNTS.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
     if let Some(set) = guard.as_mut() {
         set.remove(account_id);
     }
 }
 
 struct AccountFlushGuard(String);
+
+/// Recover only work for which this process has no live sender. Never replay an
+/// interrupted SMTP transaction: the server may already have accepted DATA.
+pub(crate) fn recover_interrupted_outbox(conn: &rusqlite::Connection) -> Result<()> {
+    let active = FLUSHING_ACCOUNTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut stmt = conn.prepare("SELECT DISTINCT account_id FROM outbox WHERE status = 'sending'")?;
+    let accounts = stmt.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for account in accounts {
+        if active.as_ref().is_some_and(|set| set.contains(&account)) {
+            continue;
+        }
+        conn.execute(
+            "UPDATE outbox SET status = 'uncertain', last_error = 'Delivery interrupted; check Sent before resending', updated_at = datetime('now') WHERE account_id = ?1 AND status = 'sending'",
+            [&account],
+        )?;
+    }
+    Ok(())
+}
 
 impl Drop for AccountFlushGuard {
     fn drop(&mut self) {
@@ -444,7 +482,7 @@ pub extern "C" fn MahoMailSendEmail(
                 )
                 .await
                 {
-                    Ok(()) => Ok("{}".to_string()),
+                    Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
                     Err(err) if use_xoauth2 && is_oauth_auth_error(&err) => {
                         let _ = conn.execute(
                             "UPDATE accounts SET oauth2_expires_at = '1970-01-01T00:00:00Z' WHERE id = ?1",
@@ -471,10 +509,13 @@ pub extern "C" fn MahoMailSendEmail(
                             )
                             .await
                             {
-                                Ok(()) => Ok("{}".to_string()),
+                                Ok(()) => Ok(serde_json::json!({"status": "sent"}).to_string()),
+                                Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
+                                    queue_uncertain_delivery(&conn, &request, &error)
+                                }
                                 Err(retry_err) if is_network_error(&retry_err) => {
                                     queue_to_outbox(&conn, &request)?;
-                                    Ok("{}".to_string())
+                                    Ok(serde_json::json!({"status": "queued"}).to_string())
                                 }
                                 Err(retry_err) => Err(retry_err),
                             }
@@ -482,9 +523,12 @@ pub extern "C" fn MahoMailSendEmail(
                             Err(err)
                         }
                     }
+                    Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
+                        queue_uncertain_delivery(&conn, &request, &error)
+                    }
                     Err(err) if is_network_error(&err) => {
                         queue_to_outbox(&conn, &request)?;
-                        Ok("{}".to_string())
+                        Ok(serde_json::json!({"status": "queued"}).to_string())
                     }
                     Err(err) => Err(err),
                 }
@@ -547,8 +591,9 @@ pub extern "C" fn MahoMailSaveDraft(
                     "INSERT INTO emails
                         (id, account_id, folder_id, message_id, subject, from_address,
                          to_addresses, cc_addresses, date, snippet, is_read, is_starred,
-                         is_draft, has_attachments, draft_attachments_json, body_text, body_html, raw_size, created_at)
-                     VALUES (?1, ?2, ?3, '', ?4, '', ?5, ?6, ?7, ?8, 1, 0, 1, ?9, ?10, ?11, ?12, 0, ?13)",
+                         is_draft, has_attachments, draft_attachments_json, body_text, body_html, raw_size, created_at,
+                         bcc_addresses, in_reply_to, email_references, read_receipt, body_fetched_at)
+                     VALUES (?1, ?2, ?3, '', ?4, '', ?5, ?6, ?7, ?8, 1, 0, 1, ?9, ?10, ?11, ?12, 0, ?13, ?14, ?15, ?16, ?17, ?13)",
                     rusqlite::params![
                         id,
                         request.account_id,
@@ -563,6 +608,10 @@ pub extern "C" fn MahoMailSaveDraft(
                         request.body_text,
                         request.body_html,
                         now,
+                        request.bcc.as_ref().map(serde_json::to_string).transpose()?,
+                        request.in_reply_to,
+                        request.references,
+                        request.read_receipt,
                     ],
                 )?;
                 Ok(id)
@@ -616,7 +665,9 @@ pub extern "C" fn MahoMailUpdateDraft(
                 conn.execute(
                     "UPDATE emails SET subject = ?1, to_addresses = ?2, cc_addresses = ?3,
                      body_text = ?4, body_html = ?5, snippet = ?6, date = ?7,
-                     has_attachments = ?8, draft_attachments_json = ?9
+                     has_attachments = ?8, draft_attachments_json = ?9,
+                     bcc_addresses = ?12, in_reply_to = ?13, email_references = ?14,
+                     read_receipt = ?15, body_fetched_at = ?7
                      WHERE id = ?10 AND is_draft = 1 AND account_id = ?11",
                     rusqlite::params![
                         request.subject,
@@ -630,6 +681,10 @@ pub extern "C" fn MahoMailUpdateDraft(
                         draft_attachments_json,
                         draft_id,
                         request.account_id,
+                        request.bcc.as_ref().map(serde_json::to_string).transpose()?,
+                        request.in_reply_to,
+                        request.references,
+                        request.read_receipt,
                     ],
                 )?;
                 Ok("{}".to_string())
@@ -762,7 +817,7 @@ pub extern "C" fn MahoMailListOutbox(
                 if let Some(ref aid) = account_id_opt {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, status, retry_count, max_retries, last_error, created_at, updated_at
-                         FROM outbox WHERE account_id = ?1 AND status IN ('queued', 'failed', 'sending') ORDER BY created_at ASC",
+                         FROM outbox WHERE account_id = ?1 AND status IN ('queued', 'failed', 'sending', 'uncertain') ORDER BY created_at ASC",
                     )?;
                     let rows = s
                         .query_map(rusqlite::params![aid], map_outbox_item)?
@@ -771,7 +826,7 @@ pub extern "C" fn MahoMailListOutbox(
                 } else {
                     let mut s = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, status, retry_count, max_retries, last_error, created_at, updated_at
-                         FROM outbox WHERE status IN ('queued', 'failed', 'sending') ORDER BY created_at ASC",
+                         FROM outbox WHERE status IN ('queued', 'failed', 'sending', 'uncertain') ORDER BY created_at ASC",
                     )?;
                     let rows = s
                         .query_map([], map_outbox_item)?
@@ -847,6 +902,7 @@ pub extern "C" fn MahoMailFlushOutbox(
                     .pool
                     .get()
                     .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+                recover_interrupted_outbox(&conn)?;
                 let pending = {
                     let mut stmt = conn.prepare(
                         "SELECT id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body_html, body_text, in_reply_to, email_references, attachments_json
@@ -936,10 +992,13 @@ pub extern "C" fn MahoMailFlushOutbox(
                                 .unwrap_or_default();
 
                         let (creds, use_xoauth2, from) = {
-                            let _ = conn.execute(
-                                "UPDATE outbox SET status = 'sending', updated_at = datetime('now') WHERE id = ?1",
+                            let claimed = conn.execute(
+                                "UPDATE outbox SET status = 'sending', updated_at = datetime('now') WHERE id = ?1 AND (status = 'queued' OR (status = 'failed' AND retry_count < max_retries))",
                                 rusqlite::params![id],
-                            );
+                            )?;
+                            if claimed == 0 {
+                                continue;
+                            }
 
                             match get_smtp_credentials(&conn, &ctx.credential_key, &account_id) {
                                 Ok(c) => {
@@ -986,6 +1045,12 @@ pub extern "C" fn MahoMailFlushOutbox(
                                 );
                                 total_sent_count += 1;
                                 log::info!("Outbox: sent email {}", id);
+                            }
+                            Err(MailFfiError::Core(maho_core::error::AppError::DeliveryUncertain(error))) => {
+                                conn.execute(
+                                    "UPDATE outbox SET status='uncertain', last_error=?1, updated_at=datetime('now') WHERE id=?2",
+                                    rusqlite::params![error, id],
+                                )?;
                             }
                             Err(e) => {
                                 if is_auth_error(&e) {
@@ -1055,14 +1120,18 @@ pub extern "C" fn MahoMailDownloadAttachment(
                 std::fs::create_dir_all(&temp_dir)
                     .map_err(|e| MailFfiError::Internal(e.to_string()))?;
 
+                let (folder_path, epoch): (String, i64) = conn.query_row(
+                    "SELECT path, uid_validity FROM folders WHERE id = ?1 AND account_id = ?2",
+                    rusqlite::params![folder_id, account_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let uid = u32::try_from(email_uid).ok().filter(|uid| *uid > 0)
+                    .ok_or(MailFfiError::InvalidArg("email_uid"))?;
                 let safe_filename =
                     filename.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-                let safe_part_id = sanitize_cache_component(&part_id);
-                let safe_account_id = sanitize_cache_component(&account_id);
-                let cache_key = format!(
-                    "{}_{}_{}_{}",
-                    safe_account_id, email_uid, safe_part_id, safe_filename
-                );
+                use sha2::{Digest, Sha256};
+                let identity = serde_json::to_vec(&(&account_id, &folder_id, &folder_path, epoch, uid, &part_id))?;
+                let cache_key = format!("{:x}_{}", Sha256::digest(identity), safe_filename);
                 let file_path = temp_dir.join(&cache_key);
 
                 if file_path.exists() {
@@ -1070,21 +1139,8 @@ pub extern "C" fn MahoMailDownloadAttachment(
                         .map_err(MailFfiError::from);
                 }
 
-                let folder_path = conn
-                    .query_row(
-                        "SELECT path FROM folders WHERE id = ?1",
-                        [&folder_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .map_err(|_| {
-                        MailFfiError::Core(maho_core::error::AppError::NotFound(
-                            "Folder not found".to_string(),
-                        ))
-                    })?;
-
                 let resolved = resolve_account_auth(&conn, &ctx.credential_key, &account_id)?;
 
-                let uid = email_uid as u32;
                 let part_id_clone = part_id.clone();
                 let folder_path_clone = folder_path.clone();
 
@@ -1212,6 +1268,21 @@ mod tests {
             None,
             capture.as_user_data()
         ));
+    }
+
+    #[test]
+    fn test_account_flush_guard_drop_recovers_from_poison() {
+        let _ = std::panic::catch_unwind(|| {
+            let _lock = FLUSHING_ACCOUNTS.lock().unwrap();
+            panic!("poisoning mutex for test");
+        });
+        assert!(FLUSHING_ACCOUNTS.is_poisoned());
+
+        let res = std::panic::catch_unwind(|| {
+            let guard = AccountFlushGuard("acc_poison_test".to_string());
+            drop(guard);
+        });
+        assert!(res.is_ok(), "AccountFlushGuard::drop must not panic on poisoned mutex");
     }
 
     #[test]
@@ -1735,9 +1806,14 @@ pub extern "C" fn MahoMailGetForwardedAttachments(
 /// Strips path separators, drive/scheme colons, wildcards and dots so a
 /// renderer-controlled component (e.g. account_id) cannot escape the cache dir
 /// via `../` traversal.
+#[cfg(test)]
 fn sanitize_cache_component(s: &str) -> String {
     s.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '.'], "_")
 }
+
+#[cfg(test)]
+#[path = "compose_review_tests.rs"]
+mod compose_review_tests;
 
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)]

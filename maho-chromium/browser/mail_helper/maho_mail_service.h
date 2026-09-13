@@ -261,6 +261,8 @@ class MahoMailService : public KeyedService,
   void DownloadAttachment(const std::string& account_id, int64_t email_uid, const std::string& folder_id, const std::string& part_id, const std::string& filename, MailReadCallback callback);
   void OpenAttachment(const std::string& capability_token,
                       MahoMailAttachmentRegistry::ConsumeCallback callback);
+  void SaveAttachment(const std::string& capability_token,
+                      MahoMailAttachmentRegistry::SaveCallback callback);
   void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback);
   void SnoozeEmail(const std::string& email_id, const std::string& snooze_until, MailReadCallback callback);
   void UnsnoozeEmail(const std::string& email_id, MailReadCallback callback);
@@ -485,6 +487,7 @@ class MahoMailService : public KeyedService,
   };
   std::optional<PendingLaunch> pending_launch_;
   std::optional<PendingLaunch> launch_inputs_;
+  base::TimeTicks next_on_demand_launch_;
   std::string sqlcipher_key_;
   std::string credential_key_;
   LifecycleState lifecycle_state_ = LifecycleState::kStopped;

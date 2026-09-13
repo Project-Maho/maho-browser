@@ -217,14 +217,35 @@ fn c_string(ptr: *const c_char, name: &'static str) -> Result<String> {
         .map(str::to_owned)
         .map_err(|_| MailFfiError::InvalidArg(name))
 }
-pub type MahoMailEventCallback = unsafe extern "C" fn(
+pub type MahoMailEventCallback = Option<
+    unsafe extern "C" fn(
+        event_type: *const c_char,
+        account_id: *const c_char,
+        provider: *const c_char,
+        reason: *const c_char,
+    ),
+>;
+
+pub type MahoMailNewMailCallback = Option<
+    unsafe extern "C" fn(
+        account_id: *const c_char,
+        email_id: *const c_char,
+        message_id: *const c_char,
+        sender: *const c_char,
+        subject: *const c_char,
+        cursor: u64,
+        epoch: u64,
+    ),
+>;
+
+type EventCallback = unsafe extern "C" fn(
     event_type: *const c_char,
     account_id: *const c_char,
     provider: *const c_char,
     reason: *const c_char,
 );
 
-pub type MahoMailNewMailCallback = unsafe extern "C" fn(
+type NewMailCallback = unsafe extern "C" fn(
     account_id: *const c_char,
     email_id: *const c_char,
     message_id: *const c_char,
@@ -234,16 +255,22 @@ pub type MahoMailNewMailCallback = unsafe extern "C" fn(
     epoch: u64,
 );
 
-static EVENT_CALLBACK: std::sync::OnceLock<MahoMailEventCallback> = std::sync::OnceLock::new();
-static NEW_MAIL_CALLBACK: std::sync::OnceLock<MahoMailNewMailCallback> = std::sync::OnceLock::new();
+static EVENT_CALLBACK: std::sync::OnceLock<EventCallback> = std::sync::OnceLock::new();
+static NEW_MAIL_CALLBACK: std::sync::OnceLock<NewMailCallback> = std::sync::OnceLock::new();
 
 #[no_mangle]
 pub extern "C" fn MahoMailRegisterEventCallback(callback: MahoMailEventCallback) -> bool {
+    let Some(callback) = callback else {
+        return false;
+    };
     EVENT_CALLBACK.set(callback).is_ok()
 }
 
 #[no_mangle]
 pub extern "C" fn MahoMailRegisterNewMailCallback(callback: MahoMailNewMailCallback) -> bool {
+    let Some(callback) = callback else {
+        return false;
+    };
     NEW_MAIL_CALLBACK.set(callback).is_ok()
 }
 

@@ -67,6 +67,9 @@ pub(crate) trait SmimeBackend: Sync {
 mod openssl;
 #[cfg(windows)]
 mod windows;
+#[cfg(all(test, not(windows)))]
+mod recipient_review_tests;
+pub(super) mod recipient;
 
 #[cfg(not(windows))]
 pub(crate) fn backend() -> &'static dyn SmimeBackend {

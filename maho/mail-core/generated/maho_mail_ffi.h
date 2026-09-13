@@ -690,6 +690,20 @@ bool MahoMailMarkRead(const char *email_id, MahoMailReadCallback callback, void 
 
 bool MahoMailMarkUnread(const char *email_id, MahoMailReadCallback callback, void *user_data);
 
+/**
+ * Grouped/batched mark-read (design U10): one database lease applies local
+ * flags, recounts each touched folder once, and persists the outbox before
+ * any network attempt; the pool connection is released before IMAP waits;
+ * one authenticated session per account selects each folder once and issues
+ * UID STORE chunks of at most 500 UIDs; a short second lease acknowledges
+ * only this batch's outbox entries for groups whose remote STORE succeeded,
+ * leaving failed groups' retry records (and any newer opposite operations)
+ * untouched.
+ */
+bool MahoMailBatchMarkRead(const char *request_json,
+                           MahoMailReadCallback callback,
+                           void *user_data);
+
 bool MahoMailToggleStar(const char *email_id, MahoMailReadCallback callback, void *user_data);
 
 bool MahoMailDeleteEmail(const char *email_id, MahoMailReadCallback callback, void *user_data);
@@ -698,10 +712,6 @@ bool MahoMailMoveEmail(const char *email_id,
                        const char *target_folder_id,
                        MahoMailReadCallback callback,
                        void *user_data);
-
-bool MahoMailBatchMarkRead(const char *request_json,
-                           MahoMailReadCallback callback,
-                           void *user_data);
 
 bool MahoMailBatchMarkUnread(const char *request_json,
                              MahoMailReadCallback callback,

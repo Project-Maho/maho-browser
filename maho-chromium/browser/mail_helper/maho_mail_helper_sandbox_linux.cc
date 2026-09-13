@@ -5,6 +5,7 @@
 #include <atomic>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/netlink.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/prctl.h>
@@ -61,11 +62,13 @@ void AddReadOnlyPathIfPresent(
 void AddReadOnlyNssModules(
     const base::FilePath& library_root,
     std::vector<BrokerFilePermission>* permissions) {
+  if (!base::DirectoryExists(library_root)) {
+    return;
+  }
   base::FileEnumerator modules(
-      library_root, true,
+      library_root, /*recursive=*/false,
       base::FileEnumerator::FILES,
-      FILE_PATH_LITERAL("libnss_*.so*"),
-      base::FileEnumerator::FolderSearchPolicy::ALL);
+      FILE_PATH_LITERAL("libnss_*.so*"));
   for (base::FilePath module = modules.Next(); !module.empty();
        module = modules.Next()) {
     AddReadOnlyPathIfPresent(module, permissions);
@@ -88,8 +91,16 @@ std::vector<BrokerFilePermission> BuildFilePermissions(
        }) {
     AddReadOnlyPathIfPresent(base::FilePath(path), &permissions);
   }
-  AddReadOnlyNssModules(base::FilePath("/lib"), &permissions);
-  AddReadOnlyNssModules(base::FilePath("/usr/lib"), &permissions);
+  for (const char* dir : {
+           "/lib",
+           "/lib64",
+           "/usr/lib",
+           "/usr/lib64",
+           "/usr/lib/x86_64-linux-gnu",
+           "/usr/lib/aarch64-linux-gnu",
+       }) {
+    AddReadOnlyNssModules(base::FilePath(dir), &permissions);
+  }
   return permissions;
 }
 
@@ -130,9 +141,20 @@ ResultExpr RestrictMailSocket() {
                               .Else(sandbox::CrashSIGSYSSocket())))
           .Default(sandbox::CrashSIGSYSSocket());
 
+  // glibc's getaddrinfo(AI_ADDRCONFIG) enumerates interface addresses over a
+  // NETLINK_ROUTE socket (same allowance the network-service policy grants
+  // AddressTrackerLinux). Only raw NETLINK_ROUTE sockets are permitted.
+  ResultExpr netlink_type_switch =
+      Switch(type & ~kTypeFlags)
+          .Case(SOCK_RAW, Switch(protocol)
+                              .Case(NETLINK_ROUTE, Allow())
+                              .Default(sandbox::CrashSIGSYSSocket()))
+          .Default(sandbox::CrashSIGSYSSocket());
+
   return Switch(domain)
       .Case(AF_UNIX, Error(EPERM))
       .Cases({AF_INET, AF_INET6}, inet_socket)
+      .Case(AF_NETLINK, netlink_type_switch)
       .Default(sandbox::CrashSIGSYSSocket());
 }
 
@@ -145,10 +167,16 @@ ResultExpr RestrictMailSocketPair() {
   // Mojo may create connected local transports after sandbox engagement.
   // Stream socketpairs have no pathname and cannot be retargeted to another
   // user's session endpoint, unlike a newly created AF_UNIX client socket.
+  // SOCK_SEQPACKET pairs are equally anonymous: base::CreateSocketPair (used
+  // by the signal-based file broker for its per-request reply channel and by
+  // Chromium IPC helpers) requests SOCK_SEQPACKET on Linux, so the broker's
+  // requests could never leave the trap without this allowance.
   return If(domain == AF_UNIX,
             If((type & ~kTypeFlags) == SOCK_STREAM,
                If(protocol == 0, Allow()).Else(Error(EPERM)))
-                .Else(Error(EPERM)))
+                .Else(If((type & ~kTypeFlags) == SOCK_SEQPACKET,
+                         If(protocol == 0, Allow()).Else(Error(EPERM)))
+                          .Else(Error(EPERM))))
       .Else(Error(EPERM));
 }
 
@@ -178,7 +206,11 @@ ResultExpr RestrictMailSetSockopt() {
       Switch(level)
           .Case(SOL_SOCKET,
                 Switch(option)
-                    .Cases({SO_KEEPALIVE, SO_RCVBUF, SO_SNDBUF}, Allow())
+                    // Rust callers configure socket read/write timeouts:
+                    // imap_client connect_with_timeout + OAuth accepted streams.
+                    .Cases({SO_KEEPALIVE, SO_RCVBUF, SO_SNDBUF, SO_RCVTIMEO,
+                            SO_SNDTIMEO},
+                           Allow())
                     .Default(sandbox::CrashSIGSYSSockopt()))
           .Case(IPPROTO_TCP,
                 Switch(option)
@@ -212,6 +244,16 @@ class MailHelperPolicy final : public sandbox::policy::BPFBasePolicy {
     }
 
     switch (sysno) {
+      case __NR_sendmsg:
+      case __NR_recvmsg:
+        // The signal-based file broker communicates over its socketpair with
+        // sendmsg(2)/recvmsg(2) from inside the SIGSYS trap handler. Without
+        // these the baseline policy's CrashSIGSYS default breaks every
+        // brokered filesystem operation (-ENOMEM). The process cannot create
+        // AF_UNIX sockets after sandbox entry, so these only ever target fds
+        // it legitimately holds: the broker channel, Mojo transports, the
+        // prebound OAuth listener, and post-entry AF_INET mail sockets.
+        return Allow();
       case __NR_socket:
         return RestrictMailSocket();
       case __NR_socketpair:
@@ -294,18 +336,29 @@ bool SeccompFilterIsActive() {
 
 bool CloseLinuxMailHelperInheritedFds(int mojo_fd,
                                       int oauth_loopback_listener_fd) {
-  if (mojo_fd < 0 || oauth_loopback_listener_fd < 0 ||
+  if (mojo_fd < 0) {
+    return false;
+  }
+  if (oauth_loopback_listener_fd >= 0 &&
       mojo_fd == oauth_loopback_listener_fd) {
     return false;
   }
   base::InjectiveMultimap preserved_fds = {
       base::InjectionArc(mojo_fd, mojo_fd, false),
-      base::InjectionArc(oauth_loopback_listener_fd,
-                         oauth_loopback_listener_fd, false),
   };
+  if (oauth_loopback_listener_fd >= 0) {
+    preserved_fds.push_back(base::InjectionArc(
+        oauth_loopback_listener_fd, oauth_loopback_listener_fd, false));
+  }
   base::CloseSuperfluousFds(preserved_fds);
-  return fcntl(mojo_fd, F_GETFD) >= 0 &&
-         fcntl(oauth_loopback_listener_fd, F_GETFD) >= 0;
+  if (fcntl(mojo_fd, F_GETFD) < 0) {
+    return false;
+  }
+  if (oauth_loopback_listener_fd >= 0 &&
+      fcntl(oauth_loopback_listener_fd, F_GETFD) < 0) {
+    return false;
+  }
+  return true;
 }
 
 bool InitializeLinuxMailHelperSandbox(const base::FilePath& mail_root,

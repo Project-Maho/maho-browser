@@ -43,7 +43,10 @@ source_set("maho_mail") {
     frameworks = [ "AppKit.framework" ]
   } else if (is_linux) {
     sources += [ "maho_mail_attachment_launcher_linux.cc" ]
-    deps += [ "//dbus" ]
+    deps += [
+      "//components/dbus",
+      "//dbus",
+    ]
   } else if (is_win) {
     sources += [ "maho_mail_attachment_launcher_win.cc" ]
   }

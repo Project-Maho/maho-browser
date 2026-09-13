@@ -10,6 +10,8 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/run_loop.h"
 #include "base/test/task_environment.h"
+#include "base/test/scoped_run_loop_timeout.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho {
@@ -40,12 +42,13 @@ class MahoMailAttachmentRegistryTest : public testing::Test {
   }
 
   std::tuple<bool, std::string, std::string> Stage(
-      const base::FilePath& source) {
+      const base::FilePath& source,
+      const std::string& filename = std::string()) {
     base::RunLoop loop;
     std::tuple<bool, std::string, std::string> result;
     registry_->StageDownloadedFile(
         MailAttachmentMessageIdentity{"account", 42, "inbox", "1.2"},
-        source,
+        source, filename.empty() ? source.BaseName().AsUTF8Unsafe() : filename,
         base::BindOnce(
             [](base::RunLoop* loop,
                std::tuple<bool, std::string, std::string>* result, bool ok,
@@ -87,6 +90,24 @@ class MahoMailAttachmentRegistryTest : public testing::Test {
     return result;
   }
 
+  std::tuple<bool, std::string, std::string> SaveToDownloads(
+      const std::string& token) {
+    base::RunLoop loop;
+    std::tuple<bool, std::string, std::string> result;
+    registry_->SaveToDownloads(
+        token, "profile-a", temp_dir_.GetPath().AppendASCII("Downloads"),
+        base::BindOnce(
+            [](base::RunLoop* loop,
+               std::tuple<bool, std::string, std::string>* result, bool ok,
+               std::string error, std::string path) {
+              *result = {ok, std::move(error), std::move(path)};
+              loop->Quit();
+            },
+            &loop, &result));
+    loop.Run();
+    return result;
+  }
+
   bool DeleteConsumed(
       std::unique_ptr<MahoMailAttachmentRegistry::ConsumedAttachment>
           attachment) {
@@ -105,12 +126,73 @@ class MahoMailAttachmentRegistryTest : public testing::Test {
   }
 
   base::test::TaskEnvironment task_environment_;
+  base::test::ScopedRunLoopTimeout run_loop_timeout_{FROM_HERE,
+                                                    base::Seconds(10)};
   base::ScopedTempDir temp_dir_;
   base::FilePath helper_root_;
   base::FilePath staging_root_;
   base::FilePath launch_root_;
   std::unique_ptr<MahoMailAttachmentRegistry> registry_;
 };
+
+TEST_F(MahoMailAttachmentRegistryTest, SaveToDownloadsPreservesNameAndBytes) {
+  auto [staged, token, stage_error] =
+      Stage(WriteHelperFile("helper.cache", "trusted payload"), "report.pdf");
+  ASSERT_TRUE(staged) << stage_error;
+  auto [ok, error, path] = SaveToDownloads(token);
+  ASSERT_TRUE(ok) << error;
+  EXPECT_TRUE(error.empty());
+  EXPECT_EQ(temp_dir_.GetPath().AppendASCII("Downloads/report.pdf"),
+            base::FilePath::FromUTF8Unsafe(path));
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(base::FilePath::FromUTF8Unsafe(path),
+                                   &contents));
+  EXPECT_EQ("trusted payload", contents);
+  EXPECT_FALSE(std::get<0>(SaveToDownloads(token)));
+}
+
+TEST_F(MahoMailAttachmentRegistryTest, SaveToDownloadsDeduplicatesNames) {
+  // Stage both tokens before saving: the deterministic token provider then
+  // exercises the registry's unique-token fallback rather than token reuse.
+  auto [staged, token, stage_error] =
+      Stage(WriteHelperFile("first.cache", "first"), "report.pdf");
+  ASSERT_TRUE(staged) << stage_error;
+  auto [staged_second, second_token, second_error] =
+      Stage(WriteHelperFile("second.cache", "second"), "report.pdf");
+  ASSERT_TRUE(staged_second) << second_error;
+  auto [ok, error, path] = SaveToDownloads(token);
+  ASSERT_TRUE(ok) << error;
+  auto [second_ok, save_error, second_path] = SaveToDownloads(second_token);
+  ASSERT_TRUE(second_ok) << save_error;
+  EXPECT_EQ(temp_dir_.GetPath().AppendASCII("Downloads/report (1).pdf"),
+            base::FilePath::FromUTF8Unsafe(second_path));
+  std::string contents;
+  ASSERT_TRUE(base::ReadFileToString(base::FilePath::FromUTF8Unsafe(path),
+                                   &contents));
+  EXPECT_EQ("first", contents);
+  ASSERT_TRUE(base::ReadFileToString(base::FilePath::FromUTF8Unsafe(second_path),
+                                   &contents));
+  EXPECT_EQ("second", contents);
+}
+
+TEST_F(MahoMailAttachmentRegistryTest, SaveToDownloadsRejectsInvalidAndExpired) {
+  for (const std::string& token : {"invalid", "../escape", "/tmp/file"}) {
+    auto [ok, error, path] = SaveToDownloads(token);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(error.empty());
+    EXPECT_TRUE(path.empty());
+  }
+  auto [staged, token, stage_error] =
+      Stage(WriteHelperFile("report.pdf", "payload"));
+  ASSERT_TRUE(staged) << stage_error;
+  registry_->SetNowCallbackForTesting(base::BindRepeating(
+      [] { return base::Time::UnixEpoch() + base::Hours(1); }));
+  auto [ok, error, path] = SaveToDownloads(token);
+  EXPECT_FALSE(ok);
+  EXPECT_FALSE(error.empty());
+  EXPECT_TRUE(path.empty());
+  EXPECT_FALSE(base::PathExists(temp_dir_.GetPath().AppendASCII("Downloads")));
+}
 
 TEST_F(MahoMailAttachmentRegistryTest, ValidOpenReachesLauncherOnce) {
   auto [staged, token, stage_error] =
@@ -131,6 +213,38 @@ TEST_F(MahoMailAttachmentRegistryTest, ValidOpenReachesLauncherOnce) {
   std::string contents;
   ASSERT_TRUE(base::ReadFileToString(launched_path, &contents));
   EXPECT_EQ("trusted payload", contents);
+  EXPECT_TRUE(DeleteConsumed(std::move(attachment)));
+}
+
+TEST_F(MahoMailAttachmentRegistryTest, ConsumedLaunchPreservesRealExtension) {
+  for (const std::string& filename : {"report.pdf", "photo.JPG", "archive.tar.gz"}) {
+    SCOPED_TRACE(filename);
+    auto [staged, token, stage_error] =
+        Stage(WriteHelperFile(filename, "trusted payload"));
+    ASSERT_TRUE(staged) << stage_error;
+    auto [attachment, error] = Consume(token);
+    ASSERT_TRUE(attachment) << error;
+    EXPECT_EQ(base::FilePath::FromUTF8Unsafe(filename).Extension(),
+              attachment->path().Extension());
+    EXPECT_TRUE(base::MakeAbsoluteFilePath(launch_root_).IsParent(
+        attachment->path()));
+    std::string contents;
+    ASSERT_TRUE(base::ReadFileToString(attachment->path(), &contents));
+    EXPECT_EQ("trusted payload", contents);
+    EXPECT_TRUE(DeleteConsumed(std::move(attachment)));
+    EXPECT_FALSE(Consume(token).first);
+  }
+}
+
+TEST_F(MahoMailAttachmentRegistryTest, LaunchUsesDisplayNameNotHelperCacheName) {
+  auto [staged, token, stage_error] =
+      Stage(WriteHelperFile("account-42-part.cache", "trusted payload"),
+            "report.pdf");
+  ASSERT_TRUE(staged) << stage_error;
+  auto [attachment, error] = Consume(token);
+  ASSERT_TRUE(attachment) << error;
+  EXPECT_EQ(base::FilePath::FromUTF8Unsafe("opaque-token-report.pdf"),
+            attachment->path().BaseName());
   EXPECT_TRUE(DeleteConsumed(std::move(attachment)));
 }
 
@@ -183,6 +297,40 @@ TEST_F(MahoMailAttachmentRegistryTest,
   EXPECT_FALSE(base::PathExists(launch_root_.AppendASCII(token)));
 }
 
+TEST_F(MahoMailAttachmentRegistryTest,
+       LaunchFileResistsRenameWhileHeld) {
+  auto [staged, token, stage_error] =
+      Stage(WriteHelperFile("launch-rename.txt", "trusted payload"));
+  ASSERT_TRUE(staged) << stage_error;
+
+  auto [attachment, open_error] = Consume(token);
+  ASSERT_TRUE(attachment) << open_error;
+
+  base::FilePath replacement =
+      temp_dir_.GetPath().AppendASCII("replacement.txt");
+  ASSERT_TRUE(base::WriteFile(replacement, "attacker replacement"));
+
+#if BUILDFLAG(IS_WIN)
+  // On Windows, the launch file handle is opened without FLAG_WIN_SHARE_DELETE,
+  // so the open handle denies deletion and rename, causing ReplaceFile to fail.
+  EXPECT_FALSE(base::ReplaceFile(replacement, attachment->path(), nullptr));
+#else
+  // On POSIX, directory entry replacement is permitted by the kernel, but the
+  // validated handle remains bound to the original inode.
+  base::File launch_file = attachment->DuplicateProtectionFile();
+  ASSERT_TRUE(launch_file.IsValid());
+  EXPECT_TRUE(base::ReplaceFile(replacement, attachment->path(), nullptr));
+  ASSERT_GE(launch_file.Seek(base::File::FROM_BEGIN, 0), 0);
+  std::string launched_bytes(15, '\0');
+  const std::optional<size_t> read = launch_file.ReadAtCurrentPos(
+      base::as_writable_byte_span(launched_bytes));
+  ASSERT_TRUE(read.has_value());
+  launched_bytes.resize(*read);
+  EXPECT_EQ("trusted payload", launched_bytes);
+#endif
+  EXPECT_TRUE(DeleteConsumed(std::move(attachment)));
+}
+
 TEST_F(MahoMailAttachmentRegistryTest, ConsumedFileDeletedAfterOpenCompletion) {
   auto [staged, token, stage_error] =
       Stage(WriteHelperFile("cleanup.txt", "payload"));
@@ -217,6 +365,7 @@ TEST_F(MahoMailAttachmentRegistryTest, RejectsSourceOutsideHelperRoot) {
   EXPECT_EQ("attachment source is not trusted", error);
 }
 
+#if BUILDFLAG(IS_POSIX)
 TEST_F(MahoMailAttachmentRegistryTest, RejectsSymlinkEscapingHelperRoot) {
   base::FilePath outside = temp_dir_.GetPath().AppendASCII("outside.txt");
   ASSERT_TRUE(base::WriteFile(outside, "outside"));
@@ -227,6 +376,7 @@ TEST_F(MahoMailAttachmentRegistryTest, RejectsSymlinkEscapingHelperRoot) {
   EXPECT_TRUE(token.empty());
   EXPECT_EQ("attachment source is not trusted", error);
 }
+#endif  // BUILDFLAG(IS_POSIX)
 
 TEST_F(MahoMailAttachmentRegistryTest, RejectsReplay) {
   auto [staged, token, stage_error] =
@@ -272,7 +422,7 @@ TEST_F(MahoMailAttachmentRegistryTest, RevocationRejectsPendingStageReply) {
   std::string callback_error;
   registry_->StageDownloadedFile(
       MailAttachmentMessageIdentity{"account", 42, "inbox", "1.2"},
-      WriteHelperFile("pending.txt", "payload"),
+      WriteHelperFile("pending.txt", "payload"), "pending.txt",
       base::BindOnce(
           [](base::RunLoop* loop, bool* callback_ok,
              std::string* callback_error, bool ok, std::string value,
@@ -331,6 +481,7 @@ TEST_F(MahoMailAttachmentRegistryTest, RejectsMissingAndReplacedFiles) {
   EXPECT_EQ("staged attachment changed", replaced_error);
 }
 
+#if BUILDFLAG(IS_POSIX)
 TEST_F(MahoMailAttachmentRegistryTest, RejectsStagedSymlinkEscape) {
   auto [staged, token, stage_error] =
       Stage(WriteHelperFile("message.txt", "payload"));
@@ -345,6 +496,7 @@ TEST_F(MahoMailAttachmentRegistryTest, RejectsStagedSymlinkEscape) {
   EXPECT_FALSE(attachment);
   EXPECT_EQ("staged attachment changed", error);
 }
+#endif  // BUILDFLAG(IS_POSIX)
 
 }  // namespace
 }  // namespace maho

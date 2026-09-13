@@ -115,8 +115,8 @@ fn accounts_changed_event_emission_and_reconnect() {
     let pool = crate::test_support::pool_with_seeded_data();
     let ctx = crate::test_support::ctx_arc(pool);
 
-    assert!(MahoMailRegisterEventCallback(test_event_cb));
-    assert!(MahoMailRegisterNewMailCallback(test_new_mail_cb));
+    assert!(MahoMailRegisterEventCallback(Some(test_event_cb)));
+    assert!(MahoMailRegisterNewMailCallback(Some(test_new_mail_cb)));
 
     let log = EVENT_LOG.get_or_init(|| Mutex::new(Vec::new()));
     log.lock().unwrap().clear();
@@ -247,3 +247,10 @@ async fn prepare_shutdown_drain_stops_all_workers_before_callback() {
         "backfill worker drained before shutdown callback"
     );
 }
+
+#[test]
+fn register_callbacks_reject_none() {
+    assert!(!MahoMailRegisterEventCallback(None));
+    assert!(!MahoMailRegisterNewMailCallback(None));
+}
+

@@ -11,6 +11,7 @@
 #include "base/no_destructor.h"
 #include "base/synchronization/lock.h"
 #include "base/task/bind_post_task.h"
+#include "base/task/sequenced_task_runner.h"
 #include "maho/browser/mail_helper/maho_mail_service.h"
 
 namespace maho {
@@ -81,9 +82,11 @@ void RefreshSettings(PermissionCallback callback) {
 }
 
 void RequestPermission(PermissionCallback callback) {
+  scoped_refptr<base::SequencedTaskRunner> runner =
+      base::SequencedTaskRunner::GetCurrentDefault();
   PermissionState* state = &GetPermissionState();
   PermissionCallback reply =
-      base::BindPostTaskToCurrentDefault(std::move(callback));
+      base::BindPostTask(runner, std::move(callback));
   {
     base::AutoLock lock(state->lock);
     state->pending_request_callbacks.push_back(std::move(reply));
@@ -99,15 +102,20 @@ void RequestPermission(PermissionCallback callback) {
   [[UNUserNotificationCenter currentNotificationCenter]
       requestAuthorizationWithOptions:options
                     completionHandler:^(BOOL granted, NSError* error) {
-                      std::vector<PermissionCallback> callbacks;
-                      {
-                        base::AutoLock lock(state->lock);
-                        state->request_pending = false;
-                        callbacks.swap(state->pending_request_callbacks);
-                      }
-                      for (auto& pending_callback : callbacks) {
-                        RefreshSettings(std::move(pending_callback));
-                      }
+                      runner->PostTask(
+                          FROM_HERE,
+                          base::BindOnce([]() {
+                            PermissionState* state = &GetPermissionState();
+                            std::vector<PermissionCallback> callbacks;
+                            {
+                              base::AutoLock lock(state->lock);
+                              state->request_pending = false;
+                              callbacks.swap(state->pending_request_callbacks);
+                            }
+                            for (auto& pending_callback : callbacks) {
+                              RefreshSettings(std::move(pending_callback));
+                            }
+                          }));
                     }];
 }
 

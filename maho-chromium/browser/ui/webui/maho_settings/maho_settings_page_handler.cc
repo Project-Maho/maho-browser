@@ -85,6 +85,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
+#include "maho/browser/ui/webui/maho_ai_provider_oauth.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_google_sign_in.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
@@ -627,10 +628,10 @@ class ProfileDeletionCoordinator
     core_deletion_in_flight_ = true;
     PendingDeletion pending = std::move(*pending_deletion_);
     pending_deletion_.reset();
+    const std::string canonical_profile_id = pending.canonical_profile_id;
     maho::PostCoreTask<std::string>(
         FROM_HERE,
-        base::BindOnce(&DeleteProfileOnCoreSequence,
-                       pending.canonical_profile_id),
+        base::BindOnce(&DeleteProfileOnCoreSequence, canonical_profile_id),
         base::BindOnce(&ProfileDeletionCoordinator::OnCoreDeletionFinished,
                        base::Unretained(this), std::move(pending)));
   }
@@ -3835,6 +3836,14 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
       !prefs_->GetString(ai::kByokOpenAIEncryptedB64).empty();
   settings->has_byok_anthropic =
       !prefs_->GetString(ai::kByokAnthropicEncryptedB64).empty();
+  settings->has_oauth_openai =
+      maho::ai_oauth::HasOAuthSession(prefs_, "openai");
+  settings->has_oauth_anthropic =
+      maho::ai_oauth::HasOAuthSession(prefs_, "anthropic");
+  settings->oauth_client_id_openai =
+      maho::ai_oauth::GetOAuthClientId(prefs_, "openai");
+  settings->oauth_client_id_anthropic =
+      maho::ai_oauth::GetOAuthClientId(prefs_, "anthropic");
 
   settings->has_relay_session = maho::auth::HasValidRelaySession(prefs_);
   settings->relay_tier = prefs_->GetString(maho::account_prefs::kRelayUserTier);
@@ -3872,6 +3881,7 @@ void MahoSettingsPageHandler::SetAIProvider(const std::string& provider) {
   }
   prefs_->SetString(ai::kProvider, provider);
   prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
 }
 
 void MahoSettingsPageHandler::SetAIBaseUrl(const std::string& url) {
@@ -3880,6 +3890,7 @@ void MahoSettingsPageHandler::SetAIBaseUrl(const std::string& url) {
   // them on the lazy flush lets a shutdown persist a new api_key alongside a
   // stale base_url/model, which authenticates against the wrong endpoint.
   prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
 }
 
 void MahoSettingsPageHandler::SetAIApiKey(const std::string& key) {
@@ -3888,11 +3899,13 @@ void MahoSettingsPageHandler::SetAIApiKey(const std::string& key) {
   if (key.empty()) {
     MahoUnifiedAgentAdapter::ClearActiveBYOKKeys("openai-compatible");
   }
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
 }
 
 void MahoSettingsPageHandler::SetAIModel(const std::string& model) {
   prefs_->SetString(ai::kModel, model);
   prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
 }
 
 void MahoSettingsPageHandler::SetAIApprovalPolicy(const std::string& policy) {
@@ -5205,15 +5218,97 @@ void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
   if (provider == "openai") {
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, encrypted_b64);
     prefs_->CommitPendingWrite();
+    MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, encrypted_b64);
     prefs_->CommitPendingWrite();
+    MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
   } else {
     LOG(ERROR) << "[SetBYOKKey] unknown provider: " << provider;
     std::move(callback).Run(false);
   }
+}
+
+void MahoSettingsPageHandler::SetAIProviderOAuthClientId(
+    const std::string& provider,
+    const std::string& client_id,
+    SetAIProviderOAuthClientIdCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::ai_oauth::IsOAuthSupported(provider)) {
+    std::move(callback).Run(false);
+    return;
+  }
+  maho::ai_oauth::SetOAuthClientId(prefs_, provider, client_id);
+  std::move(callback).Run(true);
+}
+
+void MahoSettingsPageHandler::SignInToAIProvider(
+    const std::string& provider,
+    SignInToAIProviderCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+
+  Browser* peek_host_browser =
+      host_web_contents_ ? chrome::FindBrowserWithTab(host_web_contents_)
+                         : nullptr;
+  if (!maho::IsPeekEligible(peek_host_browser) ||
+      peek_host_browser->profile() != profile_ ||
+      host_web_contents_->GetBrowserContext() != profile_) {
+    peek_host_browser = nullptr;
+  }
+
+  maho::ai_oauth::StartProviderOAuth(
+      profile_, peek_host_browser, provider,
+      maho::ai_oauth::GetOAuthClientId(prefs_, provider),
+      base::BindOnce(&MahoSettingsPageHandler::OnProviderOAuthCompleted,
+                     weak_factory_.GetWeakPtr(), provider,
+                     std::move(callback)));
+}
+
+void MahoSettingsPageHandler::OnProviderOAuthCompleted(
+    const std::string& provider,
+    SignInToAIProviderCallback callback,
+    bool ok,
+    maho::ai_oauth::ProviderTokens tokens,
+    const std::string& error_message) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!ok) {
+    std::move(callback).Run(false, error_message);
+    return;
+  }
+  if (!encryptor_.has_value()) {
+    std::move(callback).Run(false, "Encryption not ready. Please try again.");
+    return;
+  }
+  if (!maho::ai_oauth::StoreProviderOAuthTokens(prefs_, *encryptor_, provider,
+                                                tokens)) {
+    std::move(callback).Run(false, "Could not store the provider credential.");
+    return;
+  }
+  prefs_->SetString(ai::kProvider, provider);
+  prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+  std::move(callback).Run(true, std::string());
+}
+
+void MahoSettingsPageHandler::SignOutOfAIProvider(
+    const std::string& provider,
+    SignOutOfAIProviderCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!maho::ai_oauth::IsOAuthSupported(provider)) {
+    std::move(callback).Run(false);
+    return;
+  }
+  maho::ai_oauth::ClearProviderOAuth(prefs_, provider);
+  MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+  std::move(callback).Run(true);
 }
 
 void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
@@ -5222,11 +5317,13 @@ void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, "");
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
+    MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, "");
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
+    MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
   } else {
     LOG(ERROR) << "[ClearBYOKKey] unknown provider: " << provider;
@@ -5888,6 +5985,25 @@ void MahoSettingsPageHandler::MailAddAccount(const std::string& request_json,
       request_json,
       base::BindOnce(
           [](MailAddAccountCallback cb, bool ok, std::string result) {
+            std::move(cb).Run(ok, std::move(result));
+          },
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::MailTestConnection(
+    const std::string& request_json,
+    MailTestConnectionCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      maho::MahoMailServiceFactory::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(false, "Mail service unavailable");
+    return;
+  }
+  service->TestConnection(
+      request_json,
+      base::BindOnce(
+          [](MailTestConnectionCallback cb, bool ok, std::string result) {
             std::move(cb).Run(ok, std::move(result));
           },
           std::move(callback)));

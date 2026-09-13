@@ -10,6 +10,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/task/thread_pool.h"
 #include "base/uuid.h"
 #include "crypto/hash.h"
@@ -62,6 +63,7 @@ MahoMailAttachmentRegistry::ConsumedAttachment::ConsumedAttachment(
     : path_(std::move(path)), protection_file_(std::move(protection_file)) {}
 
 MahoMailAttachmentRegistry::ConsumedAttachment::~ConsumedAttachment() {
+  protection_file_.Close();
   if (!path_.empty()) {
     base::ThreadPool::PostTask(
         FROM_HERE, {base::MayBlock()},
@@ -150,6 +152,7 @@ MahoMailAttachmentRegistry::~MahoMailAttachmentRegistry() {
 void MahoMailAttachmentRegistry::StageDownloadedFile(
     const MailAttachmentMessageIdentity& message,
     const base::FilePath& source_path,
+    const std::string& filename,
     ResultCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DeleteExpiredEntries(Now());
@@ -164,7 +167,8 @@ void MahoMailAttachmentRegistry::StageDownloadedFile(
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&MahoMailAttachmentRegistry::StageOnWorker,
-                     helper_download_root_, staging_root_, source_path, token),
+                     helper_download_root_, staging_root_, source_path,
+                     filename, token),
       base::BindOnce(&MahoMailAttachmentRegistry::DispatchStageResult,
                      weak_ptr_factory_.GetWeakPtr(), message, generation,
                      account_epoch, token, std::move(callback)));
@@ -230,6 +234,77 @@ void MahoMailAttachmentRegistry::Consume(
                      validated_handle_callback_for_testing_, std::move(entry)),
       base::BindOnce(&MahoMailAttachmentRegistry::DispatchConsumeResult,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoMailAttachmentRegistry::SaveToDownloads(
+    const std::string& token,
+    const std::string& requesting_profile_identity,
+    const base::FilePath& downloads_directory,
+    SaveCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const auto it = entries_.find(token);
+  const base::FilePath filename =
+      it == entries_.end() ? base::FilePath() : it->second.filename;
+  Consume(
+      token, requesting_profile_identity,
+      base::BindOnce(
+          [](base::FilePath directory, base::FilePath filename,
+             SaveCallback callback,
+             std::unique_ptr<ConsumedAttachment> attachment,
+             std::string error) {
+            if (!attachment) {
+              std::move(callback).Run(false, std::move(error), std::string());
+              return;
+            }
+            base::ThreadPool::PostTaskAndReplyWithResult(
+                FROM_HERE,
+                {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+                base::BindOnce(
+                    [](base::FilePath directory, base::FilePath filename,
+                       std::unique_ptr<ConsumedAttachment> attachment)
+                        -> std::pair<base::FilePath, std::string> {
+                      if (!base::CreateDirectory(directory)) {
+                        return {{}, "could not create download directory"};
+                      }
+                      base::File source = attachment->DuplicateProtectionFile();
+                      // FLAG_CREATE in CopyValidatedFile atomically reserves
+                      // each candidate, including against concurrent saves.
+                      for (uint32_t suffix = 0; suffix < 10000; ++suffix) {
+                        const base::FilePath destination = directory.Append(
+                            suffix == 0 ? filename
+                                        : filename.InsertBeforeExtensionASCII(
+                                              " (" + base::NumberToString(suffix) +
+                                              ")"));
+                        base::File output;
+                        if (CopyValidatedFile(&source, destination, &output)) {
+                          return {destination, {}};
+                        }
+                        if (!output.IsValid() &&
+                            output.error_details() == base::File::FILE_ERROR_EXISTS) {
+                          continue;
+                        }
+                        if (output.IsValid()) {
+                          output.Close();
+                          if (!base::DeleteFile(destination)) {
+                            return {{}, "attachment save failed; partial file cleanup failed"};
+                          }
+                        }
+                        return {{}, "attachment save failed"};
+                      }
+                      return {{}, "too many attachment filename collisions"};
+                    },
+                    std::move(directory), std::move(filename),
+                    std::move(attachment)),
+                base::BindOnce(
+                    [](SaveCallback callback,
+                       std::pair<base::FilePath, std::string> result) {
+                      const bool ok = !result.first.empty();
+                      std::move(callback).Run(ok, std::move(result.second),
+                                              result.first.AsUTF8Unsafe());
+                    },
+                    std::move(callback)));
+          },
+          downloads_directory, filename, std::move(callback)));
 }
 
 // static
@@ -320,8 +395,10 @@ MahoMailAttachmentRegistry::StageOnWorker(
     const base::FilePath& helper_download_root,
     const base::FilePath& staging_root,
     const base::FilePath& source_path,
+    const std::string& filename,
     const std::string& token) {
   StageResult result;
+  result.filename = base::FilePath::FromUTF8Unsafe(filename);
   if (source_path.empty() || !source_path.IsAbsolute() ||
       source_path.ReferencesParent()) {
     result.error = kInvalidSource;
@@ -423,7 +500,11 @@ MahoMailAttachmentRegistry::ValidateOnWorker(const base::FilePath& staging_root,
   }
   const base::FilePath canonical_launch_root =
       base::MakeAbsoluteFilePath(launch_root);
-  result.launch_path = launch_root.AppendASCII(token);
+  // Keep the capability opaque while preserving the validated display name's
+  // real extension. The token prefix isolates otherwise identical filenames.
+  result.launch_path = launch_root.Append(
+      base::FilePath::FromUTF8Unsafe(token + "-" +
+                                    entry.filename.AsUTF8Unsafe()));
   const base::FilePath canonical_launch_path =
       base::MakeAbsoluteFilePath(result.launch_path.DirName()).Append(
           result.launch_path.BaseName());
@@ -583,6 +664,7 @@ void MahoMailAttachmentRegistry::OnStageComplete(
   Entry entry;
   entry.profile_identity = profile_identity_;
   entry.message = std::move(message);
+  entry.filename = std::move(result.filename);
   entry.staged_path = std::move(result.staged_path);
   entry.expires_at = Now() + capability_lifetime_;
   entry.generation = generation;

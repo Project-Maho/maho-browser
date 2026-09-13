@@ -22,6 +22,7 @@ use crate::google_identity::{
 type Result<T> = std::result::Result<T, CoreError>;
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(900);
+const CONNECTION_READ_TIMEOUT: Duration = Duration::from_secs(5);
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 const SUCCESS_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<html><head><meta charset=\"utf-8\"></head><body><h2>Connected</h2><p>Returning to Maho\u{2026}</p><script>window.close()</script></body></html>";
@@ -300,17 +301,24 @@ fn accept_and_exchange(
     expected_state: &str,
     cancel: &AtomicBool,
 ) -> Result<ProviderOAuthTokens> {
-    let mut stream = accept_with_timeout(listener, cancel)?;
-    let request = read_http_request(&mut stream)?;
-
-    let callback_state = query_param(&request, "state")
-        .ok_or_else(|| CoreError::Parse("no state parameter in callback".to_string()))?;
-    if callback_state != expected_state {
-        write_error_response(&mut stream, "Sign-in state mismatch (possible CSRF)", 400);
-        return Err(CoreError::Parse(
-            "sign-in state mismatch (possible CSRF)".to_string(),
-        ));
-    }
+    // Keep one overall deadline: probes must neither consume nor extend a flow.
+    let start = std::time::Instant::now();
+    let (mut stream, request) = loop {
+        let mut stream = accept_with_timeout(listener, cancel, start)?;
+        let request = match read_http_request(&mut stream) {
+            Ok(request) => request,
+            Err(e) => {
+                tracing::debug!("skipping unreadable provider OAuth connection: {e}");
+                write_error_response(&mut stream, "Invalid OAuth callback request", 400);
+                continue;
+            }
+        };
+        if query_param(&request, "state").as_deref() != Some(expected_state) {
+            write_error_response(&mut stream, "Missing or mismatched sign-in state", 400);
+            continue;
+        }
+        break (stream, request);
+    };
 
     let entry = take_pending(expected_state)
         .ok_or_else(|| CoreError::Parse("unknown sign-in state".to_string()))?;
@@ -335,11 +343,14 @@ fn accept_and_exchange(
     }
 }
 
-fn accept_with_timeout(listener: &TcpListener, cancel: &AtomicBool) -> Result<TcpStream> {
+fn accept_with_timeout(
+    listener: &TcpListener,
+    cancel: &AtomicBool,
+    start: std::time::Instant,
+) -> Result<TcpStream> {
     listener
         .set_nonblocking(true)
         .map_err(|e| CoreError::Network(format!("set_nonblocking failed: {e}")))?;
-    let start = std::time::Instant::now();
     loop {
         if cancel.load(Ordering::SeqCst) {
             return Err(CoreError::Network("sign-in cancelled".to_string()));
@@ -355,7 +366,7 @@ fn accept_with_timeout(listener: &TcpListener, cancel: &AtomicBool) -> Result<Tc
                     .set_nonblocking(false)
                     .map_err(|e| CoreError::Network(format!("set blocking failed: {e}")))?;
                 stream
-                    .set_read_timeout(Some(CALLBACK_TIMEOUT))
+                    .set_read_timeout(Some(CONNECTION_READ_TIMEOUT))
                     .map_err(|e| CoreError::Network(format!("set_read_timeout failed: {e}")))?;
                 return Ok(stream);
             }

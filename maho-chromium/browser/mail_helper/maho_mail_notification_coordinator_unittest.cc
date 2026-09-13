@@ -176,6 +176,19 @@ TEST_F(CoordinatorTest, NotificationOffAndDestructionWithdraw) {
   EXPECT_TRUE(routes_.empty());
 }
 
+TEST_F(CoordinatorTest, RestartHonorsPersistedNotificationOptOut) {
+  coordinator_.reset();
+  prefs_.SetBoolean("maho.mail.notifications_enabled", false);
+  // The service snapshot is default-constructed until the first behavior read.
+  behavior_ = MailBehaviorSnapshot();
+  ASSERT_TRUE(behavior_.desktop_notifications);
+  coordinator_ = MakeCoordinator();
+
+  coordinator_->HandleEventForTesting(Event());
+
+  EXPECT_TRUE(displayed_.empty());
+}
+
 TEST_F(CoordinatorTest, PersistedMuteEventsConvergePerAccount) {
   coordinator_->OnThreadMuteChanged("account-a", "shared-thread", true);
   coordinator_->HandleEventForTesting(

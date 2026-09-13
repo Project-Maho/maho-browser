@@ -17,6 +17,7 @@
 #include "base/no_destructor.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/pref_names.h"
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "components/prefs/pref_registry_simple.h"
@@ -340,16 +341,36 @@ bool IsPathSafeIdentifier(const std::string& value) {
 // Same contract as above for a user-visible attachment file name. The name may
 // contain dots (extensions) but must remain a single path component.
 bool IsPathSafeFileName(const std::string& value) {
-  if (value.empty() || value.size() > 512) {
-    return false;
-  }
-  if (value.find('/') != std::string::npos ||
-      value.find('\\') != std::string::npos ||
-      value.find('\0') != std::string::npos) {
-    return false;
-  }
-  if (value == "." || value == ".." ||
+  // Leave room for the UUID plus separator in the native launch basename.
+  if (value.empty() || value.size() > 218 ||
+      value.back() == '.' || value.back() == ' ' ||
+      value.find_first_of("/\\:<>\"|?*") != std::string::npos ||
       value.find("..") != std::string::npos) {
+    return false;
+  }
+  for (unsigned char c : value) {
+    if (c < 0x20 || c == 0x7f) {
+      return false;
+    }
+  }
+  // Windows device names remain reserved even when followed by an extension.
+  std::string stem = value.substr(0, value.find('.'));
+  while (!stem.empty() && stem.back() == ' ') {
+    stem.pop_back();
+  }
+  for (char& c : stem) {
+    if (c >= 'a' && c <= 'z') {
+      c -= 'a' - 'A';
+    }
+  }
+  if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+      stem == "CONIN$" || stem == "CONOUT$") {
+    return false;
+  }
+  if ((stem.starts_with("COM") || stem.starts_with("LPT")) &&
+      (stem.substr(3) == "\xc2\xb9" || stem.substr(3) == "\xc2\xb2" ||
+       stem.substr(3) == "\xc2\xb3" ||
+       (stem.size() == 4 && stem[3] >= '1' && stem[3] <= '9'))) {
     return false;
   }
   return true;
@@ -957,10 +978,25 @@ mojom::MahoMailHelper* MahoMailService::GetHelperOrNull() {
 
 void MahoMailService::ListAccounts(ReadCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if ((lifecycle_state_ == LifecycleState::kFailed ||
+       lifecycle_state_ == LifecycleState::kStopped) &&
+      IsEnabled() && !shutdown_requested_ && launch_inputs_ &&
+      base::TimeTicks::Now() >= next_on_demand_launch_) {
+    next_on_demand_launch_ = base::TimeTicks::Now() + base::Seconds(60);
+    PendingLaunch launch = *launch_inputs_;
+    EnsureHelperLaunched(launch.expected_version, launch.profile_path,
+                         launch.crashpad_database);
+  }
   if (lifecycle_state_ == LifecycleState::kStarting && IsEnabled()) {
     queued_ready_work_.push_back(base::BindOnce(
-        &MahoMailService::ListAccounts, weak_ptr_factory_.GetWeakPtr(),
-        std::move(callback)));
+        [](base::WeakPtr<MahoMailService> service, ReadCallback callback) {
+          if (service && service->IsCommandAvailable()) {
+            service->ListAccounts(std::move(callback));
+          } else {
+            std::move(callback).Run(false, kMahoMailHelperUnavailable);
+          }
+        },
+        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
     return;
   }
   mojom::MahoMailHelper* helper = GetHelperOrNull();
@@ -1286,8 +1322,8 @@ void MahoMailService::DownloadAttachment(const std::string& account_id, int64_t 
       account_id, email_uid, folder_id, part_id, filename,
       WrapReadReply(base::BindOnce(
           [](base::WeakPtr<MahoMailService> service,
-             MailAttachmentMessageIdentity message, MailReadCallback callback,
-             bool ok, std::string result_json) {
+             MailAttachmentMessageIdentity message, std::string filename,
+             MailReadCallback callback, bool ok, std::string result_json) {
             if (!ok || !service || !service->attachment_registry_) {
               std::move(callback).Run(
                   false, ok ? "attachment staging unavailable"
@@ -1302,7 +1338,7 @@ void MahoMailService::DownloadAttachment(const std::string& account_id, int64_t 
             }
             service->attachment_registry_->StageDownloadedFile(
                 message, base::FilePath::FromUTF8Unsafe(parsed->GetString()),
-                base::BindOnce(
+                filename, base::BindOnce(
                     [](MailReadCallback callback, bool staged,
                        std::string token, std::string error) {
                       if (!staged) {
@@ -1319,7 +1355,7 @@ void MahoMailService::DownloadAttachment(const std::string& account_id, int64_t 
           weak_ptr_factory_.GetWeakPtr(),
           MailAttachmentMessageIdentity{account_id, email_uid, folder_id,
                                         part_id},
-          std::move(callback))));
+          filename, std::move(callback))));
 }
 
 void MahoMailService::OpenAttachment(
@@ -1332,6 +1368,20 @@ void MahoMailService::OpenAttachment(
   }
   attachment_registry_->Consume(capability_token, profile_identity_,
                                 std::move(callback));
+}
+
+void MahoMailService::SaveAttachment(
+    const std::string& capability_token,
+    MahoMailAttachmentRegistry::SaveCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!attachment_registry_ || !profile_) {
+    std::move(callback).Run(false, "attachment staging unavailable", std::string());
+    return;
+  }
+  attachment_registry_->SaveToDownloads(
+      capability_token, profile_identity_,
+      profile_->GetPrefs()->GetFilePath(prefs::kDownloadDefaultDirectory),
+      std::move(callback));
 }
 
 void MahoMailService::ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback) {
@@ -2737,6 +2787,13 @@ void MahoMailService::OnHelperFailed(bool will_retry) {
   lifecycle_state_ = will_retry ? LifecycleState::kStarting
                                 : LifecycleState::kFailed;
   NotifyLifecycleChanged();
+  if (!will_retry) {
+    std::vector<base::OnceClosure> queued_work = std::move(queued_ready_work_);
+    queued_ready_work_.clear();
+    for (auto& work : queued_work) {
+      std::move(work).Run();
+    }
+  }
 }
 
 void MahoMailService::NotifyLifecycleChanged() {

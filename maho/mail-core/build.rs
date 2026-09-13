@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed=cbindgen.toml");
     println!("cargo:rerun-if-changed=build.rs");

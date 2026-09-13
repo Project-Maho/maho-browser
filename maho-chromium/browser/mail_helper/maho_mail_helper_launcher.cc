@@ -2,6 +2,7 @@
 
 #include "maho/browser/mail_helper/maho_mail_helper_launcher.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/command_line.h"
@@ -34,11 +35,20 @@ constexpr char kHelperExecutableName[] = "maho_mail_helper.exe";
 #else
 constexpr char kHelperExecutableName[] = "maho_mail_helper";
 #endif
+
+void SecureZeroizeString(std::string& value) {
+  if (!value.empty()) {
+    std::fill_n(static_cast<volatile char*>(&value[0]), value.size(), 0);
+    value.clear();
+  }
+}
 }  // namespace
 
 MahoMailHelperLauncher::MahoMailHelperLauncher() = default;
 
 MahoMailHelperLauncher::~MahoMailHelperLauncher() {
+  SecureZeroizeString(sqlcipher_key_);
+  SecureZeroizeString(credential_key_);
   ForceClose();
 }
 
@@ -64,6 +74,11 @@ void MahoMailHelperLauncher::Launch(const std::string& expected_version,
 
 void MahoMailHelperLauncher::LaunchInternal() {
   if (shutting_down_ || gave_up_) {
+    return;
+  }
+
+  if (helper_factory_for_testing_) {
+    BeginHandshake(helper_factory_for_testing_.Run());
     return;
   }
 
@@ -121,10 +136,23 @@ void MahoMailHelperLauncher::LaunchInternal() {
   mojo::OutgoingInvitation::Send(std::move(invitation), process_.Handle(),
                                  channel.TakeLocalEndpoint());
 
+  BeginHandshake(
+      mojo::PendingRemote<mojom::MahoMailHelper>(std::move(pipe), 0));
+}
+
+void MahoMailHelperLauncher::BeginHandshake(
+    mojo::PendingRemote<mojom::MahoMailHelper> remote) {
   ready_ = false;
-  helper_.Bind(mojo::PendingRemote<mojom::MahoMailHelper>(std::move(pipe), 0));
+  initialized_ = false;
+  keys_sent_ = false;
+  helper_.Bind(std::move(remote));
   helper_.set_disconnect_handler(
       base::BindOnce(&MahoMailHelperLauncher::OnConnectionError,
+                     weak_ptr_factory_.GetWeakPtr()));
+
+  startup_timer_.Start(
+      FROM_HERE, base::Seconds(5),
+      base::BindOnce(&MahoMailHelperLauncher::HandleFailureAndMaybeRelaunch,
                      weak_ptr_factory_.GetWeakPtr()));
 
   // Verify the version handshake before trusting the helper with any work.
@@ -168,6 +196,7 @@ void MahoMailHelperLauncher::OnInitialized(bool success) {
   }
 
   LOG(INFO) << "[MahoMailHelperLauncher] Helper initialized successfully.";
+  initialized_ = true;
 
   mojo::PendingRemote<mojom::MahoMailHelperClient> client_remote;
   client_receiver_.reset();
@@ -277,9 +306,10 @@ void MahoMailHelperLauncher::OnImport(const std::string& payload) {
 }
 
 void MahoMailHelperLauncher::ReinjectKeysIfPresent() {
-  if (!has_keys_ || !helper_.is_bound()) {
+  if (!has_keys_ || !helper_.is_bound() || !initialized_ || keys_sent_) {
     return;
   }
+  keys_sent_ = true;
   helper_->InjectKeys(
       sqlcipher_key_, credential_key_,
       base::BindOnce(&MahoMailHelperLauncher::OnKeysInjected,
@@ -290,13 +320,15 @@ void MahoMailHelperLauncher::OnKeysInjected(bool success) {
   if (shutting_down_) {
     return;
   }
-  if (success) {
+  if (success && initialized_) {
+    startup_timer_.Stop();
     ready_ = true;
     LOG(INFO) << "[MahoMailHelperLauncher] Key injection/re-injection result: SUCCESS. Launcher is now ready.";
     if (observer_) {
       observer_->OnHelperReady();
     }
   } else {
+    keys_sent_ = false;
     LOG(ERROR) << "[MahoMailHelperLauncher] Key injection/re-injection failed; relaunching helper.";
     HandleFailureAndMaybeRelaunch();
   }
@@ -311,11 +343,12 @@ void MahoMailHelperLauncher::InjectDatabaseKeys(
   sqlcipher_key_ = sqlcipher_key;
   credential_key_ = credential_key;
 
-  if (!helper_.is_bound()) {
-    LOG(WARNING) << "[MahoMailHelperLauncher] Helper not bound; keys cached "
+  if (!initialized_ || !helper_.is_bound() || keys_sent_) {
+    LOG(WARNING) << "[MahoMailHelperLauncher] Helper not yet initialized or bound; keys cached "
                     "for initialization or respawn.";
     return;
   }
+  keys_sent_ = true;
   helper_->InjectKeys(
       sqlcipher_key, credential_key,
       base::BindOnce(&MahoMailHelperLauncher::OnKeysInjected,
@@ -328,6 +361,8 @@ void MahoMailHelperLauncher::BindHelperForTesting(
   helper_.reset();
   helper_.Bind(std::move(remote));
   ready_ = ready;
+  initialized_ = ready;
+  keys_sent_ = ready;
 }
 
 void MahoMailHelperLauncher::OnConnectionError() {
@@ -344,7 +379,12 @@ void MahoMailHelperLauncher::HandleFailureAndMaybeRelaunch() {
     return;
   }
 
+  startup_timer_.Stop();
+  weak_ptr_factory_.InvalidateWeakPtrs();
+  client_receiver_.reset();
   ready_ = false;
+  initialized_ = false;
+  keys_sent_ = false;
   helper_.reset();
   if (process_.IsValid()) {
     process_.Terminate(/*exit_code=*/0, /*wait=*/false);
@@ -398,6 +438,8 @@ void MahoMailHelperLauncher::Shutdown(base::OnceClosure drained_callback) {
   }
 
   shutting_down_ = true;
+  startup_timer_.Stop();
+  weak_ptr_factory_.InvalidateWeakPtrs();
   relaunch_timer_.Stop();
   ready_ = false;
   if (drained_callback) {
@@ -449,9 +491,14 @@ void MahoMailHelperLauncher::CompleteShutdown() {
 
 void MahoMailHelperLauncher::ForceClose() {
   shutting_down_ = true;
+  startup_timer_.Stop();
+  weak_ptr_factory_.InvalidateWeakPtrs();
+  client_receiver_.reset();
   relaunch_timer_.Stop();
   shutdown_timer_.Stop();
   ready_ = false;
+  initialized_ = false;
+  keys_sent_ = false;
   helper_.reset();
   if (process_.IsValid()) {
     process_.Terminate(/*exit_code=*/0, /*wait=*/false);

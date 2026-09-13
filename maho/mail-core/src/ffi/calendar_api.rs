@@ -259,6 +259,8 @@ pub(crate) struct IcsRsvpContext {
     pub sequence: String,
     pub dtstart: String,
     pub dtend: Option<String>,
+    pub start_tz: Option<String>,
+    pub end_tz: Option<String>,
     pub summary: String,
     pub organizer_line: String,
     pub organizer_email: String,
@@ -272,6 +274,8 @@ pub(crate) struct IcsReplyParams {
     pub sequence: String,
     pub dtstart: String,
     pub dtend: Option<String>,
+    pub start_tz: Option<String>,
+    pub end_tz: Option<String>,
     pub summary: String,
     pub organizer_line: String,
     pub attendee_email: String,
@@ -483,9 +487,11 @@ pub(crate) fn normalize_organizer_cal_address(raw: &str) -> String {
 
 fn escape_ics_text(s: &str) -> String {
     s.replace('\\', "\\\\")
+        .replace("\r\n", "\\n")
+        .replace('\r', "\\n")
+        .replace('\n', "\\n")
         .replace(';', "\\;")
         .replace(',', "\\,")
-        .replace('\n', "\\n")
 }
 
 fn escape_ics_value(val: &str) -> String {
@@ -500,6 +506,27 @@ fn format_ics_datetime(iso_str: &str) -> String {
         .replace('-', "")
         .replace(':', "")
         .replace(".000", "")
+}
+
+fn format_ics_date_property(name: &str, value: &str, zone: Option<&str>) -> std::result::Result<String, String> {
+    let value = format_ics_datetime(value);
+    if is_all_day(&value) {
+        return Ok(format!("{name};VALUE=DATE:{value}"));
+    }
+    if !value.ends_with('Z') {
+        if let Some(zone) = zone.filter(|zone| !zone.is_empty()) {
+            let quoted = zone.strip_prefix('"').and_then(|zone| zone.strip_suffix('"'));
+            let content = quoted.unwrap_or(zone);
+            if content.chars().any(|ch| ch.is_control() || ch == '"') {
+                return Err("Invalid ICS timezone parameter".into());
+            }
+            if quoted.is_some() || content.contains([';', ':', ',']) {
+                return Ok(format!("{name};TZID=\"{content}\":{value}"));
+            }
+            return Ok(format!("{name};TZID={content}:{value}"));
+        }
+    }
+    Ok(format!("{name}:{value}"))
 }
 
 fn fold_line(line: &str) -> String {
@@ -547,6 +574,19 @@ fn fold_line(line: &str) -> String {
 }
 
 pub(crate) fn build_ics_reply(params: IcsReplyParams) -> std::result::Result<String, String> {
+    let raw_fields = [
+        params.uid.as_str(),
+        params.sequence.as_str(),
+        params.dtstart.as_str(),
+        params.dtend.as_deref().unwrap_or_default(),
+        params.organizer_line.as_str(),
+        params.attendee_email.as_str(),
+        params.attendee_name.as_deref().unwrap_or_default(),
+        params.partstat.as_str(),
+    ];
+    if raw_fields.iter().any(|value| value.chars().any(char::is_control)) {
+        return Err("Invalid control character in calendar reply property".into());
+    }
     let valid_partstats = ["ACCEPTED", "TENTATIVE", "DECLINED"];
     if !valid_partstats.contains(&params.partstat.as_str()) {
         return Err(format!("invalid partstat: {}", params.partstat));
@@ -578,9 +618,9 @@ pub(crate) fn build_ics_reply(params: IcsReplyParams) -> std::result::Result<Str
     lines.push("BEGIN:VEVENT".to_string());
     lines.push(format!("UID:{}", params.uid));
     lines.push(format!("DTSTAMP:{}", dtstamp));
-    lines.push(format!("DTSTART:{}", params.dtstart));
+    lines.push(format_ics_date_property("DTSTART", &params.dtstart, params.start_tz.as_deref())?);
     if let Some(ref dtend) = params.dtend {
-        lines.push(format!("DTEND:{}", dtend));
+        lines.push(format_ics_date_property("DTEND", dtend, params.end_tz.as_deref())?);
     }
     lines.push(format!("SEQUENCE:{}", sequence));
     let organizer_value = normalize_organizer_cal_address(&params.organizer_line);
@@ -641,7 +681,11 @@ pub(crate) fn subject_prefix_for_partstat(partstat: &str) -> &'static str {
 }
 
 // --- SMTP / RSVP Send Helper ---
+#[path = "calendar_replay.rs"]
+pub(crate) mod calendar_replay;
+
 pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) -> Result<()> {
+    let _guard = calendar_replay::lock(ctx, &rsvp_ctx.account_id).await?;
     let partstat = partstat_from_rsvp_status(&rsvp_ctx.rsvp_status).ok_or_else(|| {
         maho_core::error::AppError::Validation(format!(
             "invalid rsvp_status for reply: {}",
@@ -654,6 +698,8 @@ pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) 
         sequence: rsvp_ctx.sequence.clone(),
         dtstart: rsvp_ctx.dtstart.clone(),
         dtend: rsvp_ctx.dtend.clone(),
+        start_tz: rsvp_ctx.start_tz.clone(),
+        end_tz: rsvp_ctx.end_tz.clone(),
         summary: rsvp_ctx.summary.clone(),
         organizer_line: rsvp_ctx.organizer_line.clone(),
         attendee_email: rsvp_ctx.attendee_email.clone(),
@@ -665,12 +711,7 @@ pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) 
     let prefix = subject_prefix_for_partstat(partstat);
     let subject = format!("{}: {}", prefix, rsvp_ctx.summary);
 
-    let cal_alt = maho_core::smtp_client::CalendarAlternativePart {
-        content_type: "text/calendar; method=REPLY; charset=UTF-8".to_string(),
-        ics_text: ics_text.clone(),
-    };
-
-    let (in_reply_to_header, references_header, creds, display_name, use_xoauth2) = {
+    let (in_reply_to_header, references_header, display_name) = {
         let db = ctx
             .pool
             .get()
@@ -699,45 +740,138 @@ pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) 
             (None, None)
         };
 
-        let creds = crate::ffi::compose_api::get_smtp_credentials(
+        let display_name: Option<String> = db.query_row(
+            "SELECT display_name FROM accounts WHERE id = ?1",
+            params![rsvp_ctx.account_id],
+            |row| row.get(0),
+        )?;
+        (in_reply_to_header, references_header, display_name)
+    };
+
+    let payload = serde_json::json!({
+        "ics_text": ics_text,
+        "organizer_email": rsvp_ctx.organizer_email,
+        "subject": subject,
+        "attendee_email": rsvp_ctx.attendee_email,
+        "attendee_name": rsvp_ctx.attendee_name,
+        "display_name": display_name,
+        "in_reply_to": in_reply_to_header,
+        "references": references_header,
+        "rsvp_status": rsvp_ctx.rsvp_status,
+    })
+    .to_string();
+    let mutation = {
+        let mut db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        let tx = db.transaction()?;
+        calendar_replay::check_existing(&tx, &rsvp_ctx.account_id, &rsvp_ctx.event_id)?;
+        tx.execute(
+            "UPDATE calendar_events SET rsvp_status = ?1, updated_at = datetime('now') WHERE id = ?2 AND account_id = ?3",
+            params![rsvp_ctx.rsvp_status, rsvp_ctx.event_id, rsvp_ctx.account_id],
+        )?;
+        maho_core::services::offline_queue::queue_calendar_mutation(
+            &tx,
+            &rsvp_ctx.account_id,
+            "calendar_rsvp_reply",
+            &rsvp_ctx.event_id,
+            Some(&payload),
+        )?;
+        let mutation =
+            maho_core::services::offline_queue::list_pending_mutations(&tx, &rsvp_ctx.account_id)?
+                .into_iter()
+                .find(|m| {
+                    m.mutation_type == "calendar_rsvp_reply"
+                        && m.calendar_event_id.as_deref() == Some(&rsvp_ctx.event_id)
+                })
+                .ok_or_else(|| {
+                    maho_core::error::AppError::Validation("RSVP intent was not persisted".into())
+                })?;
+        tx.commit()?;
+        mutation
+    };
+    calendar_replay::replay_locked(ctx, &mutation).await?;
+    Ok(())
+}
+
+/// Serialize and reload one persisted RSVP before attempting delivery.
+pub(crate) async fn replay_calendar_mutation(
+    ctx: &AppCtx,
+    mutation: &maho_core::services::offline_queue::PendingMutation,
+) -> Result<()> {
+    let _guard = calendar_replay::lock(ctx, &mutation.account_id).await?;
+    calendar_replay::replay_locked(ctx, mutation).await?;
+    Ok(())
+}
+
+/// Transport only; durable state and acknowledgment belong to calendar_replay.
+async fn deliver_calendar_mutation(
+    ctx: &AppCtx,
+    mutation: &maho_core::services::offline_queue::PendingMutation,
+) -> Result<()> {
+    match mutation.mutation_type.as_str() {
+        "calendar_rsvp_reply" => {},
+        "calendar_delete" | "calendar_create" | "calendar_move" => {
+            return deliver_google_calendar_mutation(ctx, mutation).await;
+        }
+        _ => return Err(maho_core::error::AppError::Validation(format!(
+            "Unsupported calendar replay: {}", mutation.mutation_type
+        )).into()),
+    }
+    let payload: serde_json::Value =
+        serde_json::from_str(mutation.payload_json.as_deref().unwrap_or(""))?;
+    let required = |key: &str| -> Result<String> {
+        payload
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                maho_core::error::AppError::Validation(format!("Missing RSVP payload field: {key}"))
+                    .into()
+            })
+    };
+    let attendee_email = required("attendee_email")?;
+    let organizer_email = required("organizer_email")?;
+    let subject = required("subject")?;
+    let cal_alt = maho_core::smtp_client::CalendarAlternativePart {
+        content_type: "text/calendar; method=REPLY; charset=UTF-8".into(),
+        ics_text: required("ics_text")?,
+    };
+    let display_name = payload.get("display_name").and_then(|v| v.as_str());
+    let in_reply_to_header = payload
+        .get("in_reply_to")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let references_header = payload
+        .get("references")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let creds = {
+        let db = ctx
+            .pool
+            .get()
+            .map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        crate::ffi::compose_api::get_smtp_credentials(
             &db,
             &ctx.credential_key,
-            &rsvp_ctx.account_id,
-        )?;
-
-        let (display_name, auth_type): (Option<String>, String) = db.query_row(
-            "SELECT display_name, auth_type FROM accounts WHERE id = ?1",
-            params![rsvp_ctx.account_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-
-        let use_xoauth2 = auth_type == "oauth2_gmail";
-
-        (
-            in_reply_to_header,
-            references_header,
-            creds,
-            display_name,
-            use_xoauth2,
-        )
+            &mutation.account_id,
+        )?
+    };
+    let use_xoauth2 = matches!(&creds.auth, crate::account::ImapAuth::OAuth2 { .. });
+    let from = match display_name.filter(|s| !s.is_empty()) {
+        Some(name) => format!("\"{}\" <{}>", name.replace('"', "\\\""), attendee_email),
+        None => attendee_email,
     };
 
-    let from = match display_name.as_deref().filter(|s| !s.is_empty()) {
-        Some(name) => format!(
-            "\"{}\" <{}>",
-            name.replace('"', "\\\""),
-            rsvp_ctx.attendee_email
-        ),
-        None => rsvp_ctx.attendee_email.clone(),
-    };
-
-    let body_text = format!("{}: {}", prefix, rsvp_ctx.summary);
+    let body_text = subject.clone();
+    calendar_replay::mark_sending(ctx, mutation)?;
 
     let send_result = crate::ffi::compose_api::send_smtp_message(
         creds,
         use_xoauth2,
         from,
-        vec![rsvp_ctx.organizer_email.clone()],
+        vec![organizer_email],
         vec![],
         vec![],
         subject.clone(),
@@ -751,51 +885,79 @@ pub(crate) async fn send_ics_rsvp_reply(ctx: &AppCtx, rsvp_ctx: IcsRsvpContext) 
     )
     .await;
 
-    match send_result {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            if let MailFfiError::Core(maho_core::error::AppError::Network(_)) = err {
-                let payload = serde_json::json!({
-                    "ics_text": ics_text,
-                    "organizer_email": rsvp_ctx.organizer_email,
-                    "subject": subject,
-                    "attendee_email": rsvp_ctx.attendee_email,
-                    "attendee_name": rsvp_ctx.attendee_name,
-                    "display_name": display_name,
-                    "in_reply_to": in_reply_to_header,
-                    "references": references_header,
-                    "rsvp_status": rsvp_ctx.rsvp_status,
-                });
-                let payload_str = serde_json::to_string(&payload)?;
-                let db = ctx
-                    .pool
-                    .get()
-                    .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                maho_core::services::offline_queue::queue_calendar_mutation(
-                    &db,
-                    &rsvp_ctx.account_id,
-                    "calendar_rsvp_reply",
-                    &rsvp_ctx.event_id,
-                    Some(&payload_str),
-                )?;
-                Ok(())
-            } else {
-                Err(err)
-            }
-        }
-    }
+    send_result
 }
 
 // --- Google Calendar Client & Write Helpers ---
+async fn deliver_google_calendar_mutation(
+    ctx: &AppCtx,
+    mutation: &maho_core::services::offline_queue::PendingMutation,
+) -> Result<()> {
+    let payload: serde_json::Value =
+        serde_json::from_str(mutation.payload_json.as_deref().unwrap_or("{}"))?;
+    let required = |key: &str| -> Result<&str> {
+        payload.get(key).and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| maho_core::error::AppError::Validation(
+                format!("Missing {} payload field: {key}", mutation.mutation_type)
+            ).into())
+    };
+    if mutation.mutation_type == "calendar_delete" {
+        return google_calendar_delete_event_internal(
+            ctx, &mutation.account_id, required("calendar_id")?, required("external_id")?,
+        ).await;
+    }
+    let event_id = mutation.calendar_event_id.as_deref().ok_or_else(|| {
+        maho_core::error::AppError::Validation("Missing calendar event ID".into())
+    })?;
+    let (calendar_id, event) = if mutation.mutation_type == "calendar_create" {
+        let calendar_id: String = {
+            let db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+            db.query_row(
+                "SELECT google_calendar_id FROM calendar_events WHERE id=?1 AND account_id=?2",
+                params![event_id, mutation.account_id], |row| row.get(0),
+            )?
+        };
+        let event = google_calendar_create_event_internal(
+            ctx, &mutation.account_id, &calendar_id, payload,
+        ).await?;
+        (calendar_id, event)
+    } else {
+        let destination = required("destination_calendar_id")?;
+        let event = google_calendar_move_event_internal(
+            ctx, &mutation.account_id, required("calendar_id")?, required("external_id")?, destination,
+        ).await?;
+        (destination.to_owned(), event)
+    };
+    let mut db = ctx.pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+    let tx = db.transaction()?;
+    let account_email: String = tx.query_row(
+        "SELECT email FROM accounts WHERE id=?1", [&mutation.account_id], |row| row.get(0),
+    )?;
+    // Bind the remote identity before upsert so it updates the local event,
+    // preserving its ID and local-only metadata rather than inserting a duplicate.
+    tx.execute(
+        "UPDATE calendar_events SET source='google', external_id=?1, google_calendar_id=?2 WHERE id=?3 AND account_id=?4",
+        params![event.id, calendar_id, event_id, mutation.account_id],
+    )?;
+    upsert_event(&tx, &mutation.account_id, Some(&account_email), &calendar_id, &event)?;
+    tx.commit()?;
+    Ok(())
+}
+
 async fn get_client_and_token(
     ctx: &AppCtx,
     account_id: &str,
 ) -> std::result::Result<(reqwest::Client, String), MailFfiError> {
-    let db = ctx
-        .pool
-        .get()
-        .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-    let resolved = resolve_account_auth(&db, &ctx.credential_key, account_id)?;
+    let pool = ctx.pool.clone();
+    let credential_key = ctx.credential_key;
+    let account_id = account_id.to_owned();
+    let resolved = tokio::task::spawn_blocking(move || {
+        let db = pool.get().map_err(|e| MailFfiError::Pool(e.to_string()))?;
+        resolve_account_auth(&db, &credential_key, &account_id)
+    })
+    .await
+    .map_err(|e| MailFfiError::Internal(format!("calendar auth task: {e}")))??;
     let access_token = match resolved.auth {
         crate::account::ImapAuth::OAuth2 { access_token } => access_token,
         _ => {
@@ -1723,6 +1885,8 @@ pub(crate) struct ParsedVEvent {
     pub(crate) method: Option<String>,
     pub(crate) attendees: Vec<(String, Option<String>)>,
     pub(crate) sequence: Option<String>,
+    pub(crate) start_tz: Option<String>,
+    pub(crate) end_tz: Option<String>,
 }
 
 pub(crate) fn parse_ics(ics_data: &str) -> Vec<ParsedVEvent> {
@@ -1769,8 +1933,10 @@ pub(crate) fn parse_ics(ics_data: &str) -> Vec<ParsedVEvent> {
                 ev.description = Some(unescape_ics(val));
             } else if let Some(val) = extract_ics_value(line, "DTSTART") {
                 ev.dtstart = Some(val);
+                ev.start_tz = extract_param(line, "TZID");
             } else if let Some(val) = extract_ics_value(line, "DTEND") {
                 ev.dtend = Some(val);
+                ev.end_tz = extract_param(line, "TZID");
             } else if let Some(val) = extract_ics_value(line, "LOCATION") {
                 ev.location = Some(unescape_ics(val));
             } else if let Some(val) = extract_ics_value(line, "ORGANIZER") {
@@ -1821,8 +1987,12 @@ fn extract_ics_value(line: &str, key: &str) -> Option<String> {
     if let Some(stripped) = after_key.strip_prefix(':') {
         Some(stripped.to_string())
     } else if after_key.starts_with(';') {
+        let mut quoted = false;
         after_key
-            .find(':')
+            .find(|ch| {
+                if ch == '"' { quoted = !quoted; }
+                ch == ':' && !quoted
+            })
             .map(|colon_pos| after_key[colon_pos + 1..].to_string())
     } else {
         None
@@ -1830,18 +2000,21 @@ fn extract_ics_value(line: &str, key: &str) -> Option<String> {
 }
 
 fn extract_param(line: &str, param: &str) -> Option<String> {
-    let upper = line.to_uppercase();
-    let search = format!("{param}=");
-    let upper_search = search.to_uppercase();
-
-    if let Some(start) = upper.find(&upper_search) {
-        let val_start = start + search.len();
-        let rest = &line[val_start..];
-        let end = rest.find([';', ':']).unwrap_or(rest.len());
-        Some(rest[..end].to_string())
-    } else {
-        None
+    let mut quoted = false;
+    let mut start = 0;
+    for (index, ch) in line.char_indices() {
+        if ch == '"' { quoted = !quoted; }
+        if !quoted && matches!(ch, ';' | ':') {
+            if let Some((name, value)) = line[start..index].split_once('=') {
+                if name.eq_ignore_ascii_case(param) {
+                    return Some(value.to_string());
+                }
+            }
+            if ch == ':' { return None; }
+            start = index + 1;
+        }
     }
+    None
 }
 
 fn extract_mailto(value: &str) -> String {
@@ -1874,6 +2047,23 @@ fn unescape_ics(value: String) -> String {
         .replace("\\\\", "\\")
 }
 
+fn normalize_ics_date(value: &str) -> std::result::Result<String, maho_core::error::AppError> {
+    let normalized = if value.len() == 8 {
+        chrono::NaiveDate::parse_from_str(value, "%Y%m%d")
+            .map(|date| date.format("%Y-%m-%d").to_string())
+    } else {
+        let (local, suffix) = match value.strip_suffix('Z') {
+            Some(local) => (local, "Z"),
+            None => (value, ""),
+        };
+        chrono::NaiveDateTime::parse_from_str(local, "%Y%m%dT%H%M%S")
+            .map(|date| format!("{}{suffix}", date.format("%Y-%m-%dT%H:%M:%S")))
+    };
+    normalized.map_err(|error| {
+        maho_core::error::AppError::Validation(format!("Invalid ICS date {value}: {error}"))
+    })
+}
+
 fn insert_event(
     db: &rusqlite::Connection,
     account_id: &str,
@@ -1883,8 +2073,10 @@ fn insert_event(
     let id = Uuid::new_v4().to_string();
     let uid = ev.uid.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
     let summary = ev.summary.clone().unwrap_or_default();
-    let dtstart = ev.dtstart.clone().unwrap_or_default();
-    let all_day = is_all_day(&dtstart);
+    let raw_start = ev.dtstart.as_deref().unwrap_or_default();
+    let all_day = is_all_day(raw_start);
+    let dtstart = normalize_ics_date(raw_start)?;
+    let dtend = ev.dtend.as_deref().map(normalize_ics_date).transpose()?;
     let status = ev.status.clone().unwrap_or_else(|| "confirmed".to_string());
 
     let existing_id: Option<String> = db
@@ -1909,6 +2101,7 @@ fn insert_event(
                 recurrence_rule = ?9, \
                 all_day = ?10, \
                 sequence = ?11, \
+                start_tz = ?13, end_tz = ?14, \
                 updated_at = datetime('now') \
              WHERE id = ?12",
             params![
@@ -1916,7 +2109,7 @@ fn insert_event(
                 summary,
                 ev.description,
                 dtstart,
-                ev.dtend,
+                dtend,
                 ev.location,
                 ev.organizer,
                 status,
@@ -1924,13 +2117,15 @@ fn insert_event(
                 all_day as i64,
                 ev.sequence.as_deref().unwrap_or("0"),
                 eid,
+                ev.start_tz,
+                ev.end_tz,
             ],
         )?;
         eid
     } else {
         db.execute(
-            "INSERT INTO calendar_events (id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, recurrence_rule, all_day, sequence) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO calendar_events (id, account_id, email_id, uid, summary, description, dtstart, dtend, location, organizer, status, recurrence_rule, all_day, sequence, start_tz, end_tz) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 id,
                 account_id,
@@ -1939,13 +2134,15 @@ fn insert_event(
                 summary,
                 ev.description,
                 dtstart,
-                ev.dtend,
+                dtend,
                 ev.location,
                 ev.organizer,
                 status,
                 ev.rrule,
                 all_day as i64,
                 ev.sequence.as_deref().unwrap_or("0"),
+                ev.start_tz,
+                ev.end_tz,
             ],
         )?;
         id
@@ -2084,7 +2281,14 @@ pub extern "C" fn MahoMailListCalendarEvents(
                     param_values.push(Box::new(from.clone()));
                 }
                 if let Some(to) = &to_date {
-                    sql.push_str(&format!(" AND ce.dtstart <= ?{}", param_values.len() + 1));
+                    if chrono::NaiveDate::parse_from_str(to, "%Y-%m-%d").is_ok() {
+                        sql.push_str(&format!(
+                            " AND substr(ce.dtstart, 1, 10) <= ?{}",
+                            param_values.len() + 1
+                        ));
+                    } else {
+                        sql.push_str(&format!(" AND ce.dtstart <= ?{}", param_values.len() + 1));
+                    }
                     param_values.push(Box::new(to.clone()));
                 }
                 sql.push_str(" ORDER BY ce.dtstart ASC");
@@ -2262,6 +2466,8 @@ pub extern "C" fn MahoMailUpdateRsvp(
                     Option<String>,
                     Option<String>,
                     Option<String>,
+                    Option<String>,
+                    Option<String>,
                 );
                 let row: Option<RsvpRow> = {
                     let db = ctx
@@ -2269,9 +2475,9 @@ pub extern "C" fn MahoMailUpdateRsvp(
                         .get()
                         .map_err(|e| MailFfiError::Pool(e.to_string()))?;
                     db.query_row(
-                        "SELECT account_id, google_calendar_id, source, external_id, uid, summary, dtstart, dtend, organizer, email_id, sequence FROM calendar_events WHERE id = ?1",
+                        "SELECT account_id, google_calendar_id, source, external_id, uid, summary, dtstart, dtend, organizer, email_id, sequence, start_tz, end_tz FROM calendar_events WHERE id = ?1",
                         params![event_id],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?)),
                     ).ok()
                 };
 
@@ -2287,6 +2493,8 @@ pub extern "C" fn MahoMailUpdateRsvp(
                     organizer,
                     email_id,
                     sequence,
+                    start_tz,
+                    end_tz,
                 )) = row
                 {
                     if source == "google" {
@@ -2357,22 +2565,13 @@ pub extern "C" fn MahoMailUpdateRsvp(
                                 .pool
                                 .get()
                                 .map_err(|e| MailFfiError::Pool(e.to_string()))?;
-                            let changed = db.execute(
-                                "UPDATE calendar_events SET rsvp_status = ?1, updated_at = datetime('now') WHERE id = ?2",
-                                params![rsvp_status, event_id],
-                            )?;
-
-                            if changed == 0 {
-                                return Err(MailFfiError::Core(
-                                    maho_core::error::AppError::NotFound(format!(
-                                        "Calendar event {event_id} not found"
-                                    )),
-                                ));
-                            }
-
                             let organizer_line = match organizer.filter(|s| !s.trim().is_empty()) {
                                 Some(o) => o,
                                 None => {
+                                    db.execute(
+                                        "UPDATE calendar_events SET rsvp_status = ?1, updated_at = datetime('now') WHERE id = ?2 AND account_id = ?3",
+                                        params![rsvp_status, event_id, account_id],
+                                    )?;
                                     let record = db.query_row(
                                         "SELECT ce.id, ce.account_id, ce.email_id, ce.uid, ce.summary, ce.description, \
                                                 ce.dtstart, ce.dtend, ce.location, ce.organizer, ce.status, ce.rsvp_status, \
@@ -2407,6 +2606,8 @@ pub extern "C" fn MahoMailUpdateRsvp(
                                 sequence: sequence.unwrap_or_else(|| "0".to_string()),
                                 dtstart,
                                 dtend,
+                                start_tz,
+                                end_tz,
                                 summary,
                                 organizer_line,
                                 organizer_email,
@@ -2416,9 +2617,7 @@ pub extern "C" fn MahoMailUpdateRsvp(
                             }
                         };
 
-                        if let Err(e) = send_ics_rsvp_reply(&ctx, rsvp_ctx).await {
-                            log::warn!("send_ics_rsvp_reply failed for event {}: {}", event_id, e);
-                        }
+                        send_ics_rsvp_reply(&ctx, rsvp_ctx).await?;
                     }
                 } else {
                     return Err(MailFfiError::Core(maho_core::error::AppError::NotFound(
@@ -2501,6 +2700,8 @@ pub extern "C" fn MahoMailGenerateRsvpReply(
                     sequence: String::new(),
                     dtstart: record.dtstart,
                     dtend: record.dtend,
+                    start_tz: record.start_tz,
+                    end_tz: record.end_tz,
                     summary: record.summary,
                     organizer_line: record.organizer.unwrap_or_default(),
                     attendee_email: account_email,
@@ -2607,7 +2808,10 @@ pub extern "C" fn MahoMailDeleteCalendarEvent(
                                             &account_id,
                                             "calendar_delete",
                                             &event_id,
-                                            None,
+                                            Some(&serde_json::json!({
+                                                "calendar_id": cal_id,
+                                                "external_id": target_id,
+                                            }).to_string()),
                                         )?;
                                     }
                                     Err(e) => return Err(e),
@@ -3020,7 +3224,11 @@ pub extern "C" fn MahoMailUpdateCalendarEvent(
                                             &account_id,
                                             "calendar_move",
                                             &req.event_id,
-                                            Some(target_cal_id),
+                                            Some(&serde_json::json!({
+                                                "calendar_id": cal_id,
+                                                "external_id": target_id,
+                                                "destination_calendar_id": target_cal_id,
+                                            }).to_string()),
                                         )?;
                                         db.execute(
                                             "UPDATE calendar_events SET google_calendar_id = ?1 WHERE id = ?2",
@@ -3775,19 +3983,15 @@ pub extern "C" fn MahoMailExportCalendarIcs(
                             ics.push_str(&format!("DTEND;VALUE=DATE:{}\r\n", end_date));
                         }
                     } else {
-                        let formatted_start = format_ics_datetime(&ev.dtstart);
-                        if let Some(ref tz) = ev.start_tz {
-                            ics.push_str(&format!("DTSTART;TZID={}:{}\r\n", tz, formatted_start));
-                        } else {
-                            ics.push_str(&format!("DTSTART:{}\r\n", formatted_start));
-                        }
+                        ics.push_str(&format_ics_date_property(
+                            "DTSTART", &ev.dtstart, ev.start_tz.as_deref(),
+                        ).map_err(maho_core::error::AppError::Validation)?);
+                        ics.push_str("\r\n");
                         if let Some(ref dtend) = ev.dtend {
-                            let formatted_end = format_ics_datetime(dtend);
-                            if let Some(ref tz) = ev.end_tz {
-                                ics.push_str(&format!("DTEND;TZID={}:{}\r\n", tz, formatted_end));
-                            } else {
-                                ics.push_str(&format!("DTEND:{}\r\n", formatted_end));
-                            }
+                            ics.push_str(&format_ics_date_property(
+                                "DTEND", dtend, ev.end_tz.as_deref(),
+                            ).map_err(maho_core::error::AppError::Validation)?);
+                            ics.push_str("\r\n");
                         }
                     }
                     if let Some(ref loc) = ev.location {
@@ -4166,6 +4370,8 @@ mod tests {
             sequence: "".into(),
             dtstart: "20260715T100000Z".into(),
             dtend: Some("20260715T110000Z".into()),
+            start_tz: None,
+            end_tz: None,
             summary: "Weekly Standup".into(),
             organizer_line: "CN=Alice:mailto:alice@x.com".into(),
             attendee_email: "bob@example.com".into(),
@@ -4369,6 +4575,8 @@ mod tests {
             sequence: "1".into(),
             dtstart: "20260720T140000Z".into(),
             dtend: Some("20260720T150000Z".into()),
+            start_tz: None,
+            end_tz: None,
             summary: "Q3 Planning".into(),
             organizer_line: "CN=Alice Johnson:mailto:alice@corp.io".into(),
             attendee_email: "bob@example.com".into(),
@@ -4616,6 +4824,20 @@ mod tests {
             );
             assert_eq!(escape_ics_qstring(r#"back\slash"#), r#"back\\slash"#);
         }
+
+        #[test]
+        fn test_escape_ics_text_crlf_normalization() {
+            let input = "Title\r\nINJECTED:VAL\rLONE_CR\nLF;semi,comma\\slash";
+            let escaped = super::super::escape_ics_text(input);
+            assert!(
+                !escaped.contains('\r'),
+                "escaped text must not contain raw CR: {escaped}"
+            );
+            assert_eq!(
+                escaped,
+                "Title\\nINJECTED:VAL\\nLONE_CR\\nLF\\;semi\\,comma\\\\slash"
+            );
+        }
     }
 
     mod attendee_cn_escape_tests {
@@ -4628,6 +4850,8 @@ mod tests {
                 sequence: "0".into(),
                 dtstart: "20260715T100000Z".into(),
                 dtend: Some("20260715T110000Z".into()),
+                start_tz: None,
+                end_tz: None,
                 summary: "Meeting".into(),
                 organizer_line: "mailto:org@x.com".into(),
                 attendee_email: "bob@x.com".into(),
@@ -4663,6 +4887,14 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "calendar_review_tests.rs"]
+mod calendar_review_tests;
+
+#[cfg(test)]
+#[path = "calendar_replay_tests.rs"]
+mod calendar_replay_tests;
 
 // === [W-I] ===
 

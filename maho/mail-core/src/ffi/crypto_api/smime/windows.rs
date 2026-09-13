@@ -794,8 +794,19 @@ fn signer_identity(cert: *const CERT_CONTEXT) -> (Option<String>, Option<String>
 }
 
 fn certificate_trusted(cert: *const CERT_CONTEXT) -> bool {
+    if cert.is_null() {
+        return false;
+    }
+    let mut usage_identifier = szOID_PKIX_KP_EMAIL_PROTECTION as *mut u8;
     let mut chain_para = CERT_CHAIN_PARA::default();
     chain_para.cbSize = size_of::<CERT_CHAIN_PARA>() as u32;
+    chain_para.RequestedUsage = CERT_USAGE_MATCH {
+        dwType: USAGE_MATCH_TYPE_AND,
+        Usage: CTL_USAGE {
+            cUsageIdentifier: 1,
+            rgpszUsageIdentifier: &mut usage_identifier,
+        },
+    };
     let mut chain = null_mut();
     if unsafe {
         CertGetCertificateChain(
@@ -804,7 +815,7 @@ fn certificate_trusted(cert: *const CERT_CONTEXT) -> bool {
             null(),
             null_mut(),
             &chain_para,
-            0,
+            CERT_CHAIN_REVOCATION_CHECK_END_CERT,
             null(),
             &mut chain,
         )
@@ -1596,5 +1607,10 @@ mod tests {
             decode_reference(&identity.key_pem, foreign_profile_scope).is_err(),
             "a reference must not validate under a different profile"
         );
+    }
+
+    #[test]
+    fn certificate_trusted_rejects_null_context() {
+        assert!(!certificate_trusted(null()));
     }
 }
