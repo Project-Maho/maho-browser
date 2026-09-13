@@ -1829,6 +1829,198 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description="Maho: brand FRE and app menu default browser promo strings as Maho",
             guard="Set Maho as default and pin it to taskbar",
         ),
+        Replacement(
+            old=(
+                '      <if expr="not is_macosx and not is_chromeos">\n'
+                '        <message name="IDS_TASK_MANAGER_TITLE" desc="The title of the Task Manager window">\n'
+                "          Task Manager - Chromium\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            new=(
+                '      <if expr="not is_macosx and not is_chromeos">\n'
+                '        <message name="IDS_TASK_MANAGER_TITLE" desc="The title of the Task Manager window">\n'
+                "          Task Manager - Maho\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            description="Maho: brand task manager title as Maho",
+            guard="Task Manager - Maho",
+        ),
+        Replacement(
+            old=(
+                "          <else>\n"
+                '            <message name="IDS_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in tabs and popup windows">\n'
+                '              <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Chromium\n'
+                "            </message>\n"
+                "          </else>\n"
+                "        </if>\n"
+                "      </if>\n"
+                '      <if expr="is_chromeos">\n'
+                "        <!-- Browser Window Title Format -->\n"
+                '        <message name="IDS_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in tabbed browser windows">\n'
+                '          Chromium - <ph name="PAGE_TITLE">$1<ex>Google</ex></ph>\n'
+                "        </message>\n"
+                "      </if>\n"
+                '      <if expr="not is_chromeos and not is_macosx">\n'
+                "        <!-- Captive Portal Browser Window Title Format -->\n"
+                '        <message name="IDS_CAPTIVE_PORTAL_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in captive portal popup windows">\n'
+                '          <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Network Sign-in - Chromium\n'
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            new=(
+                "          <else>\n"
+                '            <message name="IDS_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in tabs and popup windows">\n'
+                '              <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Maho\n'
+                "            </message>\n"
+                "          </else>\n"
+                "        </if>\n"
+                "      </if>\n"
+                '      <if expr="is_chromeos">\n'
+                "        <!-- Browser Window Title Format -->\n"
+                '        <message name="IDS_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in tabbed browser windows">\n'
+                '          Maho - <ph name="PAGE_TITLE">$1<ex>Google</ex></ph>\n'
+                "        </message>\n"
+                "      </if>\n"
+                '      <if expr="not is_chromeos and not is_macosx">\n'
+                "        <!-- Captive Portal Browser Window Title Format -->\n"
+                '        <message name="IDS_CAPTIVE_PORTAL_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for titles displayed in captive portal popup windows">\n'
+                '          <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Network Sign-in - Maho\n'
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            description="Maho: brand browser window title format as Maho",
+            guard='<ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Maho',
+        ),
+        Replacement(
+            old=(
+                "        <else>\n"
+                '          <message name="IDS_ACCESSIBLE_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for the accessible name of a tabbed browser window">\n'
+                '            <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Chromium\n'
+                "          </message>\n"
+                "        </else>\n"
+            ),
+            new=(
+                "        <else>\n"
+                '          <message name="IDS_ACCESSIBLE_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for the accessible name of a tabbed browser window">\n'
+                '            <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Maho\n'
+                "          </message>\n"
+                "        </else>\n"
+            ),
+            description="Maho: brand accessible browser window title format as Maho",
+            guard='IDS_ACCESSIBLE_BROWSER_WINDOW_TITLE_FORMAT" desc="The format for the accessible name of a tabbed browser window">\n            <ph name="PAGE_TITLE">$1<ex>Google</ex></ph> - Maho',
+        ),
+        Replacement(
+            old=(
+                '      <message name="IDS_ACCNAME_APP" desc="The accessible name for the app menu." translateable="false">\n'
+                "        Chromium\n"
+                "      </message>\n"
+                "      <!-- Hung Browser Detector -->\n"
+                '      <if expr="is_win">\n'
+                '        <message name="IDS_BROWSER_HUNGBROWSER_MESSAGE" desc="Content of the dialog box shown when the browser is hung">\n'
+                "          Chromium is unresponsive. Relaunch now?\n"
+                "        </message>\n"
+                "      </if>\n"
+                "      <!-- General app failure messages -->\n"
+                '      <if expr="not is_chromeos and not is_android">\n'
+                '        <message name="IDS_COULDNT_STARTUP_PROFILE_ERROR" desc="Error displayed when Chrome cannot start because profiles were not opened correctly.">\n'
+                "          Cannot start Chromium because something went wrong when opening your profile. Try to restart Chromium.\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            new=(
+                '      <message name="IDS_ACCNAME_APP" desc="The accessible name for the app menu." translateable="false">\n'
+                "        Maho\n"
+                "      </message>\n"
+                "      <!-- Hung Browser Detector -->\n"
+                '      <if expr="is_win">\n'
+                '        <message name="IDS_BROWSER_HUNGBROWSER_MESSAGE" desc="Content of the dialog box shown when the browser is hung">\n'
+                "          Maho is unresponsive. Relaunch now?\n"
+                "        </message>\n"
+                "      </if>\n"
+                "      <!-- General app failure messages -->\n"
+                '      <if expr="not is_chromeos and not is_android">\n'
+                '        <message name="IDS_COULDNT_STARTUP_PROFILE_ERROR" desc="Error displayed when Chrome cannot start because profiles were not opened correctly.">\n'
+                "          Cannot start Maho because something went wrong when opening your profile. Try to restart Maho.\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            description="Maho: brand app menu, hung browser dialog, and profile startup error as Maho",
+            guard="Cannot start Maho because something went wrong when opening your profile",
+        ),
+        Replacement(
+            old=(
+                "      <!-- Uninstall messages -->\n"
+                '      <if expr="is_win">\n'
+                '        <message name="IDS_UNINSTALL_CLOSE_APP" desc="Message to user when uninstall detects other app instance running">\n'
+                "          Please close all Chromium windows and try again.\n"
+                "        </message>\n"
+                '        <message name="IDS_UNINSTALL_VERIFY" desc="Message to confirm user wants to uninstall">\n'
+                "          Are you sure you want to uninstall Chromium?\n"
+                "        </message>\n"
+                '        <message name="IDS_UNINSTALL_CHROME" desc="The title of the Chromium uninstall dialog.">\n'
+                "          Uninstall Chromium\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            new=(
+                "      <!-- Uninstall messages -->\n"
+                '      <if expr="is_win">\n'
+                '        <message name="IDS_UNINSTALL_CLOSE_APP" desc="Message to user when uninstall detects other app instance running">\n'
+                "          Please close all Maho windows and try again.\n"
+                "        </message>\n"
+                '        <message name="IDS_UNINSTALL_VERIFY" desc="Message to confirm user wants to uninstall">\n'
+                "          Are you sure you want to uninstall Maho?\n"
+                "        </message>\n"
+                '        <message name="IDS_UNINSTALL_CHROME" desc="The title of the Chromium uninstall dialog.">\n'
+                "          Uninstall Maho\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            description="Maho: brand Windows uninstall dialogs as Maho",
+            guard="Uninstall Maho",
+        ),
+        Replacement(
+            old=(
+                "      <!-- App shortcuts -->\n"
+                '      <message name="IDS_APP_SHORTCUTS_SUBDIR_NAME" desc="Name for the Chromium Apps Start Menu folder name.">\n'
+                "        Chromium Apps\n"
+                "      </message>\n"
+                '      <message name="IDS_APP_SHORTCUTS_SUBDIR_NAME_CANARY" desc="Name for the Chrome Apps Start Menu folder name.">\n'
+                "        Chromium Apps\n"
+                "      </message>\n"
+            ),
+            new=(
+                "      <!-- App shortcuts -->\n"
+                '      <message name="IDS_APP_SHORTCUTS_SUBDIR_NAME" desc="Name for the Chromium Apps Start Menu folder name.">\n'
+                "        Maho Apps\n"
+                "      </message>\n"
+                '      <message name="IDS_APP_SHORTCUTS_SUBDIR_NAME_CANARY" desc="Name for the Chrome Apps Start Menu folder name.">\n'
+                "        Maho Apps\n"
+                "      </message>\n"
+            ),
+            description="Maho: brand app shortcut start menu folder names as Maho",
+            guard="Maho Apps",
+        ),
+        Replacement(
+            old=(
+                '      <if expr="is_win or is_macosx">\n'
+                '        <message name="IDS_PDF_INFOBAR_TEXT" desc="Text to show in an infobar when Chromium is not the default PDF viewer.">\n'
+                "          Set Chromium as your default PDF viewer\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            new=(
+                '      <if expr="is_win or is_macosx">\n'
+                '        <message name="IDS_PDF_INFOBAR_TEXT" desc="Text to show in an infobar when Chromium is not the default PDF viewer.">\n'
+                "          Set Maho as your default PDF viewer\n"
+                "        </message>\n"
+                "      </if>\n"
+            ),
+            description="Maho: brand default PDF viewer infobar string as Maho",
+            guard="Set Maho as your default PDF viewer",
+        ),
     ],
     "components/os_crypt/common/keychain_password_mac.mm": [
         Replacement(
