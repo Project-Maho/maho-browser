@@ -201,6 +201,12 @@ def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
     convention MahoMailHelperLauncher uses, so a shipped browser never falls back
     to a developer's own omo or Bun install.
 
+    A dangling symlink inside the staged tree fails the later
+    codesign --verify --deep --strict gate (the verifier resolves the link
+    target and dies with ENOENT), so dangling links are pruned after the
+    copy; a dangling link is a no-op at runtime, so pruning changes no
+    behavior.
+
     Returns False when a piece is missing so the caller can decide; the agent
     panel simply stays on its existing backend in that case.
     """
@@ -261,6 +267,24 @@ def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
         shutil.rmtree(omo_dest)
     print(f'Embedding omo runtime into {omo_dest}')
     shutil.copytree(package, omo_dest, symlinks=True)
+    pruned = 0
+    for root, dirs, files in os.walk(omo_dest, topdown=True, followlinks=False):
+        for name in dirs + files:
+            path = os.path.join(root, name)
+            if not os.path.islink(path):
+                continue
+            target = os.readlink(path)
+            if os.path.isabs(target):
+                resolved = target
+            else:
+                resolved = os.path.normpath(os.path.join(root, target))
+            if not os.path.lexists(resolved):
+                os.remove(path)
+                pruned += 1
+                print(f'warning: pruned dangling symlink {path} -> {target}',
+                      file=sys.stderr)
+    if pruned:
+        print(f'pruned {pruned} dangling symlink(s) from {omo_dest}')
     return True
 
 
