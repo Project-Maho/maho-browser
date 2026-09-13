@@ -163,6 +163,14 @@ def chromium_revision(chromium_src: Path) -> str:
     return revision
 
 
+_DEAD_CODE_MIGRATION_TARGETS = frozenset(
+    {
+        "chrome/browser/ui/startup/bad_flags_prompt.cc",
+        "chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc",
+    }
+)
+
+
 def is_revision_incompatible_target(relative_path: str, revision: str) -> bool:
     return (
         any(revision.startswith(p[:12]) for p in _PINNED_CHROMIUM_REVISIONS)
@@ -9338,7 +9346,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\n"
                 "  // When the tabstrip isn't at the top or in constrained widths, the top\n"
                 "  // container is laid out before all side panels.\n"
-                "  if (false && horizontal_layout.force_top_container_to_top &&\n"
+                "  if ((false) && horizontal_layout.force_top_container_to_top &&\n"
                 "      IsParentedTo(views().top_container, views().browser_view)) {\n"
             ),
             description="Maho: suppress top_container vertical space consumption before side panels",
@@ -9350,11 +9358,11 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "      IsParentedTo(views().top_container, views().browser_view)) {\n"
             ),
             new=(
-                "  if (false && !horizontal_layout.force_top_container_to_top &&\n"
+                "  if ((false) && !horizontal_layout.force_top_container_to_top &&\n"
                 "      IsParentedTo(views().top_container, views().browser_view)) {\n"
             ),
             description="Maho: suppress top_container layout after side panels",
-            guard="if (false && !horizontal_layout.force_top_container_to_top &&",
+            guard="if ((false) && !horizontal_layout.force_top_container_to_top &&",
         ),
         Replacement(
             old=(
@@ -11651,6 +11659,47 @@ def normalize_chrome_content_browser_client_includes(text: str) -> tuple[str, in
     return text, 1
 
 
+def normalize_maho_dead_code_guards(text: str) -> tuple[str, int]:
+    """Migrate older materializations of dead-code suppressions.
+
+    Two older baked patch shapes trip -Werror,-Wunreachable-code on macOS
+    (that warning set is mac-only, so win/linux trees compiled fine): a
+    bare `return;` after the ShowBadFlagsPrompt suppress comment, and
+    unparenthesized `if (false &&` kill switches in the tabbed layout
+    impl. Guarding the return or parenthesizing the constant silences
+    clang while keeping the suppression.
+    """
+    changed = 0
+    suppress_comment = (
+        "  // Maho: suppress unsupported command-line flags security warning infobars.\n"
+    )
+    bare = suppress_comment + "  return;\n"
+    if bare in text:
+        text = text.replace(
+            bare,
+            suppress_comment
+            + "  if (web_contents) {\n"
+            + "    return;\n"
+            + "  }\n",
+            1,
+        )
+        changed += 1
+    for old, new in (
+        (
+            "  if (false && horizontal_layout.force_top_container_to_top &&\n",
+            "  if ((false) && horizontal_layout.force_top_container_to_top &&\n",
+        ),
+        (
+            "  if (false && !horizontal_layout.force_top_container_to_top &&\n",
+            "  if ((false) && !horizontal_layout.force_top_container_to_top &&\n",
+        ),
+    ):
+        if old in text:
+            text = text.replace(old, new, 1)
+            changed += 1
+    return text, changed
+
+
 def apply_replacements(
     target_file: Path,
     replacements: list[Replacement],
@@ -11669,6 +11718,15 @@ def apply_replacements(
             applied.append(
                 "patched: Consolidate BrowserURLHandler include beside search.h "
                 "in chrome_content_browser_client.cc"
+            )
+
+    if target_file.name in ("bad_flags_prompt.cc", "browser_view_tabbed_layout_impl.cc"):
+        text, normalized_count = normalize_maho_dead_code_guards(text)
+        if normalized_count:
+            changed = True
+            applied.append(
+                "patched: Migrate dead-code suppression guards to "
+                "-Wunreachable-code-safe form"
             )
 
     if target_file.name == "chrome_web_ui_configs.cc":
@@ -11887,6 +11945,18 @@ def main() -> int:
         if is_revision_incompatible_target(relative_path, revision):
             replacements = SPLIT_VIEW_REPLACEMENTS.get(relative_path, [])
             if not replacements:
+                if relative_path in _DEAD_CODE_MIGRATION_TARGETS:
+                    migrated_file = chromium_src / relative_path
+                    migrated_text = migrated_file.read_text()
+                    migrated_text, migrated_count = normalize_maho_dead_code_guards(migrated_text)
+                    if migrated_count:
+                        print(
+                            f"  - patched: Migrate dead-code suppression guards to "
+                            f"-Wunreachable-code-safe form [{relative_path}]"
+                        )
+                        if not args.dry_run:
+                            migrated_file.write_text(migrated_text)
+                        any_changed = True
                 print(
                     f"skip [Chromium {revision} incompatible]: {relative_path}"
                 )
