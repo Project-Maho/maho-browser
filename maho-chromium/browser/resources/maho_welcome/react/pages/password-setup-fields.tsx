@@ -368,7 +368,7 @@ export function VaultCard(props: VaultCardProps) {
       </div>
 
       <div className="rounded-lg border border-border/40 bg-muted/20 p-3 text-xs text-muted-foreground leading-relaxed">
-        The Local Vault encrypts your passwords with a key derived from your master passphrase and stores them locally on this device. Your passphrase is never sent to Maho or any server.
+        A separate master passphrase protects and unlocks your local Vault encryption key. It is not your Maho account password: signing in to Maho does not unlock this Vault. Your master passphrase stays on this device.
       </div>
 
       {!isUnlocked ? (
@@ -453,7 +453,7 @@ export function VaultCard(props: VaultCardProps) {
               </div>
               <div className="space-y-2 rounded-lg border border-border/40 bg-muted/20 p-3">
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Save your recovery kit now: keep the master passphrase and recovery secret somewhere safe outside this browser. Maho cannot recover this vault for you, and neither value is shown again after setup.
+                  Keep your master passphrase and Vault recovery secret somewhere safe outside this browser. The recovery secret restores Vault access if you forget your passphrase. It is separate from the sync recovery phrase used on other devices. Maho cannot recover this Vault for you, and neither value is shown again after setup.
                 </p>
                 <label
                   htmlFor="vault-recovery-kit-acknowledged"
