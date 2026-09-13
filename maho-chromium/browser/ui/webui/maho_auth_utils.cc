@@ -12,6 +12,7 @@
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/time/time.h"
 #include "base/uuid.h"
@@ -312,8 +313,11 @@ void PutGeneratedSyncBootstrap(
   loader->SetTimeoutDuration(base::Seconds(30));
   loader->SetAllowHttpErrorResults(true);
   auto *raw_loader = loader.get();
+  // See FetchAccountSyncBootstrap: the factory pointer must be read before the
+  // BindOnce below moves the refptr, or DownloadToString receives nullptr.
+  network::SharedURLLoaderFactory *factory_ptr = url_loader_factory.get();
   raw_loader->DownloadToString(
-      url_loader_factory.get(),
+      factory_ptr,
       base::BindOnce(
           [](scoped_refptr<network::SharedURLLoaderFactory> factory,
              std::string token, SyncBootstrapMaterial local_generated,
@@ -372,8 +376,15 @@ void FetchAccountSyncBootstrap(
   loader->SetTimeoutDuration(base::Seconds(30));
   loader->SetAllowHttpErrorResults(true);
   auto *raw_loader = loader.get();
+  // Read the factory pointer BEFORE the BindOnce below moves the refptr away.
+  // Argument evaluation order is unspecified, so passing `url_loader_factory
+  // .get()` inline races the `std::move(url_loader_factory)` in the bound
+  // arguments: right-to-left evaluation (clang-cl/x64) empties the refptr
+  // first and hands DownloadToString a null factory, tripping
+  // CHECK(url_loader_factory) in SimpleURLLoaderImpl::StartRequest.
+  network::SharedURLLoaderFactory *factory_ptr = url_loader_factory.get();
   raw_loader->DownloadToString(
-      url_loader_factory.get(),
+      factory_ptr,
       base::BindOnce(
           [](scoped_refptr<network::SharedURLLoaderFactory> factory,
              std::string token, bool can_create, LoginResultCallback cb,
@@ -382,6 +393,11 @@ void FetchAccountSyncBootstrap(
             const auto *info = completed_loader->ResponseInfo();
             const int status =
                 info && info->headers ? info->headers->response_code() : 0;
+            LOG(ERROR) << "MahoSyncBootstrap: GET result net_error="
+                       << completed_loader->NetError() << " http_status="
+                       << status << " can_create=" << can_create
+                       << " body_bytes="
+                       << (response_body ? response_body->size() : 0u);
             if (completed_loader->NetError() != net::OK) {
               std::move(cb).Run(false,
                                 "Unable to retrieve account Sync bootstrap.");
@@ -567,8 +583,14 @@ void OnLoginResponse(
     return;
   }
 
+  // Copy the token out BEFORE the BindOnce below moves `params` away.
+  // Argument evaluation order is unspecified, so reading `params.access_token`
+  // inline races the `std::move(params)` in the bound arguments: right-to-left
+  // evaluation (clang-cl/x64) empties `params` first and forwards an empty
+  // token, which the relay rejects with 401 "invalid bearer token".
+  std::string access_token_for_sync = params.access_token;
   ConfigureAccountSyncAfterLogin(
-      std::move(url_loader_factory), params.access_token,
+      std::move(url_loader_factory), std::move(access_token_for_sync),
       base::BindOnce(&CompleteLogin, prefs, std::move(params),
                      std::move(callback)));
 }
@@ -590,6 +612,18 @@ void OnGoogleLoginResponse(
 }
 
 } // namespace
+
+namespace testing {
+
+void FetchAccountSyncBootstrapForTesting(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const std::string& access_token,
+    LoginResultCallback callback) {
+  FetchAccountSyncBootstrap(std::move(url_loader_factory), access_token, true,
+                            std::move(callback));
+}
+
+}  // namespace testing
 
 std::string GetRelayAccessToken(PrefService *prefs,
                                 const os_crypt_async::Encryptor &encryptor) {
@@ -694,21 +728,42 @@ std::string BuildMailOAuthStartOptionsJson(PrefService *prefs) {
 }
 
 bool HasValidRelaySession(PrefService *prefs) {
+  // Relay auth prefs are registered by the AI panel's prefs registrar, which
+  // may not have run yet when PostProfileInit calls this at startup. Guard
+  // with FindPreference so an unregistered pref reads as "no session"
+  // instead of CHECK-crashing the browser.
+  const PrefService::Preference *access_pref =
+      prefs->FindPreference(maho::account_prefs::kRelayAccessTokenEncryptedB64);
+  if (access_pref == nullptr || !access_pref->GetValue()->is_string()) {
+    return false;
+  }
   const std::string access_token_enc =
-      prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64);
+      access_pref->GetValue()->GetString();
   if (access_token_enc.empty()) {
     return false;
   }
 
-  const int64_t access_expires_at =
-      prefs->GetInt64(maho::account_prefs::kRelayAccessTokenExpiresAt);
+  const PrefService::Preference *expires_pref =
+      prefs->FindPreference(maho::account_prefs::kRelayAccessTokenExpiresAt);
+  // base::Value stores ints as `int`; widen to int64_t for unix timestamps.
+  const std::optional<int> access_expires_at_int =
+      expires_pref ? expires_pref->GetValue()->GetIfInt()
+                   : std::optional<int>();
+  const std::optional<int64_t> access_expires_at =
+      access_expires_at_int.has_value()
+          ? std::optional<int64_t>(*access_expires_at_int)
+          : std::optional<int64_t>();
   const int64_t now = base::Time::Now().ToTimeT();
-  if (access_expires_at > now) {
+  if (access_expires_at.has_value() && access_expires_at.value() > now) {
     return true;
   }
 
-  const std::string refresh_token_enc =
-      prefs->GetString(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
+  const PrefService::Preference *refresh_pref =
+      prefs->FindPreference(maho::account_prefs::kRelayRefreshTokenEncryptedB64);
+  if (refresh_pref == nullptr || !refresh_pref->GetValue()->is_string()) {
+    return false;
+  }
+  const std::string refresh_token_enc = refresh_pref->GetValue()->GetString();
   if (refresh_token_enc.empty()) {
     return false;
   }

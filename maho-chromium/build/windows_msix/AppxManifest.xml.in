@@ -10,8 +10,8 @@
       Version="@VERSION@"
       ProcessorArchitecture="@ARCHITECTURE@" />
   <Properties>
-    <DisplayName>Maho</DisplayName>
-    <PublisherDisplayName>Maho</PublisherDisplayName>
+    <DisplayName>Maho Browser</DisplayName>
+    <PublisherDisplayName>Project Maho</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   <Resources>
