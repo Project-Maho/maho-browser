@@ -45,6 +45,12 @@ const mockHandlerInstance = vi.hoisted(() => ({
   signupFromWelcome: vi.fn().mockResolvedValue({ok: true, errorMessage: ''}),
   getRelayAccountStatusFromWelcome:
       vi.fn().mockResolvedValue({signedIn: false, tier: '', subscriptionStatus: '', welcomeCompleted: false, hasStoredSession: false}),
+  setTranslationProvider: vi.fn().mockResolvedValue({ok: true}),
+  getByokCredentialConfigured: vi.fn().mockResolvedValue({configured: false}),
+  openByokSettingsDialog: vi.fn().mockResolvedValue({configured: false}),
+  saveSyncKeyBackup: vi.fn(),
+  generateSyncKey: vi.fn(),
+  setPasswordProvider: vi.fn(),
   getSubscriptionCheckoutUrl: vi.fn(),
   finishOnboarding: vi.fn(),
 }));
@@ -100,6 +106,20 @@ vi.mock('../../../maho_common/react/lemonsqueezy.js', () => ({
 
 describe('MahoWelcomeStore', () => {
   let MahoWelcomeStore: typeof import('../store.js').MahoWelcomeStore;
+
+  async function selectByok(store: import('../store.js').MahoWelcomeStore) {
+    store.setAuthEmail('byok-fixture@example.test');
+    store.setAuthPassword('test-only-password');
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true, tier: 'free', subscriptionStatus: '',
+      welcomeCompleted: false, hasStoredSession: false,
+    });
+    await store.submitSignIn();
+    for (let step = 0; step < 7; step++) store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+    store.setAiProvider('byok');
+    await store.checkByokConfigured();
+  }
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -161,6 +181,77 @@ describe('MahoWelcomeStore', () => {
     expect(state.essentialSites).toEqual([]);
     expect(state.selectedEssentials.size).toBe(0);
     expect(state.selectedTheme).toBeNull();
+  });
+
+  it.each([true, false])('returns native backup save result %s', async saved => {
+    const store = new MahoWelcomeStore();
+    mockHandlerInstance.saveSyncKeyBackup.mockResolvedValueOnce({
+      saved, errorMessage: '',
+    });
+    try {
+      await expect(store.saveSyncKeyBackup('fixture-backup')).resolves.toBe(saved);
+      expect(mockHandlerInstance.saveSyncKeyBackup)
+          .toHaveBeenCalledWith('fixture-backup');
+      expect(store.getSnapshot().syncKeyBackup.savedToFile).toBe(false);
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it('propagates native backup write errors and permits a subsequent request', async () => {
+    const store = new MahoWelcomeStore();
+    mockHandlerInstance.saveSyncKeyBackup
+        .mockResolvedValueOnce({saved: false, errorMessage: 'fixture_write_failed'})
+        .mockResolvedValueOnce({saved: true, errorMessage: ''});
+    try {
+      await expect(store.saveSyncKeyBackup('fixture-backup'))
+          .rejects.toThrow('fixture_write_failed');
+      expect(store.getSnapshot().syncKeyBackup.savedToFile).toBe(false);
+      await expect(store.saveSyncKeyBackup('fixture-backup')).resolves.toBe(true);
+      expect(mockHandlerInstance.saveSyncKeyBackup).toHaveBeenCalledTimes(2);
+    } finally {
+      store.dispose();
+    }
+  });
+
+  it.each([false, true])(
+      'gates backup completion and scrubs recovery state only when saved=%s', async saved => {
+    const store = new MahoWelcomeStore();
+    const generated = {
+      syncKey: 'fixture-sync-key',
+      roomId: 'fixture-room',
+      recoveryPhrase: 'fixture recovery phrase',
+    };
+    mockHandlerInstance.setPasswordProvider.mockResolvedValueOnce({success: true});
+    mockHandlerInstance.generateSyncKey.mockResolvedValueOnce(generated);
+    try {
+      await selectByok(store);
+      mockHandlerInstance.getByokCredentialConfigured.mockResolvedValueOnce({
+        configured: true,
+      });
+      await store.checkByokConfigured();
+      store.nextPage();
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+      await expect(store.skipPasswordSetup()).resolves.toBe(true);
+      await expect(store.generateSyncKey()).resolves.toEqual(generated);
+      store.setSyncKeyBackupSavedToFile(saved);
+
+      store.nextPage();
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+      expect(store.advanceFromSyncKeyBackup()).toBe(saved);
+
+      const result = store.getSnapshot();
+      expect(result.currentPage).toBe(
+          saved ? WelcomePage.Completion : WelcomePage.SyncKeyBackup);
+      expect(result.syncKeyBackup.savedToFile).toBe(saved);
+      expect(result.syncKeyBackup.syncKey).toBe(saved ? null : generated.syncKey);
+      expect(result.syncKeyBackup.roomId).toBe(saved ? null : generated.roomId);
+      expect(result.syncKeyBackup.recoveryPhrase)
+          .toBe(saved ? null : generated.recoveryPhrase);
+      expect(result.syncKeyBackup.status).toBe(saved ? 'idle' : 'error');
+    } finally {
+      store.dispose();
+    }
   });
 
   it('advances through all pages in the flow once signed in', async () => {
@@ -231,6 +322,145 @@ describe('MahoWelcomeStore', () => {
     store.nextPage();
 
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.PlanSelect);
+  });
+
+  it('keeps BYOK selection on AI setup until credentials are configured', async () => {
+    const store = new MahoWelcomeStore();
+    store.setAuthEmail('byok-fixture@example.test');
+    store.setAuthPassword('test-only-password');
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'free',
+      subscriptionStatus: '',
+      welcomeCompleted: false,
+      hasStoredSession: false,
+    });
+    await store.submitSignIn();
+    for (let step = 0; step < 7; step++) {
+      store.nextPage();
+    }
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+
+    store.setAiProvider('byok');
+
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+    expect(store.getSnapshot().aiSetup.status).not.toBe('success');
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+  });
+
+  it('keeps BYOK Next blocked when the dialog reports unconfigured credentials', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    mockHandlerInstance.openByokSettingsDialog.mockResolvedValueOnce({configured: false});
+
+    await store.openByokSettings();
+
+    expect(mockHandlerInstance.openByokSettingsDialog).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().aiSetup.status).toBe('idle');
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+  });
+
+  it('unblocks BYOK Next only after the dialog confirms configured credentials', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    mockHandlerInstance.openByokSettingsDialog.mockResolvedValueOnce({configured: true});
+
+    await store.openByokSettings();
+
+    expect(store.getSnapshot().aiSetup.status).toBe('success');
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+  });
+
+  it('reports BYOK setup failed when the dialog request rejects and keeps Next blocked', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    mockHandlerInstance.openByokSettingsDialog.mockRejectedValueOnce(new Error('dialog failed'));
+
+    await store.openByokSettings();
+
+    expect(store.getSnapshot().aiSetup.status).toBe('error');
+    expect(store.getSnapshot().aiSetup.errorMessage).toBe('dialog failed');
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+  });
+
+  it('reflects an already-configured BYOK selection when readiness is re-checked', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    mockHandlerInstance.getByokCredentialConfigured.mockResolvedValueOnce({configured: true});
+
+    await store.checkByokConfigured();
+
+    expect(store.getSnapshot().aiSetup.status).toBe('success');
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+  });
+
+  it('drops a stale BYOK credential result after the user switches provider', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    mockHandlerInstance.getByokCredentialConfigured.mockResolvedValueOnce({configured: false});
+
+    const inFlight = store.checkByokConfigured();
+    store.setAiProvider('maho-managed');
+    await inFlight;
+
+    // The stale unconfigured reply must not clobber the newly selected
+    // managed provider's success state.
+    expect(store.getSnapshot().aiSetup.provider).toBe('maho-managed');
+    expect(store.getSnapshot().aiSetup.status).toBe('success');
+  });
+
+  it('ignores a superseded BYOK check reply that resolves after a newer one', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    const stale: {resolve?: (value: {configured: boolean}) => void} = {};
+    mockHandlerInstance.getByokCredentialConfigured
+        .mockImplementationOnce(
+            () => new Promise<{configured: boolean}>(resolve => {
+              stale.resolve = resolve;
+            }))
+        .mockImplementationOnce(() => Promise.resolve({configured: true}));
+
+    const staleFlight = store.checkByokConfigured();
+    const freshFlight = store.checkByokConfigured();
+    await freshFlight;
+    if (!stale.resolve) throw new Error('Stale check was not started');
+    stale.resolve({configured: false});
+    await staleFlight;
+
+    // The superseded false reply lands last and must not un-verify the
+    // newer confirmed state.
+    expect(store.getSnapshot().aiSetup.status).toBe('success');
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+  });
+
+  it('ignores a stale BYOK check reply that lands while the settings dialog is open', async () => {
+    const store = new MahoWelcomeStore();
+    await selectByok(store);
+    const stale: {resolve?: (value: {configured: boolean}) => void} = {};
+    mockHandlerInstance.getByokCredentialConfigured.mockImplementationOnce(
+        () => new Promise<{configured: boolean}>(resolve => {
+          stale.resolve = resolve;
+        }));
+    mockHandlerInstance.openByokSettingsDialog.mockResolvedValueOnce({configured: false});
+
+    const staleCheck = store.checkByokConfigured();
+    await store.openByokSettings();
+    if (!stale.resolve) throw new Error('Stale check was not started');
+    stale.resolve({configured: true});
+    await staleCheck;
+
+    // The pre-dialog check reply must not unlock Next behind the dialog's
+    // unconfigured close result.
+    expect(store.getSnapshot().aiSetup.status).toBe('idle');
+    store.nextPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
   });
 
   it('continues from the Free plan without opening checkout', () => {
@@ -323,6 +553,26 @@ describe('MahoWelcomeStore', () => {
     expect(store.getSnapshot().setAsDefaultRequested).toBe(true);
     store.applyDefaultBrowserChoice();
     expect(mockHandlerInstance.setAsDefaultBrowser).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes completed onboarding after a returning account signs in', async () => {
+    const store = new MahoWelcomeStore();
+    await store.bootstrap();
+    expect(store.getSnapshot().auth.isReauthMode).toBe(false);
+    store.setAuthEmail('returning-fixture@example.test');
+    store.setAuthPassword('test-only-password');
+    mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+      signedIn: true,
+      tier: 'free',
+      subscriptionStatus: '',
+      welcomeCompleted: true,
+      hasStoredSession: true,
+    });
+
+    await store.submitSignIn();
+
+    expect(store.getSnapshot().auth.isReauthMode).toBe(true);
+    expect(store.getSnapshot().auth.hasStoredSession).toBe(true);
   });
 
   it('marks when import is started', () => {

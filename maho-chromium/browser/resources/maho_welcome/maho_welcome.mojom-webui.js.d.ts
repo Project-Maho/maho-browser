@@ -69,8 +69,11 @@ export class PageHandlerRemote {
   }>;
   unlockVault(masterPassphrase: string): Promise<{result: VaultOperationResult}>;
   generateSyncKey(): Promise<{syncKey: string, roomId: string, recoveryPhrase: string}>;
+  saveSyncKeyBackup(content: string): Promise<{saved: boolean, errorMessage: string}>;
   startSync(roomId: string, recoveryPhrase: string): Promise<{ok: boolean, errorMessage: string}>;
   setTranslationProvider(provider: string): Promise<{ok: boolean}>;
+  getByokCredentialConfigured(): Promise<{configured: boolean}>;
+  openByokSettingsDialog(): Promise<{configured: boolean}>;
   getSubscriptionCheckoutUrl(tier: string): Promise<{checkoutUrl: string}>;
   finishOnboarding(): void;
   devSkipOnboarding(): void;

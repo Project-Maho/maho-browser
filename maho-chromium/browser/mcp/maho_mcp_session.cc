@@ -2039,8 +2039,14 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       };
 
   auto serialize_verified_action_response =
-      [](std::optional<base::Value> message_id, int ref, std::string action,
-         InputActionOutcome outcome) {
+      [session = weak_factory_.GetWeakPtr(),
+       controller_state = controller_state_](
+          std::optional<base::Value> message_id, int ref, std::string action,
+          InputActionOutcome outcome) {
+        if (!session || controller_state->is_revoked()) {
+          return BuildJsonRpcErrorLine(std::move(message_id), -32004,
+                                       "Controller session was revoked");
+        }
         if (!outcome.dispatched) {
           return BuildJsonRpcErrorLine(
               std::move(message_id), -32000,
@@ -3606,7 +3612,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     MahoMcpBrowserDelegate::AccessibilitySnapshotV2Result v2_res;
     if (g_browser_delegate) {
       v2_res = g_browser_delegate->GetAccessibilitySnapshotV2(
-          v2_params, &ref_to_ax_id_, observation_cache_,
+          v2_params, &ref_to_ax_id_, *observation_cache_,
           ++next_v2_snapshot_token_seq_);
     } else {
       v2_res.snapshot_token = "s_" + std::to_string(tab_id) + "_" +
@@ -3759,7 +3765,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
 
     std::string pre_action_token;
     if (observe_mode == "diff") {
-      const auto* cached = observation_cache_.Find(tab_id, "");
+      const auto* cached = observation_cache_->Find(tab_id, "");
       if (cached) {
         pre_action_token = cached->token;
       } else {
@@ -3768,7 +3774,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
         pre_params.mode = "interactive";
         if (g_browser_delegate) {
           auto pre_res = g_browser_delegate->GetAccessibilitySnapshotV2(
-              pre_params, &ref_to_ax_id_, observation_cache_,
+              pre_params, &ref_to_ax_id_, *observation_cache_,
               ++next_v2_snapshot_token_seq_);
           pre_action_token = pre_res.snapshot_token;
         } else {
@@ -3905,7 +3911,6 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       }
     }
 
-    InputActionOutcome outcome;
     if (!g_browser_delegate) {
       cleanup_scoped_lease();
       responses.push_back(framer_.BuildErrorResponse(
@@ -3913,22 +3918,12 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
 
-    if (is_type_action) {
-      outcome.dispatched =
-          g_browser_delegate->Type(tab_id, resolution.ax_id, text_to_type);
-      outcome.verified = outcome.dispatched;
-      outcome.method = "trusted_input";
-    } else {
-      outcome.dispatched =
-          g_browser_delegate->Click(tab_id, resolution.ax_id);
-      outcome.verified = outcome.dispatched;
-      outcome.method = "trusted_input";
-    }
-
-    if (!outcome.dispatched) {
+    if (!terminal_deferred_sender &&
+        g_browser_delegate->RequiresDeferredVerifiedInputResponses()) {
       cleanup_scoped_lease();
       responses.push_back(framer_.BuildErrorResponse(
-          msg.id, -32000, "Action failed: dispatch failed"));
+          msg.id, -32000,
+          "Action failed: locator verification requires deferred transport"));
       return;
     }
 
@@ -3951,84 +3946,188 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       }
     }
 
-    std::string wait_reason = "none";
-    int wait_elapsed_ms = 0;
-    if (wait_mode == "auto") {
-      base::TimeTicks wstart = base::TimeTicks::Now();
-      bool quiet = g_browser_delegate->WaitForAutoQuiet(tab_id, timeout_ms);
-      wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
-      wait_reason = quiet ? "auto_quiet" : "timeout";
-    } else if (wait_mode == "selector" && !wait_selector.empty()) {
-      base::TimeTicks wstart = base::TimeTicks::Now();
-      bool present =
-          g_browser_delegate->WaitForSelector(tab_id, wait_selector, timeout_ms);
-      wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
-      wait_reason = present ? "selector_present" : "timeout";
-    } else if (wait_mode == "navigation") {
-      base::TimeTicks wstart = base::TimeTicks::Now();
-      bool settled =
-          g_browser_delegate->WaitForAutoQuiet(tab_id, timeout_ms);
-      wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
-      wait_reason = settled ? "navigation_settled" : "timeout";
-    }
-
-    std::optional<std::string> post_snapshot_token;
-    std::optional<std::string> post_diff;
-    std::optional<base::DictValue> post_bot_challenge;
-    if (observe_mode == "diff") {
-      MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params post_params;
-      post_params.tab_id = tab_id;
-      post_params.mode = "interactive";
-      post_params.since_snapshot_token = pre_action_token;
-
-      auto post_res = g_browser_delegate->GetAccessibilitySnapshotV2(
-          post_params, &ref_to_ax_id_, observation_cache_,
-          ++next_v2_snapshot_token_seq_);
-      post_snapshot_token = post_res.snapshot_token;
-      post_diff = post_res.diff;
-      if (post_res.bot_challenge.has_value()) {
-        post_bot_challenge = post_res.bot_challenge->Clone();
+    auto serialize_locator_response =
+        [session = weak_factory_.GetWeakPtr(),
+         controller_state = controller_state_, target = last_resolved_target_,
+         tab_id, acquired_scoped_lease, is_type_action,
+         ref = locator_params.ref.value_or(0),
+         serialize_verified_action_response, wait_mode, timeout_ms,
+         wait_selector, observe_mode, pre_action_token,
+         has_wait = arguments && arguments->Find("wait")](
+            std::optional<base::Value> message_id,
+            InputActionOutcome outcome) -> std::string {
+      if (!session || controller_state->is_revoked()) {
+        return BuildJsonRpcErrorLine(std::move(message_id), -32004,
+                                     "Controller session was revoked");
       }
-    }
+      auto release_lease = base::ScopedClosureRunner(base::BindOnce(
+          [](base::WeakPtr<MahoMcpSession> session, int tab_id, bool acquired) {
+            if (session && acquired && session->lease_registry_) {
+              session->lease_registry_->Release(tab_id, session->session_id_);
+            }
+          },
+          session, tab_id, acquired_scoped_lease));
+      if (!g_browser_delegate ||
+          !g_browser_delegate->RevalidateTarget(target)) {
+        return BuildJsonRpcErrorLine(std::move(message_id),
+                                     kMahoMcpErrorTabNotFound,
+                                     kMahoMcpMessageTabNotFound);
+      }
+      if (!outcome.dispatched) {
+        return BuildJsonRpcErrorLine(std::move(message_id), -32000,
+                                     "Action failed: dispatch failed");
+      }
+      // Share verification failures with the canonical actions, but retain
+      // the locator's public response shape.
+      std::string action_response = serialize_verified_action_response(
+          CloneMessageId(message_id), ref, is_type_action ? "type" : "click",
+          outcome);
+      if (outcome.verified.has_value() && !*outcome.verified) {
+        return action_response;
+      }
 
-    base::DictValue result;
-    base::DictValue action_dict;
-    action_dict.Set("dispatched", outcome.dispatched);
-    if (outcome.verified.has_value()) {
-      action_dict.Set("verified", *outcome.verified);
-    }
-    action_dict.Set("method",
-                    outcome.method.empty() ? "trusted_input" : outcome.method);
-    result.Set("action", std::move(action_dict));
+      std::string wait_reason = "none";
+      int wait_elapsed_ms = 0;
+      if (wait_mode == "auto") {
+        base::TimeTicks wstart = base::TimeTicks::Now();
+        bool quiet = g_browser_delegate->WaitForAutoQuiet(tab_id, timeout_ms);
+        wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
+        wait_reason = quiet ? "auto_quiet" : "timeout";
+      } else if (wait_mode == "selector" && !wait_selector.empty()) {
+        base::TimeTicks wstart = base::TimeTicks::Now();
+        bool present = g_browser_delegate->WaitForSelector(
+            tab_id, wait_selector, timeout_ms);
+        wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
+        wait_reason = present ? "selector_present" : "timeout";
+      } else if (wait_mode == "navigation") {
+        base::TimeTicks wstart = base::TimeTicks::Now();
+        bool settled = g_browser_delegate->WaitForAutoQuiet(tab_id, timeout_ms);
+        wait_elapsed_ms = (base::TimeTicks::Now() - wstart).InMilliseconds();
+        wait_reason = settled ? "navigation_settled" : "timeout";
+      }
 
-    if (wait_mode != "none" || (arguments && arguments->Find("wait"))) {
-      base::DictValue wait_dict;
-      wait_dict.Set("reason", wait_reason);
-      wait_dict.Set("elapsed_ms", wait_elapsed_ms);
-      result.Set("wait", std::move(wait_dict));
-    }
+      // Waits may run nested loops that destroy/revoke the session or close
+      // the captured target. Do not start an observation on stale state.
+      if (!session || controller_state->is_revoked()) {
+        return BuildJsonRpcErrorLine(std::move(message_id), -32004,
+                                     "Controller session was revoked");
+      }
+      if (!g_browser_delegate ||
+          !g_browser_delegate->RevalidateTarget(target)) {
+        return BuildJsonRpcErrorLine(std::move(message_id),
+                                     kMahoMcpErrorTabNotFound,
+                                     kMahoMcpMessageTabNotFound);
+      }
 
-    if (observe_mode == "diff") {
-      base::DictValue obs_dict;
-      obs_dict.Set("snapshot_token", post_snapshot_token.value_or(""));
-      if (post_diff.has_value()) {
-        obs_dict.Set("diff", *post_diff);
+      std::optional<std::string> post_snapshot_token;
+      std::optional<std::string> post_diff;
+      std::optional<base::DictValue> post_bot_challenge;
+      if (observe_mode == "diff") {
+        MahoMcpBrowserDelegate::AccessibilitySnapshotV2Params post_params;
+        post_params.tab_id = tab_id;
+        post_params.mode = "interactive";
+        post_params.since_snapshot_token = pre_action_token;
+
+        // SnapshotAXTree can also run a nested loop. Keep its cache alive
+        // independently of the session and only publish refs after validation.
+        auto observation_cache = session->observation_cache_;
+        RefTable post_refs;
+        auto post_res = g_browser_delegate->GetAccessibilitySnapshotV2(
+            post_params, &post_refs, *observation_cache,
+            ++session->next_v2_snapshot_token_seq_);
+        if (!session || controller_state->is_revoked()) {
+          return BuildJsonRpcErrorLine(std::move(message_id), -32004,
+                                       "Controller session was revoked");
+        }
+        if (!g_browser_delegate ||
+            !g_browser_delegate->RevalidateTarget(target)) {
+          return BuildJsonRpcErrorLine(std::move(message_id),
+                                       kMahoMcpErrorTabNotFound,
+                                       kMahoMcpMessageTabNotFound);
+        }
+        session->ref_to_ax_id_ = std::move(post_refs);
+        post_snapshot_token = post_res.snapshot_token;
+        post_diff = post_res.diff;
+        if (post_res.bot_challenge.has_value()) {
+          post_bot_challenge = post_res.bot_challenge->Clone();
+        }
+      }
+
+      base::DictValue result;
+      base::DictValue action_dict;
+      action_dict.Set("dispatched", outcome.dispatched);
+      if (outcome.verified.has_value()) {
+        action_dict.Set("verified", *outcome.verified);
+      }
+      action_dict.Set("method",
+                      outcome.method.empty() ? "trusted_input" : outcome.method);
+      result.Set("action", std::move(action_dict));
+
+      if (wait_mode != "none" || has_wait) {
+        base::DictValue wait_dict;
+        wait_dict.Set("reason", wait_reason);
+        wait_dict.Set("elapsed_ms", wait_elapsed_ms);
+        result.Set("wait", std::move(wait_dict));
+      }
+
+      if (observe_mode == "diff") {
+        base::DictValue obs_dict;
+        obs_dict.Set("snapshot_token", post_snapshot_token.value_or(""));
+        if (post_diff.has_value()) {
+          obs_dict.Set("diff", *post_diff);
+        } else {
+          obs_dict.Set("diff", base::Value());
+        }
+        result.Set("observation", std::move(obs_dict));
+      }
+
+      if (post_bot_challenge.has_value()) {
+        result.Set("bot_challenge", std::move(*post_bot_challenge));
+      }
+
+      auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+      return BuildJsonRpcSuccessLine(std::move(message_id),
+                                     redacted.get().Clone());
+    };
+
+    const bool use_deferred_response =
+        g_browser_delegate->RequiresDeferredVerifiedInputResponses();
+    auto immediate_response = std::make_shared<std::optional<std::string>>();
+    auto completion = base::BindOnce(
+        [](DeferredResponseSender sender,
+           std::shared_ptr<std::optional<std::string>> immediate_response,
+           std::optional<base::Value> message_id,
+           decltype(serialize_locator_response) serialize,
+           InputActionOutcome outcome) {
+          std::string response =
+              serialize(std::move(message_id), std::move(outcome));
+          if (sender) {
+            sender.Run(std::move(response));
+          } else {
+            *immediate_response = std::move(response);
+          }
+        },
+        use_deferred_response ? terminal_deferred_sender
+                              : DeferredResponseSender(),
+        immediate_response, CloneMessageId(msg.id),
+        std::move(serialize_locator_response));
+    if (is_type_action) {
+      g_browser_delegate->TypeVerified(tab_id, resolution.ax_id, text_to_type,
+                                      std::move(completion));
+    } else {
+      g_browser_delegate->ClickVerified(tab_id, resolution.ax_id,
+                                       std::move(completion));
+    }
+    if (!use_deferred_response) {
+      if (*immediate_response) {
+        responses.push_back(std::move(**immediate_response));
       } else {
-        obs_dict.Set("diff", base::Value());
+        cleanup_scoped_lease();
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32000,
+            "Action failed: locator verification requires deferred transport"));
       }
-      result.Set("observation", std::move(obs_dict));
     }
-
-    if (post_bot_challenge.has_value()) {
-      result.Set("bot_challenge", std::move(*post_bot_challenge));
-    }
-
-    cleanup_scoped_lease();
-
-    auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
-    std::string resp =
-        framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
-    responses.push_back(std::move(resp));
     return;
   }
 

@@ -152,6 +152,7 @@
 #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
 #include "ui/message_center/public/cpp/notification.h"
 #include "ui/message_center/public/cpp/notifier_id.h"
+#include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
 namespace {
@@ -179,6 +180,7 @@ struct MahoBrowserMainExtraParts::CoreStartupResult {
   std::string spaces_json;
   std::string version;
   bool vault_uninitialized = false;
+  bool vault_selected_provider_native = false;
   bool has_enabled_rules = false;
   int content_blocking_mode = 0;
   std::string error;
@@ -489,6 +491,7 @@ std::string ExecuteMcpActionJsAllFramesBlocking(content::WebContents* wc,
 std::optional<gfx::PointF> ComputeViewportCenterCssFromTree(
     const ui::AXTree& tree,
     ui::AXNodeID ax_id,
+    float device_scale_factor,
     bool prefer_leading_edge = false) {
   const ui::AXNode* node = tree.GetFromId(ax_id);
   if (!node) {
@@ -510,6 +513,7 @@ std::optional<gfx::PointF> ComputeViewportCenterCssFromTree(
   if (bounds.IsEmpty()) {
     return std::nullopt;
   }
+  bounds.Scale(1.f / device_scale_factor);
   gfx::PointF center = bounds.CenterPoint();
   if (prefer_leading_edge) {
     center.set_x(bounds.x() + std::min(bounds.width() / 2.f, 12.f));
@@ -527,12 +531,12 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
   // offset-container walk below is a fallback that ignores scroll/transform and
   // therefore mislocates targets whenever the page is scrolled or the target
   // lives inside a scrolled/fixed container such as a modal dialog.
-  // Note: AXTree bounds serialized by Blink are already in CSS viewport pixels.
+  // AX snapshot bounds are device pixels; trusted input uses CSS viewport pixels.
   {
     ui::AXTree tree;
     if (tree.Unserialize(update)) {
       if (std::optional<gfx::PointF> center = ComputeViewportCenterCssFromTree(
-              tree, ax_id, prefer_leading_edge)) {
+              tree, ax_id, device_scale_factor, prefer_leading_edge)) {
         return center;
       }
     }
@@ -575,6 +579,7 @@ std::optional<gfx::PointF> ComputeViewportCenterCss(
     iterations++;
   }
 
+  bounds.Scale(1.f / device_scale_factor);
   gfx::PointF center = bounds.CenterPoint();
   if (prefer_leading_edge) {
     center.set_x(bounds.x() +
@@ -747,32 +752,60 @@ struct BrowserVaultCredentialLease {
   std::string totp;
 };
 
-// True only when the core affirmatively reports that this profile's Vault holds
-// no key material. A missing core, an unreadable status, or any other lock
-// state (locked/unlocked/auto-locked) all mean "initialized or unknown" and
-// return false, so setup is never re-run over key material that exists.
-bool IsVaultUninitialized(MahoCore* core) {
+// Read Vault key-material state and persisted password-manager selection on
+// the core sequence. The native Vault status always identifies its own provider,
+// even when the profile selected an external manager or disabled passwords.
+// Missing or unreadable fields must not trigger setup repair.
+struct VaultStartupStatus {
+  bool uninitialized = false;
+  bool selected_provider_native = false;
+};
+
+VaultStartupStatus ParseVaultStartupStatus(MahoCore* core) {
+  VaultStartupStatus status;
   if (!core) {
-    return false;
+    return status;
   }
   char* status_json = maho_vault_status_json(core);
   if (!status_json) {
-    return false;
+    return status;
   }
-  const std::string status(status_json);
+  const std::string status_json_str(status_json);
   maho_string_free(status_json);
 
   std::optional<base::Value> parsed =
-      base::JSONReader::Read(status, base::JSON_PARSE_RFC);
+      base::JSONReader::Read(status_json_str, base::JSON_PARSE_RFC);
   if (!parsed || !parsed->is_dict()) {
-    return false;
+    return status;
   }
   const base::DictValue* data = parsed->GetDict().FindDict("data");
   if (!data) {
-    return false;
+    return status;
   }
-  const std::string* lock_state = data->FindString("lockState");
-  return lock_state && *lock_state == "uninitialized";
+  if (const std::string* lock_state = data->FindString("lockState")) {
+    status.uninitialized = *lock_state == "uninitialized";
+  }
+  std::unique_ptr<char, decltype(&maho_string_free)> settings_json(
+      maho_core_get_settings(core), &maho_string_free);
+  if (!settings_json) {
+    return status;
+  }
+  const auto settings =
+      base::JSONReader::Read(settings_json.get(), base::JSON_PARSE_RFC);
+  if (!settings || !settings->is_dict()) {
+    return status;
+  }
+  const base::DictValue* autofill = settings->GetDict().FindDict("autofill");
+  if (!autofill) {
+    return status;
+  }
+  if (const std::string* selected_provider =
+          autofill->FindString("passwordProvider")) {
+    status.selected_provider_native =
+        autofill->FindBool("passwordsEnabled").value_or(false) &&
+        *selected_provider == "maho_native";
+  }
+  return status;
 }
 
 }  // namespace
@@ -933,6 +966,66 @@ class McpTabIdRegistry {
 int McpSessionIdOf(content::WebContents* web_contents) {
   static base::NoDestructor<McpTabIdRegistry> registry;
   return registry->GetIdFor(web_contents);
+}
+
+bool IsStandaloneOnboardingContentsMcpEligible(
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return false;
+  }
+  MahoPrivateContextToken token(nullptr, web_contents);
+  return token.Revalidate(MahoPrivateCapability::kMCP);
+}
+
+// Require an explicit id so a frontmost private browser never falls back to
+// an onboarding window behind it.
+content::WebContents* ResolveStandaloneOnboardingTarget(int requested_tab_id) {
+  if (requested_tab_id == 0) {
+    return nullptr;
+  }
+  content::WebContents* welcome =
+      maho::MahoWelcomeWindow::GetHostedWebContents();
+  content::WebContents* dialog =
+      maho::MahoWelcomeWindow::GetByokSettingsDialogWebContents();
+  if (dialog && McpSessionIdOf(dialog) == requested_tab_id) {
+    return dialog;
+  }
+  if (welcome && McpSessionIdOf(welcome) == requested_tab_id) {
+    return welcome;
+  }
+  return nullptr;
+}
+
+void AppendStandaloneOnboardingTabInfos(
+    std::vector<maho::MahoMcpSession::TabInfo>* list) {
+  content::WebContents* welcome =
+      maho::MahoWelcomeWindow::GetHostedWebContents();
+  content::WebContents* dialog =
+      maho::MahoWelcomeWindow::GetByokSettingsDialogWebContents();
+  if (!welcome && !dialog) {
+    return;
+  }
+  auto append = [list](content::WebContents* web_contents, bool is_active) {
+    if (!web_contents ||
+        !IsStandaloneOnboardingContentsMcpEligible(web_contents)) {
+      return;
+    }
+    maho::MahoMcpSession::TabInfo tab;
+    tab.id = McpSessionIdOf(web_contents);
+    if (auto* helper = MahoTabIdHelper::FromWebContents(web_contents)) {
+      tab.stable_id = helper->stable_tab_id();
+    }
+    tab.title = base::UTF16ToUTF8(web_contents->GetTitle());
+    tab.url = web_contents->GetLastCommittedURL().spec();
+    tab.is_active = is_active;
+    tab.targetable = tab.id != 0;
+    tab.tab_strip_index = -1;  // Standalone onboarding: no tab strip.
+    list->push_back(std::move(tab));
+  };
+  // The dialog is parented on top and owns interaction while open; the
+  // welcome surface is the active standalone target otherwise.
+  append(welcome, dialog == nullptr);
+  append(dialog, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -2272,6 +2365,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
           }
           return true;
         });
+    AppendStandaloneOnboardingTabInfos(&list);
     return list;
   }
 
@@ -2301,6 +2395,10 @@ std::string FormatMailActionDetails(const std::string& action_name,
   }
 
   content::WebContents* GetWebContentsForTabId(int tab_id) {
+    if (auto* standalone = ResolveStandaloneOnboardingTarget(tab_id);
+        standalone && IsStandaloneOnboardingContentsMcpEligible(standalone)) {
+      return standalone;
+    }
     content::WebContents* match = nullptr;
     ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
         [&match, tab_id](BrowserWindowInterface* browser) {
@@ -2656,14 +2754,16 @@ std::string FormatMailActionDetails(const std::string& action_name,
           "    if (els.length === 0) return JSON.stringify({count: 0});\n"
           "    if (els.length > 1) return JSON.stringify({count: els.length});\n"
           "    const el = els[0];\n"
+          "    el.scrollIntoView({block: 'nearest', inline: 'nearest', behavior: 'instant'});\n"
           "    const rect = el.getBoundingClientRect();\n"
           "    const style = window.getComputedStyle(el);\n"
           "    const visible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;\n"
           "    const disabled = el.disabled === true || el.getAttribute('aria-disabled') === 'true';\n"
           "    const attached = el.isConnected;\n"
           "    const id = el.id || '';\n"
-          "    const name = el.getAttribute('aria-label') || el.innerText || el.value || '';\n"
-          "    return JSON.stringify({count: 1, attached: attached, visible: visible, disabled: disabled, id: id, name: name});\n"
+          "    const label = Array.from(el.labels || [], label => label.innerText).join(' ');\n"
+          "    const name = (el.getAttribute('aria-label') || label || el.innerText || el.value || '').replace(/\\s+/g, ' ').trim();\n"
+          "    return JSON.stringify({count: 1, attached: attached, visible: visible, disabled: disabled, id: id, name: name, tag: el.localName});\n"
           "  } catch (e) {\n"
           "    return JSON.stringify({error: e.message});\n"
           "  }\n"
@@ -2677,6 +2777,11 @@ std::string FormatMailActionDetails(const std::string& action_name,
         return res;
       }
       const auto& dict = parsed_json->GetDict();
+      if (const std::string* error = dict.FindString("error")) {
+        res.error_code = "locator_query_failed";
+        res.hint = "Selector query failed: " + *error;
+        return res;
+      }
       int count = dict.FindInt("count").value_or(0);
       if (count == 0) {
         res.error_code = "locator_not_found";
@@ -2711,6 +2816,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
       ui::AXTreeUpdate update = SnapshotAXTree(wc);
       const std::string* el_id = dict.FindString("id");
       const std::string* el_name = dict.FindString("name");
+      const std::string* el_tag = dict.FindString("tag");
       ui::AXNodeID matched_ax_id = 0;
       if (el_id && !el_id->empty()) {
         for (const auto& node : update.nodes) {
@@ -2722,14 +2828,27 @@ std::string FormatMailActionDetails(const std::string& action_name,
       }
       if (matched_ax_id == 0 && el_name && !el_name->empty()) {
         for (const auto& node : update.nodes) {
-          if (node.GetStringAttribute(ax::mojom::StringAttribute::kName) == *el_name) {
+          if (el_tag &&
+              node.GetStringAttribute(ax::mojom::StringAttribute::kHtmlTag) !=
+                  *el_tag) {
+            continue;
+          }
+          if (base::CollapseWhitespaceASCII(
+                  node.GetStringAttribute(ax::mojom::StringAttribute::kName),
+                  false) == *el_name) {
+            if (matched_ax_id != 0) {
+              res.error_code = "locator_ambiguous";
+              res.hint = "Multiple accessibility nodes match the selected element";
+              return res;
+            }
             matched_ax_id = node.id;
-            break;
           }
         }
       }
-      if (matched_ax_id == 0 && !update.nodes.empty()) {
-        matched_ax_id = update.nodes[0].id;
+      if (matched_ax_id == 0) {
+        res.error_code = "locator_not_found";
+        res.hint = "Selected element has no matching accessibility node";
+        return res;
       }
       res.success = true;
       res.ax_id = matched_ax_id;
@@ -2960,6 +3079,19 @@ std::string FormatMailActionDetails(const std::string& action_name,
   }
 
   bool CloseTab(int tab_id) override {
+    auto* dialog = maho::MahoWelcomeWindow::GetByokSettingsDialogWebContents();
+    if (dialog && tab_id != 0 && McpSessionIdOf(dialog) == tab_id) {
+      if (!IsStandaloneOnboardingContentsMcpEligible(dialog)) {
+        return false;
+      }
+      auto* widget = views::Widget::GetWidgetForNativeWindow(
+          dialog->GetTopLevelNativeWindow());
+      if (!widget || widget->IsClosed()) {
+        return false;
+      }
+      widget->Close();
+      return true;
+    }
     bool closed = false;
     ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
         [tab_id, &closed](BrowserWindowInterface* browser) {
@@ -3010,7 +3142,8 @@ std::string FormatMailActionDetails(const std::string& action_name,
     const int64_t generation = ++generation_counter_;
     resolution.target.valid = true;
     resolution.target.tab_id = McpSessionIdOf(tab.web_contents);
-    resolution.target.browser_id = tab.browser->GetSessionID().id();
+    resolution.target.browser_id =
+        tab.browser ? tab.browser->GetSessionID().id() : 0;
     resolution.target.generation = generation;
     StoreTargetToken(generation, std::move(token));
     return resolution;
@@ -3103,6 +3236,11 @@ std::string FormatMailActionDetails(const std::string& action_name,
   // is the eligible owning tab, or empty.
   EligibleTab ResolveEligibleTab(int requested_tab_id) {
     EligibleTab result;
+    if (auto* standalone = ResolveStandaloneOnboardingTarget(requested_tab_id);
+        standalone && IsStandaloneOnboardingContentsMcpEligible(standalone)) {
+      result.web_contents = standalone;
+      return result;
+    }
     if (requested_tab_id == 0) {
       bool inspected_frontmost = false;
       ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
@@ -3396,6 +3534,9 @@ std::string FormatMailActionDetails(const std::string& action_name,
     CachedRefSnapshot cache;
     cache.navigation_epoch = navigation_epoch;
     cache.frame_signature = frame_signature;
+    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+    const float device_scale_factor =
+        view ? view->GetDeviceScaleFactor() : 1.f;
     for (const auto& ref_entry : refs) {
       const ui::AXNodeID ax_id = ref_entry.second;
       const ui::AXNode* node = tree.GetFromId(ax_id);
@@ -3414,9 +3555,10 @@ std::string FormatMailActionDetails(const std::string& action_name,
           data.GetStringAttribute(ax::mojom::StringAttribute::kAutoComplete);
       cached.accessible_name =
           data.GetStringAttribute(ax::mojom::StringAttribute::kName);
-      cached.center = ComputeViewportCenterCssFromTree(tree, ax_id);
+      cached.center =
+          ComputeViewportCenterCssFromTree(tree, ax_id, device_scale_factor);
       cached.leading_center = ComputeViewportCenterCssFromTree(
-          tree, ax_id, /*prefer_leading_edge=*/true);
+          tree, ax_id, device_scale_factor, /*prefer_leading_edge=*/true);
       cache.nodes.emplace(ax_id, std::move(cached));
     }
     const int resolved_tab_id = ResolveRefCacheTabId(tab_id, wc);
@@ -5492,7 +5634,8 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
     const bool has_valid_relay_session =
         maho::auth::HasValidRelaySession(prefs);
     const bool gate_value = maho::welcome::IsLoginGateActive(
-        login_gate_bypassed, has_valid_relay_session);
+        login_gate_bypassed, has_valid_relay_session,
+        prefs->GetBoolean(maho::welcome::kWelcomeCompleted));
 
     prefs->SetBoolean(maho::welcome::kLoginGateActive, gate_value);
 
@@ -5840,7 +5983,11 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
               result->error = "core_snapshot_failed";
               return result;
             }
-            result->vault_uninitialized = IsVaultUninitialized(result->core.get());
+            const VaultStartupStatus vault_status =
+                ParseVaultStartupStatus(result->core.get());
+            result->vault_uninitialized = vault_status.uninitialized;
+            result->vault_selected_provider_native =
+                vault_status.selected_provider_native;
             result->tab_facts = maho::ReadCoreTabFactsSnapshot(result->core.get());
             result->content_blocking_mode =
                 maho::core::GetContentBlockingMode(result->core.get());
@@ -5938,7 +6085,8 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
           "maho-disable-login-gate");
   const bool has_valid_relay_session = maho::auth::HasValidRelaySession(prefs);
   bool needs_login_gate = maho::welcome::IsLoginGateActive(
-      login_gate_bypassed, has_valid_relay_session);
+      login_gate_bypassed, has_valid_relay_session,
+      prefs->GetBoolean(maho::welcome::kWelcomeCompleted));
 
   // Reconcile the onboarding flag against the Vault's real on-disk state.
   // `kWelcomeCompleted` lives in profile Preferences while the Vault's key
@@ -5947,10 +6095,13 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
   // Onboarding is the only path that initializes the Vault, so a diverged
   // profile would otherwise keep an uninitialized Vault for its whole life and
   // refuse every native password write. Only an affirmatively reported
-  // uninitialized Vault re-opens setup; an unreadable status never does.
+  // uninitialized Vault re-opens setup, and only for a profile that selected
+  // the native password manager: bitwarden/onepassword/disabled profiles
+  // legitimately hold no native Vault. An unreadable status never does.
   if (maho::welcome::RequiresVaultSetupRepair(
           prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
-          result->vault_uninitialized)) {
+          result->vault_uninitialized,
+          result->vault_selected_provider_native)) {
     LOG(WARNING) << "Maho Vault holds no key material for an onboarded "
                     "profile; re-opening Vault setup so password saves are "
                     "not silently discarded.";

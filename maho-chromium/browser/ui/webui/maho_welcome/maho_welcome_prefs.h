@@ -16,9 +16,23 @@ constexpr bool RequiresPasswordSetup(bool welcome_completed) {
   return !welcome_completed;
 }
 
+// Returning-profile repair additionally respects the selected password
+// provider. bitwarden/onepassword/disabled profiles legitimately hold no
+// native Vault, so only a profile that affirmatively selected Maho Native may
+// be re-opened through setup; an unknown/unreadable provider token is never
+// native and is therefore never repair.
+constexpr bool RequiresVaultSetupRepair(bool welcome_completed,
+                                        bool vault_is_uninitialized,
+                                        bool selected_provider_is_native) {
+  return welcome_completed && vault_is_uninitialized &&
+         selected_provider_is_native;
+}
+
 constexpr bool IsLoginGateActive(bool login_gate_bypassed,
-                                 bool has_valid_relay_session) {
-  return !login_gate_bypassed && !has_valid_relay_session;
+                                 bool has_valid_relay_session,
+                                 bool welcome_completed) {
+  return !login_gate_bypassed &&
+         (!has_valid_relay_session || !welcome_completed);
 }
 
 struct GeneratedSyncKeyResult {

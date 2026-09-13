@@ -45,6 +45,13 @@ export class PageHandlerRemote {
     return Promise.resolve({result: {wasCancelled: true, importedItemsBitmask: 0}});
   }
   getLocalizedStrings() { return Promise.resolve({strings: {}}); }
+  saveSyncKeyBackup(_content) {
+    return Promise.resolve({saved: false, errorMessage: 'Native file saving is unavailable in this preview.'});
+  }
+  setTranslationProvider(_provider) { return Promise.resolve({ok: true}); }
+  getByokCredentialConfigured() { return Promise.resolve({configured: false}); }
+  openByokSettingsDialog() { return Promise.resolve({configured: false}); }
+  getSubscriptionCheckoutUrl(_tier) { return Promise.resolve({checkoutUrl: ''}); }
   finishOnboarding() {}
   openFDASettings() {}
 }

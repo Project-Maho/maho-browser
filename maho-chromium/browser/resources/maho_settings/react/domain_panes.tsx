@@ -1529,7 +1529,8 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
   const [state, setState] = useState<LoadState<AISettings>>(createLoadingState());
 
   const loadSettings = useCallback(async () => {
-    setState(createLoadingState());
+    setState(current =>
+      current.status === 'loaded' ? current : createLoadingState());
     setActionError(null);
     try {
       const {settings} = await handler.getAISettings();

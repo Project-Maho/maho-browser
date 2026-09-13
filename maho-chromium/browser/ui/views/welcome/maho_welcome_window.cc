@@ -184,6 +184,11 @@ bool MahoWelcomeWindow::ActivateIfOpen() {
   return true;
 }
 
+content::WebContents* MahoWelcomeWindow::GetHostedWebContents() {
+  auto& map = GetContentsMap();
+  return map.empty() ? nullptr : map.begin()->first;
+}
+
 // static
 void MahoWelcomeWindow::CloseInstance() {
   auto& storage = GetSingletonStorage();

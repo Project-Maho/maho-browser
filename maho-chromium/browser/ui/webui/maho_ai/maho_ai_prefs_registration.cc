@@ -41,6 +41,14 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
                                 std::string());
   registry->RegisterStringPref(ai_prefs::kByokAnthropicEncryptedB64,
                                 std::string());
+  registry->RegisterStringPref(ai_prefs::kOAuthOpenAIClientId, std::string());
+  registry->RegisterStringPref(ai_prefs::kOAuthOpenAIRefreshEncryptedB64,
+                               std::string());
+  registry->RegisterInt64Pref(ai_prefs::kOAuthOpenAIExpiresAt, 0);
+  registry->RegisterStringPref(ai_prefs::kOAuthAnthropicClientId, std::string());
+  registry->RegisterStringPref(ai_prefs::kOAuthAnthropicRefreshEncryptedB64,
+                               std::string());
+  registry->RegisterInt64Pref(ai_prefs::kOAuthAnthropicExpiresAt, 0);
   registry->RegisterDictionaryPref(ai_prefs::kAgentToolGrants);
   registry->RegisterDictionaryPref(ai_prefs::kMcpCredentials);
   registry->RegisterBooleanPref(

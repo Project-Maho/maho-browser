@@ -56,6 +56,7 @@ export function SyncKeyBackupContent({
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const phraseRef = useRef<string | null>(null);
+  const savePendingRef = useRef(false);
 
   const words = useMemo(() => {
     const phrase = localPhrase || syncKeyBackup.recoveryPhrase;
@@ -110,6 +111,8 @@ export function SyncKeyBackupContent({
   }, [words.length, isGenerating, syncKeyBackup.status, handleGenerate]);
 
   const handleDownload = useCallback(async () => {
+    if (savePendingRef.current) return;
+    savePendingRef.current = true;
     setIsSaving(true);
     setSaveError(null);
     const phraseToSave = localPhrase || syncKeyBackup.recoveryPhrase || '';
@@ -140,16 +143,7 @@ Generated: ${new Date().toISOString()}
       if (onSaveFile) {
         success = await onSaveFile(content, filename);
       } else {
-        const blob = new Blob([content], {type: 'text/plain;charset=utf-8'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        success = true;
+        success = await store.saveSyncKeyBackup(content);
       }
 
       if (success) {
@@ -162,6 +156,7 @@ Generated: ${new Date().toISOString()}
       setSaveError(err instanceof Error ? err.message : 'Failed to save recovery phrase file.');
       store.setSyncKeyBackupSavedToFile(false);
     } finally {
+      savePendingRef.current = false;
       setIsSaving(false);
     }
   }, [localPhrase, syncKeyBackup.recoveryPhrase, activeRoomId, onSaveFile, store]);

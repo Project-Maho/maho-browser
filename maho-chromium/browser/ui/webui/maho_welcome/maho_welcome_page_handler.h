@@ -19,6 +19,7 @@
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 
 class Browser;
 class Profile;
@@ -37,7 +38,8 @@ class MahoImportSessionBridge;
 }
 
 class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
-                               public maho::MahoMailService::Observer {
+                               public maho::MahoMailService::Observer,
+                               public ui::SelectFileDialog::Listener {
  public:
   MahoWelcomePageHandler(
       mojo::PendingReceiver<maho_welcome::mojom::PageHandler> receiver,
@@ -101,6 +103,10 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
 
   // Sync key setup
   void GenerateSyncKey(GenerateSyncKeyCallback callback) override;
+  void SaveSyncKeyBackup(const std::string& content,
+                        SaveSyncKeyBackupCallback callback) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
   void StartSync(const std::string& room_id,
                  const std::string& recovery_phrase,
                  StartSyncCallback callback) override;
@@ -123,6 +129,10 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
   void GetAiProviderConfigured(GetAiProviderConfiguredCallback callback) override;
   void SetTranslationProvider(const std::string& provider,
                               SetTranslationProviderCallback callback) override;
+  void GetByokCredentialConfigured(
+      GetByokCredentialConfiguredCallback callback) override;
+  void OpenByokSettingsDialog(OpenByokSettingsDialogCallback callback) override;
+
   void GetSubscriptionCheckoutUrl(
       const std::string& tier,
       GetSubscriptionCheckoutUrlCallback callback) override;
@@ -140,6 +150,7 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
 
  private:
   void CloseWelcomeTab();
+  void OnSyncKeyBackupWritten(bool saved);
   void CompletePendingMailOAuth();
   void CloseMailOAuthTab(content::WebContents* oauth_contents);
   void ReactivateWelcomeTab();
@@ -175,6 +186,9 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
   std::unique_ptr<maho::MahoImportSessionBridge> import_session_bridge_;
   std::unique_ptr<maho::EssentialImporter> essential_importer_;
   bool is_finishing_ = false;
+  scoped_refptr<ui::SelectFileDialog> sync_save_dialog_;
+  SaveSyncKeyBackupCallback sync_save_callback_;
+  std::string sync_save_content_;
 
   std::optional<os_crypt_async::Encryptor> encryptor_;
 

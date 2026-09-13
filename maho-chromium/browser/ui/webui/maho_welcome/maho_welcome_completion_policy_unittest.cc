@@ -12,16 +12,56 @@ TEST(MahoWelcomeCompletionPolicyTest,
   EXPECT_FALSE(RequiresPasswordSetup(true));
 }
 
+TEST(MahoWelcomeCompletionPolicyTest,
+     RequiresVaultSetupRepairOnlyForSelectedNativeProvider) {
+  // A returning profile that selected the native manager and whose Vault
+  // affirmatively reports no key material is sent back through setup.
+  EXPECT_TRUE(RequiresVaultSetupRepair(/*welcome_completed=*/true,
+                                       /*vault_is_uninitialized=*/true,
+                                       /*selected_provider_is_native=*/true));
+
+  // Profiles that selected bitwarden/onepassword/disabled legitimately hold no
+  // native Vault; their completion must not be cleared.
+  EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/true,
+                                        /*vault_is_uninitialized=*/true,
+                                        /*selected_provider_is_native=*/false));
+
+  // Locked (initialized) native material is never repair, and a fresh
+  // (never-onboarded) profile already routes through RequiresPasswordSetup.
+  EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/true,
+                                        /*vault_is_uninitialized=*/false,
+                                        /*selected_provider_is_native=*/true));
+  EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/false,
+                                        /*vault_is_uninitialized=*/true,
+                                        /*selected_provider_is_native=*/true));
+}
+
 TEST(MahoWelcomeCompletionPolicyTest, IsLoginGateActivePolicyMatrix) {
-  // Gate active only when not bypassed and no valid relay session exists.
+  // Authentication does not imply that required setup was completed.
   EXPECT_TRUE(IsLoginGateActive(/*login_gate_bypassed=*/false,
-                                /*has_valid_relay_session=*/false));
+                                /*has_valid_relay_session=*/false,
+                                /*welcome_completed=*/false));
+  EXPECT_TRUE(IsLoginGateActive(/*login_gate_bypassed=*/false,
+                                /*has_valid_relay_session=*/false,
+                                /*welcome_completed=*/true));
+  EXPECT_TRUE(IsLoginGateActive(/*login_gate_bypassed=*/false,
+                                /*has_valid_relay_session=*/true,
+                                /*welcome_completed=*/false));
   EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/false,
-                                 /*has_valid_relay_session=*/true));
+                                 /*has_valid_relay_session=*/true,
+                                 /*welcome_completed=*/true));
   EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
-                                 /*has_valid_relay_session=*/false));
+                                 /*has_valid_relay_session=*/false,
+                                 /*welcome_completed=*/false));
   EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
-                                 /*has_valid_relay_session=*/true));
+                                 /*has_valid_relay_session=*/false,
+                                 /*welcome_completed=*/true));
+  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
+                                 /*has_valid_relay_session=*/true,
+                                 /*welcome_completed=*/false));
+  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
+                                 /*has_valid_relay_session=*/true,
+                                 /*welcome_completed=*/true));
 }
 
 TEST(MahoWelcomeSyncKeyTest, ParseGenerateSyncKeyJsonSuccessAndFailure) {

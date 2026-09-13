@@ -96,6 +96,7 @@ interface PageHandler {
 
   // Sync key setup
   GenerateSyncKey() => (string sync_key, string room_id, string recovery_phrase);
+  SaveSyncKeyBackup(string content) => (bool saved, string error_message);
   StartSync(string room_id, string recovery_phrase) => (bool ok, string error_message);
 
   // Mail account onboarding
@@ -117,6 +118,19 @@ interface PageHandler {
   // Translation setup (cloud-backed; no local model).
   GetAiProviderConfigured() => (bool configured);
   SetTranslationProvider(string provider) => (bool ok);
+
+  // Truthful BYOK readiness: true only when the provider selected in prefs
+  // (openai/anthropic/openai-compatible) has runtime-usable credentials —
+  // encrypted key, OAuth session, or legacy provider-scoped key (plus base
+  // URL for openai-compatible). "maho-managed" and unrelated stored keys
+  // never certify BYOK.
+  GetByokCredentialConfigured() => (bool configured);
+  // Opens chrome://maho-settings?pane=maho-ai parented to the welcome window
+  // so the existing Settings BYOK fields configure credentials during
+  // onboarding. Replies once the dialog closes with the re-read
+  // GetByokCredentialConfigured state; duplicate opens return false without
+  // replacing the existing dialog.
+  OpenByokSettingsDialog() => (bool configured);
 
   // Returns the LemonSqueezy checkout URL for a monthly subscription tier.
   // tier must be "pro" or "max". Returns empty string otherwise.

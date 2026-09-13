@@ -34,6 +34,7 @@
 #include "chrome/browser/ui/browser_navigator.h"  // nogncheck
 #include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
 #include "chrome/browser/ui/browser_tabstrip.h"  // nogncheck
+#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
 #include "chrome/browser/ui/startup/startup_tab.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck
 #include "chrome/browser/ui/views/frame/browser_view.h"  // nogncheck
@@ -65,15 +66,25 @@
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
+#include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_google_sign_in.h"
 #include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom.h"
 #include "ui/color/color_provider_manager.h"
+#include "ui/gfx/geometry/insets.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/native_ui_types.h"
+#include "ui/shell_dialogs/selected_file_info.h"
+#include "ui/views/controls/webview/webview.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/window/dialog_delegate.h"
+#include "net/base/url_util.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_MAC)
@@ -110,7 +121,102 @@ FinalizeWelcomeVaultLifecycleOperation(
   return operation;
 }
 
+// Parented onboarding dialog hosting the existing Settings AI pane
+// (chrome://maho-settings?pane=maho-ai) so BYOK credentials are configured
+// with the production Settings fields during the welcome wizard.
+constexpr int kByokDialogWidth = 560;
+constexpr int kByokDialogHeight = 640;
+
+views::Widget* g_byok_settings_dialog_widget = nullptr;
+content::WebContents* g_byok_settings_dialog_web_contents = nullptr;
+
+// Mirror of IsProviderConfiguredForRuntime (maho_unified_agent_adapter.cc,
+// namespace-local there) for the BYOK providers; keep in sync: openai and
+// anthropic accept an encrypted key, an OAuth refresh token, or a legacy
+// provider-scoped API key; openai-compatible additionally requires a base
+// URL. "maho-managed" and unknown providers report false.
+bool IsByokProviderConfiguredForRuntime(const std::string& provider_id,
+                                        PrefService* prefs) {
+  if (!prefs) {
+    return false;
+  }
+  if (provider_id == "openai") {
+    return !prefs->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty() ||
+           !prefs->GetString(maho::ai_prefs::kOAuthOpenAIRefreshEncryptedB64)
+                .empty() ||
+           (prefs->GetString(maho::ai_prefs::kProvider) == "openai" &&
+            !prefs->GetString(maho::ai_prefs::kApiKey).empty());
+  }
+  if (provider_id == "anthropic") {
+    return !prefs->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64)
+                .empty() ||
+           !prefs->GetString(maho::ai_prefs::kOAuthAnthropicRefreshEncryptedB64)
+                .empty() ||
+           (prefs->GetString(maho::ai_prefs::kProvider) == "anthropic" &&
+            !prefs->GetString(maho::ai_prefs::kApiKey).empty());
+  }
+  if (provider_id == "openai-compatible") {
+    return prefs->GetString(maho::ai_prefs::kProvider) ==
+               "openai-compatible" &&
+           !prefs->GetString(maho::ai_prefs::kBaseUrl).empty();
+  }
+  return false;
+}
+
+class MahoByokSettingsDialogDelegate : public views::DialogDelegate {
+ public:
+  MahoByokSettingsDialogDelegate(
+      Profile* profile, const GURL& url,
+      MahoWelcomePageHandler::OpenByokSettingsDialogCallback callback)
+      : profile_(profile), callback_(std::move(callback)) {
+    SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
+    // kWindow gives a native close button; the Settings WebUI has none.
+    SetModalType(ui::mojom::ModalType::kWindow);
+    SetShowCloseButton(true);
+    SetTitle(u"Maho Settings");
+    SetCanResize(false);
+    set_fixed_width(kByokDialogWidth);
+    set_margins(gfx::Insets());
+    set_corner_radius(12);
+
+    auto web_view = std::make_unique<views::WebView>(profile);
+    web_view_ = web_view.get();
+    web_view_->SetPreferredSize(gfx::Size(kByokDialogWidth, kByokDialogHeight));
+    web_view_->LoadInitialURL(url);
+    SetContentsView(std::move(web_view));
+    g_byok_settings_dialog_web_contents = web_view_->web_contents();
+  }
+
+  MahoByokSettingsDialogDelegate(const MahoByokSettingsDialogDelegate&) = delete;
+  MahoByokSettingsDialogDelegate& operator=(
+      const MahoByokSettingsDialogDelegate&) = delete;
+
+  void WindowClosing() override {
+    if (web_view_) {
+      web_view_->SetWebContents(nullptr);
+    }
+    g_byok_settings_dialog_widget = nullptr;
+    g_byok_settings_dialog_web_contents = nullptr;
+
+    PrefService* prefs = profile_ ? profile_->GetPrefs() : nullptr;
+    const std::string provider =
+        prefs ? prefs->GetString(maho::ai_prefs::kProvider) : std::string();
+    const bool configured = IsByokProviderConfiguredForRuntime(provider, prefs);
+    std::move(callback_).Run(configured);
+  }
+
+ private:
+  raw_ptr<Profile> profile_;
+  raw_ptr<views::WebView> web_view_ = nullptr;
+  MahoWelcomePageHandler::OpenByokSettingsDialogCallback callback_;
+};
+
 }  // namespace
+
+content::WebContents*
+maho::MahoWelcomeWindow::GetByokSettingsDialogWebContents() {
+  return g_byok_settings_dialog_web_contents;
+}
 
 MahoWelcomePageHandler::MahoWelcomePageHandler(
     mojo::PendingReceiver<maho_welcome::mojom::PageHandler> receiver,
@@ -142,11 +248,64 @@ MahoWelcomePageHandler::MahoWelcomePageHandler(
 }
 
 MahoWelcomePageHandler::~MahoWelcomePageHandler() {
+  if (sync_save_dialog_) {
+    sync_save_dialog_->ListenerDestroyed();
+  }
   if (MahoSpaceThemeState::HasPreviewOverride(browser_)) {
     MahoSpaceThemeState::ClearPreviewOverride(browser_);
     MahoSpaceThemeState::UpdateFromCore();
     MahoSpaceThemePickerDialog::RepaintBrowser(browser_);
   }
+}
+
+void MahoWelcomePageHandler::SaveSyncKeyBackup(
+    const std::string& content, SaveSyncKeyBackupCallback callback) {
+  if (sync_save_callback_) {
+    std::move(callback).Run(false, "A backup save is already in progress.");
+    return;
+  }
+  if (content.empty() || content.size() > 16384 || !web_contents_ ||
+      !web_contents_->GetTopLevelNativeWindow()) {
+    std::move(callback).Run(false, "The backup or its window is unavailable.");
+    return;
+  }
+  sync_save_callback_ = std::move(callback);
+  sync_save_content_ = content;
+  if (!sync_save_dialog_) {
+    sync_save_dialog_ = ui::SelectFileDialog::Create(
+        this, std::make_unique<ChromeSelectFilePolicy>(web_contents_));
+  }
+  // SelectFile can synchronously dispatch cancellation or a nested close.
+  // Keep the dialog and arguments local and do not access this after the call.
+  scoped_refptr<ui::SelectFileDialog> dialog = sync_save_dialog_;
+  const base::FilePath filename(FILE_PATH_LITERAL("maho-sync-key-backup.txt"));
+  dialog->SelectFile(ui::SelectFileDialog::SELECT_SAVEAS_FILE,
+                     u"Save sync recovery key", filename, nullptr, 0,
+                     base::FilePath::StringType(),
+                     web_contents_->GetTopLevelNativeWindow());
+}
+
+void MahoWelcomePageHandler::FileSelected(
+    const ui::SelectedFileInfo& file, int index) {
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](base::FilePath path, std::string content) {
+            return base::WriteFile(path, content);
+          },
+          file.path(), std::move(sync_save_content_)),
+      base::BindOnce(&MahoWelcomePageHandler::OnSyncKeyBackupWritten,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoWelcomePageHandler::FileSelectionCanceled() {
+  sync_save_content_.clear();
+  std::move(sync_save_callback_).Run(false, "");
+}
+
+void MahoWelcomePageHandler::OnSyncKeyBackupWritten(bool saved) {
+  std::move(sync_save_callback_).Run(
+      saved, saved ? "" : "Could not write the backup file. Please try again.");
 }
 
 void MahoWelcomePageHandler::GetAvailableBrowsers(
@@ -1271,6 +1430,53 @@ void MahoWelcomePageHandler::SetTranslationProvider(
   }
   profile_->GetPrefs()->SetString(maho::ai_prefs::kTranslationProvider, provider);
   std::move(callback).Run(true);
+}
+
+void MahoWelcomePageHandler::GetByokCredentialConfigured(
+    GetByokCredentialConfiguredCallback callback) {
+  PrefService* prefs = profile_ ? profile_->GetPrefs() : nullptr;
+  const std::string provider =
+      prefs ? prefs->GetString(maho::ai_prefs::kProvider) : std::string();
+  // Only the user's actually-selected BYOK provider can certify readiness;
+  // the login-written "maho-managed" default and unrelated stored keys do not.
+  std::move(callback).Run(IsByokProviderConfiguredForRuntime(provider, prefs));
+}
+
+void MahoWelcomePageHandler::OpenByokSettingsDialog(
+    OpenByokSettingsDialogCallback callback) {
+  views::Widget* parent_widget = nullptr;
+  if (web_contents_) {
+    parent_widget = views::Widget::GetWidgetForNativeWindow(
+        web_contents_->GetTopLevelNativeWindow());
+  }
+  if (!parent_widget && browser_) {
+    BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser_);
+    if (bv) {
+      parent_widget = bv->GetWidget();
+    }
+  }
+  gfx::NativeWindow parent_window =
+      parent_widget ? parent_widget->GetNativeWindow() : gfx::NativeWindow();
+  if (!parent_window) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  if (g_byok_settings_dialog_widget) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  GURL url(maho::kMahoSettingsURL);
+  url = net::AppendQueryParameter(url, "pane", "maho-ai");
+
+  auto dialog = std::make_unique<MahoByokSettingsDialogDelegate>(
+      profile_, url, std::move(callback));
+  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
+      std::move(dialog), parent_window, parent_widget->GetNativeView());
+  g_byok_settings_dialog_widget = widget;
+  widget->Show();
+  widget->Activate();
 }
 
 void MahoWelcomePageHandler::GetSubscriptionCheckoutUrl(

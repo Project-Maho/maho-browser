@@ -3966,6 +3966,30 @@ public:
   bool verified_click_result = true;
   bool verified_click_dispatched = true;
   std::string verified_click_reason;
+  base::OnceCallback<void(InputActionOutcome)> pending_verified_click;
+  base::OnceClosure on_wait;
+  base::OnceClosure on_snapshot;
+  int snapshot_v2_calls = 0;
+
+  bool WaitForAutoQuiet(int tab_id, int timeout_ms) override {
+    if (on_wait) {
+      std::move(on_wait).Run();
+    }
+    return true;
+  }
+
+  AccessibilitySnapshotV2Result GetAccessibilitySnapshotV2(
+      const AccessibilitySnapshotV2Params& params,
+      MahoMcpSession::RefTable* out_refs,
+      MahoMcpAccessibilityHandler::ObservationCache& observation_cache,
+      uint64_t token_sequence) override {
+    ++snapshot_v2_calls;
+    if (on_snapshot) {
+      std::move(on_snapshot).Run();
+    }
+    return ResolvingFakeDelegate::GetAccessibilitySnapshotV2(
+        params, out_refs, observation_cache, token_sequence);
+  }
 
   bool ConfirmCredentialTypingApproval(
       std::string_view,
@@ -4003,6 +4027,10 @@ public:
       int tab_id,
       ui::AXNodeID ax_id,
       base::OnceCallback<void(InputActionOutcome)> callback) override {
+    if (requires_deferred_verified_input_responses) {
+      pending_verified_click = std::move(callback);
+      return;
+    }
     InputActionOutcome outcome;
     outcome.dispatched = verified_click_dispatched;
     outcome.verified = verified_click_result;
@@ -4065,6 +4093,11 @@ public:
 
 class MahoMcpSessionTypeGuardTest : public testing::Test {
 protected:
+  explicit MahoMcpSessionTypeGuardTest(
+      base::test::TaskEnvironment::TimeSource time_source =
+          base::test::TaskEnvironment::TimeSource::SYSTEM_TIME)
+      : task_environment_(time_source) {}
+
   static constexpr char kSentinel[] = "S3NTINEL-maho-vault-9F4C";
 
   void SetUp() override {
@@ -4202,6 +4235,262 @@ protected:
   std::unique_ptr<MahoMcpSession> session_;
   std::vector<std::string> deferred_responses_;
 };
+
+// Retain the real session's response/receipt and revocation paths; only the
+// browser completion is controlled by the test, without timers or polling.
+class MahoMcpSessionLocatorVerifiedTest
+    : public MahoMcpSessionTypeGuardTest,
+      public testing::WithParamInterface<bool> {
+ protected:
+  MahoMcpSessionLocatorVerifiedTest()
+      : MahoMcpSessionTypeGuardTest(
+            base::test::TaskEnvironment::TimeSource::MOCK_TIME) {}
+
+  void SetUp() override {
+    MahoMcpSessionTypeGuardTest::SetUp();
+    MahoMcpSession::SetLeaseRegistryForBrowserActions(lease_registry_.get());
+    delegate_->requires_deferred_verified_input_responses = true;
+    delegate_->mock_locator_nodes = {
+        {.ax_id = 101, .role = "textbox", .name = "Search", .css = "#target"},
+    };
+    MahoMcpFieldMetadata ordinary;
+    ordinary.classified = true;
+    delegate_->field_metadata[101] = ordinary;
+    session_->SetDeferredResponseSender(base::BindRepeating(
+        [](std::vector<std::string>* responses, std::string response) {
+          responses->push_back(std::move(response));
+        },
+        base::Unretained(&deferred_responses_)));
+  }
+
+  void TearDown() override {
+    MahoMcpSessionTypeGuardTest::TearDown();
+    MahoMcpSession::SetLeaseRegistryForBrowserActions(nullptr);
+  }
+
+  void ExpectDroppedLeaseExpires(const std::string& session_id) {
+    EXPECT_TRUE(lease_registry_->IsHeldBy(7, session_id));
+    task_environment_.FastForwardBy(base::Seconds(6));
+    EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_id));
+  }
+
+  void StartAction(const std::string& extra_arguments = "") {
+    const auto immediate = session_->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":30,)"
+        R"("params":{"name":"%s","arguments":{"tab_id":7,)"
+        R"("locator":{"css":"#target"},"text":"locator-value"%s}}})"
+        "\n",
+        GetParam() ? "input.locator_type" : "input.locator_click",
+        extra_arguments.c_str()));
+    EXPECT_TRUE(immediate.empty())
+        << (immediate.empty() ? std::string() : immediate.front());
+    EXPECT_TRUE(deferred_responses_.empty());
+  }
+
+  base::OnceCallback<void(InputActionOutcome)>& PendingCompletion() {
+    return GetParam() ? delegate_->pending_verified_type
+                      : delegate_->pending_verified_click;
+  }
+
+  void CompleteAction(bool verified) {
+    InputActionOutcome outcome;
+    outcome.dispatched = true;
+    outcome.verified = verified;
+    outcome.method = "test";
+    if (!verified) {
+      outcome.reason = "postcondition_failed";
+    }
+    std::move(PendingCompletion()).Run(std::move(outcome));
+  }
+
+  void ExpectRevokedResponse() {
+    ASSERT_EQ(deferred_responses_.size(), 1u);
+    auto response = base::JSONReader::Read(deferred_responses_.front(),
+                                          base::JSON_PARSE_RFC);
+    ASSERT_TRUE(response.has_value());
+    EXPECT_EQ(response->GetDict().FindInt("id"), 30);
+    EXPECT_FALSE(response->GetDict().Find("result"));
+    const auto* error = response->GetDict().FindDict("error");
+    ASSERT_TRUE(error);
+    EXPECT_EQ(error->FindInt("code"), -32004);
+  }
+};
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, SuccessWaitsForVerifiedCompletion) {
+  StartAction();
+  ASSERT_TRUE(PendingCompletion());
+  CompleteAction(true);
+
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  auto response = base::JSONReader::Read(deferred_responses_.front(),
+                                        base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->GetDict().FindInt("id"), 30);
+  const auto* result = response->GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_TRUE(result->FindDict("receipt"));
+  base::Value output = ParseExecutionOutput(std::move(*response));
+  const auto* action = output.GetDict().FindDict("action");
+  ASSERT_TRUE(action);
+  EXPECT_EQ(action->FindBool("dispatched"), true);
+  EXPECT_EQ(action->FindBool("verified"), true);
+  const auto* method = action->FindString("method");
+  ASSERT_TRUE(method);
+  EXPECT_EQ(*method, "test");
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, VerificationFailureIsNotSuccess) {
+  StartAction();
+  ASSERT_TRUE(PendingCompletion());
+  CompleteAction(false);
+
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  auto response = base::JSONReader::Read(deferred_responses_.front(),
+                                        base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response.has_value());
+  EXPECT_EQ(response->GetDict().FindInt("id"), 30);
+  EXPECT_FALSE(response->GetDict().Find("result"));
+  const auto* error = response->GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), kMahoMcpErrorActionNotApplied);
+  const auto* reason = error->FindStringByDottedPath("data.reason");
+  ASSERT_TRUE(reason);
+  EXPECT_EQ(*reason, "postcondition_failed");
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, RevocationRejectsLateCompletion) {
+  StartAction();
+  ASSERT_TRUE(PendingCompletion());
+  const std::string session_id = session_->session_id();
+  MahoMcpSession::RevokeControllerSession(session_id);
+  ExpectDroppedLeaseExpires(session_id);
+  EXPECT_TRUE(deferred_responses_.empty());
+
+  CompleteAction(true);
+  ExpectRevokedResponse();
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, DestructionRejectsLateCompletion) {
+  StartAction();
+  ASSERT_TRUE(PendingCompletion());
+  const std::string session_id = session_->session_id();
+  session_.reset();
+  ExpectDroppedLeaseExpires(session_id);
+  EXPECT_TRUE(deferred_responses_.empty());
+
+  CompleteAction(true);
+  ExpectRevokedResponse();
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, RevocationDuringWaitSkipsObservation) {
+  StartAction(R"(,"wait":{"mode":"auto"},"observe":"diff")");
+  ASSERT_TRUE(PendingCompletion());
+  const int snapshots_before_completion = delegate_->snapshot_v2_calls;
+  const std::string session_id = session_->session_id();
+  bool waited = false;
+  delegate_->on_wait = base::BindOnce(
+      [](bool* waited, std::string session_id) {
+        *waited = true;
+        MahoMcpSession::RevokeControllerSession(session_id);
+      },
+      &waited, session_id);
+  CompleteAction(true);
+  EXPECT_TRUE(waited);
+  EXPECT_EQ(delegate_->snapshot_v2_calls, snapshots_before_completion);
+  ExpectDroppedLeaseExpires(session_id);
+  ExpectRevokedResponse();
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, DestructionDuringWaitSkipsObservation) {
+  StartAction(R"(,"wait":{"mode":"auto"},"observe":"diff")");
+  ASSERT_TRUE(PendingCompletion());
+  const int snapshots_before_completion = delegate_->snapshot_v2_calls;
+  const std::string session_id = session_->session_id();
+  bool waited = false;
+  delegate_->on_wait = base::BindOnce(
+      [](bool* waited, std::unique_ptr<MahoMcpSession>* session) {
+        *waited = true;
+        session->reset();
+      },
+      &waited, &session_);
+  CompleteAction(true);
+  EXPECT_TRUE(waited);
+  EXPECT_EQ(delegate_->snapshot_v2_calls, snapshots_before_completion);
+  ExpectDroppedLeaseExpires(session_id);
+  ExpectRevokedResponse();
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, DestructionDuringSnapshotFailsClosed) {
+  StartAction(R"(,"observe":"diff")");
+  ASSERT_TRUE(PendingCompletion());
+  const int snapshots_before_completion = delegate_->snapshot_v2_calls;
+  bool observed = false;
+  delegate_->on_snapshot = base::BindOnce(
+      [](bool* observed, std::unique_ptr<MahoMcpSession>* session) {
+        *observed = true;
+        session->reset();
+      },
+      &observed, &session_);
+  CompleteAction(true);
+  EXPECT_TRUE(observed);
+  EXPECT_EQ(delegate_->snapshot_v2_calls, snapshots_before_completion + 1);
+  ExpectRevokedResponse();
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, RevocationDuringSnapshotFailsClosed) {
+  StartAction(R"(,"observe":"diff")");
+  ASSERT_TRUE(PendingCompletion());
+  bool observed = false;
+  delegate_->on_snapshot = base::BindOnce(
+      [](bool* observed, std::string session_id) {
+        *observed = true;
+        MahoMcpSession::RevokeControllerSession(session_id);
+      },
+      &observed, session_->session_id());
+  CompleteAction(true);
+  EXPECT_TRUE(observed);
+  ExpectRevokedResponse();
+}
+
+TEST_P(MahoMcpSessionLocatorVerifiedTest, ScopedLeaseHeldThroughCompletion) {
+  const std::string session_id = session_->session_id();
+  lease_registry_->Release(7, session_id);
+  ASSERT_FALSE(lease_registry_->IsHeldBy(7, session_id));
+  StartAction(R"(,"lease":"scoped","wait":{"mode":"auto"},"observe":"diff")");
+  ASSERT_TRUE(PendingCompletion());
+  EXPECT_TRUE(lease_registry_->IsHeldBy(7, session_id));
+  bool waited = false;
+  delegate_->on_wait = base::BindOnce(
+      [](bool* waited, MahoMcpLeaseRegistry* registry,
+         std::string session_id) {
+        *waited = true;
+        EXPECT_TRUE(registry->IsHeldBy(7, session_id));
+      },
+      &waited, lease_registry_.get(), session_id);
+  const int snapshots_before_completion = delegate_->snapshot_v2_calls;
+  CompleteAction(true);
+  EXPECT_TRUE(waited);
+  EXPECT_EQ(delegate_->snapshot_v2_calls, snapshots_before_completion + 1);
+  EXPECT_FALSE(lease_registry_->IsHeldBy(7, session_id));
+  ASSERT_EQ(deferred_responses_.size(), 1u);
+  auto response = base::JSONReader::Read(deferred_responses_.front(),
+                                        base::JSON_PARSE_RFC);
+  ASSERT_TRUE(response);
+  base::Value output = ParseExecutionOutput(std::move(*response));
+  EXPECT_EQ(output.GetDict().FindBoolByDottedPath("action.verified"), true);
+  const auto* wait_reason = output.GetDict().FindStringByDottedPath("wait.reason");
+  ASSERT_TRUE(wait_reason);
+  EXPECT_EQ(*wait_reason, "auto_quiet");
+  EXPECT_TRUE(output.GetDict().FindDict("observation"));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    LocatorActions,
+    MahoMcpSessionLocatorVerifiedTest,
+    testing::Bool(),
+    [](const testing::TestParamInfo<bool>& info) {
+      return info.param ? "Type" : "Click";
+    });
 
 TEST_F(MahoMcpSessionTypeGuardTest, OrdinaryTextFieldTypesThroughWithoutEcho) {
   MahoMcpFieldMetadata ordinary;

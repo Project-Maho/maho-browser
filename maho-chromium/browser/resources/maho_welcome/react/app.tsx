@@ -500,7 +500,10 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
             type="button"
             className="h-10 min-w-36 rounded-lg font-semibold shadow-lg shadow-primary/10"
             aria-busy={isAuthPage && snapshot.auth.status === 'submitting'}
-            disabled={(isAuthPage && snapshot.auth.status === 'submitting')}
+            disabled={(isAuthPage && snapshot.auth.status === 'submitting') ||
+                (pageForRender === WelcomePage.AIProvider &&
+                 snapshot.aiSetup.provider === 'byok' &&
+                 snapshot.aiSetup.status !== 'success')}
             onClick={() => { void onPrimaryClick(); }}
           >
             {primaryLabel}

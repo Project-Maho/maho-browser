@@ -1,7 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 import React from 'react';
-import {Check, Clock, Loader2, Server, Sparkles} from 'lucide-react';
+import {Check, Clock, ExternalLink, Key, Loader2, Server, Sparkles} from 'lucide-react';
 
 import {cn} from '@lib/utils';
 import {Badge} from '@ui/badge';
@@ -142,6 +142,42 @@ export function AiSetupContent({store, provider, status, errorMessage, isSignedI
                 You're on the Free tier with monthly AI credits included. Upgrade or manage billing anytime from Settings. Click Next to continue.
               </p>
             </div>
+          </div>
+        </div>
+      ) : provider === 'byok' ? (
+        <div
+          className="mt-4 rounded-xl border border-border/70 bg-card/50 p-4"
+          data-testid="byok-setup-card"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-2.5">
+              {status === 'success' ? (
+                <Check className="mt-0.5 size-4 shrink-0 text-primary" />
+              ) : (
+                <Key className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              )}
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold text-foreground">
+                  {status === 'success'
+                    ? 'BYOK credentials configured'
+                    : 'Provider configuration required'}
+                </p>
+                <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                  {status === 'success'
+                    ? 'Your selected provider configuration is saved. Click Next to continue.'
+                    : 'Choose OpenAI, Anthropic, or a compatible endpoint in Settings and save your key before continuing.'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={status === 'submitting'}
+              onClick={() => { void store.openByokSettings(); }}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+            >
+              <span>{status === 'success' ? 'Edit in Settings' : 'Configure in Settings'}</span>
+              <ExternalLink className="size-3 text-muted-foreground" />
+            </button>
           </div>
         </div>
       ) : null}

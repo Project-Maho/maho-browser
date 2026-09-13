@@ -22,6 +22,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "maho/browser/ai/maho_browser_tool_registry.h"
 #include "maho/browser/ai/maho_mail_tool_authorization.h"
@@ -346,11 +347,11 @@ class MahoMcpSession {
   const RefTable& ref_table() const { return ref_to_ax_id_; }
 
   MahoMcpAccessibilityHandler::ObservationCache& observation_cache() {
-    return observation_cache_;
+    return *observation_cache_;
   }
   const MahoMcpAccessibilityHandler::ObservationCache& observation_cache()
       const {
-    return observation_cache_;
+    return *observation_cache_;
   }
 
  private:
@@ -406,7 +407,9 @@ class MahoMcpSession {
   uint64_t ref_snapshot_token_ = 0;
 
   // Observation cache for V2 snapshots.
-  MahoMcpAccessibilityHandler::ObservationCache observation_cache_;
+  std::shared_ptr<MahoMcpAccessibilityHandler::ObservationCache>
+      observation_cache_ =
+          std::make_shared<MahoMcpAccessibilityHandler::ObservationCache>();
   uint64_t next_v2_snapshot_token_seq_ = 0;
 
   // Per-session network capture observer (Wave 4.4).
@@ -447,6 +450,7 @@ class MahoMcpSession {
   DeferredResponseSender deferred_response_sender_;
 
   SEQUENCE_CHECKER(sequence_checker_);
+  base::WeakPtrFactory<MahoMcpSession> weak_factory_{this};
 };
 
 class MahoMcpBrowserDelegate {

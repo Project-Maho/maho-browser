@@ -69,6 +69,9 @@ export class MahoWelcomeStore {
   private readonly pageHandler = new PageHandlerRemote();
   private state: WelcomeState = createInitialState();
   private authReturnPage: WelcomePage | null = null;
+  // Generation of the latest BYOK readiness operation; only the newest
+  // operation may apply its result.
+  private byokCheckGeneration = 0;
 
   constructor() {
     const factory = PageHandlerFactory.getRemote();
@@ -196,6 +199,13 @@ export class MahoWelcomeStore {
     }
 
     if (this.state.currentPage === WelcomePage.AIProvider) {
+      if (this.state.aiSetup.provider === 'byok' &&
+          this.state.aiSetup.status !== 'success') {
+        // BYOK stays on the AI page until the selected provider's credentials
+        // are confirmed by the native readiness check; Next must not advance
+        // unconfigured.
+        return;
+      }
       this.patch(d => {
         if (d.aiSetup.provider === 'maho-managed' && d.auth.status !== 'success') {
           d.currentPage = WelcomePage.Auth;
@@ -327,11 +337,90 @@ export class MahoWelcomeStore {
 
     if (provider === 'byok') {
       this.patch(draft => {
-        draft.aiSetup = { provider: 'byok', status: 'success', errorMessage: '', skipped: false };
-        draft.currentPage = WelcomePage.PasswordSetup;
-        draft.direction = 'forward';
+        draft.aiSetup = { provider: 'byok', status: 'idle', errorMessage: '', skipped: false };
       });
+      void this.checkByokConfigured();
       return;
+    }
+  }
+
+  async checkByokConfigured(): Promise<boolean> {
+    const generation = ++this.byokCheckGeneration;
+    try {
+      const {configured} = await this.pageHandler.getByokCredentialConfigured();
+      if (generation !== this.byokCheckGeneration) {
+        return configured;
+      }
+      this.patch(draft => {
+        if (draft.aiSetup.provider !== 'byok') {
+          return;
+        }
+        draft.aiSetup = {
+          ...draft.aiSetup,
+          status: configured ? 'success' : 'idle',
+          errorMessage: '',
+        };
+      });
+      return configured;
+    } catch (error) {
+      if (generation !== this.byokCheckGeneration) {
+        return false;
+      }
+      this.patch(draft => {
+        if (draft.aiSetup.provider !== 'byok') {
+          return;
+        }
+        draft.aiSetup = {
+          ...draft.aiSetup,
+          status: 'error',
+          errorMessage: error instanceof Error
+            ? error.message
+            : 'Could not verify the AI provider configuration.',
+        };
+      });
+      return false;
+    }
+  }
+
+  async openByokSettings(): Promise<void> {
+    if (this.state.aiSetup.provider !== 'byok') {
+      return;
+    }
+    const generation = ++this.byokCheckGeneration;
+    this.patch(draft => {
+      draft.aiSetup = {...draft.aiSetup, status: 'submitting', errorMessage: ''};
+    });
+    try {
+      const {configured} = await this.pageHandler.openByokSettingsDialog();
+      if (generation !== this.byokCheckGeneration) {
+        return;
+      }
+      this.patch(draft => {
+        if (draft.aiSetup.provider !== 'byok') {
+          return;
+        }
+        draft.aiSetup = {
+          ...draft.aiSetup,
+          status: configured ? 'success' : 'idle',
+          errorMessage: '',
+        };
+      });
+    } catch (error) {
+      if (generation !== this.byokCheckGeneration) {
+        return;
+      }
+      this.patch(draft => {
+        if (draft.aiSetup.provider !== 'byok') {
+          return;
+        }
+        draft.aiSetup = {
+          ...draft.aiSetup,
+          status: 'error',
+          errorMessage: error instanceof Error
+            ? error.message
+            : 'Could not open AI settings.',
+        };
+      });
     }
   }
 
@@ -604,6 +693,14 @@ export class MahoWelcomeStore {
     });
   }
 
+  async saveSyncKeyBackup(content: string): Promise<boolean> {
+    const {saved, errorMessage} = await this.pageHandler.saveSyncKeyBackup(content);
+    if (!saved && errorMessage) {
+      throw new Error(errorMessage);
+    }
+    return saved;
+  }
+
   advanceFromSyncKeyBackup(): boolean {
     if (this.state.currentPage !== WelcomePage.SyncKeyBackup) {
       return false;
@@ -794,12 +891,14 @@ export class MahoWelcomeStore {
   }
 
   async refreshRelayAccountStatus(): Promise<void> {
-    const {signedIn} =
+    const {signedIn, welcomeCompleted, hasStoredSession} =
         await this.pageHandler.getRelayAccountStatusFromWelcome();
     this.patch(draft => {
       draft.auth = {
         ...draft.auth,
         status: signedIn ? 'success' : 'idle',
+        isReauthMode: welcomeCompleted,
+        hasStoredSession,
       };
     });
   }
