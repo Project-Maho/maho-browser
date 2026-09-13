@@ -12,8 +12,15 @@ import sys
 import tempfile
 import importlib.util
 
+_cargo_bin = os.path.expanduser('~/.cargo/bin')
+if os.path.isdir(_cargo_bin) and _cargo_bin not in os.environ.get('PATH', ''):
+    os.environ['PATH'] = f"{_cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-_MAHO_SCRIPTS_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..', 'maho', 'scripts'))
+_WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
+if os.path.basename(_WORKSPACE_ROOT) == 'src' and os.path.basename(os.path.dirname(_WORKSPACE_ROOT)) == 'chromium':
+    _WORKSPACE_ROOT = os.path.normpath(os.path.join(_WORKSPACE_ROOT, '..', '..'))
+_MAHO_SCRIPTS_DIR = os.path.normpath(os.path.join(_WORKSPACE_ROOT, 'maho', 'scripts'))
 _DEFAULT_GOOGLE_CLIENT_ID = (
     '650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com'
 )
@@ -53,9 +60,9 @@ def load_build_lock():
 
 build_lock = load_build_lock()
 
-WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
+WORKSPACE_ROOT = _WORKSPACE_ROOT
 MAHO_ROOT = os.path.join(WORKSPACE_ROOT, 'maho')
-MAHO_CHROMIUM_ROOT = os.path.join(WORKSPACE_ROOT, 'maho-chromium')
+MAHO_CHROMIUM_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
 PREBUILT_DIR = os.path.join(MAHO_CHROMIUM_ROOT, 'third_party', 'maho', 'prebuilt')
 
 
@@ -576,8 +583,9 @@ def build_rust_prebuilt(target=None, incremental=False):
     temp_header_path = os.path.join(cbindgen_dir, 'maho_ffi.h.tmp')
 
     cbindgen_config = os.path.join(MAHO_ROOT, 'crates', 'maho-ffi', 'cbindgen.toml')
+    cbindgen_bin = shutil.which('cbindgen') or os.path.expanduser('~/.cargo/bin/cbindgen')
     subprocess.run(
-        ['cbindgen', '--config', cbindgen_config, '--crate', 'maho-ffi', '--output', temp_header_path],
+        [cbindgen_bin, '--config', cbindgen_config, '--crate', 'maho-ffi', '--output', temp_header_path],
         cwd=os.path.join(MAHO_ROOT, 'crates', 'maho-ffi'),
         check=True,
     )

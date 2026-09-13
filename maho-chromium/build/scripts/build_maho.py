@@ -13,6 +13,10 @@ import sys
 import time
 from subprocess import SubprocessError
 
+_cargo_bin = os.path.expanduser('~/.cargo/bin')
+if os.path.isdir(_cargo_bin) and _cargo_bin not in os.environ.get('PATH', ''):
+    os.environ['PATH'] = f"{_cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _MAHO_CHROMIUM_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
 _WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
@@ -169,6 +173,94 @@ def embed_mail_helper(app_path: str, out_dir: str) -> bool:
         os.remove(dest)
     print(f"Embedding maho_mail_helper into {macos_dir}")
     shutil.copy2(src, dest)
+    return True
+
+
+def omo_runtime_source():
+    """Directory holding the omo package to stage, or None when unavailable.
+
+    Override with MAHO_OMO_PACKAGE_DIR. The directory must contain
+    dist/rpc-entry.js; anything else is rejected rather than silently staged.
+    """
+    override = os.environ.get('MAHO_OMO_PACKAGE_DIR')
+    candidates = [override] if override else [
+        os.path.expanduser(
+            '~/.bun/install/global/node_modules/@code-yeongyu/senpi'),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(
+                os.path.join(candidate, 'dist', 'rpc-entry.js')):
+            return candidate
+    return None
+
+
+def embed_omo_runtime(app_path: str, out_dir: str) -> bool:
+    """Stage the omo runtime, Bun, and the browser MCP bridge into the bundle.
+
+    OmoBackend resolves all three from <DIR_EXE> (Contents/MacOS), the same
+    convention MahoMailHelperLauncher uses, so a shipped browser never falls back
+    to a developer's own omo or Bun install.
+
+    Returns False when a piece is missing so the caller can decide; the agent
+    panel simply stays on its existing backend in that case.
+    """
+    macos_dir = os.path.join(app_path, 'Contents', 'MacOS')
+    os.makedirs(macos_dir, exist_ok=True)
+
+    bun = shutil.which('bun')
+    if not bun:
+        print('warning: bun not found on PATH; skipping omo runtime staging',
+              file=sys.stderr)
+        return False
+
+    package = omo_runtime_source()
+    if not package:
+        print('warning: omo package not found (set MAHO_OMO_PACKAGE_DIR); '
+              'skipping omo runtime staging', file=sys.stderr)
+        return False
+
+    mcp = os.path.join(
+        _WORKSPACE_ROOT, 'maho', 'target', 'release', 'maho-browser-mcp')
+    if not os.path.isfile(mcp):
+        mcp = os.path.join(
+            _WORKSPACE_ROOT, 'maho', 'target', 'debug', 'maho-browser-mcp')
+    if not os.path.isfile(mcp):
+        print('warning: maho-browser-mcp not built; skipping omo runtime '
+              'staging', file=sys.stderr)
+        return False
+
+    bun_dest = os.path.join(macos_dir, 'bun')
+    if os.path.islink(bun_dest) or os.path.isfile(bun_dest):
+        os.remove(bun_dest)
+    print(f'Embedding bun into {macos_dir}')
+    shutil.copy2(bun, bun_dest)
+
+    mcp_dest = os.path.join(macos_dir, 'maho-browser-mcp')
+    if os.path.islink(mcp_dest) or os.path.isfile(mcp_dest):
+        os.remove(mcp_dest)
+    print(f'Embedding maho-browser-mcp into {macos_dir}')
+    shutil.copy2(mcp, mcp_dest)
+
+    # Also stage into Contents/Helpers where IsTrustedMahoPeer and
+    # IsTrustedMahoExecutablePath expect it.
+    helpers_dir = os.path.join(app_path, 'Contents', 'Helpers')
+    os.makedirs(helpers_dir, exist_ok=True)
+    helpers_mcp = os.path.join(helpers_dir, 'maho-browser-mcp')
+    if os.path.islink(helpers_mcp) or os.path.isfile(helpers_mcp):
+        os.remove(helpers_mcp)
+    print(f'Embedding maho-browser-mcp into {helpers_dir}')
+    shutil.copy2(mcp, helpers_mcp)
+
+    # omo runtime files (JS/JSON/etc.) belong in Contents/Resources/omo so that
+    # Apple's codesign seals them as resources rather than rejecting uncompiled
+    # .d.ts/.js files in Contents/MacOS.
+    resources_dir = os.path.join(app_path, 'Contents', 'Resources')
+    os.makedirs(resources_dir, exist_ok=True)
+    omo_dest = os.path.join(resources_dir, 'omo')
+    if os.path.isdir(omo_dest):
+        shutil.rmtree(omo_dest)
+    print(f'Embedding omo runtime into {omo_dest}')
+    shutil.copytree(package, omo_dest, symlinks=True)
     return True
 
 
@@ -345,6 +437,11 @@ def find_appstore_provisioning_profile(bundle_id: str) -> str | None:
         if expiration is not None and expiration.replace(
                 tzinfo=timezone.utc) <= now:
             continue
+        # Ensure profile platform is compatible with macOS. iOS/visionOS/xrOS
+        # profiles for com.maho.browser must not be embedded in the macOS app.
+        platforms = plist.get('Platform') or []
+        if platforms and 'OSX' not in platforms and 'macOS' not in platforms:
+            continue
         # Skip development profiles: they are pinned to other certificates and
         # would not satisfy a distribution-signed build anyway.
         certs = plist.get('DeveloperCertificates') or []
@@ -360,6 +457,9 @@ def codesign_app(identity: str, app_path: str) -> bool:
         return False
     try:
         provisioning_profile = os.environ.get('MAHO_MAC_PROVISIONING_PROFILE')
+        embedded_profile = os.path.join(
+            app_path, 'Contents', 'embedded.provisionprofile'
+        )
         if provisioning_profile:
             if not os.path.isfile(provisioning_profile):
                 print(
@@ -368,11 +468,13 @@ def codesign_app(identity: str, app_path: str) -> bool:
                     file=sys.stderr,
                 )
                 return False
-            embedded_profile = os.path.join(
-                app_path, 'Contents', 'embedded.provisionprofile'
-            )
             print(f"Embedding macOS provisioning profile: {provisioning_profile}")
             shutil.copy2(provisioning_profile, embedded_profile)
+        elif os.path.isfile(embedded_profile):
+            try:
+                os.remove(embedded_profile)
+            except OSError:
+                pass
 
         frameworks_dir = os.path.join(app_path, 'Contents', 'Frameworks')
         entitlements_path = os.path.join(
@@ -493,6 +595,26 @@ def codesign_app(identity: str, app_path: str) -> bool:
                 helper_cmd += ['--entitlements', helper_entitlements_path]
             helper_cmd += [mail_helper]
             subprocess.run(helper_cmd, check=True, timeout=120)
+
+        # Sign the staged omo runtime pieces before the outer bundle is sealed.
+        # bun and maho-browser-mcp need the helper entitlements (allow-jit,
+        # allow-unsigned-executable-memory, disable-library-validation) or AMFI
+        # kills them.
+        for staged_rel in (
+            ('Contents', 'MacOS', 'bun'),
+            ('Contents', 'MacOS', 'maho-browser-mcp'),
+            ('Contents', 'Helpers', 'maho-browser-mcp'),
+        ):
+            staged_path = os.path.join(app_path, *staged_rel)
+            if not os.path.isfile(staged_path):
+                continue
+            print(f"Signing staged {os.path.basename(staged_path)} in {staged_rel[1]}...")
+            staged_cmd = [
+                'codesign', '--force', '--sign', identity, '--options', 'runtime']
+            if os.path.isfile(helper_entitlements_path):
+                staged_cmd += ['--entitlements', helper_entitlements_path]
+            staged_cmd += [staged_path]
+            subprocess.run(staged_cmd, check=True, timeout=300)
 
         maho_cli = os.path.join(app_path, 'Contents', 'Helpers', 'maho')
         if os.path.isfile(maho_cli):
@@ -986,9 +1108,6 @@ def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=
 
 
 def sync_local_google_api_key(workspace_root, args_gn_path, release):
-    if not release:
-        return
-
     vault_path = os.path.join(
         workspace_root,
         '.secrets',
@@ -996,10 +1115,12 @@ def sync_local_google_api_key(workspace_root, args_gn_path, release):
         'google_chromium_api_key.env',
     )
     if not os.path.isfile(vault_path):
-        raise RuntimeError(
-            'release build requires local Google API key: '
-            f'{vault_path}'
-        )
+        if release:
+            raise RuntimeError(
+                'release build requires local Google API key: '
+                f'{vault_path}'
+            )
+        return False
 
     with open(vault_path, encoding='utf-8') as vault_file:
         key_lines = [
@@ -1018,9 +1139,12 @@ def sync_local_google_api_key(workspace_root, args_gn_path, release):
         updated_args = api_key_pattern.sub(assignment, args, count=1)
     else:
         updated_args = f'{args.rstrip()}\n{assignment}\n'
-    with open(args_gn_path, 'w', encoding='utf-8') as args_file:
-        args_file.write(updated_args)
-    print(f'Synchronized local Google API key into {args_gn_path}')
+    if updated_args != args:
+        with open(args_gn_path, 'w', encoding='utf-8') as args_file:
+            args_file.write(updated_args)
+        print(f'Synchronized local Google API key into {args_gn_path}')
+        return True
+    return False
 
 
 def run_gn_gen(chromium_src, out_dir, depot_tools_dir):
@@ -1051,8 +1175,11 @@ def build_chromium_app(out_dir, targets, extra_args):
     path = env.get('PATH', '')
     env['PATH'] = os.pathsep.join([_DEPOT_TOOLS_DIR, path]) if path else _DEPOT_TOOLS_DIR
     # Keep the default low enough to avoid exhausting memory on local builds.
-    # MAHO_NINJA_JOBS and a caller-supplied -j continue to override it.
-    jobs = os.environ.get('MAHO_NINJA_JOBS', '4')
+    # Windows is the exception: the maho-win builder (6C/12T, 32 GB) sat at ~20%
+    # CPU on 4 jobs and crawled through a full Chromium build, so it always runs
+    # 12. MAHO_NINJA_JOBS and a caller-supplied -j continue to override it.
+    default_jobs = '12' if sys.platform == 'win32' else '4'
+    jobs = os.environ.get('MAHO_NINJA_JOBS', default_jobs)
     caller_set_j = any(a == '-j' or a.startswith('-j') for a in extra_args)
     if not targets:
         # Never fall through to a bare autoninja: with no target ninja builds
@@ -1411,7 +1538,7 @@ def main():
                 args.release,
                 args.debug,
             )
-            sync_local_google_api_key(
+            key_synced = sync_local_google_api_key(
                 _WORKSPACE_ROOT,
                 os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'args.gn'),
                 args.release,
@@ -1420,7 +1547,7 @@ def main():
             apply_branding(platform)
             build_ninja_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'build.ninja')
             if (not os.path.isfile(build_ninja_path)
-                    or args.force_gn_gen or args.release):
+                    or args.force_gn_gen or args.release or key_synced):
                 run_gn_gen(_CHROMIUM_SRC_ROOT, out_dir, _DEPOT_TOOLS_DIR)
 
             targets = list(args.ninja_target) if args.ninja_target else ['chrome']
@@ -1455,6 +1582,7 @@ def main():
                 if platform == 'mac':
                     embed_sparkle_framework(app_path)
                     embed_mail_helper(app_path, out_dir)
+                    embed_omo_runtime(app_path, out_dir)
                     if maho_cli_path is None or not embed_maho_cli(
                             app_path, maho_cli_path):
                         raise RuntimeError('failed to embed maho CLI into app bundle')
@@ -1527,6 +1655,13 @@ def main():
                                     sys.exit(1)
                     else:
                         if platform == 'mac':
+                            embedded_profile = os.path.join(
+                                app_path, 'Contents', 'embedded.provisionprofile')
+                            if os.path.isfile(embedded_profile):
+                                try:
+                                    os.remove(embedded_profile)
+                                except OSError:
+                                    pass
                             # Ad-hoc fallback with a STABLE designated
                             # requirement. TCC keys permission grants on the
                             # DR; the default ad-hoc DR embeds the cdhash,

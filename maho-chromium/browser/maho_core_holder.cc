@@ -34,6 +34,13 @@ struct MahoCore;
 
 namespace maho {
 
+CoreEventResult::CoreEventResult() = default;
+CoreEventResult::CoreEventResult(const CoreEventResult&) = default;
+CoreEventResult::CoreEventResult(CoreEventResult&&) noexcept = default;
+CoreEventResult& CoreEventResult::operator=(const CoreEventResult&) = default;
+CoreEventResult& CoreEventResult::operator=(CoreEventResult&&) noexcept = default;
+CoreEventResult::~CoreEventResult() = default;
+
 namespace {
 std::atomic<::MahoCore*> g_core{nullptr};
 std::atomic<Profile*> g_core_owner_profile{nullptr};

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/timer/elapsed_timer.h"
@@ -90,11 +91,18 @@ void MaybeFireManyTabsEvent(TabStripModel* model, int tab_count) {
       return;
     }
     armed_map[model] = false;
-    if (MahoCore* core = maho::GetCore()) {
-      maho_routines_fire_event(
-          core, base::StringPrintf("{\"kind\":\"on_many_tabs\",\"count\":%d}",
-                                   tab_count)
-                    .c_str());
+    if (maho::GetCore()) {
+      const uint64_t generation = maho::GetCoreGeneration();
+      maho::PostCoreClosure(FROM_HERE, base::BindOnce(
+          [](uint64_t generation, int count) {
+            if (generation == maho::GetCoreGeneration()) {
+              if (MahoCore* current = maho::GetCore()) {
+                maho_routines_fire_event(
+                    current, base::StringPrintf(
+                        "{\"kind\":\"on_many_tabs\",\"count\":%d}", count).c_str());
+              }
+            }
+          }, generation, tab_count));
     }
   } else {
     armed_map[model] = true;
@@ -117,23 +125,23 @@ void DispatchShellEventLocalWithCore(MahoCore* core,
   if (!core) {
     return;
   }
-  base::ElapsedTimer maho_perf_t;
-  std::string updates = maho::core::HandleEvent(core, json.c_str());
-  InvalidateSidebarCoreCacheForUpdatesJson(updates);
-  const double he_ms = maho_perf_t.Elapsed().InMillisecondsF();
-  base::ElapsedTimer notify_t;
   const bool is_structural = !(kind == "tab_title_updated" ||
                                 kind == "tab_url_updated" ||
                                 kind == "tab_favicon_updated" ||
                                 kind == "tab_loading_state_changed" ||
                                 kind == "update_tab_scroll_position" ||
                                 kind == "update_tab_preview");
-  if (auto* bridge = maho::MahoSpaceProfileBridge::GetInstance(); bridge) {
-    bridge->NotifyChanged(is_structural);
-  }
-  DVLOG(1) << "[MAHO_PERF] DispatchShellEventLocal kind=" << kind
-           << " HandleEvent=" << he_ms
-           << "ms NotifyChanged=" << notify_t.Elapsed().InMillisecondsF() << "ms";
+  maho::DispatchCoreEvent(
+      std::move(json),
+      base::BindOnce([](bool is_structural, maho::CoreEventResult result) {
+        if (result.status != maho::CoreEventStatus::kApplied) {
+          LOG(WARNING) << "Tab core event did not apply: "
+                       << static_cast<int>(result.status);
+          return;
+        }
+        InvalidateSidebarCoreCacheForUpdatesJson(result.updates_json);
+        maho::MahoSpaceProfileBridge::GetInstance()->NotifyChanged(is_structural);
+      }, is_structural));
 }
 
 void DispatchShellEventLocal(const std::string& kind, base::DictValue event) {
@@ -185,7 +193,10 @@ void DispatchCreateTabForContents(BrowserWindowInterface* browser,
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   const std::string space_id =
       bridge ? bridge->GetActiveSpaceId(browser) : std::string();
-  if (space_id.empty()) {
+  if (space_id.empty() || !bridge->IsSpaceRegistered(space_id)) {
+    return;
+  }
+  if (!maho::GetCore()) {
     return;
   }
 
@@ -253,19 +264,13 @@ ScopedMahoTabWakeId::~ScopedMahoTabWakeId() {
 }
 
 bool IsCorePinnedTab(const std::string& tab_id) {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return false;
-  }
-  return maho_core_is_tab_pinned(core, tab_id.c_str());
+  const auto facts = maho::GetCachedCoreTabFacts(tab_id);
+  return facts && facts->pinned;
 }
 
 bool IsCoreCloseProtectedTab(const std::string& tab_id) {
-  MahoCore* core = maho::GetCore();
-  if (!core) {
-    return false;
-  }
-  return maho_core_is_tab_close_protected(core, tab_id.c_str());
+  const auto facts = maho::GetCachedCoreTabFacts(tab_id);
+  return facts && facts->close_protected;
 }
 
 class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
@@ -316,7 +321,15 @@ class MahoTabRegistry::NavObserver : public content::WebContentsObserver {
     last_title_ = title;
     MahoCore* core = maho::GetCore();
     if (!core) return;
-    maho_core_add_history_entry(core, url_spec.c_str(), title.c_str());
+    const uint64_t generation = maho::GetCoreGeneration();
+    maho::PostCoreClosure(FROM_HERE, base::BindOnce(
+        [](uint64_t generation, std::string url, std::string title) {
+          if (generation == maho::GetCoreGeneration()) {
+            if (MahoCore* current = maho::GetCore()) {
+              maho_core_add_history_entry(current, url.c_str(), title.c_str());
+            }
+          }
+        }, generation, url_spec, title));
   }
 
   void MaybeDispatchTabUrl() {
@@ -474,16 +487,6 @@ class MahoTabRegistry::StripObserver : public TabStripModelObserver {
             registry_->EraseDispatchCache(tab_id);
             continue;
           }
-          // Close-protected tabs (pinned OR favorite) must not be deleted on
-          // native close (Cmd+W / strip). Dispatch suspend_tab to move the core
-          // record Active->Suspended in lockstep with the dying WebContents, then
-          // suppress the duplicate close_tab. If CloseTabById already suspended
-          // this tab, the Rust suspend path is idempotent so re-dispatch is safe.
-          if (IsCoreCloseProtectedTab(tab_id)) {
-            DispatchShellEventLocal("suspend_tab", {{"tab_id", tab_id}});
-            registry_->EraseDispatchCache(tab_id);
-            continue;
-          }
           registry_->EraseDispatchCache(tab_id);
         }
         DispatchCloseTabForContents(removed.contents);
@@ -574,6 +577,11 @@ MahoTabRegistry* MahoTabRegistry::Get() {
 
 MahoTabRegistry::MahoTabRegistry() {
   browser_collection_observation_.Observe(GlobalBrowserCollection::GetInstance());
+  core_ready_subscription_ = AddCoreReadyCallback(base::BindRepeating(
+      [](MahoTabRegistry* registry) {
+        registry->ReannounceUnannouncedTabs();
+      },
+      base::Unretained(this)));
 }
 
 MahoTabRegistry::~MahoTabRegistry() = default;
@@ -631,6 +639,15 @@ void MahoTabRegistry::DetachStripObserverFor(BrowserWindowInterface* browser) {
 
 void MahoTabRegistry::ReannounceUnannouncedTabs() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (auto* collection = GlobalBrowserCollection::GetInstance()) {
+    collection->ForEach([this](BrowserWindowInterface* browser) {
+      if (browser && IsRegistryEligibleBrowser(browser) &&
+          !strip_observers_.contains(browser)) {
+        AttachStripObserverFor(browser);
+      }
+      return true;
+    });
+  }
   for (const auto& [browser, observer] : strip_observers_) {
     if (!browser) {
       continue;

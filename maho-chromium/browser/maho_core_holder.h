@@ -5,6 +5,9 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
+#include <optional>
+#include <vector>
 #include <utility>
 
 #include "base/callback_list.h"
@@ -29,9 +32,42 @@ class FilePath;
 namespace maho {
 
 ::MahoCore* GetCore();
+uint64_t GetCoreGeneration();
+
+struct CoreTabFacts {
+  std::string id;
+  bool exists = false;
+  bool pinned = false;
+  bool close_protected = false;
+};
+
+enum class CoreEventStatus { kUnavailable, kStale, kFailed, kApplied };
+struct CoreEventResult {
+  CoreEventResult();
+  CoreEventResult(const CoreEventResult&);
+  CoreEventResult(CoreEventResult&&) noexcept;
+  CoreEventResult& operator=(const CoreEventResult&);
+  CoreEventResult& operator=(CoreEventResult&&) noexcept;
+  ~CoreEventResult();
+
+  CoreEventStatus status = CoreEventStatus::kUnavailable;
+  uint64_t generation = 0;
+  std::string updates_json;
+  std::optional<CoreTabFacts> tab;
+};
+
+void DispatchCoreEvent(
+    std::string event_json,
+    base::OnceCallback<void(CoreEventResult)> reply);
+std::optional<CoreTabFacts> GetCachedCoreTabFacts(std::string_view tab_id);
+std::vector<CoreTabFacts> ReadCoreTabFactsSnapshot(::MahoCore* core);
+void PublishCoreTabFacts(uint64_t generation,
+                         std::vector<CoreTabFacts> facts);
 
 void SetCore(::MahoCore* core);
 void SetCoreForProfile(::MahoCore* core, Profile* owner_profile);
+void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
+                       std::vector<CoreTabFacts> facts);
 Profile* GetCoreOwnerProfile();
 
 // The single browser-process password profile-ownership check. Access is

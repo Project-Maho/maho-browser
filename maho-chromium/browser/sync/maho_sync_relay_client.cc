@@ -1,13 +1,21 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/sync/maho_sync_relay_client.h"
+// allow: SIZE_OK - test-only observer/clock injection in the existing linked
+// client; this regression lane cannot refactor the production transport.
 
 #include <cstdlib>
+#include <algorithm>
 #include <utility>
 
+#include "base/base64.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
+#include "services/network/public/cpp/resource_request.h"
+#include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/url_response_head.mojom.h"
+#include "net/base/net_errors.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/storage_partition.h"
 #include "maho/browser/maho_core_holder.h"
@@ -67,8 +75,11 @@ std::string GetWebSocketUrl(const std::string& server_url, const std::string& ke
 
 }  // namespace
 
-MahoSyncRelayClient::MahoSyncRelayClient(Profile* profile)
+MahoSyncRelayClient::MahoSyncRelayClient(Profile* profile,
+                                       const base::TickClock* tick_clock)
     : profile_(profile),
+      poll_timer_(tick_clock),
+      snapshot_timer_(tick_clock),
       readable_watcher_(FROM_HERE,
                         mojo::SimpleWatcher::ArmingPolicy::MANUAL,
                         base::SequencedTaskRunner::GetCurrentDefault()),
@@ -86,14 +97,51 @@ MahoSyncRelayClient::~MahoSyncRelayClient() {
 
 void MahoSyncRelayClient::StartPolling() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (poll_timer_.IsRunning()) return;
-  poll_timer_.Start(FROM_HERE, base::Seconds(2),
-                    base::BindRepeating(&MahoSyncRelayClient::Poll, base::Unretained(this)));
+  if (polling_) {
+    return;
+  }
+  polling_ = true;
+  ++poll_generation_;
+  next_poll_delay_ = base::Seconds(2);
+  core_ready_subscription_ = AddCoreReadyCallback(base::BindRepeating(
+      [](MahoSyncRelayClient* client) {
+        ++client->poll_generation_;
+        client->WakePolling();
+      },
+      base::Unretained(this)));
+  SchedulePoll();
 }
 
 void MahoSyncRelayClient::StopPolling() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   poll_timer_.Stop();
+  snapshot_timer_.Stop();
+  core_ready_subscription_ = {};
+  polling_ = false;
+  poll_wake_pending_ = false;
+  ++poll_generation_;
+}
+
+void MahoSyncRelayClient::SchedulePoll() {
+  if (polling_) {
+    poll_timer_.Start(FROM_HERE, next_poll_delay_,
+                     base::BindOnce(&MahoSyncRelayClient::Poll,
+                                    base::Unretained(this)));
+  }
+}
+
+void MahoSyncRelayClient::WakePolling() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!polling_) {
+    return;
+  }
+  next_poll_delay_ = base::Seconds(2);
+  poll_timer_.Stop();
+  if (poll_in_flight_) {
+    poll_wake_pending_ = true;
+    return;
+  }
+  Poll();
 }
 
 void MahoSyncRelayClient::DrainReceivedTabs() {
@@ -136,36 +184,131 @@ void MahoSyncRelayClient::DrainReceivedTabs() {
   }
 }
 
+MahoSyncRelayClient::PollResult::PollResult() = default;
+MahoSyncRelayClient::PollResult::PollResult(const PollResult&) = default;
+MahoSyncRelayClient::PollResult::PollResult(PollResult&&) noexcept = default;
+MahoSyncRelayClient::PollResult& MahoSyncRelayClient::PollResult::operator=(
+    const PollResult&) = default;
+MahoSyncRelayClient::PollResult& MahoSyncRelayClient::PollResult::operator=(
+    PollResult&&) noexcept = default;
+MahoSyncRelayClient::PollResult::~PollResult() = default;
+
 void MahoSyncRelayClient::Poll() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  ::MahoCore* core = maho::GetCore();
-  if (!core) return;
-
-  // Received tabs are drained by the socket read path the moment core has been
-  // handed a message, so the timer no longer needs to poll for them. It still
-  // reconciles connection state and flushes the outgoing queue, neither of
-  // which has a push signal from core today.
-
-  char* status_c = maho_core_get_sync_status(core);
-  if (!status_c) return;
-  std::string status(status_c);
-  maho_core_free_string(status_c);
-
-  if (status == "idle") {
-    Disconnect();
+  if (!polling_ || poll_in_flight_) {
     return;
   }
+  poll_in_flight_ = true;
+  if (poll_observer_for_testing_) {
+    poll_observer_for_testing_.Run();
+  }
+  PostCoreTask<PollResult>(
+      FROM_HERE,
+      base::BindOnce(
+          [](bool can_send, std::string connected_key) {
+            PollResult result;
+            ::MahoCore* core = GetCore();
+            if (!core) {
+              return result;
+            }
+            std::unique_ptr<char, decltype(&maho_core_free_string)> status(
+                maho_core_get_sync_status(core), &maho_core_free_string);
+            auto parsed = status
+                              ? base::JSONReader::Read(status.get(),
+                                                       base::JSON_PARSE_RFC)
+                              : std::nullopt;
+            const std::string* kind =
+                parsed && parsed->is_dict()
+                    ? parsed->GetDict().FindString("kind")
+                    : nullptr;
+            if (!kind) {
+              return result;
+            }
+            result.valid = true;
+            result.idle = *kind == "idle";
+            if (result.idle) {
+              return result;
+            }
+            std::unique_ptr<char, decltype(&maho_core_free_string)> server_url(
+                maho_core_get_sync_server_url(core), &maho_core_free_string);
+            std::unique_ptr<char, decltype(&maho_core_free_string)> key(
+                maho_core_get_sync_key(core), &maho_core_free_string);
+            if (server_url) {
+              result.server_url = server_url.get();
+            }
+            if (key) {
+              result.key = key.get();
+            }
+            if (can_send && result.key == connected_key) {
+              std::unique_ptr<char, decltype(&maho_core_free_string)> outgoing(
+                  maho_core_drain_outgoing_envelopes(core),
+                  &maho_core_free_string);
+              auto messages = outgoing
+                                  ? base::JSONReader::Read(
+                                        outgoing.get(), base::JSON_PARSE_RFC)
+                                  : std::nullopt;
+              if (messages && messages->is_list()) {
+                for (const auto& message : messages->GetList()) {
+                  std::string json;
+                  if (base::JSONWriter::Write(message, &json)) {
+                    result.outgoing.push_back(std::move(json));
+                  }
+                }
+              }
+            }
+            return result;
+          },
+          state_ == State::kConnected && authenticated_ &&
+              pending_writes_.empty(),
+          active_key_),
+      base::BindOnce(&MahoSyncRelayClient::OnPollComplete,
+                     weak_ptr_factory_.GetWeakPtr(), poll_generation_));
+}
 
-  if (state_ == State::kDisconnected) {
-    char* server_url_c = maho_core_get_sync_server_url(core);
-    char* key_c = maho_core_get_sync_key(core);
-    if (server_url_c && key_c) {
-      Connect(server_url_c, key_c);
+void MahoSyncRelayClient::OnPollComplete(uint64_t generation,
+                                       PollResult result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  poll_in_flight_ = false;
+  if (!polling_) {
+    return;
+  }
+  if (generation != poll_generation_) {
+    poll_wake_pending_ = false;
+    WakePolling();
+    return;
+  }
+  if (result.valid && result.idle) {
+    Disconnect();
+    pending_writes_.clear();
+    snapshot_timer_.Stop();
+    next_poll_delay_ = std::min(next_poll_delay_ * 2, base::Seconds(30));
+  } else if (result.valid) {
+    next_poll_delay_ = base::Seconds(2);
+    if (pending_write_key_ != result.key) {
+      Disconnect();
+      pending_writes_.clear();
+      pending_write_key_ = result.key;
     }
-    if (server_url_c) maho_core_free_string(server_url_c);
-    if (key_c) maho_core_free_string(key_c);
-  } else if (state_ == State::kConnected && authenticated_) {
-    SendOutgoingMessages();
+    if (!snapshot_timer_.IsRunning()) {
+      snapshot_timer_.Start(
+          FROM_HERE, base::Minutes(15),
+          base::BindRepeating(&MahoSyncRelayClient::PublishSnapshotIfNeeded,
+                              base::Unretained(this)));
+    }
+    for (auto& message : result.outgoing) {
+      pending_writes_.push_back(std::move(message));
+    }
+    if (state_ == State::kDisconnected) {
+      Connect(result.server_url, result.key);
+    } else if (state_ == State::kConnected && authenticated_) {
+      FlushWriteQueue();
+    }
+  }
+  if (poll_wake_pending_) {
+    poll_wake_pending_ = false;
+    WakePolling();
+  } else {
+    SchedulePoll();
   }
 }
 
@@ -228,6 +371,10 @@ void MahoSyncRelayClient::Disconnect() {
   pending_read_data_.clear();
   pending_read_data_index_ = 0;
   pending_read_finished_ = false;
+  pending_auth_.clear();
+  pending_write_offset_ = 0;
+  write_in_flight_ = false;
+  write_header_sent_ = false;
 }
 
 void MahoSyncRelayClient::SendAuthMessage() {
@@ -250,28 +397,8 @@ void MahoSyncRelayClient::SendAuthMessage() {
 
   std::string auth_json;
   if (base::JSONWriter::Write(base::Value(std::move(auth_msg)), &auth_json)) {
-    WriteData(auth_json);
-  }
-}
-
-void MahoSyncRelayClient::SendOutgoingMessages() {
-  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  ::MahoCore* core = maho::GetCore();
-  if (!core) return;
-
-  char* outgoing_json = maho_core_drain_outgoing_envelopes(core);
-  if (!outgoing_json) return;
-
-  std::optional<base::Value> val = base::JSONReader::Read(outgoing_json, base::JSON_PARSE_RFC);
-  maho_core_free_string(outgoing_json);
-
-  if (val && val->is_list()) {
-    for (const auto& msg : val->GetList()) {
-      std::string msg_json;
-      if (base::JSONWriter::Write(msg, &msg_json)) {
-        WriteData(msg_json);
-      }
-    }
+    pending_auth_ = std::move(auth_json);
+    FlushWriteQueue();
   }
 }
 
@@ -284,30 +411,40 @@ void MahoSyncRelayClient::WriteData(const std::string& data) {
 
 void MahoSyncRelayClient::FlushWriteQueue() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (state_ != State::kConnected || write_in_flight_ || pending_writes_.empty()) {
-    return;
-  }
-
-  const std::string& data = pending_writes_.front();
-  if (pending_write_offset_ == 0) {
-    websocket_->SendMessage(network::mojom::WebSocketMessageType::TEXT, data.size());
-  }
-  size_t written = 0;
-  MojoResult result = writable_->WriteData(
-      base::as_byte_span(data).subspan(pending_write_offset_),
-      MOJO_WRITE_DATA_FLAG_NONE, written);
-  if (result == MOJO_RESULT_OK) {
-    pending_write_offset_ += written;
-    if (pending_write_offset_ == data.size()) {
-      pending_writes_.pop_front();
-      pending_write_offset_ = 0;
+  while (state_ == State::kConnected && !write_in_flight_) {
+    const bool sending_auth = !pending_auth_.empty();
+    if (!sending_auth && (!authenticated_ || pending_writes_.empty())) {
+      return;
     }
-    FlushWriteQueue();
-  } else if (result == MOJO_RESULT_SHOULD_WAIT) {
-    write_in_flight_ = true;
-    writable_watcher_.ArmOrNotify();
-  } else {
-    Disconnect();
+    const std::string& data =
+        sending_auth ? pending_auth_ : pending_writes_.front();
+    if (!write_header_sent_) {
+      websocket_->SendMessage(network::mojom::WebSocketMessageType::TEXT,
+                              data.size());
+      write_header_sent_ = true;
+    }
+    size_t written = 0;
+    MojoResult result = writable_->WriteData(
+        base::as_byte_span(data).subspan(pending_write_offset_),
+        MOJO_WRITE_DATA_FLAG_NONE, written);
+    if (result == MOJO_RESULT_OK) {
+      pending_write_offset_ += written;
+      if (pending_write_offset_ == data.size()) {
+        if (sending_auth) {
+          pending_auth_.clear();
+        } else {
+          pending_writes_.pop_front();
+        }
+        pending_write_offset_ = 0;
+        write_header_sent_ = false;
+      }
+    } else if (result == MOJO_RESULT_SHOULD_WAIT) {
+      write_in_flight_ = true;
+      writable_watcher_.ArmOrNotify();
+    } else {
+      Disconnect();
+      return;
+    }
   }
 }
 
@@ -345,7 +482,9 @@ void MahoSyncRelayClient::HandleRelayFrame(const std::string& frame) {
 
   if (frame_kind == MahoSyncRelayFrameKind::kAuthOk) {
     authenticated_ = true;
-    SendOutgoingMessages();
+    FlushWriteQueue();
+    WakePolling();
+    PublishSnapshotIfNeeded();
     return;
   }
 
@@ -474,10 +613,6 @@ void MahoSyncRelayClient::ReadFromDataPipe(MojoResult result,
   pending_read_data_.clear();
   pending_read_data_index_ = 0;
   pending_read_finished_ = false;
-  pending_writes_.clear();
-  pending_write_offset_ = 0;
-  write_in_flight_ = false;
-
         HandleRelayFrame(message_str);
       }
     }
@@ -491,6 +626,123 @@ void MahoSyncRelayClient::ReadFromDataPipe(MojoResult result,
 void MahoSyncRelayClient::OnMojoPipeDisconnect() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   Disconnect();
+}
+
+void MahoSyncRelayClient::PublishSnapshotIfNeeded() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (state_ != State::kConnected || !authenticated_ || snapshot_in_flight_) {
+    return;
+  }
+
+  ::MahoCore* core = maho::GetCore();
+  if (!core) return;
+
+  char* snapshot_json = maho_core_export_sync_snapshot(core);
+  if (!snapshot_json) return;
+
+  std::string snapshot(snapshot_json);
+  maho_core_free_string(snapshot_json);
+
+  if (snapshot == last_published_snapshot_) {
+    return;
+  }
+
+  UploadSnapshot(std::move(snapshot));
+}
+
+void MahoSyncRelayClient::UploadSnapshot(std::string snapshot) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  ::MahoCore* core = maho::GetCore();
+  if (!core || !profile_) return;
+
+  char* token_c = maho_core_get_sync_auth_token(core);
+  if (!token_c) return;
+  std::string token(token_c);
+  maho_core_free_string(token_c);
+
+  char* server_url_c = maho_core_get_sync_server_url(core);
+  std::string server_url = server_url_c ? server_url_c : "";
+  if (server_url_c) maho_core_free_string(server_url_c);
+  if (server_url.empty()) return;
+
+  if (server_url.rfind("wss://", 0) == 0) {
+    server_url.replace(0, 6, "https://");
+  } else if (server_url.rfind("ws://", 0) == 0) {
+    server_url.replace(0, 5, "http://");
+  }
+
+  std::optional<base::Value> parsed = base::JSONReader::Read(snapshot, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) return;
+
+  const std::string* blob_str = parsed->GetDict().FindString("blob");
+  if (!blob_str || blob_str->empty()) return;
+
+  base::DictValue body;
+  body.Set("room_id", active_key_);
+  if (auto ceiling = parsed->GetDict().FindDouble("hlc_ts_ceiling")) {
+    body.Set("hlc_ts_ceiling", *ceiling);
+  } else if (auto ceiling_int = parsed->GetDict().FindInt("hlc_ts_ceiling")) {
+    body.Set("hlc_ts_ceiling", static_cast<double>(*ceiling_int));
+  } else {
+    body.Set("hlc_ts_ceiling", static_cast<double>(base::Time::Now().InMillisecondsSinceUnixEpoch()));
+  }
+  body.Set("blob", *blob_str);
+
+  std::string body_json;
+  if (!base::JSONWriter::Write(base::Value(std::move(body)), &body_json)) {
+    return;
+  }
+
+  std::string upload_url = server_url;
+  if (!upload_url.empty() && upload_url.back() == '/') {
+    upload_url += "sync/snapshot/upload";
+  } else {
+    upload_url += "/sync/snapshot/upload";
+  }
+
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = GURL(upload_url);
+  request->method = "POST";
+  request->headers.SetHeader("Authorization", "Bearer " + token);
+  request->headers.SetHeader("Content-Type", "application/json");
+  request->headers.SetHeader("Accept", "application/json");
+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+
+  snapshot_in_flight_ = true;
+  std::string snapshot_copy = snapshot;
+
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), kSyncTrafficAnnotation);
+  loader->AttachStringForUpload(body_json, "application/json");
+  loader->SetTimeoutDuration(base::Seconds(30));
+  loader->SetAllowHttpErrorResults(true);
+
+  auto* raw_loader = loader.get();
+  content::StoragePartition* partition = profile_->GetDefaultStoragePartition();
+  if (!partition) {
+    snapshot_in_flight_ = false;
+    return;
+  }
+
+  raw_loader->DownloadToString(
+      partition->GetURLLoaderFactoryForBrowserProcess().get(),
+      base::BindOnce(
+          [](base::WeakPtr<MahoSyncRelayClient> client,
+             std::string published,
+             std::unique_ptr<network::SimpleURLLoader> loader,
+             std::optional<std::string> response_body) {
+            if (!client) return;
+            client->snapshot_in_flight_ = false;
+            const auto* info = loader->ResponseInfo();
+            const int status =
+                info && info->headers ? info->headers->response_code() : 0;
+            if (loader->NetError() == net::OK && (status == 200 || status == 201)) {
+              client->last_published_snapshot_ = std::move(published);
+            }
+          },
+          weak_ptr_factory_.GetWeakPtr(), std::move(snapshot_copy),
+          std::move(loader)),
+      1024 * 1024);
 }
 
 }  // namespace maho

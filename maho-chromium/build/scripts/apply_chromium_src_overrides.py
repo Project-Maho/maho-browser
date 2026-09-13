@@ -1667,6 +1667,168 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\"Chromium Safe Storage\") and in-app product strings say Maho"
             ),
         ),
+        Replacement(
+            old=(
+                '      <message name="IDS_FR_CUSTOMIZE_DEFAULT_BROWSER" desc="Default browser checkbox label">\n'
+                "        Make Chromium the default browser\n"
+                "      </message>\n"
+                '      <message name="IDS_DEFAULT_BROWSER_CHANGED_MESSAGE" desc="Body of the notification shown when Chrome is no longer the default browser.">\n'
+                "        Chromium is no longer your default browser. Make Chromium the default browser?\n"
+                "      </message>\n"
+            ),
+            new=(
+                '      <message name="IDS_FR_CUSTOMIZE_DEFAULT_BROWSER" desc="Default browser checkbox label">\n'
+                "        Make Maho the default browser\n"
+                "      </message>\n"
+                '      <message name="IDS_DEFAULT_BROWSER_CHANGED_MESSAGE" desc="Body of the notification shown when Chrome is no longer the default browser.">\n'
+                "        Maho is no longer your default browser. Make Maho the default browser?\n"
+                "      </message>\n"
+            ),
+            description="Maho: brand default browser customize and changed notification strings as Maho",
+            guard="Make Maho the default browser",
+        ),
+        Replacement(
+            old=(
+                '      <message name="IDS_DEFAULT_BROWSER_INFOBAR_TEXT" desc="Text to show in an infobar when Chromium is not the current default browser.">\n'
+                "        Chromium isn't your default browser\n"
+                "      </message>\n"
+                '      <message name="IDS_DEFAULT_BROWSER_PIN_INFOBAR_TEXT" desc="Text to show in an infobar when Chromium is not the current default browser and can be pinned to the taskbar.">\n'
+                "        Set Chromium as your default browser and pin it to your taskbar\n"
+                "      </message>\n"
+                '      <if expr="not is_android and not is_chromeos">\n'
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_TITLE_WITH_SETTINGS_ILLUSTRATION" desc="Title of the default browser modal with settings illustration.">\n'
+                "          Set Chromium as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION" desc="Body text of the default browser modal with settings illustration.">\n'
+                "          Keep your passwords, bookmarks, and history perfectly synced across devices. Easily access the features you know and love by updating your default browser to Chromium.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION_UNPINNED" desc="Body text of the default browser modal with settings illustration when Chromium is not pinned to the taskbar.">\n'
+                "          Keep your passwords, bookmarks, and history perfectly synced across devices. Easily access the features you know and love by updating your default browser to Chromium. Chromium will be pinned to your taskbar for quick access.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_TITLE_WITHOUT_SETTINGS_ILLUSTRATION" desc="Title of the default browser modal without settings illustration.">\n'
+                "          Set Chromium as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITHOUT_SETTINGS_ILLUSTRATION" desc="Body text of the default browser modal without settings illustration.">\n'
+                "          Get easy access to the features you know, love, and trust by setting Chromium as your default browser.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITHOUT_SETTINGS_ILLUSTRATION_UNPINNED" desc="Body text of the default browser modal without settings illustration when Chromium is not pinned to the taskbar.">\n'
+                "          Get easy access to the features you know, love, and trust by setting Chromium as your default browser. Chromium will be pinned to your taskbar for quick access.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_BUBBLE_DIALOG_TITLE" desc="Title of the dialog prompting the user to set Chromium as the default browser.">\n'
+                "          Set Chromium as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_BUBBLE_DIALOG_BODY" desc="Main explanatory text in the default browser dialog.">\n'
+                "          Get easy access to the features you know, love, and trust by setting Chromium as your default browser.\n"
+                "        </message>\n"
+            ),
+            new=(
+                '      <message name="IDS_DEFAULT_BROWSER_INFOBAR_TEXT" desc="Text to show in an infobar when Chromium is not the current default browser.">\n'
+                "        Maho isn't your default browser\n"
+                "      </message>\n"
+                '      <message name="IDS_DEFAULT_BROWSER_PIN_INFOBAR_TEXT" desc="Text to show in an infobar when Chromium is not the current default browser and can be pinned to the taskbar.">\n'
+                "        Set Maho as your default browser and pin it to your taskbar\n"
+                "      </message>\n"
+                '      <if expr="not is_android and not is_chromeos">\n'
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_TITLE_WITH_SETTINGS_ILLUSTRATION" desc="Title of the default browser modal with settings illustration.">\n'
+                "          Set Maho as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION" desc="Body text of the default browser modal with settings illustration.">\n'
+                "          Keep your passwords, bookmarks, and history perfectly synced across devices. Easily access the features you know and love by updating your default browser to Maho.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITH_SETTINGS_ILLUSTRATION_UNPINNED" desc="Body text of the default browser modal with settings illustration when Chromium is not pinned to the taskbar.">\n'
+                "          Keep your passwords, bookmarks, and history perfectly synced across devices. Easily access the features you know and love by updating your default browser to Maho. Maho will be pinned to your taskbar for quick access.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_TITLE_WITHOUT_SETTINGS_ILLUSTRATION" desc="Title of the default browser modal without settings illustration.">\n'
+                "          Set Maho as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITHOUT_SETTINGS_ILLUSTRATION" desc="Body text of the default browser modal without settings illustration.">\n'
+                "          Get easy access to the features you know, love, and trust by setting Maho as your default browser.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_MODAL_BODY_WITHOUT_SETTINGS_ILLUSTRATION_UNPINNED" desc="Body text of the default browser modal without settings illustration when Chromium is not pinned to the taskbar.">\n'
+                "          Get easy access to the features you know, love, and trust by setting Maho as your default browser. Maho will be pinned to your taskbar for quick access.\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_BUBBLE_DIALOG_TITLE" desc="Title of the dialog prompting the user to set Chromium as the default browser.">\n'
+                "          Set Maho as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_DEFAULT_BROWSER_BUBBLE_DIALOG_BODY" desc="Main explanatory text in the default browser dialog.">\n'
+                "          Get easy access to the features you know, love, and trust by setting Maho as your default browser.\n"
+                "        </message>\n"
+            ),
+            description="Maho: brand default browser infobar and modal dialog strings as Maho",
+            guard="Maho isn't your default browser",
+        ),
+        Replacement(
+            old=(
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_TITLE" desc="Title for the page that prompts user to set Chromium as their default browser in the first run experience.">\n'
+                "          Set Chromium as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_AND_PINNING_TITLE" desc="Title for the page that prompts user to set Chromium as their default browser and pin to taskbar in the first run experience.">\n'
+                "          Use Chromium by default and get it pinned\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_SUBTITLE_NEW" desc="Subtitle for the page that prompts user to set Chromium as their default browser in the first run experience.">\n'
+                "          Use Chromium anytime you click links in messages, documents, and other apps\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_AND_PINNING_SUBTITLE" desc="Subtitle for the page that prompts user to set Chromium as their default browser and pin to taskbar in the first run experience.">\n'
+                "          Open links in Chromium from any app. Plus for easy access, it gets pinned to your taskbar.\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_ILLUSTRATION_ALT_TEXT" desc="Alt text for the illustration in the page that prompts user to set Chromium as their default browser.">\n'
+                "          Chromium logo inside a computer screen.\n"
+                "        </message>\n"
+                '        <message name="IDS_APP_MENU_TOOLTIP_DEFAULT_PROMPT" desc="The tooltip to show for the browser menu when the default browser prompt is displayed">\n'
+                "          Customize and control Chromium. Set Chromium as your default.\n"
+                "        </message>\n"
+                '        <message name="IDS_APP_MENU_BUTTON_DEFAULT_PROMPT" desc="Text in the browser menu chip indicating that the user can change their default browser">\n'
+                "          Set Chromium as your default\n"
+                "        </message>\n"
+                '        <message name="IDS_SET_BROWSER_AS_DEFAULT_MENU_ITEM" desc="Menu item that prompts user to set Chromium as their default browser.">\n'
+                "          Set Chromium as your default browser\n"
+                "        </message>\n"
+                "\n"
+                "        <!-- Default Browser Promo Refresh -->\n"
+                '        <message name="IDS_FRE_REFRESH_DEFAULT_BROWSER_TITLE" desc="Title for the page that prompts user to set Chromium as their default browser in the refreshed first run experience.">\n'
+                "          Set Chromium as default and pin it to taskbar\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_REFRESH_DEFAULT_BROWSER_SUBTITLE" desc="Subtitle for the page that prompts user to set Chromium as their default browser in the refreshed first run experience.">\n'
+                "          Open links in Chromium from any app and keep the browser accessible on your taskbar\n"
+                "        </message>\n"
+            ),
+            new=(
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_TITLE" desc="Title for the page that prompts user to set Chromium as their default browser in the first run experience.">\n'
+                "          Set Maho as your default browser\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_AND_PINNING_TITLE" desc="Title for the page that prompts user to set Chromium as their default browser and pin to taskbar in the first run experience.">\n'
+                "          Use Maho by default and get it pinned\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_SUBTITLE_NEW" desc="Subtitle for the page that prompts user to set Chromium as their default browser in the first run experience.">\n'
+                "          Use Maho anytime you click links in messages, documents, and other apps\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_AND_PINNING_SUBTITLE" desc="Subtitle for the page that prompts user to set Chromium as their default browser and pin to taskbar in the first run experience.">\n'
+                "          Open links in Maho from any app. Plus for easy access, it gets pinned to your taskbar.\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_DEFAULT_BROWSER_ILLUSTRATION_ALT_TEXT" desc="Alt text for the illustration in the page that prompts user to set Chromium as their default browser.">\n'
+                "          Maho logo inside a computer screen.\n"
+                "        </message>\n"
+                '        <message name="IDS_APP_MENU_TOOLTIP_DEFAULT_PROMPT" desc="The tooltip to show for the browser menu when the default browser prompt is displayed">\n'
+                "          Customize and control Maho. Set Maho as your default.\n"
+                "        </message>\n"
+                '        <message name="IDS_APP_MENU_BUTTON_DEFAULT_PROMPT" desc="Text in the browser menu chip indicating that the user can change their default browser">\n'
+                "          Set Maho as your default\n"
+                "        </message>\n"
+                '        <message name="IDS_SET_BROWSER_AS_DEFAULT_MENU_ITEM" desc="Menu item that prompts user to set Chromium as their default browser.">\n'
+                "          Set Maho as your default browser\n"
+                "        </message>\n"
+                "\n"
+                "        <!-- Default Browser Promo Refresh -->\n"
+                '        <message name="IDS_FRE_REFRESH_DEFAULT_BROWSER_TITLE" desc="Title for the page that prompts user to set Chromium as their default browser in the refreshed first run experience.">\n'
+                "          Set Maho as default and pin it to taskbar\n"
+                "        </message>\n"
+                '        <message name="IDS_FRE_REFRESH_DEFAULT_BROWSER_SUBTITLE" desc="Subtitle for the page that prompts user to set Chromium as their default browser in the refreshed first run experience.">\n'
+                "          Open links in Maho from any app and keep the browser accessible on your taskbar\n"
+                "        </message>\n"
+            ),
+            description="Maho: brand FRE and app menu default browser promo strings as Maho",
+            guard="Set Maho as default and pin it to taskbar",
+        ),
     ],
     "components/os_crypt/common/keychain_password_mac.mm": [
         Replacement(
@@ -5000,8 +5162,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
                 "    gfx::Point test_point(point);\n"
                 "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
-                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
-                "              maho_mini_top_bar_)\n"
+                "      if (static_cast<maho::MahoMiniTopBarView*>(maho_mini_top_bar_)\n"
                 "              ->IsPositionInWindowCaption(test_point)) {\n"
                 "        return HTCAPTION;\n"
                 "      }\n"
@@ -6321,6 +6482,66 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
     ],
     # ── startup_browser_creator_impl.cc ──────────────────────────────────────
+    "chrome/browser/ui/startup/infobar_utils.cc": [
+        Replacement(
+            old=(
+                "  if (!google_apis::HasAPIKeyConfigured()) {\n"
+                "    GoogleApiKeysInfoBarDelegate::Create(infobar_manager);\n"
+                "  }\n"
+            ),
+            new=(
+                "  // Maho: Google API keys infobar is permanently suppressed regardless of configuration.\n"
+            ),
+            description="Maho: permanently suppress Google API keys missing infobar",
+            guard="Maho: Google API keys infobar is permanently suppressed",
+        ),
+    ],
+    "chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc": [
+        Replacement(
+            old=(
+                "    // Only show the prompt if some other program is the user's default browser.\n"
+                "    // In particular, don't show it if another install mode is default (e.g.,\n"
+                "    // don't prompt for Chrome Beta if stable Chrome is the default).\n"
+                "    did_show_prompt =\n"
+                "        DefaultBrowserPromptManager::GetInstance()->MaybeShowPrompt();\n"
+            ),
+            new=(
+                "    // Maho: permanently suppress default browser startup prompts (infobars, modals, bubbles).\n"
+                "    did_show_prompt = false;\n"
+            ),
+            description="Maho: permanently suppress startup default browser prompt",
+            guard="Maho: permanently suppress startup default browser prompt",
+        ),
+    ],
+    "chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc": [
+        Replacement(
+            old=(
+                "// static\n"
+                "infobars::InfoBar* DefaultBrowserInfoBarDelegate::Create(\n"
+                "    infobars::ContentInfoBarManager* infobar_manager,\n"
+                "    Profile* profile,\n"
+                "    bool can_pin_to_taskbar) {\n"
+                "  return infobar_manager->AddInfoBar(\n"
+                "      CreateConfirmInfoBar(std::make_unique<DefaultBrowserInfoBarDelegate>(\n"
+                "          base::PassKey<DefaultBrowserInfoBarDelegate>(), profile,\n"
+                "          can_pin_to_taskbar)));\n"
+                "}\n"
+            ),
+            new=(
+                "// static\n"
+                "infobars::InfoBar* DefaultBrowserInfoBarDelegate::Create(\n"
+                "    infobars::ContentInfoBarManager* /*infobar_manager*/,\n"
+                "    Profile* /*profile*/,\n"
+                "    bool /*can_pin_to_taskbar*/) {\n"
+                "  // Maho: permanently suppress default browser infobar. Maho handles default browser\n"
+                "  // prompts in Welcome (chrome://maho-welcome) and Settings (chrome://maho-settings).\n"
+                "  return nullptr;\n"
+                "}\n"
+            ),
+            description="Maho: permanently suppress default browser infobar creation",
+            guard="Maho: permanently suppress default browser infobar creation",
+        ),
+    ],
     "chrome/browser/ui/startup/startup_browser_creator_impl.cc": [
         Replacement(
             old="#include <iterator>\n",
@@ -8898,15 +9119,50 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             new=(
                 "BrowserViewTabbedLayoutImpl::GetTabStripType() const {\n"
-                "  // Maho Arc layout: the sidebar rail replaces the stock tab strip.\n"
-                "  if (views().maho_sidebar_container &&\n"
-                "      views().maho_sidebar_container->GetVisible()) {\n"
-                "    return TabStripType::kNone;\n"
-                "  }\n"
+                "  // Maho Arc layout: Maho permanently suppresses stock Chromium tab strips\n"
+                "  // regardless of sidebar visibility or toggle state.\n"
+                "  return TabStripType::kNone;\n"
                 "  if (delegate().ShouldUseTouchableTabstrip()) {\n"
             ),
-            description="Maho: suppress the stock tab strip while the Arc rail is visible",
-            guard="Maho Arc layout: the sidebar rail replaces the stock tab strip.",
+            description="Maho: permanently suppress stock tab strips regardless of sidebar state",
+            guard="Maho Arc layout: Maho permanently suppresses stock Chromium tab strips",
+        ),
+        Replacement(
+            old=(
+                "  // When the tabstrip isn't at the top or in constrained widths, the top\n"
+                "  // container is laid out before all side panels.\n"
+                "  if (horizontal_layout.force_top_container_to_top &&\n"
+                "      IsParentedTo(views().top_container, views().browser_view)) {\n"
+            ),
+            new=(
+                "  // Maho Arc layout: stock top chrome (tabs, toolbar, omnibox) must never occupy\n"
+                "  // vertical space in the window, regardless of sidebar visibility or toggle state.\n"
+                "  if (IsParentedTo(views().top_container, views().browser_view)) {\n"
+                "    layout.AddChild(views().top_container, gfx::Rect(), false);\n"
+                "  }\n"
+                "  if (IsParentedTo(views().top_container_separator, views().browser_view)) {\n"
+                "    layout.AddChild(views().top_container_separator, gfx::Rect(), false);\n"
+                "  }\n"
+                "\n"
+                "  // When the tabstrip isn't at the top or in constrained widths, the top\n"
+                "  // container is laid out before all side panels.\n"
+                "  if (false && horizontal_layout.force_top_container_to_top &&\n"
+                "      IsParentedTo(views().top_container, views().browser_view)) {\n"
+            ),
+            description="Maho: suppress top_container vertical space consumption before side panels",
+            guard="Maho Arc layout: stock top chrome (tabs, toolbar, omnibox) must never occupy",
+        ),
+        Replacement(
+            old=(
+                "  if (!horizontal_layout.force_top_container_to_top &&\n"
+                "      IsParentedTo(views().top_container, views().browser_view)) {\n"
+            ),
+            new=(
+                "  if (false && !horizontal_layout.force_top_container_to_top &&\n"
+                "      IsParentedTo(views().top_container, views().browser_view)) {\n"
+            ),
+            description="Maho: suppress top_container layout after side panels",
+            guard="if (false && !horizontal_layout.force_top_container_to_top &&",
         ),
         Replacement(
             old=(
@@ -8925,23 +9181,20 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  // so the stock top chrome must not occupy the window. Collapse it\n"
                 "  // after upstream has finished laying everything out, which keeps the\n"
                 "  // upstream geometry pipeline (exclusions, side panels, splits) intact.\n"
-                "  if (views().maho_sidebar_container &&\n"
-                "      views().maho_sidebar_container->GetVisible()) {\n"
-                "    for (views::View* maho_top_chrome :\n"
-                "         {static_cast<views::View*>(views().top_container),\n"
-                "          static_cast<views::View*>(views().top_container_separator)}) {\n"
-                "      if (!IsParentedTo(maho_top_chrome, views().browser_view)) {\n"
-                "        continue;\n"
-                "      }\n"
-                "      auto maho_it = layout.children.find(maho_top_chrome);\n"
-                "      if (maho_it == layout.children.end()) {\n"
-                "        layout.AddChild(maho_top_chrome, gfx::Rect(), false);\n"
-                "        continue;\n"
-                "      }\n"
-                "      maho_it->second.bounds = gfx::Rect();\n"
-                "      maho_it->second.visibility = false;\n"
-                "      maho_it->second.children.clear();\n"
+                "  for (views::View* maho_top_chrome :\n"
+                "       {static_cast<views::View*>(views().top_container),\n"
+                "        static_cast<views::View*>(views().top_container_separator)}) {\n"
+                "    if (!IsParentedTo(maho_top_chrome, views().browser_view)) {\n"
+                "      continue;\n"
                 "    }\n"
+                "    auto maho_it = layout.children.find(maho_top_chrome);\n"
+                "    if (maho_it == layout.children.end()) {\n"
+                "      layout.AddChild(maho_top_chrome, gfx::Rect(), false);\n"
+                "      continue;\n"
+                "    }\n"
+                "    maho_it->second.bounds = gfx::Rect();\n"
+                "    maho_it->second.visibility = false;\n"
+                "    maho_it->second.children.clear();\n"
                 "  }\n"
                 "\n"
                 "  return layout;\n"
