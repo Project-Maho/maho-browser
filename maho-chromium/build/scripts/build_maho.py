@@ -668,6 +668,34 @@ def codesign_app(identity: str, app_path: str) -> bool:
                 timeout=180,
             )
 
+        # Notarization audits every Mach-O in the bundle, including native
+        # modules shipped inside the omo runtime's node_modules (e.g. pi-pty,
+        # pi-tui prebuilds). codesign --deep seals them as resources but the
+        # notary service rejects unsigned executables, so each one is signed
+        # here with the Developer ID identity and a secure timestamp.
+        omo_dir = os.path.join(app_path, 'Contents', 'Resources', 'omo')
+        if os.path.isdir(omo_dir):
+            signed_count = 0
+            for root, dirs, files in os.walk(omo_dir, followlinks=False):
+                for name in files:
+                    path = os.path.join(root, name)
+                    try:
+                        with open(path, 'rb') as f:
+                            magic = f.read(4)
+                    except OSError:
+                        continue
+                    if magic not in (b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe'):
+                        continue
+                    subprocess.run(
+                        ['codesign', '--force', '--sign', identity,
+                         '--options', 'runtime', '--timestamp', path],
+                        check=True,
+                        timeout=180,
+                    )
+                    signed_count += 1
+            if signed_count:
+                print(f"Signed {signed_count} native module(s) in the omo runtime")
+
         cmd = ['codesign', '--force', '--sign', identity, '--options', 'runtime']
         if os.path.isfile(entitlements_path):
             cmd += ['--entitlements', entitlements_path]
