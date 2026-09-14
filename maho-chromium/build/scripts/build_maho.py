@@ -1541,7 +1541,11 @@ def main():
         help='Run gn gen even if <out-dir>/build.ninja already exists.',
     )
     parser.add_argument('--skip-codesign', action='store_true', help='Skip codesigning on macOS.')
-    parser.add_argument('--notarize', action='store_true', help='Notarize the built app (or dmg) on macOS.')
+    parser.add_argument('--notarize', action='store_true',
+                        help='Deprecated compatibility flag; macOS --release builds are notarized by default.')
+    parser.add_argument('--no-notarize', action='store_true',
+                        help='Skip notarization for a macOS --release build; the artifact '
+                             'will be rejected by Gatekeeper (local-only use).')
     parser.add_argument('--dmg', action='store_true', help='Force macOS dmg packaging even without --release.')
     parser.add_argument('--no-dmg', action='store_true', help='Skip macOS dmg packaging even for a --release build.')
     parser.add_argument('--no-launch', action='store_true', help='Do not launch the built app on macOS.')
@@ -1675,7 +1679,17 @@ def main():
                             # A release build IS the bundle: package the signed
                             # app into a dmg unless explicitly opted out.
                             want_dmg = (args.release or args.dmg) and not args.no_dmg
-                            if args.notarize:
+                            # macOS --release defaults to notarizing app and
+                            # dmg: a Developer ID-signed but unnotarized
+                            # artifact is rejected by Gatekeeper on user
+                            # machines, and the only path that ever shipped a
+                            # good release (release_local.py) always passes
+                            # --notarize. Explicit --no-notarize opts out for
+                            # local-only artifacts.
+                            do_notarize = (platform == 'mac'
+                                           and not args.no_notarize
+                                           and (args.release or args.notarize))
+                            if do_notarize:
                                 # When notarizing, notarize and staple the app
                                 # bundle FIRST so the ticket is baked into the
                                 # staged app before it is imaged into the read-only DMG.
@@ -1685,9 +1699,10 @@ def main():
                                     sys.exit(1)
                             elif args.release and platform == 'mac':
                                 print(
-                                    "warning: building --release on macOS without --notarize. "
-                                    "The resulting app/dmg is not notarized and will fail "
-                                    "Gatekeeper on user machines!",
+                                    "warning: --release on macOS explicitly opted out of "
+                                    "notarization (--no-notarize). The resulting app/dmg "
+                                    "is not notarized and will fail Gatekeeper on user "
+                                    "machines!",
                                     file=sys.stderr,
                                 )
                             if want_dmg:
@@ -1701,7 +1716,7 @@ def main():
                                     print("error: dmg packaging/verification failed; aborting",
                                           file=sys.stderr)
                                     sys.exit(1)
-                                if args.notarize and not notarize_dmg(dmg_path):
+                                if do_notarize and not notarize_dmg(dmg_path):
                                     print("error: dmg notarization/stapling failed; aborting",
                                           file=sys.stderr)
                                     sys.exit(1)
@@ -1769,4 +1784,14 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # print the machine-checkable result sentinel so callers that pipe the
+    # output (e.g. `python3 build_maho.py | tee log`, which reports tee's
+    # exit status) can still verify the real outcome from the log tail.
+    try:
+        main()
+        print('MAHO BUILD RESULT: SUCCESS')
+    except SystemExit as e:
+        if e.code not in (None, 0):
+            print('MAHO BUILD RESULT: FAILED', file=sys.stderr)
+        raise
+    sys.exit(0)

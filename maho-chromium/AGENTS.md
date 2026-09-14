@@ -80,6 +80,8 @@ maho-chromium/
 - **Naming**: All Maho classes/files prefixed with `maho_`; WebUI URLs use `chrome://maho-{feature}`
 
 ## ANTI-PATTERNS (THIS PROJECT)
+- **macOS release artifacts must be notarized** — `build_maho.py --release` on macOS notarizes+staples the app AND the dmg by default (fail-closed; `--no-notarize` only for local-only artifacts). A Developer ID-signed but unnotarized dmg is rejected by Gatekeeper ("Apple could not verify"). Every Mach-O staged inside `Contents/Resources/omo` (native `.node` prebuilds) is Developer ID signed with a secure timestamp automatically — the notary service audits every Mach-O, not just bundles. After any re-sign/staple the dmg bytes change, so regenerate Sparkle feeds (edSignature+length must match the uploaded file).
+- **Never trust a piped exit code for builds** — `python3 build_maho.py … | tee log` reports tee's status, not the build's. Grep the final `MAHO BUILD RESULT: SUCCESS` / `MAHO BUILD RESULT: FAILED` sentinel line printed by the script before claiming a build finished.
 - No embedding complex logic in WebUI page handlers — extract to `browser/ai/` or helpers
 - No raw string WebUI URLs — use `components/constants/webui_url_constants.h`
 - No skipping Mojo IDL for new WebUI features

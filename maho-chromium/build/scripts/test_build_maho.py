@@ -187,7 +187,7 @@ class TestCodesignApp(unittest.TestCase):
             mock_run.return_value = MagicMock(returncode=0)
             result = codesign_app('DEADBEEF', app_path)
         self.assertTrue(result)
-        self.assertEqual(mock_run.call_count, 17)
+        self.assertEqual(mock_run.call_count, 20)
 
     def test_signs_chromium_framework_before_outer_app(self):
         framework_path = (
