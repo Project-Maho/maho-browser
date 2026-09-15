@@ -22,6 +22,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "base/uuid.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -196,10 +197,7 @@ std::string ResolveMahoAiSettingsPaneKey(const std::string& pane_key) {
 }
 
 std::string GenerateSessionId() {
-  return "ses_" +
-         base::NumberToString(static_cast<uint64_t>(
-             base::Time::Now().InSecondsFSinceUnixEpoch() * 1000)) +
-         "_" + base::NumberToString(base::RandUint64() % 100000);
+  return base::Uuid::GenerateRandomV4().AsLowercaseString();
 }
 
 const net::NetworkTrafficAnnotationTag kCreditBalanceTrafficAnnotation =

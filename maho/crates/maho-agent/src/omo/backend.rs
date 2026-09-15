@@ -651,12 +651,21 @@ impl OmoBackend {
         let params = self.config.open_session_params();
         let preferred = self.preferred_provider.lock().unwrap().clone();
         let provider = preferred.or_else(|| params.provider);
-        let session_file = self.config.session_dir().join(format!("{maho_session_id}.json"));
-        let session_path = if session_file.exists() {
-            Some(session_file.to_string_lossy().to_string())
-        } else {
-            params.session_path
-        };
+        let session_file = self.config.session_dir().join(format!("{maho_session_id}.jsonl"));
+        if !session_file.exists() {
+            if let Some(parent) = session_file.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let header = serde_json::json!({
+                "type": "session",
+                "version": 3,
+                "id": maho_session_id,
+                "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "cwd": self.cwd.to_string_lossy(),
+            });
+            let _ = std::fs::write(&session_file, format!("{header}\n"));
+        }
+        let session_path = Some(session_file.to_string_lossy().to_string());
 
         let command = RpcCommand::OpenSession {
             id: None,
@@ -973,9 +982,14 @@ impl AgentRuntime for OmoBackend {
     }
 
     fn set_system_prompt(&self, prompt: &str) {
+        let effective_prompt = if prompt.trim().is_empty() {
+            crate::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT
+        } else {
+            prompt
+        };
         let mut guard = self.system_prompt.lock().unwrap();
-        *guard = prompt.to_string();
-        let _ = self.write_system_prompt(prompt);
+        *guard = effective_prompt.to_string();
+        let _ = self.write_system_prompt(effective_prompt);
     }
 }
 
@@ -1224,5 +1238,24 @@ mod tests {
                 succeeded: true,
             })
         );
+    }
+
+    #[test]
+    fn set_system_prompt_empty_falls_back_to_default() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let config = OmoLaunchConfig::builder(temp_dir.path())
+            .build()
+            .unwrap();
+        let backend = OmoBackend::new(
+            config,
+            temp_dir.path().join("bin/maho-mcp"),
+            temp_dir.path().to_path_buf(),
+        );
+        backend.set_system_prompt("");
+        let prompt_file = temp_dir.path().join("system_prompt.txt");
+        assert!(prompt_file.exists());
+        let content = std::fs::read_to_string(&prompt_file).unwrap();
+        assert!(!content.is_empty());
+        assert_eq!(content, crate::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT);
     }
 }
