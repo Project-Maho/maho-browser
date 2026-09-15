@@ -12,8 +12,35 @@ namespace maho::welcome {
 inline constexpr char kWelcomeCompleted[] = "maho.welcome.completed";
 inline constexpr char kLoginGateActive[] = "maho.auth.login_gate_active";
 
+// Durable account credentials identify a returning profile even when its
+// completion pref was reset. Run before Vault repair, which may clear completion.
+constexpr bool ReconcileWelcomeCompleted(bool welcome_completed,
+                                         bool has_valid_relay_session,
+                                         bool has_stored_session) {
+  return welcome_completed || has_valid_relay_session || has_stored_session;
+}
+
 constexpr bool RequiresPasswordSetup(bool welcome_completed) {
   return !welcome_completed;
+}
+
+// Whether a profile that already finished onboarding must be sent back through
+// Vault setup because its profile database holds no Vault key material.
+//
+// `kWelcomeCompleted` lives in profile Preferences while the Vault's key
+// material lives in the profile database, so the two can diverge (a reset,
+// replaced, or newly created database under an already-onboarded profile).
+// Onboarding is the only path that initializes the Vault, so without this
+// reconciliation such a profile keeps an uninitialized Vault forever: every
+// native password write is refused for the life of the profile.
+//
+// Only an affirmatively observed uninitialized Vault re-opens setup. A locked
+// Vault is initialized, and an unknown/unreadable state must never be treated
+// as "no key material" because re-running setup would overwrite key material
+// that exists but could not be read.
+constexpr bool RequiresVaultSetupRepair(bool welcome_completed,
+                                        bool vault_is_uninitialized) {
+  return welcome_completed && vault_is_uninitialized;
 }
 
 // Returning-profile repair additionally respects the selected password

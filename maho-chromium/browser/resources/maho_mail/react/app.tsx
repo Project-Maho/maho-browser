@@ -1560,7 +1560,7 @@ export function App({renderMailClient}: AppProps = {}) {
     addAccount: (requestJson) => handler.addAccount(requestJson),
     testConnection: (paramsJson) => handler.testConnection(paramsJson),
     deleteAccount: (accountId) => handler.deleteAccount(accountId),
-    beginOAuth: (provider) => handler.beginOAuth(provider),
+    beginOAuth: (provider) => handler.beginOAuth(provider, ''),
     subscribeAccountsChanged: (cb: () => void) => {
       const listenerId = callbackRouter.onAccountsChanged.addListener(cb);
       return () => {

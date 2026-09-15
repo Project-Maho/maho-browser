@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -40,28 +41,87 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             check=False,
         )
 
-    def test_uses_public_default_when_environment_is_empty(self):
-        with patch.dict(os.environ, {}, clear=True):
+    def test_fails_closed_when_web_client_has_no_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(_module, '_WORKSPACE_ROOT', temp_dir), \
+             patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(RuntimeError) as raised:
+                _module.mail_oauth_build_env()
+
+        message = str(raised.exception)
+        self.assertIn('GMAIL_CLIENT_SECRET', message)
+        self.assertIn(
+            '650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com',
+            message,
+        )
+
+    def test_desktop_client_override_needs_no_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(_module, '_WORKSPACE_ROOT', temp_dir), \
+             patch.dict(os.environ, {
+                 'MAHO_GOOGLE_CLIENT_ID': '1234-abcd.apps.googleusercontent.com',
+             }, clear=True):
             env = _module.mail_oauth_build_env()
 
         self.assertEqual(
-            env['GMAIL_CLIENT_ID'],
-            '650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com',
-        )
+            env['GMAIL_CLIENT_ID'], '1234-abcd.apps.googleusercontent.com')
+        self.assertNotIn('GMAIL_CLIENT_SECRET', env)
+
+    def test_vault_client_secret_file_supplies_secret(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_dir = Path(temp_dir) / '.secrets' / 'maho'
+            vault_dir.mkdir(parents=True)
+            vault_file = vault_dir / 'google_desktop_oauth.json'
+            vault_file.write_text(json.dumps({
+                'installed': {
+                    'client_id': (
+                        '650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0'
+                        '.apps.googleusercontent.com'),
+                    'client_secret': 'vault-supplied-secret',
+                },
+            }), encoding='utf-8')
+            with patch.object(_module, '_WORKSPACE_ROOT', temp_dir), \
+                 patch.dict(os.environ, {}, clear=True):
+                env = _module.mail_oauth_build_env()
+
+        self.assertEqual(env['GMAIL_CLIENT_SECRET'], 'vault-supplied-secret')
+
+    def test_vault_client_id_mismatch_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            vault_dir = Path(temp_dir) / '.secrets' / 'maho'
+            vault_dir.mkdir(parents=True)
+            vault_file = vault_dir / 'google_desktop_oauth.json'
+            vault_file.write_text(json.dumps({
+                'installed': {
+                    'client_id': '9999-other.apps.googleusercontent.com',
+                    'client_secret': 'other-secret',
+                },
+            }), encoding='utf-8')
+            with patch.object(_module, '_WORKSPACE_ROOT', temp_dir), \
+                 patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(RuntimeError) as raised:
+                    _module.mail_oauth_build_env()
+
+        self.assertIn('9999-other.apps.googleusercontent.com',
+                      str(raised.exception))
 
     def test_uses_maho_google_client_id_for_gmail_when_not_overridden(self):
-        with patch.dict(os.environ, {
-            'MAHO_GOOGLE_CLIENT_ID': 'maho-public-client-id',
-        }, clear=True):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(_module, '_WORKSPACE_ROOT', temp_dir), \
+             patch.dict(os.environ, {
+                 'MAHO_GOOGLE_CLIENT_ID': 'maho-public-client-id',
+             }, clear=True):
             env = _module.mail_oauth_build_env()
 
         self.assertEqual(env['GMAIL_CLIENT_ID'], 'maho-public-client-id')
 
     def test_explicit_gmail_client_id_wins(self):
-        with patch.dict(os.environ, {
-            'MAHO_GOOGLE_CLIENT_ID': 'maho-public-client-id',
-            'GMAIL_CLIENT_ID': 'mail-specific-client-id',
-        }, clear=True):
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch.object(_module, '_WORKSPACE_ROOT', temp_dir), \
+             patch.dict(os.environ, {
+                 'MAHO_GOOGLE_CLIENT_ID': 'maho-public-client-id',
+                 'GMAIL_CLIENT_ID': 'mail-specific-client-id',
+             }, clear=True):
             env = _module.mail_oauth_build_env()
 
         self.assertEqual(env['GMAIL_CLIENT_ID'], 'mail-specific-client-id')
@@ -73,6 +133,19 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             env = _module.mail_oauth_build_env()
 
         self.assertEqual(env['GMAIL_CLIENT_SECRET'], 'original-tauri-secret')
+
+    def test_platform_specific_env_wins_over_generic(self):
+        plat = _module._platform_name().upper()
+        with patch.dict(os.environ, {
+            f'MAHO_GOOGLE_CLIENT_ID_{plat}': 'platform-specific-id',
+            f'MAHO_GOOGLE_CLIENT_SECRET_{plat}': 'platform-specific-secret',
+            'MAHO_GOOGLE_CLIENT_ID': 'generic-id',
+            'MAHO_GOOGLE_CLIENT_SECRET': 'generic-secret',
+        }, clear=True):
+            env = _module.mail_oauth_build_env()
+
+        self.assertEqual(env['GMAIL_CLIENT_ID'], 'platform-specific-id')
+        self.assertEqual(env['GMAIL_CLIENT_SECRET'], 'platform-specific-secret')
 
     def test_linux_chromium_toolchain_env_covers_c_cxx_ar_and_sysroot(self):
         chromium_src = os.path.join(_module.WORKSPACE_ROOT, 'chromium', 'src')
@@ -145,6 +218,8 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
                  patch.object(_module, 'PREBUILT_DIR', str(prebuilt_dir)), \
                  patch.object(_module, '_cargo_build'), \
                  patch.object(
+                     _module, 'mail_oauth_build_env', return_value={}), \
+                 patch.object(
                      _module, 'chromium_linux_toolchain_env',
                      return_value={}), \
                  patch.object(
@@ -190,6 +265,7 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
 
     def test_windows_mail_prebuilt_uses_coff_library_name(self):
         with patch.object(_module, '_cargo_build'), \
+             patch.object(_module, 'mail_oauth_build_env', return_value={}), \
              patch.object(_module.os.path, 'isdir', return_value=True), \
              patch.object(_module.os.path, 'exists', return_value=False):
             with self.assertRaises(SystemExit) as error:
@@ -578,7 +654,7 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             main_parts,
         )
         self.assertIn(
-            'MailOsNotificationPermission::kUnsupported',
+            'MailOsNotificationPermission::kGranted',
             generic,
         )
         self.assertIn('RoGetActivationFactory', windows)

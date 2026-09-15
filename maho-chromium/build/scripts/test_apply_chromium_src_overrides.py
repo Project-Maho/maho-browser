@@ -2,10 +2,48 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from apply_chromium_src_overrides import REPLACEMENTS, apply_replacements
+from apply_chromium_src_overrides import (
+    _CHROMIUM_BRANDING_TARGETS,
+    _MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+    REPLACEMENTS,
+    apply_replacements,
+)
 
 
 _BROWSER_BUILD_PATH = "chrome/browser/BUILD.gn"
+_BROWSER_COMMAND_CONTROLLER_PATH = "chrome/browser/ui/browser_command_controller.cc"
+_CHROME_PAGES_CC_PATH = "chrome/browser/ui/chrome_pages.cc"
+
+_UPSTREAM_ADDED_TO_WIDGET = (
+    "  views::ClientView::AddedToWidget();\n"
+    "\n"
+    "  widget_observation_.Observe(GetWidget());\n"
+)
+
+_UPSTREAM_SELECT_NUMBERED_TAB_CASE = (
+    "    case IDC_SELECT_TAB_0:\n"
+    "    case IDC_SELECT_TAB_1:\n"
+    "    case IDC_SELECT_TAB_2:\n"
+    "    case IDC_SELECT_TAB_3:\n"
+    "    case IDC_SELECT_TAB_4:\n"
+    "    case IDC_SELECT_TAB_5:\n"
+    "    case IDC_SELECT_TAB_6:\n"
+    "    case IDC_SELECT_TAB_7:\n"
+    '      base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));\n'
+    "      SelectNumberedTab(\n"
+    "          browser_, id - IDC_SELECT_TAB_0,\n"
+    "          TabStripUserGestureDetails(\n"
+    "              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n"
+    "      break;\n"
+)
+
+_UPSTREAM_SHOW_SETTINGS = (
+    '#include "chrome/browser/ui/browser_navigator_params.h"\n'
+    "\n"
+    "void ShowSettings(BrowserWindowInterface* browser) {\n"
+    "  ShowSettingsSubPage(browser, std::string());\n"
+    "}\n"
+)
 _APP_CONTROLLER_HEADER_PATH = "chrome/browser/app_controller_mac.h"
 _APP_CONTROLLER_MM_PATH = "chrome/browser/app_controller_mac.mm"
 _BROWSER_VIEW_CC_PATH = "chrome/browser/ui/views/frame/browser_view.cc"
@@ -1589,6 +1627,227 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
                     [replacement],
                     relative_path=_BROWSER_CC_PATH,
                 )
+
+
+class MahoDesktopDefectRegressionTest(unittest.TestCase):
+    """Regressions for the 2026-09-14 macOS desktop defect report.
+
+    D1 Settings entry points opened Chromium's chrome://settings.
+    D3 Cmd+Shift+C / Cmd+L / Cmd+E never reached Maho's shortcut registry
+       because AddedToWidget only ever registered Ctrl+1..9 with the
+       FocusManager, and macOS dispatches FocusManager accelerators (in
+       ChromeCommandDispatcherDelegate::prePerformKeyEquivalent) BEFORE
+       CommandForKeyEvent -- but only at kHighPriority.
+    D4 Cmd+2/3/4 fell through to the Chromium tab strip when the requested
+       favorite did not exist.
+    """
+
+    def _apply(self, relative_path, filename, source, replacements):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / filename
+            target.write_text(source)
+            changed, applied = apply_replacements(
+                target,
+                replacements,
+                relative_path=relative_path,
+            )
+            output = target.read_text()
+
+            changed_again, applied_again = apply_replacements(
+                target,
+                replacements,
+                relative_path=relative_path,
+            )
+            self.assertFalse(
+                changed_again, "override must be idempotent on a patched tree"
+            )
+            self.assertEqual(target.read_text(), output)
+            return changed, applied, output
+
+    def test_added_to_widget_registers_every_maho_shortcut_at_high_priority(self):
+        replacements = [
+            item
+            for item in REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.cc"]
+            if item.old == _UPSTREAM_ADDED_TO_WIDGET
+        ]
+        self.assertEqual(len(replacements), 1)
+
+        changed, _applied, output = self._apply(
+            "chrome/browser/ui/views/frame/browser_view.cc",
+            "browser_view.cc",
+            _UPSTREAM_ADDED_TO_WIDGET,
+            replacements,
+        )
+        self.assertTrue(changed)
+
+        # Every enabled Maho binding must be registered, not just Ctrl+1..9:
+        # AcceleratorPressed only ever fires for combos the FocusManager knows.
+        self.assertIn(
+            "maho::MahoShortcutInterceptor::GetRegisteredAccelerators()", output
+        )
+        self.assertNotIn("ui::VKEY_1 + i", output)
+
+        # kHighPriority is what makes prePerformKeyEquivalent consult the
+        # FocusManager BEFORE CommandForKeyEvent, which is the only way
+        # Cmd+Shift+C stops resolving to IDC_DEV_TOOLS_INSPECT.
+        self.assertIn("ui::AcceleratorManager::kHighPriority", output)
+        self.assertNotIn("ui::AcceleratorManager::kNormalPriority", output)
+
+    def test_accelerator_migrations_consume_the_comment_they_reemit(self):
+        # Each accelerator migration rewrites an ALREADY-patched block, and its
+        # replacement text carries the explanatory comment. So its "old" must
+        # start at that block's existing comment, otherwise the previous copy is
+        # left behind and a fresh one is prepended on every run -- which is how
+        # browser_view.cc ended up with the comment three times. Starting from
+        # pristine upstream does NOT catch this: the insert fires and every
+        # migration reports "already", so assert the invariant on the rules.
+        replacements = [
+            item
+            for item in REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.cc"]
+            if _MAHO_FOCUS_ACCELERATOR_REGISTRATION in item.new
+        ]
+        migrations = [
+            item for item in replacements if item.old != _UPSTREAM_ADDED_TO_WIDGET
+        ]
+        self.assertGreaterEqual(len(migrations), 3)
+
+        for migration in migrations:
+            self.assertTrue(
+                migration.old.lstrip().startswith("//"),
+                f"migration {migration.description!r} re-emits the Maho comment "
+                f"but its old text starts with {migration.old.lstrip()[:60]!r}, "
+                "so the existing comment is orphaned instead of replaced",
+            )
+
+    def test_accelerator_registration_is_idempotent_and_mac_scoped(self):
+        replacements = [
+            item
+            for item in REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.cc"]
+            if _MAHO_FOCUS_ACCELERATOR_REGISTRATION in item.new
+        ]
+        _changed, _applied, output = self._apply(
+            "chrome/browser/ui/views/frame/browser_view.cc",
+            "browser_view.cc",
+            _UPSTREAM_ADDED_TO_WIDGET,
+            replacements,
+        )
+
+        # AcceleratorManager DCHECKs !Contains(target) and, at high priority,
+        # !has_priority_handler_, so the immediate call and the core-ready
+        # retry must not both register.
+        self.assertIn("self->maho_accelerators_registered_", output)
+        self.assertIn("self->maho_accelerators_registered_ = true;", output)
+
+        # An empty list means the core is still cold, not that registration
+        # succeeded; treating it as success is what stranded the window with
+        # zero accelerators for its lifetime.
+        self.assertIn("maho_accelerators.empty()", output)
+
+        # LoadAccelerators() runs right after this block and on Windows/Linux
+        # registers Ctrl+L on the same target that command_bar resolves to.
+        gate = output.index("#if BUILDFLAG(IS_MAC)")
+        end = output.index("#endif  // BUILDFLAG(IS_MAC)")
+        self.assertLess(gate, output.index("maho_register_accelerators = "))
+        self.assertLess(output.index("AddCoreReadyCallback"), end)
+
+    def test_numbered_tab_shortcut_never_falls_back_to_the_tab_strip(self):
+        replacements = [
+            item
+            for item in REPLACEMENTS[_BROWSER_COMMAND_CONTROLLER_PATH]
+            if item.old.startswith("    case IDC_SELECT_TAB_0:")
+        ]
+        self.assertEqual(len(replacements), 1)
+
+        changed, _applied, output = self._apply(
+            _BROWSER_COMMAND_CONTROLLER_PATH,
+            "browser_command_controller.cc",
+            _UPSTREAM_SELECT_NUMBERED_TAB_CASE,
+            replacements,
+        )
+        self.assertTrue(changed)
+        self.assertIn("TryActivateFavoriteByIndex", output)
+
+        # In a Maho window Cmd+1..8 addresses favorites only. Asking for a
+        # favorite that does not exist must be a no-op, never a jump to an
+        # unrelated tab, so the tab-strip call must be unreachable once the
+        # sidebar container is present.
+        favorite_call = output.index("TryActivateFavoriteByIndex")
+        tab_strip_call = output.index("SelectNumberedTab(")
+        self.assertLess(favorite_call, tab_strip_call)
+        between = output[favorite_call:tab_strip_call]
+        self.assertIn("break;", between)
+        self.assertNotIn("if (!activated)", output)
+        self.assertRegex(
+            output,
+            r"if \(maho_sidebar_container\) \{",
+        )
+
+    def test_user_visible_chromium_product_strings_are_rebranded_to_maho(self):
+        source = (
+            '      <message name="IDS_PROFILES_CUSTOMIZE_PROFILE" desc="Chromium profile customization">\n'
+            "        Customize your Chromium profile\n"
+            "      </message>\n"
+            '      <message name="IDS_PROFILE_CUSTOMIZATION_TITLE" desc="Title text.">\n'
+            "        This is your Chromium\n"
+            "      </message>\n"
+            '      <message name="IDS_SYNC_ERROR" desc="Shown when Chromium cannot sync.">\n'
+            "        Some of your Chromium data hasn't been saved yet.\n"
+            "      </message>\n"
+            '      <message name="IDS_OS_ONLY" desc="ChromeOS string.">\n'
+            "        Chromium OS is up to date\n"
+            "      </message>\n"
+        )
+
+        # The per-message Replacements cover a handful of anchors; the sweep
+        # that makes the product name consistent is a normalizer, so exercise
+        # it on its own with an empty replacement list.
+        changed, _applied, output = self._apply(
+            "chrome/app/chromium_strings.grd",
+            "chromium_strings.grd",
+            source,
+            [],
+        )
+        self.assertTrue(changed)
+
+        # Message BODIES are the user-visible surface and must say Maho.
+        self.assertIn("Customize your Maho profile", output)
+        self.assertIn("This is your Maho", output)
+        self.assertIn("Some of your Maho data hasn't been saved yet.", output)
+
+        # Translator notes and grit message ids must keep referring to upstream.
+        self.assertIn('desc="Chromium profile customization"', output)
+        self.assertIn('desc="Shown when Chromium cannot sync."', output)
+
+        # ChromeOS is a different product and is never compiled into Maho.
+        self.assertIn("Chromium OS is up to date", output)
+
+        # settings_chromium_strings.grdp holds "Customize your Chromium profile"
+        # and friends. It carries no per-message Replacements, so it only gets
+        # swept if it is registered as a REPLACEMENTS key.
+        self.assertIn("chrome/app/settings_chromium_strings.grdp", REPLACEMENTS)
+
+    def test_show_settings_opens_maho_settings_not_chrome_settings(self):
+        replacements = REPLACEMENTS.get(_CHROME_PAGES_CC_PATH, [])
+        self.assertTrue(
+            replacements,
+            "chrome_pages.cc needs an override so every settings entry point "
+            "(macOS app menu, Cmd+comma, IDC_OPTIONS) opens Maho settings",
+        )
+
+        changed, _applied, output = self._apply(
+            _CHROME_PAGES_CC_PATH,
+            "chrome_pages.cc",
+            _UPSTREAM_SHOW_SETTINGS,
+            replacements,
+        )
+        self.assertTrue(changed)
+        self.assertIn('#include "maho/browser/ui/maho_settings_navigation.h"', output)
+        self.assertIn("maho::OpenMahoSettingsPane(", output)
+
+        body_start = output.index("void ShowSettings(BrowserWindowInterface* browser) {")
+        body_end = output.index("\n}\n", body_start)
+        body = output[body_start:body_end]
+        self.assertIn("maho::OpenMahoSettingsPane(", body)
 
 
 if __name__ == "__main__":

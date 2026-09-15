@@ -105,6 +105,287 @@ _BROWSER_WIDGET_OTR_SENTINEL: Final[str] = (
 )
 
 
+# Maho registers EVERY enabled shortcut from the Rust registry with the
+# FocusManager, at kHighPriority.
+#
+# Why the full set and not just Ctrl+1..9: BrowserView::AcceleratorPressed() is
+# the only Maho dispatch path wired into browser_view.cc, and the FocusManager
+# only ever calls it for accelerators that were registered. Registering a subset
+# silently kills every other binding.
+#
+# Why kHighPriority: on macOS, ChromeCommandDispatcherDelegate
+# ::prePerformKeyEquivalent consults the Views FocusManager at kHighPriority
+# BEFORE calling CommandForKeyEvent(); kNormalPriority is only consulted in
+# postPerformKeyEquivalent, i.e. AFTER the upstream key-equivalent table already
+# claimed the event. That ordering is why Cmd+Shift+C resolved to
+# IDC_DEV_TOOLS_INSPECT and Cmd+L / Cmd+E never reached Maho at all.
+# The second iteration re-registered on core readiness but was NOT idempotent:
+# when the core was already warm at AddedToWidget() (every window after the
+# first) both the immediate call and the core-ready callback registered the same
+# (accelerator, target) pair, tripping AcceleratorManager's !Contains(target) and
+# !has_priority_handler_ DCHECKs in a debug build. Kept so already-patched trees
+# migrate to the guarded form.
+_MAHO_LEGACY_UNGATED_ACCELERATORS_REGISTERED_MEMBER: Final[str] = (
+    "  // Maho: true once the Maho shortcut accelerators have actually been\n"
+    "  // registered with this window's FocusManager. AddedToWidget() and the\n"
+    "  // core-ready retry share one registration path, and registering the\n"
+    "  // same target twice at kHighPriority trips AcceleratorManager DCHECKs,\n"
+    "  // so the second caller must be able to tell the work is already done.\n"
+    "  bool maho_accelerators_registered_ = false;\n"
+)
+
+_MAHO_GATED_ACCELERATORS_REGISTERED_MEMBER: Final[str] = (
+    "#if BUILDFLAG(IS_MAC)\n"
+    "  // Maho: true once the Maho shortcut accelerators have actually been\n"
+    "  // registered with this window's FocusManager. AddedToWidget() and the\n"
+    "  // core-ready retry share one registration path, and registering the\n"
+    "  // same target twice at kHighPriority trips AcceleratorManager DCHECKs,\n"
+    "  // so the second caller must be able to tell the work is already done.\n"
+    "  // Gated with the registration it guards: off-mac nothing reads it, and\n"
+    "  // -Wunused-private-field is an error under Chromium's -Werror.\n"
+    "  bool maho_accelerators_registered_ = false;\n"
+    "#endif  // BUILDFLAG(IS_MAC)\n"
+)
+
+_MAHO_LEGACY_NONIDEMPOTENT_ACCELERATOR_REGISTRATION: Final[str] = (
+    "  // Maho: register every enabled Maho shortcut as a FocusManager\n"
+    "  // accelerator. FocusManager accelerators fire regardless of which view\n"
+    "  // holds focus (so shortcuts still work with no active tab), and\n"
+    "  // kHighPriority is what makes macOS consult the FocusManager in\n"
+    "  // ChromeCommandDispatcherDelegate::prePerformKeyEquivalent BEFORE\n"
+    "  // CommandForKeyEvent(). At kNormalPriority the upstream key-equivalent\n"
+    "  // table wins first, which is why Cmd+Shift+C opened DevTools Inspect.\n"
+    "  // Resolution still goes through MahoShortcutInterceptor, so the Rust\n"
+    "  // ShortcutManager stays the single source of truth.\n"
+    "  if (browser_ && browser_->is_type_normal()) {\n"
+    "    auto maho_register_accelerators = [](base::WeakPtr<BrowserView> self) {\n"
+    "      if (!self) {\n"
+    "        return;\n"
+    "      }\n"
+    "      views::FocusManager* fm = self->GetFocusManager();\n"
+    "      if (!fm) {\n"
+    "        return;\n"
+    "      }\n"
+    "      for (const ui::Accelerator& maho_accelerator :\n"
+    "           maho::MahoShortcutInterceptor::GetRegisteredAccelerators()) {\n"
+    "        fm->RegisterAccelerator(maho_accelerator,\n"
+    "                                ui::AcceleratorManager::kHighPriority,\n"
+    "                                self.get());\n"
+    "      }\n"
+    "    };\n"
+    "    maho_register_accelerators(GetAsWeakPtr());\n"
+    "    // The Rust core is frequently still starting at AddedToWidget() time,\n"
+    "    // and GetRegisteredAccelerators() returns an EMPTY list until it is\n"
+    "    // up. Registering only once therefore leaves the window with zero\n"
+    "    // Maho accelerators for its entire lifetime, so prePerformKeyEquivalent\n"
+    "    // finds nothing at kHighPriority and falls through to\n"
+    "    // CommandForKeyEvent() -- which is exactly how Cmd+Shift+C still\n"
+    "    // reached IDC_DEV_TOOLS_INSPECT while the binding itself resolved\n"
+    "    // correctly. Re-register when the core publishes readiness.\n"
+    "    maho_core_ready_accelerators_subscription_ =\n"
+    "        maho::AddCoreReadyCallback(\n"
+    "            base::BindRepeating(maho_register_accelerators,\n"
+    "                                GetAsWeakPtr()));\n"
+    "  }\n"
+)
+
+# The third iteration was idempotent but had no platform gate. BrowserView calls
+# LoadAccelerators() right after this block, and on Windows/Linux the upstream
+# table registers Ctrl+L (EF_PLATFORM_ACCELERATOR) for IDC_FOCUS_LOCATION on the
+# SAME BrowserView target that the Rust registry's command_bar resolves to, so
+# the two collide on the same-target invariant. That upstream entry sits inside
+# an "#if !BUILDFLAG(IS_MAC)" block, so macOS is unaffected -- and the whole
+# mechanism here (kHighPriority so prePerformKeyEquivalent consults the
+# FocusManager before CommandForKeyEvent) is macOS-only anyway. Kept so
+# already-patched trees migrate to the gated form.
+_MAHO_LEGACY_UNSCOPED_IDEMPOTENT_ACCELERATOR_REGISTRATION: Final[str] = (
+    "  // Maho: register every enabled Maho shortcut as a FocusManager\n"
+    "  // accelerator. FocusManager accelerators fire regardless of which view\n"
+    "  // holds focus (so shortcuts still work with no active tab), and\n"
+    "  // kHighPriority is what makes macOS consult the FocusManager in\n"
+    "  // ChromeCommandDispatcherDelegate::prePerformKeyEquivalent BEFORE\n"
+    "  // CommandForKeyEvent(). At kNormalPriority the upstream key-equivalent\n"
+    "  // table wins first, which is why Cmd+Shift+C opened DevTools Inspect.\n"
+    "  // Resolution still goes through MahoShortcutInterceptor, so the Rust\n"
+    "  // ShortcutManager stays the single source of truth.\n"
+    "  if (browser_ && browser_->is_type_normal()) {\n"
+    "    // Runs at AddedToWidget() and again when the core publishes readiness,\n"
+    "    // so it MUST be idempotent: AcceleratorManager DCHECKs both\n"
+    "    // !Contains(target) and !has_priority_handler_, so registering the same\n"
+    "    // (accelerator, target) pair twice at kHighPriority crashes a debug\n"
+    "    // build. That happens whenever the core is already warm here -- for\n"
+    "    // example every window opened after the first. The empty-list check\n"
+    "    // also matters on its own: GetRegisteredAccelerators() returns an EMPTY\n"
+    "    // vector while maho::GetCore() is null, and treating that as a real\n"
+    "    // registration is what previously left the window with zero Maho\n"
+    "    // accelerators for its lifetime, dropping Cmd+Shift+C through to\n"
+    "    // CommandForKeyEvent() and IDC_DEV_TOOLS_INSPECT.\n"
+    "    auto maho_register_accelerators = [](base::WeakPtr<BrowserView> self) {\n"
+    "      if (!self || self->maho_accelerators_registered_) {\n"
+    "        return;\n"
+    "      }\n"
+    "      views::FocusManager* fm = self->GetFocusManager();\n"
+    "      if (!fm) {\n"
+    "        return;\n"
+    "      }\n"
+    "      const std::vector<ui::Accelerator> maho_accelerators =\n"
+    "          maho::MahoShortcutInterceptor::GetRegisteredAccelerators();\n"
+    "      if (maho_accelerators.empty()) {\n"
+    "        return;\n"
+    "      }\n"
+    "      for (const ui::Accelerator& maho_accelerator : maho_accelerators) {\n"
+    "        fm->RegisterAccelerator(maho_accelerator,\n"
+    "                                ui::AcceleratorManager::kHighPriority,\n"
+    "                                self.get());\n"
+    "      }\n"
+    "      self->maho_accelerators_registered_ = true;\n"
+    "    };\n"
+    "    maho_register_accelerators(GetAsWeakPtr());\n"
+    "    maho_core_ready_accelerators_subscription_ =\n"
+    "        maho::AddCoreReadyCallback(\n"
+    "            base::BindRepeating(maho_register_accelerators,\n"
+    "                                GetAsWeakPtr()));\n"
+    "  }\n"
+)
+
+_MAHO_FOCUS_ACCELERATOR_REGISTRATION: Final[str] = (
+    "#if BUILDFLAG(IS_MAC)\n"
+    "  // Maho: register every enabled Maho shortcut as a FocusManager\n"
+    "  // accelerator. FocusManager accelerators fire regardless of which view\n"
+    "  // holds focus (so shortcuts still work with no active tab), and\n"
+    "  // kHighPriority is what makes macOS consult the FocusManager in\n"
+    "  // ChromeCommandDispatcherDelegate::prePerformKeyEquivalent BEFORE\n"
+    "  // CommandForKeyEvent(). At kNormalPriority the upstream key-equivalent\n"
+    "  // table wins first, which is why Cmd+Shift+C opened DevTools Inspect.\n"
+    "  // Resolution still goes through MahoShortcutInterceptor, so the Rust\n"
+    "  // ShortcutManager stays the single source of truth.\n"
+    "  if (browser_ && browser_->is_type_normal()) {\n"
+    "    // Runs at AddedToWidget() and again when the core publishes readiness,\n"
+    "    // so it MUST be idempotent: AcceleratorManager DCHECKs both\n"
+    "    // !Contains(target) and !has_priority_handler_, so registering the same\n"
+    "    // (accelerator, target) pair twice at kHighPriority crashes a debug\n"
+    "    // build. That happens whenever the core is already warm here -- for\n"
+    "    // example every window opened after the first. The empty-list check\n"
+    "    // also matters on its own: GetRegisteredAccelerators() returns an EMPTY\n"
+    "    // vector while maho::GetCore() is null, and treating that as a real\n"
+    "    // registration is what previously left the window with zero Maho\n"
+    "    // accelerators for its lifetime, dropping Cmd+Shift+C through to\n"
+    "    // CommandForKeyEvent() and IDC_DEV_TOOLS_INSPECT.\n"
+    "    auto maho_register_accelerators = [](base::WeakPtr<BrowserView> self) {\n"
+    "      if (!self || self->maho_accelerators_registered_) {\n"
+    "        return;\n"
+    "      }\n"
+    "      views::FocusManager* fm = self->GetFocusManager();\n"
+    "      if (!fm) {\n"
+    "        return;\n"
+    "      }\n"
+    "      const std::vector<ui::Accelerator> maho_accelerators =\n"
+    "          maho::MahoShortcutInterceptor::GetRegisteredAccelerators();\n"
+    "      if (maho_accelerators.empty()) {\n"
+    "        return;\n"
+    "      }\n"
+    "      for (const ui::Accelerator& maho_accelerator : maho_accelerators) {\n"
+    "        fm->RegisterAccelerator(maho_accelerator,\n"
+    "                                ui::AcceleratorManager::kHighPriority,\n"
+    "                                self.get());\n"
+    "      }\n"
+    "      self->maho_accelerators_registered_ = true;\n"
+    "    };\n"
+    "    maho_register_accelerators(GetAsWeakPtr());\n"
+    "    maho_core_ready_accelerators_subscription_ =\n"
+    "        maho::AddCoreReadyCallback(\n"
+    "            base::BindRepeating(maho_register_accelerators,\n"
+    "                                GetAsWeakPtr()));\n"
+    "  }\n"
+    "#endif  // BUILDFLAG(IS_MAC)\n"
+)
+
+# The first shipped version of the registration above ran exactly once, inside
+# AddedToWidget(). That is too early: the Rust core is often still starting, so
+# GetRegisteredAccelerators() returned an empty list and the window kept ZERO
+# Maho accelerators for its lifetime. Kept here so already-patched trees migrate
+# to the core-ready retry instead of failing the override pass.
+_MAHO_LEGACY_SINGLE_SHOT_ACCELERATOR_REGISTRATION: Final[str] = (
+    "  // Maho: register every enabled Maho shortcut as a FocusManager\n"
+    "  // accelerator. FocusManager accelerators fire regardless of which view\n"
+    "  // holds focus (so shortcuts still work with no active tab), and\n"
+    "  // kHighPriority is what makes macOS consult the FocusManager in\n"
+    "  // ChromeCommandDispatcherDelegate::prePerformKeyEquivalent BEFORE\n"
+    "  // CommandForKeyEvent(). At kNormalPriority the upstream key-equivalent\n"
+    "  // table wins first, which is why Cmd+Shift+C opened DevTools Inspect.\n"
+    "  // Resolution still goes through MahoShortcutInterceptor, so the Rust\n"
+    "  // ShortcutManager stays the single source of truth.\n"
+    "  if (browser_ && browser_->is_type_normal()) {\n"
+    "    views::FocusManager* fm = GetFocusManager();\n"
+    "    if (fm) {\n"
+    "      for (const ui::Accelerator& maho_accelerator :\n"
+    "           maho::MahoShortcutInterceptor::GetRegisteredAccelerators()) {\n"
+    "        fm->RegisterAccelerator(maho_accelerator,\n"
+    "                                ui::AcceleratorManager::kHighPriority,\n"
+    "                                this);\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+)
+
+_MAHO_ADDED_TO_WIDGET_PATCHED: Final[str] = (
+    "  views::ClientView::AddedToWidget();\n"
+    "\n"
+    + _MAHO_FOCUS_ACCELERATOR_REGISTRATION
+    + "\n"
+    "  widget_observation_.Observe(GetWidget());\n"
+)
+
+# The Ctrl+1..9-only shapes that shipped before the full-registry registration.
+# Both spellings of the layout gate exist in the wild, so migrate both.
+_MAHO_LEGACY_CTRL_ACCELERATOR_BODY: Final[str] = (
+    "    views::FocusManager* fm = GetFocusManager();\n"
+    "    if (fm) {\n"
+    "      for (int i = 0; i < 9; ++i) {\n"
+    "        fm->RegisterAccelerator(\n"
+    "            ui::Accelerator(static_cast<ui::KeyboardCode>(ui::VKEY_1 + i),\n"
+    "                            ui::EF_CONTROL_DOWN),\n"
+    "            ui::AcceleratorManager::kNormalPriority, this);\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+)
+
+# Cmd+1..8 in a Maho window addresses the sidebar favorites, never the Chromium
+# tab strip. Asking for a favorite that does not exist must be a no-op: the old
+# `if (activate) break; SelectNumberedTab(...)` fallback is what made Cmd+2/3/4
+# jump to unrelated tabs on a profile with a single favorite.
+_MAHO_FAVORITE_ONLY_NUMBERED_TAB: Final[str] = (
+    "      if (maho_sidebar_container) {\n"
+    "        // Maho windows address favorites with Cmd+1..8. An index past the\n"
+    "        // last favorite is a no-op; falling through to the Chromium tab\n"
+    "        // strip would move focus to an unrelated tab.\n"
+    "        maho_sidebar_container->TryActivateFavoriteByIndex(\n"
+    "            id - IDC_SELECT_TAB_0);\n"
+    "        break;\n"
+    "      }\n"
+    "      SelectNumberedTab(\n"
+    "          browser_, id - IDC_SELECT_TAB_0,\n"
+)
+
+_MAHO_LEGACY_FAVORITE_FALLBACK_NUMBERED_TAB: Final[str] = (
+    "      if (maho_sidebar_container &&\n"
+    "          maho_sidebar_container->TryActivateFavoriteByIndex(\n"
+    "              id - IDC_SELECT_TAB_0)) {\n"
+    "        break;\n"
+    "      }\n"
+    "      SelectNumberedTab(\n"
+    "          browser_, id - IDC_SELECT_TAB_0,\n"
+)
+
+_MAHO_LEGACY_CTRL_ACCELERATOR_COMMENT: Final[str] = (
+    "  // Maho: Register Ctrl+1..9 as FocusManager accelerators so space-switching\n"
+    "  // shortcuts fire regardless of which view has focus. Delegates to\n"
+    "  // MahoShortcutInterceptor::ResolveActionForAccelerator to preserve\n"
+    "  // Rust ShortcutManager as the single source of truth.\n"
+)
+
+
 _PINNED_CHROMIUM_REVISIONS: Final[tuple[str, ...]] = (
     "ee4bd9e95294a95c855ef51dfa26f0576f192e69",
     "72f18f12ad47a8d6dbfb4282a2ef8e507ae65428",
@@ -179,6 +460,53 @@ def is_revision_incompatible_target(relative_path: str, revision: str) -> bool:
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    # ── Settings entry points land on Maho settings, never chrome://settings ──
+    # On macOS the app-menu "Settings…" item and Cmd+, do NOT go through
+    # IDC_OPTIONS in browser_command_controller: AppController intercepts the
+    # command and calls -showPreferencesForProfile:, which calls
+    # chrome::ShowSettings() directly (app_controller_mac.mm). Overriding
+    # ShowSettings() itself is the one place that covers every entry point
+    # (app menu, Cmd+comma, IDC_OPTIONS, chrome::OpenOptionsWindow).
+    # ShowSettingsSubPage() keeps upstream behaviour so feature-specific
+    # sub-pages (passwords, site settings, …) are untouched.
+    "chrome/browser/ui/chrome_pages.cc": [
+        Replacement(
+            old='#include "chrome/browser/ui/browser_navigator_params.h"\n',
+            new=(
+                '#include "chrome/browser/ui/browser_navigator_params.h"\n'
+                '#include "maho/browser/ui/maho_settings_navigation.h"\n'
+            ),
+            description="Include Maho settings navigation in chrome_pages.cc",
+            guard='#include "maho/browser/ui/maho_settings_navigation.h"',
+        ),
+        Replacement(
+            old=(
+                "void ShowSettings(BrowserWindowInterface* browser) {\n"
+                "  ShowSettingsSubPage(browser, std::string());\n"
+                "}\n"
+            ),
+            new=(
+                "void ShowSettings(BrowserWindowInterface* browser) {\n"
+                "  // Maho: open Maho's own settings surface instead of\n"
+                "  // chrome://settings. This is the single choke point for the macOS\n"
+                "  // app menu Settings item, Cmd+comma, IDC_OPTIONS and\n"
+                "  // chrome::OpenOptionsWindow.\n"
+                "  Browser* maho_browser =\n"
+                "      browser ? browser->GetBrowserForMigrationOnly() : nullptr;\n"
+                "  if (maho_browser) {\n"
+                "    maho::OpenMahoSettingsPane(maho_browser, std::string());\n"
+                "    return;\n"
+                "  }\n"
+                "  ShowSettingsSubPage(browser, std::string());\n"
+                "}\n"
+            ),
+            description=(
+                "Route chrome::ShowSettings to Maho settings so the macOS app menu "
+                "and Cmd+comma open chrome://maho-settings, not chrome://settings"
+            ),
+            guard="maho::OpenMahoSettingsPane(maho_browser, std::string());",
+        ),
+    ],
     "third_party/blink/public/common/loader/url_loader_throttle.h": [
         Replacement(
             old="  virtual void DetachFromCurrentSequence();\n",
@@ -1651,6 +1979,24 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="MAHO_SPLITVIEW_CREATE = 1964,",
         ),
     ],
+    # No per-message Replacements: these files are swept entirely by
+    # normalize_chromium_product_branding(). They must still appear as keys so
+    # the main loop visits them.
+    "chrome/app/password_manager_ui_strings.grdp": [],
+    "chrome/app/settings_chromium_strings.grdp": [],
+    "chrome/app/settings_strings.grdp": [],
+    "components/autofill_payments_strings.grdp": [],
+    "components/autofill_strings.grdp": [],
+    "components/components_chromium_strings.grd": [],
+    "components/management_strings.grdp": [],
+    "components/new_or_sad_tab_strings.grdp": [],
+    "components/page_info_strings.grdp": [],
+    "components/password_manager_strings.grdp": [],
+    "components/privacy_sandbox_strings.grd": [],
+    "components/reset_password_strings.grdp": [],
+    "components/search_engine_choice_strings.grdp": [],
+    "components/security_interstitials_strings.grdp": [],
+    "components/ssl_errors_strings.grdp": [],
     "chrome/app/chromium_strings.grd": [
         Replacement(
             old=(
@@ -2454,21 +2800,27 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 '              ? static_cast<maho::MahoSidebarContainerView*>(\n'
                 '                    maho_browser_view->maho_sidebar_container())\n'
                 '              : nullptr;\n'
-                '      if (maho_sidebar_container &&\n'
-                '          maho_sidebar_container->TryActivateFavoriteByIndex(\n'
-                '              id - IDC_SELECT_TAB_0)) {\n'
-                '        break;\n'
-                '      }\n'
-                '      SelectNumberedTab(\n'
-                '          browser_, id - IDC_SELECT_TAB_0,\n'
+                + _MAHO_FAVORITE_ONLY_NUMBERED_TAB +
                 '          TabStripUserGestureDetails(\n'
                 '              TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));\n'
                 '      break;\n'
                 '    }\n'
             ),
+            idempotent=True,
             description=(
-                "Maho Cmd+1..8 activates Nth favorite (Zen essentials) with "
-                "fallback to Chrome tab strip when no favorite exists"
+                "Maho Cmd+1..8 activates the Nth favorite (Zen essentials) only; "
+                "an index past the last favorite is a no-op instead of falling "
+                "back to the Chromium tab strip"
+            ),
+        ),
+        Replacement(
+            old=_MAHO_LEGACY_FAVORITE_FALLBACK_NUMBERED_TAB,
+            new=_MAHO_FAVORITE_ONLY_NUMBERED_TAB,
+            idempotent=True,
+            description=(
+                "Migrate the Cmd+1..8 favorite activation away from its Chromium "
+                "tab-strip fallback so out-of-range favorites no longer move tab "
+                "focus"
             ),
         ),
         Replacement(
@@ -4160,6 +4512,71 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="maho_sidebar_palette_subscription_;",
         ),
+        Replacement(
+            old=(
+                "  base::CallbackListSubscription maho_sidebar_palette_subscription_;\n"
+            ),
+            new=(
+                "  base::CallbackListSubscription maho_sidebar_palette_subscription_;\n"
+                "\n"
+                "  // Maho: keeps the core-ready retry that re-registers Maho shortcut\n"
+                "  // accelerators with the FocusManager. AddedToWidget() runs before the\n"
+                "  // Rust core is guaranteed to be up, and GetRegisteredAccelerators()\n"
+                "  // returns an empty list until then; without this retry the window\n"
+                "  // keeps zero Maho accelerators and Cmd+Shift+C falls through to\n"
+                "  // Chromium's hidden table (DevTools Inspect). Destroyed with the\n"
+                "  // BrowserView, and the callback holds only a WeakPtr.\n"
+                "  base::CallbackListSubscription\n"
+                "      maho_core_ready_accelerators_subscription_;\n"
+            ),
+            description=(
+                "Maho: declare the core-ready subscription that re-registers Maho "
+                "shortcut accelerators once the Rust core finishes starting"
+            ),
+            guard="maho_core_ready_accelerators_subscription_;",
+        ),
+        Replacement(
+            old=(
+                "  base::CallbackListSubscription\n"
+                "      maho_core_ready_accelerators_subscription_;\n"
+            ),
+            new=(
+                "  base::CallbackListSubscription\n"
+                "      maho_core_ready_accelerators_subscription_;\n"
+                "\n"
+                "#if BUILDFLAG(IS_MAC)\n"
+                "  // Maho: true once the Maho shortcut accelerators have actually been\n"
+                "  // registered with this window's FocusManager. AddedToWidget() and the\n"
+                "  // core-ready retry share one registration path, and registering the\n"
+                "  // same target twice at kHighPriority trips AcceleratorManager DCHECKs,\n"
+                "  // so the second caller must be able to tell the work is already done.\n"
+                "  // Gated with the registration it guards: off-mac nothing reads it, and\n"
+                "  // -Wunused-private-field is an error under Chromium's -Werror.\n"
+                "  bool maho_accelerators_registered_ = false;\n"
+                "#endif  // BUILDFLAG(IS_MAC)\n"
+            ),
+            description=(
+                "Maho: track whether the shortcut accelerators were already registered "
+                "so the core-ready retry stays idempotent"
+            ),
+            guard="maho_accelerators_registered_ = false;",
+        ),
+        Replacement(
+            old=_MAHO_LEGACY_UNGATED_ACCELERATORS_REGISTERED_MEMBER,
+            new=_MAHO_GATED_ACCELERATORS_REGISTERED_MEMBER,
+            idempotent=True,
+            description=(
+                "Gate the Maho accelerator-registered flag to macOS so off-mac "
+                "builds do not carry an unread private field, which is an error "
+                "under -Wunused-private-field with -Werror"
+            ),
+            # The ungated declaration is a SUBSTRING of the gated one, so without
+            # this guard the migration would match its own output and nest.
+            guard=(
+                "#if BUILDFLAG(IS_MAC)\n"
+                "  // Maho: true once the Maho shortcut accelerators have actually been\n"
+            ),
+        ),
     ],
     # ── browser_view.cc ───────────────────────────────────────────────────────
     "chrome/browser/ui/views/frame/browser_view.cc": [
@@ -5030,42 +5447,87 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             guard="[Maho fix] Defensive cleanup",
         ),
-        # ── Patch #14: Ctrl+1..9 space switching from any focus state ─────────
+        # ── Patch #14: every Maho shortcut dispatches from any focus state ────
         Replacement(
             old=(
                 "  views::ClientView::AddedToWidget();\n"
                 "\n"
                 "  widget_observation_.Observe(GetWidget());\n"
             ),
-            new=(
-                "  views::ClientView::AddedToWidget();\n"
-                "\n"
-                "  // Maho: Register Ctrl+1..9 as FocusManager accelerators so space-switching\n"
-                "  // shortcuts fire regardless of which view has focus. Delegates to\n"
-                "  // MahoShortcutInterceptor::ResolveActionForAccelerator to preserve\n"
-                "  // Rust ShortcutManager as the single source of truth.\n"
-                "  if (IsMahoArcLayoutActive()) {\n"
-                "    views::FocusManager* fm = GetFocusManager();\n"
-                "    if (fm) {\n"
-                "      for (int i = 0; i < 9; ++i) {\n"
-                "        fm->RegisterAccelerator(\n"
-                "            ui::Accelerator(static_cast<ui::KeyboardCode>(ui::VKEY_1 + i),\n"
-                "                            ui::EF_CONTROL_DOWN),\n"
-                "            ui::AcceleratorManager::kNormalPriority, this);\n"
-                "      }\n"
-                "    }\n"
-                "  }\n"
-                "\n"
-                "  widget_observation_.Observe(GetWidget());\n"
-            ),
+            new=_MAHO_ADDED_TO_WIDGET_PATCHED,
             idempotent=True,
             description=(
-                "Register Ctrl+1..9 as FocusManager accelerators in AddedToWidget "
-                "so Maho space-switching shortcuts fire regardless of which view "
-                "holds focus (fixes shortcuts being dead when the WebContents is "
-                "not the first responder, e.g. fresh window, omnibox focus)"
+                "Register every enabled Maho shortcut as a kHighPriority "
+                "FocusManager accelerator in AddedToWidget so Maho bindings fire "
+                "from any focus state and win over upstream macOS key "
+                "equivalents (Cmd+Shift+C, Cmd+L, Cmd+E)"
             ),
-            guard="Maho: Register all enabled Maho shortcuts as FocusManager accelerators",
+        ),
+        Replacement(
+            old=(
+                _MAHO_LEGACY_CTRL_ACCELERATOR_COMMENT
+                + "  if (IsMahoArcLayoutActive()) {\n"
+                + _MAHO_LEGACY_CTRL_ACCELERATOR_BODY
+            ),
+            new=_MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+            idempotent=True,
+            description=(
+                "Migrate the Ctrl+1..9-only FocusManager registration to the full "
+                "Maho shortcut set at kHighPriority (IsMahoArcLayoutActive gate)"
+            ),
+        ),
+        Replacement(
+            old=(
+                _MAHO_LEGACY_CTRL_ACCELERATOR_COMMENT
+                + "  if ((maho_sidebar_container_ && maho_sidebar_container_->GetVisible())) {\n"
+                + _MAHO_LEGACY_CTRL_ACCELERATOR_BODY
+            ),
+            new=_MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+            idempotent=True,
+            description=(
+                "Migrate the Ctrl+1..9-only FocusManager registration to the full "
+                "Maho shortcut set at kHighPriority (sidebar-visibility gate)"
+            ),
+        ),
+        Replacement(
+            old=_MAHO_LEGACY_SINGLE_SHOT_ACCELERATOR_REGISTRATION,
+            new=_MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+            idempotent=True,
+            description=(
+                "Retry Maho accelerator registration once the Rust core is ready; "
+                "the single-shot AddedToWidget registration saw an empty shortcut "
+                "list on a cold core and left Cmd+Shift+C to DevTools Inspect"
+            ),
+        ),
+        Replacement(
+            old=_MAHO_LEGACY_UNSCOPED_IDEMPOTENT_ACCELERATOR_REGISTRATION,
+            new=_MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+            idempotent=True,
+            description=(
+                "Scope Maho accelerator registration to macOS: LoadAccelerators() "
+                "runs right after it and on Windows/Linux registers Ctrl+L on the "
+                "same BrowserView target the Rust command_bar binding resolves to, "
+                "violating AcceleratorManager's same-target invariant"
+            ),
+            # The ungated body is a SUBSTRING of the gated replacement (same body,
+            # wrapped in #if/#endif), so without this guard the migration would
+            # match its own output and nest the block on every later run.
+            guard=(
+                "#if BUILDFLAG(IS_MAC)\n"
+                "  // Maho: register every enabled Maho shortcut as a FocusManager\n"
+            ),
+        ),
+        Replacement(
+            old=_MAHO_LEGACY_NONIDEMPOTENT_ACCELERATOR_REGISTRATION,
+            new=_MAHO_FOCUS_ACCELERATOR_REGISTRATION,
+            idempotent=True,
+            description=(
+                "Make Maho accelerator registration idempotent: skip once already "
+                "registered and ignore the empty cold-core list, so the immediate "
+                "call and the core-ready retry cannot both register the same "
+                "target and trip AcceleratorManager's duplicate-target and "
+                "single-high-priority-handler DCHECKs"
+            ),
         ),
         Replacement(
             old=(
@@ -5358,11 +5820,15 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="static_cast<maho::MahoMiniTopBarView*>(",
         ),
         Replacement(
+            # Anchor must match the wrapped form that patch #48 actually emits
+            # (and that the checkout carries); the single-line spelling this
+            # anchor used before never matched, so the migration path was dead.
             old=(
                 "  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {\n"
                 "    gfx::Point test_point(point);\n"
                 "    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {\n"
-                "      if (static_cast<maho::MahoMiniTopBarView*>(maho_mini_top_bar_)\n"
+                "      if (static_cast<maho::MahoMiniTopBarView*>(\n"
+                "              maho_mini_top_bar_)\n"
                 "              ->IsPositionInWindowCaption(test_point)) {\n"
                 "        return HTCAPTION;\n"
                 "      }\n"
@@ -10959,6 +11425,67 @@ def normalize_maho_test_webui_config(text: str) -> tuple[str, int]:
     return text, include_count + registration_count
 
 
+# grd/grdp files whose message bodies still hardcode the upstream product name.
+# generated_resources.grd uses <ph name="PRODUCT_NAME"> and therefore already
+# resolves to IDS_PRODUCT_NAME ("Maho"); these two spell "Chromium" out in the
+# message body, which is how "your Chromium" reached the UI.
+# Every resource file that spells the product name out instead of deferring to
+# <ph name="PRODUCT_NAME">. The shared *_strings.grdp files keep the literal in
+# an <if expr="not _google_chrome"> branch, and Maho builds unbranded, so those
+# branches are exactly the ones that ship.
+_CHROMIUM_BRANDING_TARGETS: Final[frozenset[str]] = frozenset(
+    {
+        "chrome/app/chromium_strings.grd",
+        "chrome/app/password_manager_ui_strings.grdp",
+        "chrome/app/settings_chromium_strings.grdp",
+        "chrome/app/settings_strings.grdp",
+        "components/autofill_payments_strings.grdp",
+        "components/autofill_strings.grdp",
+        "components/components_chromium_strings.grd",
+        "components/management_strings.grdp",
+        "components/new_or_sad_tab_strings.grdp",
+        "components/page_info_strings.grdp",
+        "components/password_manager_strings.grdp",
+        "components/privacy_sandbox_strings.grd",
+        "components/reset_password_strings.grdp",
+        "components/search_engine_choice_strings.grdp",
+        "components/security_interstitials_strings.grdp",
+        "components/ssl_errors_strings.grdp",
+    }
+)
+
+_GRD_ATTRIBUTE_RE: Final[re.Pattern[str]] = re.compile(r'[\w:-]+="[^"]*"')
+# "Chromium OS" is a different product that is never compiled into a Maho build;
+# renaming it would be wrong, so it is excluded.
+_CHROMIUM_PRODUCT_WORD_RE: Final[re.Pattern[str]] = re.compile(r"\bChromium\b(?! OS)")
+_GRD_MASK_RE: Final[re.Pattern[str]] = re.compile(r"\x00(\d+)\x00")
+
+
+def normalize_chromium_product_branding(text: str) -> tuple[str, int]:
+    """Rebrand user-visible Chromium product strings to Maho.
+
+    Only message BODY text is rewritten. XML attributes (name=, desc=,
+    meaning=, translateable=) are masked first so grit message ids and
+    translator notes keep describing the upstream string, which is what keeps
+    these files diffable against upstream.
+    """
+    rewritten = 0
+    lines: list[str] = []
+    for line in text.split("\n"):
+        masked: list[str] = []
+
+        def _mask(match: re.Match[str]) -> str:
+            masked.append(match.group(0))
+            return f"\x00{len(masked) - 1}\x00"
+
+        body = _GRD_ATTRIBUTE_RE.sub(_mask, line)
+        body, count = _CHROMIUM_PRODUCT_WORD_RE.subn("Maho", body)
+        rewritten += count
+        body = _GRD_MASK_RE.sub(lambda m: masked[int(m.group(1))], body)
+        lines.append(body)
+    return "\n".join(lines), rewritten
+
+
 def normalize_browser_view_features(text: str) -> tuple[str, int]:
     text, include_count = re.subn(
         r'#include "[^"]*/maho_features\.h"\n',
@@ -11844,6 +12371,23 @@ def apply_replacements(
         text = text.replace(replacement.old, replacement.new, 1)
         changed = True
         applied.append(f"patched: {replacement.description}")
+
+    # Branding runs AFTER the replacement loop on purpose: the per-message
+    # Replacements above anchor on upstream text that still says "Chromium",
+    # so sweeping first would destroy their anchors. On a re-run the loop sees
+    # its own `new` text already present and reports "already", then this sweep
+    # is a no-op because nothing user-visible says Chromium any more.
+    branding_rel = (
+        relative_path.replace("\\", "/") if relative_path is not None else exact_rel
+    )
+    if branding_rel in _CHROMIUM_BRANDING_TARGETS:
+        text, branded_count = normalize_chromium_product_branding(text)
+        if branded_count:
+            changed = True
+            applied.append(
+                f"patched: Rebrand {branded_count} user-visible Chromium product "
+                f"strings to Maho"
+            )
 
     # A pristine browser.cc receives the OpenURLFromTab hook in the replacement
     # loop above, so normalize once more after replacements to produce the same

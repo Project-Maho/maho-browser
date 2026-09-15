@@ -81,7 +81,7 @@ export class PageHandlerRemote {
   testConnection(paramsJson: string): Promise<MailHandlerResult>;
   deleteAccount(accountId: string): Promise<MailHandlerResult>;
   oAuthStartUrl(provider: string, clientId: string, redirectUri: string): Promise<MailHandlerResult>;
-  beginOAuth(provider: string): Promise<{ ok: boolean; errorJson: string; state: string }>;
+  beginOAuth(provider: string, reauthorizeAccountId: string): Promise<{ ok: boolean; errorJson: string; state: string }>;
   oAuthComplete(state: string, code: string): Promise<MailHandlerResult>;
   reconnectAccount(accountId: string): Promise<MailHandlerResult>;
   cancelOAuth(state: string): Promise<{ accepted: boolean }>;

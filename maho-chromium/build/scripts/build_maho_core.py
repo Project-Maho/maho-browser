@@ -3,6 +3,7 @@
 
 import argparse
 import glob
+import json
 import os
 import platform
 import shutil
@@ -25,6 +26,55 @@ _DEFAULT_GOOGLE_CLIENT_ID = (
     '650357306759-c6tn05kg1l60ved2ne6cf9jp33moanh0.apps.googleusercontent.com'
 )
 
+# Google token endpoints for these clients reject secretless PKCE exchanges with
+# 400 invalid_request "client_secret is missing" (verified live 2026-09-15;
+# evidence: a1/d6-token-400-root-cause.md). Building the mail FFI against such a
+# client without GMAIL_CLIENT_SECRET ships a broken Gmail OAuth, so fail closed.
+_WEB_CLIENT_IDS_REQUIRING_SECRET = frozenset({_DEFAULT_GOOGLE_CLIENT_ID})
+_GOOGLE_DESKTOP_OAUTH_VAULT = os.path.join(
+    '.secrets', 'maho', 'google_desktop_oauth.json')
+
+
+def _platform_name():
+    if sys.platform == 'darwin':
+        return 'mac'
+    if sys.platform == 'win32':
+        return 'windows'
+    if sys.platform.startswith('linux'):
+        return 'linux'
+    return sys.platform
+
+
+def _vault_google_desktop_oauth_client():
+    """Read the owner-supplied Google OAuth client JSON from the vault.
+
+    Checks platform-specific vault files first (e.g.
+    .secrets/maho/google_windows_oauth.json, google_mac_oauth.json, etc.),
+    then falls back to .secrets/maho/google_desktop_oauth.json.
+
+    Returns (client_id, client_secret), or None when absent/malformed.
+    """
+    plat = _platform_name()
+    candidate_relpaths = [
+        os.path.join('.secrets', 'maho', f'google_{plat}_oauth.json'),
+        os.path.join('.secrets', 'maho', 'google_desktop_oauth.json'),
+    ]
+    for relpath in candidate_relpaths:
+        path = os.path.join(_WORKSPACE_ROOT, relpath)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding='utf-8') as handle:
+                data = json.load(handle)
+            entry = data.get('installed') or data.get('web') or {}
+            client_id = entry.get('client_id')
+            secret = entry.get('client_secret')
+            if isinstance(client_id, str) and client_id and isinstance(secret, str) and secret:
+                return client_id, secret
+        except Exception:
+            continue
+    return None
+
 # Pin the macOS deployment target for the prebuilt Rust static libs to match
 # Chromium's mac_deployment_target (chromium/src/build/config/mac/mac_sdk.gni).
 # cc-rs otherwise stamps vendored C objects (sqlcipher / OpenSSL libcrypto) with
@@ -37,14 +87,41 @@ if sys.platform == 'darwin':
 
 def mail_oauth_build_env():
     cargo_env = os.environ.copy()
-    google_client_id = cargo_env.get(
-        'MAHO_GOOGLE_CLIENT_ID', _DEFAULT_GOOGLE_CLIENT_ID)
+    plat = _platform_name().upper()
+    google_client_id = (
+        cargo_env.get(f'MAHO_GOOGLE_CLIENT_ID_{plat}')
+        or cargo_env.get('MAHO_GOOGLE_CLIENT_ID')
+        or cargo_env.get('GMAIL_CLIENT_ID')
+        or _DEFAULT_GOOGLE_CLIENT_ID
+    )
     cargo_env.setdefault('MAHO_GOOGLE_CLIENT_ID', google_client_id)
     cargo_env.setdefault('GMAIL_CLIENT_ID', google_client_id)
-    google_client_secret = cargo_env.get(
-        'MAHO_GOOGLE_CLIENT_SECRET', cargo_env.get('GMAIL_CLIENT_SECRET'))
+    google_client_secret = (
+        cargo_env.get(f'MAHO_GOOGLE_CLIENT_SECRET_{plat}')
+        or cargo_env.get('MAHO_GOOGLE_CLIENT_SECRET')
+        or cargo_env.get('GMAIL_CLIENT_SECRET')
+    )
+    vault = _vault_google_desktop_oauth_client()
+    if not google_client_secret and vault:
+        vault_id, vault_secret = vault
+        if vault_id == google_client_id:
+            google_client_secret = vault_secret
+        else:
+            raise RuntimeError(
+                f'{_GOOGLE_DESKTOP_OAUTH_VAULT} holds client {vault_id} '
+                f'but this build bakes {google_client_id}; refresh the '
+                'vault file or override GMAIL_CLIENT_ID to match.')
     if google_client_secret:
         cargo_env['GMAIL_CLIENT_SECRET'] = google_client_secret
+    elif google_client_id in _WEB_CLIENT_IDS_REQUIRING_SECRET:
+        raise RuntimeError(
+            'GMAIL_CLIENT_SECRET is required: Google OAuth client '
+            f'{google_client_id} rejects secretless token exchanges (400 '
+            'invalid_request, "client_secret is missing."). Set '
+            f'MAHO_GOOGLE_CLIENT_SECRET_{plat}, MAHO_GOOGLE_CLIENT_SECRET, or '
+            'GMAIL_CLIENT_SECRET in the build environment, or place the '
+            f'client JSON in .secrets/maho/, or bake a desktop-type PKCE-only '
+            'client id via MAHO_GOOGLE_CLIENT_ID / GMAIL_CLIENT_ID.')
     return cargo_env
 
 
