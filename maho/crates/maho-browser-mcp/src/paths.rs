@@ -63,6 +63,50 @@ pub fn linux_default_socket_path() -> PathBuf {
     resolve_linux_socket_path(&base)
 }
 
+/// Ordered macOS socket candidates under one Application Support directory:
+/// branded product data dir first, then the unbranded Chromium data dir.
+#[cfg(target_os = "macos")]
+fn macos_socket_candidates_in(app_support_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        app_support_dir.join("Maho").join("maho.sock"),
+        app_support_dir.join("Chromium").join("maho.sock"),
+    ]
+}
+
+/// Ordered macOS socket candidates for diagnostics and self-probing (the
+/// branded product data dir first, then the unbranded Chromium data dir where
+/// real fork builds bind).
+#[cfg(target_os = "macos")]
+pub fn socket_path_candidates() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    macos_socket_candidates_in(&PathBuf::from(home).join("Library/Application Support"))
+}
+
+/// Resolves the macOS socket path given the Application Support directory.
+///
+/// Resolution order (mirrors [`resolve_linux_socket_path`]):
+/// 1. `MAHO_MCP_SOCKET_PATH` environment variable override (if set and non-empty).
+/// 2. `<base>/Maho/maho.sock` if it exists (the branded product data dir).
+/// 3. `<base>/Chromium/maho.sock` if it exists (the unbranded Chromium data dir
+///    basename where real fork builds actually bind — same situation the Linux
+///    `chromium` probe covers).
+/// 4. Default branded path: `<base>/Maho/maho.sock`.
+#[cfg(target_os = "macos")]
+fn resolve_macos_socket_path(app_support_dir: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var(ENV_SOCKET_PATH) {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+
+    let candidates = macos_socket_candidates_in(app_support_dir);
+    let fallback = candidates[0].clone();
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists())
+        .unwrap_or(fallback)
+}
+
 /// Mirrors Chromium's `DIR_USER_DATA` for the Maho product per platform. The
 /// C++ browser derives both its socket (`<DIR_USER_DATA>/maho.sock`) and its
 /// registry DB (`<DIR_USER_DATA>/MahoCore/maho.db`) from this directory, so the
@@ -107,8 +151,10 @@ pub fn user_data_dir() -> PathBuf {
 /// Resolution order:
 /// 1. `MAHO_MCP_SOCKET_PATH` environment variable (if set and non-empty).
 /// 2. Platform default:
-///    - macOS: `<user_data_dir>/maho.sock` — matches the C++ browser's
-///      `ComputeSocketPath` = `<DIR_USER_DATA>/maho.sock`.
+///    - macOS: `<user_data_dir>/maho.sock` when it exists, else the unbranded
+///      `Chromium` data-dir socket where real fork builds bind (mirrors the
+///      Linux probe); falls back to `<user_data_dir>/maho.sock` — matches the
+///      C++ browser's `ComputeSocketPath` = `<DIR_USER_DATA>/maho.sock`.
 ///    - Linux: delegates to [`linux_default_socket_path`].
 ///    - Windows: `\\.\pipe\maho-browser-<username>` named pipe.
 pub fn default_socket_path() -> PathBuf {
@@ -122,10 +168,12 @@ pub fn default_socket_path() -> PathBuf {
     platform_default_path()
 }
 
-/// macOS Unix domain socket lives directly inside the user-data dir.
+/// macOS Unix domain socket lives directly inside the user-data dir; probe
+/// branded and unbranded data-dir basenames exactly like the Linux resolver.
 #[cfg(target_os = "macos")]
 fn platform_default_path() -> PathBuf {
-    user_data_dir().join("maho.sock")
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    resolve_macos_socket_path(&PathBuf::from(home).join("Library/Application Support"))
 }
 
 /// Linux Unix domain socket resolution delegate.
@@ -369,7 +417,8 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         assert!(
-            path_str.contains("Library/Application Support/Maho/maho.sock"),
+            path_str.contains("Library/Application Support/Maho/maho.sock")
+                || path_str.contains("Library/Application Support/Chromium/maho.sock"),
             "unexpected path: {}",
             path_str
         );
@@ -383,14 +432,145 @@ mod tests {
     }
 
     // On macOS the socket sits directly in the user-data dir (<user_data_dir>/maho.sock).
+    // Pin HOME to an empty temp dir so no live Maho/Chromium socket can win the
+    // probe and the branded fallback is exercised deterministically.
     #[cfg(target_os = "macos")]
     #[test]
     fn socket_parent_equals_user_data_dir() {
         let _guard = lock_env();
+        let temp_dir_path = std::env::temp_dir().join(format!(
+            "maho_macos_parent_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir_path).unwrap();
+        let _temp_dir_guard = TempDirGuard(temp_dir_path.clone());
+
+        let _home_guard = EnvVarGuard::set("HOME", &temp_dir_path);
         unsafe { std::env::remove_var(ENV_SOCKET_PATH) };
         let path = default_socket_path();
         assert_eq!(path.parent().unwrap(), user_data_dir());
         assert_eq!(path.file_name().unwrap(), "maho.sock");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_socket_path_prefers_branded_when_both_exist() {
+        let _guard = lock_env();
+        let temp_dir_path = std::env::temp_dir().join(format!(
+            "maho_macos_both_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir_path).unwrap();
+        let _temp_dir_guard = TempDirGuard(temp_dir_path.clone());
+
+        for base in ["Maho", "Chromium"] {
+            let dir = temp_dir_path.join("Library/Application Support").join(base);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("maho.sock"), b"").unwrap();
+        }
+
+        let _home_guard = EnvVarGuard::set("HOME", &temp_dir_path);
+        unsafe { std::env::remove_var(ENV_SOCKET_PATH) };
+
+        let resolved = default_socket_path();
+        assert_eq!(
+            resolved,
+            temp_dir_path
+                .join("Library/Application Support/Maho")
+                .join("maho.sock")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_socket_path_falls_back_to_unbranded_chromium_socket() {
+        let _guard = lock_env();
+        let temp_dir_path = std::env::temp_dir().join(format!(
+            "maho_macos_unbranded_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir_path).unwrap();
+        let _temp_dir_guard = TempDirGuard(temp_dir_path.clone());
+
+        let chromium_dir = temp_dir_path
+            .join("Library/Application Support/Chromium")
+            .join("maho.sock");
+        std::fs::create_dir_all(chromium_dir.parent().unwrap()).unwrap();
+        std::fs::write(&chromium_dir, b"").unwrap();
+
+        let _home_guard = EnvVarGuard::set("HOME", &temp_dir_path);
+        unsafe { std::env::remove_var(ENV_SOCKET_PATH) };
+
+        let resolved = default_socket_path();
+        assert_eq!(resolved, chromium_dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_socket_path_defaults_to_branded_when_neither_exists() {
+        let _guard = lock_env();
+        let temp_dir_path = std::env::temp_dir().join(format!(
+            "maho_macos_neither_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir_path).unwrap();
+        let _temp_dir_guard = TempDirGuard(temp_dir_path.clone());
+
+        let _home_guard = EnvVarGuard::set("HOME", &temp_dir_path);
+        unsafe { std::env::remove_var(ENV_SOCKET_PATH) };
+
+        let resolved = default_socket_path();
+        assert_eq!(
+            resolved,
+            temp_dir_path
+                .join("Library/Application Support/Maho")
+                .join("maho.sock")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_socket_path_env_override_precedes_existing_files() {
+        let _guard = lock_env();
+        let temp_dir_path = std::env::temp_dir().join(format!(
+            "maho_macos_env_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir_path).unwrap();
+        let _temp_dir_guard = TempDirGuard(temp_dir_path.clone());
+
+        let chromium_dir = temp_dir_path
+            .join("Library/Application Support/Chromium")
+            .join("maho.sock");
+        std::fs::create_dir_all(chromium_dir.parent().unwrap()).unwrap();
+        std::fs::write(&chromium_dir, b"").unwrap();
+
+        let _home_guard = EnvVarGuard::set("HOME", &temp_dir_path);
+        let override_sock = PathBuf::from("/custom/explicit/maho.sock");
+        let _env_guard = EnvVarGuard::set(ENV_SOCKET_PATH, &override_sock);
+
+        let resolved = default_socket_path();
+        assert_eq!(resolved, override_sock);
     }
 
     // Parity with the C++ server's SanitizeUsername: only [A-Za-z0-9_-] survive,

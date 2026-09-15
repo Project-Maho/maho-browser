@@ -2,6 +2,7 @@ mod auth;
 mod browser;
 pub mod config;
 mod credits;
+mod doctor;
 mod platform;
 
 use maho_cli::browser_pipe;
@@ -122,6 +123,11 @@ pub enum Commands {
     Vault {
         #[command(subcommand)]
         command: VaultCommands,
+    },
+
+    Doctor {
+        #[arg(long)]
+        fix: bool,
     },
 
     /// Show version info
@@ -1240,6 +1246,8 @@ async fn main() -> Result<()> {
                 }
             },
         },
+
+        Commands::Doctor { fix } => cmd_doctor(fix, socket_path.as_deref(), json_output).await,
 
         // ─── Version ──────────────────────────────────────────────────────
         Commands::Version => {
@@ -3604,6 +3612,14 @@ async fn discover_tool_catalog(
     let discovery = client.call("tools/list", serde_json::json!({})).await?;
     validate_tool_discovery(&discovery)?;
     Ok((discovery, "live_browser", true))
+}
+
+async fn cmd_doctor(
+    fix: bool,
+    socket_path: Option<&str>,
+    json_output: bool,
+) -> Result<()> {
+    doctor::run(fix, socket_path, json_output).await
 }
 
 async fn cmd_tool(
