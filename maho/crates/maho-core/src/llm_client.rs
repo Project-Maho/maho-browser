@@ -91,10 +91,11 @@ pub async fn extract_facts_json(
             .to_string()
     } else {
         let url = format!("{}/chat/completions", auth.base_url.trim_end_matches('/'));
-        let resp: ChatCompletionResp = client
-            .post(&url)
-            .bearer_auth(&auth.api_key)
-            .json(&body)
+        let mut req = client.post(&url).json(&body);
+        if !auth.api_key.is_empty() {
+            req = req.bearer_auth(&auth.api_key);
+        }
+        let resp: ChatCompletionResp = req
             .send()
             .await
             .map_err(|e| CoreError::Network(e.to_string()))?
@@ -166,10 +167,11 @@ pub async fn summarize_browsing(auth: &AuthSnapshot, text: &str) -> Result<Strin
             .to_string())
     } else {
         let url = format!("{}/chat/completions", auth.base_url.trim_end_matches('/'));
-        let resp: ChatCompletionResp = client
-            .post(&url)
-            .bearer_auth(&auth.api_key)
-            .json(&body)
+        let mut req = client.post(&url).json(&body);
+        if !auth.api_key.is_empty() {
+            req = req.bearer_auth(&auth.api_key);
+        }
+        let resp: ChatCompletionResp = req
             .send()
             .await
             .map_err(|e| CoreError::Network(e.to_string()))?

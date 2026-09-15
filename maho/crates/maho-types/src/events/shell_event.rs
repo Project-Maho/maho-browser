@@ -10,6 +10,14 @@ use crate::settings::SettingsUpdate;
 use crate::space::{SpaceColor, SpaceConfigUpdate};
 use crate::tab::TabRole;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryAuthSnapshot {
+    pub provider: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QuickAction {
@@ -695,6 +703,9 @@ pub enum ShellEvent {
     LlmError {
         request_id: String,
         error: String,
+    },
+    SetMemoryAuth {
+        auth: Option<MemoryAuthSnapshot>,
     },
     RequestPagePreview {
         url: String,

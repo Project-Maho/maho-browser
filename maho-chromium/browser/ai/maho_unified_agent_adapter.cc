@@ -255,17 +255,15 @@ std::optional<std::string> PreferredProviderForRuntime(PrefService* prefs) {
   if (!prefs) {
     return std::nullopt;
   }
-  const std::string provider = prefs->GetString(maho::ai_prefs::kProvider);
-  if (provider.empty()) {
-    return std::nullopt;
+  auto route_res =
+      maho::ai::ResolveMahoAiModelRoute(prefs, maho::ai::MahoAiTask::kChat);
+  if (route_res.is_ok()) {
+    if (route_res.route.provider_id == "maho-managed") {
+      return "managed";
+    }
+    return route_res.route.provider_id;
   }
-  if (provider == "maho-managed") {
-    return "managed";
-  }
-  if (provider == "openai-compatible") {
-    return "openai";
-  }
-  return provider;
+  return std::nullopt;
 }
 
 }  // namespace
@@ -416,6 +414,96 @@ void MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(const std::string& provider) {
         base::BindOnce(&MahoUnifiedAgentAdapter::ClearBYOKKeyOnOwningSequence,
                        adapter->active_adapter_weak_ptr_, provider));
   }
+}
+
+void MahoUnifiedAgentAdapter::NotifyAISettingsChanged(PrefService* prefs) {
+  if (prefs) {
+    maho::ai::SyncMemoryAuthFromPrefs(prefs, nullptr);
+  }
+  base::AutoLock lock(GetActiveAdaptersLock());
+  for (auto* adapter : GetActiveAdapters()) {
+    if (adapter->prefs_ != prefs) {
+      continue;
+    }
+    adapter->owning_task_runner_->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<MahoUnifiedAgentAdapter> weak_adapter) {
+              if (!weak_adapter || !weak_adapter->prefs_) {
+                return;
+              }
+              DCHECK_CALLED_ON_VALID_SEQUENCE(weak_adapter->sequence_checker_);
+              weak_adapter->SyncAISettingsFromPrefs();
+            },
+            adapter->active_adapter_weak_ptr_));
+  }
+}
+
+bool MahoUnifiedAgentAdapter::SyncAISettingsFromPrefs(uint64_t generation) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (prefs_) {
+    maho::ai::SyncMemoryAuthFromPrefs(prefs_, encryptor_ ? encryptor_.get() : nullptr);
+  }
+  if (!session_ffi_resources_ || !session_ffi_resources_->byok_snapshot ||
+      !session_ffi_resources_->byok_bridge) {
+    return false;
+  }
+
+  auto replacement =
+      std::make_shared<ByokSnapshot>(*session_ffi_resources_->byok_snapshot);
+  if (prefs_) {
+    replacement->encrypted_byok_openai_b64 =
+        prefs_->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64);
+    replacement->encrypted_byok_anthropic_b64 =
+        prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64);
+
+    auto route_res =
+        maho::ai::ResolveMahoAiModelRoute(prefs_, maho::ai::MahoAiTask::kChat);
+    if (route_res.is_ok()) {
+      replacement->custom_provider = route_res.route.provider_id;
+      replacement->custom_base_url = route_res.route.endpoint;
+      replacement->custom_model = route_res.route.model_id;
+      if (route_res.route.provider_id == "openai-compatible") {
+        std::string dec =
+            maho::ai::DecryptProviderKey(prefs_, "openai-compatible", encryptor_ ? encryptor_.get() : nullptr);
+        replacement->custom_api_key =
+            dec.empty() ? prefs_->GetString(maho::ai_prefs::kApiKey) : dec;
+      } else {
+        replacement->custom_api_key =
+            prefs_->GetString(maho::ai_prefs::kApiKey);
+      }
+    } else {
+      replacement->custom_provider =
+          prefs_->GetString(maho::ai_prefs::kProvider);
+      replacement->custom_api_key =
+          prefs_->GetString(maho::ai_prefs::kApiKey);
+      replacement->custom_base_url =
+          prefs_->GetString(maho::ai_prefs::kBaseUrl);
+      replacement->custom_model =
+          prefs_->GetString(maho::ai_prefs::kModel);
+    }
+  }
+  replacement->encryptor = encryptor_;
+
+  session_ffi_resources_->byok_snapshot = replacement;
+  const auto preferred = PreferredProviderForRuntime(prefs_);
+  {
+    base::AutoLock lock(session_ffi_resources_->byok_bridge->lock);
+    session_ffi_resources_->byok_bridge->snapshot = replacement;
+    session_ffi_resources_->byok_bridge->preferred_provider =
+        preferred.value_or(std::string());
+  }
+  if (agent_session_ && agent_ffi_ && agent_ffi_->set_preferred_provider) {
+    const char* provider = preferred ? preferred->c_str() : nullptr;
+    if (!agent_ffi_->set_preferred_provider(agent_session_, provider)) {
+      if (generation > 0) {
+        TransitionToCredentialErrorForGeneration(
+            generation, MahoAiRuntimeErrorCode::kUnsupportedProvider);
+      }
+      return false;
+    }
+  }
+  return true;
 }
 
 void MahoUnifiedAgentAdapter::NotifyMailReadConsentChanged(PrefService* prefs) {
@@ -740,18 +828,39 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
         session_resources->callback_handle->user_data();
     session_resources->byok_snapshot = std::make_shared<ByokSnapshot>();
     if (prefs_) {
+      maho::ai::SyncMemoryAuthFromPrefs(prefs_, encryptor_ ? encryptor_.get() : nullptr);
       session_resources->byok_snapshot->encrypted_byok_openai_b64 =
           prefs_->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64);
       session_resources->byok_snapshot->encrypted_byok_anthropic_b64 =
           prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64);
-      session_resources->byok_snapshot->custom_provider =
-          prefs_->GetString(maho::ai_prefs::kProvider);
-      session_resources->byok_snapshot->custom_api_key =
-          prefs_->GetString(maho::ai_prefs::kApiKey);
-      session_resources->byok_snapshot->custom_base_url =
-          prefs_->GetString(maho::ai_prefs::kBaseUrl);
-      session_resources->byok_snapshot->custom_model =
-          prefs_->GetString(maho::ai_prefs::kModel);
+      auto route_res =
+          maho::ai::ResolveMahoAiModelRoute(prefs_, maho::ai::MahoAiTask::kChat);
+      if (route_res.is_ok()) {
+        session_resources->byok_snapshot->custom_provider =
+            route_res.route.provider_id;
+        session_resources->byok_snapshot->custom_base_url =
+            route_res.route.endpoint;
+        session_resources->byok_snapshot->custom_model =
+            route_res.route.model_id;
+        if (route_res.route.provider_id == "openai-compatible") {
+          std::string dec = maho::ai::DecryptProviderKey(
+              prefs_, "openai-compatible", encryptor_ ? encryptor_.get() : nullptr);
+          session_resources->byok_snapshot->custom_api_key =
+              dec.empty() ? prefs_->GetString(maho::ai_prefs::kApiKey) : dec;
+        } else {
+          session_resources->byok_snapshot->custom_api_key =
+              prefs_->GetString(maho::ai_prefs::kApiKey);
+        }
+      } else {
+        session_resources->byok_snapshot->custom_provider =
+            prefs_->GetString(maho::ai_prefs::kProvider);
+        session_resources->byok_snapshot->custom_api_key =
+            prefs_->GetString(maho::ai_prefs::kApiKey);
+        session_resources->byok_snapshot->custom_base_url =
+            prefs_->GetString(maho::ai_prefs::kBaseUrl);
+        session_resources->byok_snapshot->custom_model =
+            prefs_->GetString(maho::ai_prefs::kModel);
+      }
       const auto& creds = prefs_->GetDict(maho::ai_prefs::kMcpCredentials);
       for (auto item : creds) {
         if (item.second.is_string()) {
@@ -2527,11 +2636,53 @@ void MahoUnifiedAgentAdapter::ClearSecureStorageEncryptorForTesting() {
   session_ffi_resources_->byok_bridge->snapshot = std::move(replacement);
 }
 
+void MahoUnifiedAgentAdapter::RenewExpiringProviderOAuth(PrefService* prefs) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!prefs || !encryptor_) {
+    return;
+  }
+  for (const char* provider : {"openai", "anthropic"}) {
+    if (!maho::ai_oauth::HasOAuthSession(prefs, provider) ||
+        !maho::ai_oauth::IsAccessTokenExpiring(prefs, provider)) {
+      continue;
+    }
+    const std::string refresh_token = maho::ai_oauth::LoadProviderRefreshToken(
+        prefs, *encryptor_, provider);
+    if (refresh_token.empty()) {
+      continue;
+    }
+    maho::ai_oauth::RefreshProviderOAuthTokens(
+        provider, maho::ai_oauth::GetOAuthClientId(prefs, provider),
+        refresh_token,
+        base::BindOnce(&MahoUnifiedAgentAdapter::OnProviderOAuthRenewed,
+                       weak_factory_.GetWeakPtr(), std::string(provider)));
+  }
+}
+
+void MahoUnifiedAgentAdapter::OnProviderOAuthRenewed(
+    const std::string& provider,
+    bool ok,
+    maho::ai_oauth::ProviderTokens tokens,
+    const std::string& error_message) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  PrefService* prefs = prefs_;
+  if (!ok || !prefs || !encryptor_) {
+    LOG(WARNING) << "[MahoAgent] provider OAuth renewal failed for " << provider
+                 << ": " << error_message;
+    return;
+  }
+  if (maho::ai_oauth::StoreProviderOAuthTokens(prefs, *encryptor_, provider,
+                                               tokens)) {
+    NotifyAISettingsChanged(prefs);
+  }
+}
+
 void MahoUnifiedAgentAdapter::OnOsCryptReady(
     os_crypt_async::Encryptor encryptor) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   encryptor_ =
       std::make_shared<os_crypt_async::Encryptor>(std::move(encryptor));
+  RenewExpiringProviderOAuth(prefs_);
   if (!session_ffi_resources_ || !session_ffi_resources_->byok_snapshot ||
       !session_ffi_resources_->byok_bridge ||
       !session_ffi_resources_->byok_bridge->active.load(

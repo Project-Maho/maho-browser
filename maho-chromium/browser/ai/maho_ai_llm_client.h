@@ -25,6 +25,7 @@ class Encryptor;
 }
 
 namespace network {
+struct ResourceRequest;
 class SharedURLLoaderFactory;
 class SimpleURLLoader;
 }  // namespace network
@@ -39,6 +40,7 @@ class MahoAiLlmClient {
     CompletionRequest(CompletionRequest&&);
     CompletionRequest& operator=(CompletionRequest&&);
 
+    std::optional<std::string> provider_id;
     std::optional<std::string> endpoint;
     std::optional<std::string> model;
     base::ListValue prompt_messages;
@@ -93,6 +95,8 @@ class MahoAiLlmClient {
     virtual RequestPlan CreateRequestPlan(CompletionRequest request,
                                           const std::string& endpoint,
                                           const std::string& model) const = 0;
+    virtual void ApplyHeaders(network::ResourceRequest* resource_request,
+                              const std::string& credential) const;
     virtual void ProcessResponseBody(
         std::string body,
         std::string* sse_buffer,
@@ -113,12 +117,16 @@ class MahoAiLlmClient {
 
   static void RegisterProfilePrefs(PrefService* prefs) = delete;
 
-  bool HasConfiguredCredential() const;
+  bool HasConfiguredCredential(
+      const std::optional<std::string>& provider_id = std::nullopt) const;
   void Reset();
   void StartCompletion(CompletionRequest request,
                        TokenCallback on_token,
                        CompleteCallback on_complete,
                        ErrorCallback on_error);
+
+  std::unique_ptr<ProviderTransport> CreateTransportForProvider(
+      const std::string& provider_id) const;
 
  private:
   friend class MahoAiLlmClientStreamConsumer;
@@ -157,6 +165,7 @@ class MahoAiLlmClient {
   std::unique_ptr<MahoAiLlmClientStreamConsumer> stream_consumer_;
   bool provider_adapter_v2_enabled_ = false;
   std::unique_ptr<ProviderTransport> provider_transport_;
+  std::unique_ptr<ProviderTransport> active_transport_;
   std::string sse_buffer_;
   CompletionResult completion_result_;
   TokenCallback on_token_;

@@ -17,6 +17,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "content/public/browser/storage_partition.h"
 #include "maho/browser/ai/maho_ai_llm_client.h"
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_bridge.h"
@@ -125,6 +126,13 @@ class TidyRun {
       return;
     }
 
+    auto route_res = maho::ai::ResolveMahoAiModelRoute(
+        browser_->profile()->GetPrefs(), maho::ai::MahoAiTask::kTabTidy);
+    if (!route_res.is_ok()) {
+      Finish(0, "Tab Tidy model is not configured");
+      return;
+    }
+
     auto url_loader_factory = browser_->profile()
                                   ->GetDefaultStoragePartition()
                                   ->GetURLLoaderFactoryForBrowserProcess();
@@ -136,6 +144,9 @@ class TidyRun {
         ai_gate_);
 
     MahoAiLlmClient::CompletionRequest request;
+    request.provider_id = route_res.route.provider_id;
+    request.endpoint = route_res.route.endpoint;
+    request.model = route_res.route.model_id;
     request.prompt_messages = base::ListValue(std::move(*prompt_messages));
 
     llm_client_->StartCompletion(

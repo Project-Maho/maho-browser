@@ -15,6 +15,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ai/maho_extract_prompt_messages.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"  // nogncheck
@@ -117,8 +118,10 @@ void MahoInlineEditHandler::RequestEdit(const std::string& text,
     return;
   }
 
-  if (!llm_client_.HasConfiguredCredential()) {
-    std::move(callback).Run("No API key configured.");
+  auto route_res = maho::ai::ResolveMahoAiModelRoute(
+      prefs_, maho::ai::MahoAiTask::kInlineEdit);
+  if (!route_res.is_ok()) {
+    std::move(callback).Run("No AI model configured for Inline Edit.");
     return;
   }
 
@@ -216,7 +219,14 @@ void MahoInlineEditHandler::StartLlmRequest(
   }
   pending_callback_ = std::move(callback);
 
+  auto route_res = maho::ai::ResolveMahoAiModelRoute(
+      prefs_, maho::ai::MahoAiTask::kInlineEdit);
   MahoAiLlmClient::CompletionRequest request;
+  if (route_res.is_ok()) {
+    request.provider_id = route_res.route.provider_id;
+    request.endpoint = route_res.route.endpoint;
+    request.model = route_res.route.model_id;
+  }
   request.prompt_messages = std::move(prompt_messages);
   llm_client_.StartCompletion(
       std::move(request), MahoAiLlmClient::TokenCallback(),

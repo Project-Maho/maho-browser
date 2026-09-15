@@ -292,4 +292,18 @@ TEST_F(MahoAiLlmClientTest, ErrorCompletionMayDestroyOwningClient) {
   EXPECT_FALSE(client);
 }
 
+TEST_F(MahoAiLlmClientTest, PerRequestProviderSelection) {
+  prefs_.registry()->RegisterStringPref(maho::ai_prefs::kByokOpenAIEncryptedB64, "");
+  prefs_.registry()->RegisterStringPref(maho::ai_prefs::kByokAnthropicEncryptedB64, "");
+
+  MahoAiLlmClient client(&prefs_, nullptr, nullptr, false);
+
+  prefs_.SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "key-anthropic");
+  EXPECT_TRUE(client.HasConfiguredCredential("anthropic"));
+  EXPECT_FALSE(client.HasConfiguredCredential("openai"));
+
+  prefs_.SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "key-openai");
+  EXPECT_TRUE(client.HasConfiguredCredential("openai"));
+}
+
 }  // namespace

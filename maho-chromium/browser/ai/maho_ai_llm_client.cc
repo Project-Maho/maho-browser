@@ -17,6 +17,7 @@
 #include "chrome/browser/browser_process.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
 
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -24,6 +25,10 @@
 namespace {
 
 constexpr size_t kMaxLlmResponseBytes = 2 * 1024 * 1024;  // 2 MB
+// Upper bound on the tool-call slots a single response may address. The SSE
+// `index` field is model-controlled, so it also bounds the vector this parser
+// will grow on demand.
+constexpr size_t kMaxLlmToolCallsPerResponse = 256;
 
 const char kMahoAiApiKeyPref[] = "maho.ai.api_key";
 const char kMahoAiEndpointPref[] = "maho.ai.base_url";
@@ -166,6 +171,14 @@ void ProcessSseBuffer(std::string* sse_buffer,
 
         const std::optional<int> index = tool_call->FindInt("index");
         const int call_index = index.value_or(static_cast<int>(i));
+        // `index` arrives from the model stream and has no lower bound. A
+        // negative value casts to a huge size_t whose +1 wraps to 0, so the
+        // resize below would CLEAR the vector and the subscript would write at
+        // SIZE_MAX. Reject out-of-range indices instead.
+        if (call_index < 0 ||
+            static_cast<size_t>(call_index) >= kMaxLlmToolCallsPerResponse) {
+          continue;
+        }
         const std::string* id = tool_call->FindString("id");
         const base::DictValue* function = tool_call->FindDict("function");
         if (!function) {
@@ -194,6 +207,75 @@ void ProcessSseBuffer(std::string* sse_buffer,
             return;
           }
           parsed_call.arguments_json += *arguments;
+        }
+      }
+    }
+  }
+  if (cursor > 0) {
+    sse_buffer->erase(0, cursor);
+  }
+}
+
+void ProcessAnthropicSseBuffer(
+    std::string* sse_buffer,
+    MahoAiLlmClient::CompletionResult* completion_result,
+    const MahoAiLlmClient::TokenCallback& on_token,
+    bool* overflowed) {
+  size_t cursor = 0;
+  while (true) {
+    size_t pos = sse_buffer->find("\n\n", cursor);
+    if (pos == std::string::npos) {
+      break;
+    }
+    std::string event_block(sse_buffer->substr(cursor, pos - cursor));
+    cursor = pos + 2;
+
+    for (const auto& line : base::SplitStringPiece(
+             event_block, "\n", base::KEEP_WHITESPACE,
+             base::SPLIT_WANT_NONEMPTY)) {
+      if (!base::StartsWith(line, "data:")) {
+        continue;
+      }
+
+      std::string data = std::string(line.substr(5));
+      size_t first_non_space = data.find_first_not_of(" \t");
+      if (first_non_space != std::string::npos) {
+        data = data.substr(first_non_space);
+      } else {
+        data.clear();
+      }
+
+      if (data == "[DONE]") {
+        sse_buffer->erase(0, cursor);
+        return;
+      }
+
+      auto json = base::JSONReader::Read(data, base::JSON_PARSE_RFC);
+      if (!json || !json->is_dict()) {
+        continue;
+      }
+
+      const std::string* type = json->GetDict().FindString("type");
+      if (type && *type == "message_stop") {
+        completion_result->finish_reason = "stop";
+      }
+
+      const base::DictValue* delta = json->GetDict().FindDict("delta");
+      if (delta) {
+        const std::string* text = delta->FindString("text");
+        if (text && !text->empty()) {
+          if (completion_result->full_text.size() + text->size() >
+              kMaxLlmResponseBytes) {
+            *overflowed = true;
+            return;
+          }
+          completion_result->full_text += *text;
+          if (on_token) {
+            on_token.Run(*text);
+          }
+        }
+        if (const std::string* stop_reason = delta->FindString("stop_reason")) {
+          completion_result->finish_reason = *stop_reason;
         }
       }
     }
@@ -237,18 +319,37 @@ class MahoAiLlmClientStreamConsumer final
   raw_ptr<MahoAiLlmClient> client_;
 };
 
+void MahoAiLlmClient::ProviderTransport::ApplyHeaders(
+    network::ResourceRequest* resource_request,
+    const std::string& credential) const {
+  if (!credential.empty()) {
+    resource_request->headers.SetHeader("Authorization",
+                                        "Bearer " + credential);
+  }
+  resource_request->headers.SetHeader("Content-Type", "application/json");
+}
+
 namespace {
 
 class OpenAICompatibleProviderTransport final
     : public MahoAiLlmClient::ProviderTransport {
  public:
+  explicit OpenAICompatibleProviderTransport(std::string provider_id = "")
+      : provider_id_(std::move(provider_id)) {}
+
   bool HasConfiguredCredential(PrefService* prefs) const override {
+    if (!provider_id_.empty()) {
+      return maho::ai::IsProviderConnected(prefs, provider_id_);
+    }
     return !GetConfiguredApiKey(prefs).empty() ||
            !prefs->GetString(kMahoAiEndpointPref).empty() ||
            prefs->GetString(kMahoAiProviderPref) == "local-server";
   }
 
-  std::string GetCredential(PrefService* prefs, const os_crypt_async::Encryptor*) const override {
+  std::string GetCredential(PrefService* prefs, const os_crypt_async::Encryptor* encryptor) const override {
+    if (!provider_id_.empty()) {
+      return maho::ai::DecryptProviderKey(prefs, provider_id_, encryptor);
+    }
     return GetConfiguredApiKey(prefs);
   }
 
@@ -258,11 +359,16 @@ class OpenAICompatibleProviderTransport final
     if (request.endpoint.has_value()) {
       return request.endpoint;
     }
+    if (!provider_id_.empty()) {
+      std::string ep = maho::ai::ResolveProviderEndpoint(prefs, provider_id_);
+      if (!ep.empty()) return ep;
+    }
     const std::string endpoint = prefs->GetString(kMahoAiEndpointPref);
     if (!endpoint.empty()) {
       return endpoint;
     }
-    if (prefs->GetString(kMahoAiProviderPref) == "local-server") {
+    if (prefs->GetString(kMahoAiProviderPref) == "local-server" ||
+        provider_id_ == "local-server") {
       return std::string(kDefaultLocalServerEndpoint);
     }
     return std::nullopt;
@@ -273,6 +379,10 @@ class OpenAICompatibleProviderTransport final
       PrefService* prefs) const override {
     if (request.model.has_value()) {
       return request.model;
+    }
+    if (!provider_id_.empty()) {
+      std::string last = maho::ai::GetProviderLastModel(prefs, provider_id_);
+      if (!last.empty()) return last;
     }
     const std::string model = prefs->GetString(kMahoAiModelPref);
     if (model.empty()) {
@@ -297,7 +407,10 @@ class OpenAICompatibleProviderTransport final
     AppendChatCompletionsPath(&endpoint_url);
 
     return MahoAiLlmClient::RequestPlan{
-        .url = endpoint_url.is_valid() ? endpoint_url : GURL(kOpenAIEndpoint),
+        // Fail closed on a malformed user-configured endpoint: falling back to
+        // kOpenAIEndpoint would ship the user's prompts and BYOK key to OpenAI
+        // without telling them. The caller rejects an invalid URL.
+        .url = endpoint_url,
         .body_json = std::move(body_json)};
   }
 
@@ -309,6 +422,117 @@ class OpenAICompatibleProviderTransport final
       bool* overflowed) const override {
     *sse_buffer += NormalizeSseChunk(std::move(body));
     ProcessSseBuffer(sse_buffer, completion_result, on_token, overflowed);
+  }
+
+ private:
+  std::string provider_id_;
+};
+
+class AnthropicProviderTransport final
+    : public MahoAiLlmClient::ProviderTransport {
+ public:
+  bool HasConfiguredCredential(PrefService* prefs) const override {
+    return maho::ai::IsProviderConnected(prefs, maho::ai::kProviderAnthropic);
+  }
+
+  std::string GetCredential(PrefService* prefs,
+                            const os_crypt_async::Encryptor* encryptor) const override {
+    return maho::ai::DecryptProviderKey(prefs, maho::ai::kProviderAnthropic, encryptor);
+  }
+
+  std::optional<std::string> ResolveEndpoint(
+      const MahoAiLlmClient::CompletionRequest& request,
+      PrefService* prefs) const override {
+    if (request.endpoint.has_value()) {
+      return request.endpoint;
+    }
+    return std::string("https://api.anthropic.com/v1");
+  }
+
+  std::optional<std::string> ResolveModel(
+      const MahoAiLlmClient::CompletionRequest& request,
+      PrefService* prefs) const override {
+    if (request.model.has_value()) {
+      return request.model;
+    }
+    std::string last =
+        maho::ai::GetProviderLastModel(prefs, maho::ai::kProviderAnthropic);
+    if (!last.empty()) {
+      return last;
+    }
+    const std::string model = prefs->GetString(kMahoAiModelPref);
+    if (!model.empty()) {
+      return model;
+    }
+    return std::string("claude-3-5-sonnet-20241022");
+  }
+
+  MahoAiLlmClient::RequestPlan CreateRequestPlan(
+      MahoAiLlmClient::CompletionRequest request,
+      const std::string& endpoint,
+      const std::string& model) const override {
+    base::DictValue request_body;
+    request_body.Set("model", model);
+    request_body.Set("stream", true);
+    request_body.Set("max_tokens", 4096);
+
+    base::ListValue anthropic_messages;
+    std::string system_prompt;
+    for (const auto& item : request.prompt_messages) {
+      const base::DictValue* msg = item.GetIfDict();
+      if (!msg) continue;
+      const std::string* role = msg->FindString("role");
+      const std::string* content = msg->FindString("content");
+      if (role && *role == "system") {
+        if (content) {
+          if (!system_prompt.empty()) system_prompt += "\n\n";
+          system_prompt += *content;
+        }
+      } else if (role && content) {
+        base::DictValue m;
+        m.Set("role", *role);
+        m.Set("content", *content);
+        anthropic_messages.Append(std::move(m));
+      }
+    }
+    if (!system_prompt.empty()) {
+      request_body.Set("system", system_prompt);
+    }
+    request_body.Set("messages", std::move(anthropic_messages));
+
+    std::string body_json;
+    base::JSONWriter::Write(request_body, &body_json);
+
+    GURL endpoint_url(endpoint);
+    std::string path = endpoint_url.spec();
+    if (!base::EndsWith(path, "/", base::CompareCase::SENSITIVE)) {
+      path.push_back('/');
+    }
+    path.append("messages");
+    endpoint_url = GURL(path);
+
+    return MahoAiLlmClient::RequestPlan{
+        .url = endpoint_url,
+        .body_json = std::move(body_json)};
+  }
+
+  void ApplyHeaders(network::ResourceRequest* resource_request,
+                    const std::string& credential) const override {
+    if (!credential.empty()) {
+      resource_request->headers.SetHeader("x-api-key", credential);
+    }
+    resource_request->headers.SetHeader("anthropic-version", "2023-06-01");
+    resource_request->headers.SetHeader("Content-Type", "application/json");
+  }
+
+  void ProcessResponseBody(
+      std::string body,
+      std::string* sse_buffer,
+      MahoAiLlmClient::CompletionResult* completion_result,
+      const MahoAiLlmClient::TokenCallback& on_token,
+      bool* overflowed) const override {
+    *sse_buffer += NormalizeSseChunk(std::move(body));
+    ProcessAnthropicSseBuffer(sse_buffer, completion_result, on_token, overflowed);
   }
 };
 
@@ -370,7 +594,10 @@ class ProviderAdapterV2Transport final
     AppendChatCompletionsPath(&endpoint_url);
 
     return MahoAiLlmClient::RequestPlan{
-        .url = endpoint_url.is_valid() ? endpoint_url : GURL(kOpenAIEndpoint),
+        // Fail closed on a malformed user-configured endpoint: falling back to
+        // kOpenAIEndpoint would ship the user's prompts and BYOK key to OpenAI
+        // without telling them. The caller rejects an invalid URL.
+        .url = endpoint_url,
         .body_json = std::move(body_json)};
   }
 
@@ -518,9 +745,33 @@ MahoAiLlmClient::CompletionResult::CompletionResult(CompletionResult&&) = defaul
 MahoAiLlmClient::CompletionResult&
 MahoAiLlmClient::CompletionResult::operator=(CompletionResult&&) = default;
 
-bool MahoAiLlmClient::HasConfiguredCredential() const {
+bool MahoAiLlmClient::HasConfiguredCredential(
+    const std::optional<std::string>& provider_id) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  return provider_transport_->HasConfiguredCredential(prefs_);
+  std::string target_provider = provider_id.value_or(
+      prefs_->GetString(kMahoAiProviderPref));
+  auto transport = CreateTransportForProvider(target_provider);
+  return transport ? transport->HasConfiguredCredential(prefs_)
+                   : (provider_transport_ && provider_transport_->HasConfiguredCredential(prefs_));
+}
+
+std::unique_ptr<MahoAiLlmClient::ProviderTransport>
+MahoAiLlmClient::CreateTransportForProvider(
+    const std::string& provider_id) const {
+  if (provider_id == "maho-managed") {
+    return std::make_unique<MahoManagedProviderTransport>();
+  }
+  if (provider_id == "anthropic") {
+    return std::make_unique<AnthropicProviderTransport>();
+  }
+  if (provider_id == "openai" || provider_id == "openai-compatible" ||
+      provider_id == "local-server") {
+    return std::make_unique<OpenAICompatibleProviderTransport>(provider_id);
+  }
+  if (provider_adapter_v2_enabled_) {
+    return std::make_unique<ProviderAdapterV2Transport>();
+  }
+  return std::make_unique<OpenAICompatibleProviderTransport>();
 }
 
 void MahoAiLlmClient::Reset() {
@@ -528,6 +779,7 @@ void MahoAiLlmClient::Reset() {
   weak_factory_.InvalidateWeakPtrs();
   stream_consumer_.reset();
   url_loader_.reset();
+  active_transport_.reset();
   sse_buffer_.clear();
   completion_result_ = CompletionResult();
   on_token_.Reset();
@@ -545,6 +797,7 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
 
   Reset();
 
+  active_request_.provider_id = request.provider_id;
   active_request_.endpoint = request.endpoint;
   active_request_.model = request.model;
   active_request_.prompt_messages = request.prompt_messages.Clone();
@@ -558,7 +811,16 @@ void MahoAiLlmClient::StartCompletion(CompletionRequest request,
     return;
   }
 
-  if (provider_transport_->HasConfiguredCredential(prefs_) && !GetEncryptor()) {
+  std::string provider_id = request.provider_id.value_or(
+      prefs_->GetString(kMahoAiProviderPref));
+  active_transport_ = CreateTransportForProvider(provider_id);
+  if (!active_transport_) {
+    active_transport_ = CreateTransportForProvider("");
+  }
+
+  if (active_transport_ &&
+      active_transport_->HasConfiguredCredential(prefs_) &&
+      !GetEncryptor()) {
     pending_request_ = PendingRequest{
         std::move(request), on_token_,
         std::move(on_complete_), std::move(on_error_)};
@@ -576,10 +838,22 @@ void MahoAiLlmClient::PerformStartCompletion(CompletionRequest request) {
     return;
   }
 
+  if (!active_transport_) {
+    std::string provider_id = request.provider_id.value_or(
+        prefs_->GetString(kMahoAiProviderPref));
+    active_transport_ = CreateTransportForProvider(provider_id);
+  }
+  ProviderTransport* transport = active_transport_ ? active_transport_.get()
+                                                   : provider_transport_.get();
+  if (!transport) {
+    FinishWithError("No AI provider transport available");
+    return;
+  }
+
   const std::optional<std::string> endpoint =
-      provider_transport_->ResolveEndpoint(request, prefs_);
+      transport->ResolveEndpoint(request, prefs_);
   const std::optional<std::string> model =
-      provider_transport_->ResolveModel(request, prefs_);
+      transport->ResolveModel(request, prefs_);
   if (!endpoint.has_value() || !model.has_value()) {
     FinishWithError(
         "No AI model is configured. Check your Local Server or AI settings.");
@@ -587,18 +861,24 @@ void MahoAiLlmClient::PerformStartCompletion(CompletionRequest request) {
   }
 
   const RequestPlan request_plan =
-      provider_transport_->CreateRequestPlan(std::move(request), *endpoint,
-                                             *model);
+      transport->CreateRequestPlan(std::move(request), *endpoint,
+                                   *model);
+
+  // A user-configured endpoint that does not parse must abort the request.
+  // Silently substituting a default provider would leak the prompt and the
+  // Authorization header to a host the user never chose.
+  if (!request_plan.url.is_valid()) {
+    FinishWithError(
+        "The configured AI endpoint is not a valid URL. Check your Local "
+        "Server or AI settings.");
+    return;
+  }
 
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = request_plan.url;
   resource_request->method = "POST";
-  const std::string api_key = provider_transport_->GetCredential(prefs_, GetEncryptor());
-  if (!api_key.empty()) {
-    resource_request->headers.SetHeader("Authorization",
-                                        "Bearer " + api_key);
-  }
-  resource_request->headers.SetHeader("Content-Type", "application/json");
+  const std::string api_key = transport->GetCredential(prefs_, GetEncryptor());
+  transport->ApplyHeaders(resource_request.get(), api_key);
 
   url_loader_ = network::SimpleURLLoader::Create(std::move(resource_request),
                                                  kTrafficAnnotation);
@@ -614,9 +894,13 @@ void MahoAiLlmClient::OnResponseDataReceived(std::string body_chunk) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   bool overflowed = false;
-  provider_transport_->ProcessResponseBody(std::move(body_chunk), &sse_buffer_,
-                                           &completion_result_, on_token_,
-                                           &overflowed);
+  ProviderTransport* transport = active_transport_ ? active_transport_.get()
+                                                   : provider_transport_.get();
+  if (transport) {
+    transport->ProcessResponseBody(std::move(body_chunk), &sse_buffer_,
+                                   &completion_result_, on_token_,
+                                   &overflowed);
+  }
   if (overflowed) {
     FinishWithError("LLM response exceeded 2 MB cap");
   }

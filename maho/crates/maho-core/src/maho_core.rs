@@ -348,6 +348,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn set_memory_auth_updates_memory_manager_snapshot() {
+        let mut core = MahoCore::new();
+        let auth = maho_types::events::shell_event::MemoryAuthSnapshot {
+            provider: "openai-compatible".to_string(),
+            base_url: "http://127.0.0.1:18801/v1".to_string(),
+            api_key: "custom-key".to_string(),
+            model: "gpt-oss-120b-medium".to_string(),
+        };
+
+        let updates = core.handle_event(ShellEvent::SetMemoryAuth {
+            auth: Some(auth),
+        });
+        assert!(updates.is_empty());
+
+        let updates_clear = core.handle_event(ShellEvent::SetMemoryAuth { auth: None });
+        assert!(updates_clear.is_empty());
+    }
+
+    #[test]
     fn boost_url_lookup_inherits_parent_domain_and_prefers_exact_host() {
         let mut core = MahoCore::new();
         let parent = core
@@ -6724,6 +6743,16 @@ impl MahoCore {
                 ref error,
             } => {
                 return self.llm_manager.handle_error(request_id, error);
+            }
+            ShellEvent::SetMemoryAuth { ref auth } => {
+                let snapshot = auth.as_ref().map(|a| crate::memory_manager::AuthSnapshot {
+                    provider: a.provider.clone(),
+                    base_url: a.base_url.clone(),
+                    api_key: a.api_key.clone(),
+                    model: a.model.clone(),
+                });
+                self.set_memory_auth(snapshot);
+                return vec![];
             }
             ShellEvent::ChatSessionEnded { ref session_id } => {
                 if let Some(ref storage) = self.storage {

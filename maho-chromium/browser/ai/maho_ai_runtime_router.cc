@@ -4,12 +4,17 @@
 
 #include <utility>
 
+#include "base/base64.h"
+#include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/values.h"
+#include "components/os_crypt/async/common/encryptor.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
@@ -322,6 +327,94 @@ MahoAiRouteResult ResolveMahoAiModelRoute(PrefService* prefs, MahoAiTask task) {
   std::string ep = ResolveProviderEndpoint(prefs, default_provider);
   bool inherited = (task != MahoAiTask::kChat);
   return {MahoAiRouteError::kOk, {default_provider, default_model, ep, inherited}};
+}
+
+namespace {
+
+std::string DecryptKeyHelper(const std::string& encrypted_b64,
+                             const os_crypt_async::Encryptor* encryptor) {
+  if (encrypted_b64.empty() || !encryptor) {
+    return "";
+  }
+  std::string encrypted_bytes;
+  if (!base::Base64Decode(encrypted_b64, &encrypted_bytes)) {
+    return "";
+  }
+  std::string plaintext;
+  if (encryptor->DecryptString(encrypted_bytes, &plaintext)) {
+    return plaintext;
+  }
+  return "";
+}
+
+}  // namespace
+
+std::string DecryptProviderKey(PrefService* prefs,
+                               const std::string& provider_id,
+                               const os_crypt_async::Encryptor* encryptor) {
+  if (!prefs) {
+    return "";
+  }
+  if (provider_id == kProviderOpenAI) {
+    std::string b64 = prefs->GetString(ai_prefs::kByokOpenAIEncryptedB64);
+    return DecryptKeyHelper(b64, encryptor);
+  }
+  if (provider_id == kProviderAnthropic) {
+    std::string b64 = prefs->GetString(ai_prefs::kByokAnthropicEncryptedB64);
+    return DecryptKeyHelper(b64, encryptor);
+  }
+  if (provider_id == kProviderOpenAICompatible) {
+    std::string b64 =
+        prefs->GetString(ai_prefs::kByokOpenAICompatibleEncryptedB64);
+    std::string decrypted = DecryptKeyHelper(b64, encryptor);
+    if (!decrypted.empty()) {
+      return decrypted;
+    }
+    return prefs->GetString(ai_prefs::kApiKey);
+  }
+  if (provider_id == kProviderMahoManaged) {
+    if (encryptor) {
+      return maho::auth::GetRelayAccessToken(prefs, *encryptor);
+    }
+    return "";
+  }
+  return "";
+}
+
+void SyncMemoryAuthFromPrefs(PrefService* prefs,
+                             const os_crypt_async::Encryptor* encryptor) {
+  MahoCore* core = maho::GetCore();
+  if (!core || !prefs) {
+    return;
+  }
+
+  MahoAiRouteResult route_res =
+      ResolveMahoAiModelRoute(prefs, MahoAiTask::kMemory);
+  if (!route_res.is_ok()) {
+    base::DictValue event;
+    event.Set("kind", "set_memory_auth");
+    event.Set("auth", base::Value());
+    std::string json;
+    base::JSONWriter::Write(event, &json);
+    maho::core::HandleEvent(core, json.c_str());
+    return;
+  }
+
+  std::string api_key =
+      DecryptProviderKey(prefs, route_res.route.provider_id, encryptor);
+
+  base::DictValue event;
+  event.Set("kind", "set_memory_auth");
+  base::DictValue auth_dict;
+  auth_dict.Set("provider", route_res.route.provider_id);
+  auth_dict.Set("base_url", route_res.route.endpoint);
+  auth_dict.Set("api_key", api_key);
+  auth_dict.Set("model", route_res.route.model_id);
+  event.Set("auth", std::move(auth_dict));
+
+  std::string json;
+  base::JSONWriter::Write(event, &json);
+  maho::core::HandleEvent(core, json.c_str());
 }
 
 }  // namespace maho::ai

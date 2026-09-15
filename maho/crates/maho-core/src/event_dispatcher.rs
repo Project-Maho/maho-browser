@@ -1587,7 +1587,7 @@ impl EventDispatcher {
 
             ShellEvent::RequestSkillsList | ShellEvent::UseSkill { .. } | ShellEvent::ChatMessage { .. }
             | ShellEvent::ToolPermissionResponse { .. } | ShellEvent::ToolActionResult { .. }
-            | ShellEvent::ChatSessionEnded { .. } => vec![],
+            | ShellEvent::ChatSessionEnded { .. } | ShellEvent::SetMemoryAuth { .. } => vec![],
         }
     }
 }

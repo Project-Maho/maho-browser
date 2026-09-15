@@ -3304,6 +3304,32 @@ void MahoAIPageHandler::RequestTabTidy(
     return;
   }
 
+  std::string req_type_str;
+  if (const std::string* rt = llm_request->FindString("request_type")) {
+    req_type_str = *rt;
+  }
+  maho::ai::MahoAiTask task = maho::ai::MahoAiTask::kTabTidy;
+  if (req_type_str == "tidy_tabs" || req_type_str == "TidyTabs") {
+    task = maho::ai::MahoAiTask::kTabTidy;
+  } else if (req_type_str == "tidy_tab_title" || req_type_str == "TidyTabTitle") {
+    task = maho::ai::MahoAiTask::kTabTitle;
+  } else if (req_type_str == "tidy_download" || req_type_str == "TidyDownload") {
+    task = maho::ai::MahoAiTask::kDownloadTidy;
+  } else if (req_type_str == "page_preview" || req_type_str == "PagePreview") {
+    task = maho::ai::MahoAiTask::kPagePreview;
+  } else if (req_type_str == "chat_completion" || req_type_str == "ChatCompletion") {
+    task = maho::ai::MahoAiTask::kChat;
+  }
+
+  auto route_res = maho::ai::ResolveMahoAiModelRoute(
+      browser_->profile()->GetPrefs(), task);
+  if (!route_res.is_ok()) {
+    LOG(ERROR) << "MahoAIPageHandler::RequestTabTidy: No route for task "
+               << TaskToString(task);
+    std::move(callback).Run({});
+    return;
+  }
+
   // Build and fire the LLM completion request.
   auto* url_loader_factory = browser_->profile()
                                  ->GetDefaultStoragePartition()

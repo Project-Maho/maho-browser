@@ -476,3 +476,77 @@ TEST_F(MahoAiRuntimeRouterTest, Migration_ModelCacheInvalidatedForMismatchedEndp
       prefs_.GetDict(maho::ai_prefs::kModelCache);
   EXPECT_EQ(cache.FindDict("openai-compatible"), nullptr);
 }
+
+TEST_F(MahoAiRuntimeRouterTest, Phase2_ConcurrentConsumerRoutingWithOverrides) {
+  // Connect 3 providers simultaneously: OpenAI, Anthropic, OpenAI-compatible
+  prefs_.SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "key-openai");
+  prefs_.SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "key-anthropic");
+  maho::ai::SetProviderBaseUrl(&prefs_, maho::ai::kProviderOpenAICompatible,
+                               "http://127.0.0.1:18801/v1");
+
+  // Set Default to OpenAI with gpt-4o
+  prefs_.SetString(maho::ai_prefs::kProvider, maho::ai::kProviderOpenAI);
+  prefs_.SetString(maho::ai_prefs::kModel, "gpt-4o");
+
+  // Set overrides:
+  // Tab Tidy -> Anthropic (claude-3-5-sonnet)
+  // Inline Edit -> OpenAI-compatible (gpt-oss-120b-medium)
+  // Memory -> Anthropic (claude-3-5-haiku)
+  maho::ai::SetTaskOverride(&prefs_, maho::ai::MahoAiTask::kTabTidy,
+                            maho::ai::kProviderAnthropic, "claude-3-5-sonnet");
+  maho::ai::SetTaskOverride(&prefs_, maho::ai::MahoAiTask::kInlineEdit,
+                            maho::ai::kProviderOpenAICompatible, "gpt-oss-120b-medium");
+  maho::ai::SetTaskOverride(&prefs_, maho::ai::MahoAiTask::kMemory,
+                            maho::ai::kProviderAnthropic, "claude-3-5-haiku");
+
+  // Verify Chat & Agent observes Default (OpenAI / gpt-4o)
+  auto chat_res = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kChat);
+  EXPECT_TRUE(chat_res.is_ok());
+  EXPECT_EQ(chat_res.route.provider_id, maho::ai::kProviderOpenAI);
+  EXPECT_EQ(chat_res.route.model_id, "gpt-4o");
+  EXPECT_FALSE(chat_res.route.inherited_from_default);
+
+  // Verify Tab Tidy observes its Anthropic override
+  auto tidy_res = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kTabTidy);
+  EXPECT_TRUE(tidy_res.is_ok());
+  EXPECT_EQ(tidy_res.route.provider_id, maho::ai::kProviderAnthropic);
+  EXPECT_EQ(tidy_res.route.model_id, "claude-3-5-sonnet");
+  EXPECT_FALSE(tidy_res.route.inherited_from_default);
+
+  // Verify Inline Edit observes its OpenAI-compatible override
+  auto edit_res = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kInlineEdit);
+  EXPECT_TRUE(edit_res.is_ok());
+  EXPECT_EQ(edit_res.route.provider_id, maho::ai::kProviderOpenAICompatible);
+  EXPECT_EQ(edit_res.route.model_id, "gpt-oss-120b-medium");
+  EXPECT_FALSE(edit_res.route.inherited_from_default);
+
+  // Verify Memory observes its Anthropic override
+  auto mem_res = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kMemory);
+  EXPECT_TRUE(mem_res.is_ok());
+  EXPECT_EQ(mem_res.route.provider_id, maho::ai::kProviderAnthropic);
+  EXPECT_EQ(mem_res.route.model_id, "claude-3-5-haiku");
+  EXPECT_FALSE(mem_res.route.inherited_from_default);
+
+  // Non-overridden task (e.g. PagePreview) inherits Default
+  auto preview_res = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kPagePreview);
+  EXPECT_TRUE(preview_res.is_ok());
+  EXPECT_EQ(preview_res.route.provider_id, maho::ai::kProviderOpenAI);
+  EXPECT_EQ(preview_res.route.model_id, "gpt-4o");
+  EXPECT_TRUE(preview_res.route.inherited_from_default);
+
+  // Disconnect Anthropic -> Tab Tidy and Memory must fail closed without fallback
+  prefs_.SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "");
+  EXPECT_FALSE(maho::ai::IsProviderConnected(&prefs_, maho::ai::kProviderAnthropic));
+
+  auto tidy_fail = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kTabTidy);
+  EXPECT_FALSE(tidy_fail.is_ok());
+  EXPECT_EQ(tidy_fail.error, maho::ai::MahoAiRouteError::kProviderDisconnected);
+
+  auto mem_fail = maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kMemory);
+  EXPECT_FALSE(mem_fail.is_ok());
+  EXPECT_EQ(mem_fail.error, maho::ai::MahoAiRouteError::kProviderDisconnected);
+
+  // Chat & Inline Edit remain completely unaffected
+  EXPECT_TRUE(maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kChat).is_ok());
+  EXPECT_TRUE(maho::ai::ResolveMahoAiModelRoute(&prefs_, maho::ai::MahoAiTask::kInlineEdit).is_ok());
+}

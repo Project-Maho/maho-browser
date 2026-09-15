@@ -17,6 +17,10 @@
 class Browser;
 class PrefService;
 
+namespace os_crypt_async {
+class Encryptor;
+}
+
 namespace network {
 class SharedURLLoaderFactory;
 }
@@ -122,6 +126,15 @@ std::string ResolveProviderEndpoint(PrefService* prefs,
                                     const std::string& provider_id);
 
 MahoAiRouteResult ResolveMahoAiModelRoute(PrefService* prefs, MahoAiTask task);
+
+std::string DecryptProviderKey(
+    PrefService* prefs,
+    const std::string& provider_id,
+    const os_crypt_async::Encryptor* encryptor);
+
+void SyncMemoryAuthFromPrefs(
+    PrefService* prefs,
+    const os_crypt_async::Encryptor* encryptor);
 
 }  // namespace maho::ai
 
