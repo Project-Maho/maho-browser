@@ -48,6 +48,9 @@ class MahoModelListFetcher {
   // Subscribe to background refresh events (Mojo push).
   void SetRefreshedCallback(RefreshedCallback callback);
 
+  // Invalidate cache entry for a specific provider.
+  void InvalidateCache(const std::string& provider_id);
+
   // Offline fallback models shared by selector surfaces that cannot initiate a
   // model-list fetch themselves.
   static std::vector<std::string> GetHardcodedFallback(

@@ -3852,16 +3852,6 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   settings->credit_balance_usd = last_known_credit_balance_;
   settings->tier_ceiling_usd = last_known_tier_ceiling_;
 
-  // Legacy migration
-  if (!prefs_->GetBoolean(ai::kSettingsMigratedFromGoogleProvider)) {
-    if (settings->provider == "google") {
-      prefs_->SetString(ai::kProvider, "");
-      settings->provider = "";
-    }
-    prefs_->SetBoolean(ai::kSettingsMigratedFromGoogleProvider, true);
-    prefs_->CommitPendingWrite();
-  }
-
   // Server-side coercion (single source of truth; client is read-only).
   if (settings->has_relay_session && settings->provider.empty()) {
     prefs_->SetString(ai::kProvider, "maho-managed");

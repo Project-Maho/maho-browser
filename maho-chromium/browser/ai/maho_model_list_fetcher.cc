@@ -17,6 +17,7 @@
 #include "components/os_crypt/async/browser/os_crypt_async.h"
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/third_party/maho/maho_ffi.h"
@@ -132,7 +133,7 @@ void MahoModelListFetcher::PerformFetch(const std::string& provider_id,
     auth_header_value = key;
     anthropic_version = "2025-06-01";
   } else if (provider_id == "openai-compatible") {
-    std::string base_url = prefs_->GetString(maho::ai_prefs::kBaseUrl);
+    std::string base_url = maho::ai::GetProviderBaseUrl(prefs_, "openai-compatible");
     if (base_url.empty()) {
       std::move(callback).Run(GetHardcodedFallback(provider_id), false);
       return;
@@ -145,13 +146,24 @@ void MahoModelListFetcher::PerformFetch(const std::string& provider_id,
     } else {
       url = base_url + "/models";
     }
-    std::string key = prefs_->GetString(maho::ai_prefs::kApiKey);
+    std::string encrypted = prefs_->GetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64);
+    std::string key = DecryptKey(encrypted);
+    if (key.empty()) {
+      key = prefs_->GetString(maho::ai_prefs::kApiKey);
+    }
     if (!key.empty()) {
       auth_header_name = "Authorization";
       auth_header_value = "Bearer " + key;
     }
   } else if (provider_id == "local-server") {
-    url = "http://localhost:11434/api/tags";
+    std::string base_url = maho::ai::GetProviderBaseUrl(prefs_, "local-server");
+    if (base_url.empty()) {
+      base_url = "http://localhost:11434";
+    }
+    if (base_url.back() == '/') {
+      base_url.pop_back();
+    }
+    url = base_url + "/api/tags";
   } else if (provider_id == "maho-managed") {
     char* p = maho_core_managed_proxy_url();
     std::string proxy_url(p ? p : "https://proxy.maho.co/v1");
@@ -263,6 +275,22 @@ std::optional<std::vector<std::string>> MahoModelListFetcher::ReadCache(
   const base::DictValue* provider_entry = cache.FindDict(provider_id);
   if (!provider_entry) return std::nullopt;
 
+  if (provider_id == "openai-compatible" || provider_id == "local-server") {
+    const base::DictValue* src = provider_entry->FindDict("source");
+    const std::string* cached_url = src ? src->FindString("base_url") : nullptr;
+    std::string current_url = maho::ai::GetProviderBaseUrl(prefs_, provider_id);
+    if (!current_url.empty() && current_url.back() == '/') {
+      current_url.pop_back();
+    }
+    std::string norm_cached = (cached_url ? *cached_url : "");
+    if (!norm_cached.empty() && norm_cached.back() == '/') {
+      norm_cached.pop_back();
+    }
+    if (norm_cached != current_url) {
+      return std::nullopt;
+    }
+  }
+
   const base::ListValue* models_list = provider_entry->FindList("models");
   std::optional<double> fetched_at_val = provider_entry->FindDouble("fetched_at");
   if (!models_list || !fetched_at_val) return std::nullopt;
@@ -288,7 +316,23 @@ void MahoModelListFetcher::WriteCache(const std::string& provider_id,
   }
   provider_entry.Set("models", std::move(models_list));
   provider_entry.Set("fetched_at", base::Time::Now().InSecondsFSinceUnixEpoch());
+  if (provider_id == "openai-compatible" || provider_id == "local-server") {
+    base::DictValue source_dict;
+    std::string current_url = maho::ai::GetProviderBaseUrl(prefs_, provider_id);
+    if (!current_url.empty() && current_url.back() == '/') {
+      current_url.pop_back();
+    }
+    source_dict.Set("base_url", current_url);
+    provider_entry.Set("source", std::move(source_dict));
+  }
+  provider_entry.Set("metadata", base::DictValue());
   update->Set(provider_id, std::move(provider_entry));
+}
+
+void MahoModelListFetcher::InvalidateCache(const std::string& provider_id) {
+  if (!prefs_) return;
+  ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kModelCache);
+  update->Remove(provider_id);
 }
 
 std::vector<std::string> MahoModelListFetcher::GetHardcodedFallback(

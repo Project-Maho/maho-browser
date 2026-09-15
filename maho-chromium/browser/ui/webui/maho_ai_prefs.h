@@ -44,6 +44,15 @@ inline constexpr char kByokAnthropicEncryptedB64[] = "maho.ai.byok.anthropic.enc
 inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants";
 inline constexpr char kMcpCredentials[] = "maho.ai.byok.mcp_credentials";
 
+// Models settings v1 prefs.
+inline constexpr char kProviderConfigs[] = "maho.ai.provider_configs";
+inline constexpr char kTaskModels[] = "maho.ai.task_models";
+inline constexpr char kByokOpenAICompatibleEncryptedB64[] =
+    "maho.ai.byok.openai_compatible.encrypted_b64";
+inline constexpr char kModelsSettingsMigratedV1[] =
+    "maho.ai.models_settings_migrated_v1";
+
+
 // One-time migration flag: true once macOS defaults have been copied into
 // Chromium prefs. Prevents re-migration on subsequent launches.
 inline constexpr char kSettingsMigratedFromMacOSDefaults[] =

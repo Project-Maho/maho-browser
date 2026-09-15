@@ -51,6 +51,15 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterInt64Pref(ai_prefs::kOAuthAnthropicExpiresAt, 0);
   registry->RegisterDictionaryPref(ai_prefs::kAgentToolGrants);
   registry->RegisterDictionaryPref(ai_prefs::kMcpCredentials);
+
+  // Models settings v1 prefs.
+  registry->RegisterDictionaryPref(ai_prefs::kProviderConfigs);
+  registry->RegisterDictionaryPref(ai_prefs::kTaskModels);
+  registry->RegisterStringPref(
+      ai_prefs::kByokOpenAICompatibleEncryptedB64, std::string());
+  registry->RegisterBooleanPref(
+      ai_prefs::kModelsSettingsMigratedV1, false);
+
   registry->RegisterBooleanPref(
       ai_prefs::kSettingsMigratedFromMacOSDefaults, false);
   registry->RegisterBooleanPref(

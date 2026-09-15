@@ -6121,7 +6121,7 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
   sync_relay_client_ = std::make_unique<maho::MahoSyncRelayClient>(profile);
   sync_relay_client_->StartPolling();
 
-  maho::MigrateAiSettingsFromMacOSDefaults(profile);
+  maho::MigrateAiSettings(profile);
 
   maho::MahoTabIdSessionHelper::GetForProfile(profile);
 
