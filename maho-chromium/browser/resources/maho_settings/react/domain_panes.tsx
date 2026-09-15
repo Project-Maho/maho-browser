@@ -714,13 +714,15 @@ export function SelectShell<T extends string>(
       options: Array<{label: string; value: T; disabled?: boolean; description?: string}>;
       value: T;
     }) {
-  const placeholder = options[0]?.label || ariaLabel;
+  const unknownValue = value !== '' && !options.some(option => option.value === value);
 
   return (
     <div className={SELECT_SHELL_CLASS}>
       <Select value={value} onValueChange={nextValue => onChange(nextValue as T)}>
         <SelectTrigger aria-label={ariaLabel} className={SELECT_TRIGGER_CLASS}>
-          <SelectValue placeholder={placeholder} />
+          <SelectValue placeholder={ariaLabel}>
+            {unknownValue ? value : undefined}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
           {options.map(option => (

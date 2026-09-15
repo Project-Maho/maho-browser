@@ -18,6 +18,7 @@ const tests = [
   "e2e_shortcuts_import_export.ts",
   "e2e_pane_content_blocker.ts",
   "e2e_pane_ai.ts",
+  "e2e_pane_ai_hydration.ts",
   "e2e_pane_account_sync.ts",
   "e2e_pane_autofill.ts",
   "e2e_pane_atc.ts",
