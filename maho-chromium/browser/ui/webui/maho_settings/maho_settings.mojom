@@ -185,11 +185,81 @@ struct AISettings {
   bool has_byok_openai;
   bool has_byok_anthropic;
 
+  // OAuth sign-in state per provider. The access token itself lands in the
+  // matching BYOK slot, so has_byok_* may be true purely because of OAuth.
+  bool has_oauth_openai;
+  bool has_oauth_anthropic;
+  string oauth_client_id_openai;
+  string oauth_client_id_anthropic;
+
   bool has_relay_session;
   string relay_tier;
   string relay_subscription_status;
   double credit_balance_usd;
   double tier_ceiling_usd;
+};
+
+enum AIConnectionState {
+  kDisconnected,
+  kConnected,
+  kNeedsAuth,
+  kOffline,
+  kError,
+};
+
+enum AIModelCapability {
+  kUnknown,
+  kSupported,
+  kUnsupported,
+};
+
+struct AIModelDescriptor {
+  string id;
+  string label;
+  AIModelCapability vision;
+  AIModelCapability tools;
+};
+
+struct AIProviderDescriptor {
+  string id;
+  string label;
+  string auth_label;
+  AIConnectionState state;
+  bool is_default_provider;
+  string? base_url;
+  string? last_model_id;
+  array<AIModelDescriptor> models;
+  bool models_loading;
+  string? models_error;
+};
+
+struct AITaskModelRoute {
+  string task_id;
+  bool inherits_default;
+  string effective_provider_id;
+  string effective_model_id;
+  bool available;
+  string? unavailable_reason;
+};
+
+struct AIModelsSettings {
+  array<AIProviderDescriptor> providers;
+  string default_provider_id;
+  string default_model_id;
+  array<AITaskModelRoute> task_routes;
+  bool has_relay_session;
+};
+
+struct AIProviderTestResult {
+  bool ok;
+  string message;
+};
+
+struct AITaskReplacement {
+  string task_id;
+  bool inherit_default;
+  string? provider_id;
+  string? model_id;
 };
 
 struct MojoKeyCombo {
@@ -681,6 +751,20 @@ interface PageHandler {
   ToggleATCRule(string rule_id, bool enabled);
 
   GetAISettings() => (AISettings settings);
+  GetAIModelsSettings() => (AIModelsSettings settings);
+  SetDefaultAIModel(string provider_id, string model_id)
+      => (bool accepted, string? error);
+  SetTaskAIModel(string task_id, string? provider_id, string? model_id)
+      => (bool accepted, string? error);
+  SetAIProviderBaseUrl(string provider_id, string base_url)
+      => (bool accepted, string? error);
+  TestAIProvider(string provider_id)
+      => (AIProviderTestResult result);
+  DisconnectAIProvider(string provider_id,
+                       string? replacement_default_provider_id,
+                       string? replacement_default_model_id,
+                       array<AITaskReplacement> task_replacements)
+      => (bool accepted, array<string> affected_task_ids, string? error);
   SetAIProvider(string provider);
   SetAIBaseUrl(string url);
   SetAIApiKey(string key);
@@ -827,6 +911,15 @@ interface PageHandler {
   SetBYOKKey(string provider, string key) => (bool success);
   ClearBYOKKey(string provider) => (bool success);
 
+  // Provider OAuth — signs in to "openai" or "anthropic" with the PKCE
+  // loopback flow instead of a pasted API key. The resulting access token is
+  // stored in that provider's encrypted BYOK slot.
+  SetAIProviderOAuthClientId(string provider, string client_id)
+      => (bool success);
+  SignInToAIProvider(string provider)
+      => (bool success, string error_message);
+  SignOutOfAIProvider(string provider) => (bool success);
+
   // Auth — Identity domain (Account pane)
   // Login attempts to sign in with email/password against the Maho relay.
   // On success: stores encrypted tokens via OSCrypt and fires AccountStatusChanged.
@@ -931,6 +1024,7 @@ interface PageHandler {
   MailListSmimeIdentities(string account_id) => (bool ok, string result_json);
   MailDeleteSmimeIdentity(string id) => (bool ok);
   MailSetDefaultSmimeIdentity(string account_id, string identity_id) => (bool ok);
+  MailTestConnection(string request_json) => (bool ok, string result_json);
 };
 
 interface Page {

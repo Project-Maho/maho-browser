@@ -21,6 +21,7 @@
 #include "base/timer/timer.h"
 #include "components/os_crypt/async/common/encryptor.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "maho/browser/ui/webui/maho_ai_provider_oauth.h"
 #include "maho/browser/extensions/maho_extension_state_bridge.h"
 #include "chrome/browser/profiles/profile_manager_observer.h"
 #include "chrome/browser/profiles/profile_observer.h"
@@ -553,6 +554,25 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void ToggleATCRule(const std::string& rule_id, bool enabled) override;
 
   void GetAISettings(GetAISettingsCallback callback) override;
+  void GetAIModelsSettings(GetAIModelsSettingsCallback callback) override;
+  void SetDefaultAIModel(const std::string& provider_id,
+                         const std::string& model_id,
+                         SetDefaultAIModelCallback callback) override;
+  void SetTaskAIModel(const std::string& task_id,
+                      const std::optional<std::string>& provider_id,
+                      const std::optional<std::string>& model_id,
+                      SetTaskAIModelCallback callback) override;
+  void SetAIProviderBaseUrl(const std::string& provider_id,
+                            const std::string& base_url,
+                            SetAIProviderBaseUrlCallback callback) override;
+  void TestAIProvider(const std::string& provider_id,
+                      TestAIProviderCallback callback) override;
+  void DisconnectAIProvider(
+      const std::string& provider_id,
+      const std::optional<std::string>& replacement_default_provider_id,
+      const std::optional<std::string>& replacement_default_model_id,
+      std::vector<maho_settings::mojom::AITaskReplacementPtr> task_replacements,
+      DisconnectAIProviderCallback callback) override;
   void SetAIProvider(const std::string& provider) override;
   void SetAIBaseUrl(const std::string& url) override;
   void SetAIApiKey(const std::string& key) override;
@@ -727,6 +747,19 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void SetBYOKKey(const std::string& provider,
                   const std::string& key,
                   SetBYOKKeyCallback callback) override;
+  void SetAIProviderOAuthClientId(
+      const std::string& provider,
+      const std::string& client_id,
+      SetAIProviderOAuthClientIdCallback callback) override;
+  void SignInToAIProvider(const std::string& provider,
+                          SignInToAIProviderCallback callback) override;
+  void SignOutOfAIProvider(const std::string& provider,
+                           SignOutOfAIProviderCallback callback) override;
+  void OnProviderOAuthCompleted(const std::string& provider,
+                                SignInToAIProviderCallback callback,
+                                bool ok,
+                                maho::ai_oauth::ProviderTokens tokens,
+                                const std::string& error_message);
   void ClearBYOKKey(const std::string& provider,
                     ClearBYOKKeyCallback callback) override;
 
@@ -749,6 +782,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void MailListAccounts(MailListAccountsCallback callback) override;
   void MailAddAccount(const std::string& request_json,
                       MailAddAccountCallback callback) override;
+  void MailTestConnection(const std::string& request_json,
+                          MailTestConnectionCallback callback) override;
   void MailDeleteAccount(const std::string& account_id,
                          MailDeleteAccountCallback callback) override;
   void MailBeginOAuth(const std::string& provider,

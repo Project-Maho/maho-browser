@@ -207,11 +207,78 @@ export interface AISettings {
   mailReadAllowed: boolean;
   hasByokOpenai: boolean;
   hasByokAnthropic: boolean;
+  hasOauthOpenai: boolean;
+  hasOauthAnthropic: boolean;
+  oauthClientIdOpenai: string;
+  oauthClientIdAnthropic: string;
   hasRelaySession: boolean;
   relayTier: string;
   relaySubscriptionStatus: string;
   creditBalanceUsd: number;
   tierCeilingUsd: number;
+}
+
+export enum AIConnectionState {
+  kDisconnected = 0,
+  kConnected = 1,
+  kNeedsAuth = 2,
+  kOffline = 3,
+  kError = 4,
+}
+
+export enum AIModelCapability {
+  kUnknown = 0,
+  kSupported = 1,
+  kUnsupported = 2,
+}
+
+export interface AIModelDescriptor {
+  id: string;
+  label: string;
+  vision: AIModelCapability;
+  tools: AIModelCapability;
+}
+
+export interface AIProviderDescriptor {
+  id: string;
+  label: string;
+  authLabel: string;
+  state: AIConnectionState;
+  isDefaultProvider: boolean;
+  baseUrl?: string;
+  lastModelId?: string;
+  models: AIModelDescriptor[];
+  modelsLoading: boolean;
+  modelsError?: string;
+}
+
+export interface AITaskModelRoute {
+  taskId: string;
+  inheritsDefault: boolean;
+  effectiveProviderId: string;
+  effectiveModelId: string;
+  available: boolean;
+  unavailableReason?: string;
+}
+
+export interface AIModelsSettings {
+  providers: AIProviderDescriptor[];
+  defaultProviderId: string;
+  defaultModelId: string;
+  taskRoutes: AITaskModelRoute[];
+  hasRelaySession: boolean;
+}
+
+export interface AIProviderTestResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface AITaskReplacement {
+  taskId: string;
+  inheritDefault: boolean;
+  providerId?: string;
+  modelId?: string;
 }
 
 export interface MojoKeyCombo {
@@ -689,6 +756,16 @@ export class PageHandlerRemote {
   removeATCRule(ruleId: string): Promise<void>;
   toggleATCRule(ruleId: string, enabled: boolean): Promise<void>;
   getAISettings(): Promise<{settings: AISettings}>;
+  getAIModelsSettings(): Promise<{settings: AIModelsSettings}>;
+  setDefaultAIModel(providerId: string, modelId: string): Promise<{accepted: boolean; error?: string}>;
+  setTaskAIModel(taskId: string, providerId?: string, modelId?: string): Promise<{accepted: boolean; error?: string}>;
+  setAIProviderBaseUrl(providerId: string, baseUrl: string): Promise<{accepted: boolean; error?: string}>;
+  testAIProvider(providerId: string): Promise<{result: AIProviderTestResult}>;
+  disconnectAIProvider(
+      providerId: string,
+      replacementDefaultProviderId?: string,
+      replacementDefaultModelId?: string,
+      taskReplacements?: AITaskReplacement[]): Promise<{accepted: boolean; affectedTaskIds: string[]; error?: string}>;
   setAIApiKey(key: string): Promise<void>;
   setAIProvider(provider: string): Promise<void>;
   setAIBaseUrl(url: string): Promise<void>;
@@ -835,6 +912,9 @@ export class PageHandlerRemote {
   openChromiumSettingsPage(): Promise<void>;
   setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
   clearBYOKKey(provider: string): Promise<{success: boolean}>;
+  setAIProviderOAuthClientId(provider: string, clientId: string): Promise<{success: boolean}>;
+  signInToAIProvider(provider: string): Promise<{success: boolean; errorMessage: string}>;
+  signOutOfAIProvider(provider: string): Promise<{success: boolean}>;
   login(email: string, password: string): Promise<{success: boolean; errorMessage: string}>;
   signInWithGoogle(): Promise<{success: boolean; errorMessage: string}>;
   logout(): Promise<void>;
@@ -846,6 +926,7 @@ export class PageHandlerRemote {
   getSubscriptionCheckoutUrl(tier: string): Promise<{checkoutUrl: string}>;
   mailListAccounts(): Promise<{ok: boolean; resultJson: string}>;
   mailAddAccount(requestJson: string): Promise<{ok: boolean; resultJson: string}>;
+  mailTestConnection(requestJson: string): Promise<{ok: boolean; resultJson: string}>;
   mailDeleteAccount(accountId: string): Promise<{ok: boolean; resultJson: string}>;
   mailBeginOAuth(provider: string): Promise<{ok: boolean; resultJson: string}>;
   mailOAuthComplete(state: string, code: string): Promise<{ok: boolean; resultJson: string}>;

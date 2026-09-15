@@ -65,6 +65,7 @@
 #include "content/public/common/content_switches.h"
 #include "extensions/browser/extension_registrar.h"
 #include "extensions/browser/extension_registry.h"
+#include "maho/browser/ai/maho_ai_runtime_router.h"
 #include "maho/browser/ai/maho_managed_connection_test.h"
 #include "maho/browser/ai/maho_model_list_fetcher.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
@@ -3860,6 +3861,363 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   }
 
   std::move(callback).Run(std::move(settings));
+}
+
+void MahoSettingsPageHandler::GetAIModelsSettings(
+    GetAIModelsSettingsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto settings = maho_settings::mojom::AIModelsSettings::New();
+  settings->has_relay_session = maho::auth::HasValidRelaySession(prefs_);
+
+  auto default_route_res =
+      maho::ai::ResolveMahoAiModelRoute(prefs_, maho::ai::MahoAiTask::kChat);
+  std::string default_provider =
+      default_route_res.is_ok() ? default_route_res.route.provider_id : "";
+  std::string default_model =
+      default_route_res.is_ok() ? default_route_res.route.model_id : "";
+
+  settings->default_provider_id = default_provider;
+  settings->default_model_id = default_model;
+
+  const std::vector<std::string> provider_ids = {
+      "maho-managed", "openai", "anthropic", "openai-compatible", "local-server"};
+
+  const base::DictValue& provider_configs =
+      prefs_->GetDict(maho::ai_prefs::kProviderConfigs);
+
+  for (const auto& pid : provider_ids) {
+    auto desc = maho_settings::mojom::AIProviderDescriptor::New();
+    desc->id = pid;
+    desc->is_default_provider = (pid == default_provider);
+    desc->models_loading = false;
+
+    const base::DictValue* cfg = provider_configs.FindDict(pid);
+    if (cfg) {
+      if (const std::string* m = cfg->FindString("last_model_id")) {
+        desc->last_model_id = *m;
+      }
+      if (const std::string* u = cfg->FindString("base_url")) {
+        desc->base_url = *u;
+      }
+    }
+
+    if (pid == "maho-managed") {
+      desc->label = "Maho Managed";
+      desc->auth_label = "Maho account";
+      desc->state = settings->has_relay_session
+                        ? maho_settings::mojom::AIConnectionState::kConnected
+                        : maho_settings::mojom::AIConnectionState::kDisconnected;
+    } else if (pid == "openai") {
+      desc->label = "OpenAI";
+      bool has_oauth = maho::ai_oauth::HasOAuthSession(prefs_, "openai");
+      bool has_byok =
+          !prefs_->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty();
+      desc->auth_label = has_oauth ? "OAuth" : "API key";
+      desc->state = (has_oauth || has_byok)
+                        ? maho_settings::mojom::AIConnectionState::kConnected
+                        : maho_settings::mojom::AIConnectionState::kDisconnected;
+    } else if (pid == "anthropic") {
+      desc->label = "Anthropic";
+      bool has_oauth = maho::ai_oauth::HasOAuthSession(prefs_, "anthropic");
+      bool has_byok =
+          !prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64).empty();
+      desc->auth_label = has_oauth ? "OAuth" : "API key";
+      desc->state = (has_oauth || has_byok)
+                        ? maho_settings::mojom::AIConnectionState::kConnected
+                        : maho_settings::mojom::AIConnectionState::kDisconnected;
+    } else if (pid == "openai-compatible") {
+      desc->label = "OpenAI-compatible";
+      desc->auth_label = "Custom API";
+      std::string base_url = desc->base_url.value_or("");
+      if (base_url.empty()) {
+        base_url = prefs_->GetString(maho::ai_prefs::kBaseUrl);
+        if (!base_url.empty()) {
+          desc->base_url = base_url;
+        }
+      }
+      desc->state = !base_url.empty()
+                        ? maho_settings::mojom::AIConnectionState::kConnected
+                        : maho_settings::mojom::AIConnectionState::kDisconnected;
+    } else if (pid == "local-server") {
+      desc->label = "Local Server (Ollama)";
+      desc->auth_label = "Ollama";
+      std::string base_url = desc->base_url.value_or("");
+      if (base_url.empty()) {
+        base_url = prefs_->GetString(maho::ai_prefs::kBaseUrl);
+        if (base_url.empty()) {
+          base_url = "http://localhost:11434";
+        }
+        desc->base_url = base_url;
+      }
+      desc->state =
+          (cfg != nullptr ||
+           prefs_->GetString(maho::ai_prefs::kProvider) == "local-server")
+              ? maho_settings::mojom::AIConnectionState::kConnected
+              : maho_settings::mojom::AIConnectionState::kDisconnected;
+    }
+
+    std::vector<std::string> fallback_models =
+        maho::ai::MahoModelListFetcher::GetHardcodedFallback(pid);
+    for (const auto& mid : fallback_models) {
+      auto mdesc = maho_settings::mojom::AIModelDescriptor::New();
+      mdesc->id = mid;
+      mdesc->label = mid;
+      mdesc->vision = maho_settings::mojom::AIModelCapability::kUnknown;
+      mdesc->tools = maho_settings::mojom::AIModelCapability::kUnknown;
+      desc->models.push_back(std::move(mdesc));
+    }
+
+    settings->providers.push_back(std::move(desc));
+  }
+
+  struct TaskInfo {
+    std::string task_id;
+    maho::ai::MahoAiTask task;
+  };
+  const std::vector<TaskInfo> tasks = {
+      {"tab_tidy", maho::ai::MahoAiTask::kTabTidy},
+      {"inline_edit", maho::ai::MahoAiTask::kInlineEdit},
+      {"page_preview", maho::ai::MahoAiTask::kPagePreview},
+      {"tab_title", maho::ai::MahoAiTask::kTabTitle},
+      {"download_tidy", maho::ai::MahoAiTask::kDownloadTidy},
+      {"memory", maho::ai::MahoAiTask::kMemory},
+  };
+
+  const base::DictValue& task_models =
+      prefs_->GetDict(maho::ai_prefs::kTaskModels);
+
+  for (const auto& t : tasks) {
+    auto route = maho_settings::mojom::AITaskModelRoute::New();
+    route->task_id = t.task_id;
+    const base::DictValue* task_entry = task_models.FindDict(t.task_id);
+    route->inherits_default = (task_entry == nullptr);
+
+    auto route_res = maho::ai::ResolveMahoAiModelRoute(prefs_, t.task);
+    if (route_res.is_ok()) {
+      route->effective_provider_id = route_res.route.provider_id;
+      route->effective_model_id = route_res.route.model_id;
+      route->available = true;
+    } else {
+      route->available = false;
+      switch (route_res.error) {
+        case maho::ai::MahoAiRouteError::kNoDefault:
+          route->unavailable_reason = "No default model configured";
+          break;
+        case maho::ai::MahoAiRouteError::kProviderDisconnected:
+          route->unavailable_reason = "Provider disconnected";
+          break;
+        case maho::ai::MahoAiRouteError::kModelMissing:
+          route->unavailable_reason = "Model not specified";
+          break;
+        case maho::ai::MahoAiRouteError::kVisionUnsupported:
+          route->unavailable_reason = "Vision unsupported";
+          break;
+        case maho::ai::MahoAiRouteError::kUnknownProvider:
+          route->unavailable_reason = "Unknown provider";
+          break;
+        default:
+          route->unavailable_reason = "Unavailable";
+          break;
+      }
+    }
+    settings->task_routes.push_back(std::move(route));
+  }
+
+  std::move(callback).Run(std::move(settings));
+}
+
+void MahoSettingsPageHandler::SetDefaultAIModel(
+    const std::string& provider_id,
+    const std::string& model_id,
+    SetDefaultAIModelCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (provider_id.empty() || model_id.empty()) {
+    std::move(callback).Run(false, "Provider and model must not be empty.");
+    return;
+  }
+  prefs_->SetString(ai::kProvider, provider_id);
+  prefs_->SetString(ai::kModel, model_id);
+
+  {
+    ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kProviderConfigs);
+    base::DictValue* pcfg = update->EnsureDict(provider_id);
+    pcfg->Set("last_model_id", model_id);
+  }
+
+  prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+  std::move(callback).Run(true, std::nullopt);
+}
+
+void MahoSettingsPageHandler::SetTaskAIModel(
+    const std::string& task_id,
+    const std::optional<std::string>& provider_id,
+    const std::optional<std::string>& model_id,
+    SetTaskAIModelCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (task_id == "chat") {
+    std::move(callback).Run(false,
+                            "Chat & Agent task must use SetDefaultAIModel.");
+    return;
+  }
+
+  ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kTaskModels);
+  if (!provider_id.has_value() || !model_id.has_value() ||
+      provider_id->empty() || model_id->empty()) {
+    update->Remove(task_id);
+  } else {
+    base::DictValue* entry = update->EnsureDict(task_id);
+    entry->Set("provider_id", *provider_id);
+    entry->Set("model_id", *model_id);
+  }
+
+  prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+  std::move(callback).Run(true, std::nullopt);
+}
+
+void MahoSettingsPageHandler::SetAIProviderBaseUrl(
+    const std::string& provider_id,
+    const std::string& base_url,
+    SetAIProviderBaseUrlCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  {
+    ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kProviderConfigs);
+    base::DictValue* pcfg = update->EnsureDict(provider_id);
+    pcfg->Set("base_url", base_url);
+  }
+
+  if (prefs_->GetString(ai::kProvider) == provider_id) {
+    prefs_->SetString(ai::kBaseUrl, base_url);
+  }
+
+  prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+  std::move(callback).Run(true, std::nullopt);
+}
+
+void MahoSettingsPageHandler::TestAIProvider(
+    const std::string& provider_id,
+    TestAIProviderCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto result = maho_settings::mojom::AIProviderTestResult::New();
+  if (provider_id == "maho-managed") {
+    bool ok = maho::auth::HasValidRelaySession(prefs_);
+    result->ok = ok;
+    result->message = ok ? "Maho relay session is active and healthy."
+                         : "No active Maho account session.";
+  } else if (provider_id == "openai") {
+    bool ok =
+        maho::ai_oauth::HasOAuthSession(prefs_, "openai") ||
+        !prefs_->GetString(maho::ai_prefs::kByokOpenAIEncryptedB64).empty();
+    result->ok = ok;
+    result->message =
+        ok ? "OpenAI credential configured." : "OpenAI credential missing.";
+  } else if (provider_id == "anthropic") {
+    bool ok =
+        maho::ai_oauth::HasOAuthSession(prefs_, "anthropic") ||
+        !prefs_->GetString(maho::ai_prefs::kByokAnthropicEncryptedB64).empty();
+    result->ok = ok;
+    result->message =
+        ok ? "Anthropic credential configured." : "Anthropic credential missing.";
+  } else if (provider_id == "openai-compatible") {
+    std::string url = prefs_->GetString(maho::ai_prefs::kBaseUrl);
+    const base::DictValue& configs =
+        prefs_->GetDict(maho::ai_prefs::kProviderConfigs);
+    if (const base::DictValue* c = configs.FindDict("openai-compatible")) {
+      if (const std::string* u = c->FindString("base_url")) {
+        url = *u;
+      }
+    }
+    bool ok = !url.empty();
+    result->ok = ok;
+    result->message = ok ? "Custom OpenAI-compatible endpoint configured."
+                         : "Base URL is required.";
+  } else if (provider_id == "local-server") {
+    result->ok = true;
+    result->message = "Local server endpoint ready.";
+  } else {
+    result->ok = false;
+    result->message = "Unknown provider: " + provider_id;
+  }
+  std::move(callback).Run(std::move(result));
+}
+
+void MahoSettingsPageHandler::DisconnectAIProvider(
+    const std::string& provider_id,
+    const std::optional<std::string>& replacement_default_provider_id,
+    const std::optional<std::string>& replacement_default_model_id,
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> task_replacements,
+    DisconnectAIProviderCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<std::string> affected_tasks;
+
+  bool is_default = (prefs_->GetString(ai::kProvider) == provider_id);
+  if (is_default) {
+    affected_tasks.push_back("chat");
+    if (!replacement_default_provider_id.has_value() ||
+        replacement_default_provider_id->empty() ||
+        !replacement_default_model_id.has_value() ||
+        replacement_default_model_id->empty()) {
+      std::move(callback).Run(
+          false, affected_tasks,
+          "Default provider requires a replacement before disconnecting.");
+      return;
+    }
+  }
+
+  const base::DictValue& task_models =
+      prefs_->GetDict(maho::ai_prefs::kTaskModels);
+  for (const auto item : task_models) {
+    if (const base::DictValue* dict = item.second.GetIfDict()) {
+      const std::string* pid = dict->FindString("provider_id");
+      if (pid && *pid == provider_id) {
+        affected_tasks.push_back(item.first);
+      }
+    }
+  }
+
+  if (is_default) {
+    prefs_->SetString(ai::kProvider, *replacement_default_provider_id);
+    prefs_->SetString(ai::kModel, *replacement_default_model_id);
+  }
+
+  if (!task_replacements.empty()) {
+    ScopedDictPrefUpdate task_update(prefs_, maho::ai_prefs::kTaskModels);
+    for (const auto& repl : task_replacements) {
+      if (repl->inherit_default || !repl->provider_id.has_value() ||
+          repl->provider_id->empty()) {
+        task_update->Remove(repl->task_id);
+      } else {
+        base::DictValue* entry = task_update->EnsureDict(repl->task_id);
+        entry->Set("provider_id", *repl->provider_id);
+        entry->Set("model_id", repl->model_id.value_or(""));
+      }
+    }
+  }
+
+  {
+    ScopedDictPrefUpdate config_update(prefs_, maho::ai_prefs::kProviderConfigs);
+    config_update->Remove(provider_id);
+  }
+
+  if (provider_id == "openai") {
+    prefs_->SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "");
+    maho::ai_oauth::ClearProviderOAuth(prefs_, "openai");
+  } else if (provider_id == "anthropic") {
+    prefs_->SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "");
+    maho::ai_oauth::ClearProviderOAuth(prefs_, "anthropic");
+  } else if (provider_id == "openai-compatible") {
+    prefs_->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, "");
+    if (prefs_->GetString(ai::kProvider) == "openai-compatible") {
+      prefs_->SetString(ai::kBaseUrl, "");
+      prefs_->SetString(ai::kApiKey, "");
+    }
+  }
+
+  prefs_->CommitPendingWrite();
+  MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+  std::move(callback).Run(true, affected_tasks, std::nullopt);
 }
 
 void MahoSettingsPageHandler::SetAIProvider(const std::string& provider) {

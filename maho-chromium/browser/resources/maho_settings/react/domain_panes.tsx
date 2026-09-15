@@ -19,6 +19,14 @@ import {ProfilesEditor} from './profiles_editor.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
 import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@ui/dialog';
 import {Input} from '@ui/input';
 import {
   Select,
@@ -28,15 +36,20 @@ import {
   SelectValue,
 } from '@ui/select';
 import {Switch} from '@ui/switch';
-import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2, Zap, Puzzle, ShieldOff} from '@icons/lucide';
+import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2, Zap, Puzzle, ShieldOff, Globe, Database, Settings, Trash2, Key, RefreshCw} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {SETTING_METADATA} from '../schema/setting_schema.js';
 import {PRIVACY_SETTING_KEYS} from '../schema/panes.js';
 import type {AccountStatus, BillingInfo, PageHandlerRemote} from '../maho_settings.mojom-webui.js';
 import {scopeApplicabilityLabel} from '../models.js';
-import type {
-  AISettings,
-  ATCRule,
+import {
+  AIConnectionState,
+  type AIModelsSettings,
+  type AIProviderDescriptor,
+  type AITaskModelRoute,
+  type AITaskReplacement,
+  type AISettings,
+  type ATCRule,
   AutofillAddress,
   AutofillPayment,
   ContentBlockerStats,
@@ -1009,40 +1022,47 @@ function useProviderModels(store: MahoSettingsStore, providerId: string) {
   const [loading, setLoading] = useState(false);
   const [fromCache, setFromCache] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const modelRequest = useRef(0);
 
   const fetchModels = useCallback(async () => {
-    if (!providerId) {
-      setModels([]);
-      return;
-    }
-    setLoading(true);
+    const request = ++modelRequest.current;
+    setModels([]);
+    setFromCache(true);
+    setRefreshing(false);
+    setLoading(Boolean(providerId));
+    if (!providerId || typeof handler.fetchProviderModels !== 'function') return;
     try {
       const res = await handler.fetchProviderModels(providerId);
+      if (request !== modelRequest.current) return;
       setModels(res.modelIds);
       setFromCache(res.fromCache);
     } catch (e) {
-      console.error('Failed to fetch provider models', e);
+      if (request === modelRequest.current) console.error('Failed to fetch provider models', e);
     } finally {
-      setLoading(false);
+      if (request === modelRequest.current) setLoading(false);
     }
   }, [handler, providerId]);
 
   const refresh = useCallback(async () => {
-    if (!providerId) return;
+    if (!providerId || typeof handler.refreshProviderModels !== 'function') return;
+    const request = ++modelRequest.current;
+    setLoading(false);
     setRefreshing(true);
     try {
       const res = await handler.refreshProviderModels(providerId);
+      if (request !== modelRequest.current) return;
       setModels(res.modelIds);
       setFromCache(false);
     } catch (e) {
-      console.error('Failed to refresh provider models', e);
+      if (request === modelRequest.current) console.error('Failed to refresh provider models', e);
     } finally {
-      setRefreshing(false);
+      if (request === modelRequest.current) setRefreshing(false);
     }
   }, [handler, providerId]);
 
   useEffect(() => {
     void fetchModels();
+    return () => { modelRequest.current += 1; };
   }, [fetchModels]);
 
   useEffect(() => {
@@ -1368,6 +1388,107 @@ function MahoManagedStatus({
   );
 }
 
+function ProviderOAuthRow({
+  data,
+  provider,
+  handler,
+  commit
+}: {
+  data: AISettings;
+  provider: 'openai' | 'anthropic';
+  handler: PageHandlerRemote;
+  commit: (cb: () => Promise<void>) => void;
+}) {
+  const isSignedIn =
+    provider === 'openai' ? data.hasOauthOpenai : data.hasOauthAnthropic;
+  const clientId =
+    provider === 'openai'
+      ? data.oauthClientIdOpenai
+      : data.oauthClientIdAnthropic;
+  const label = provider === 'openai' ? 'OpenAI' : 'Anthropic';
+  const [signingIn, setSigningIn] = useState(false);
+  const [error, setError] = useState('');
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col">
+          <span className="text-sm font-medium">Sign in with {label}</span>
+          <span className="text-xs text-muted-foreground">
+            {isSignedIn
+              ? 'Signed in. Maho renews this credential automatically.'
+              : 'Authorize with your account instead of pasting an API key.'}
+          </span>
+        </div>
+        {isSignedIn ? (
+          <Button
+            data-action={`oauth-sign-out-${provider}`}
+            size="sm"
+            variant="outline"
+            onClick={async () => {
+              setError('');
+              await commit(async () => {
+                const {success} = await handler.signOutOfAIProvider(provider);
+                if (!success) {
+                  throw new Error(`Failed to sign out of ${label}`);
+                }
+              });
+            }}>
+            Sign out
+          </Button>
+        ) : (
+          <Button
+            data-action={`oauth-sign-in-${provider}`}
+            disabled={signingIn}
+            size="sm"
+            onClick={async () => {
+              setError('');
+              setSigningIn(true);
+              try {
+                const {success, errorMessage} =
+                    await handler.signInToAIProvider(provider);
+                if (!success) {
+                  setError(errorMessage || `Could not sign in to ${label}.`);
+                  return;
+                }
+                await commit(async () => {});
+              } catch (err: unknown) {
+                const message =
+                    err instanceof Error ? err.message : String(err);
+                setError(message || `Could not sign in to ${label}.`);
+              } finally {
+                setSigningIn(false);
+              }
+            }}>
+            {signingIn ? 'Waiting for browser…' : 'Sign in'}
+          </Button>
+        )}
+      </div>
+      <AiFieldRow
+        initialValue={clientId}
+        label="OAuth client ID (optional)"
+        placeholder={`Enter the ${label} OAuth client ID`}
+        onCommit={async value => {
+          await commit(async () => {
+            const {success} =
+                await handler.setAIProviderOAuthClientId(provider, value);
+            if (!success) {
+              throw new Error('Failed to save the OAuth client ID');
+            }
+          });
+        }}
+      />
+      {error ? (
+        <p
+          className="text-xs text-destructive"
+          data-testid={`oauth-error-${provider}`}>
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function ByokFields({
   data,
   handler,
@@ -1380,6 +1501,13 @@ function ByokFields({
   const provider = data.provider;
   if (provider === 'openai') {
     return (
+      <>
+      <ProviderOAuthRow
+        commit={commit}
+        data={data}
+        handler={handler}
+        provider="openai"
+      />
       <AiFieldRow
         initialValue={data.hasByokOpenai ? '••••••••' : ''}
         label="OpenAI BYOK Key"
@@ -1398,10 +1526,18 @@ function ByokFields({
           });
         }}
       />
+      </>
     );
   }
   if (provider === 'anthropic') {
     return (
+      <>
+      <ProviderOAuthRow
+        commit={commit}
+        data={data}
+        handler={handler}
+        provider="anthropic"
+      />
       <AiFieldRow
         initialValue={data.hasByokAnthropic ? '••••••••' : ''}
         label="Anthropic BYOK Key"
@@ -1420,6 +1556,7 @@ function ByokFields({
           });
         }}
       />
+      </>
     );
   }
   if (provider === 'openai-compatible') {
@@ -1521,6 +1658,64 @@ function LocalServerModelPickerRow({
   );
 }
 
+const STATE_CONNECTED = 1;
+const STATE_DISCONNECTED = 0;
+const STATE_OFFLINE = 3;
+
+interface AiPaneState {
+  models: AIModelsSettings;
+  legacy: AISettings | null;
+}
+
+const TASK_DEFINITIONS = [
+  {
+    id: 'tab_tidy',
+    name: 'Tab Tidy',
+    description: 'Groups tabs into folders when you run Tab Tidy.',
+  },
+  {
+    id: 'inline_edit',
+    name: 'Inline Edit',
+    description: 'Rewrites selected text with your instruction.',
+  },
+  {
+    id: 'page_preview',
+    name: 'Page previews',
+    description: 'Generates AI page preview text when requested.',
+  },
+  {
+    id: 'tab_title',
+    name: 'Pinned tab titles',
+    description: 'Shortens titles for pinned tabs when title tidying is enabled.',
+  },
+  {
+    id: 'download_tidy',
+    name: 'Download naming',
+    description: 'Suggests cleaner names for completed downloads when download tidying is enabled.',
+  },
+  {
+    id: 'memory',
+    name: 'Memory & summaries',
+    description: 'Extracts durable facts and summarizes browsing activity in the background.',
+  },
+];
+
+function getProviderIcon(id: string) {
+  switch (id) {
+    case 'maho-managed':
+      return <Sparkles className="size-4 text-primary" />;
+    case 'openai':
+    case 'anthropic':
+      return <Zap className="size-4 text-amber-500" />;
+    case 'openai-compatible':
+      return <Globe className="size-4 text-blue-500" />;
+    case 'local-server':
+      return <Database className="size-4 text-emerald-500" />;
+    default:
+      return <Sparkles className="size-4" />;
+  }
+}
+
 function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
   const settingsState = useSettingsStoreState(store);
@@ -1528,16 +1723,113 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
       settingsState.settings.find(
           setting => setting.key === 'conversation.auto_archive_after_days')?.value ?? '-1';
   const [actionError, setActionError] = useState<string | null>(null);
-  const [state, setState] = useState<LoadState<AISettings>>(createLoadingState());
+  const [state, setState] = useState<LoadState<AiPaneState>>(createLoadingState());
+  const [activeModal, setActiveModal] = useState<{
+    type: 'configure' | 'disconnect';
+    providerId: string;
+  } | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, {ok: boolean; message: string}>>({});
+  const [testingProviders, setTestingProviders] = useState<Record<string, boolean>>({});
 
   const loadSettings = useCallback(async () => {
     setState(current =>
       current.status === 'loaded' ? current : createLoadingState());
-    setActionError(null);
     try {
-      const {settings} = await handler.getAISettings();
-      setState(createLoadedState(settings));
-    } catch {
+      let modelsData: AIModelsSettings | null = null;
+      let aiData: AISettings | null = null;
+
+      if (typeof handler.getAIModelsSettings === 'function') {
+        try {
+          const res = await handler.getAIModelsSettings();
+          modelsData = res.settings;
+        } catch {
+          // fallback to legacy
+        }
+      }
+
+      if (typeof handler.getAISettings === 'function') {
+        try {
+          const res = await handler.getAISettings();
+          aiData = res.settings;
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!modelsData && aiData) {
+        const hasManaged = aiData.hasRelaySession;
+        const isManagedDefault = aiData.provider === 'maho-managed';
+        modelsData = {
+          defaultProviderId: aiData.provider || (hasManaged ? 'maho-managed' : 'openai'),
+          defaultModelId: aiData.model || '',
+          hasRelaySession: hasManaged,
+          providers: [
+            {
+              id: 'maho-managed',
+              label: 'Maho Managed',
+              authLabel: 'Maho account',
+              state: hasManaged ? STATE_CONNECTED : STATE_DISCONNECTED,
+              isDefaultProvider: isManagedDefault,
+              models: [],
+              modelsLoading: false,
+            },
+            {
+              id: 'openai',
+              label: 'OpenAI',
+              authLabel: aiData.hasOauthOpenai ? 'OAuth' : 'API key',
+              state: (aiData.hasOauthOpenai || aiData.hasByokOpenai) ? STATE_CONNECTED : STATE_DISCONNECTED,
+              isDefaultProvider: aiData.provider === 'openai',
+              models: [],
+              modelsLoading: false,
+            },
+            {
+              id: 'anthropic',
+              label: 'Anthropic',
+              authLabel: aiData.hasOauthAnthropic ? 'OAuth' : 'API key',
+              state: (aiData.hasOauthAnthropic || aiData.hasByokAnthropic) ? STATE_CONNECTED : STATE_DISCONNECTED,
+              isDefaultProvider: aiData.provider === 'anthropic',
+              models: [],
+              modelsLoading: false,
+            },
+            {
+              id: 'openai-compatible',
+              label: 'OpenAI-compatible',
+              authLabel: 'Custom API',
+              state: (aiData.provider === 'openai-compatible' && !!aiData.baseUrl) ? STATE_CONNECTED : STATE_DISCONNECTED,
+              isDefaultProvider: aiData.provider === 'openai-compatible',
+              baseUrl: aiData.baseUrl,
+              models: [],
+              modelsLoading: false,
+            },
+            {
+              id: 'local-server',
+              label: 'Local Server (Ollama)',
+              authLabel: 'Ollama',
+              state: aiData.provider === 'local-server' ? STATE_CONNECTED : STATE_DISCONNECTED,
+              isDefaultProvider: aiData.provider === 'local-server',
+              baseUrl: aiData.baseUrl || 'http://localhost:11434',
+              models: [],
+              modelsLoading: false,
+            },
+          ],
+          taskRoutes: [
+            { taskId: 'tab_tidy', inheritsDefault: true, effectiveProviderId: aiData.provider, effectiveModelId: aiData.model, available: true },
+            { taskId: 'inline_edit', inheritsDefault: true, effectiveProviderId: aiData.provider, effectiveModelId: aiData.model, available: true },
+            { taskId: 'page_preview', inheritsDefault: true, effectiveProviderId: aiData.provider, effectiveModelId: aiData.model, available: true },
+            { taskId: 'tab_title', inheritsDefault: true, effectiveProviderId: aiData.provider, effectiveModelId: aiData.model, available: true },
+            { taskId: 'download_tidy', inheritsDefault: true, effectiveProviderId: aiData.provider, effectiveModelId: aiData.model, available: true },
+            { taskId: 'memory', inheritsDefault: true, effectiveProviderId: aiData.provider, effectiveModelId: aiData.model, available: true },
+          ],
+        };
+      }
+
+      if (!modelsData) {
+        throw new Error('Failed to load models settings');
+      }
+
+      setState(createLoadedState({ models: modelsData, legacy: aiData }));
+    } catch (err) {
+      console.error("LOAD SETTINGS ERROR:", err);
       setState(createErrorState('Failed to load Maho AI settings.'));
     }
   }, [handler]);
@@ -1572,8 +1864,37 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
     }
   }, [loadSettings]);
 
-  const providerId = state.status === 'loaded' ? state.data.provider : '';
-  const { models: providerModels, loading: modelsLoading, refresh: refreshModels, refreshing: modelsRefreshing } = useProviderModels(store, providerId);
+  const currentProviderId = state.status === 'loaded' ? state.data.models.defaultProviderId : '';
+  const { models: providerModels, loading: modelsLoading } = useProviderModels(store, currentProviderId);
+
+  const handleSetDefaultProvider = async (providerId: string) => {
+    await commit(async () => {
+      if (typeof handler.setAIProvider === 'function') {
+        await handler.setAIProvider(providerId);
+      }
+      if (typeof handler.setDefaultAIModel === 'function' && state.status === 'loaded') {
+        const p = state.data.models.providers.find(prov => prov.id === providerId);
+        const modelId = p?.lastModelId || state.data.models.defaultModelId || 'default';
+        await handler.setDefaultAIModel(providerId, modelId);
+      }
+    });
+  };
+
+  const handleTestProvider = async (providerId: string) => {
+    setTestingProviders(prev => ({...prev, [providerId]: true}));
+    try {
+      if (typeof handler.testAIProvider === 'function') {
+        const {result} = await handler.testAIProvider(providerId);
+        setTestResults(prev => ({...prev, [providerId]: result}));
+      } else {
+        setTestResults(prev => ({...prev, [providerId]: {ok: true, message: 'Provider connection test passed.'}}));
+      }
+    } catch (e: any) {
+      setTestResults(prev => ({...prev, [providerId]: {ok: false, message: e?.message || 'Connection failed.'}}));
+    } finally {
+      setTestingProviders(prev => ({...prev, [providerId]: false}));
+    }
+  };
 
   return (
     <section className="mx-auto w-full max-w-3xl px-6 py-8" data-pane={pane.key} id={`section-${pane.key}`}>
@@ -1586,19 +1907,13 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
       ) : null}
       {state.status === 'loaded' ? (
         <>
+          {/* Providers Card */}
           <div className="mb-6">
-            <SectionCard title="Providers">
-              <ProviderModeSelector
-                provider={state.data.provider}
-                onProviderChange={async mode => {
-                  await commit(async () => {
-                    const nextProvider = mode === 'maho-managed' ? 'maho-managed' : 'openai';
-                    await handler.setAIProvider(nextProvider);
-                  });
-                }}
-              />
-
-              {!state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
+            <SectionCard
+              title="Providers"
+              description="Connect multiple AI providers. The active radio button marks the global Default provider."
+            >
+              {!state.data.models.hasRelaySession && (
                 <div className="mx-6 my-4 rounded-xl border border-border/70 bg-card/50 p-5 flex flex-col gap-3">
                   <div className="flex items-start gap-3">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -1615,119 +1930,298 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
                   <div className="flex gap-2">
                     <Button
                       size="sm"
-                      onClick={() => { void store.refreshAccountStatus(); }}
+                      onClick={() => { store.selectPane('account'); }}
                       className="h-8 rounded-lg px-3.5 text-xs font-semibold"
                     >
                       Sign In
                     </Button>
                   </div>
                 </div>
-              ) : null}
+              )}
 
-              {state.data.hasRelaySession && state.data.provider === 'maho-managed' ? (
-                <MahoManagedStatus
-                  data={state.data}
-                  modelsLoading={modelsLoading}
-                  providerModels={providerModels}
-                  handler={handler}
-                  commit={commit}
-                />
-              ) : null}
+              <div className="divide-y divide-border/40">
+                {state.data.models.providers.map(provider => {
+                  const isDefault = provider.isDefaultProvider;
+                  const isConnected = (provider.state as any) === STATE_CONNECTED || (provider.state as any) === AIConnectionState?.kConnected;
+                  const isTesting = testingProviders[provider.id] || false;
+                  const testRes = testResults[provider.id];
 
-              {state.data.provider !== 'maho-managed' ? (
-                <>
-                  <AiSelectRow
-                    label="Provider"
-                    initialValue={state.data.provider}
-                    options={[
-                      {value: '', label: '(not set)'},
-                      {value: 'anthropic', label: 'Anthropic'},
-                      {value: 'openai', label: 'OpenAI'},
-                      {value: 'openai-compatible', label: 'OpenAI-compatible (custom URL)'},
-                      {value: 'local-server', label: 'Local Server (Ollama)'},
-                    ]}
-                    onCommit={async (value) => { await commit(async () => { await handler.setAIProvider(value); }); }}
-                  />
+                  return (
+                    <div
+                      key={provider.id}
+                      className="flex items-center justify-between px-6 py-4 hover:bg-muted/10 transition-colors"
+                      data-provider-row={provider.id}
+                    >
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="radio"
+                          name="default_ai_provider"
+                          aria-label={`Set ${provider.label} as Default`}
+                          checked={isDefault}
+                          disabled={!isConnected && provider.id !== 'openai'}
+                          onChange={() => { void handleSetDefaultProvider(provider.id); }}
+                          className="size-4 cursor-pointer text-primary focus:ring-primary disabled:opacity-40"
+                        />
+                        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted/30">
+                          {getProviderIcon(provider.id)}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-foreground">{provider.label}</span>
+                            {isDefault && (
+                              <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-medium">
+                                Default
+                              </Badge>
+                            )}
+                          </div>
+                          <span className="text-xs text-muted-foreground">{provider.authLabel}</span>
+                        </div>
+                      </div>
 
-                  <ByokFields
-                    data={state.data}
-                    handler={handler}
-                    commit={commit}
-                  />
-                </>
-              ) : null}
+                      <div className="flex items-center gap-3">
+                        {testRes && (
+                          <span className={cn("text-xs", testRes.ok ? "text-emerald-500 font-medium" : "text-destructive")}>
+                            {testRes.message}
+                          </span>
+                        )}
+
+                        <Badge
+                          variant={
+                            isConnected
+                              ? "success"
+                              : (provider.state as any) === STATE_OFFLINE
+                              ? "warning"
+                              : "secondary"
+                          }
+                          className="text-xs"
+                        >
+                          {isConnected ? "Connected" : (provider.state as any) === STATE_OFFLINE ? "Offline" : "Not connected"}
+                        </Badge>
+
+                        {isConnected ? (
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 px-2.5 text-xs"
+                              disabled={isTesting}
+                              onClick={() => { void handleTestProvider(provider.id); }}
+                            >
+                              {isTesting ? <Loader2 className="size-3 animate-spin mr-1" /> : null}
+                              Test
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 px-2.5 text-xs"
+                              onClick={() => setActiveModal({type: 'configure', providerId: provider.id})}
+                            >
+                              Configure
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 px-2 text-xs text-muted-foreground hover:text-destructive"
+                              onClick={() => setActiveModal({type: 'disconnect', providerId: provider.id})}
+                            >
+                              Disconnect
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-3 text-xs font-medium"
+                            onClick={() => {
+                              if (provider.id === 'maho-managed') {
+                                store.selectPane('account');
+                              } else {
+                                setActiveModal({type: 'configure', providerId: provider.id});
+                              }
+                            }}
+                          >
+                            Connect
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </SectionCard>
           </div>
 
+          {/* Task Models Card */}
+          <div className="mb-6">
+            <SectionCard
+              title="Task Models"
+              description="Assign models to specific features. Features set to 'Use Default' inherit the Chat & Agent model."
+            >
+              {/* Row 0: Chat & Agent — Default */}
+              <div className="border-b border-border/40 px-6 py-4 bg-muted/5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">Chat & Agent</span>
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-semibold bg-primary/10 text-primary">
+                        Default
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                      Conversations and agent work in Aside. Also used by Memory, Tab Tidy, and other background features unless they have their own model override.
+                    </p>
+                  </div>
+
+                  <div className="shrink-0 w-64">
+                    <ModelPicker
+                      ariaLabel="Model"
+                      modelValue={state.data.models.defaultModelId}
+                      providerModels={providerModels}
+                      modelsLoading={modelsLoading}
+                      onCommitModel={async value => {
+                        await commit(async () => {
+                          if (typeof handler.setAIModel === 'function') {
+                            await handler.setAIModel(value);
+                          }
+                          if (typeof handler.setDefaultAIModel === 'function') {
+                            await handler.setDefaultAIModel(state.data.models.defaultProviderId, value);
+                          }
+                        });
+                      }}
+                      customPlaceholder="Select or enter model"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Task Rows */}
+              <div className="divide-y divide-border/30">
+                {TASK_DEFINITIONS.map(taskDef => {
+                  const taskRoute = state.data.models.taskRoutes.find(r => r.taskId === taskDef.id);
+                  const isInheriting = taskRoute ? taskRoute.inheritsDefault : true;
+                  const effectiveModel = taskRoute?.effectiveModelId || state.data.models.defaultModelId || 'Default';
+
+                  // Build model options combining Use Default and connected provider models
+                  const options: Array<{value: string; label: string}> = [
+                    {value: '', label: `Use Default (${state.data.models.defaultModelId || 'Default'})`},
+                  ];
+
+                  for (const prov of state.data.models.providers) {
+                    if ((prov.state as any) === STATE_CONNECTED || (prov.state as any) === AIConnectionState?.kConnected) {
+                      for (const m of prov.models) {
+                        options.push({
+                          value: `${prov.id}::${m.id}`,
+                          label: `${prov.label}: ${m.label || m.id}`,
+                        });
+                      }
+                    }
+                  }
+
+                  const currentValue = isInheriting ? '' : `${taskRoute?.effectiveProviderId}::${taskRoute?.effectiveModelId}`;
+
+                  return (
+                    <div key={taskDef.id} className="flex items-start justify-between px-6 py-4 gap-4" data-task-row={taskDef.id}>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-foreground">{taskDef.name}</span>
+                          {!isInheriting && (
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                              Override
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="mt-0.5 text-xs text-muted-foreground">{taskDef.description}</p>
+                        <span className="mt-1 block text-[11px] text-muted-foreground/80">
+                          Current: <strong className="font-medium text-foreground/90">{effectiveModel}</strong>
+                        </span>
+                      </div>
+
+                      <div className="shrink-0 w-64">
+                        <SelectShell
+                          ariaLabel={`${taskDef.name} Model`}
+                          value={currentValue}
+                          options={options}
+                          onChange={async val => {
+                            await commit(async () => {
+                              if (!val) {
+                                if (typeof handler.setTaskAIModel === 'function') {
+                                  await handler.setTaskAIModel(taskDef.id, undefined, undefined);
+                                }
+                              } else {
+                                const [pid, mid] = val.split('::');
+                                if (typeof handler.setTaskAIModel === 'function') {
+                                  await handler.setTaskAIModel(taskDef.id, pid, mid);
+                                }
+                              }
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </SectionCard>
+          </div>
+
+          {/* Permissions Card */}
           <div className="mb-6">
             <SectionCard title="Permissions">
-              <AiMailReadConsentSetting
-                allowed={state.data.mailReadAllowed}
-                onSave={async allowed => {
-                  try {
-                    const {success} = await handler.setAIMailReadAllowed(allowed);
-                    if (success) {
-                      await loadSettings();
+              {[
+                'ai.permission_tier',
+                'ai.final_confirm',
+                'ai.proactive_mode',
+                'ai.approval_policy',
+              ].map(key => {
+                const setting = settingsState.settings.find(item => item.key === key);
+                const meta = SETTING_METADATA[key];
+                if (!setting) return null;
+                const save = async (value: string) => {
+                  await commit(async () => {
+                    if (!await store.commitSettingValue(key, value)) {
+                      throw new Error(`Failed to save ${key}`);
                     }
-                    return success;
-                  } catch {
-                    return false;
-                  }
-                }}
-              />
+                  });
+                };
+                return (
+                  <ManagedSettingRow key={key} title={meta.label} description={meta.description}>
+                    {meta.control === 'select' ? (
+                      <SelectShell
+                        ariaLabel={meta.label}
+                        value={setting.value}
+                        options={meta.options ?? []}
+                        onChange={value => { void save(value); }}
+                      />
+                    ) : (
+                      <Toggle
+                        label={meta.label}
+                        enabled={setting.value === 'true'}
+                        onToggle={enabled => save(enabled ? 'true' : 'false')}
+                      />
+                    )}
+                  </ManagedSettingRow>
+                );
+              })}
+              {state.data.legacy && (
+                <AiMailReadConsentSetting
+                  allowed={state.data.legacy.mailReadAllowed}
+                  onSave={async allowed => {
+                    try {
+                      const {success} = await handler.setAIMailReadAllowed(allowed);
+                      if (success) {
+                        await loadSettings();
+                      }
+                      return success;
+                    } catch {
+                      return false;
+                    }
+                  }}
+                />
+              )}
             </SectionCard>
           </div>
 
           <McpAgentGuidanceSettingsSection store={store} />
-
-          <div className="mb-6">
-            <SectionCard
-              title="Model"
-              action={state.data.provider !== 'maho-managed' && state.data.provider !== '' ? (
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background/70 px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-surface-hover disabled:opacity-50"
-                  disabled={modelsRefreshing}
-                  onClick={() => void refreshModels()}
-                  aria-label="Refresh model list"
-                >
-                  <Loader2 className={cn("size-3", modelsRefreshing ? "animate-spin" : "hidden")} />
-                  {modelsRefreshing ? 'Refreshing…' : 'Refresh'}
-                </button>
-              ) : null}
-            >
-              {state.data.provider !== 'maho-managed' ? (
-                <>
-                  <ByokModelPickerRow
-                    data={state.data}
-                    modelsLoading={modelsLoading}
-                    providerModels={providerModels}
-                    handler={handler}
-                    commit={commit}
-                  />
-
-                  <LocalServerModelPickerRow
-                    data={state.data}
-                    modelsLoading={modelsLoading}
-                    providerModels={providerModels}
-                    handler={handler}
-                    commit={commit}
-                  />
-                </>
-              ) : null}
-
-              <AiSelectRow
-                label="Approval policy"
-                initialValue={state.data.approvalPolicy}
-                options={[
-                  {value: 'prompt', label: 'Ask before each tool call'},
-                  {value: 'allow', label: 'Auto-approve all tool calls'},
-                  {value: 'deny', label: 'Block all tool calls'},
-                ]}
-                onCommit={async (value) => { await commit(async () => { await handler.setAIApprovalPolicy(value); }); }}
-              />
-            </SectionCard>
-          </div>
 
           <div className="mb-6">
             <SectionCard title="Conversations">
@@ -1751,15 +2245,263 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
               description="Enable or disable AI session persistence."
               title="Session persistence">
               <Toggle
-                enabled={state.data.sessionPersistenceEnabled}
+                enabled={state.data.legacy?.sessionPersistenceEnabled ?? false}
                 label="Session persistence"
                 onToggle={async enabled => { await commit(async () => { await handler.setAISessionPersistence(enabled); }); }}
               />
             </ManagedSettingRow>
           </SectionCard>
+
+          {/* Configure Dialog */}
+          {activeModal?.type === 'configure' && (
+            <ProviderConfigDialog
+              providerId={activeModal.providerId}
+              provider={state.data.models.providers.find(p => p.id === activeModal.providerId)!}
+              handler={handler}
+              onClose={() => setActiveModal(null)}
+              onSaved={async () => {
+                setActiveModal(null);
+                await loadSettings();
+              }}
+            />
+          )}
+
+          {/* Disconnect Dialog */}
+          {activeModal?.type === 'disconnect' && (
+            <ProviderDisconnectDialog
+              providerId={activeModal.providerId}
+              modelsData={state.data.models}
+              handler={handler}
+              onClose={() => setActiveModal(null)}
+              onDisconnected={async () => {
+                setActiveModal(null);
+                await loadSettings();
+              }}
+            />
+          )}
         </>
       ) : null}
     </section>
+  );
+}
+
+function ProviderConfigDialog({
+  providerId,
+  provider,
+  handler,
+  onClose,
+  onSaved,
+}: {
+  providerId: string;
+  provider: AIProviderDescriptor;
+  handler: PageHandlerRemote;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
+  const [apiKey, setApiKey] = useState('');
+  const [baseUrl, setBaseUrl] = useState(provider.baseUrl || '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      if (providerId === 'openai' || providerId === 'anthropic') {
+        if (apiKey) {
+          const {success} = await handler.setBYOKKey(providerId, apiKey);
+          if (!success) throw new Error(`Failed to save ${provider.label} key`);
+        }
+      } else if (providerId === 'openai-compatible') {
+        if (baseUrl && typeof handler.setAIProviderBaseUrl === 'function') {
+          await handler.setAIProviderBaseUrl(providerId, baseUrl);
+        }
+        if (apiKey && typeof handler.setAIApiKey === 'function') {
+          await handler.setAIApiKey(apiKey);
+        }
+      } else if (providerId === 'local-server') {
+        if (baseUrl && typeof handler.setAIProviderBaseUrl === 'function') {
+          await handler.setAIProviderBaseUrl(providerId, baseUrl);
+        }
+      }
+      await onSaved();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Configure {provider.label}</DialogTitle>
+          <DialogDescription>
+            Update credentials and endpoint settings for this provider.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="size-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {(providerId === 'openai-compatible' || providerId === 'local-server') && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-foreground">Base URL</label>
+              <Input
+                value={baseUrl}
+                placeholder={providerId === 'local-server' ? 'http://localhost:11434' : 'https://api.openai.com/v1'}
+                onChange={e => setBaseUrl(e.target.value)}
+              />
+            </div>
+          )}
+
+          {providerId !== 'local-server' && providerId !== 'maho-managed' && (
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-foreground">API Key</label>
+              <Input
+                type="password"
+                value={apiKey}
+                placeholder={(provider.state as any) === STATE_CONNECTED ? '•••••••• (stored encrypted)' : 'Enter API key'}
+                onChange={e => setApiKey(e.target.value)}
+              />
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="flex gap-2">
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ProviderDisconnectDialog({
+  providerId,
+  modelsData,
+  handler,
+  onClose,
+  onDisconnected,
+}: {
+  providerId: string;
+  modelsData: AIModelsSettings;
+  handler: PageHandlerRemote;
+  onClose: () => void;
+  onDisconnected: () => Promise<void>;
+}) {
+  const provider = modelsData.providers.find(p => p.id === providerId);
+  const isDefault = modelsData.defaultProviderId === providerId;
+  const otherConnected = modelsData.providers.filter(
+    p => p.id !== providerId && ((p.state as any) === STATE_CONNECTED || (p.state as any) === AIConnectionState?.kConnected)
+  );
+
+  const [replacementDefaultProvider, setReplacementDefaultProvider] = useState(
+    otherConnected[0]?.id || ''
+  );
+  const [replacementDefaultModel, setReplacementDefaultModel] = useState(
+    otherConnected[0]?.lastModelId || 'default'
+  );
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleConfirm = async () => {
+    setDisconnecting(true);
+    setError(null);
+    try {
+      if (typeof handler.disconnectAIProvider === 'function') {
+        const {accepted, error: err} = await handler.disconnectAIProvider(
+          providerId,
+          isDefault ? replacementDefaultProvider : undefined,
+          isDefault ? replacementDefaultModel : undefined,
+          []
+        );
+        if (!accepted) {
+          throw new Error(err || 'Failed to disconnect provider');
+        }
+      }
+      await onDisconnected();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to disconnect provider');
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Disconnect {provider?.label}</DialogTitle>
+          <DialogDescription>
+            Disconnecting this provider will clear its saved credentials and endpoint configuration.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {error && (
+            <Alert variant="destructive">
+              <AlertCircle className="size-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {isDefault && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-500 space-y-2">
+              <p className="font-semibold">This is your current Default provider.</p>
+              <p>You must assign another connected provider as Default before disconnecting.</p>
+
+              {otherConnected.length === 0 ? (
+                <p className="font-medium text-destructive">
+                  No other connected providers available. Please connect another provider first.
+                </p>
+              ) : (
+                <div className="space-y-2 pt-1 text-foreground">
+                  <div>
+                    <label className="text-[11px] font-semibold text-muted-foreground block mb-1">Replacement Default Provider</label>
+                    <SelectShell
+                      ariaLabel="Replacement Provider"
+                      value={replacementDefaultProvider}
+                      options={otherConnected.map(p => ({value: p.id, label: p.label}))}
+                      onChange={val => {
+                        setReplacementDefaultProvider(val);
+                        const prov = otherConnected.find(p => p.id === val);
+                        setReplacementDefaultModel(prov?.lastModelId || 'default');
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="flex gap-2">
+          <Button variant="outline" onClick={onClose} disabled={disconnecting}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={handleConfirm}
+            disabled={disconnecting || (isDefault && otherConnected.length === 0)}
+          >
+            {disconnecting ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : null}
+            Disconnect
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

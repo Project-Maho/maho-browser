@@ -1,4 +1,6 @@
 export {
+  AIConnectionState,
+  AIModelCapability,
   BrowserUpdateState,
   MailBehaviorUpdateStatus,
   MailNotificationPermission,
@@ -14,6 +16,12 @@ export {
   VaultPreflightState,
 } from './maho_settings.mojom-webui.js';
 export type {
+  AIModelsSettings,
+  AIModelDescriptor,
+  AIProviderDescriptor,
+  AITaskModelRoute,
+  AIProviderTestResult,
+  AITaskReplacement,
   AISettings,
   ATCRule,
   AutofillAddress,
