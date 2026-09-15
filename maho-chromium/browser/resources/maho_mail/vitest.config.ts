@@ -20,29 +20,15 @@ function localNodeModulePath(relativePath: string): string {
   return new URL(relativePath, localNodeModulesUrl).pathname;
 }
 
-// Mail started life as a Tauri app, so parts of the React tree still import
-// @tauri-apps/*. Production builds redirect those to in-tree stubs through
-// tsconfig paths; tests resolve them the same way instead of installing Tauri.
-const tauriStub = featurePath('react/tauri_mocks.ts');
-
 export default defineConfig({
   test: {
     environment: 'jsdom',
-    // react/tauri_mocks.ts switches to vi.fn() stubs by probing `'vi' in
-    // globalThis`, so the global API must be exposed for those mocks to arm.
     globals: true,
     include: ['react/**/*.test.ts', 'react/**/*.test.tsx'],
     setupFiles: [featurePath('react/__tests__/setup.ts')],
   },
   resolve: {
     alias: [
-      {
-        find: /^@tauri-apps\/api\/event$/,
-        replacement: featurePath('react/events.ts'),
-      },
-      {find: /^@tauri-apps\/api\/.*$/, replacement: tauriStub},
-      {find: /^@tauri-apps\/plugin-.*$/, replacement: tauriStub},
-
       {find: /^@theme\/(.+)$/, replacement: featurePath('../maho_common/react/theme/$1')},
       {find: /^@ui\/(.+)$/, replacement: featurePath('../maho_common/react/ui/$1')},
       {find: /^@icons\/(.+)$/, replacement: featurePath('../maho_common/react/icons/$1')},

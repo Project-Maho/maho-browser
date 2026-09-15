@@ -19,24 +19,6 @@
     ],
     "types": [],
     "paths": {
-      "@tauri-apps/api/event": [
-        "./events.ts"
-      ],
-      "@tauri-apps/api/path": [
-        "./tauri_mocks.ts"
-      ],
-      "@tauri-apps/api/core": [
-        "./tauri_mocks.ts"
-      ],
-      "@tauri-apps/plugin-opener": [
-        "./tauri_mocks.ts"
-      ],
-      "@tauri-apps/api/*": [
-        "./tauri_mocks.ts"
-      ],
-      "@tauri-apps/plugin-*": [
-        "./tauri_mocks.ts"
-      ],
       "@/*": [
         "./*"
       ],

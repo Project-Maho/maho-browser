@@ -1,9 +1,9 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../../events.js";
 import { useAuthStatus } from "../useAuthStatus";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("../../events.js", () => ({ listen: vi.fn() }));
 
 const listeners = new Map<string, (event: { payload: any }) => void>();
 const unlistenFns: Array<() => void> = [];

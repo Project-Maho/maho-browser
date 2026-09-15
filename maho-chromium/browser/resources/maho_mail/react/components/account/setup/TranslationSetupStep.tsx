@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../../../events.js';
 import { Cpu, Key, Loader2, SkipForward } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import * as api from '../../../api';

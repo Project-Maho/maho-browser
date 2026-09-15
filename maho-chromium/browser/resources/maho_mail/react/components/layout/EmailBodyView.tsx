@@ -12,6 +12,7 @@ import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
 import * as api from "../../api";
 import { formatFileSize } from "../ui/utils";
+import { openExternalUrl } from "../../utils/openExternal.js";
 
 interface EmailBodyViewProps {
   emailDetail: EmailDetail;
@@ -147,7 +148,7 @@ export function EmailBodyView({
           if (!href || !URL.canParse(href)) return;
           const url = new URL(href);
           if (["http:", "https:", "mailto:"].includes(url.protocol)) {
-            window.open(url.href, "_blank", "noopener,noreferrer");
+            openExternalUrl(url.href);
           }
         };
         iframe.contentDocument.addEventListener("click", clickHandler);

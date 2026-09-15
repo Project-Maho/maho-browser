@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../events.js";
 import type { SyncErrorEvent } from "../types";
 
 interface NewEmailsPayload {

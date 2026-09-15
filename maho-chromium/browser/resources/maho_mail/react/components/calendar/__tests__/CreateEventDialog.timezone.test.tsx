@@ -4,7 +4,6 @@ import { CreateEventDialog } from "../CreateEventDialog";
 import { TestProviders } from "../../../test/mocks";
 import * as api from "../../../api";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => {

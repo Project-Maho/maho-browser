@@ -11,10 +11,6 @@ const { toastMock, getAccountMock, testConnectionMock, updateAccountMock } = vi.
   updateAccountMock: vi.fn(),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("../../../api", () => ({
   getAccount: getAccountMock,
   testConnection: testConnectionMock,

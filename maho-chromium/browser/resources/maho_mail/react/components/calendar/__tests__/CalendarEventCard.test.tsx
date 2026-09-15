@@ -3,7 +3,6 @@ import { describe, it, expect, vi } from "vitest";
 import { CalendarEventCard } from "../CalendarEventCard";
 import { TestProviders } from "../../../test/mocks";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));

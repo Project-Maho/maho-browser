@@ -14,7 +14,7 @@ import { toZonedTime } from "date-fns-tz";
 import { MiniCalendar } from "./MiniCalendar";
 import { YearView } from "./YearView";
 import { useCalendarClient } from "../../hooks/useCalendarClient";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../../utils/openExternal.js";
 import { TodayPanel } from "./TodayPanel";
 import { MobileDayView } from "./MobileDayView";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "../ui/Tooltip";
@@ -503,7 +503,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
   const handleOpenInGoogleCalendar = async (externalId: string, calendarId: string) => {
     try {
       const url = getGoogleCalendarUrl(externalId, calendarId);
-      await openUrl(url);
+      openExternalUrl(url);
     } catch (err) {
       console.error("Failed to open external url", err);
     }

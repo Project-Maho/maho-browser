@@ -3,14 +3,6 @@ import { describe, it, expect, vi } from "vitest";
 import { TestProviders } from "../../../../test/mocks";
 import { AccountSetupFlow } from '../AccountSetupFlow';
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
-
 describe("AccountSetupFlow", () => {
   it("renders ProviderStep initially", () => {
     render(<AccountSetupFlow onComplete={vi.fn()} />, { wrapper: TestProviders });

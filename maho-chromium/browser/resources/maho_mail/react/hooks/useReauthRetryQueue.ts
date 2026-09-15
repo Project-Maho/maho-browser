@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../events.js";
 import { useTranslation } from "react-i18next";
 import { useToast } from "../components/ui/Toast";
 

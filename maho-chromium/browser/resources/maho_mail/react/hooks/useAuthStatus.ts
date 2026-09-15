@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../events.js";
 import type { AuthError } from "../types";
 
 interface ReauthRequiredPayload {

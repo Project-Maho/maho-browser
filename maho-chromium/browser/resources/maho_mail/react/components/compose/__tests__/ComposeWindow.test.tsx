@@ -3,10 +3,9 @@ import { useEffect } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ComposeWindow } from "../ComposeWindow";
 import { TestProviders } from "../../../test/mocks";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { AccountSummary } from "../../../types";
 
-const { toastMock, sendEmailMock, listAccountsMock, composeInitPayload, currentWindow, closeSelfMock } = vi.hoisted(() => ({
+const { toastMock, sendEmailMock, listAccountsMock, composeInitPayload, closeSelfMock } = vi.hoisted(() => ({
   toastMock: vi.fn(),
   sendEmailMock: vi.fn().mockResolvedValue(undefined),
   listAccountsMock: vi.fn(),
@@ -20,15 +19,10 @@ const { toastMock, sendEmailMock, listAccountsMock, composeInitPayload, currentW
     accountId: "acc-1",
   },
   closeSelfMock: vi.fn(),
-  currentWindow: {
-    label: "compose-test",
-    close: vi.fn().mockResolvedValue(undefined),
-    setFocus: vi.fn().mockResolvedValue(undefined),
-  },
 }));
 
 
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("../../../events.js", () => ({
   emit: vi.fn().mockResolvedValue(undefined),
   listen: vi.fn((event: string, handler: (event: { payload: unknown }) => void) => {
     if (event === "compose:init") {
@@ -135,7 +129,6 @@ describe("ComposeWindow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listAccountsMock.mockResolvedValue(accounts);
-    vi.mocked(getCurrentWebviewWindow).mockReturnValue(currentWindow as never);
   });
 
   it("renders the compose window after initialization", async () => {

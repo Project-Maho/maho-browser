@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { CalendarGrid } from "../CalendarGrid";
 import { TestProviders } from "../../../test/mocks";
 
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("../../../events.js", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 vi.mock("react-i18next", () => ({

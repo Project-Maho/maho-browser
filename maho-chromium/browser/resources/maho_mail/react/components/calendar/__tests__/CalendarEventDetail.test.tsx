@@ -13,7 +13,6 @@ vi.mock("../../../api", () => ({
   snoozeCalendarEvent: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));

@@ -3,10 +3,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AddAccountModal } from "../AddAccountModal";
 import { TestProviders } from "../../../test/mocks";
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
-}));
-
 describe("AddAccountModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();

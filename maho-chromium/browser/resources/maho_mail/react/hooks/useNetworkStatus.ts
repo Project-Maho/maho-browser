@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../events.js";
 import { flushOutbox, listAllPendingMutations } from "../api";
 
 export type ConnectionStatus = "online" | "offline" | "partial";

@@ -12,7 +12,7 @@ const apiMocks = vi.hoisted(() => ({
 
 vi.mock("../../../../api", () => apiMocks);
 
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("../../../../events.js", () => ({
   listen: vi.fn((_event: string, _handler: (event: unknown) => void) =>
     Promise.resolve(() => {}),
   ),
@@ -32,14 +32,6 @@ vi.mock("../../../ui", () => ({
 
 vi.mock("../../../ui/Toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
-}));
-
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
 }));
 
 describe("OAuthStep", () => {
@@ -101,7 +93,7 @@ describe("OAuthStep", () => {
   });
 
   it("advances via onSuccess when accounts-changed fires after browser approval", async () => {
-    const { listen } = await import("@tauri-apps/api/event");
+    const { listen } = await import("../../../../events.js");
     const onSuccess = vi.fn();
     render(<OAuthStep provider="gmail" onBack={vi.fn()} onSuccess={onSuccess} />);
 

@@ -2,10 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useCalendarClient } from "../useCalendarClient";
 import * as api from "../../api";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../../events.js";
 import { toast as sonnerToast } from "sonner";
 
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+vi.mock("../../events.js", () => ({ listen: vi.fn() }));
 
 vi.mock("../../api", () => ({
   listCalendarEvents: vi.fn().mockResolvedValue([]),

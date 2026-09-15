@@ -1,9 +1,6 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
 import { useEffect, useRef } from "react";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
 import { isMobile } from "../utils/platform";
 
 interface UseNotificationsOptions {
@@ -18,13 +15,13 @@ export function useNotifications({ enabled }: UseNotificationsOptions) {
   // appears early rather than on the first incoming email.
   useEffect(() => {
     if (!enabled || !isMobile() || permissionRequested.current) return;
+    if (typeof Notification === "undefined") return;
     permissionRequested.current = true;
 
     void (async () => {
       try {
-        const granted = await isPermissionGranted();
-        if (!granted) {
-          await requestPermission();
+        if (Notification.permission === "default") {
+          await Notification.requestPermission();
         }
       } catch {
         // Permission API unavailable — silently degrade
@@ -33,16 +30,15 @@ export function useNotifications({ enabled }: UseNotificationsOptions) {
   }, [enabled]);
 
   async function notify(title: string, body: string) {
-    if (!enabled) return;
+    if (!enabled || typeof Notification === "undefined") return;
 
     try {
-      let permitted = await isPermissionGranted();
-      if (!permitted) {
-        const permission = await requestPermission();
-        permitted = permission === "granted";
+      let permitted = Notification.permission === "granted";
+      if (!permitted && Notification.permission !== "denied") {
+        permitted = (await Notification.requestPermission()) === "granted";
       }
       if (permitted) {
-        sendNotification({ title, body: body || "" });
+        new Notification(title, { body: body || "" });
       }
     } catch {
       // Native notification unavailable — silently degrade

@@ -14,7 +14,7 @@ import { useConfirm } from "../ui/ConfirmDialog";
 import { useToast } from "../ui/Toast";
 import * as api from "../../api";
 import type { CalendarEvent } from "../../types";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternalUrl } from "../../utils/openExternal.js";
 
 interface CalendarEventDetailProps {
   event: CalendarEvent;
@@ -200,7 +200,7 @@ export function CalendarEventDetail({
                 <p className="text-xs font-medium text-muted-foreground">{t("calendar.videoCall") || "Video Call"}</p>
                 <button
                   type="button"
-                  onClick={() => void openUrl(event.hangout_link!)}
+                  onClick={() => openExternalUrl(event.hangout_link!)}
                   className="inline-flex items-center justify-center rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {t("calendar.joinMeet") || "Join Google Meet"}

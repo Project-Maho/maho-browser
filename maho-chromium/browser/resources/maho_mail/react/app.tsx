@@ -85,7 +85,6 @@ import {
 } from "./hooks/usePopoutWindow";
 import { ReaderWindow } from "./components/reader/ReaderWindow";
 import { ComposeWindow } from "./components/compose/ComposeWindow";
-import { useDeepLink } from "./hooks/useDeepLink";
 import { useAppLifecycle } from "./hooks/useAppLifecycle";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 import { useNotifications } from "./hooks/useNotifications";
@@ -204,13 +203,6 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     setComposeInitialBcc(undefined);
     setShowCompose(true);
   }, []);
-
-  useDeepLink({
-    onNavigateToEmail: useCallback((messageId: string) => {
-      void mail.selectEmail(messageId);
-    }, [mail.selectEmail]),
-    onComposeToRecipient: handleComposeToRecipient,
-  });
 
   // Cross-window sync: refresh data when popout windows make changes
   useMailUpdatedListener(() => {

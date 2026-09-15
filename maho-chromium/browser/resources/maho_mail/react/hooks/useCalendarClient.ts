@@ -5,7 +5,7 @@ import type { CalendarEvent, GoogleCalendarEntry, CalendarCategory, AccountSumma
 import { useToast } from "../components/ui/Toast";
 import { useTranslation } from "react-i18next";
 import * as chrono from "chrono-node";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "../events.js";
 
 interface UseCalendarClientProps {
   accountId: string;

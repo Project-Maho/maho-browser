@@ -4,7 +4,7 @@ import { useAutoSync } from "../useAutoSync";
 
 const mockListeners = new Map<string, Function>();
 
-vi.mock("@tauri-apps/api/event", () => ({
+vi.mock("../../events.js", () => ({
   listen: vi.fn((event: string, handler: Function) => {
     mockListeners.set(event, handler);
     const unlisten = vi.fn(() => { mockListeners.delete(event); });
@@ -24,7 +24,7 @@ describe("useAutoSync", () => {
     const onSyncCompleted = vi.fn();
     const onSyncError = vi.fn();
 
-    const { listen } = await import("@tauri-apps/api/event");
+    const { listen } = await import("../../events.js");
 
     renderHook(() =>
       useAutoSync({
@@ -54,7 +54,7 @@ describe("useAutoSync", () => {
   it("only registers listeners for provided callbacks", async () => {
     const onNewEmails = vi.fn();
 
-    const { listen } = await import("@tauri-apps/api/event");
+    const { listen } = await import("../../events.js");
 
     renderHook(() =>
       useAutoSync({
@@ -131,7 +131,7 @@ describe("useAutoSync", () => {
     const onSyncCompleted = vi.fn();
     const onSyncError = vi.fn();
 
-    const { listen } = await import("@tauri-apps/api/event");
+    const { listen } = await import("../../events.js");
 
     const { unmount } = renderHook(() =>
       useAutoSync({

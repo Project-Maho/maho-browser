@@ -3,14 +3,6 @@ import { describe, it, expect, vi } from "vitest";
 import { TestProviders } from "../../../test/mocks";
 import { OnboardingScreen } from '../OnboardingScreen';
 
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
-
 describe("OnboardingScreen", () => {
   it("renders welcome heading", () => {
     render(<OnboardingScreen onAccountAdded={vi.fn()} />, { wrapper: TestProviders });

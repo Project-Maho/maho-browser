@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../../../events.js';
 import * as api from '../../../api';
 import { useToast } from '../../ui/Toast';
 import { Button } from '../../ui';

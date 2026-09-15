@@ -2,10 +2,6 @@ import { renderHook, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useHotkeys } from "../useHotkeys";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
-
 describe("useHotkeys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
