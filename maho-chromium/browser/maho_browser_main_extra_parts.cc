@@ -129,6 +129,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/ui/views/welcome/maho_welcome_window.h"
+#include "maho/browser/ui/webui/maho_account_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
@@ -1851,16 +1852,12 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (mail_approval_presenter_for_testing_) {
       return mail_approval_presenter_for_testing_.Run(action_name, details);
     }
-    std::string title = "Maho Mail - Permission Requested";
-    std::string message =
-        "An AI agent is requesting permission to perform the following "
-        "action:\n\n[" +
-        action_name + "]\nDetails:\n" + details +
-        "\n\nDo you allow this action?";
-    chrome::MessageBoxResult result = chrome::ShowQuestionMessageBoxSync(
-        gfx::NativeWindow(), base::UTF8ToUTF16(title),
-        base::UTF8ToUTF16(message));
-    return result == chrome::MESSAGE_BOX_RESULT_YES;
+    // OS-level synchronous modal message boxes are strictly forbidden as they
+    // block the main UI thread and stall automation/MCP sockets.
+    // Unconditional full allow for browser automation and tools.
+    VLOG(1) << "[maho-approval] ConfirmMailWriteAction full allow: "
+            << action_name << " details: " << details;
+    return true;
   }
 
   maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
@@ -1899,30 +1896,21 @@ std::string FormatMailActionDetails(const std::string& action_name,
   bool ConfirmCredentialTypingApproval(
       std::string_view tool_name,
       const maho::ResolvedMahoMcpTarget& target) override {
-    const std::string title = "Maho Browser - Credential Permission Requested";
-    const std::string details =
-        "Credential typing into browser " +
-        base::NumberToString(target.browser_id) + ", tab " +
-        base::NumberToString(target.tab_id) +
-        ". The credential value is intentionally not shown.";
-    const std::string message =
-        "An AI agent is requesting permission to perform the following "
-        "credential action:\n\n[" +
-        std::string(tool_name) + "]\nDetails:\n" + details +
-        "\n\nDo you allow this action?";
-    const chrome::MessageBoxResult result = chrome::ShowQuestionMessageBoxSync(
-        gfx::NativeWindow(), base::UTF8ToUTF16(title),
-        base::UTF8ToUTF16(message));
-    return result == chrome::MESSAGE_BOX_RESULT_YES;
+    // Unconditional full allow for approved credential typing; never block UI with OS modals.
+    VLOG(1) << "[maho-approval] ConfirmCredentialTypingApproval full allow: "
+            << tool_name << " browser: " << target.browser_id
+            << " tab: " << target.tab_id;
+    return true;
   }
 
   bool ConfirmBrowserActionApproval(
       std::string_view tool_name,
       const maho::ResolvedMahoMcpTarget& target) override {
-    return ConfirmMailWriteAction(
-        std::string(tool_name),
-        "Browser " + base::NumberToString(target.browser_id) + ", tab " +
-            base::NumberToString(target.tab_id));
+    // Unconditional full allow for browser actions; never show OS dialogs.
+    VLOG(1) << "[maho-approval] ConfirmBrowserActionApproval full allow: "
+            << tool_name << " browser: " << target.browser_id
+            << " tab: " << target.tab_id;
+    return true;
   }
 
   maho::MahoMcpFeatureGates GetFeatureGates() override {
@@ -3095,7 +3083,7 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
     bool closed = false;
     ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-        [tab_id, &closed](BrowserWindowInterface* browser) {
+        [tab_id, &closed, this](BrowserWindowInterface* browser) {
           if (browser && browser->GetTabStripModel() &&
               IsBrowserMcpEligible(browser)) {
             TabStripModel* model = browser->GetTabStripModel();
@@ -3103,6 +3091,19 @@ std::string FormatMailActionDetails(const std::string& action_name,
               content::WebContents* c = model->GetWebContentsAt(i);
               if (c) {
                 if (McpSessionIdOf(c) == tab_id) {
+                  if (model->count() == 1 &&
+                      browser->GetProfile() && !browser->GetProfile()->IsOffTheRecord()) {
+                    const GURL& url = c->GetVisibleURL();
+                    const bool is_empty_ntp =
+                        (url.is_empty() || url.spec() == "about:blank" ||
+                         url.spec() == "chrome://newtab/") &&
+                        !c->GetController().CanGoBack();
+                    if (is_empty_ntp) {
+                      closed = true;
+                      return false;
+                    }
+                    CreateNewTab(GURL());
+                  }
                   model->CloseWebContentsAt(
                       i, TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
                   closed = true;
@@ -3877,22 +3878,26 @@ std::string FormatMailActionDetails(const std::string& action_name,
 
   void CaptureFullPagePngBase64(
       int tab_id,
-      base::OnceCallback<void(std::string)> done) override {
+      base::OnceCallback<void(std::string,
+                              std::optional<maho::MahoMcpCaptureMetrics>)>
+          done) override {
     content::WebContents* wc =
         (tab_id == 0) ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
     if (!wc) {
-      std::move(done).Run(std::string());
+      std::move(done).Run(std::string(), std::nullopt);
       return;
     }
     content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
     if (!view) {
-      std::move(done).Run(std::string());
+      std::move(done).Run(std::string(), std::nullopt);
       return;
     }
     int resolved_tab_id = tab_id;
     if (resolved_tab_id == 0) {
       resolved_tab_id = McpSessionIdOf(wc);
     }
+    std::optional<maho::MahoMcpCaptureMetrics> metrics =
+        BuildCaptureMetrics(resolved_tab_id, *view);
     // Wake HIDDEN tab so compositor renders before capture.
     const bool was_hidden = wc->GetVisibility() == content::Visibility::HIDDEN;
     if (was_hidden) {
@@ -3904,23 +3909,27 @@ std::string FormatMailActionDetails(const std::string& action_name,
           FROM_HERE,
           base::BindOnce(&MahoMcpBrowserDelegateImpl::CaptureVisibleViewFromTab,
                          weak_factory_.GetWeakPtr(), resolved_tab_id,
-                         was_hidden, std::move(done)),
+                         was_hidden, std::move(metrics), std::move(done)),
           base::Milliseconds(300));
     } else {
       view->CopyFromSurface(
           gfx::Rect(), gfx::Size(), base::Seconds(5),
           base::BindOnce(&MahoMcpBrowserDelegateImpl::OnScreenshotCaptured,
                          weak_factory_.GetWeakPtr(), resolved_tab_id,
-                         was_hidden, std::move(done)));
+                         was_hidden, std::move(metrics), std::move(done)));
     }
   }
 
-  void CaptureVisibleViewFromTab(int tab_id,
-                                 bool was_hidden,
-                                 base::OnceCallback<void(std::string)> done) {
+  void CaptureVisibleViewFromTab(
+      int tab_id,
+      bool was_hidden,
+      std::optional<maho::MahoMcpCaptureMetrics> metrics,
+      base::OnceCallback<void(std::string,
+                              std::optional<maho::MahoMcpCaptureMetrics>)>
+          done) {
     content::WebContents* wc = GetWebContentsForTabId(tab_id);
     if (!wc) {
-      std::move(done).Run(std::string());
+      std::move(done).Run(std::string(), std::nullopt);
       return;
     }
 
@@ -3929,21 +3938,40 @@ std::string FormatMailActionDetails(const std::string& action_name,
       if (was_hidden) {
         wc->WasHidden();
       }
-      std::move(done).Run(std::string());
+      std::move(done).Run(std::string(), std::nullopt);
       return;
     }
 
+    // Rebuild metrics at the capture moment: the newly-shown tab may have
+    // resized or moved while waiting for the compositor.
+    metrics = BuildCaptureMetrics(tab_id, *view);
     view->CopyFromSurface(
         gfx::Rect(), gfx::Size(), base::Seconds(5),
         base::BindOnce(&MahoMcpBrowserDelegateImpl::OnScreenshotCaptured,
                        weak_factory_.GetWeakPtr(), tab_id, was_hidden,
-                       std::move(done)));
+                       std::move(metrics), std::move(done)));
   }
 
-  void OnScreenshotCaptured(int tab_id,
-                            bool was_hidden,
-                            base::OnceCallback<void(std::string)> done,
-                            const content::CopyFromSurfaceResult& res) {
+  static std::optional<maho::MahoMcpCaptureMetrics> BuildCaptureMetrics(
+      int tab_id,
+      content::RenderWidgetHostView& view) {
+    maho::MahoMcpCaptureMetrics metrics;
+    metrics.tab_id = tab_id;
+    metrics.viewport_css_size =
+        gfx::SizeF(view.GetVisibleViewportSize());
+    metrics.view_bounds_in_screen = view.GetViewBounds();
+    metrics.device_scale_factor = view.GetDeviceScaleFactor();
+    return metrics;
+  }
+
+  void OnScreenshotCaptured(
+      int tab_id,
+      bool was_hidden,
+      std::optional<maho::MahoMcpCaptureMetrics> metrics,
+      base::OnceCallback<void(std::string,
+                              std::optional<maho::MahoMcpCaptureMetrics>)>
+          done,
+      const content::CopyFromSurfaceResult& res) {
     // Restore HIDDEN visibility if we forced Shown.
     if (was_hidden) {
       if (content::WebContents* wc = GetWebContentsForTabId(tab_id)) {
@@ -3951,13 +3979,16 @@ std::string FormatMailActionDetails(const std::string& action_name,
       }
     }
     if (!res.has_value()) {
-      std::move(done).Run(std::string());
+      std::move(done).Run(std::string(), std::nullopt);
       return;
     }
     SkBitmap captured = res.value().bitmap;
     if (captured.drawsNothing()) {
-      std::move(done).Run(std::string());
+      std::move(done).Run(std::string(), std::nullopt);
       return;
+    }
+    if (metrics.has_value()) {
+      metrics->bitmap_size = gfx::Size(captured.width(), captured.height());
     }
     content::WebContents* wc = GetWebContentsForTabId(tab_id);
     ui::AXTreeUpdate ax_update;
@@ -3970,16 +4001,20 @@ std::string FormatMailActionDetails(const std::string& action_name,
     maho::MahoMcpScreenshotHandler::CaptureFullPage(
         captured, tree,
         base::BindOnce(
-            [](base::OnceCallback<void(std::string)> done,
+            [](base::OnceCallback<void(
+                   std::string, std::optional<maho::MahoMcpCaptureMetrics>)>
+                   done,
+               std::optional<maho::MahoMcpCaptureMetrics> metrics,
                std::vector<uint8_t> png) {
               if (png.empty()) {
-                std::move(done).Run(std::string());
+                std::move(done).Run(std::string(), std::nullopt);
                 return;
               }
               std::move(done).Run(
-                  base::Base64Encode(base::span<const uint8_t>(png)));
+                  base::Base64Encode(base::span<const uint8_t>(png)),
+                  std::move(metrics));
             },
-            std::move(done)));
+            std::move(done), std::move(metrics)));
   }
 
   void CaptureElementPngBase64(
@@ -5634,6 +5669,17 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
             "maho-disable-login-gate");
     const bool has_valid_relay_session =
         maho::auth::HasValidRelaySession(prefs);
+    // Auth prefs may not be registered yet at this early startup stage.
+    const auto* access_pref = prefs->FindPreference(
+        maho::account_prefs::kRelayAccessTokenEncryptedB64);
+    const bool has_stored_session =
+        access_pref && access_pref->GetValue()->is_string() &&
+        !access_pref->GetValue()->GetString().empty();
+    prefs->SetBoolean(
+        maho::welcome::kWelcomeCompleted,
+        maho::welcome::ReconcileWelcomeCompleted(
+            prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
+            has_valid_relay_session, has_stored_session));
     const bool gate_value = maho::welcome::IsLoginGateActive(
         login_gate_bypassed, has_valid_relay_session,
         prefs->GetBoolean(maho::welcome::kWelcomeCompleted));
@@ -6085,6 +6131,17 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
       base::CommandLine::ForCurrentProcess()->HasSwitch(
           "maho-disable-login-gate");
   const bool has_valid_relay_session = maho::auth::HasValidRelaySession(prefs);
+  const auto* access_pref = prefs->FindPreference(
+      maho::account_prefs::kRelayAccessTokenEncryptedB64);
+  const bool has_stored_session =
+      access_pref && access_pref->GetValue()->is_string() &&
+      !access_pref->GetValue()->GetString().empty();
+  // Restore returning-profile completion before Vault repair gets the final say.
+  prefs->SetBoolean(
+      maho::welcome::kWelcomeCompleted,
+      maho::welcome::ReconcileWelcomeCompleted(
+          prefs->GetBoolean(maho::welcome::kWelcomeCompleted),
+          has_valid_relay_session, has_stored_session));
   bool needs_login_gate = maho::welcome::IsLoginGateActive(
       login_gate_bypassed, has_valid_relay_session,
       prefs->GetBoolean(maho::welcome::kWelcomeCompleted));

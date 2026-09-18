@@ -61,6 +61,7 @@ constexpr base::TimeDelta kDeactivationHideDelay = base::Milliseconds(200);
 
 constexpr int kPopupWidthDp = 744;
 constexpr int kPopupInitialHeightDp = 232;
+constexpr int kPopupMinHeightDp = 48;
 constexpr int kPopupMinTopMarginDp = 62;
 constexpr int kPopupMinBottomMarginDp = 32;
 
@@ -343,9 +344,12 @@ void MahoCommandOverlayController::AnimationProgressed(
   if (!widget_ || animation != &resize_animation_)
     return;
 
-  widget_->SetBounds(gfx::Tween::RectValueBetween(
+  const gfx::Rect bounds = gfx::Tween::RectValueBetween(
       resize_animation_.GetCurrentValue(), animation_start_bounds_,
-      animation_target_bounds_));
+      animation_target_bounds_);
+  if (!bounds.IsEmpty()) {
+    widget_->SetBounds(bounds);
+  }
 }
 
 void MahoCommandOverlayController::AnimationEnded(
@@ -353,7 +357,9 @@ void MahoCommandOverlayController::AnimationEnded(
   if (!widget_ || animation != &resize_animation_)
     return;
 
-  widget_->SetBounds(animation_target_bounds_);
+  if (!animation_target_bounds_.IsEmpty()) {
+    widget_->SetBounds(animation_target_bounds_);
+  }
 }
 
 gfx::Rect MahoCommandOverlayController::ComputePopupBounds() const {
@@ -372,6 +378,11 @@ gfx::Rect MahoCommandOverlayController::ComputeBoundsForHeight(int height) const
     return gfx::Rect();
 
   const gfx::Rect parent_bounds = parent_widget_->GetWindowBoundsInScreen();
+  if (parent_bounds.IsEmpty())
+    return gfx::Rect();
+
+  height = std::max(height, kPopupMinHeightDp);
+
   const gfx::Rect work_area =
       GetWorkAreaForParentWidget(parent_widget_, parent_bounds);
   const int x = parent_bounds.x() +
@@ -389,19 +400,35 @@ void MahoCommandOverlayController::Reposition() {
     return;
 
   const gfx::Rect parent_bounds = parent_widget_->GetWindowBoundsInScreen();
+  if (parent_bounds.IsEmpty())
+    return;
+
   const gfx::Rect work_area =
       GetWorkAreaForParentWidget(parent_widget_, parent_bounds);
+  int current_height = widget_->GetWindowBoundsInScreen().height();
+  current_height = std::max(current_height, kPopupMinHeightDp);
   gfx::Rect bounds = ComputeCenteredPopupBounds(
-      parent_bounds, work_area, widget_->GetWindowBoundsInScreen().height());
-  widget_->SetBounds(bounds);
+      parent_bounds, work_area, current_height);
+  if (!bounds.IsEmpty()) {
+    widget_->SetBounds(bounds);
+  }
 }
 
 void MahoCommandOverlayController::AnimateBoundsToHeight(int height) {
   if (!widget_)
     return;
 
+  height = std::max(height, kPopupMinHeightDp);
+
   gfx::Rect target_bounds = ComputeBoundsForHeight(height);
+  if (target_bounds.IsEmpty())
+    return;
+
   gfx::Rect current_bounds = widget_->GetWindowBoundsInScreen();
+  if (current_bounds.IsEmpty()) {
+    widget_->SetBounds(target_bounds);
+    return;
+  }
   if (current_bounds == target_bounds)
     return;
 
@@ -494,7 +521,6 @@ void MahoCommandOverlayController::Show(views::View* anchor,
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
   params.parent = parent_widget_->GetNativeView();
   params.context = parent_widget_->GetNativeWindow();
-  params.child = true;
   params.opacity = views::Widget::InitParams::WindowOpacity::kTranslucent;
   params.bounds = ComputePopupBounds();
   params.accept_events = true;
@@ -514,10 +540,21 @@ void MahoCommandOverlayController::Show(views::View* anchor,
   }
 
   gfx::Size preferred = overlay_ptr->GetPreferredSize();
-  gfx::Rect bounds = ComputeBoundsForHeight(preferred.height());
-  widget_ptr->SetBounds(bounds);
-  animation_start_bounds_ = bounds;
-  animation_target_bounds_ = bounds;
+  const int initial_height = std::max(preferred.height(), kPopupMinHeightDp);
+  gfx::Rect bounds = ComputeBoundsForHeight(initial_height);
+  if (bounds.IsEmpty()) {
+    const gfx::Rect parent_bounds = parent_widget_->GetWindowBoundsInScreen();
+    const gfx::Rect work_area =
+        GetWorkAreaForParentWidget(parent_widget_, parent_bounds);
+    bounds = ComputeCenteredPopupBounds(
+        parent_bounds.IsEmpty() ? work_area : parent_bounds,
+        work_area, initial_height);
+  }
+  if (!bounds.IsEmpty()) {
+    widget_ptr->SetBounds(bounds);
+    animation_start_bounds_ = bounds;
+    animation_target_bounds_ = bounds;
+  }
   if (auto* root = widget_ptr->GetRootView()) {
     root->DeprecatedLayoutImmediately();
   }

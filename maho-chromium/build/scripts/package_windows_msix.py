@@ -22,8 +22,8 @@ _DEFAULT_RELEASE_FILE = (
 _DEFAULT_VERSION_FILE = _WORKSPACE_ROOT / "maho/version.txt"
 _MANIFEST_TEMPLATE = _OVERLAY_ROOT / "build/windows_msix/AppxManifest.xml.in"
 _BRANDING_DIR = _OVERLAY_ROOT / "branding"
-_DEFAULT_PUBLISHER = "CN=Maho Development"
-_DEFAULT_PACKAGE_NAME = "MahoBrowser"
+_DEFAULT_PUBLISHER = "CN=68073D7F-44F8-47BF-8B3E-B17FBDC44F36"
+_DEFAULT_PACKAGE_NAME = "ProjectMaho.MahoBrowser"
 
 
 def is_windows_host() -> bool:

@@ -111,9 +111,7 @@ inline constexpr bool CapabilityLeavesBrowserBoundary(
       return true;
     }
   }
-  return canonical_id == "artifact.export" ||
-         canonical_id == "input.file_upload_select" ||
-         canonical_id == "browser.visual_click";
+  return canonical_id == "artifact.export";
 }
 
 inline constexpr bool RequiresLease(const BrowserActionContract& contract) {

@@ -16,6 +16,10 @@
 #include "base/memory/ref_counted_memory.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/strings/string_util.h"
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_version.h"
+#endif
 #include "cc/paint/paint_flags.h"
 #include "ui/compositor/layer.h"
 #include "maho/browser/maho_ai_popup_lifetime_tracker.h"
@@ -391,8 +395,10 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   bool use_vibrancy = false;
-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+#if BUILDFLAG(IS_MAC)
   use_vibrancy = true;
+#elif BUILDFLAG(IS_WIN)
+  use_vibrancy = (base::win::GetVersion() >= base::win::Version::WIN11_22H2);
 #endif
 
   if (!use_vibrancy) {
@@ -711,6 +717,10 @@ void MahoCommandOverlayView::RequestFocus() {
   } else {
     views::View::RequestFocus();
   }
+}
+
+gfx::Size MahoCommandOverlayView::GetMinimumSize() const {
+  return gfx::Size(kPopupWidthDp, kPopupMinHeightDp);
 }
 
 void MahoCommandOverlayView::UpdateLayoutForMode() {
@@ -1287,11 +1297,12 @@ void MahoCommandOverlayView::ActivateSelected() {
     if (!model_->query().empty() && !browser_->profile()->IsOffTheRecord()) {
       model_->SaveRecentSearch(model_->query());
     }
+    const WindowOpenDisposition disposition = DispositionForMode();
     Dismiss();
     VLOG(1) << "[maho-command-trace] ActivateSelected: index=" << index
             << " type=" << static_cast<int>(suggestion.type)
             << " payload=" << suggestion.execution_payload;
-    OpenCommandSuggestion(browser_, suggestion, DispositionForMode());
+    OpenCommandSuggestion(browser_, suggestion, disposition);
     return;
   }
 
@@ -1305,10 +1316,11 @@ void MahoCommandOverlayView::ActivateFirstNavigation() {
       if (!model_->query().empty() && !browser_->profile()->IsOffTheRecord()) {
         model_->SaveRecentSearch(model_->query());
       }
+      const WindowOpenDisposition disposition = DispositionForMode();
       Dismiss();
       VLOG(1) << "[maho-command-trace] ActivateFirstNavigation:"
               << " payload=" << s.execution_payload;
-      OpenCommandSuggestion(browser_, s, DispositionForMode());
+      OpenCommandSuggestion(browser_, s, disposition);
       return;
     }
   }
@@ -1318,6 +1330,7 @@ void MahoCommandOverlayView::ActivateFirstNavigation() {
 void MahoCommandOverlayView::NavigateTypedText() {
   DCHECK(browser_);
   std::string text = base::UTF16ToUTF8(textfield_->GetText());
+  base::TrimWhitespaceASCII(text, base::TRIM_ALL, &text);
   if (text.empty()) {
     return;
   }
@@ -1359,6 +1372,7 @@ void MahoCommandOverlayView::NavigateTypedText() {
   if (!model_->query().empty() && !browser_->profile()->IsOffTheRecord()) {
     model_->SaveRecentSearch(model_->query());
   }
+  const WindowOpenDisposition disposition = DispositionForMode();
   Dismiss();
 
   VLOG(1) << "[maho-command-trace] NavigateTypedText:"
@@ -1371,13 +1385,13 @@ void MahoCommandOverlayView::NavigateTypedText() {
   // origin_mode_,
   // so a new-tab palette that transitioned into site-search will still produce
   // NEW_FOREGROUND_TAB here without needing a separate mode_ == kNewTab check.
-  if (DispositionForMode() == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
+  if (disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB) {
     NavigateToNewForegroundTab(browser_, gurl, ui::PAGE_TRANSITION_GENERATED);
     return;
   }
 
   NavigateParams params(browser_, gurl, ui::PAGE_TRANSITION_GENERATED);
-  params.disposition = DispositionForMode();
+  params.disposition = disposition;
   Navigate(&params);
 }
 

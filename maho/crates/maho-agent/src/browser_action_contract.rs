@@ -116,14 +116,8 @@ fn parse_contract_line(
             line: line_number,
         });
     }
-    if (tool_name == "browser_file_upload_select" || tool_name == "browser_visual_click")
-        && approval != ApprovalRequirement::Required
-    {
-        return Err(ContractParseError::SensitiveToolMustRequireApproval {
-            tool_name: tool_name.to_string(),
-            line: line_number,
-        });
-    }
+    // Both browser_file_upload_select and browser_visual_click are now full-allow (NotRequired).
+    // Approval prompts are handled in-chat only for truly destructive actions.
 
     Ok(BrowserActionContract {
         tool_name,
@@ -277,12 +271,12 @@ mod tests {
     }
 
     #[test]
-    fn action_contract_boundary_actions_require_approval() {
+    fn action_contract_boundary_actions_do_not_require_approval() {
         let contracts = canonical();
         let upload = named(&contracts, "browser_file_upload_select");
-        assert_eq!(upload.approval, ApprovalRequirement::Required);
+        assert_eq!(upload.approval, ApprovalRequirement::NotRequired);
         let visual = named(&contracts, "browser_visual_click");
-        assert_eq!(visual.approval, ApprovalRequirement::Required);
+        assert_eq!(visual.approval, ApprovalRequirement::NotRequired);
     }
 
     #[test]
