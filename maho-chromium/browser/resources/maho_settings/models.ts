@@ -97,8 +97,8 @@ export interface PaneDefinition {
   domain: DomainId;
   groupKeys?: string[];
   embedUrl?: string;
-  contentKind?: 'profiles'|'atc'|'ai'|'ai-developers'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'mail-overview'|'content-blocker'|'extensions'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-security';
-  externalAction?: 'openExtensions';
+  contentKind?: 'profiles'|'atc'|'ai'|'ai-developers'|'billing'|'account'|'shortcuts'|'sync'|'autofill'|'passwords'|'saved-passwords'|'mail'|'mail-overview'|'content-blocker'|'extensions'|'bookmarks'|'maho-mini'|'mail-signatures'|'mail-rules'|'mail-calendar'|'mail-behavior'|'mail-security';
+  externalAction?: 'openExtensions' | 'openBookmarks';
 }
 
 export interface LiveCardDefinition {

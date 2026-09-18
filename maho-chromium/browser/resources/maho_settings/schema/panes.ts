@@ -264,6 +264,17 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     externalAction: 'openExtensions',
   },
   {
+    key: 'bookmarks',
+    scope: 'profile',
+    selectedProfileSupport: 'host-only',
+    symbol: 'BM',
+    navTitle: 'Bookmarks',
+    title: 'Bookmarks',
+    kind: 'live',
+    domain: 'productivity',
+    externalAction: 'openBookmarks',
+  },
+  {
     key: 'maho-mini',
     scope: 'process',
     selectedProfileSupport: 'host-only',

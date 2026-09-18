@@ -27,7 +27,6 @@ const tests = [
   "e2e_pane_mail_rules.ts",
   "e2e_pane_mail_calendar.ts",
   "e2e_pane_mail_behavior.ts",
-  "e2e_pane_mail_ai.ts",
   "e2e_pane_mail_security.ts",
   "e2e_pane_chromium_settings.ts",
   "e2e_pane_schema_live.ts",

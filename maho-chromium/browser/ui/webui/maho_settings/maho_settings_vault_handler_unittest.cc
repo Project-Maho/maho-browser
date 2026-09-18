@@ -21,6 +21,9 @@
 #include "maho/browser/ui/webui/maho_settings/maho_settings_password_helpers.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "components/prefs/testing_pref_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai_prefs_registration.h"
 
 
 
@@ -1277,6 +1280,11 @@ TEST_F(MahoSettingsVaultHandlerTest,
 
 class MahoRoutinesSchedulerTest : public MahoSettingsVaultHandlerTest {};
 
+TEST_F(MahoRoutinesSchedulerTest, StatusTickIntervalIsThirtySeconds) {
+  EXPECT_EQ(maho::MahoRoutinesScheduler::kStatusTickInterval,
+            base::Seconds(30));
+}
+
 TEST(MahoVaultLockStatusJsonParseTest, FailsClosedUnlessExplicitUnlocked) {
   using maho::MahoRoutinesScheduler;
   EXPECT_FALSE(MahoRoutinesScheduler::IsLockedVaultStatusJson(
@@ -1800,6 +1808,140 @@ TEST(MahoSettingsSelectedProfileStateMachineTest,
     EXPECT_EQ(17u, error->current_context_revision);
     ASSERT_TRUE(error->current_profile_revision.has_value());
     EXPECT_EQ(23u, *error->current_profile_revision);
+  }
+}
+
+TEST(MahoSettingsDisconnectAIProviderTest, AtomicallyRejectsMalformedPayloads) {
+  TestingPrefServiceSimple prefs;
+  maho::ai::RegisterProfilePrefs(prefs.registry());
+
+  prefs.SetString("maho.ai.provider", "anthropic");
+  prefs.SetString("maho.ai.model", "claude-sonnet-4-20250514");
+
+  {
+    ScopedDictPrefUpdate pcfg_update(&prefs, "maho.ai.provider_configs");
+    base::DictValue* pcfg_ant = pcfg_update->EnsureDict("anthropic");
+    pcfg_ant->Set("connected", true);
+    pcfg_ant->Set("last_model", "claude-sonnet-4-20250514");
+
+    base::DictValue* pcfg_oai = pcfg_update->EnsureDict("openai");
+    pcfg_oai->Set("connected", true);
+    pcfg_oai->Set("last_model", "gpt-4o");
+  }
+
+  {
+    ScopedDictPrefUpdate task_update(&prefs, "maho.ai.task_models");
+    base::DictValue* tidy = task_update->EnsureDict("tab_tidy");
+    tidy->Set("provider", "anthropic");
+    tidy->Set("model", "claude-sonnet-4-20250514");
+
+    base::DictValue* inline_edit = task_update->EnsureDict("inline_edit");
+    inline_edit->Set("provider", "openai");
+    inline_edit->Set("model", "gpt-4o");
+  }
+
+  // 1. Extra chat replacement -> MUST REJECT without mutation
+  {
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> repls;
+    auto r1 = maho_settings::mojom::AITaskReplacement::New();
+    r1->task_id = "tab_tidy";
+    r1->inherit_default = true;
+    repls.push_back(std::move(r1));
+
+    auto r2 = maho_settings::mojom::AITaskReplacement::New();
+    r2->task_id = "chat";
+    r2->inherit_default = false;
+    r2->provider_id = "openai";
+    r2->model_id = "gpt-4o";
+    repls.push_back(std::move(r2));
+
+    std::string err;
+    bool ok = MahoSettingsPageHandler::DisconnectAIProviderForTesting(
+        &prefs, "anthropic", "openai", "gpt-4o", std::move(repls), &err);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+    EXPECT_EQ(prefs.GetString("maho.ai.provider"), "anthropic");
+    const base::DictValue& tm = prefs.GetDict("maho.ai.task_models");
+    EXPECT_EQ(*tm.FindDict("tab_tidy")->FindString("provider"), "anthropic");
+    EXPECT_EQ(tm.FindDict("chat"), nullptr);
+  }
+
+  // 2. Unrelated task replacement -> MUST REJECT without mutation
+  {
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> repls;
+    auto r1 = maho_settings::mojom::AITaskReplacement::New();
+    r1->task_id = "tab_tidy";
+    r1->inherit_default = true;
+    repls.push_back(std::move(r1));
+
+    auto r2 = maho_settings::mojom::AITaskReplacement::New();
+    r2->task_id = "inline_edit";
+    r2->inherit_default = false;
+    r2->provider_id = "openai";
+    r2->model_id = "gpt-4o";
+    repls.push_back(std::move(r2));
+
+    std::string err;
+    bool ok = MahoSettingsPageHandler::DisconnectAIProviderForTesting(
+        &prefs, "anthropic", "openai", "gpt-4o", std::move(repls), &err);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+    EXPECT_EQ(prefs.GetString("maho.ai.provider"), "anthropic");
+  }
+
+  // 3. Disconnected replacement destination -> MUST REJECT without mutation
+  {
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> repls;
+    auto r1 = maho_settings::mojom::AITaskReplacement::New();
+    r1->task_id = "tab_tidy";
+    r1->inherit_default = false;
+    r1->provider_id = "not-connected-provider";
+    r1->model_id = "some-model";
+    repls.push_back(std::move(r1));
+
+    std::string err;
+    bool ok = MahoSettingsPageHandler::DisconnectAIProviderForTesting(
+        &prefs, "anthropic", "openai", "gpt-4o", std::move(repls), &err);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+    EXPECT_EQ(prefs.GetString("maho.ai.provider"), "anthropic");
+  }
+
+  // 4. Invalid replacement Default model -> MUST REJECT without mutation
+  {
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> repls;
+    auto r1 = maho_settings::mojom::AITaskReplacement::New();
+    r1->task_id = "tab_tidy";
+    r1->inherit_default = true;
+    repls.push_back(std::move(r1));
+
+    std::string err;
+    bool ok = MahoSettingsPageHandler::DisconnectAIProviderForTesting(
+        &prefs, "anthropic", "openai", "invalid model with spaces", std::move(repls), &err);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+    EXPECT_EQ(prefs.GetString("maho.ai.provider"), "anthropic");
+  }
+
+  // 5. Valid exact replacement -> COMMITS successfully
+  {
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> repls;
+    auto r1 = maho_settings::mojom::AITaskReplacement::New();
+    r1->task_id = "tab_tidy";
+    r1->inherit_default = true;
+    repls.push_back(std::move(r1));
+
+    std::string err;
+    bool ok = MahoSettingsPageHandler::DisconnectAIProviderForTesting(
+        &prefs, "anthropic", "openai", "gpt-4o", std::move(repls), &err);
+    EXPECT_TRUE(ok);
+    EXPECT_TRUE(err.empty());
+    EXPECT_EQ(prefs.GetString("maho.ai.provider"), "openai");
+    EXPECT_EQ(prefs.GetString("maho.ai.model"), "gpt-4o");
+    const base::DictValue& tm = prefs.GetDict("maho.ai.task_models");
+    EXPECT_EQ(tm.FindDict("tab_tidy"), nullptr);
+    const base::DictValue& pcfg = prefs.GetDict("maho.ai.provider_configs");
+    EXPECT_EQ(pcfg.FindDict("anthropic"), nullptr);
   }
 }
 

@@ -259,6 +259,8 @@ export interface AITaskModelRoute {
   effectiveModelId: string;
   available: boolean;
   unavailableReason?: string;
+  configuredProviderId?: string;
+  configuredModelId?: string;
 }
 
 export interface AIModelsSettings {
@@ -661,6 +663,9 @@ export class PageCallbackRouter {
   providerModelsRefreshed: {
     addListener(listener: (providerId: string, modelIds: string[]) => void): number;
   };
+  onAIModelsSettingsChanged: {
+    addListener(listener: (settings: AIModelsSettings) => void): number;
+  };
   onVaultLockStateChanged: {
     addListener(listener: (locked: boolean) => void): number;
   };
@@ -908,8 +913,10 @@ export class PageHandlerRemote {
     success: boolean;
     mutation: ContentBlockerMutationResult;
   }>;
-  openExtensionsPage(): Promise<void>;
-  openChromiumSettingsPage(): Promise<void>;
+  openExtensionsPage(): void;
+  openChromiumSettingsPage(): void;
+  openBookmarksPage(): void;
+  openMigrationDialog(): void;
   setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
   clearBYOKKey(provider: string): Promise<{success: boolean}>;
   setAIProviderOAuthClientId(provider: string, clientId: string): Promise<{success: boolean}>;

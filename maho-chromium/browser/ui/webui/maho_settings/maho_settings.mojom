@@ -240,6 +240,8 @@ struct AITaskModelRoute {
   string effective_model_id;
   bool available;
   string? unavailable_reason;
+  string? configured_provider_id;
+  string? configured_model_id;
 };
 
 struct AIModelsSettings {
@@ -907,6 +909,8 @@ interface PageHandler {
 
   OpenExtensionsPage();
   OpenChromiumSettingsPage();
+  OpenBookmarksPage();
+  OpenMigrationDialog();
 
   SetBYOKKey(string provider, string key) => (bool success);
   ClearBYOKKey(string provider) => (bool success);
@@ -1044,6 +1048,11 @@ interface Page {
 
   // Pushed when background model-list refresh completes.
   ProviderModelsRefreshed(string provider_id, array<string> model_ids);
+
+  // Pushed when any pref feeding the AIModelsSettings snapshot changes
+  // (Default provider/model, task overrides, provider configs, credentials),
+  // so an open Models page reflects composer-side Default changes live.
+  OnAIModelsSettingsChanged(AIModelsSettings settings);
 
   // Pushed when the browser process observes the Vault lock state change,
   // including the inactivity auto-lock evaluated by the periodic core tick,

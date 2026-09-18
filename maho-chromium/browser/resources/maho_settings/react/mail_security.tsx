@@ -58,6 +58,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
   const handler = store.getHandler();
   const router = store.getCallbackRouter();
   const mountedRef = useRef(true);
+  const securityRequest = useRef(0);
 
   const [accounts, setAccounts] = useState<MailAccountOption[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState('');
@@ -117,32 +118,33 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
   }, [loadAccounts]);
 
   const loadSecurityData = useCallback(async () => {
-    if (!selectedAccountId) {
-      setPgpKeys([]);
-      setSmimeIdentities([]);
-      return;
-    }
+    const request = ++securityRequest.current;
+    setPgpKeys([]);
+    setSmimeIdentities([]);
+    setError('');
+    if (!selectedAccountId) return;
     try {
       const {ok: okPgp, resultJson: pgpJson} = await handler.mailListPgpKeys(selectedAccountId);
-      if (okPgp && pgpJson) {
-        setPgpKeys(JSON.parse(pgpJson) as PgpKeyInfo[]);
-      } else {
-        setError('Failed to load PGP keys');
-      }
+      if (!mountedRef.current || request !== securityRequest.current) return;
+      const keys = okPgp && pgpJson ? JSON.parse(pgpJson) as PgpKeyInfo[] : [];
+      if (!okPgp) setError('Failed to load PGP keys');
 
       const {ok: okSmime, resultJson: smimeJson} = await handler.mailListSmimeIdentities(selectedAccountId);
+      if (!mountedRef.current || request !== securityRequest.current) return;
+      setPgpKeys(keys);
       if (okSmime && smimeJson) {
         setSmimeIdentities(JSON.parse(smimeJson) as SmimeIdentityInfo[]);
       } else {
         setError('Failed to load S/MIME identities');
       }
     } catch {
-      if (mountedRef.current) setError('Failed to load security keys');
+      if (mountedRef.current && request === securityRequest.current) setError('Failed to load security keys');
     }
   }, [handler, selectedAccountId]);
 
   useEffect(() => {
     void loadSecurityData();
+    return () => { securityRequest.current += 1; };
   }, [loadSecurityData]);
 
   useEffect(() => {

@@ -19,6 +19,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: /^.*maho_boost\.mojom-webui\.js$/,
+        replacement: featurePath('../maho_boost/testing/mojo_stub.ts'),
+      },
+      {
         find: /^\.\.\/mojo\.js$/,
         replacement: featurePath('react/__tests__/mojo_stub.ts'),
       },

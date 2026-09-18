@@ -48,6 +48,7 @@ source_set("maho_settings") {
 
   deps = [
     ":maho_settings_password_helpers",
+    "//maho/browser:maho_ai_provider_oauth",
     "//maho/browser:maho_auth_utils",
     "//maho/browser:maho_google_sign_in",
     "//maho/browser:maho_extension_state_bridge",

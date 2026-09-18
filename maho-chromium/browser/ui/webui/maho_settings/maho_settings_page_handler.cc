@@ -47,6 +47,10 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/views/frame/browser_view.h"  // nogncheck
+#include "maho/browser/importer/maho_browser_detector.h"  // nogncheck
+#include "maho/browser/ui/views/importer/maho_migration_dialog_view.h"  // nogncheck
+#include "ui/views/widget/widget.h"
 #include "chrome/common/channel_info.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/core/browser/cookie_settings.h"
@@ -1997,6 +2001,22 @@ MahoSettingsPageHandler::MahoSettingsPageHandler(
       maho::sidebar_prefs::kSidebarWidth,
       base::BindRepeating(&MahoSettingsPageHandler::OnPrefChanged,
                           weak_factory_.GetWeakPtr()));
+  // AI models-snapshot prefs: push OnAIModelsSettingsChanged so an open
+  // Models page reflects composer-side Default changes (chrome://maho-ai
+  // quick switcher writes the same maho.ai.provider/model pair) live.
+  for (const auto* ai_pref_path :
+       {ai::kProvider, ai::kModel, maho::ai_prefs::kBaseUrl,
+        maho::ai_prefs::kApiKey, maho::ai_prefs::kProviderConfigs,
+        maho::ai_prefs::kTaskModels,
+        maho::ai_prefs::kByokOpenAIEncryptedB64,
+        maho::ai_prefs::kByokAnthropicEncryptedB64,
+        maho::ai_prefs::kByokOpenAICompatibleEncryptedB64}) {
+    pref_registrar_.Add(
+        ai_pref_path,
+        base::BindRepeating(
+            &MahoSettingsPageHandler::OnAIModelsSettingsPrefsChanged,
+            weak_factory_.GetWeakPtr()));
+  }
 
   MigrateAtcExternalMiniSettingToCore();
 
@@ -3863,8 +3883,52 @@ void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   std::move(callback).Run(std::move(settings));
 }
 
+namespace {
+
+bool IsValidModelForProvider(const std::string& provider_id,
+                             const std::string& model_id) {
+  if (model_id.empty() || model_id == "default") {
+    return false;
+  }
+  if (model_id.find_first_of(" \t\r\n") != std::string::npos) {
+    return false;
+  }
+  std::vector<std::string> known =
+      maho::ai::MahoModelListFetcher::GetHardcodedFallback(provider_id);
+  if (!known.empty()) {
+    for (const auto& k : known) {
+      if (k == model_id) {
+        return true;
+      }
+    }
+    if (provider_id == "openai") {
+      if (base::StartsWith(model_id, "gpt-", base::CompareCase::INSENSITIVE_ASCII) ||
+          base::StartsWith(model_id, "o1", base::CompareCase::INSENSITIVE_ASCII) ||
+          base::StartsWith(model_id, "o3", base::CompareCase::INSENSITIVE_ASCII)) {
+        return true;
+      }
+    } else if (provider_id == "anthropic") {
+      if (base::StartsWith(model_id, "claude-", base::CompareCase::INSENSITIVE_ASCII)) {
+        return true;
+      }
+    } else if (provider_id == "maho-managed") {
+      return false;
+    }
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 void MahoSettingsPageHandler::GetAIModelsSettings(
     GetAIModelsSettingsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::move(callback).Run(BuildAIModelsSettings());
+}
+
+maho_settings::mojom::AIModelsSettingsPtr
+MahoSettingsPageHandler::BuildAIModelsSettings() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto settings = maho_settings::mojom::AIModelsSettings::New();
   settings->has_relay_session = maho::auth::HasValidRelaySession(prefs_);
@@ -3893,8 +3957,10 @@ void MahoSettingsPageHandler::GetAIModelsSettings(
 
     const base::DictValue* cfg = provider_configs.FindDict(pid);
     if (cfg) {
-      if (const std::string* m = cfg->FindString("last_model_id")) {
+      if (const std::string* m = cfg->FindString("last_model")) {
         desc->last_model_id = *m;
+      } else if (const std::string* m_id = cfg->FindString("last_model_id")) {
+        desc->last_model_id = *m_id;
       }
       if (const std::string* u = cfg->FindString("base_url")) {
         desc->base_url = *u;
@@ -3991,6 +4057,22 @@ void MahoSettingsPageHandler::GetAIModelsSettings(
     route->task_id = t.task_id;
     const base::DictValue* task_entry = task_models.FindDict(t.task_id);
     route->inherits_default = (task_entry == nullptr);
+    if (task_entry) {
+      const std::string* prov = task_entry->FindString("provider");
+      if (!prov) {
+        prov = task_entry->FindString("provider_id");
+      }
+      const std::string* mod = task_entry->FindString("model");
+      if (!mod) {
+        mod = task_entry->FindString("model_id");
+      }
+      if (prov) {
+        route->configured_provider_id = *prov;
+      }
+      if (mod) {
+        route->configured_model_id = *mod;
+      }
+    }
 
     auto route_res = maho::ai::ResolveMahoAiModelRoute(prefs_, t.task);
     if (route_res.is_ok()) {
@@ -4023,7 +4105,14 @@ void MahoSettingsPageHandler::GetAIModelsSettings(
     settings->task_routes.push_back(std::move(route));
   }
 
-  std::move(callback).Run(std::move(settings));
+  return settings;
+}
+
+void MahoSettingsPageHandler::OnAIModelsSettingsPrefsChanged() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (page_.is_bound()) {
+    page_->OnAIModelsSettingsChanged(BuildAIModelsSettings());
+  }
 }
 
 void MahoSettingsPageHandler::SetDefaultAIModel(
@@ -4035,12 +4124,25 @@ void MahoSettingsPageHandler::SetDefaultAIModel(
     std::move(callback).Run(false, "Provider and model must not be empty.");
     return;
   }
+  if (model_id == "default") {
+    std::move(callback).Run(false, "Invalid model selection.");
+    return;
+  }
+  if (!maho::ai::IsProviderConnected(prefs_, provider_id)) {
+    std::move(callback).Run(false, "Provider is not connected.");
+    return;
+  }
+  if (!IsValidModelForProvider(provider_id, model_id)) {
+    std::move(callback).Run(false, "Selected model is not valid for this provider.");
+    return;
+  }
   prefs_->SetString(ai::kProvider, provider_id);
   prefs_->SetString(ai::kModel, model_id);
 
   {
     ScopedDictPrefUpdate update(prefs_, maho::ai_prefs::kProviderConfigs);
     base::DictValue* pcfg = update->EnsureDict(provider_id);
+    pcfg->Set("last_model", model_id);
     pcfg->Set("last_model_id", model_id);
   }
 
@@ -4066,8 +4168,14 @@ void MahoSettingsPageHandler::SetTaskAIModel(
       provider_id->empty() || model_id->empty()) {
     update->Remove(task_id);
   } else {
+    if (!IsValidModelForProvider(*provider_id, *model_id)) {
+      std::move(callback).Run(false, "Selected model is not valid for this provider.");
+      return;
+    }
     base::DictValue* entry = update->EnsureDict(task_id);
+    entry->Set("provider", *provider_id);
     entry->Set("provider_id", *provider_id);
+    entry->Set("model", *model_id);
     entry->Set("model_id", *model_id);
   }
 
@@ -4143,6 +4251,167 @@ void MahoSettingsPageHandler::TestAIProvider(
   std::move(callback).Run(std::move(result));
 }
 
+bool MahoSettingsPageHandler::DisconnectAIProviderInternal(
+    PrefService* prefs,
+    const std::string& provider_id,
+    const std::optional<std::string>& replacement_default_provider_id,
+    const std::optional<std::string>& replacement_default_model_id,
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> task_replacements,
+    std::vector<std::string>& affected_tasks,
+    std::string& error_out) {
+  if (!prefs) {
+    error_out = "Pref service is null.";
+    return false;
+  }
+
+  bool is_default = (prefs->GetString(ai::kProvider) == provider_id);
+  if (is_default) {
+    affected_tasks.push_back("chat");
+    if (!replacement_default_provider_id.has_value() ||
+        replacement_default_provider_id->empty()) {
+      error_out = "Replacement default provider must be specified.";
+      return false;
+    }
+    if (*replacement_default_provider_id == provider_id) {
+      error_out = "Replacement default provider cannot be the provider being disconnected.";
+      return false;
+    }
+    if (!maho::ai::IsProviderConnected(prefs, *replacement_default_provider_id)) {
+      error_out = "Replacement default provider is not connected.";
+      return false;
+    }
+    if (!replacement_default_model_id.has_value() ||
+        !IsValidModelForProvider(*replacement_default_provider_id,
+                                 *replacement_default_model_id)) {
+      error_out = "Replacement default model is not valid for the replacement provider.";
+      return false;
+    }
+  }
+
+  const base::DictValue& task_models =
+      prefs->GetDict(maho::ai_prefs::kTaskModels);
+  std::vector<std::string> task_route_names;
+  for (const auto item : task_models) {
+    if (const base::DictValue* dict = item.second.GetIfDict()) {
+      const std::string* pid = dict->FindString("provider");
+      if (!pid) {
+        pid = dict->FindString("provider_id");
+      }
+      if (pid && *pid == provider_id) {
+        affected_tasks.push_back(item.first);
+        task_route_names.push_back(item.first);
+      }
+    }
+  }
+
+  // Validate task replacements: ensure no duplicates, exact match with affected
+  // tasks set, and destinations are connected and valid.
+  std::set<std::string> affected_set(task_route_names.begin(), task_route_names.end());
+  std::set<std::string> seen_task_ids;
+  for (const auto& repl : task_replacements) {
+    if (repl->task_id == "chat") {
+      error_out = "Chat & Agent task cannot be modified via task replacements.";
+      return false;
+    }
+    if (!affected_set.contains(repl->task_id)) {
+      error_out = "Task replacement ID is not an affected explicit route: " + repl->task_id;
+      return false;
+    }
+    if (seen_task_ids.count(repl->task_id)) {
+      error_out = "Duplicate task replacement entry for: " + repl->task_id;
+      return false;
+    }
+    seen_task_ids.insert(repl->task_id);
+
+    if (!repl->inherit_default) {
+      if (!repl->provider_id.has_value() || repl->provider_id->empty()) {
+        error_out = "Replacement provider must be specified for task: " + repl->task_id;
+        return false;
+      }
+      if (*repl->provider_id == provider_id) {
+        error_out = "Replacement provider for task " + repl->task_id +
+                    " cannot be the provider being disconnected.";
+        return false;
+      }
+      if (!maho::ai::IsProviderConnected(prefs, *repl->provider_id)) {
+        error_out = "Replacement provider for task " + repl->task_id + " is not connected.";
+        return false;
+      }
+      if (!repl->model_id.has_value() ||
+          !IsValidModelForProvider(*repl->provider_id, *repl->model_id)) {
+        error_out = "Replacement model is not valid for task: " + repl->task_id;
+        return false;
+      }
+    }
+  }
+
+  if (seen_task_ids != affected_set) {
+    error_out = "All affected tasks must be explicitly accounted for in task replacements.";
+    return false;
+  }
+
+  if (is_default) {
+    prefs->SetString(ai::kProvider, *replacement_default_provider_id);
+    prefs->SetString(ai::kModel, *replacement_default_model_id);
+  }
+
+  if (!task_replacements.empty()) {
+    ScopedDictPrefUpdate task_update(prefs, maho::ai_prefs::kTaskModels);
+    for (const auto& repl : task_replacements) {
+      if (repl->inherit_default || !repl->provider_id.has_value() ||
+          repl->provider_id->empty()) {
+        task_update->Remove(repl->task_id);
+      } else {
+        base::DictValue* entry = task_update->EnsureDict(repl->task_id);
+        entry->Set("provider", *repl->provider_id);
+        entry->Set("provider_id", *repl->provider_id);
+        entry->Set("model", repl->model_id.value_or(""));
+        entry->Set("model_id", repl->model_id.value_or(""));
+      }
+    }
+  }
+
+  {
+    ScopedDictPrefUpdate config_update(prefs, maho::ai_prefs::kProviderConfigs);
+    config_update->Remove(provider_id);
+  }
+
+  if (provider_id == "openai") {
+    prefs->SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "");
+    maho::ai_oauth::ClearProviderOAuth(prefs, "openai");
+  } else if (provider_id == "anthropic") {
+    prefs->SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "");
+    maho::ai_oauth::ClearProviderOAuth(prefs, "anthropic");
+  } else if (provider_id == "openai-compatible" || provider_id == "custom") {
+    prefs->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, "");
+    if (prefs->GetString(ai::kProvider) == "openai-compatible") {
+      prefs->SetString(ai::kBaseUrl, "");
+      prefs->SetString(ai::kApiKey, "");
+    }
+  }
+
+  return true;
+}
+
+bool MahoSettingsPageHandler::DisconnectAIProviderForTesting(
+    PrefService* prefs,
+    const std::string& provider_id,
+    const std::optional<std::string>& replacement_default_provider_id,
+    const std::optional<std::string>& replacement_default_model_id,
+    std::vector<maho_settings::mojom::AITaskReplacementPtr> task_replacements,
+    std::string* error_out) {
+  std::vector<std::string> affected_tasks;
+  std::string error;
+  bool ok = DisconnectAIProviderInternal(
+      prefs, provider_id, replacement_default_provider_id,
+      replacement_default_model_id, std::move(task_replacements),
+      affected_tasks, error);
+  if (error_out) {
+    *error_out = error;
+  }
+  return ok;
+}
+
 void MahoSettingsPageHandler::DisconnectAIProvider(
     const std::string& provider_id,
     const std::optional<std::string>& replacement_default_provider_id,
@@ -4151,68 +4420,14 @@ void MahoSettingsPageHandler::DisconnectAIProvider(
     DisconnectAIProviderCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   std::vector<std::string> affected_tasks;
-
-  bool is_default = (prefs_->GetString(ai::kProvider) == provider_id);
-  if (is_default) {
-    affected_tasks.push_back("chat");
-    if (!replacement_default_provider_id.has_value() ||
-        replacement_default_provider_id->empty() ||
-        !replacement_default_model_id.has_value() ||
-        replacement_default_model_id->empty()) {
-      std::move(callback).Run(
-          false, affected_tasks,
-          "Default provider requires a replacement before disconnecting.");
-      return;
-    }
-  }
-
-  const base::DictValue& task_models =
-      prefs_->GetDict(maho::ai_prefs::kTaskModels);
-  for (const auto item : task_models) {
-    if (const base::DictValue* dict = item.second.GetIfDict()) {
-      const std::string* pid = dict->FindString("provider_id");
-      if (pid && *pid == provider_id) {
-        affected_tasks.push_back(item.first);
-      }
-    }
-  }
-
-  if (is_default) {
-    prefs_->SetString(ai::kProvider, *replacement_default_provider_id);
-    prefs_->SetString(ai::kModel, *replacement_default_model_id);
-  }
-
-  if (!task_replacements.empty()) {
-    ScopedDictPrefUpdate task_update(prefs_, maho::ai_prefs::kTaskModels);
-    for (const auto& repl : task_replacements) {
-      if (repl->inherit_default || !repl->provider_id.has_value() ||
-          repl->provider_id->empty()) {
-        task_update->Remove(repl->task_id);
-      } else {
-        base::DictValue* entry = task_update->EnsureDict(repl->task_id);
-        entry->Set("provider_id", *repl->provider_id);
-        entry->Set("model_id", repl->model_id.value_or(""));
-      }
-    }
-  }
-
-  {
-    ScopedDictPrefUpdate config_update(prefs_, maho::ai_prefs::kProviderConfigs);
-    config_update->Remove(provider_id);
-  }
-
-  if (provider_id == "openai") {
-    prefs_->SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "");
-    maho::ai_oauth::ClearProviderOAuth(prefs_, "openai");
-  } else if (provider_id == "anthropic") {
-    prefs_->SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "");
-    maho::ai_oauth::ClearProviderOAuth(prefs_, "anthropic");
-  } else if (provider_id == "openai-compatible") {
-    prefs_->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, "");
-    if (prefs_->GetString(ai::kProvider) == "openai-compatible") {
-      prefs_->SetString(ai::kBaseUrl, "");
-      prefs_->SetString(ai::kApiKey, "");
-    }
+  std::string error;
+  bool ok = DisconnectAIProviderInternal(
+      prefs_, provider_id, replacement_default_provider_id,
+      replacement_default_model_id, std::move(task_replacements),
+      affected_tasks, error);
+  if (!ok) {
+    std::move(callback).Run(false, affected_tasks, error);
+    return;
   }
 
   prefs_->CommitPendingWrite();
@@ -5537,6 +5752,55 @@ void MahoSettingsPageHandler::OpenChromiumSettingsPage() {
   }
 }
 
+void MahoSettingsPageHandler::OpenBookmarksPage() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  BrowserWindowInterface* browser = chrome::FindLastActiveWithProfile(profile_);
+  if (browser) {
+    chrome::ShowBookmarkManager(browser);
+  }
+}
+
+void MahoSettingsPageHandler::OpenMigrationDialog() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(&maho::DetectInstalledBrowsers),
+      base::BindOnce(&MahoSettingsPageHandler::OnOpenMigrationDialogBrowsersDetected,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSettingsPageHandler::OnOpenMigrationDialogBrowsersDetected(
+    std::vector<maho::DetectedBrowser> browsers) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  // Resolve parent widget at dialog-show time, not before the async hop,
+  // to avoid a dangling Widget* if the window closes during detection.
+  views::Widget* parent_widget = nullptr;
+  if (host_web_contents_) {
+    parent_widget = views::Widget::GetWidgetForNativeWindow(
+        host_web_contents_->GetTopLevelNativeWindow());
+  }
+  if (!parent_widget) {
+    BrowserWindowInterface* bwi = chrome::FindLastActiveWithProfile(profile_);
+    if (bwi && bwi->GetBrowserForOpeningWebUi()) {
+      BrowserView* bv = BrowserView::GetBrowserViewForBrowser(
+          bwi->GetBrowserForOpeningWebUi());
+      if (bv) {
+        parent_widget = bv->GetWidget();
+      }
+    }
+  }
+
+  maho::MahoMigrationDialogView::Show(
+      parent_widget, profile_, std::move(browsers),
+      base::BindOnce(
+          [](bool was_cancelled, uint32_t imported_items_bitmask) {
+            VLOG(1) << "MahoSettingsPageHandler: Migration dialog closed, cancelled="
+                    << was_cancelled << " bitmask=" << imported_items_bitmask;
+          }));
+}
+
 void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
                                          const std::string& key,
                                          SetBYOKKeyCallback callback) {
@@ -5570,6 +5834,11 @@ void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, encrypted_b64);
+    prefs_->CommitPendingWrite();
+    MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+    std::move(callback).Run(true);
+  } else if (provider == "openai-compatible" || provider == "custom") {
+    prefs_->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, encrypted_b64);
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
@@ -5669,6 +5938,12 @@ void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, "");
+    prefs_->CommitPendingWrite();
+    MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
+    MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+    std::move(callback).Run(true);
+  } else if (provider == "openai-compatible" || provider == "custom") {
+    prefs_->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, "");
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
     MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);

@@ -7,6 +7,55 @@
  * shapes the password panes need are declared.
  */
 
+type StubListener = (...args: never[]) => void;
+
+class StubCallbackRoute {
+  private readonly listeners = new Map<number, StubListener>();
+  private nextId = 1;
+
+  addListener(listener: StubListener): number {
+    const id = this.nextId++;
+    this.listeners.set(id, listener);
+    return id;
+  }
+
+  removeListener(id: number): boolean {
+    return this.listeners.delete(id);
+  }
+}
+
+// `bindMojoPageHandler` calls `new RouterClass()` / `new HandlerClass()` and
+// then `$.bindNewPipeAndPassRemote()` / `$.bindNewPipeAndPassReceiver()`, so the
+// stub must supply real constructors with a `$` handle or the store cannot be
+// built under vitest.
+export class PageCallbackRouter {
+  readonly $ = {
+    bindNewPipeAndPassRemote: () => ({}),
+    close: () => {},
+  };
+
+  readonly settingsChanged = new StubCallbackRoute();
+  readonly accountStatusChanged = new StubCallbackRoute();
+  readonly onBrowserUpdateStateChanged = new StubCallbackRoute();
+
+  removeListener(_id: number): boolean {
+    return true;
+  }
+}
+
+export class PageHandlerRemote {
+  readonly $ = {
+    bindNewPipeAndPassReceiver: () => ({}),
+    close: () => {},
+  };
+}
+
+export const PageHandlerFactory = {
+  getRemote: () => ({
+    createPageHandler: (_router: unknown, _handler: unknown) => {},
+  }),
+};
+
 export enum SettingScope {
   kProfile = 0,
   kDevice = 1,
@@ -131,6 +180,20 @@ export enum BrowserUpdateState {
   kReadyToInstall = 5,
   kUpToDate = 6,
   kError = 7,
+}
+
+export enum AIConnectionState {
+  kDisconnected = 0,
+  kConnected = 1,
+  kNeedsAuth = 2,
+  kOffline = 3,
+  kError = 4,
+}
+
+export enum AIModelCapability {
+  kUnknown = 0,
+  kSupported = 1,
+  kUnsupported = 2,
 }
 
 export interface AISettings {

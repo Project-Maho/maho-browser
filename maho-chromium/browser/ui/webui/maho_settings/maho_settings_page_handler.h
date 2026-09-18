@@ -57,6 +57,14 @@ namespace device_reauth {
 class DeviceAuthenticator;
 }
 
+namespace views {
+class Widget;
+}
+
+namespace maho {
+struct DetectedBrowser;
+}
+
 namespace maho_settings::testing {
 
 enum class ProfileObservablesDecisionKind { kSnapshot, kRetry, kNull };
@@ -121,6 +129,21 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void FileSelectionCanceled() override;
 
   static MahoSettingsPageHandler* GetActiveInstance();
+  static bool DisconnectAIProviderForTesting(
+      PrefService* prefs,
+      const std::string& provider_id,
+      const std::optional<std::string>& replacement_default_provider_id,
+      const std::optional<std::string>& replacement_default_model_id,
+      std::vector<maho_settings::mojom::AITaskReplacementPtr> task_replacements,
+      std::string* error_out = nullptr);
+  static bool DisconnectAIProviderInternal(
+      PrefService* prefs,
+      const std::string& provider_id,
+      const std::optional<std::string>& replacement_default_provider_id,
+      const std::optional<std::string>& replacement_default_model_id,
+      std::vector<maho_settings::mojom::AITaskReplacementPtr> task_replacements,
+      std::vector<std::string>& affected_tasks,
+      std::string& error_out);
   const os_crypt_async::Encryptor* encryptor() const {
     return encryptor_.has_value() ? &encryptor_.value() : nullptr;
   }
@@ -555,6 +578,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
 
   void GetAISettings(GetAISettingsCallback callback) override;
   void GetAIModelsSettings(GetAIModelsSettingsCallback callback) override;
+  maho_settings::mojom::AIModelsSettingsPtr BuildAIModelsSettings();
+  void OnAIModelsSettingsPrefsChanged();
   void SetDefaultAIModel(const std::string& provider_id,
                          const std::string& model_id,
                          SetDefaultAIModelCallback callback) override;
@@ -743,6 +768,8 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
 
   void OpenExtensionsPage() override;
   void OpenChromiumSettingsPage() override;
+  void OpenBookmarksPage() override;
+  void OpenMigrationDialog() override;
 
   void SetBYOKKey(const std::string& provider,
                   const std::string& key,
@@ -1003,6 +1030,9 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                               std::unique_ptr<network::SimpleURLLoader> loader,
                               std::optional<std::string> response_body);
   void BroadcastAccountStatus();
+
+  void OnOpenMigrationDialogBrowsersDetected(
+      std::vector<maho::DetectedBrowser> browsers);
 
   // Forwards a browser-process Vault lock-state transition (notably the
   // inactivity auto-lock evaluated by the periodic core tick) to the page so

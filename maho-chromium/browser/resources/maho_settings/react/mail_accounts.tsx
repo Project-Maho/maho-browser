@@ -137,6 +137,7 @@ export function MailAccountsPane(
   const [imapHost, setImapHost] = useState('');
   const preOAuthIds = useRef<ReadonlySet<string>>(new Set());
   const activeOAuthState = useRef<string | null>(null);
+  const oauthAttempt = useRef(0);
 
   useEffect(() => {
     return () => {
@@ -229,44 +230,66 @@ export function MailAccountsPane(
   }, [handler]);
 
   const removeAccount = async (account: MailAccount) => {
-    const {ok, resultJson} = await handler.mailDeleteAccount(account.id);
-    if (!ok) {
-      setFeedback({kind: 'error', message: resultJson || 'Could not remove this account.'});
-      return;
+    if (busy || !window.confirm(`Remove ${account.email} from Maho? This deletes its local mail data and saved credentials, including any unsynced local changes.`)) return;
+    setBusy(true);
+    try {
+      const {ok, resultJson} = await handler.mailDeleteAccount(account.id);
+      if (!ok) {
+        setFeedback({kind: 'error', message: resultJson || 'Could not remove this account.'});
+        return;
+      }
+      setFeedback({kind: 'success', message: `Removed ${account.email}.`});
+      await loadAccounts();
+    } catch {
+      setFeedback({kind: 'error', message: 'Could not remove this account.'});
+    } finally {
+      setBusy(false);
     }
-    setFeedback({kind: 'success', message: `Removed ${account.email}.`});
-    await loadAccounts();
   };
 
   const reconnectAccount = async (account: MailAccount) => {
-    const {ok, resultJson} = await handler.mailReconnectAccount(account.id);
-    if (!ok) {
-      setFeedback({kind: 'error', message: resultJson || 'Could not reconnect this account.'});
-      return;
+    try {
+      const {ok, resultJson} = await handler.mailReconnectAccount(account.id);
+      if (!ok) {
+        setFeedback({kind: 'error', message: resultJson || 'Could not reconnect this account.'});
+        return;
+      }
+      setFeedback({kind: 'success', message: `Reconnecting ${account.email}…`});
+      await loadAccounts();
+    } catch {
+      setFeedback({kind: 'error', message: 'Could not reconnect this account.'});
     }
-    setFeedback({kind: 'success', message: `Reconnecting ${account.email}…`});
-    await loadAccounts();
   };
 
   const startOAuth = async (provider: OAuthProvider) => {
+    const attempt = ++oauthAttempt.current;
     setBusy(true);
     setFeedback(null);
     setOAuthProvider(provider);
     preOAuthIds.current = new Set(accounts.map(account => account.id));
-    const {ok, resultJson} = await handler.mailBeginOAuth(provider);
-    setBusy(false);
-    if (!ok) {
-      setFeedback({kind: 'error', message: resultJson || 'OAuth is unavailable. Try IMAP instead.'});
-      return;
+    try {
+      const {ok, resultJson} = await handler.mailBeginOAuth(provider);
+      if (!ok) {
+        setFeedback({kind: 'error', message: resultJson || 'OAuth is unavailable. Try IMAP instead.'});
+        return;
+      }
+      const oauthStart = parseOAuthStartResponse(resultJson);
+      if (oauthStart === null) {
+        setFeedback({kind: 'error', message: 'The mail service returned an invalid authorization link.'});
+        return;
+      }
+      if (attempt !== oauthAttempt.current || !mountedRef.current) {
+        if (oauthStart.state) await handler.mailOAuthCancel(oauthStart.state);
+        return;
+      }
+      activeOAuthState.current = oauthStart.state;
+      window.open(oauthStart.authUrl, '_blank', 'noopener,noreferrer');
+      setView('oauth');
+    } catch {
+      setFeedback({kind: 'error', message: 'OAuth is unavailable. Try IMAP instead.'});
+    } finally {
+      setBusy(false);
     }
-    const oauthStart = parseOAuthStartResponse(resultJson);
-    if (oauthStart === null) {
-      setFeedback({kind: 'error', message: 'The mail service returned an invalid authorization link.'});
-      return;
-    }
-    activeOAuthState.current = oauthStart.state;
-    window.open(oauthStart.authUrl, '_blank', 'noopener,noreferrer');
-    setView('oauth');
   };
 
   const connectImap = async () => {
@@ -280,18 +303,31 @@ export function MailAccountsPane(
     setFeedback(null);
     const smtpHost = host.startsWith('imap.') ? `smtp.${host.slice(5)}` : host;
     const requestJson = JSON.stringify({email: username, display_name: username, auth_type: 'password', imap_host: host, imap_port: 993, imap_encryption: 'Tls', smtp_host: smtpHost, smtp_port: 587, smtp_encryption: 'StartTls', username, password});
-    const {ok, resultJson} = await handler.mailAddAccount(requestJson);
-    setBusy(false);
-    if (!ok) {
-      setFeedback({kind: 'error', message: resultJson || 'Could not add this mail account.'});
-      return;
+    try {
+      const probe = await handler.mailTestConnection(JSON.stringify({
+        imap_host: host, imap_port: 993, imap_encryption: 'Tls',
+        username, auth_type: 'password', password,
+      }));
+      if (!probe.ok) {
+        setFeedback({kind: 'error', message: probe.resultJson || 'Could not connect to the IMAP server.'});
+        return;
+      }
+      const {ok, resultJson} = await handler.mailAddAccount(requestJson);
+      if (!ok) {
+        setFeedback({kind: 'error', message: resultJson || 'Could not add this mail account.'});
+        return;
+      }
+      setEmail('');
+      setPassword('');
+      setImapHost('');
+      setFeedback({kind: 'success', message: 'Mail account added. IMAP connection verified; outgoing mail has not been tested.'});
+      setView('list');
+      await loadAccounts();
+    } catch {
+      setFeedback({kind: 'error', message: 'Could not connect or add this mail account. Try again.'});
+    } finally {
+      setBusy(false);
     }
-    setEmail('');
-    setPassword('');
-    setImapHost('');
-    setFeedback({kind: 'success', message: 'Mail account connected.'});
-    setView('list');
-    await loadAccounts();
   };
 
   return (
@@ -352,7 +388,7 @@ export function MailAccountsPane(
                   Reconnect
                 </Button>
               ) : null}
-              <Button type="button" size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" aria-label={`Remove ${account.email}`} onClick={() => { void removeAccount(account); }}>
+              <Button type="button" size="icon" variant="ghost" className="size-8 text-muted-foreground hover:text-destructive" disabled={busy} aria-label={`Remove ${account.email}`} onClick={() => { void removeAccount(account); }}>
                 <Trash2 aria-hidden="true" />
               </Button>
             </div>
@@ -389,7 +425,7 @@ export function MailAccountsPane(
                 );
               })}
             </div>
-            <Button type="button" size="sm" variant="ghost" className="px-0 text-muted-foreground hover:bg-transparent hover:text-foreground" onClick={() => setView('list')}>
+            <Button type="button" size="sm" variant="ghost" className="px-0 text-muted-foreground hover:bg-transparent hover:text-foreground" onClick={() => { ++oauthAttempt.current; setView('list'); }}>
               <ArrowLeft aria-hidden="true" />
               Cancel
             </Button>
@@ -418,7 +454,7 @@ export function MailAccountsPane(
               <Button type="button" disabled={busy} onClick={() => { void connectImap(); }}>
                 {busy ? 'Testing connection…' : 'Connect account'}
               </Button>
-              <Button type="button" variant="ghost" onClick={() => setView('picker')}>
+              <Button type="button" variant="ghost" disabled={busy} onClick={() => { setPassword(''); setView('picker'); }}>
                 <ArrowLeft aria-hidden="true" />
                 Back
               </Button>

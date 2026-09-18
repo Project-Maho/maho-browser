@@ -186,6 +186,7 @@ export class MahoSettingsStore {
   private readonly settingsChangedListenerId: number;
   private readonly updateStateChangedListenerId: number;
   private state: SettingsState = createInitialState();
+  private accountGeneration = 0;
   // RAF-coalesced notify: the C++ handler emits a full settings snapshot on
   // every change, and each notify re-renders the whole pane tree. Multiple
   // patches within one frame collapse into a single render.
@@ -536,6 +537,7 @@ export class MahoSettingsStore {
   }
 
   async signOut(): Promise<void> {
+    this.accountGeneration += 1;
     this.patch(state => ({
       ...state,
       accountError: '',
@@ -595,6 +597,7 @@ export class MahoSettingsStore {
   }
 
   async refreshInvoices(): Promise<void> {
+    const generation = this.accountGeneration;
     if (!this.state.accountStatus?.signedIn) {
       this.patch(state => ({
         ...state,
@@ -612,12 +615,14 @@ export class MahoSettingsStore {
 
     try {
       const {invoices} = await this.pageHandler.getInvoices();
+      if (generation !== this.accountGeneration) return;
       this.patch(state => ({
         ...state,
         invoices,
         invoicesLoading: false,
       }));
     } catch (error) {
+      if (generation !== this.accountGeneration) return;
       this.patch(state => ({
         ...state,
         invoicesError: formatActionError(error),
@@ -764,7 +769,13 @@ export class MahoSettingsStore {
   }
 
   private patch(mutator: (state: SettingsState) => SettingsState): void {
+    const previous = this.state.accountStatus;
     this.state = mutator(this.state);
+    const current = this.state.accountStatus;
+    if (previous?.signedIn !== current?.signedIn || previous?.userId !== current?.userId) {
+      this.accountGeneration += 1;
+      this.state = {...this.state, invoices: [], invoicesError: '', invoicesLoading: false};
+    }
     this.scheduleNotify();
   }
 

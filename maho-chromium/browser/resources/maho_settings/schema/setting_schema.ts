@@ -382,6 +382,56 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'ai.permission_tier',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Permission tier',
+      description: 'Choose what the AI agent may do: read only, act with Guard checks, or use full access. Other permission settings still apply.',
+      control: 'select',
+      options: [
+        {value: 'read_only', label: 'Read only'},
+        {value: 'guard', label: 'Guard'},
+        {value: 'full_access', label: 'Full access'},
+      ],
+    },
+  },
+  {
+    key: 'ai.final_confirm',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Final confirmation',
+      description: 'Require a confirmation prompt before the AI agent performs consequential actions.',
+      control: 'toggle',
+    },
+  },
+  {
+    key: 'ai.proactive_mode',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Proactive mode',
+      description: 'Let the AI agent act without being asked, within your permission settings.',
+      control: 'toggle',
+    },
+  },
+  {
+    key: 'ai.approval_policy',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Approval policy',
+      description: 'Choose whether tool calls require approval, are automatically approved, or are blocked. Permission tier and final confirmation still apply.',
+      control: 'select',
+      options: [
+        {value: 'prompt', label: 'Ask before each tool call'},
+        {value: 'allow', label: 'Auto-approve all tool calls'},
+        {value: 'deny', label: 'Block all tool calls'},
+      ],
+    },
+  },
+  {
     key: 'ai.mail_read_allowed',
     metadata: {
       scope: 'profile',

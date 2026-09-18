@@ -40,7 +40,7 @@ import {Toaster} from '@ui/sonner';
 import {ArrowLeft, ArrowUpRight} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
-import {DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
+import {BookmarksPane, BrowserDataImportCard as DomainBrowserDataImportCard, DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
 import {DiscordCommunitySettingsSection} from './discord_community_settings_section.js';
 import {MahoSettingsStore} from './store.js';
 
@@ -228,6 +228,9 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
                               if (pane.externalAction === 'openExtensions' &&
                                   externalActionDisposition === 'pane') {
                                 store.getHandler().openExtensionsPage();
+                              } else if (pane.externalAction === 'openBookmarks' &&
+                                         externalActionDisposition === 'pane') {
+                                store.getHandler().openBookmarksPage();
                               } else {
                                 store.selectPane(pane.key);
                               }
@@ -518,7 +521,40 @@ function LivePaneSection(
       ) : null}
       {pane.key === 'general' ? <DiscordCommunitySettingsSection /> : null}
       {pane.key === 'general' ? <BrowserVersionCard store={store} /> : null}
-      {cards.map((card, cardIndex) => (
+      {pane.key === 'general' ? (
+        <div className="mb-6">
+          <DomainBrowserDataImportCard handler={store.getHandler()} />
+        </div>
+      ) : null}
+      {pane.key === 'bookmarks' ? (
+        <div className="mb-6">
+          <BookmarksPane handler={store.getHandler()} />
+        </div>
+      ) : null}
+      {pane.key === 'extensions' ? (
+        <div className="mb-6">
+          <SectionCard
+            title="Extensions"
+            description="Manage installed extensions and add-ons."
+          >
+            <div className="flex items-center justify-between border-t border-border px-6 py-4">
+              <div>
+                <div className="text-sm font-medium text-foreground">Extensions</div>
+                <div className="text-xs text-muted-foreground">
+                  Opens chrome://extensions in a new tab.
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => store.getHandler().openExtensionsPage()}
+              >
+                Manage Extensions
+              </Button>
+            </div>
+          </SectionCard>
+        </div>
+      ) : null}
+      {!pane.externalAction && cards.map((card, cardIndex) => (
         <div key={`${pane.key}-${card.title}`} className={cardIndex < cards.length - 1 ? 'mb-6' : undefined}>
           <SectionCard title={card.title} description={card.description}>
             {card.missingSettingKeys.length > 0 ? (
