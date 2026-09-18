@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>2026.9.18</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -32,7 +32,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>20260822</string>
+	<string>20260918</string>
 	<key>MahoGoogleClientID</key>
 	<string>650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com</string>
 	<key>MahoGoogleRedirectScheme</key>
@@ -41,6 +41,12 @@
 	<string>Maho uses the microphone for voice search.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Maho uses speech recognition to let you search by voice.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Maho uses the camera to allow photo uploads and visual search.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Maho accesses your photo library to allow uploading images in web forms.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Maho uses your location to provide local search results and allow websites to access location when permitted.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -55,6 +61,15 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 </dict>
 </plist>

@@ -12,11 +12,11 @@ import { latestReleaseAssetUrl, releasePageUrl } from '../lib/release-url';
 
 const RELEASE_REPO = import.meta.env.PUBLIC_RELEASE_REPO_URL || 'https://github.com/Project-Maho/release';
 const RELEASE_PAGE_URL = releasePageUrl(RELEASE_REPO);
-const RELEASE_URL_MACOS = import.meta.env.PUBLIC_RELEASE_URL_MACOS || latestReleaseAssetUrl(RELEASE_REPO, 'Maho-1.0.0.dmg');
-const RELEASE_URL_WINDOWS = import.meta.env.PUBLIC_RELEASE_URL_WINDOWS || latestReleaseAssetUrl(RELEASE_REPO, 'MahoSetup-1.0.0.exe');
-const RELEASE_URL_LINUX = import.meta.env.PUBLIC_RELEASE_URL_LINUX || latestReleaseAssetUrl(RELEASE_REPO, 'maho_1.0.0_amd64.deb');
-const RELEASE_URL_LINUX_RPM = latestReleaseAssetUrl(RELEASE_REPO, 'maho-1.0.0-1.x86_64.rpm');
-const RELEASE_URL_LINUX_TARBALL = latestReleaseAssetUrl(RELEASE_REPO, 'maho-1.0.0-x86_64.tar.gz');
+const RELEASE_URL_MACOS = import.meta.env.PUBLIC_RELEASE_URL_MACOS || latestReleaseAssetUrl(RELEASE_REPO, 'Maho-2026.9.18.dmg');
+const RELEASE_URL_WINDOWS = import.meta.env.PUBLIC_RELEASE_URL_WINDOWS || latestReleaseAssetUrl(RELEASE_REPO, 'MahoSetup-2026.9.18.exe');
+const RELEASE_URL_LINUX = import.meta.env.PUBLIC_RELEASE_URL_LINUX || latestReleaseAssetUrl(RELEASE_REPO, 'maho_2026.9.18_amd64.deb');
+const RELEASE_URL_LINUX_RPM = latestReleaseAssetUrl(RELEASE_REPO, 'maho-2026.9.18-1.x86_64.rpm');
+const RELEASE_URL_LINUX_TARBALL = latestReleaseAssetUrl(RELEASE_REPO, 'maho-2026.9.18-x86_64.tar.gz');
 
 const productParam = Astro.url.searchParams.get('product');
 const isMailProduct = productParam === 'mail';

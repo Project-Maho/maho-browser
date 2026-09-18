@@ -1,6 +1,57 @@
 {
   "releases": [
     {
+      "version": "2026.9.18",
+      "date": "2026-09-18",
+      "channel": "stable",
+      "highlights": [
+        "Switched to CalVer (date-based versioning) across all desktop and mobile platforms",
+        "Multi-provider AI model routing and seamless provider switching in Maho Settings",
+        "Automated onboarding and sync relay account authentication hardening"
+      ],
+      "sections": [
+        {
+          "type": "changed",
+          "title": "Versioning & Infrastructure",
+          "items": [
+            "Adopted CalVer (YYYY.M.D) versioning starting with 2026.9.18",
+            "Universal remote S3 sccache compilation and release packaging verification across platforms"
+          ]
+        },
+        {
+          "type": "added",
+          "title": "AI & Settings",
+          "items": [
+            "Simultaneous multi-provider configuration in Maho Settings with per-task model routing",
+            "Maho Local Vault initialization and secure credential encryption during onboarding"
+          ]
+        }
+      ],
+      "body": "# Maho 2026.9.18\n\nTransition to date-based versioning and multi-provider settings release.\n\n## Overview\n\nThis release introduces CalVer versioning across all platforms alongside multi-provider AI model configuration and hardened onboarding.\n\n### What's New\n\n- **CalVer Versioning**: Maho now uses date-based versioning (`YYYY.M.D`), starting with `2026.9.18`.\n- **Multi-Provider AI Settings**: Configure multiple AI providers simultaneously with per-task model overrides and safe disconnect transactions.\n- **Hardened Onboarding**: Streamlined account setup, local Vault master key initialization, and cross-device sync key backup."
+    },
+    {
+      "version": "1.0.1",
+      "date": "2026-08-31",
+      "channel": "stable",
+      "highlights": [
+        "Automatic updates are now enabled — Maho checks update.mahobrowser.com for signed updates on the stable channel",
+        "New chrome://maho-changelog surface that opens once after an update is installed",
+        "Signed, length-pinned update envelopes with explicit signature-mismatch failure states"
+      ],
+      "sections": [
+        {
+          "type": "added",
+          "title": "New Features",
+          "items": [
+            "Automatic update pipeline with offline-verifiable signed envelopes; rollout starts with a small canary percentage and widens gradually",
+            "Built-in chrome://maho-changelog WebUI that opens once after an update is installed so you can see what changed",
+            "Update feed hardening: appcast responses are signed and length-pinned, and mismatched signatures map to an explicit failure state"
+          ]
+        }
+      ],
+      "body": "# Maho 1.0.1\n\nUpdate delivery infrastructure release.\n\n## Overview\n\nThis release brings the browser's automatic update pipeline online and adds a\nbuilt-in changelog surface.\n\n### What's New\n\n- **Automatic updates enabled**: Maho now checks `update.mahobrowser.com` for signed updates on the stable channel. Updates are delivered as offline-verifiable signed envelopes; the rollout starts with a small canary percentage and widens gradually.\n- **`chrome://maho-changelog`**: a bundled changelog WebUI. After an update is installed, Maho opens it once so you can see what changed.\n- **Update feed hardening**: appcast responses are signed and length-pinned; mismatched signatures map to an explicit failure state instead of a silent install."
+    },
+    {
       "version": "1.0.0",
       "date": "2026-08-12",
       "channel": "stable",

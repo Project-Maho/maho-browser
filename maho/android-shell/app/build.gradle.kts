@@ -17,8 +17,8 @@ android {
         applicationId = "dev.maho.browser"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
-        versionName = "1.0.0"
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 20260918
+        versionName = "2026.9.18"
         buildConfigField(
             "String",
             "GOOGLE_OAUTH_SERVER_CLIENT_ID",
