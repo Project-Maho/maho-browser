@@ -300,8 +300,10 @@ fn cli_routine_run_success_renders_browser_result() {
 }
 
 /// `maho routine run` must reject provider/model/workspace because browser-side
-/// routines cannot honor those CLI overrides. The approval flags are global
-/// deprecated no-ops and must execute the routine normally.
+/// routines cannot honor those CLI overrides. They are no longer registered
+/// as flags at all, so clap rejects them at parse time — same exit 2, and
+/// they no longer appear in `routine run --help` promising a capability the
+/// command never had.
 #[test]
 fn cli_routine_run_rejects_only_provider_model_and_workspace() {
     let mut responses = HashMap::new();
@@ -343,6 +345,22 @@ fn cli_routine_run_rejects_only_provider_model_and_workspace() {
             stderr.contains(flag[0]),
             "error must name the rejected flag {}; stderr: {stderr}",
             flag[0]
+        );
+    }
+
+    // The rejected flags must also be gone from the Options list, not merely
+    // refused at runtime. (The description above Usage deliberately explains
+    // why they are absent, so only the options section is checked.)
+    let help = run_cli_with_socket(&["routine", "run", "--help"], mock.socket());
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    let options = help_stdout
+        .split_once("Options:")
+        .map(|(_, rest)| rest.to_string())
+        .unwrap_or_else(|| panic!("help must have an Options section, got: {help_stdout}"));
+    for flag in ["--provider", "--model", "--workspace"] {
+        assert!(
+            !options.contains(flag),
+            "`routine run --help` must not advertise {flag}, got: {help_stdout}"
         );
     }
 }

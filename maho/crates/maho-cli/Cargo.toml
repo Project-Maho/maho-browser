@@ -17,6 +17,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+secrecy = "0.10.3"
 clap = { version = "4", features = ["derive"] }
 directories = "5"
 anyhow = "1"

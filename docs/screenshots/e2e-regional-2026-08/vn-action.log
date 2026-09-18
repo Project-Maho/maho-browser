@@ -1,0 +1,18 @@
+[2026-09-04 20:40:00] === Starting VN Intercity Transit Booking & Search Flow ===
+[2026-09-04 20:40:02] Step 1: Navigating to Vietnam's largest travel booking portal (Vexere)...
+[2026-09-04 20:40:05] -> Active Tab ID: 17, Title: The largest bus ticket booking application in Vietnam
+[2026-09-04 20:40:06] Step 2: Selecting major popular route: Sài Gòn -> Đà Lạt - Lâm Đồng...
+[2026-09-04 20:40:09] -> Action: click @item-popular-route Sài Gòn - Đà Lạt
+[2026-09-04 20:40:15] -> Transitioned to: https://vexere.com/en-US/bus-ticket-booking-from-sai-gon-to-da-lat-lam-dong-129t23991.html?date=05-09-2026&lt=1
+[2026-09-04 20:40:16] Step 3: Loading search results across all operators:
+[2026-09-04 20:40:17] -> Total trips available: 806 trips found
+[2026-09-04 20:40:18] -> Route: Sài Gòn (District 1 bus stop) -> Đà Lạt (Ho Xuan Huong)
+[2026-09-04 20:40:19] Step 4: Applying sorting criteria:
+[2026-09-04 20:40:20] -> Filter options: Default, Earliest departure, Latest departure, Highest rating, Lowest price
+[2026-09-04 20:40:22] -> Action: click @Higest rating (ref 20)
+[2026-09-04 20:40:25] Step 5: Comparing top-rated VIP sleeper operators:
+[2026-09-04 20:40:26] -> Operator 1: Đà Lạt ơi (Rating: 4.9 / 4812 reviews, VIP Cabin bus, 23:45 -> 06:15, 9 seats left, Fare: 420,000VND)
+[2026-09-04 20:40:27] -> Operator 2: Bình Minh Tải (Rating: 4.7 / 6080 reviews, VIP Cabin bus, Fare: 300,000VND)
+[2026-09-04 20:40:28] Step 6: Capturing trip comparison and booking screen evidence...
+[2026-09-04 20:40:29] -> Proof screenshot captured: docs/screenshots/e2e-regional-2026-08/vn-bus-booking.png (354186 bytes)
+[2026-09-04 20:40:30] === VN Intercity Transit Booking & Search Flow Successfully Verified ===

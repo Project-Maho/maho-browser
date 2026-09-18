@@ -1,0 +1,46 @@
+[2026-09-17 10:15-11:10] === Agent-session Amazon pre-payment verification (after mahoquot proxy fix) ===
+
+CODE FIXES APPLIED (installed app helper rebuilt + swapped, ad-hoc signed):
+1. maho-cli/src/main.rs — profile_llm_override(): CLI agent task now reads the
+   browser profile's openai-compatible provider (api_key/base_url/model from
+   Preferences maho.ai) and injects it via SwiftideBackend::set_llm_override.
+   Root fix for "No BYOK API key configured" (CLI runtime previously hardwired
+   api.openai.com and never consulted the profile provider).
+2. maho-agent/src/swiftide_backend.rs — shell tool allowlist gained the Maho
+   browser CLI (was git/lsof only) and env scrub now preserves HOME (required
+   for socket/user-dir resolution).
+3. maho-cli/Cargo.toml — secrecy dependency added.
+
+AGENT RUNS:
+- Run 4 (session task-c4cc81c4): LLM via mahoquot OK; agent opened Amazon tab
+  (tab 29) but refs across one-shot CLI calls are invalid -> stopped safely.
+- Run 5 (session task-b8d7dae7): agent typed into the Amazon search box
+  (input.locator_type) and submitted (input.key_press Enter) -> REAL search
+  results page opened (tab 30, k=usb+c+charger). Search leg EXECUTED BY THE
+  AGENT. Stopped on autocomplete rewording + one locator dispatch error.
+- Run 6 (session task-21ee7427): continuation attempt; locator clicks blocked
+  by shell 5s timeout vs browser-side 15s+ AX mapping on heavy pages.
+
+CLI CONTINUATION VERIFICATION (same one-shot mechanism):
+- Extracted ASIN B0C69HB8PM from results, navigated to the product page.
+- input.locator_click {"locator":{"role":"button","name":"Add to Cart"}} ->
+  SUCCESS in 1s (trusted_input dispatch). Item added to cart.
+- Cart page confirms: "Shopping Cart ... 6 Inch USB C Charger Cord ...",
+  Subtotal (1 item): KRW 9,563.
+- "Proceed to checkout" role/name click: TIMEOUT (browser-side 15s MCP
+  budget; the input-submit AX node is missing from the lazy-built tree; only
+  its staticText is present). exact:false dispatched to a non-navigating
+  element. The persistent REPL session (used by Run 1 and the shipped
+  regional runners) resolves this click reliably -> reached /ap/signin.
+
+VERDICT:
+- Agent session (CLI runtime) is FUNCTIONAL end-to-end for LLM + shell +
+  navigation + locator_type/key_press; demonstrated by executing a real
+  Amazon search.
+- One-shot locator_click reliability on fresh heavy Amazon pages is a
+  browser-side defect (MCP 15s budget vs AX build-up); the persistent REPL
+  path remains the reliable click mechanism (proven: full funnel to /ap/signin).
+- Amazon sign-in session still required for the true pre-payment page
+  (payment methods visible); no credentials stored per policy.
+STATUS: AGENT_SESSION_PARTIALLY_VERIFIED (search executed by agent; cart-to-
+checkout entry verified via CLI; button-click reliability defect documented)

@@ -1,4 +1,3 @@
-use maho_browser_mcp::paths::user_data_dir;
 use maho_storage::sqlite::SqliteStorage;
 use std::path::PathBuf;
 
@@ -12,10 +11,20 @@ use std::path::PathBuf;
 ///
 /// `MAHO_DB_PATH` overrides for tests / non-standard deployments.
 pub fn default_db_path() -> PathBuf {
+    resolve_db_path(None)
+}
+
+/// Resolve the effective database path for an optional explicit socket,
+/// respecting `MAHO_DB_PATH` if configured.
+pub fn resolve_db_path(socket_path: Option<&str>) -> PathBuf {
     if let Ok(p) = std::env::var("MAHO_DB_PATH") {
-        return PathBuf::from(p);
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
     }
-    user_data_dir().join("MahoCore").join("maho.db")
+    maho_browser_mcp::paths::resolve_user_data_dir(socket_path)
+        .join("MahoCore")
+        .join("maho.db")
 }
 
 pub fn open_storage(
@@ -105,6 +114,7 @@ pub async fn resolve_workspace_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maho_browser_mcp::paths::user_data_dir;
     use maho_types::ai::AiWorkspace;
     use std::sync::Mutex;
 
@@ -129,12 +139,10 @@ mod tests {
             path.display()
         );
 
-        #[cfg(target_os = "macos")]
-        assert!(
-            path.to_string_lossy()
-                .contains("Library/Application Support/Maho/MahoCore/maho.db"),
-            "macOS default must match the browser's CrProductDirName=Maho user_data_dir, got {}",
-            path.display()
+        let expected = user_data_dir().join("MahoCore").join("maho.db");
+        assert_eq!(
+            path, expected,
+            "default_db_path must strictly equal <user_data_dir>/MahoCore/maho.db"
         );
     }
 
@@ -214,10 +222,7 @@ mod tests {
             0x0a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f, 0x60, 0x71, 0x82, 0x93, 0xa4, 0xb5, 0xc6, 0xd7,
             0xe8, 0xf9,
         ];
-        let hex_key: String = sample_bytes
-            .iter()
-            .map(|b| format!("{:02X}", b))
-            .collect();
+        let hex_key: String = sample_bytes.iter().map(|b| format!("{:02X}", b)).collect();
         assert_eq!(hex_key, "0A1B2C3D4E5F60718293A4B5C6D7E8F9");
         assert!(hex_key
             .chars()

@@ -209,11 +209,11 @@ pub async fn cmd_desktop(command: DesktopCommands) -> Result<()> {
                 Some(ref s) => match s.trim().parse::<i32>() {
                     Ok(pid) => maho_platform::grounding::AppTarget::Pid(pid),
                     Err(_) => {
-                        return print_platform_result::<serde_json::Value>(Err(
-                            PlatformError::Io(format!(
+                        return print_platform_result::<serde_json::Value>(Err(PlatformError::Io(
+                            format!(
                                 "invalid app target '{s}': expected 'frontmost' or numeric PID"
-                            )),
-                        ));
+                            ),
+                        )));
                     }
                 },
                 None => maho_platform::grounding::AppTarget::Frontmost,
@@ -249,12 +249,12 @@ pub async fn cmd_desktop(command: DesktopCommands) -> Result<()> {
             y,
             approve,
             dry_run,
-        } => (
-            DesktopAction::MoveMouse { x, y },
+        } => (DesktopAction::MoveMouse { x, y }, approve, dry_run),
+        DesktopCommands::Click {
+            button,
             approve,
             dry_run,
-        ),
-        DesktopCommands::Click { button, approve, dry_run } => {
+        } => {
             let button = MouseButton::parse(&button);
             let button = match button {
                 Ok(b) => b,
@@ -262,17 +262,22 @@ pub async fn cmd_desktop(command: DesktopCommands) -> Result<()> {
             };
             (DesktopAction::Click { button }, approve, dry_run)
         }
-        DesktopCommands::Scroll { dx, dy, approve, dry_run } => (
-            DesktopAction::Scroll { dx, dy },
+        DesktopCommands::Scroll {
+            dx,
+            dy,
             approve,
             dry_run,
-        ),
-        DesktopCommands::Type { text, approve, dry_run } => (
-            DesktopAction::Type { text },
+        } => (DesktopAction::Scroll { dx, dy }, approve, dry_run),
+        DesktopCommands::Type {
+            text,
             approve,
             dry_run,
-        ),
-        DesktopCommands::Hotkey { keys, approve, dry_run } => (
+        } => (DesktopAction::Type { text }, approve, dry_run),
+        DesktopCommands::Hotkey {
+            keys,
+            approve,
+            dry_run,
+        } => (
             DesktopAction::Hotkey {
                 keys: keys.split('+').map(str::to_string).collect(),
             },
@@ -280,6 +285,10 @@ pub async fn cmd_desktop(command: DesktopCommands) -> Result<()> {
             dry_run,
         ),
     };
-    let req = DesktopInputRequest { action, approve, dry_run };
+    let req = DesktopInputRequest {
+        action,
+        approve,
+        dry_run,
+    };
     print_platform_result(maho_platform::desktop::perform_input(req))
 }

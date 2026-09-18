@@ -253,15 +253,15 @@ fn tool_list_json_uses_packaged_catalog_without_browser() {
     assert_eq!(value["catalogDiagnostics"]["catalogVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["schemaVersion"], 1);
     assert_eq!(value["catalogDiagnostics"]["resultVersion"], 1);
-    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 86);
+    assert_eq!(value["catalogDiagnostics"]["canonicalCount"], 87);
     let tools = value["tools"].as_array().unwrap();
     let tool_ids = tools
         .iter()
         .map(|tool| tool["capabilityId"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(tool_ids.len(), 54);
+    assert_eq!(tool_ids.len(), 55);
     assert_eq!(tool_ids[0], "bookmarks.create");
-    assert_eq!(tool_ids[53], "tab.switch");
+    assert_eq!(tool_ids[54], "tab.switch");
 
     let diagnostic_ids = value["catalogDiagnostics"]["surfaces"]["publicMcp"]["ids"]
         .as_array()
@@ -382,5 +382,73 @@ fn stateful_list_is_exact_six() {
     assert!(
         !maho_cli::STATEFUL_TOOLS.contains(&"browser_refresh_lease"),
         "bogus 'browser_refresh_lease' must not be in the stateful set"
+    );
+}
+
+// ─── C4-DEFECT-1: --json must be honored on error paths ──────────────────────
+
+/// The global `--json` flag promises "Output structured JSON for all
+/// commands", but the capability-resolution error path bypassed it entirely:
+/// stdout was EMPTY and the only diagnostic was a human sentence on stderr.
+/// A machine consumer piping stdout got unparseable nothing and no stable
+/// reason code. With --json the error must be a structured object on stdout
+/// carrying a stable reason field plus the message; exit codes are unchanged.
+#[test]
+fn json_flag_emits_structured_error_on_unknown_capability() {
+    // `tool describe` resolves against the packaged catalog, so the
+    // unknown-capability path is reachable with no browser running.
+    // `tool run` needs a reachable browser to get past connect, so it is
+    // exercised against the mock below.
+    let mock = MockBrowser::spawn();
+    let describe = run_cli(&["--json", "tool", "describe", "nonexistent.capability.id"]);
+    let run = run_cli_with_socket(
+        &["--json", "tool", "run", "nonexistent.capability.id"],
+        mock.socket(),
+    );
+
+    for (verb, output) in [("describe", describe), ("run", run)] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "`--json tool {verb}` must keep its exit code; stdout: {stdout}"
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+            panic!("`--json tool {verb}` must emit parseable JSON on stdout, got {stdout:?}: {e}")
+        });
+
+        assert_eq!(parsed["ok"], serde_json::json!(false));
+        assert_eq!(
+            parsed["error"]["reason"], "unknown_capability",
+            "structured error must carry a stable reason token, got: {parsed}"
+        );
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("nonexistent.capability.id")),
+            "structured error must carry the human message, got: {parsed}"
+        );
+    }
+}
+
+/// Without --json the human path is unchanged: the sentence stays on stderr
+/// and stdout stays empty, so existing terminal usage and scripts that read
+/// stderr keep working.
+#[test]
+fn human_error_path_is_unchanged_without_json_flag() {
+    let output = run_cli(&["tool", "describe", "nonexistent.capability.id"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stdout.trim().is_empty(),
+        "non-json stdout must stay empty, got: {stdout}"
+    );
+    assert!(
+        stderr.contains("nonexistent.capability.id"),
+        "non-json error must stay on stderr, got: {stderr}"
     );
 }

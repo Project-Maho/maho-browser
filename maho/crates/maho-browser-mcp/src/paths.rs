@@ -98,6 +98,11 @@ fn resolve_macos_socket_path(app_support_dir: &Path) -> PathBuf {
             return PathBuf::from(path);
         }
     }
+    if let Ok(dir) = std::env::var("MAHO_USER_DATA_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("maho.sock");
+        }
+    }
 
     let candidates = macos_socket_candidates_in(app_support_dir);
     let fallback = candidates[0].clone();
@@ -115,8 +120,28 @@ fn resolve_macos_socket_path(app_support_dir: &Path) -> PathBuf {
 /// convention and are pending live confirmation on a real build of each.
 #[cfg(target_os = "macos")]
 pub fn user_data_dir() -> PathBuf {
+    if let Ok(path) = std::env::var(ENV_SOCKET_PATH) {
+        if !path.is_empty() {
+            let p = PathBuf::from(path);
+            let canonical = std::fs::canonicalize(&p).unwrap_or(p);
+            if let Some(parent) = canonical.parent() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    if let Ok(dir) = std::env::var("MAHO_USER_DATA_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir);
+        }
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join("Library/Application Support/Maho")
+    let app_support = PathBuf::from(home).join("Library/Application Support");
+    let sock = resolve_macos_socket_path(&app_support);
+    let resolved_sock = std::fs::canonicalize(&sock).unwrap_or(sock);
+    resolved_sock
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| app_support.join("Maho"))
 }
 
 #[cfg(target_os = "linux")]
@@ -144,6 +169,25 @@ pub fn user_data_dir() -> PathBuf {
 pub fn user_data_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".config/maho")
+}
+
+/// Resolve the effective user data directory for a given socket path, or the default.
+/// If an explicit socket path is provided, it is canonicalized (resolving symlinks)
+/// and its parent is used as the user data directory.
+/// If no explicit socket path is provided, but socket environment overrides are set,
+/// the socket is canonicalized and its parent is used as the user data directory,
+/// preventing divergence between tool bridge endpoint and user data directory.
+pub fn resolve_user_data_dir(explicit_socket: Option<&str>) -> PathBuf {
+    if let Some(sock_str) = explicit_socket {
+        if !sock_str.is_empty() {
+            let p = PathBuf::from(sock_str);
+            let canonical = std::fs::canonicalize(&p).unwrap_or(p);
+            if let Some(parent) = canonical.parent() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    user_data_dir()
 }
 
 /// Returns the path to the Maho Browser MCP transport endpoint.
@@ -239,6 +283,11 @@ mod tests {
         fn set(key: &'static str, val: &std::path::Path) -> Self {
             let original = std::env::var(key).ok();
             unsafe { std::env::set_var(key, val) };
+            Self { key, original }
+        }
+        fn remove(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            unsafe { std::env::remove_var(key) };
             Self { key, original }
         }
     }
@@ -411,6 +460,8 @@ mod tests {
     #[test]
     fn platform_default_is_reasonable() {
         let _guard = lock_env();
+        let _user_data_guard = EnvVarGuard::remove("MAHO_USER_DATA_DIR");
+        let _mcp_sock_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
         unsafe { std::env::remove_var(ENV_SOCKET_PATH) };
         let path = default_socket_path();
         let path_str = path.to_string_lossy();
@@ -438,6 +489,8 @@ mod tests {
     #[test]
     fn socket_parent_equals_user_data_dir() {
         let _guard = lock_env();
+        let _user_data_guard = EnvVarGuard::remove("MAHO_USER_DATA_DIR");
+        let _mcp_sock_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
         let temp_dir_path = std::env::temp_dir().join(format!(
             "maho_macos_parent_test_{}_{}",
             std::process::id(),
@@ -460,6 +513,8 @@ mod tests {
     #[test]
     fn macos_socket_path_prefers_branded_when_both_exist() {
         let _guard = lock_env();
+        let _user_data_guard = EnvVarGuard::remove("MAHO_USER_DATA_DIR");
+        let _mcp_sock_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
         let temp_dir_path = std::env::temp_dir().join(format!(
             "maho_macos_both_test_{}_{}",
             std::process::id(),
@@ -493,6 +548,8 @@ mod tests {
     #[test]
     fn macos_socket_path_falls_back_to_unbranded_chromium_socket() {
         let _guard = lock_env();
+        let _user_data_guard = EnvVarGuard::remove("MAHO_USER_DATA_DIR");
+        let _mcp_sock_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
         let temp_dir_path = std::env::temp_dir().join(format!(
             "maho_macos_unbranded_test_{}_{}",
             std::process::id(),
@@ -521,6 +578,8 @@ mod tests {
     #[test]
     fn macos_socket_path_defaults_to_branded_when_neither_exists() {
         let _guard = lock_env();
+        let _user_data_guard = EnvVarGuard::remove("MAHO_USER_DATA_DIR");
+        let _mcp_sock_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
         let temp_dir_path = std::env::temp_dir().join(format!(
             "maho_macos_neither_test_{}_{}",
             std::process::id(),
@@ -548,6 +607,8 @@ mod tests {
     #[test]
     fn macos_socket_path_env_override_precedes_existing_files() {
         let _guard = lock_env();
+        let _user_data_guard = EnvVarGuard::remove("MAHO_USER_DATA_DIR");
+        let _mcp_sock_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
         let temp_dir_path = std::env::temp_dir().join(format!(
             "maho_macos_env_test_{}_{}",
             std::process::id(),
@@ -571,6 +632,32 @@ mod tests {
 
         let resolved = default_socket_path();
         assert_eq!(resolved, override_sock);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_user_data_dir_env_override_is_respected() {
+        let _guard = lock_env();
+        let _sock_guard = EnvVarGuard::remove(ENV_SOCKET_PATH);
+        let _mcp_guard = EnvVarGuard::remove("MAHO_MCP_SOCKET_PATH");
+        let custom_dir = PathBuf::from("/tmp/explicit_user_data_dir_test");
+        let _user_data_guard = EnvVarGuard::set("MAHO_USER_DATA_DIR", &custom_dir);
+
+        let udir = user_data_dir();
+        assert_eq!(udir, custom_dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_socket_env_override_precedes_user_data_dir() {
+        let _guard = lock_env();
+        let custom_sock = PathBuf::from("/tmp/sock_dir_override/maho.sock");
+        let _sock_guard = EnvVarGuard::set(ENV_SOCKET_PATH, &custom_sock);
+        let custom_user_dir = PathBuf::from("/tmp/custom_user_dir");
+        let _user_data_guard = EnvVarGuard::set("MAHO_USER_DATA_DIR", &custom_user_dir);
+
+        let udir = user_data_dir();
+        assert_eq!(udir, PathBuf::from("/tmp/sock_dir_override"));
     }
 
     // Parity with the C++ server's SanitizeUsername: only [A-Za-z0-9_-] survive,

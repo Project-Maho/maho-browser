@@ -91,6 +91,47 @@ pub async fn connect_repl(override_path: Option<&str>) -> Result<BrowserClient> 
     connect_as(override_path, ControllerKind::MahoCliRepl).await
 }
 
+/// Connect as the autonomous CLI agent controller (non-stealing lease admission).
+pub async fn connect_autonomous(override_path: Option<&str>) -> Result<BrowserClient> {
+    let path = match override_path {
+        Some(p) => PathBuf::from(p),
+        None => default_socket_path(),
+    };
+
+    let result = BrowserClient::connect_autonomous_as(&path, connection_timeout(), ControllerKind::MahoCli).await;
+    result.map_err(|e| {
+        if matches!(e, maho_browser_mcp::error::McpBridgeError::SocketConnect(_)) {
+            anyhow::anyhow!(
+                "Browser not running. Start Maho.app or run `maho headless --launch`.\n\
+                 (socket: {})\n\
+                 (underlying: {})",
+                path.display(),
+                e
+            )
+        } else {
+            anyhow::anyhow!("{e}")
+        }
+    })
+}
+
+/// Call an MCP tool on the connected browser without reconnecting and return
+/// the raw result Value directly without CLI human projection.
+pub async fn send_raw_tool_call_no_replay(
+    client: &BrowserClient,
+    tool: &str,
+    args: Value,
+) -> Result<Value> {
+    let params = serde_json::json!({
+        "name": tool,
+        "arguments": args,
+    });
+    let timeout = tool_timeout(tool);
+    client
+        .call_without_reconnect_with_timeout("tools/call", params, timeout)
+        .await
+        .map_err(|error| describe_tool_call_failure(tool, error))
+}
+
 async fn connect_as(
     override_path: Option<&str>,
     controller_kind: ControllerKind,

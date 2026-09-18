@@ -1,0 +1,40 @@
+[2026-09-17 09:55:31] === Starting Amazon Pre-Payment E2E (CLI pipeline) ===
+[2026-09-17 09:55:31] Step 1: Opening Amazon search results (usb-c to usb-c adapter)...
+[2026-09-17 09:55:37] -> Active Tab ID: 27
+[2026-09-17 09:55:37] -> Search results page: id: 27
+title: Amazon.com : usb c to usb c adapter short
+url: https://www.amazon.com/s?k=usb+c+to+usb+c+adapter+short
+active: true
+[2026-09-17 09:55:37] Step 2: Extracting first product URL from rendered results...
+[2026-09-17 09:55:37] -> Product URL: https://www.amazon.com/dp/B0CL4HS7W7
+[2026-09-17 09:55:37] Step 3: Navigating to product detail page...
+[2026-09-17 09:55:43] -> Product page: id: 27
+title: amazon.com: 6 Inch USB C Charger Cord, 2 Pack Short USB C to C Cable Braided Fast Charging USBC Cable Compatible with iPhone 15 Samsung Galaxy S23 Ultra Google Pixel : Electronics
+url: https://www.amazon.com/dp/B0CL4HS7W7?th=1
+active: true
+[2026-09-17 09:55:43] -> Page text: Skip to Skip to main content Main content About this item About this item Buying options Buying options Videos Videos Reviews Reviews Keyboard shortcuts Keyboard shortcuts Search, option, forward slash Cart, shift, option, c Home, shift, option, h Your orders, shift, option, o Add to cart, shift, op
+[2026-09-17 09:55:44] Step 4: Adding item to cart...
+[2026-09-17 09:55:44] -> Add to Cart click: maho> ok
+maho>
+[2026-09-17 09:55:49] -> After add: id: 27
+title: Amazon.com Shopping Cart
+url: https://www.amazon.com/cart/smart-wagon?newItems=6563ee23-5eee-4c5a-ae4c-7aa10af00800,1&ref_=sw_refresh
+active: true
+[2026-09-17 09:55:49] Step 5: Opening the cart to confirm the subtotal...
+[2026-09-17 09:55:54] -> Cart page: id: 27
+title: Amazon.com Shopping Cart
+url: https://www.amazon.com/gp/cart/view.html
+active: true
+[2026-09-17 09:55:54] -> Cart text: Skip to Skip to main content Main content Shopping cart Your Amazon Cart Keyboard shortcuts Keyboard shortcuts Search, option, forward slash Cart, shift, option, c Home, shift, option, h Your orders, shift, option, o Show/hide shortcuts, shift, option, z To move between items, use your keyboard's up
+[2026-09-17 09:55:54] Step 6: Clicking Proceed to checkout (stops at pre-payment boundary)...
+[2026-09-17 09:55:54] -> Proceed click: maho> ok
+maho>
+[2026-09-17 09:56:00] -> Checkout entry: id: 27
+title: Sign in
+url: https://www.amazon.com/ap/signin?openid.pape.max_auth_age=[REDACTED]&openid.return_to=https%3A%2F%2Fwww.amazon.com%2Fcheckout%2Fentry%2Fcart%3FisEligibilityLogicDisabled%3D1%26referrer%3Dcart%26proceedToCheckout%3D1%26proceedToCheckout%3D1%26ref_%3Dox_sc_proceed%26oldCustomerId%3D0%26tangoWeblabStatus%3Dtango_enable_unrec_customer%26sessionID%3D145-4484330-5324151%26pipelineType%3DChewbacca%26isToBeGiftWrappedBefore%3D0%26useDefaultCart%3D1%26isUnrec%3D1&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.assoc_handle=amazon_checkout_us&openid.mode=checkid_setup&language=en_US&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0
+active: true
+[2026-09-17 09:56:00] -> Checkout page text: Amazon Sign in or create account Sign in or create account Enter mobile number or email Continue Submit By continuing, you agree to Amazon's Conditions of Use Conditions of Use and Privacy Notice Privacy Notice . Need help? Need help? Buying for work? Create a free business account Create a free business account Conditions of Use Conditions of Use Privacy Notice Privacy Notice Help Help © 1996-202
+[2026-09-17 09:56:00] -> Checkout reached the Amazon authentication wall (no stored credentials).
+[2026-09-17 09:56:00]    Stopping here: payment page requires an authenticated session; no order placed.
+[2026-09-17 09:56:00] === Amazon Pre-Payment E2E (CLI pipeline) Finished ===
+[2026-09-17 09:56:00] FINAL STATUS: BLOCKED_AT_AUTH

@@ -29,6 +29,7 @@ async fn spawn_mock_server(
         // 1. Read initialize request
         reader.read_line(&mut line).await.expect("read init failed");
         let req: Value = serde_json::from_str(&line).expect("parse init failed");
+        assert_eq!(req["method"], "initialize");
         let id = req["id"].as_i64().unwrap_or(1);
         let init_resp = json!({
             "jsonrpc": "2.0",
@@ -99,6 +100,439 @@ async fn spawn_mock_server(
     (dir, sock_path, handle)
 }
 
+/// Exercise the shipped NDJSON entry point, not just its in-process dispatcher.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pipe_act_forwards_exact_args_and_preserves_rpc_denials() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::clone(&captured);
+    let handler: MockHandler = Box::new(move |req| {
+        assert_eq!(req["method"], "tools/call");
+        let params = req["params"].clone();
+        calls.lock().unwrap().push(params.clone());
+        match params["name"].as_str().unwrap() {
+            "browser.act_and_observe" => {
+                // Mirror the executing session handler: only object kind=type
+                // selects typing; all other shapes dispatch a click.
+                let args = &params["arguments"];
+                let action = &args["action"];
+                let locator = args
+                    .get("locator")
+                    .or_else(|| action.get("locator"))
+                    .unwrap();
+                assert!(locator.is_object());
+                let kind = if action["kind"] == "type" {
+                    "type"
+                } else {
+                    "click"
+                };
+                let text = args.get("text").or_else(|| action.get("text"));
+                if let Some(code) = params["arguments"]["tab_id"].as_i64().filter(|id| *id < 0) {
+                    return Err((
+                        code,
+                        "denied".into(),
+                        Some(json!({
+                            "hint": "request_approval", "reason": "test_denial", "redacted": true
+                        })),
+                    ));
+                }
+                Ok(json!({"structuredContent": {
+                    "action": {"dispatched": true, "verified": true},
+                    "fixture_receipt": {"kind": kind, "text": text, "locator": locator},
+                    "observation": {"snapshot_token": "act-token"}
+                }}))
+            }
+            "page.accessibility_snapshot_v2" => {
+                if params["arguments"]["tab_id"] == -32602 {
+                    return Err((-32602, "invalid".into(), None));
+                }
+                Ok(json!({"snapshot_token": "observe-token"}))
+            }
+            other => panic!("Unexpected tool call: {other}"),
+        }
+    });
+    let (_dir, socket, server) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
+    let exact_args = json!({
+        "action": {"kind": "type", "locator": {"css": "#query"}, "text": "fixture text"},
+        "wait": {"mode": "auto", "timeout_ms": 2000}, "observe": "diff", "tab_id": 7,
+        "since_snapshot_token": "explicit-token", "lease": "scoped"
+    });
+    let mut first = exact_args.clone();
+    first["id"] = json!("act-explicit");
+    first["op"] = json!("act");
+    first["consent"] = json!(true);
+    first["tool"] = json!("must_not_forward");
+    let click_args = json!({"action": {"kind": "click"}, "locator": {"ref": 2}});
+    let mut click = click_args.clone();
+    click["id"] = json!(2);
+    click["op"] = json!("act");
+    let mut requests = vec![first, click];
+    for code in [-32007, -32008, -32009, -32011] {
+        requests.push(
+            json!({"id": code, "op": "act", "action": {"kind": "click"}, "tab_id": code,
+                             "locator": {"ref": 2}}),
+        );
+    }
+    requests.extend([
+        json!({"id": "after-denials", "op": "observe"}),
+        json!({"id": "old-rpc", "op": "observe", "tab_id": -32602}),
+        json!({"id": "missing", "op": "act"}),
+        json!({"id": "native", "op": "act", "action": "native_key"}),
+        json!({"id": "recovered", "op": "observe"}),
+    ]);
+    for (index, args) in [
+        json!({"action": "type", "locator": {"ref": 2}, "text": "must not click"}),
+        json!({"action": {"kind": "native_key"}, "locator": {"ref": 2}}),
+        json!({"action": {"kind": "observe"}, "locator": {"ref": 2}}),
+        json!({"action": {"kind": "navigate"}, "locator": {"ref": 2}}),
+        json!({"action": {"kind": "click"}}),
+        json!({"action": {"kind": "click"}, "locator": {"ref": "@e2"}}),
+        json!({"action": {"kind": "click"}, "locator": {"ref": 2}, "wait": "auto"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut request = args;
+        request["id"] = json!(format!("invalid-{index}"));
+        request["op"] = json!("act");
+        requests.push(request);
+    }
+    let input = requests
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_maho"))
+        .args(["--socket-path", socket.to_str().unwrap(), "browser", "pipe"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn CLI");
+    let output = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(input.as_bytes()).await.unwrap();
+        drop(stdin);
+        child.wait_with_output().await.unwrap()
+    })
+    .await
+    .expect("CLI completion");
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server EOF")
+        .expect("server task");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), requests.len());
+    for (response, request) in responses.iter().zip(&requests) {
+        assert_eq!(response["id"], request["id"]);
+    }
+    assert_eq!(responses[0]["ok"], true, "{}", responses[0]);
+    // This flag is forwarded dispatch evidence, not a verified page postcondition.
+    assert_eq!(
+        responses[0]["result"]["action"],
+        json!({"dispatched": true, "verified": true})
+    );
+    assert_eq!(responses[1]["ok"], true);
+    assert_eq!(
+        responses[0]["result"]["fixture_receipt"],
+        json!({
+            "kind": "type", "text": "fixture text", "locator": {"css": "#query"}
+        })
+    );
+    assert_eq!(
+        responses[1]["result"]["fixture_receipt"],
+        json!({
+            "kind": "click", "text": null, "locator": {"ref": 2}
+        })
+    );
+    for response in &responses[11..] {
+        assert_eq!(response["error"]["code"], "invalid_params", "{response}");
+        assert!(response["error"].get("rpc_code").is_none());
+    }
+    for (response, code) in responses[2..6].iter().zip([-32007, -32008, -32009, -32011]) {
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"],
+            json!({
+                "code": "rpc_error", "message": "denied", "hint": "request_approval",
+                "rpc_code": code, "rpc_data": {
+                    "hint": "request_approval", "reason": "test_denial", "redacted": true
+                }
+            })
+        );
+    }
+    assert_eq!(responses[6]["ok"], true);
+    assert_eq!(
+        responses[7]["error"],
+        json!({"code": "invalid_params", "message": "invalid", "rpc_code": -32602})
+    );
+    for response in &responses[8..10] {
+        assert_eq!(response["error"]["code"], "invalid_params");
+        assert!(response["error"].get("rpc_code").is_none());
+        assert!(response["error"].get("rpc_data").is_none());
+    }
+    assert_eq!(responses[10]["ok"], true);
+    let calls = captured.lock().unwrap();
+    assert_eq!(
+        calls.len(),
+        9,
+        "no implicit grants, lease calls, or retries"
+    );
+    assert_eq!(
+        calls[0],
+        json!({"name": "browser.act_and_observe", "arguments": exact_args})
+    );
+    assert_eq!(
+        calls[1],
+        json!({"name": "browser.act_and_observe", "arguments": click_args})
+    );
+    for (call, code) in calls[2..6].iter().zip([-32007, -32008, -32009, -32011]) {
+        assert_eq!(
+            call,
+            &json!({"name": "browser.act_and_observe", "arguments": {
+                "action": {"kind": "click"}, "tab_id": code, "locator": {"ref": 2}
+            }})
+        );
+    }
+    assert_eq!(
+        calls[6]["arguments"],
+        json!({"since_snapshot_token": "act-token"})
+    );
+    assert_eq!(
+        calls[8]["arguments"],
+        json!({"since_snapshot_token": "observe-token"})
+    );
+}
+
+/// Exercise the shipped NDJSON entry point for `op: "native"`:
+/// - Verifies click, type, key actions forwarded to input.native_action
+/// - Verifies RPC error code/data preservation (-32007, -32008, -32009, -32011)
+/// - Verifies invalid parameter rejection (missing frame_token, rect bounds, etc.)
+/// - Verifies snapshot token chaining
+#[tokio::test(flavor = "multi_thread")]
+async fn test_pipe_native_forwards_exact_args_and_preserves_rpc_denials() {
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let calls = Arc::clone(&captured);
+    let handler: MockHandler = Box::new(move |req| {
+        assert_eq!(req["method"], "tools/call");
+        let params = req["params"].clone();
+        calls.lock().unwrap().push(params.clone());
+        match params["name"].as_str().unwrap() {
+            "input.native_action" => {
+                let args = &params["arguments"];
+                let action = &args["action"];
+                let kind = action["kind"].as_str().unwrap();
+                if let Some(code) = args
+                    .get("tab_id")
+                    .and_then(Value::as_i64)
+                    .filter(|id| *id < 0)
+                {
+                    let mut data = json!({
+                        "hint": "request_approval",
+                        "reason": "test_native_denial",
+                        "redacted": true
+                    });
+                    if code == -32011 {
+                        data["available"] = json!(false);
+                        data["raw_os_status"] = json!(5);
+                    }
+                    return Err((code, "denied".into(), Some(data)));
+                }
+                Ok(json!({"structuredContent": {
+                    "action": {"dispatched": true, "verified": true, "kind": kind},
+                    "observation": {"snapshot_token": "native-token"}
+                }}))
+            }
+            "page.accessibility_snapshot_v2" => Ok(json!({"snapshot_token": "observe-token"})),
+            other => panic!("Unexpected tool call: {other}"),
+        }
+    });
+    let (_dir, socket, server) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
+
+    let click_req = json!({
+        "id": "native-click",
+        "op": "native",
+        "frame_token": "frame-token-1",
+        "tab_id": 7,
+        "lease_epoch": 1,
+        "action": {
+            "kind": "click",
+            "click_point_css": [120.0, 80.0],
+            "target_rect_css": [100.0, 60.0, 50.0, 40.0],
+            "motion_profile": "direct"
+        }
+    });
+
+    let type_req = json!({
+        "id": "native-type",
+        "op": "native",
+        "frame_token": "frame-token-1",
+        "tab_id": 7,
+        "lease_epoch": 1,
+        "action": {
+            "kind": "type",
+            "text": "native keyboard input"
+        }
+    });
+
+    let key_req = json!({
+        "id": "native-key",
+        "op": "native",
+        "frame_token": "frame-token-1",
+        "tab_id": 7,
+        "lease_epoch": 1,
+        "action": {
+            "kind": "key",
+            "key": "Enter",
+            "modifiers": ["Control"]
+        }
+    });
+
+    let mut requests = vec![click_req, type_req, key_req];
+
+    // RPC denial codes: -32007, -32008, -32009, -32011
+    for code in [-32007, -32008, -32009, -32011] {
+        requests.push(json!({
+            "id": code,
+            "op": "native",
+            "frame_token": "frame-token-1",
+            "tab_id": code,
+            "lease_epoch": 1,
+            "action": {
+                "kind": "click",
+                "click_point_css": [120.0, 80.0],
+                "target_rect_css": [100.0, 60.0, 50.0, 40.0]
+            }
+        }));
+    }
+
+    // Observe chaining
+    requests.push(json!({"id": "after-native", "op": "observe"}));
+
+    // Invalid requests (must fail before dispatch with invalid_params)
+    for (index, bad) in [
+        // Missing frame_token
+        json!({"action": {"kind": "click", "click_point_css": [120.0, 80.0], "target_rect_css": [100.0, 60.0, 50.0, 40.0]}}),
+        // Disallowed kind (generic tool op)
+        json!({"frame_token": "f", "action": {"kind": "generic_tool"}}),
+        // Target rect does not contain click point
+        json!({"frame_token": "f", "action": {"kind": "click", "click_point_css": [500.0, 500.0], "target_rect_css": [0.0, 0.0, 50.0, 50.0]}}),
+        // Target rect negative dimensions
+        json!({"frame_token": "f", "action": {"kind": "click", "click_point_css": [10.0, 10.0], "target_rect_css": [0.0, 0.0, -50.0, 50.0]}}),
+        // Non-finite click coords
+        json!({"frame_token": "f", "action": {"kind": "click", "click_point_css": ["nan", 10.0], "target_rect_css": [0.0, 0.0, 50.0, 50.0]}}),
+        // Empty text for type
+        json!({"frame_token": "f", "action": {"kind": "type", "text": ""}}),
+        // Empty key for key
+        json!({"frame_token": "f", "action": {"kind": "key", "key": ""}}),
+    ].into_iter().enumerate() {
+        let mut request = bad;
+        request["id"] = json!(format!("invalid-native-{index}"));
+        request["op"] = json!("native");
+        requests.push(request);
+    }
+
+    let input = requests
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_maho"))
+        .args(["--socket-path", socket.to_str().unwrap(), "browser", "pipe"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn CLI");
+
+    let output = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(input.as_bytes()).await.unwrap();
+        drop(stdin);
+        child.wait_with_output().await.unwrap()
+    })
+    .await
+    .expect("CLI completion");
+
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server EOF")
+        .expect("server task");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let responses: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+
+    assert_eq!(responses.len(), requests.len());
+    for (response, request) in responses.iter().zip(&requests) {
+        assert_eq!(response["id"], request["id"]);
+    }
+
+    // 0: click success
+    assert_eq!(responses[0]["ok"], true, "{}", responses[0]);
+    assert_eq!(responses[0]["result"]["action"]["kind"], "click");
+
+    // 1: type success
+    assert_eq!(responses[1]["ok"], true, "{}", responses[1]);
+    assert_eq!(responses[1]["result"]["action"]["kind"], "type");
+
+    // 2: key success
+    assert_eq!(responses[2]["ok"], true, "{}", responses[2]);
+    assert_eq!(responses[2]["result"]["action"]["kind"], "key");
+
+    // 3..7: denials with exact RPC codes
+    for (response, code) in responses[3..7].iter().zip([-32007, -32008, -32009, -32011]) {
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "rpc_error");
+        assert_eq!(response["error"]["rpc_code"], code);
+        assert!(response["error"]["rpc_data"].is_object());
+        if code == -32011 {
+            assert_eq!(response["error"]["rpc_data"]["available"], false);
+            assert_eq!(response["error"]["rpc_data"]["raw_os_status"], 5);
+        }
+    }
+
+    // 7: after-native observe chained snapshot token
+    assert_eq!(responses[7]["ok"], true);
+
+    // 8..: invalid parameter requests
+    for response in &responses[8..] {
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "invalid_params", "{response}");
+        assert!(response["error"].get("rpc_code").is_none());
+    }
+
+    let calls_lock = captured.lock().unwrap();
+    // 3 successful native + 4 denials + 1 observe = 8 calls reached the mock server
+    assert_eq!(calls_lock.len(), 8);
+    assert_eq!(calls_lock[0]["name"], "input.native_action");
+    assert_eq!(
+        calls_lock[7]["arguments"]["since_snapshot_token"],
+        "native-token"
+    );
+}
+
 /// (a) Three sequential ops correlate IDs correctly and chain snapshot tokens.
 #[tokio::test(flavor = "multi_thread")]
 async fn test_sequential_ops_correlate_ids_and_chain_snapshot_tokens() {
@@ -113,11 +547,16 @@ async fn test_sequential_ops_correlate_ids_and_chain_snapshot_tokens() {
             .unwrap_or("")
             .to_string();
         let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-        calls_clone.lock().unwrap().push((tool_name.clone(), arguments.clone()));
+        calls_clone
+            .lock()
+            .unwrap()
+            .push((tool_name.clone(), arguments.clone()));
 
         match tool_name.as_str() {
             "page.accessibility_snapshot_v2" => {
-                let since = arguments.get("since_snapshot_token").and_then(Value::as_str);
+                let since = arguments
+                    .get("since_snapshot_token")
+                    .and_then(Value::as_str);
                 if since == Some("token-beta") {
                     Ok(json!({
                         "snapshot_token": "token-gamma",
@@ -142,9 +581,10 @@ async fn test_sequential_ops_correlate_ids_and_chain_snapshot_tokens() {
     });
 
     let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
-    let client = BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
-        .await
-        .expect("failed to connect");
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
 
     let stdin_data = [
         r#"{"id": "op-1", "op": "observe", "mode": "compact"}"#,
@@ -163,7 +603,11 @@ async fn test_sequential_ops_correlate_ids_and_chain_snapshot_tokens() {
 
     let output_str = String::from_utf8(output).expect("valid utf8");
     let lines: Vec<&str> = output_str.lines().collect();
-    assert_eq!(lines.len(), 3, "Expected 3 response lines, got: {output_str}");
+    assert_eq!(
+        lines.len(),
+        3,
+        "Expected 3 response lines, got: {output_str}"
+    );
 
     let resp1: PipeResponse = serde_json::from_str(lines[0]).expect("parse line 1");
     assert_eq!(resp1.id, json!("op-1"));
@@ -216,9 +660,10 @@ async fn test_structured_error_survival_and_subsequent_op() {
     });
 
     let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
-    let client = BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
-        .await
-        .expect("failed to connect");
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
 
     // Line 1: unknown op
     // Line 2: click missing locator
@@ -240,7 +685,11 @@ async fn test_structured_error_survival_and_subsequent_op() {
 
     let output_str = String::from_utf8(output).expect("valid utf8");
     let lines: Vec<&str> = output_str.lines().collect();
-    assert_eq!(lines.len(), 3, "Expected 3 response lines, got: {output_str}");
+    assert_eq!(
+        lines.len(),
+        3,
+        "Expected 3 response lines, got: {output_str}"
+    );
 
     let resp1: PipeResponse = serde_json::from_str(lines[0]).expect("parse line 1");
     assert_eq!(resp1.id, json!(101));
@@ -282,9 +731,10 @@ async fn test_malformed_line_yields_bad_request_and_stream_continues() {
     });
 
     let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
-    let client = BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
-        .await
-        .expect("failed to connect");
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
 
     let stdin_data = [
         "not json at all {{{{",
@@ -303,7 +753,11 @@ async fn test_malformed_line_yields_bad_request_and_stream_continues() {
 
     let output_str = String::from_utf8(output).expect("valid utf8");
     let lines: Vec<&str> = output_str.lines().collect();
-    assert_eq!(lines.len(), 3, "Expected 3 response lines, got: {output_str}");
+    assert_eq!(
+        lines.len(),
+        3,
+        "Expected 3 response lines, got: {output_str}"
+    );
 
     let resp1: PipeResponse = serde_json::from_str(lines[0]).expect("parse line 1");
     assert_eq!(resp1.id, Value::Null);
@@ -344,9 +798,10 @@ async fn test_type_navigate_wait_ops() {
     });
 
     let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
-    let client = BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
-        .await
-        .expect("failed to connect");
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
 
     let stdin_data = [
         r##"{"id": 1, "op": "type", "locator": {"css": "input.query"}, "text": "search terms", "submit": true}"##,
@@ -404,11 +859,13 @@ async fn test_pipe_grant_op_dispatches_grant_exact_origin() {
     });
 
     let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
-    let client = BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
-        .await
-        .expect("failed to connect");
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
 
-    let stdin_data = r#"{"id": 7, "op": "grant", "origin": "https://contest.aitestbed.kr"}"#.to_string() + "\n";
+    let stdin_data =
+        r#"{"id": 7, "op": "grant", "origin": "https://contest.aitestbed.kr"}"#.to_string() + "\n";
 
     let mut output = Vec::new();
     browser_pipe::run_pipe_loop(stdin_data.as_bytes(), &mut output, &client)
@@ -429,9 +886,10 @@ async fn test_pipe_grant_missing_origin_is_invalid_params() {
     let handler: MockHandler = Box::new(|_req: Value| Ok(json!({})));
 
     let (_dir, sock_path, server_handle) = spawn_mock_server(Arc::new(Mutex::new(handler))).await;
-    let client = BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
-        .await
-        .expect("failed to connect");
+    let client =
+        BrowserClient::connect_as(&sock_path, Duration::from_secs(5), ControllerKind::MahoCli)
+            .await
+            .expect("failed to connect");
 
     let stdin_data = r#"{"id": 8, "op": "grant"}"#.to_string() + "\n";
 

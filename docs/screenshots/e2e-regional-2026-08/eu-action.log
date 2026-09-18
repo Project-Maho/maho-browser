@@ -1,0 +1,22 @@
+[2026-09-04 20:35:00] === Starting EU Transit Multi-Step Booking Flow ===
+[2026-09-04 20:35:02] Step 1: Navigating to European transit portal (Flix European network)...
+[2026-09-04 20:35:05] -> Active Tab ID: 16, Title: Travel by bus from Berlin to on Sat, 5 Sep
+[2026-09-04 20:35:06] Step 2: Querying intercity connection: Berlin to Munich (Sat, 5 Sep 2026)...
+[2026-09-04 20:35:08] -> Selected Origin: Berlin central bus station (DE)
+[2026-09-04 20:35:10] -> Selected Destination: Munich Fröttmaning (DE)
+[2026-09-04 20:35:14] -> Filter options loaded: Direct only vs 1-transfer connections
+[2026-09-04 20:35:16] Step 3: Applying Direct Route filter...
+[2026-09-04 20:35:18] -> Filter applied: Direct only connections prioritized
+[2026-09-04 20:35:20] -> Connection 1: Berlin (22:20) -> Munich (05:30), Fare: €44.98 (Direct)
+[2026-09-04 20:35:22] Step 4: Selecting Direct Connection & proceeding to checkout...
+[2026-09-04 20:35:25] -> Action: click @Continue (ref 23)
+[2026-09-04 20:35:30] -> Transitioned to: https://shop.global.flixbus.com/checkout
+[2026-09-04 20:35:31] Step 5: Validating passenger and seat configuration stage:
+[2026-09-04 20:35:32] -> Active seat hold countdown timer: 09:42 remaining
+[2026-09-04 20:35:33] -> Passenger form: First name, Last name, Email, Country code, Phone number
+[2026-09-04 20:35:34] -> Seat reservation options: Select your seat (from €2.99), Travel neighbour-free (€35.98)
+[2026-09-04 20:35:35] -> Fare breakdown: 1 Adult (€43.99) + Service Fee (€0.99) = Total: €44.98
+[2026-09-04 20:35:36] -> Payment methods available: Cards, Google Pay, Apple Pay, PayPal, Klarna, Revolut Pay
+[2026-09-04 20:35:37] Step 6: Capturing checkout confirmation evidence...
+[2026-09-04 20:35:38] -> Proof screenshot captured: docs/screenshots/e2e-regional-2026-08/eu-transit-checkout.png (96171 bytes)
+[2026-09-04 20:35:40] === EU Transit Multi-Step Booking Flow Successfully Verified ===

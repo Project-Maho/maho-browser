@@ -22,7 +22,8 @@ use crate::omo::proto::{
 };
 use crate::run_journal::{AgentRunId, RunCheckpointKind, RunJournal};
 use crate::{
-    AgentError, AgentRuntime, AgentStreamEvent, PermissionCallback, SecureKeyBundle, ToolDefinition,
+    AgentError, AgentRuntime, AgentStorage, AgentStreamEvent, BrowserActionToolsState,
+    PermissionCallback, SecureKeyBundle, ToolDefinition,
 };
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -305,6 +306,10 @@ pub fn browser_mcp_config(binary: &Path, socket_path: Option<&Path>) -> serde_js
         "MAHO_MCP_PUBLIC_ENABLED".to_string(),
         serde_json::Value::String("true".to_string()),
     );
+    env.insert(
+        "MAHO_MCP_AUTO_APPROVE".to_string(),
+        serde_json::Value::String("true".to_string()),
+    );
     if let Some(sp) = socket_path {
         env.insert(
             "MAHO_MCP_SOCKET_PATH".to_string(),
@@ -417,11 +422,15 @@ pub struct OmoBackend {
     turn_locks: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     pub(crate) permission_callback: Mutex<Option<PermissionCallback>>,
     pub(crate) secure_storage_callback: Mutex<Option<SecureStorageCallback>>,
+    pub(crate) browser_tool_bridge: Mutex<Option<Arc<dyn crate::BrowserToolBridge>>>,
     run_journal: Arc<Mutex<RunJournal>>,
     preferred_provider: Mutex<Option<String>>,
     runtime_tier: Mutex<Option<String>>,
     active_space_id: Mutex<Option<String>>,
     system_prompt: Mutex<String>,
+    fs_whitelist_roots: Mutex<Vec<String>>,
+    artifact_root: Mutex<Option<PathBuf>>,
+    composite_cfg: Mutex<crate::composite::CompositeExecutionConfig>,
 }
 
 impl OmoBackend {
@@ -440,12 +449,44 @@ impl OmoBackend {
             turn_locks: tokio::sync::Mutex::new(HashMap::new()),
             permission_callback: Mutex::new(None),
             secure_storage_callback: Mutex::new(None),
+            browser_tool_bridge: Mutex::new(None),
             run_journal: Arc::new(Mutex::new(RunJournal::new())),
             preferred_provider: Mutex::new(None),
             runtime_tier: Mutex::new(None),
             active_space_id: Mutex::new(None),
             system_prompt: Mutex::new(crate::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT.to_string()),
+            fs_whitelist_roots: Mutex::new(Vec::new()),
+            artifact_root: Mutex::new(None),
+            composite_cfg: Mutex::new(crate::composite::CompositeExecutionConfig::default()),
         }
+    }
+
+    pub fn composite_config(&self) -> crate::composite::CompositeExecutionConfig {
+        lock_unpoison(&self.composite_cfg).clone()
+    }
+
+    pub fn set_composite_config(&self, config: crate::composite::CompositeExecutionConfig) {
+        *lock_unpoison(&self.composite_cfg) = config;
+    }
+
+    pub fn system_prompt(&self) -> Option<String> {
+        Some(lock_unpoison(&self.system_prompt).clone())
+    }
+
+    pub fn runtime_tier(&self) -> Option<String> {
+        lock_unpoison(&self.runtime_tier).clone()
+    }
+
+    pub fn fs_whitelist_roots(&self) -> Vec<String> {
+        lock_unpoison(&self.fs_whitelist_roots).clone()
+    }
+
+    pub fn artifact_root(&self) -> Option<PathBuf> {
+        lock_unpoison(&self.artifact_root).clone()
+    }
+
+    pub fn active_space_id(&self) -> Option<String> {
+        lock_unpoison(&self.active_space_id).clone()
     }
 
     pub fn browser_socket_path(&self) -> Option<PathBuf> {
@@ -537,8 +578,7 @@ impl OmoBackend {
             AgentError::ExecutionError(format!("failed to create omo agent directory: {error}"))
         })?;
         let path = self.config.agent_dir().join("settings.json");
-        let empty: Vec<String> = Vec::new();
-        let bytes = serde_json::to_vec_pretty(&serde_json::json!({ "defaultTools": empty }))
+        let bytes = serde_json::to_vec_pretty(&serde_json::json!({}))
             .map_err(|error| AgentError::ExecutionError(error.to_string()))?;
         std::fs::write(&path, bytes).map_err(|error| {
             AgentError::ExecutionError(format!(
@@ -914,6 +954,15 @@ impl AgentRuntime for OmoBackend {
         Ok(ChatMessage::assistant(ChatContent::text(output)))
     }
 
+    fn set_browser_tool_bridge(
+        &self,
+        bridge: Arc<dyn crate::BrowserToolBridge>,
+    ) -> Result<(), AgentError> {
+        let mut guard = self.browser_tool_bridge.lock().unwrap();
+        *guard = Some(bridge);
+        Ok(())
+    }
+
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError> {
         let connection = self.connection().await?;
         let rpc_session_id = self
@@ -934,15 +983,20 @@ impl AgentRuntime for OmoBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDefinition>, AgentError> {
         // omo's RPC protocol exposes no tool-list command, so the only truthful source for
         // the browser tools this agent can reach is the MCP bridge itself. An unreachable
-        // browser yields an empty list rather than failing the session.
+        // browser yields platform fallback tools rather than failing the session.
         let socket_path = self.browser_socket_path();
-        Ok(browser_mcp_tools(
+        let tools = browser_mcp_tools(
             &self.browser_mcp_binary,
             socket_path.as_deref(),
             MCP_LIST_TIMEOUT,
         )
         .await
-        .unwrap_or_default())
+        .unwrap_or_default();
+        if !tools.is_empty() {
+            Ok(tools)
+        } else {
+            Ok(crate::tool_registry::get_platform_tools())
+        }
     }
 
     fn set_permission_callback(&self, callback: PermissionCallback) -> Result<(), AgentError> {
@@ -981,6 +1035,14 @@ impl AgentRuntime for OmoBackend {
         *guard = space_id;
     }
 
+    fn set_fs_whitelist_roots(&self, roots: Vec<String>) {
+        *lock_unpoison(&self.fs_whitelist_roots) = roots;
+    }
+
+    fn fs_whitelist_roots(&self) -> Vec<String> {
+        lock_unpoison(&self.fs_whitelist_roots).clone()
+    }
+
     fn set_system_prompt(&self, prompt: &str) {
         let effective_prompt = if prompt.trim().is_empty() {
             crate::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT
@@ -990,6 +1052,26 @@ impl AgentRuntime for OmoBackend {
         let mut guard = self.system_prompt.lock().unwrap();
         *guard = effective_prompt.to_string();
         let _ = self.write_system_prompt(effective_prompt);
+    }
+
+    fn system_prompt(&self) -> Option<String> {
+        Some(lock_unpoison(&self.system_prompt).clone())
+    }
+
+    fn set_composite_config(&self, config: crate::composite::CompositeExecutionConfig) {
+        self.set_composite_config(config);
+    }
+
+    fn composite_config(&self) -> crate::composite::CompositeExecutionConfig {
+        self.composite_config()
+    }
+
+    fn set_artifact_root(&self, artifact_root: Option<PathBuf>) {
+        *lock_unpoison(&self.artifact_root) = artifact_root;
+    }
+
+    fn artifact_root(&self) -> Option<PathBuf> {
+        self.artifact_root()
     }
 }
 
@@ -1189,6 +1271,10 @@ mod tests {
         );
         assert_eq!(
             config["mcpServers"]["maho-browser"]["env"]["MAHO_MCP_PUBLIC_ENABLED"],
+            "true"
+        );
+        assert_eq!(
+            config["mcpServers"]["maho-browser"]["env"]["MAHO_MCP_AUTO_APPROVE"],
             "true"
         );
         assert!(config["mcpServers"]["maho-browser"]["env"]

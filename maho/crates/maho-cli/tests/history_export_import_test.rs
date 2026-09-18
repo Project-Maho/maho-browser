@@ -126,12 +126,15 @@ async fn history_export_ndjson_to_file() {
     }
 }
 
-// ─── history import (deprecation) ────────────────────────────────────────────
+// ─── history import (unregistered) ───────────────────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
-async fn history_import_deprecated_nonzero_exit() {
-    // No mock server needed: import must fail fast with a documented message
-    // because no browser_history_import server tool exists.
+async fn history_import_is_not_a_registered_command() {
+    // `history import` was registered in clap but its handler was a pure
+    // hard-exit stub: the browser MCP server exposes no history-import tool,
+    // so the command taught users a capability that does not exist. It is
+    // now unregistered — clap rejects it at parse time, keeping the nonzero
+    // exit while removing it from `maho history --help`.
     let import_dir = tempfile::tempdir().unwrap();
     let ndjson = import_dir.path().join("in.ndjson");
     std::fs::write(&ndjson, "{\"url\":\"https://x.com\"}\n").unwrap();
@@ -143,13 +146,16 @@ async fn history_import_deprecated_nonzero_exit() {
 
     assert!(
         !output.status.success(),
-        "expected nonzero exit for deprecated import"
+        "expected nonzero exit for the unregistered import subcommand"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let help = run_cli(
+        &["history", "--help"],
+        std::path::Path::new("/tmp/nonexistent-import-test.sock"),
+    );
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
     assert!(
-        stderr.contains("browser_history_import")
-            || stderr.to_lowercase().contains("no server tool")
-            || stderr.to_lowercase().contains("not supported"),
-        "expected documented deprecation message, got: {stderr}"
+        !help_stdout.contains("import"),
+        "`maho history --help` must not advertise import, got: {help_stdout}"
     );
 }

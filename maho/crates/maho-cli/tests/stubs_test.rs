@@ -22,12 +22,13 @@ fn test_tab_write_stub() {
     assert!(stderr.contains("Command 'tab write' is deprecated"));
 }
 
+/// `history import` is no longer registered at all (its handler was a pure
+/// hard-exit stub for a server tool that does not exist), so clap rejects it
+/// as an unknown subcommand — same exit code, no longer advertised in help.
 #[test]
-fn test_history_import_stub() {
+fn test_history_import_is_unregistered() {
     let output = run_cli(&["history", "import", "foo.ndjson"]);
     assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("history import` is not supported"));
 }
 
 #[test]

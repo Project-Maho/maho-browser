@@ -29,6 +29,11 @@ pub struct PipeErrorDetail {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc_code: Option<i64>,
+    /// Original structured RPC data; this mapping does not log request arguments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc_data: Option<Value>,
 }
 
 /// NDJSON response framing.
@@ -66,6 +71,28 @@ impl PipeResponse {
                 code: code.into(),
                 message: message.into(),
                 hint,
+                rpc_code: None,
+                rpc_data: None,
+            }),
+        }
+    }
+
+    fn bridge_error(id: Value, err: &McpBridgeError) -> Self {
+        let (code, message, hint) = map_bridge_error(err);
+        let (rpc_code, rpc_data) = match err {
+            McpBridgeError::Rpc { code, data, .. } => (Some(i64::from(*code)), data.clone()),
+            _ => (None, None),
+        };
+        Self {
+            id,
+            ok: false,
+            result: None,
+            error: Some(PipeErrorDetail {
+                code,
+                message,
+                hint,
+                rpc_code,
+                rpc_data,
             }),
         }
     }
@@ -171,6 +198,324 @@ fn update_snapshot_token(session: &mut PipeSession, result: &Value) {
     }
 }
 
+/// Forward only the existing act-and-observe contract, without implicit authority.
+async fn handle_act(
+    session: &mut PipeSession,
+    client: &BrowserClient,
+    id: Value,
+    req: &Map<String, Value>,
+) -> PipeResponse {
+    // Follow the executing session handler, not the advertised string schema:
+    // anything other than object kind=type would otherwise become a click.
+    let action = req.get("action").and_then(Value::as_object);
+    if !matches!(
+        action.and_then(|a| a.get("kind")).and_then(Value::as_str),
+        Some("click" | "type")
+    ) {
+        return PipeResponse::error(
+            id,
+            "invalid_params",
+            "'action' must be an object with kind click or type; use separate observe/navigate ops",
+            None,
+        );
+    }
+    let locator = req
+        .get("locator")
+        .or_else(|| action.and_then(|a| a.get("locator")))
+        .and_then(Value::as_object);
+    let valid_locator = locator.is_some_and(|loc| {
+        let valid_ref = loc
+            .get("ref")
+            .is_none_or(|value| value.as_i64().is_some_and(|r| i32::try_from(r).is_ok()));
+        valid_ref
+            && (loc.contains_key("ref")
+                || loc.get("css").and_then(Value::as_str).is_some()
+                || (loc.get("role").and_then(Value::as_str).is_some()
+                    && loc.get("name").and_then(Value::as_str).is_some()))
+    });
+    if !valid_locator || req.get("wait").is_some_and(|wait| !wait.is_object()) {
+        return PipeResponse::error(
+            id,
+            "invalid_params",
+            "act requires a locator with an integer ref, css, or role/name; wait must be an object",
+            None,
+        );
+    }
+    let mut args = Map::new();
+    for key in [
+        "action",
+        "locator",
+        "text",
+        "wait",
+        "observe",
+        "since_snapshot_token",
+        "tab_id",
+        "lease",
+    ] {
+        if let Some(value) = req.get(key) {
+            args.insert(key.to_string(), value.clone());
+        }
+    }
+    match client
+        .call_capability("browser.act_and_observe", Value::Object(args))
+        .await
+    {
+        Ok(raw) => {
+            let res = unwrap_mcp_result(raw);
+            update_snapshot_token(session, &res);
+            PipeResponse::success(id, res)
+        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
+    }
+}
+
+fn parse_point_f64(v: Option<&Value>) -> Option<(f64, f64)> {
+    match v? {
+        Value::Array(arr) if arr.len() >= 2 => {
+            let x = arr[0].as_f64()?;
+            let y = arr[1].as_f64()?;
+            Some((x, y))
+        }
+        Value::Object(obj) => {
+            let x = obj.get("x").and_then(Value::as_f64)?;
+            let y = obj.get("y").and_then(Value::as_f64)?;
+            Some((x, y))
+        }
+        _ => None,
+    }
+}
+
+fn parse_rect_f64(v: Option<&Value>) -> Option<(f64, f64, f64, f64)> {
+    match v? {
+        Value::Array(arr) if arr.len() >= 4 => {
+            let x = arr[0].as_f64()?;
+            let y = arr[1].as_f64()?;
+            let w = arr[2].as_f64()?;
+            let h = arr[3].as_f64()?;
+            Some((x, y, w, h))
+        }
+        Value::Object(obj) => {
+            let x = obj.get("x").and_then(Value::as_f64)?;
+            let y = obj.get("y").and_then(Value::as_f64)?;
+            let w = obj
+                .get("width")
+                .or_else(|| obj.get("w"))
+                .and_then(Value::as_f64)?;
+            let h = obj
+                .get("height")
+                .or_else(|| obj.get("h"))
+                .and_then(Value::as_f64)?;
+            Some((x, y, w, h))
+        }
+        _ => None,
+    }
+}
+
+/// Forward discriminated NativeActionRequest strictly for allowed native actions.
+async fn handle_native(
+    session: &mut PipeSession,
+    client: &BrowserClient,
+    id: Value,
+    req: &Map<String, Value>,
+) -> PipeResponse {
+    let action_val = req.get("action");
+    let kind = match action_val {
+        Some(Value::Object(obj)) => obj
+            .get("kind")
+            .or_else(|| obj.get("type"))
+            .and_then(Value::as_str),
+        Some(Value::String(s)) => Some(s.as_str()),
+        _ => req
+            .get("kind")
+            .or_else(|| req.get("type"))
+            .and_then(Value::as_str),
+    };
+
+    let kind = match kind {
+        Some(k @ ("click" | "type" | "key")) => k,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "native op requires allowed kind: 'click', 'type', or 'key'",
+                None,
+            );
+        }
+    };
+
+    let frame_token = req
+        .get("frame_token")
+        .or_else(|| action_val.and_then(|a| a.get("frame_token")))
+        .and_then(Value::as_str);
+
+    let frame_token = match frame_token {
+        Some(ft) if !ft.trim().is_empty() => ft,
+        _ => {
+            return PipeResponse::error(
+                id,
+                "invalid_params",
+                "Missing required 'frame_token'",
+                None,
+            );
+        }
+    };
+
+    let act_obj = action_val.and_then(Value::as_object);
+    let mut args = Map::new();
+    args.insert(
+        "frame_token".to_string(),
+        Value::String(frame_token.to_string()),
+    );
+
+    match kind {
+        "click" => {
+            let click_point = req
+                .get("click_point_css")
+                .or_else(|| req.get("click_point"))
+                .or_else(|| act_obj.and_then(|a| a.get("click_point_css")))
+                .or_else(|| act_obj.and_then(|a| a.get("click_point")));
+
+            let target_rect = req
+                .get("target_rect_css")
+                .or_else(|| req.get("target_rect"))
+                .or_else(|| act_obj.and_then(|a| a.get("target_rect_css")))
+                .or_else(|| act_obj.and_then(|a| a.get("target_rect")));
+
+            let (cx, cy) = match parse_point_f64(click_point) {
+                Some(pt) if pt.0.is_finite() && pt.1.is_finite() => pt,
+                _ => {
+                    return PipeResponse::error(
+                        id,
+                        "invalid_params",
+                        "click requires valid finite 'click_point_css' [x, y]",
+                        None,
+                    );
+                }
+            };
+
+            let (rx, ry, rw, rh) = match parse_rect_f64(target_rect) {
+                Some(r)
+                    if r.0.is_finite()
+                        && r.1.is_finite()
+                        && r.2.is_finite()
+                        && r.3.is_finite()
+                        && r.2 > 0.0
+                        && r.3 > 0.0 =>
+                {
+                    r
+                }
+                _ => {
+                    return PipeResponse::error(
+                        id,
+                        "invalid_params",
+                        "click requires valid finite 'target_rect_css' with positive width and height",
+                        None,
+                    );
+                }
+            };
+
+            if cx < rx || cx > rx + rw || cy < ry || cy > ry + rh {
+                return PipeResponse::error(
+                    id,
+                    "invalid_params",
+                    "target_rect must contain click_point",
+                    None,
+                );
+            }
+
+            let mut action_map = Map::new();
+            action_map.insert("kind".to_string(), Value::String("click".to_string()));
+            action_map.insert("click_point_css".to_string(), json!([cx, cy]));
+            action_map.insert("target_rect_css".to_string(), json!([rx, ry, rw, rh]));
+            if let Some(motion) = act_obj
+                .and_then(|a| a.get("motion_profile"))
+                .or_else(|| req.get("motion_profile"))
+            {
+                action_map.insert("motion_profile".to_string(), motion.clone());
+            }
+            args.insert("action".to_string(), Value::Object(action_map));
+        }
+        "type" => {
+            let text = req
+                .get("text")
+                .or_else(|| act_obj.and_then(|a| a.get("text")))
+                .and_then(Value::as_str);
+            match text {
+                Some(t) if !t.is_empty() => {
+                    let mut action_map = Map::new();
+                    action_map.insert("kind".to_string(), Value::String("type".to_string()));
+                    action_map.insert("text".to_string(), Value::String(t.to_string()));
+                    args.insert("action".to_string(), Value::Object(action_map));
+                    args.insert("text".to_string(), Value::String(t.to_string()));
+                }
+                _ => {
+                    return PipeResponse::error(
+                        id,
+                        "invalid_params",
+                        "type requires non-empty 'text'",
+                        None,
+                    );
+                }
+            }
+        }
+        "key" => {
+            let key = req
+                .get("key")
+                .or_else(|| act_obj.and_then(|a| a.get("key")))
+                .and_then(Value::as_str);
+            match key {
+                Some(k) if !k.is_empty() => {
+                    let mut action_map = Map::new();
+                    action_map.insert("kind".to_string(), Value::String("key".to_string()));
+                    action_map.insert("key".to_string(), Value::String(k.to_string()));
+                    let modifiers = req
+                        .get("modifiers")
+                        .or_else(|| act_obj.and_then(|a| a.get("modifiers")));
+                    if let Some(m) = modifiers {
+                        action_map.insert("modifiers".to_string(), m.clone());
+                        args.insert("modifiers".to_string(), m.clone());
+                    }
+                    args.insert("action".to_string(), Value::Object(action_map));
+                    args.insert("key".to_string(), Value::String(k.to_string()));
+                }
+                _ => {
+                    return PipeResponse::error(
+                        id,
+                        "invalid_params",
+                        "key requires non-empty 'key'",
+                        None,
+                    );
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    for key in [
+        "tab_id",
+        "lease_epoch",
+        "document_epoch",
+        "user_modifiers_active",
+        "lease",
+    ] {
+        if let Some(val) = req.get(key) {
+            args.insert(key.to_string(), val.clone());
+        }
+    }
+
+    match client
+        .call_capability("input.native_action", Value::Object(args))
+        .await
+    {
+        Ok(raw) => {
+            let res = unwrap_mcp_result(raw);
+            update_snapshot_token(session, &res);
+            PipeResponse::success(id, res)
+        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
+    }
+}
+
 async fn handle_observe(
     session: &mut PipeSession,
     client: &BrowserClient,
@@ -218,13 +563,9 @@ async fn handle_observe(
             update_snapshot_token(session, &res);
             PipeResponse::success(id, res)
         }
-        Err(err) => {
-            let (code, message, hint) = map_bridge_error(&err);
-            PipeResponse::error(id, code, message, hint)
-        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
     }
 }
-
 
 async fn handle_click(
     session: &mut PipeSession,
@@ -246,11 +587,11 @@ async fn handle_click(
 
     let mut args = Map::new();
     args.insert("locator".to_string(), locator.clone());
-    let observe_mode = req
-        .get("observe")
-        .and_then(Value::as_str)
-        .unwrap_or("diff");
-    args.insert("observe".to_string(), Value::String(observe_mode.to_string()));
+    let observe_mode = req.get("observe").and_then(Value::as_str).unwrap_or("diff");
+    args.insert(
+        "observe".to_string(),
+        Value::String(observe_mode.to_string()),
+    );
     args.insert("lease".to_string(), Value::String("scoped".to_string()));
     if let Some(wait) = req.get("wait") {
         args.insert("wait".to_string(), wait.clone());
@@ -268,10 +609,7 @@ async fn handle_click(
             update_snapshot_token(session, &res);
             PipeResponse::success(id, res)
         }
-        Err(err) => {
-            let (code, message, hint) = map_bridge_error(&err);
-            PipeResponse::error(id, code, message, hint)
-        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
     }
 }
 
@@ -311,11 +649,11 @@ async fn handle_type(
     if let Some(submit) = req.get("submit").and_then(Value::as_bool) {
         args.insert("submit".to_string(), Value::Bool(submit));
     }
-    let observe_mode = req
-        .get("observe")
-        .and_then(Value::as_str)
-        .unwrap_or("diff");
-    args.insert("observe".to_string(), Value::String(observe_mode.to_string()));
+    let observe_mode = req.get("observe").and_then(Value::as_str).unwrap_or("diff");
+    args.insert(
+        "observe".to_string(),
+        Value::String(observe_mode.to_string()),
+    );
     args.insert("lease".to_string(), Value::String("scoped".to_string()));
     if let Some(wait) = req.get("wait") {
         args.insert("wait".to_string(), wait.clone());
@@ -333,10 +671,7 @@ async fn handle_type(
             update_snapshot_token(session, &res);
             PipeResponse::success(id, res)
         }
-        Err(err) => {
-            let (code, message, hint) = map_bridge_error(&err);
-            PipeResponse::error(id, code, message, hint)
-        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
     }
 }
 
@@ -370,10 +705,7 @@ async fn handle_grant(
             let _granted = unwrap_mcp_result(raw);
             PipeResponse::success(id, json!({ "granted": true, "origin": origin }))
         }
-        Err(err) => {
-            let (code, message, hint) = map_bridge_error(&err);
-            PipeResponse::error(id, code, message, hint)
-        }
+        Err(err) => PipeResponse::bridge_error(id, &err),
     }
 }
 
@@ -406,10 +738,7 @@ async fn handle_navigate(
         .await
     {
         Ok(raw) => unwrap_mcp_result(raw),
-        Err(err) => {
-            let (code, message, hint) = map_bridge_error(&err);
-            return PipeResponse::error(id, code, message, hint);
-        }
+        Err(err) => return PipeResponse::bridge_error(id, &err),
     };
 
     // If wait was specified alongside navigate
@@ -417,25 +746,24 @@ async fn handle_navigate(
         let should_wait_nav = match wait_val {
             Value::Bool(b) => *b,
             Value::String(s) => s == "navigation" || s == "auto",
-            Value::Object(map) => {
-                map.get("mode")
-                    .and_then(Value::as_str)
-                    .map(|m| m == "navigation" || m == "auto")
-                    .unwrap_or(true)
-            }
+            Value::Object(map) => map
+                .get("mode")
+                .and_then(Value::as_str)
+                .map(|m| m == "navigation" || m == "auto")
+                .unwrap_or(true),
             _ => false,
         };
 
         if should_wait_nav {
             let timeout_ms = match wait_val {
-                Value::Object(map) => map.get("timeout_ms").and_then(Value::as_u64).unwrap_or(30000),
+                Value::Object(map) => map
+                    .get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(30000),
                 _ => 30000,
             };
             let mut wait_args = Map::new();
-            wait_args.insert(
-                "timeout_ms".to_string(),
-                Value::Number(timeout_ms.into()),
-            );
+            wait_args.insert("timeout_ms".to_string(), Value::Number(timeout_ms.into()));
             if let Some(tab_id) = req.get("tab_id").and_then(Value::as_i64) {
                 wait_args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
             }
@@ -444,7 +772,10 @@ async fn handle_navigate(
                 .await;
         } else if let Value::Object(map) = wait_val {
             if let Some(sel) = map.get("selector").and_then(Value::as_str) {
-                let timeout_ms = map.get("timeout_ms").and_then(Value::as_u64).unwrap_or(10000);
+                let timeout_ms = map
+                    .get("timeout_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(10000);
                 let mut sel_args = Map::new();
                 sel_args.insert("selector".to_string(), Value::String(sel.to_string()));
                 sel_args.insert("timeout_ms".to_string(), Value::Number(timeout_ms.into()));
@@ -473,7 +804,10 @@ async fn handle_wait(
         .or_else(|| req.get("pattern"))
         .or_else(|| req.get("url_pattern"))
         .and_then(Value::as_str);
-    let timeout_ms = req.get("timeout_ms").and_then(Value::as_u64).unwrap_or(10000);
+    let timeout_ms = req
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(10000);
 
     if let Some(sel) = selector {
         let mut args = Map::new();
@@ -491,10 +825,7 @@ async fn handle_wait(
                 let res = unwrap_mcp_result(raw);
                 PipeResponse::success(id, res)
             }
-            Err(err) => {
-                let (code, message, hint) = map_bridge_error(&err);
-                PipeResponse::error(id, code, message, hint)
-            }
+            Err(err) => PipeResponse::bridge_error(id, &err),
         }
     } else if let Some(pattern) = url_pattern {
         let start = std::time::Instant::now();
@@ -502,16 +833,17 @@ async fn handle_wait(
         let mut matched_url: Option<String> = None;
 
         while start.elapsed() < timeout {
-            let tab_list_res = client
-                .call_capability("tab.list", json!({}))
-                .await;
+            let tab_list_res = client.call_capability("tab.list", json!({})).await;
             if let Ok(raw) = tab_list_res {
                 let res = unwrap_mcp_result(raw);
                 if let Some(tabs) = res.get("tabs").and_then(Value::as_array) {
-                    let target_tab = if let Some(tab_id) = req.get("tab_id").and_then(Value::as_i64) {
-                        tabs.iter().find(|t| t.get("id") == Some(&Value::Number(tab_id.into())))
+                    let target_tab = if let Some(tab_id) = req.get("tab_id").and_then(Value::as_i64)
+                    {
+                        tabs.iter()
+                            .find(|t| t.get("id") == Some(&Value::Number(tab_id.into())))
                     } else {
-                        tabs.iter().find(|t| t.get("is_active") == Some(&Value::Bool(true)))
+                        tabs.iter()
+                            .find(|t| t.get("is_active") == Some(&Value::Bool(true)))
                     };
                     if let Some(tab) = target_tab {
                         if let Some(url) = tab.get("url").and_then(Value::as_str) {
@@ -567,16 +899,13 @@ pub async fn handle_pipe_line(
     let op = match obj.get("op").and_then(Value::as_str) {
         Some(op) => op,
         None => {
-            return PipeResponse::error(
-                id,
-                "invalid_params",
-                "Missing 'op' field",
-                None,
-            );
+            return PipeResponse::error(id, "invalid_params", "Missing 'op' field", None);
         }
     };
 
     match op {
+        "act" => handle_act(session, client, id, &obj).await,
+        "native" => handle_native(session, client, id, &obj).await,
         "grant" => handle_grant(session, client, id, &obj).await,
         "observe" => handle_observe(session, client, id, &obj).await,
         "click" => handle_click(session, client, id, &obj).await,
@@ -593,11 +922,7 @@ pub async fn handle_pipe_line(
 }
 
 /// Persistent pipe read-eval-print loop over NDJSON streams.
-pub async fn run_pipe_loop<R, W>(
-    reader: R,
-    mut writer: W,
-    client: &BrowserClient,
-) -> Result<()>
+pub async fn run_pipe_loop<R, W>(reader: R, mut writer: W, client: &BrowserClient) -> Result<()>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -634,10 +959,19 @@ mod tests {
 
     #[test]
     fn test_matches_url_pattern() {
-        assert!(matches_url_pattern("https://example.com/login", "example.com"));
+        assert!(matches_url_pattern(
+            "https://example.com/login",
+            "example.com"
+        ));
         assert!(matches_url_pattern("https://example.com/login", "*login"));
-        assert!(matches_url_pattern("https://example.com/login", "https://*.com/*"));
+        assert!(matches_url_pattern(
+            "https://example.com/login",
+            "https://*.com/*"
+        ));
         assert!(matches_url_pattern("https://example.com/login", "*"));
-        assert!(!matches_url_pattern("https://example.com/dashboard", "*login"));
+        assert!(!matches_url_pattern(
+            "https://example.com/dashboard",
+            "*login"
+        ));
     }
 }

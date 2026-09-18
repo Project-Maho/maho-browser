@@ -27,7 +27,7 @@ fn arg_utf8(arg: &OsString) -> Option<&str> {
 }
 
 fn is_global_flag_without_value(arg: &OsString) -> bool {
-    arg_is(arg, "--json") || arg_is(arg, "--isolated")
+    arg_is(arg, "--json")
 }
 
 fn is_global_flag_with_value(arg: &OsString) -> bool {
@@ -100,7 +100,7 @@ fn semantic_verb(value: &OsString) -> Option<&'static str> {
 fn semantic_help(verb: &str) -> Option<&'static str> {
     match verb {
         "click" => Some("Usage: maho click [--tab <id>] <selector>\n\nClick an element selected by CSS. Use @<ref> from a fresh accessibility snapshot when duplicate controls are indistinguishable."),
-        "type" => Some("Usage: maho type [--tab <id>] [--submit] <text>\n\nType into the currently focused element. --submit presses Enter after typing."),
+        "type" => Some("Usage: maho type [--tab <id>] [--submit] [--allow-credentials] <text>\n\nType into the currently focused element. --submit presses Enter after typing. --allow-credentials allows typing into password/credential fields."),
         "key" => Some("Usage: maho key [--tab <id>] <key-name>\n\nPress a browser key such as Enter or ArrowDown."),
         "scroll" => Some("Usage: maho scroll [--tab <id>] [--amount N | --to top|bottom]\n\nScroll vertically. Positive --amount scrolls down; negative scrolls up; the default is 300 pixels."),
         "hover" => Some("Usage: maho hover [--tab <id>] <selector>\n\nHover an element selected by CSS. Use @<ref> as an explicit accessibility-ref selector when needed."),
@@ -139,6 +139,7 @@ fn build_semantic_payload(
 ) -> Result<(String, Value, Vec<OsString>)> {
     let mut tab_id: Option<i64> = None;
     let mut submit = false;
+    let mut allow_credentials = false;
     let mut amount: Option<i64> = None;
     let mut to: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
@@ -195,6 +196,11 @@ fn build_semantic_payload(
             index += 1;
             continue;
         }
+        if !positional_only && arg_is(current, "--allow-credentials") {
+            allow_credentials = true;
+            index += 1;
+            continue;
+        }
         if !positional_only && arg_is(current, "--amount") {
             let value = take_value(semantic_tokens, &mut index, "--amount")?;
             amount = Some(parse_i64_option(&value, "--amount")?);
@@ -248,12 +254,15 @@ fn build_semantic_payload(
         }
         "type" => {
             if positional.len() != 1 {
-                bail!("Usage: maho type [--tab <id>] [--submit] <text>");
+                bail!("Usage: maho type [--tab <id>] [--submit] [--allow-credentials] <text>");
             }
             payload["selector"] = Value::String(":focus".to_string());
             payload["text"] = Value::String(positional.remove(0));
             if submit {
                 payload["submit"] = Value::Bool(true);
+            }
+            if allow_credentials {
+                payload["allow_credentials"] = Value::Bool(true);
             }
             "input.type"
         }

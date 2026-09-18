@@ -1,5 +1,10 @@
 use serde::Deserialize;
 
+/// Single pay-what-you-want LemonSqueezy product buy link (variant 1988896).
+/// Kept in sync with maho_subscription_checkout.h (kPaygCreditsCheckoutUrl).
+pub const PAYG_CREDITS_CHECKOUT_URL: &str =
+    "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35";
+
 /// Self balance read uses `/auth/subscription` (user bearer token), NOT the
 /// service-token-gated `/billing/credit_balance` route which is Worker-only.
 #[derive(Deserialize)]
@@ -28,11 +33,23 @@ pub async fn fetch_balance(
     Ok(resp.json().await?)
 }
 
-pub fn checkout_url_for_pack(_amount: &str) -> &'static str {
-    // Single pay-what-you-want LemonSqueezy product buy link (variant 1988896).
-    // The buyer chooses their desired amount in the LemonSqueezy checkout,
-    // kept in sync with maho_subscription_checkout.h (kPaygCreditsCheckoutUrl).
-    "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35"
+/// Builds the pay-what-you-want credits checkout URL, attributing the purchase
+/// to numeric `user_id` via checkout custom data (matching relay billing parsing
+/// and C++ `BuildPaygCreditsCheckoutUrl` in `maho_subscription_checkout.h`).
+///
+/// Fails closed when `user_id <= 0` so callers cannot return or open an
+/// unattributable checkout that would credit no account.
+pub fn build_payg_credits_checkout_url(user_id: i32) -> anyhow::Result<String> {
+    if user_id <= 0 {
+        anyhow::bail!("positive numeric user_id is required to attribute checkout");
+    }
+    Ok(format!(
+        "{PAYG_CREDITS_CHECKOUT_URL}?checkout[custom][user_id]={user_id}"
+    ))
+}
+
+pub fn checkout_url_for_pack(_amount: &str, user_id: i32) -> anyhow::Result<String> {
+    build_payg_credits_checkout_url(user_id)
 }
 
 /// Outcome of a checkout URL launch attempt.
@@ -187,21 +204,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checkout_url_for_pack_returns_known_slugs() {
+    fn checkout_url_for_pack_attributes_numeric_user_id() {
         let expected =
-            "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35";
-        assert_eq!(checkout_url_for_pack("10"), expected);
-        assert_eq!(checkout_url_for_pack("50"), expected);
-        assert_eq!(checkout_url_for_pack("100"), expected);
+            "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35?checkout[custom][user_id]=42";
+        assert_eq!(checkout_url_for_pack("10", 42).unwrap(), expected);
+        assert_eq!(checkout_url_for_pack("50", 42).unwrap(), expected);
+        assert_eq!(checkout_url_for_pack("100", 42).unwrap(), expected);
     }
 
     #[test]
-    fn checkout_url_for_pack_falls_back_on_unknown() {
-        let expected =
-            "https://noveling.lemonsqueezy.com/checkout/buy/93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35";
-        assert_eq!(checkout_url_for_pack("999"), expected);
-        assert_eq!(checkout_url_for_pack(""), expected);
-        assert_eq!(checkout_url_for_pack("abc"), expected);
+    fn checkout_url_for_pack_fails_closed_when_user_id_non_positive() {
+        assert!(checkout_url_for_pack("10", 0).is_err());
+        assert!(checkout_url_for_pack("10", -1).is_err());
+        assert!(build_payg_credits_checkout_url(0).is_err());
+        assert!(build_payg_credits_checkout_url(-5).is_err());
     }
 
     #[test]

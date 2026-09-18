@@ -64,9 +64,12 @@ fn help_contains_global_flags() {
         stdout.contains("--json"),
         "--help should show --json flag, got:\n{stdout}"
     );
+    // `--isolated` was removed: it was declared and parsed but no handler
+    // ever read it, so it advertised browser-profile isolation the CLI did
+    // not perform. Help must not offer it back.
     assert!(
-        stdout.contains("--isolated"),
-        "--help should show --isolated flag, got:\n{stdout}"
+        !stdout.contains("--isolated"),
+        "--help must not advertise the removed no-op --isolated flag, got:\n{stdout}"
     );
     assert!(
         stdout.contains("--socket-path"),
@@ -269,7 +272,6 @@ fn help_output_snapshot() {
 
 #[test]
 fn billing_buy_credits_preserves_behavior() {
-    // The deprecated path `maho buy-credits --amount 10` should still work
     let output = maho_cmd()
         .args(["buy-credits", "--amount", "10"])
         .output()
@@ -284,9 +286,12 @@ fn billing_buy_credits_preserves_behavior() {
         "deprecated buy-credits should warn, got stderr:\n{stderr}"
     );
 
-    // Should still produce the checkout URL (behavior preserved)
     assert!(
-        stdout.contains("93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35"),
-        "buy-credits should still produce URL, got stdout:\n{stdout}"
+        !output.status.success(),
+        "deprecated unauthenticated buy-credits should fail closed"
+    );
+    assert!(
+        !stdout.contains("93f5ccbc-cd1c-4c4a-94a0-5ff4ad8d2c35"),
+        "buy-credits must not produce an unattributable URL, got stdout:\n{stdout}"
     );
 }

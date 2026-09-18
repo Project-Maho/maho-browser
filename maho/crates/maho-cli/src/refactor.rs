@@ -612,6 +612,9 @@ async fn try_execute_v2_semantic_call(
         if submit {
             capability_args["submit"] = Value::Bool(true);
         }
+        if let Some(allow) = object.get("allow_credentials") {
+            capability_args["allow_credentials"] = allow.clone();
+        }
     }
     if let Some(wait) = object.get("wait") {
         capability_args["wait"] = wait.clone();

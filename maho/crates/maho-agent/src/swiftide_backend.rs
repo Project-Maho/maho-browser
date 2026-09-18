@@ -259,6 +259,22 @@ struct PermissionGatedTool {
     session_id: String,
 
     approval_policy: Arc<Mutex<ApprovalPolicy>>,
+
+    // Wave 1D (D7): runtime-tier gate inputs, shared with the backend so the
+    // CLI can bind them per session. `runtime_tier: None` leaves the gate
+    // inert (browser surfaces stay broker-gated, plan R-F8).
+    runtime_tier: Arc<Mutex<Option<String>>>,
+
+    fs_whitelist_roots: Arc<Mutex<Vec<String>>>,
+
+    workspace_root: Arc<std::path::PathBuf>,
+
+    // Snapshot input for the tier gate's fs_path resolution (see
+    // permission::kernel_fs_request). Shared Arc with the backend so invoke
+    // reads the live value per call — and so building a gated tool never
+    // re-locks a mutex the caller may already hold (the FsWriteTool
+    // construction sites lock artifact_root within the same statement).
+    artifact_root: Arc<Mutex<Option<std::path::PathBuf>>>,
 }
 
 fn permission_error(reason: &str) -> swiftide_core::chat_completion::errors::ToolError {
@@ -457,6 +473,60 @@ impl Tool for PermissionGatedTool {
             return Err(permission_error("prior tool denial in this turn"));
         }
 
+        // Wave 1D (D7): runtime-tier gate for kernel tool calls. Inert unless
+        // the session carries a tier — CLI task sessions always do; tierless
+        // sessions (browser surfaces) keep the capability broker as the sole
+        // tier authority (plan R-F8). Deny refuses with the machine-consumed
+        // tier reason code; RequireApproval forces the call onto the callback
+        // path (the guard ask-gate outside the whitelist) even when the
+        // approval policy would auto-allow; Allow falls through untouched.
+        let tier_forces_prompt = {
+            let tier_opt = self.runtime_tier.lock_unpoison().clone();
+            match tier_opt {
+                Some(ref raw_tier) => {
+                    let roots = self.fs_whitelist_roots.lock_unpoison().clone();
+                    let root_refs: Vec<&str> = roots.iter().map(String::as_str).collect();
+                    // Read live per call: no stale snapshot, and the lock is
+                    // never held across an await or a nested build call.
+                    let artifact_root = self.artifact_root.lock_unpoison().clone();
+                    let (is_write, fs_path) = crate::permission::kernel_fs_request(
+                        &tool_name,
+                        tool_call.args().unwrap_or("{}"),
+                        &self.workspace_root,
+                        artifact_root.as_deref(),
+                    );
+                    match crate::permission::authorize_kernel_tool_request(
+                        raw_tier, &tool_name, is_write, &fs_path, &root_refs,
+                    ) {
+                        crate::permission::KernelTierDecision::Deny(reason) => {
+                            let metadata = ApprovalDecisionMetadata::new(
+                                PermissionDecision::Deny,
+                                policy,
+                                ApprovalDecisionSource::Runtime,
+                                ApprovalDecisionReason::TierDeny,
+                            );
+                            audit_decision(
+                                ApprovalAuditEventKind::PermissionDeny,
+                                &self.session_id,
+                                &tool_name,
+                                self.sensitivity,
+                                metadata,
+                            );
+                            *self.denied_flag.lock_unpoison() = true;
+                            cancel_guard.complete();
+                            // Arguments are never echoed on a tier denial.
+                            return Err(permission_error(&format!(
+                                "permission tier denied the tool ({reason})"
+                            )));
+                        }
+                        crate::permission::KernelTierDecision::RequireApproval => true,
+                        crate::permission::KernelTierDecision::Allow => false,
+                    }
+                }
+                None => false,
+            }
+        };
+
         let mail_requires_typed_approval = crate::classify_mail_tool(&tool_name).is_some()
             && self.sensitivity == ToolSensitivity::Sensitive;
         let action_approval = crate::authorize_action_consequence(
@@ -484,7 +554,8 @@ impl Tool for PermissionGatedTool {
         }
         let consequence_requires_approval =
             action_approval == crate::ConsequenceApprovalAction::RequireApproval;
-        if !mail_requires_typed_approval
+        if !tier_forces_prompt
+            && !mail_requires_typed_approval
             && action_approval == crate::ConsequenceApprovalAction::Allow
         {
             let metadata = ApprovalDecisionMetadata::new(
@@ -512,7 +583,8 @@ impl Tool for PermissionGatedTool {
             return result;
         }
 
-        if !mail_requires_typed_approval
+        if !tier_forces_prompt
+            && !mail_requires_typed_approval
             && action_approval != crate::ConsequenceApprovalAction::Allow
             && !consequence_requires_approval
         {
@@ -1112,7 +1184,7 @@ impl Tool for ShellExecTool {
 
         // 1. Safety check: reject shell metacharacters
 
-        let forbidden_chars = ['|', ';', '&', '$', '`', '>', '<', '(', ')', '*', '?', '\\'];
+        let forbidden_chars = ['|', ';', '&', '$', '`', '>', '<', '(', ')', '*', '\\'];
 
         if command.chars().any(|c| forbidden_chars.contains(&c)) {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
@@ -1120,9 +1192,27 @@ impl Tool for ShellExecTool {
             ));
         }
 
-        // 2. Parse command into arguments
+        // 2. Parse command into arguments (quote-aware so string flags like -e "..." work)
 
-        let parts: Vec<&str> = command.split_whitespace().collect();
+        let mut parts: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let mut in_single = false;
+        let mut in_double = false;
+        for ch in command.chars() {
+            match ch {
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                ch if ch.is_whitespace() && !in_single && !in_double => {
+                    if !current.is_empty() {
+                        parts.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            }
+        }
+        if !current.is_empty() {
+            parts.push(current);
+        }
 
         if parts.is_empty() {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
@@ -1130,11 +1220,11 @@ impl Tool for ShellExecTool {
             ));
         }
 
-        let exe = parts[0];
+        let exe = parts[0].as_str();
 
-        // Strict validation: drop cargo, python3, bun. Only allow git and lsof.
+        // Strict validation: only git, lsof, and the Maho browser CLI.
 
-        if exe != "git" && exe != "lsof" {
+        if exe != "git" && exe != "lsof" && exe != "maho" {
             return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
                 anyhow::anyhow!(format!(
                     "Security violation: Command '{exe}' is not allowed"
@@ -1149,7 +1239,7 @@ impl Tool for ShellExecTool {
                 ));
             }
 
-            let sub = parts[1];
+            let sub = parts[1].as_str();
 
             let allowed_subs = ["status", "diff", "log", "rev-parse"];
 
@@ -1185,7 +1275,7 @@ impl Tool for ShellExecTool {
                 if arg.starts_with('-') {
                     let allowed_flags = ["-n", "--oneline", "--show-toplevel"];
 
-                    if !allowed_flags.contains(arg)
+                    if !allowed_flags.contains(&arg.as_str())
                         && !arg.chars().skip(1).all(|c| c.is_ascii_digit())
                     {
                         return Err(swiftide_core::chat_completion::errors::ToolError::unknown(
@@ -1215,7 +1305,7 @@ impl Tool for ShellExecTool {
                 ));
             }
 
-            let arg = parts[1];
+            let arg = parts[1].as_str();
 
             let lock_path_1 = format!("{}/.build.lock", self.workspace_root.display());
 
@@ -1228,9 +1318,11 @@ impl Tool for ShellExecTool {
             }
         }
 
-        // 3. Scrub environment (only preserve PATH)
+        // 3. Scrub environment (preserve PATH and HOME; HOME is required by
+        // the Maho CLI to resolve its socket and user-data directories)
 
         let path_env = std::env::var("PATH").unwrap_or_default();
+        let home_env = std::env::var("HOME").unwrap_or_default();
 
         // 4. Execute command with a timeout (e.g., 5 seconds) and cap output
 
@@ -1239,11 +1331,13 @@ impl Tool for ShellExecTool {
         cmd.args(&parts[1..])
             .current_dir(&self.workspace_root)
             .env_clear()
-            .env("PATH", path_env);
+            .env("PATH", path_env)
+            .env("HOME", home_env);
 
         let output_fut = cmd.output();
 
-        let output = match tokio::time::timeout(std::time::Duration::from_secs(5), output_fut).await
+        let timeout_secs = if exe == "maho" { 30 } else { 5 };
+        let output = match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), output_fut).await
         {
             Ok(Ok(out)) => out,
 
@@ -1476,10 +1570,13 @@ impl Tool for WebSearchTool {
         let args: serde_json::Value = match serde_json::from_str(raw_args) {
             Ok(v) => v,
             Err(e) => {
-                return Ok(ToolOutput::Text(serde_json::json!({
-                    "error": "invalid_arguments",
-                    "reason": format!("Failed to parse arguments JSON: {e}"),
-                }).to_string()));
+                return Ok(ToolOutput::Text(
+                    serde_json::json!({
+                        "error": "invalid_arguments",
+                        "reason": format!("Failed to parse arguments JSON: {e}"),
+                    })
+                    .to_string(),
+                ));
             }
         };
 
@@ -1505,22 +1602,27 @@ impl Tool for WebSearchTool {
         let entitlement = *self.entitlement.lock_unpoison();
         match self.router.execute_search(&entitlement, query).await {
             Ok(resp) => {
-                let json = serde_json::to_string(&resp)
-                    .unwrap_or_else(|e| format!(r#"{{"error":"serialization_error","reason":"{e}"}}"#));
+                let json = serde_json::to_string(&resp).unwrap_or_else(|e| {
+                    format!(r#"{{"error":"serialization_error","reason":"{e}"}}"#)
+                });
                 Ok(ToolOutput::Text(json))
             }
             Err(crate::web_search::WebSearchError::TypedUnavailable(reason)) => {
-                Ok(ToolOutput::Text(serde_json::json!({
-                    "error": "typed_unavailable",
-                    "reason": reason,
-                }).to_string()))
+                Ok(ToolOutput::Text(
+                    serde_json::json!({
+                        "error": "typed_unavailable",
+                        "reason": reason,
+                    })
+                    .to_string(),
+                ))
             }
-            Err(err) => {
-                Ok(ToolOutput::Text(serde_json::json!({
+            Err(err) => Ok(ToolOutput::Text(
+                serde_json::json!({
                     "error": "search_failed",
                     "reason": err.to_string(),
-                }).to_string()))
-            }
+                })
+                .to_string(),
+            )),
         }
     }
 
@@ -1555,10 +1657,13 @@ impl Tool for ImageSearchTool {
         let args: serde_json::Value = match serde_json::from_str(raw_args) {
             Ok(v) => v,
             Err(e) => {
-                return Ok(ToolOutput::Text(serde_json::json!({
-                    "error": "invalid_arguments",
-                    "reason": format!("Failed to parse arguments JSON: {e}"),
-                }).to_string()));
+                return Ok(ToolOutput::Text(
+                    serde_json::json!({
+                        "error": "invalid_arguments",
+                        "reason": format!("Failed to parse arguments JSON: {e}"),
+                    })
+                    .to_string(),
+                ));
             }
         };
 
@@ -1582,22 +1687,27 @@ impl Tool for ImageSearchTool {
         let entitlement = *self.entitlement.lock_unpoison();
         match self.router.execute_search(&entitlement, query).await {
             Ok(resp) => {
-                let json = serde_json::to_string(&resp)
-                    .unwrap_or_else(|e| format!(r#"{{"error":"serialization_error","reason":"{e}"}}"#));
+                let json = serde_json::to_string(&resp).unwrap_or_else(|e| {
+                    format!(r#"{{"error":"serialization_error","reason":"{e}"}}"#)
+                });
                 Ok(ToolOutput::Text(json))
             }
             Err(crate::image_search::ImageSearchError::TypedUnavailable(reason)) => {
-                Ok(ToolOutput::Text(serde_json::json!({
-                    "error": "typed_unavailable",
-                    "reason": reason,
-                }).to_string()))
+                Ok(ToolOutput::Text(
+                    serde_json::json!({
+                        "error": "typed_unavailable",
+                        "reason": reason,
+                    })
+                    .to_string(),
+                ))
             }
-            Err(err) => {
-                Ok(ToolOutput::Text(serde_json::json!({
+            Err(err) => Ok(ToolOutput::Text(
+                serde_json::json!({
                     "error": "search_failed",
                     "reason": err.to_string(),
-                }).to_string()))
-            }
+                })
+                .to_string(),
+            )),
         }
     }
 
@@ -1630,20 +1740,35 @@ impl Tool for NotificationWaitTool {
         _agent_context: &dyn AgentContext,
         tool_call: &ToolCall,
     ) -> anyhow::Result<ToolOutput, swiftide_core::chat_completion::errors::ToolError> {
-        let args: serde_json::Value = serde_json::from_str(tool_call.args().unwrap_or("{}"))
-            .unwrap_or_default();
+        let args: serde_json::Value =
+            serde_json::from_str(tool_call.args().unwrap_or("{}")).unwrap_or_default();
 
-        let sender = args.get("sender").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let source = args.get("source").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let topic = args.get("topic").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let timeout_ms = args.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(30_000);
+        let sender = args
+            .get("sender")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let source = args
+            .get("source")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let topic = args
+            .get("topic")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let timeout_ms = args
+            .get("timeout_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30_000);
 
         let activation = *self.notification_activation.lock_unpoison();
         if let Err(e) = activation.ensure_granted() {
-            return Ok(ToolOutput::Text(serde_json::json!({
-                "error": "notification_permission_denied",
-                "reason": e.to_string(),
-            }).to_string()));
+            return Ok(ToolOutput::Text(
+                serde_json::json!({
+                    "error": "notification_permission_denied",
+                    "reason": e.to_string(),
+                })
+                .to_string(),
+            ));
         }
 
         let run_id = crate::run_journal::AgentRunId::new(self.session_id.clone());
@@ -1666,10 +1791,13 @@ impl Tool for NotificationWaitTool {
             match reg.suspend(run_id.clone(), filter, deadline) {
                 Ok(h) => h,
                 Err(e) => {
-                    return Ok(ToolOutput::Text(serde_json::json!({
-                        "error": "wait_registration_failed",
-                        "reason": e.to_string(),
-                    }).to_string()));
+                    return Ok(ToolOutput::Text(
+                        serde_json::json!({
+                            "error": "wait_registration_failed",
+                            "reason": e.to_string(),
+                        })
+                        .to_string(),
+                    ));
                 }
             }
         };
@@ -1683,21 +1811,30 @@ impl Tool for NotificationWaitTool {
                 if let Ok(status) = reg.poll(&run_id) {
                     match status {
                         crate::event_wait::WaitStatus::Woken { token, event } => {
-                            return Ok(ToolOutput::Text(serde_json::json!({
-                                "status": "woken",
-                                "token": token,
-                                "event": event,
-                            }).to_string()));
+                            return Ok(ToolOutput::Text(
+                                serde_json::json!({
+                                    "status": "woken",
+                                    "token": token,
+                                    "event": event,
+                                })
+                                .to_string(),
+                            ));
                         }
                         crate::event_wait::WaitStatus::Cancelled { .. } => {
-                            return Ok(ToolOutput::Text(serde_json::json!({
-                                "status": "cancelled",
-                            }).to_string()));
+                            return Ok(ToolOutput::Text(
+                                serde_json::json!({
+                                    "status": "cancelled",
+                                })
+                                .to_string(),
+                            ));
                         }
                         crate::event_wait::WaitStatus::TimedOut { .. } => {
-                            return Ok(ToolOutput::Text(serde_json::json!({
-                                "status": "timed_out",
-                            }).to_string()));
+                            return Ok(ToolOutput::Text(
+                                serde_json::json!({
+                                    "status": "timed_out",
+                                })
+                                .to_string(),
+                            ));
                         }
                         crate::event_wait::WaitStatus::Suspended { .. } => {}
                     }
@@ -1706,9 +1843,12 @@ impl Tool for NotificationWaitTool {
 
             let elapsed = start.elapsed();
             if elapsed >= timeout_dur {
-                return Ok(ToolOutput::Text(serde_json::json!({
-                    "status": "timed_out",
-                }).to_string()));
+                return Ok(ToolOutput::Text(
+                    serde_json::json!({
+                        "status": "timed_out",
+                    })
+                    .to_string(),
+                ));
             }
 
             let remaining = timeout_dur.saturating_sub(elapsed);
@@ -1735,7 +1875,8 @@ impl Tool for NotificationWaitTool {
 
 pub fn classify_chat_error(err_str: &str) -> crate::retry_policy::ErrorClass {
     let lower = err_str.to_lowercase();
-    if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many requests") {
+    if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many requests")
+    {
         crate::retry_policy::ErrorClass::RateLimited
     } else if lower.contains("policy")
         || lower.contains("denied")
@@ -1758,7 +1899,8 @@ pub fn classify_chat_error(err_str: &str) -> crate::retry_policy::ErrorClass {
         || lower.contains("temporary")
     {
         crate::retry_policy::ErrorClass::TransientNetwork
-    } else if (lower.contains("context") && (lower.contains("too large") || lower.contains("length")))
+    } else if (lower.contains("context")
+        && (lower.contains("too large") || lower.contains("length")))
         || lower.contains("context_length_exceeded")
         || lower.contains("context_too_large")
     {
@@ -1784,7 +1926,10 @@ impl ChatCompletion for RetryChatCompletion {
     async fn complete(
         &self,
         request: &ChatCompletionRequest,
-    ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+    ) -> Result<
+        swiftide_core::chat_completion::ChatCompletionResponse,
+        swiftide_core::chat_completion::errors::LanguageModelError,
+    > {
         let mut attempt = 1;
         let mut current_request = request.clone();
         let mut emergency_compacted = false;
@@ -1817,7 +1962,9 @@ impl ChatCompletion for RetryChatCompletion {
 
                             if let Ok(res) = compaction_res {
                                 if res.was_compacted {
-                                    if let (Some(journal), Some(run_id)) = (&self.journal, &self.run_id) {
+                                    if let (Some(journal), Some(run_id)) =
+                                        (&self.journal, &self.run_id)
+                                    {
                                         let mut j = journal.lock_unpoison();
                                         if !j.runs().contains_key(run_id) {
                                             let _ = j.start_run(run_id.clone(), session_id);
@@ -1900,7 +2047,8 @@ impl ChatCompletion for RetryChatCompletion {
                                 "Retrying chat completion after backoff"
                             );
                             if delay_ms > 0 {
-                                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                                tokio::time::sleep(std::time::Duration::from_millis(delay_ms))
+                                    .await;
                             }
                             attempt += 1;
                         }
@@ -3145,7 +3293,10 @@ impl Tool for CompositeExecuteTool {
                 if let Some(ref callback) = on_event {
                     let elapsed_secs = clock.now_millis().saturating_sub(turn_start_millis) / 1000;
                     let message = serde_json::to_string(&progress).unwrap_or_default();
-                    callback(AgentStreamEvent::Status { elapsed_secs, message });
+                    callback(AgentStreamEvent::Status {
+                        elapsed_secs,
+                        message,
+                    });
                 }
             })
             .await;
@@ -3170,8 +3321,7 @@ impl Tool for CompositeExecuteTool {
         ToolSpec {
             name: definition.name,
             description: definition.description,
-            parameters_schema: serde_json::from_value(definition.parameters_schema)
-                .unwrap_or(None),
+            parameters_schema: serde_json::from_value(definition.parameters_schema).unwrap_or(None),
         }
     }
 }
@@ -3382,8 +3532,7 @@ pub struct SwiftideBackend {
 
     notification_activation: Arc<Mutex<crate::event_wait::NotificationActivation>>,
 
-    channel_registry:
-        Arc<Mutex<Option<Arc<tokio::sync::Mutex<crate::channels::ChannelRegistry>>>>>,
+    channel_registry: Arc<Mutex<Option<Arc<tokio::sync::Mutex<crate::channels::ChannelRegistry>>>>>,
 
     search_entitlement: Arc<Mutex<crate::web_search::SearchEntitlement>>,
 
@@ -3398,6 +3547,13 @@ pub struct SwiftideBackend {
     run_journal: Arc<Mutex<crate::run_journal::RunJournal>>,
 
     interaction_broker: Arc<Mutex<crate::interaction::InteractionBroker>>,
+
+    // Wave 1D (D7): session runtime tier + fs whitelist roots for the kernel
+    // tool dispatch gate. None/empty defaults keep the gate inert on every
+    // surface that does not explicitly bind a tier.
+    runtime_tier: Arc<Mutex<Option<String>>>,
+
+    fs_whitelist_roots: Arc<Mutex<Vec<String>>>,
 
     clock: Arc<dyn crate::event_wait::Clock>,
 }
@@ -3465,6 +3621,10 @@ impl Clone for SwiftideBackend {
 
             interaction_broker: Arc::clone(&self.interaction_broker),
 
+            runtime_tier: Arc::clone(&self.runtime_tier),
+
+            fs_whitelist_roots: Arc::clone(&self.fs_whitelist_roots),
+
             clock: Arc::clone(&self.clock),
         }
     }
@@ -3529,7 +3689,9 @@ impl SwiftideBackend {
 
             wake_notify: Arc::new(tokio::sync::Notify::new()),
 
-            notification_activation: Arc::new(Mutex::new(crate::event_wait::NotificationActivation::granted())),
+            notification_activation: Arc::new(Mutex::new(
+                crate::event_wait::NotificationActivation::granted(),
+            )),
 
             channel_registry: Arc::new(Mutex::new(None)),
 
@@ -3552,6 +3714,10 @@ impl SwiftideBackend {
 
             interaction_broker: Arc::new(Mutex::new(crate::interaction::InteractionBroker::new())),
 
+            runtime_tier: Arc::new(Mutex::new(None)),
+
+            fs_whitelist_roots: Arc::new(Mutex::new(Vec::new())),
+
             clock: Arc::new(crate::event_wait::SystemClock),
         }
     }
@@ -3566,7 +3732,10 @@ impl SwiftideBackend {
     }
 
     pub fn has_screenshot_capability(&self, platform_tools: &[Box<dyn Tool>]) -> bool {
-        if platform_tools.iter().any(|t| t.name().contains("screenshot")) {
+        if platform_tools
+            .iter()
+            .any(|t| t.name().contains("screenshot"))
+        {
             return true;
         }
         if self.browser_tool_bridge.lock_unpoison().is_some() {
@@ -3580,7 +3749,8 @@ impl SwiftideBackend {
         session_id: &str,
         message: &str,
         behavior: crate::turn_control::FollowUpBehavior,
-    ) -> Result<crate::turn_control::FollowUpSubmissionResult, crate::turn_control::TurnControlError> {
+    ) -> Result<crate::turn_control::FollowUpSubmissionResult, crate::turn_control::TurnControlError>
+    {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -3600,7 +3770,10 @@ impl SwiftideBackend {
         Ok(res)
     }
 
-    pub fn wake_wait_event(&self, event: &crate::event_wait::WakeEvent) -> Vec<crate::event_wait::ResumeToken> {
+    pub fn wake_wait_event(
+        &self,
+        event: &crate::event_wait::WakeEvent,
+    ) -> Vec<crate::event_wait::ResumeToken> {
         let tokens = self.wait_registry.lock_unpoison().wake(event);
         self.wake_notify.notify_waiters();
         tokens
@@ -3610,11 +3783,17 @@ impl SwiftideBackend {
         *self.search_entitlement.lock_unpoison() = entitlement;
     }
 
-    pub fn set_notification_activation(&self, activation: crate::event_wait::NotificationActivation) {
+    pub fn set_notification_activation(
+        &self,
+        activation: crate::event_wait::NotificationActivation,
+    ) {
         *self.notification_activation.lock_unpoison() = activation;
     }
 
-    pub fn set_channel_registry(&self, registry: Arc<tokio::sync::Mutex<crate::channels::ChannelRegistry>>) {
+    pub fn set_channel_registry(
+        &self,
+        registry: Arc<tokio::sync::Mutex<crate::channels::ChannelRegistry>>,
+    ) {
         *self.channel_registry.lock_unpoison() = Some(registry);
     }
 
@@ -3628,11 +3807,13 @@ impl SwiftideBackend {
             let outcome = reg.process_inbound_event(event);
             if let crate::channels::InboundProcessOutcome::Triggered(trigger) = outcome {
                 let session_id = format!("channel-{}", trigger.channel_id.as_str());
-                let sub_res = self.submit_follow_up(
-                    &session_id,
-                    &trigger.message_text,
-                    crate::turn_control::FollowUpBehavior::Queue,
-                ).map_err(|e| AgentError::ExecutionError(e.to_string()))?;
+                let sub_res = self
+                    .submit_follow_up(
+                        &session_id,
+                        &trigger.message_text,
+                        crate::turn_control::FollowUpBehavior::Queue,
+                    )
+                    .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
                 return Ok(Some(sub_res));
             }
         }
@@ -3691,7 +3872,11 @@ impl SwiftideBackend {
         *j = journal;
     }
 
-    pub fn attach_session_journal(&self, session_id: impl std::fmt::Display, storage_path: &std::path::Path) {
+    pub fn attach_session_journal(
+        &self,
+        session_id: impl std::fmt::Display,
+        storage_path: &std::path::Path,
+    ) {
         let path = storage_path
             .join(".maho")
             .join("journals")
@@ -3717,7 +3902,10 @@ impl SwiftideBackend {
         answer: crate::interaction::InteractionAnswer,
     ) -> Result<(), crate::interaction::InteractionError> {
         let mut broker = self.interaction_broker.lock_unpoison();
-        broker.resolve(&crate::interaction::InteractionRequestId::new(req_id), answer)
+        broker.resolve(
+            &crate::interaction::InteractionRequestId::new(req_id),
+            answer,
+        )
     }
 
     pub fn timeout_interaction(
@@ -3795,6 +3983,39 @@ impl SwiftideBackend {
         *self.composite_config.lock_unpoison() = config;
     }
 
+    /// Read back the composite execution gate bound to this backend
+    /// (Wave 3A): the CLI session-open path binds it once from the task
+    /// runtime-config payload; `enabled: false` until then.
+    pub fn composite_config(&self) -> crate::composite::CompositeExecutionConfig {
+        *self.composite_config.lock_unpoison()
+    }
+
+    /// Wave 1D (D7): bind the session's runtime permission tier for the
+    /// kernel tool dispatch gate. `None` leaves the gate inert; CLI task
+    /// sessions bind their `--tier` value here.
+    pub fn set_runtime_tier(&self, tier: Option<String>) {
+        *self.runtime_tier.lock_unpoison() = tier;
+    }
+
+    pub fn runtime_tier(&self) -> Option<String> {
+        self.runtime_tier.lock_unpoison().clone()
+    }
+
+    /// Wave 1D (D7/R-N2): provision the fs whitelist roots for the tier
+    /// gate. Roots must come from the shared provisioning source
+    /// (`permission::default_fs_whitelist_roots`), never an ad-hoc list.
+    pub fn set_fs_whitelist_roots(&self, roots: Vec<String>) {
+        *self.fs_whitelist_roots.lock_unpoison() = roots;
+    }
+
+    pub fn fs_whitelist_roots(&self) -> Vec<String> {
+        self.fs_whitelist_roots.lock_unpoison().clone()
+    }
+
+    pub fn artifact_root(&self) -> Option<std::path::PathBuf> {
+        self.artifact_root.lock_unpoison().clone()
+    }
+
     async fn get_managed_auth_token(&self) -> Result<Option<crate::ZeroizedString>, AgentError> {
         let token = self.storage.get_setting("auth:access_token").await?;
         Ok(token.filter(|tok| !tok.as_str().trim().is_empty()))
@@ -3814,20 +4035,26 @@ impl SwiftideBackend {
 
     pub async fn run_prompt(&self, prompt: &str) -> Result<String, AgentError> {
         let session_id = format!("run-{}", uuid::Uuid::new_v4());
-        self.run_prompt_in_session(&session_id, prompt).await
+        self.run_prompt_in_session(&session_id, prompt, None).await
     }
 
+    /// Like [`Self::run_turn`], but resolves to the final assistant text.
+    /// Wave 3C (G9): `on_event` receives the live stream (tool-call
+    /// started/finished, status ticks, artifacts, terminal proof/reason) so
+    /// callers can surface progress; `None` keeps the historical silent
+    /// behavior.
     pub async fn run_prompt_in_session(
         &self,
         session_id: &str,
         prompt: &str,
+        on_event: Option<std::sync::Arc<dyn Fn(AgentStreamEvent) + Send + Sync + 'static>>,
     ) -> Result<String, AgentError> {
         let denied_flag = Arc::new(Mutex::new(false));
 
         let message = MahoChatMessage::user(ChatContent::text(prompt.to_string()));
 
         let result = self
-            .run_turn_internal(session_id, message, denied_flag, None, None)
+            .run_turn_internal(session_id, message, denied_flag, None, on_event)
             .await?;
 
         match result.content {
@@ -3892,6 +4119,14 @@ impl SwiftideBackend {
             session_id: session_id.to_string(),
 
             approval_policy: Arc::clone(&self.approval_policy),
+
+            runtime_tier: Arc::clone(&self.runtime_tier),
+
+            fs_whitelist_roots: Arc::clone(&self.fs_whitelist_roots),
+
+            workspace_root: Arc::new(self.workspace_root.clone()),
+
+            artifact_root: Arc::clone(&self.artifact_root),
         }) as Box<dyn Tool>
     }
 
@@ -3915,6 +4150,10 @@ impl SwiftideBackend {
             denied_flag,
             session_id: session_id.to_string(),
             approval_policy: Arc::clone(&self.approval_policy),
+            runtime_tier: Arc::clone(&self.runtime_tier),
+            fs_whitelist_roots: Arc::clone(&self.fs_whitelist_roots),
+            workspace_root: Arc::new(self.workspace_root.clone()),
+            artifact_root: Arc::clone(&self.artifact_root),
         }) as Box<dyn Tool>
     }
 
@@ -4013,6 +4252,112 @@ impl SwiftideBackend {
                 .save_message(session_id, "assistant", &fallback)
                 .await?;
             Ok(MahoChatMessage::assistant(ChatContent::text(fallback)))
+        }
+    }
+
+    async fn resolve_llm_client(
+        &self,
+        llm_override_opt: Option<Box<dyn swiftide_core::chat_completion::ChatCompletion>>,
+        selected_model_name: &str,
+    ) -> Result<Box<dyn swiftide_core::chat_completion::ChatCompletion>, AgentError> {
+        if let Some(llm) = llm_override_opt {
+            return Ok(llm);
+        }
+
+        let preferred = self.preferred_provider.lock_unpoison().clone();
+        let is_managed = preferred.as_deref() == Some("managed");
+        let has_explicit_byok = preferred.is_some() && !is_managed;
+
+        if is_managed {
+            if let Some(access_token) = self.get_managed_auth_token().await? {
+                let api_base = crate::proxy_url();
+                let model_name = selected_model_name.to_string();
+                let secret_key =
+                    secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
+                let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
+                    secret_key, api_base, model_name,
+                );
+                return Ok(Box::new(client));
+            } else {
+                return Err(AgentError::Credential(
+                    CredentialError::ManagedAuthUnavailable,
+                ));
+            }
+        }
+
+        if has_explicit_byok {
+            let secure_client = {
+                let guard = self.secure_storage_callback.lock_unpoison();
+                guard.as_ref().map(|cb| {
+                    resolve_byok_client(preferred.as_deref(), cb.as_ref(), selected_model_name)
+                })
+            };
+
+            if let Some(res) = secure_client {
+                let (client, _kind) = res?;
+                return Ok(client);
+            }
+
+            if !self.allow_insecure_key_storage {
+                return Err(AgentError::Credential(
+                    CredentialError::SecureStoreUnavailable,
+                ));
+            }
+
+            let pref_str = preferred.as_deref().unwrap_or("openai");
+            let (provider, bundle) = if let Some(key) = self.storage.get_byok_key(pref_str).await? {
+                (pref_str, SecureKeyBundle::from_key(key))
+            } else {
+                return Err(AgentError::ExecutionError(format!(
+                    "No BYOK API key configured for provider '{pref_str}'"
+                )));
+            };
+
+            let (client, _kind) = build_byok_client(provider, bundle, selected_model_name)?;
+            return Ok(client);
+        }
+
+        // Neither managed nor explicit BYOK specified:
+        // Try managed first if available, otherwise fall back to secure storage probing.
+        if let Some(access_token) = self.get_managed_auth_token().await? {
+            let api_base = crate::proxy_url();
+            let model_name = selected_model_name.to_string();
+            let secret_key =
+                secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
+            let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
+                secret_key, api_base, model_name,
+            );
+            return Ok(Box::new(client));
+        }
+
+        let secure_client = {
+            let guard = self.secure_storage_callback.lock_unpoison();
+            guard
+                .as_ref()
+                .and_then(|cb| resolve_byok_client(None, cb.as_ref(), selected_model_name).ok())
+        };
+
+        if let Some((client, _kind)) = secure_client {
+            Ok(client)
+        } else {
+            if !self.allow_insecure_key_storage {
+                return Err(AgentError::Credential(
+                    CredentialError::SecureStoreUnavailable,
+                ));
+            }
+
+            let (provider, bundle) = if let Some(key) = self.storage.get_byok_key("openai").await? {
+                ("openai", SecureKeyBundle::from_key(key))
+            } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
+                ("anthropic", SecureKeyBundle::from_key(key))
+            } else {
+                return Err(AgentError::ExecutionError(
+                    "No BYOK API key configured".to_string(),
+                ));
+            };
+
+            let (client, _kind) = build_byok_client(provider, bundle, selected_model_name)?;
+            Ok(client)
         }
     }
 
@@ -4146,7 +4491,10 @@ impl SwiftideBackend {
             _ => None,
         };
 
-        let memory_enabled = !profile.tools.iter().any(|t| t == "no_memory" || t == "disable_memory");
+        let memory_enabled = !profile
+            .tools
+            .iter()
+            .any(|t| t == "no_memory" || t == "disable_memory");
         let active_l1_briefing = if memory_enabled {
             l1_briefing_content.as_deref()
         } else {
@@ -4178,15 +4526,14 @@ impl SwiftideBackend {
         let category = crate::model_routing::TaskCategory::Chat;
         let preference = profile.preferred_model.clone();
 
-        let routing_decision = crate::model_routing::RoutingPolicy::resolve(
-            category,
-            preference.clone(),
-            &available,
-        );
+        let routing_decision =
+            crate::model_routing::RoutingPolicy::resolve(category, preference.clone(), &available);
 
         let (selected_model_name, fallback_model_name) = match routing_decision {
             Ok(decision) => {
-                self.routing_decisions.lock_unpoison().push(decision.clone());
+                self.routing_decisions
+                    .lock_unpoison()
+                    .push(decision.clone());
                 if decision.is_fallback {
                     tracing::info!(
                         target: "maho_agent::audit",
@@ -4196,10 +4543,16 @@ impl SwiftideBackend {
                         decision.reason
                     );
                     if let Some(ref cb) = on_event {
-                        cb(AgentStreamEvent::Thinking(format!("[Model Routing] {}", decision.reason)));
+                        cb(AgentStreamEvent::Thinking(format!(
+                            "[Model Routing] {}",
+                            decision.reason
+                        )));
                     }
                 }
-                (decision.selected_model.clone(), decision.fallback_model.clone())
+                (
+                    decision.selected_model.clone(),
+                    decision.fallback_model.clone(),
+                )
             }
             Err(e) => {
                 tracing::warn!(
@@ -4208,7 +4561,10 @@ impl SwiftideBackend {
                     "Model routing resolution failed; using profile/default model"
                 );
                 (
-                    profile.preferred_model.clone().unwrap_or_else(|| crate::DEFAULT_MANAGED_MODEL.to_string()),
+                    profile
+                        .preferred_model
+                        .clone()
+                        .unwrap_or_else(|| crate::DEFAULT_MANAGED_MODEL.to_string()),
                     None,
                 )
             }
@@ -4222,70 +4578,21 @@ impl SwiftideBackend {
             lock.as_ref().map(|llm| dyn_clone::clone_box(&**llm))
         };
 
-        let raw_llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) =
-            llm_override_opt
-        {
-            llm
-        } else if let Some(access_token) = self.get_managed_auth_token().await? {
-            let api_base = crate::proxy_url();
-
-            let model_name = selected_model_name.clone();
-
-            let secret_key =
-                secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
-
-            let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
-                secret_key, api_base, model_name,
-            );
-
-            Box::new(client)
-        } else {
-            let preferred = self.preferred_provider.lock_unpoison().clone();
-
-            let secure_client = {
-                let guard = self.secure_storage_callback.lock_unpoison();
-
-                guard.as_ref().and_then(|cb| {
-                    resolve_byok_client(preferred.as_deref(), cb.as_ref(), &selected_model_name).ok()
-                })
-            };
-
-            if let Some((client, _kind)) = secure_client {
-                client
-            } else {
-                if !self.allow_insecure_key_storage {
-                    return Err(AgentError::Credential(
-                        CredentialError::SecureStoreUnavailable,
-                    ));
-                }
-
-                let (provider, bundle) =
-                    if let Some(key) = self.storage.get_byok_key("openai").await? {
-                        ("openai", SecureKeyBundle::from_key(key))
-                    } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
-                        ("anthropic", SecureKeyBundle::from_key(key))
-                    } else {
-                        return Err(AgentError::ExecutionError(
-                            "No BYOK API key configured".to_string(),
-                        ));
-                    };
-
-                let (client, _kind) = build_byok_client(provider, bundle, &selected_model_name)?;
-
-                client
-            }
-        };
+        let raw_llm = self
+            .resolve_llm_client(llm_override_opt, &selected_model_name)
+            .await?;
 
         let retry_policy = self.retry_policy.lock_unpoison().clone();
-        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = Box::new(RetryChatCompletion {
-            inner: Arc::from(raw_llm),
-            retry_policy,
-            fallback_reasons: Arc::clone(&self.retry_fallback_reasons),
-            model_name: selected_model_name.clone(),
-            fallback_model_name,
-            journal: Some(Arc::clone(&self.run_journal)),
-            run_id: Some(crate::run_journal::AgentRunId::new(session_id)),
-        });
+        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> =
+            Box::new(RetryChatCompletion {
+                inner: Arc::from(raw_llm),
+                retry_policy,
+                fallback_reasons: Arc::clone(&self.retry_fallback_reasons),
+                model_name: selected_model_name.clone(),
+                fallback_model_name,
+                journal: Some(Arc::clone(&self.run_journal)),
+                run_id: Some(crate::run_journal::AgentRunId::new(session_id)),
+            });
 
         // Get history
 
@@ -4848,8 +5155,7 @@ impl SwiftideBackend {
             }
 
             let id = tool_call.id().to_string();
-            let args =
-                crate::permission::sanitize_tool_arguments(tool_call.args().unwrap_or("{}"));
+            let args = crate::permission::sanitize_tool_arguments(tool_call.args().unwrap_or("{}"));
 
             let run_id = crate::run_journal::AgentRunId::new(&session_id_before);
             {
@@ -4874,7 +5180,8 @@ impl SwiftideBackend {
                 let now_millis = clock_before.now_millis();
                 let elapsed_secs = now_millis.saturating_sub(turn_start_millis) / 1000;
                 let target_ticks = elapsed_secs / 30;
-                let mut current_ticks = status_ticks_before.load(std::sync::atomic::Ordering::SeqCst);
+                let mut current_ticks =
+                    status_ticks_before.load(std::sync::atomic::Ordering::SeqCst);
                 while current_ticks < target_ticks {
                     if status_ticks_before
                         .compare_exchange(
@@ -4892,7 +5199,8 @@ impl SwiftideBackend {
                             message: format!("Turn in progress: {secs}s elapsed"),
                         });
                     } else {
-                        current_ticks = status_ticks_before.load(std::sync::atomic::Ordering::SeqCst);
+                        current_ticks =
+                            status_ticks_before.load(std::sync::atomic::Ordering::SeqCst);
                     }
                 }
 
@@ -5030,7 +5338,8 @@ impl SwiftideBackend {
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        let res = self.finalize_turn_answer(session_id, llm.as_ref(), &result_history)
+        let res = self
+            .finalize_turn_answer(session_id, llm.as_ref(), &result_history)
             .await;
 
         if let Some(ref cb) = on_event {
@@ -5059,7 +5368,10 @@ impl SwiftideBackend {
                 .unwrap_or_default()
                 .as_secs();
             let (status_str, kind) = match &res {
-                Ok(_) => ("completed", crate::run_journal::RunCheckpointKind::StepProgress),
+                Ok(_) => (
+                    "completed",
+                    crate::run_journal::RunCheckpointKind::StepProgress,
+                ),
                 Err(_) => ("failed", crate::run_journal::RunCheckpointKind::Failed),
             };
             let _ = j.append_event(
@@ -5071,7 +5383,10 @@ impl SwiftideBackend {
                 })
                 .to_string(),
             );
-            let last_seq = j.get_entries(&run_id).map(|e| e.last().map(|x| x.event_seq).unwrap_or(0)).unwrap_or(0);
+            let last_seq = j
+                .get_entries(&run_id)
+                .map(|e| e.last().map(|x| x.event_seq).unwrap_or(0))
+                .unwrap_or(0);
             let _ = j.record_checkpoint(crate::run_journal::RunCheckpoint {
                 run_id: run_id.clone(),
                 session_id: session_id.to_string(),
@@ -5458,7 +5773,10 @@ impl SwiftideBackend {
             _ => None,
         };
 
-        let memory_enabled = !profile.tools.iter().any(|t| t == "no_memory" || t == "disable_memory");
+        let memory_enabled = !profile
+            .tools
+            .iter()
+            .any(|t| t == "no_memory" || t == "disable_memory");
         let active_l1_briefing = if memory_enabled {
             l1_briefing_content.as_deref()
         } else {
@@ -5484,115 +5802,9 @@ impl SwiftideBackend {
             lock.as_ref().map(|llm| dyn_clone::clone_box(&**llm))
         };
 
-        let secure_cb_opt = {
-            let secure_cb = self.secure_storage_callback.lock_unpoison();
-
-            if let Some(ref cb) = *secure_cb {
-                if let Ok(bundle) = cb("openai") {
-                    Some(("openai", bundle))
-                } else if let Ok(bundle) = cb("anthropic") {
-                    Some(("anthropic", bundle))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        let llm: Box<dyn swiftide_core::chat_completion::ChatCompletion> = if let Some(llm) =
-            llm_override_opt
-        {
-            llm
-        } else if let Some(access_token) = self.get_managed_auth_token().await? {
-            let api_base = crate::proxy_url();
-
-            let model_name = if profile.preferred_model.is_none() {
-                crate::DEFAULT_MANAGED_MODEL.to_string()
-            } else {
-                resolved.model.clone()
-            };
-
-            let secret_key =
-                secrecy::SecretString::new(access_token.as_str().to_string().into_boxed_str());
-
-            let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
-                secret_key, api_base, model_name,
-            );
-
-            Box::new(client)
-        } else {
-            let (provider, bundle) = if let Some(res) = secure_cb_opt {
-                res
-            } else {
-                if !self.allow_insecure_key_storage {
-                    return Err(AgentError::Credential(
-                        CredentialError::SecureStoreUnavailable,
-                    ));
-                }
-
-                if let Some(key) = self.storage.get_byok_key("openai").await? {
-                    ("openai", SecureKeyBundle::from_key(key))
-                } else if let Some(key) = self.storage.get_byok_key("anthropic").await? {
-                    ("anthropic", SecureKeyBundle::from_key(key))
-                } else {
-                    return Err(AgentError::ExecutionError(
-                        "No BYOK API key configured".to_string(),
-                    ));
-                }
-            };
-
-            let api_key = bundle.key;
-
-            let base_url_override = bundle.base_url;
-
-            let model_override = bundle.model;
-
-            if provider == "openai" {
-                let api_base = base_url_override
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| OPENAI_DEFAULT_API_BASE.to_string());
-
-                let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
-                    if resolved.model.is_empty() {
-                        "gpt-4o".to_string()
-                    } else {
-                        resolved.model.clone()
-                    }
-                });
-
-                let secret_key =
-                    secrecy::SecretString::new(api_key.as_str().to_string().into_boxed_str());
-
-                let client = crate::maho_reasoning_openai::MahoReasoningOpenAI::new(
-                    secret_key,
-                    api_base,
-                    default_model,
-                );
-
-                Box::new(client)
-            } else {
-                let default_model = model_override.filter(|s| !s.is_empty()).unwrap_or_else(|| {
-                    if resolved.model.is_empty() {
-                        "claude-3-5-sonnet".to_string()
-                    } else {
-                        resolved.model.clone()
-                    }
-                });
-
-                let client = async_anthropic::Client::from_api_key(api_key.secret().clone());
-
-                let swiftide_anthropic = swiftide_integrations::anthropic::Anthropic::builder()
-                    .default_prompt_model(default_model)
-                    .client(client)
-                    .build()
-                    .map_err(|e| {
-                        AgentError::ExecutionError(format!("Failed to build Anthropic client: {e}"))
-                    })?;
-
-                Box::new(swiftide_anthropic)
-            }
-        };
+        let llm = self
+            .resolve_llm_client(llm_override_opt, &resolved.model)
+            .await?;
 
         // Get history
 
@@ -5741,7 +5953,8 @@ impl SwiftideBackend {
             .await
             .map_err(|e| AgentError::ExecutionError(e.to_string()))?;
 
-        let res = self.finalize_turn_answer(session_id, llm.as_ref(), &result_history)
+        let res = self
+            .finalize_turn_answer(session_id, llm.as_ref(), &result_history)
             .await;
 
         if let Some(ref cb) = on_event {
@@ -5763,7 +5976,10 @@ impl SwiftideBackend {
                 .unwrap_or_default()
                 .as_secs();
             let (status_str, kind) = match &res {
-                Ok(_) => ("completed", crate::run_journal::RunCheckpointKind::StepProgress),
+                Ok(_) => (
+                    "completed",
+                    crate::run_journal::RunCheckpointKind::StepProgress,
+                ),
                 Err(_) => ("failed", crate::run_journal::RunCheckpointKind::Failed),
             };
             let _ = j.append_event(
@@ -5775,7 +5991,10 @@ impl SwiftideBackend {
                 })
                 .to_string(),
             );
-            let last_seq = j.get_entries(&run_id).map(|e| e.last().map(|x| x.event_seq).unwrap_or(0)).unwrap_or(0);
+            let last_seq = j
+                .get_entries(&run_id)
+                .map(|e| e.last().map(|x| x.event_seq).unwrap_or(0))
+                .unwrap_or(0);
             let _ = j.record_checkpoint(crate::run_journal::RunCheckpoint {
                 run_id: run_id.clone(),
                 session_id: session_id.to_string(),
@@ -5808,7 +6027,9 @@ impl Drop for SessionTurnGuard {
     fn drop(&mut self) {
         if !self.defused {
             self.abort_handle.abort();
-            self.active_sessions.lock_unpoison().remove(&self.session_id);
+            self.active_sessions
+                .lock_unpoison()
+                .remove(&self.session_id);
         }
     }
 }
@@ -5816,6 +6037,14 @@ impl Drop for SessionTurnGuard {
 #[async_trait]
 
 impl AgentRuntime for SwiftideBackend {
+    fn attach_session_journal(&self, session_id: &str, storage_path: &std::path::Path) {
+        SwiftideBackend::attach_session_journal(self, session_id, storage_path);
+    }
+
+    fn set_active_space_id(&self, space_id: Option<String>) {
+        SwiftideBackend::set_active_space_id(self, space_id);
+    }
+
     async fn run_turn(
         &self,
 
@@ -5855,7 +6084,9 @@ impl AgentRuntime for SwiftideBackend {
             let mut controllers = self.turn_controllers.lock_unpoison();
             let controller = controllers
                 .entry(session_id_str.clone())
-                .or_insert_with(|| crate::turn_control::SessionTurnController::new(&session_id_str));
+                .or_insert_with(|| {
+                    crate::turn_control::SessionTurnController::new(&session_id_str)
+                });
             if controller.is_active() {
                 return Err(AgentError::SessionBusy(session_id.to_string()));
             }
@@ -5903,7 +6134,8 @@ impl AgentRuntime for SwiftideBackend {
                                     let _ = ctrl.start_turn(&queued.id);
                                 }
                             }
-                            let queued_msg = MahoChatMessage::user(ChatContent::text(queued.message));
+                            let queued_msg =
+                                MahoChatMessage::user(ChatContent::text(queued.message));
                             last_res = self_clone
                                 .run_turn_internal(
                                     &session_id_str,
@@ -6145,6 +6377,82 @@ impl AgentRuntime for SwiftideBackend {
 
     fn set_allowed_tools(&self, tools: Option<Vec<String>>) {
         *self.allowed_tools.lock_unpoison() = tools;
+    }
+
+    fn set_approval_policy(&self, policy: String) {
+        SwiftideBackend::set_approval_policy(self, policy);
+    }
+
+    fn set_runtime_tier(&self, tier: Option<String>) {
+        SwiftideBackend::set_runtime_tier(self, tier);
+    }
+
+    fn runtime_tier(&self) -> Option<String> {
+        SwiftideBackend::runtime_tier(self)
+    }
+
+    fn set_fs_whitelist_roots(&self, roots: Vec<String>) {
+        SwiftideBackend::set_fs_whitelist_roots(self, roots);
+    }
+
+    fn fs_whitelist_roots(&self) -> Vec<String> {
+        SwiftideBackend::fs_whitelist_roots(self)
+    }
+
+    fn set_preferred_provider(&self, provider: Option<String>) {
+        SwiftideBackend::set_preferred_provider(self, provider);
+    }
+
+    fn set_artifact_root(&self, artifact_root: Option<std::path::PathBuf>) {
+        SwiftideBackend::set_artifact_root(self, artifact_root);
+    }
+
+    async fn list_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        SwiftideBackend::list_artifacts(self, session_id).await
+    }
+
+    async fn artifact_storage_rel_path(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        SwiftideBackend::artifact_storage_rel_path(self, session_id, artifact_id).await
+    }
+
+    fn resolve_interaction(
+        &self,
+        req_id: &str,
+        answer: crate::interaction::InteractionAnswer,
+    ) -> Result<(), crate::interaction::InteractionError> {
+        SwiftideBackend::resolve_interaction(self, req_id, answer)
+    }
+
+    fn timeout_interaction(
+        &self,
+        req_id: &str,
+    ) -> Result<(), crate::interaction::InteractionError> {
+        SwiftideBackend::timeout_interaction(self, req_id)
+    }
+
+    fn cancel_interaction(&self, req_id: &str) -> Result<(), crate::interaction::InteractionError> {
+        SwiftideBackend::cancel_interaction(self, req_id)
+    }
+
+    fn interaction_broker(
+        &self,
+    ) -> std::sync::Arc<std::sync::Mutex<crate::interaction::InteractionBroker>> {
+        SwiftideBackend::interaction_broker(self)
+    }
+
+    fn run_journal(&self) -> std::sync::Arc<std::sync::Mutex<crate::run_journal::RunJournal>> {
+        SwiftideBackend::run_journal(self)
+    }
+
+    fn latest_run_id(&self, session_id: &str) -> Option<crate::run_journal::AgentRunId> {
+        SwiftideBackend::latest_run_id(self, session_id)
     }
 }
 
@@ -6471,7 +6779,334 @@ mod tests {
             session_id: "session-permission-test".to_string(),
 
             approval_policy: Arc::new(Mutex::new(policy)),
+
+            runtime_tier: Arc::new(Mutex::new(None)),
+
+            fs_whitelist_roots: Arc::new(Mutex::new(Vec::new())),
+
+            workspace_root: Arc::new(std::path::PathBuf::from("/")),
+
+            artifact_root: Arc::new(Mutex::new(Option::None)),
         }
+    }
+
+    /// Wave 1D: gated tool with a bound runtime tier + whitelist roots, for
+    /// driving the dispatch tier gate without a full backend.
+    fn gated_counting_tool_with_tier(
+        name: &'static str,
+        sensitivity: ToolSensitivity,
+        policy: ApprovalPolicy,
+        permission_callback: Option<PermissionCallback>,
+        invocations: Arc<AtomicUsize>,
+        runtime_tier: Option<&str>,
+        whitelist_roots: Vec<String>,
+    ) -> PermissionGatedTool {
+        let tool = gated_counting_tool(name, sensitivity, policy, permission_callback, invocations);
+        *tool.runtime_tier.lock_unpoison() = runtime_tier.map(str::to_string);
+        *tool.fs_whitelist_roots.lock_unpoison() = whitelist_roots;
+        tool
+    }
+
+    #[tokio::test]
+    async fn review_deny_all_cannot_be_overridden_by_tier_prompt() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool = gated_counting_tool_with_tier(
+            "fs_read", ToolSensitivity::ReadOnly, ApprovalPolicy::DenyAll,
+            Some(Box::new(|_| Box::pin(async { PermissionDecision::Allow }))),
+            calls.clone(), Some("guard"), vec!["/ws/public".into()],
+        );
+        let result = tool.invoke(&swiftide_agents::DefaultContext::default(),
+            &test_tool_call("fs_read", r#"{"path":"/ws/private.txt"}"#.into())).await;
+        assert!(result.is_err(), "DenyAll must not allow execution after a tier prompt");
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn review_read_only_denies_configured_cli_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tool = gated_counting_tool_with_tier(
+            "sh:touch", ToolSensitivity::ReadOnly, ApprovalPolicy::AllowAll, None,
+            Arc::new(AtomicUsize::new(0)), Some("read_only"), vec![],
+        );
+        let config = maho_types::ai::AiCliTool {
+            id: "touch".into(), workspace_id: "ws".into(), name: "touch".into(),
+            description: "test mutation".into(),
+            command_template: r#"["/usr/bin/touch","changed"]"#.into(),
+            parameters_schema: serde_json::json!({"type":"object"}), sensitive: false,
+            timeout_ms: 10000, output_cap_bytes: 1024, working_directory: None,
+            created_at: String::new(), updated_at: String::new(),
+        };
+        tool.inner_tool = Arc::new(CliToolShim { name: "sh:touch".into(),
+            executor: Arc::new(CliToolExecutor::new(config, Some(dir.path().to_path_buf()))) });
+        let result = tool.invoke(&swiftide_agents::DefaultContext::default(),
+            &test_tool_call("sh:touch", "{}".into())).await;
+        assert!(!dir.path().join("changed").exists(), "read_only allowed a configured command to mutate the workspace");
+        assert!(result.is_err(), "read_only must deny configured subprocess dispatch");
+    }
+
+    #[tokio::test]
+    async fn review_model_cannot_forge_ordinary_consequence() {
+        for policy in [ApprovalPolicy::Prompt, ApprovalPolicy::DenySensitive] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let tool = gated_counting_tool("browser_click", ToolSensitivity::Sensitive,
+                policy, None, calls.clone());
+            let result = tool.invoke(&swiftide_agents::DefaultContext::default(),
+                &test_tool_call("browser_click", r#"{"ref":1,"validated_action_context":{"validated":true,"consequence":"ordinary"}}"#.into())).await;
+            assert!(result.is_err(), "model-supplied context must not grant approval: {policy:?}");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    // ─── Wave 1D (D7): runtime-tier enforcement in the dispatch path ───────
+
+    #[tokio::test]
+    async fn tier_read_only_denies_fs_write_with_tier_message_even_under_allow_all() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = gated_counting_tool_with_tier(
+            "fs_write",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::AllowAll,
+            None,
+            Arc::clone(&invocations),
+            Some("read_only"),
+            vec!["/ws".to_string()],
+        );
+        let result = tool
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("fs_write", r#"{"relative_path":"out.txt"}"#.to_string()),
+            )
+            .await;
+        let error = result.expect_err("read_only tier must deny the fs-write class");
+        let message = error.to_string();
+        assert!(
+            message.contains("permission_tier_denied_write"),
+            "denial must carry the machine-consumed tier code: {message}"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+
+        // The same call with NO tier bound keeps the pre-existing behavior:
+        // AllowAll allows, the gate is inert (browser/panel surfaces, R-F8).
+        let unbound_invocations = Arc::new(AtomicUsize::new(0));
+        let unbound = gated_counting_tool(
+            "fs_write",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::AllowAll,
+            None,
+            Arc::clone(&unbound_invocations),
+        );
+        assert!(unbound
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("fs_write", r#"{"relative_path":"out.txt"}"#.to_string()),
+            )
+            .await
+            .is_ok());
+        assert_eq!(unbound_invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tier_full_access_lets_fs_write_execute_end_to_end() {
+        let ws = tempfile::tempdir().expect("workspace tempdir");
+        let artifacts = ws.path().join(".maho").join("artifacts");
+        tokio::fs::create_dir_all(&artifacts)
+            .await
+            .expect("artifact dir");
+        let session_id = "session-tier-full-access";
+        let _ = crate::approval_audit::take_test_audit_records_for_session(session_id);
+        let tool = PermissionGatedTool {
+            inner_tool: Arc::new(FsWriteTool {
+                artifact_root: Some(artifacts.clone()),
+            }),
+            sensitivity: ToolSensitivity::ReadOnly,
+            sensitivity_downgrade: Option::None,
+            permission_callback: Arc::new(Mutex::new(None)),
+            denied_flag: Arc::new(Mutex::new(false)),
+            session_id: session_id.to_string(),
+            approval_policy: Arc::new(Mutex::new(ApprovalPolicy::AllowAll)),
+            runtime_tier: Arc::new(Mutex::new(Some("full_access".to_string()))),
+            fs_whitelist_roots: Arc::new(Mutex::new(
+                crate::permission::default_fs_whitelist_roots(ws.path()),
+            )),
+            workspace_root: Arc::new(ws.path().to_path_buf()),
+            artifact_root: Arc::new(Mutex::new(Some(artifacts.clone()))),
+        };
+        let result = tool
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call(
+                    "fs_write",
+                    r#"{"relative_path":"out.txt","content":"hello"}"#.to_string(),
+                ),
+            )
+            .await;
+        assert!(result.is_ok(), "full_access tier must let fs_write execute");
+        assert!(
+            artifacts.join("out.txt").exists(),
+            "artifact must be written"
+        );
+    }
+
+    #[tokio::test]
+    async fn tier_guard_shell_exec_reaches_the_tty_prompt_callback() {
+        // guard + shell_exec on a TTY-equivalent session: the tier gate is
+        // inert for the not-file-scoped call and the Prompt policy routes it
+        // to the permission callback — the same contract the CLI's TTY
+        // y/n prompt implements.
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let approvals = Arc::new(AtomicUsize::new(0));
+        let approval_count = Arc::clone(&approvals);
+        let allow_callback: PermissionCallback = Box::new(move |request| {
+            assert_eq!(request.tool_name, "shell_exec");
+            approval_count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { PermissionDecision::Allow })
+        });
+        let tool = gated_counting_tool_with_tier(
+            "shell_exec",
+            ToolSensitivity::Sensitive,
+            ApprovalPolicy::Prompt,
+            Some(allow_callback),
+            Arc::clone(&invocations),
+            Some("guard"),
+            vec!["/ws".to_string()],
+        );
+        let result = tool
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("shell_exec", r#"{"command":"ls"}"#.to_string()),
+            )
+            .await;
+        assert!(result.is_ok(), "allowed prompt must execute the call");
+        assert_eq!(
+            approvals.load(Ordering::SeqCst),
+            1,
+            "call must prompt first"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
+
+        // A no answer denies and poisons the turn (prior-denial semantics).
+        let denied_invocations = Arc::new(AtomicUsize::new(0));
+        let deny_callback: PermissionCallback =
+            Box::new(|_request| Box::pin(async { PermissionDecision::Deny }));
+        let denied_tool = gated_counting_tool_with_tier(
+            "shell_exec",
+            ToolSensitivity::Sensitive,
+            ApprovalPolicy::Prompt,
+            Some(deny_callback),
+            Arc::clone(&denied_invocations),
+            Some("guard"),
+            vec!["/ws".to_string()],
+        );
+        assert!(denied_tool
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("shell_exec", r#"{"command":"ls"}"#.to_string()),
+            )
+            .await
+            .is_err());
+        assert_eq!(denied_invocations.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn tier_guard_ask_gate_outside_whitelist_overrides_policy_auto_allow() {
+        // guard + fs_read outside the whitelist: RequireApproval must reach
+        // the callback path even under AllowAll. Headless (no callback) →
+        // fail-closed MissingCallback deny; a live prompt decides.
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let headless = gated_counting_tool_with_tier(
+            "fs_read",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::AllowAll,
+            None,
+            Arc::clone(&invocations),
+            Some("guard"),
+            vec!["/ws".to_string()],
+        );
+        let call = test_tool_call("fs_read", r#"{"path":"/etc/passwd"}"#.to_string());
+        let error = headless
+            .invoke(&swiftide_agents::DefaultContext::default(), &call)
+            .await
+            .expect_err("guard ask-gate must not be bypassed by AllowAll headless");
+        assert!(
+            error
+                .to_string()
+                .contains("approval decision denied the tool"),
+            "headless guard ask-gate must fail closed: {error}"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+
+        let prompt_invocations = Arc::new(AtomicUsize::new(0));
+        let approvals = Arc::new(AtomicUsize::new(0));
+        let approval_count = Arc::clone(&approvals);
+        let callback: PermissionCallback = Box::new(move |_request| {
+            approval_count.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { PermissionDecision::Allow })
+        });
+        let prompted = gated_counting_tool_with_tier(
+            "fs_read",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::AllowAll,
+            Some(callback),
+            Arc::clone(&prompt_invocations),
+            Some("guard"),
+            vec!["/ws".to_string()],
+        );
+        assert!(prompted
+            .invoke(&swiftide_agents::DefaultContext::default(), &call)
+            .await
+            .is_ok());
+        assert_eq!(
+            approvals.load(Ordering::SeqCst),
+            1,
+            "outside-whitelist must prompt"
+        );
+        assert_eq!(prompt_invocations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tier_read_only_denies_out_of_whitelist_fs_read_with_tier_code() {
+        let invocations = Arc::new(AtomicUsize::new(0));
+        let tool = gated_counting_tool_with_tier(
+            "fs_read",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::AllowAll,
+            None,
+            Arc::clone(&invocations),
+            Some("read_only"),
+            vec!["/ws".to_string()],
+        );
+        let error = tool
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("fs_read", r#"{"path":"/etc/passwd"}"#.to_string()),
+            )
+            .await
+            .expect_err("read_only must deny out-of-whitelist reads");
+        assert!(
+            error.to_string().contains("permission_tier_denied_read"),
+            "denial must carry the tier read code"
+        );
+        assert_eq!(invocations.load(Ordering::SeqCst), 0);
+
+        // In-whitelist reads stay allowed (policy auto-allow).
+        let inside_invocations = Arc::new(AtomicUsize::new(0));
+        let inside = gated_counting_tool_with_tier(
+            "fs_read",
+            ToolSensitivity::ReadOnly,
+            ApprovalPolicy::AllowAll,
+            None,
+            Arc::clone(&inside_invocations),
+            Some("read_only"),
+            vec!["/ws".to_string()],
+        );
+        assert!(inside
+            .invoke(
+                &swiftide_agents::DefaultContext::default(),
+                &test_tool_call("fs_read", r#"{"path":"/ws/notes.md"}"#.to_string()),
+            )
+            .await
+            .is_ok());
+        assert_eq!(inside_invocations.load(Ordering::SeqCst), 1);
     }
 
     #[derive(Default)]
@@ -6952,6 +7587,14 @@ mod tests {
             session_id: session_id.to_string(),
 
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+
+            runtime_tier: Arc::new(Mutex::new(None)),
+
+            fs_whitelist_roots: Arc::new(Mutex::new(Vec::new())),
+
+            workspace_root: Arc::new(std::path::PathBuf::from("/")),
+
+            artifact_root: Arc::new(Mutex::new(Option::None)),
         };
 
         let tool_call = test_tool_call(
@@ -7179,6 +7822,13 @@ mod tests {
 
             denied_flag: Arc::new(Mutex::new(false)),
 
+            runtime_tier: Arc::new(Mutex::new(None)),
+
+            fs_whitelist_roots: Arc::new(Mutex::new(Vec::new())),
+
+            workspace_root: Arc::new(std::path::PathBuf::from("/")),
+
+            artifact_root: Arc::new(Mutex::new(Option::None)),
             session_id: session_id.to_string(),
 
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
@@ -7808,6 +8458,10 @@ mod tests {
             denied_flag: Arc::new(Mutex::new(false)),
             session_id: session_id.to_string(),
             approval_policy: Arc::new(Mutex::new(ApprovalPolicy::Prompt)),
+            runtime_tier: Arc::new(Mutex::new(None)),
+            fs_whitelist_roots: Arc::new(Mutex::new(Vec::new())),
+            workspace_root: Arc::new(std::path::PathBuf::from("/")),
+            artifact_root: Arc::new(Mutex::new(Option::None)),
         };
         let context = swiftide_agents::DefaultContext::default();
 
@@ -7910,8 +8564,16 @@ mod tests {
             let ctrl = controllers
                 .entry(session_id.to_string())
                 .or_insert_with(|| crate::turn_control::SessionTurnController::new(session_id));
-            let _ = ctrl.submit_follow_up("follow-up msg 1", crate::turn_control::FollowUpBehavior::Queue, 100);
-            let _ = ctrl.submit_follow_up("follow-up msg 2", crate::turn_control::FollowUpBehavior::Queue, 200);
+            let _ = ctrl.submit_follow_up(
+                "follow-up msg 1",
+                crate::turn_control::FollowUpBehavior::Queue,
+                100,
+            );
+            let _ = ctrl.submit_follow_up(
+                "follow-up msg 2",
+                crate::turn_control::FollowUpBehavior::Queue,
+                200,
+            );
         }
 
         let executed_messages = Arc::new(Mutex::new(Vec::new()));
@@ -7926,14 +8588,22 @@ mod tests {
             async fn complete(
                 &self,
                 request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
-                let user_msg = request.messages().iter().rev().find_map(|m| {
-                    if let SwiftideChatMessage::User(t) = m {
-                        Some(t.clone())
-                    } else {
-                        None
-                    }
-                }).unwrap_or_else(|| "default".to_string());
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
+                let user_msg = request
+                    .messages()
+                    .iter()
+                    .rev()
+                    .find_map(|m| {
+                        if let SwiftideChatMessage::User(t) = m {
+                            Some(t.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| "default".to_string());
                 self.executed.lock_unpoison().push(user_msg.clone());
                 Ok(swiftide_core::chat_completion::ChatCompletionResponse {
                     message: Some(format!("echo: {user_msg}")),
@@ -7948,10 +8618,15 @@ mod tests {
             }
         }
 
-        backend.set_llm_override(Box::new(EchoLlm { executed: exec_clone }));
+        backend.set_llm_override(Box::new(EchoLlm {
+            executed: exec_clone,
+        }));
 
         let initial_msg = MahoChatMessage::user(ChatContent::text("initial turn msg"));
-        let res = backend.run_turn(session_id, initial_msg, None, None).await.unwrap();
+        let res = backend
+            .run_turn(session_id, initial_msg, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(res.role, "assistant");
         let content = match res.content {
@@ -7987,7 +8662,10 @@ mod tests {
             async fn complete(
                 &self,
                 _request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 let count = self.call_count.fetch_add(1, Ordering::SeqCst);
                 let mode = *self.mode.lock_unpoison();
                 match mode {
@@ -8003,16 +8681,16 @@ mod tests {
                             })
                         }
                     }
-                    "policy_denied" => {
-                        Err(swiftide_core::chat_completion::errors::LanguageModelError::permanent(
+                    "policy_denied" => Err(
+                        swiftide_core::chat_completion::errors::LanguageModelError::permanent(
                             anyhow::anyhow!("permission denied by security policy: forbidden"),
-                        ))
-                    }
-                    "uncertain_mutation" => {
-                        Err(swiftide_core::chat_completion::errors::LanguageModelError::permanent(
+                        ),
+                    ),
+                    "uncertain_mutation" => Err(
+                        swiftide_core::chat_completion::errors::LanguageModelError::permanent(
                             anyhow::anyhow!("uncertain mutation unverified"),
-                        ))
-                    }
+                        ),
+                    ),
                     _ => Ok(swiftide_core::chat_completion::ChatCompletionResponse::default()),
                 }
             }
@@ -8094,7 +8772,8 @@ mod tests {
             serde_json::json!({
                 "query": "quantum computing",
                 "tier": "premium",
-            }).to_string(),
+            })
+            .to_string(),
         );
 
         let res = tool.invoke(&context, &call).await.unwrap();
@@ -8102,7 +8781,10 @@ mod tests {
             ToolOutput::Text(t) => {
                 let json: serde_json::Value = serde_json::from_str(&t).expect("valid json output");
                 assert_eq!(json["error"], "typed_unavailable");
-                assert!(json["reason"].as_str().unwrap().contains("requires Max tier"));
+                assert!(json["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("requires Max tier"));
             }
             other => panic!("expected ToolOutput::Text, got {other:?}"),
         }
@@ -8110,8 +8792,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_model_routing_fallback_reason_recorded() {
-        let sqlite = maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("routing-test-key")
-            .expect("in-memory sqlite");
+        let sqlite =
+            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("routing-test-key")
+                .expect("in-memory sqlite");
         let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
             sqlite,
         ))));
@@ -8134,7 +8817,10 @@ mod tests {
             async fn complete(
                 &self,
                 _request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 Ok(swiftide_core::chat_completion::ChatCompletionResponse {
                     message: Some("hello".to_string()),
                     ..Default::default()
@@ -8151,13 +8837,19 @@ mod tests {
         backend.set_llm_override(Box::new(SimpleEchoLlm));
 
         let msg = MahoChatMessage::user(ChatContent::text("what is the weather"));
-        let _ = backend.run_turn("sess-routing-test", msg, None, None).await.unwrap();
+        let _ = backend
+            .run_turn("sess-routing-test", msg, None, None)
+            .await
+            .unwrap();
 
         let decisions = backend.routing_decisions();
         assert!(!decisions.is_empty(), "routing decision must be recorded");
         let last = decisions.last().unwrap();
         assert!(last.is_fallback, "decision should be marked as fallback");
-        assert!(!last.reason.is_empty(), "fallback reason string must be recorded");
+        assert!(
+            !last.reason.is_empty(),
+            "fallback reason string must be recorded"
+        );
         assert_eq!(last.selected_model, "anthropic/claude-3-7-sonnet");
     }
 
@@ -8165,7 +8857,9 @@ mod tests {
     async fn test_notification_wait_suspends_and_wake_resumes_same_turn() {
         let registry = Arc::new(Mutex::new(crate::event_wait::WaitRegistry::new()));
         let wake_notify = Arc::new(tokio::sync::Notify::new());
-        let activation = Arc::new(Mutex::new(crate::event_wait::NotificationActivation::granted()));
+        let activation = Arc::new(Mutex::new(
+            crate::event_wait::NotificationActivation::granted(),
+        ));
 
         let session_id = "sess-wait-wake-1".to_string();
         let tool = NotificationWaitTool {
@@ -8181,12 +8875,11 @@ mod tests {
             serde_json::json!({
                 "sender": "service-worker",
                 "timeout_ms": 10000,
-            }).to_string(),
+            })
+            .to_string(),
         );
 
-        let invoke_task = tokio::spawn(async move {
-            tool.invoke(&context, &call).await
-        });
+        let invoke_task = tokio::spawn(async move { tool.invoke(&context, &call).await });
 
         // Yield execution to allow the tool to register in WaitRegistry and suspend
         tokio::task::yield_now().await;
@@ -8266,7 +8959,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let output_xlsx = tool.invoke(&context, &call_xlsx).await.expect("binary fs_write xlsx");
+        let output_xlsx = tool
+            .invoke(&context, &call_xlsx)
+            .await
+            .expect("binary fs_write xlsx");
         let text = match output_xlsx {
             ToolOutput::Text(t) => t,
             other => panic!("expected ToolOutput::Text, got {other:?}"),
@@ -8283,8 +8979,13 @@ mod tests {
         assert_eq!(written_bytes, binary_data);
 
         // 2. Verify build_after_tool_events produces ArtifactCreated with kind "xlsx"
-        let (events, artifact_to_persist) =
-            build_after_tool_events("sess-1", "call-xlsx-bin".to_string(), "fs_write".to_string(), true, &text);
+        let (events, artifact_to_persist) = build_after_tool_events(
+            "sess-1",
+            "call-xlsx-bin".to_string(),
+            "fs_write".to_string(),
+            true,
+            &text,
+        );
         assert_eq!(events.len(), 2);
         match &events[0] {
             AgentStreamEvent::ArtifactCreated { artifact } => {
@@ -8313,13 +9014,21 @@ mod tests {
             .build()
             .unwrap();
 
-        let output_pdf = tool.invoke(&context, &call_pdf).await.expect("binary fs_write pdf");
+        let output_pdf = tool
+            .invoke(&context, &call_pdf)
+            .await
+            .expect("binary fs_write pdf");
         let text_pdf = match output_pdf {
             ToolOutput::Text(t) => t,
             _other => panic!("expected text"),
         };
-        let (pdf_events, _) =
-            build_after_tool_events("sess-1", "call-pdf-bin".to_string(), "fs_write".to_string(), true, &text_pdf);
+        let (pdf_events, _) = build_after_tool_events(
+            "sess-1",
+            "call-pdf-bin".to_string(),
+            "fs_write".to_string(),
+            true,
+            &text_pdf,
+        );
         match &pdf_events[0] {
             AgentStreamEvent::ArtifactCreated { artifact } => {
                 assert_eq!(artifact.kind.as_deref(), Some("pdf"));
@@ -8349,7 +9058,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = tool.invoke(&context, &call).await.expect_err("must error when both set");
+        let err = tool
+            .invoke(&context, &call)
+            .await
+            .expect_err("must error when both set");
         let msg = err.to_string();
         assert!(msg.contains("cannot provide both 'content' and 'content_b64'"));
     }
@@ -8373,7 +9085,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = tool.invoke(&context, &call).await.expect_err("must error when neither set");
+        let err = tool
+            .invoke(&context, &call)
+            .await
+            .expect_err("must error when neither set");
         let msg = err.to_string();
         assert!(msg.contains("must provide either 'content' or 'content_b64'"));
     }
@@ -8398,7 +9113,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = tool.invoke(&context, &call).await.expect_err("must error on invalid base64");
+        let err = tool
+            .invoke(&context, &call)
+            .await
+            .expect_err("must error on invalid base64");
         let msg = err.to_string();
         assert!(msg.contains("Invalid base64 payload"));
     }
@@ -8410,19 +9128,17 @@ mod tests {
     #[tokio::test]
     async fn test_runtime_status_emitter_65s_turn_emits_status_and_proof() {
         use std::sync::atomic::AtomicUsize;
-        let sqlite = maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("status-test-key")
-            .expect("sqlite");
-        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(sqlite))));
+        let sqlite =
+            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("status-test-key")
+                .expect("sqlite");
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
         let clock = Arc::new(crate::event_wait::MockClock::new(1000));
         let root = tempfile::tempdir().unwrap();
 
-        let backend = SwiftideBackend::new(
-            storage,
-            None,
-            root.path().to_path_buf(),
-            true,
-        )
-        .with_clock(clock.clone());
+        let backend = SwiftideBackend::new(storage, None, root.path().to_path_buf(), true)
+            .with_clock(clock.clone());
         backend.set_artifact_root(Some(root.path().to_path_buf()));
 
         #[derive(Clone)]
@@ -8436,7 +9152,10 @@ mod tests {
             async fn complete(
                 &self,
                 _request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 let current_step = self.step.fetch_add(1, Ordering::SeqCst);
                 if current_step == 0 {
                     // Tool call 1 after 35s simulated wall progress
@@ -8446,7 +9165,10 @@ mod tests {
                         tool_calls: Some(vec![ToolCall::builder()
                             .id("step-tool-1".to_string())
                             .name("fs_write".to_string())
-                            .args(serde_json::json!({ "relative_path": "a.txt", "content": "step1" }).to_string())
+                            .args(
+                                serde_json::json!({ "relative_path": "a.txt", "content": "step1" })
+                                    .to_string(),
+                            )
                             .build()
                             .unwrap()]),
                         ..Default::default()
@@ -8459,7 +9181,10 @@ mod tests {
                         tool_calls: Some(vec![ToolCall::builder()
                             .id("step-tool-2".to_string())
                             .name("fs_write".to_string())
-                            .args(serde_json::json!({ "relative_path": "b.txt", "content": "step2" }).to_string())
+                            .args(
+                                serde_json::json!({ "relative_path": "b.txt", "content": "step2" })
+                                    .to_string(),
+                            )
                             .build()
                             .unwrap()]),
                         ..Default::default()
@@ -8512,7 +9237,10 @@ mod tests {
         );
 
         match status_events[0] {
-            AgentStreamEvent::Status { elapsed_secs, message } => {
+            AgentStreamEvent::Status {
+                elapsed_secs,
+                message,
+            } => {
                 assert_eq!(*elapsed_secs, 30);
                 assert!(message.contains("30s"));
             }
@@ -8520,7 +9248,10 @@ mod tests {
         }
 
         match status_events[1] {
-            AgentStreamEvent::Status { elapsed_secs, message } => {
+            AgentStreamEvent::Status {
+                elapsed_secs,
+                message,
+            } => {
                 assert_eq!(*elapsed_secs, 60);
                 assert!(message.contains("60s"));
             }
@@ -8530,7 +9261,10 @@ mod tests {
         // Terminal event must be ProofOrReason
         let last_event = events.last().expect("must have events");
         match last_event {
-            AgentStreamEvent::ProofOrReason { proof_locator, reason } => {
+            AgentStreamEvent::ProofOrReason {
+                proof_locator,
+                reason,
+            } => {
                 assert!(proof_locator.is_some() || reason.is_some());
             }
             other => panic!("expected terminal ProofOrReason event, got {other:?}"),
@@ -8541,7 +9275,9 @@ mod tests {
     async fn test_runtime_status_emitter_fast_turn_emits_no_status_and_terminal_proof() {
         let sqlite = maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("fast-test-key")
             .expect("sqlite");
-        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(sqlite))));
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
         let clock = Arc::new(crate::event_wait::MockClock::new(1000));
 
         let backend = SwiftideBackend::new(
@@ -8562,7 +9298,10 @@ mod tests {
             async fn complete(
                 &self,
                 _request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 // Fast turn: advance 10s only (< 30s)
                 self.clock.advance(10_000);
                 Ok(swiftide_core::chat_completion::ChatCompletionResponse {
@@ -8603,13 +9342,123 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, AgentStreamEvent::Status { .. }))
             .count();
-        assert_eq!(status_count, 0, "Fast turn (<30s) must emit 0 status events");
+        assert_eq!(
+            status_count, 0,
+            "Fast turn (<30s) must emit 0 status events"
+        );
 
         // Terminal event must be ProofOrReason
         let last_event = events.last().expect("must have events");
         match last_event {
             AgentStreamEvent::ProofOrReason { .. } => {}
             other => panic!("expected terminal ProofOrReason event, got {other:?}"),
+        }
+    }
+
+    /// Wave 3C (G9): `run_prompt_in_session` forwards the live event stream
+    /// to the supplied sink — a tool call surfaces as ToolCall followed by a
+    /// successful ToolResult — while still returning the final assistant
+    /// text (the CLI's stderr progress rides exactly this sink).
+    #[tokio::test]
+    async fn test_run_prompt_in_session_streams_tool_events_to_sink() {
+        let sqlite =
+            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("prompt-stream-key")
+                .expect("sqlite");
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
+        let root = tempfile::tempdir().unwrap();
+
+        let backend = SwiftideBackend::new(storage, None, root.path().to_path_buf(), true);
+        backend.set_artifact_root(Some(root.path().to_path_buf()));
+        // AllowAll so the gated fs_write executes deterministically without
+        // a permission callback (mirrors `maho agent task --approve-all`).
+        backend.set_approval_policy("allow_all".to_string());
+
+        #[derive(Clone)]
+        struct ToolThenAnswerLlm {
+            step: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl ChatCompletion for ToolThenAnswerLlm {
+            async fn complete(
+                &self,
+                _request: &ChatCompletionRequest,
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
+                let step = self.step.fetch_add(1, Ordering::SeqCst);
+                if step == 0 {
+                    Ok(swiftide_core::chat_completion::ChatCompletionResponse {
+                        message: None,
+                        tool_calls: Some(vec![ToolCall::builder()
+                            .id("stream-tool-1".to_string())
+                            .name("fs_write".to_string())
+                            .args(
+                                serde_json::json!({
+                                    "relative_path": "stream.txt",
+                                    "content": "hello"
+                                })
+                                .to_string(),
+                            )
+                            .build()
+                            .unwrap()]),
+                        ..Default::default()
+                    })
+                } else {
+                    Ok(swiftide_core::chat_completion::ChatCompletionResponse {
+                        message: Some("Wrote the file".to_string()),
+                        tool_calls: None,
+                        ..Default::default()
+                    })
+                }
+            }
+        }
+
+        backend.set_llm_override(Box::new(ToolThenAnswerLlm {
+            step: Arc::new(AtomicUsize::new(0)),
+        }));
+
+        let events_collected = Arc::new(Mutex::new(Vec::new()));
+        let ev_clone = events_collected.clone();
+        let on_event = Arc::new(move |ev: AgentStreamEvent| {
+            ev_clone.lock_unpoison().push(ev);
+        });
+
+        let answer = backend
+            .run_prompt_in_session(
+                "session-prompt-stream",
+                "write the file then say done",
+                Some(on_event),
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "Wrote the file");
+
+        let events = events_collected.lock_unpoison().clone();
+        let tool_call_idx = events
+            .iter()
+            .position(|e| {
+                matches!(e, AgentStreamEvent::ToolCall { name, .. } if name.as_str() == "fs_write")
+            })
+            .expect("sink must receive the fs_write ToolCall");
+        let tool_result_idx = events
+            .iter()
+            .position(|e| {
+                matches!(e, AgentStreamEvent::ToolResult { name, .. } if name.as_str() == "fs_write")
+            })
+            .expect("sink must receive the fs_write ToolResult");
+        assert!(
+            tool_call_idx < tool_result_idx,
+            "ToolCall must precede ToolResult: {events:?}"
+        );
+        match &events[tool_result_idx] {
+            AgentStreamEvent::ToolResult { succeeded, .. } => {
+                assert!(*succeeded, "fs_write must report success: {events:?}");
+            }
+            other => panic!("expected ToolResult, got {other:?}"),
         }
     }
 
@@ -8631,7 +9480,9 @@ mod tests {
             )
             .unwrap();
 
-        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(sqlite))));
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
 
         let backend = SwiftideBackend::new(
             storage.clone(),
@@ -8650,7 +9501,10 @@ mod tests {
             async fn complete(
                 &self,
                 request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 for msg in request.messages() {
                     if let SwiftideChatMessage::System(prompt) = msg {
                         self.captured_prompts.lock_unpoison().push(prompt.clone());
@@ -8671,7 +9525,10 @@ mod tests {
         }));
 
         let user_msg = MahoChatMessage::user(ChatContent::text("hello with memory"));
-        let _ = backend.run_turn("session-briefing-1", user_msg, None, None).await.unwrap();
+        let _ = backend
+            .run_turn("session-briefing-1", user_msg, None, None)
+            .await
+            .unwrap();
 
         let all_prompts = captured.lock_unpoison().clone();
         let prompt = all_prompts.join("\n\n");
@@ -8679,9 +9536,14 @@ mod tests {
         assert!(prompt.contains("[MEMORY L1 BRIEFING]"));
         assert!(prompt.contains("User preferences: Rust async, macOS terminal Ghostty"));
 
-        let baseline_idx = prompt.find("[MAHO RUNTIME SYSTEM CONTRACT - IMMUTABLE]").unwrap();
+        let baseline_idx = prompt
+            .find("[MAHO RUNTIME SYSTEM CONTRACT - IMMUTABLE]")
+            .unwrap();
         let briefing_idx = prompt.find("[MEMORY L1 BRIEFING]").unwrap();
-        assert!(baseline_idx < briefing_idx, "L1 briefing must appear after baseline contract");
+        assert!(
+            baseline_idx < briefing_idx,
+            "L1 briefing must appear after baseline contract"
+        );
 
         // 2. Run turn with memory-disabled profile
         // Create a profile that has "no_memory" tool gate or blank without memory
@@ -8717,12 +9579,18 @@ mod tests {
         }));
 
         let user_msg2 = MahoChatMessage::user(ChatContent::text("hello without memory"));
-        let _ = backend.run_turn("session-briefing-disabled", user_msg2, None, None).await.unwrap();
+        let _ = backend
+            .run_turn("session-briefing-disabled", user_msg2, None, None)
+            .await
+            .unwrap();
 
         let all_disabled = captured_disabled.lock_unpoison().clone();
         let prompt_disabled = all_disabled.join("\n\n");
         assert!(prompt_disabled.contains("[MAHO RUNTIME SYSTEM CONTRACT - IMMUTABLE]"));
-        assert!(!prompt_disabled.contains("[MEMORY L1 BRIEFING]"), "Memory-disabled profile must omit L1 briefing block");
+        assert!(
+            !prompt_disabled.contains("[MEMORY L1 BRIEFING]"),
+            "Memory-disabled profile must omit L1 briefing block"
+        );
         assert!(!prompt_disabled.contains("macOS terminal Ghostty"));
     }
 
@@ -8737,15 +9605,12 @@ mod tests {
         let journal_path = temp_dir.path().join("session_journal.json");
 
         let sqlite = SqliteStorage::open_in_memory_with_key("journal-persist-key").unwrap();
-        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(sqlite))));
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
 
-        let backend = SwiftideBackend::new(
-            storage,
-            None,
-            temp_dir.path().to_path_buf(),
-            true,
-        )
-        .with_journal_path(&journal_path);
+        let backend = SwiftideBackend::new(storage, None, temp_dir.path().to_path_buf(), true)
+            .with_journal_path(&journal_path);
 
         #[derive(Clone)]
         struct SimpleMockLlm;
@@ -8754,7 +9619,10 @@ mod tests {
             async fn complete(
                 &self,
                 _request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 Ok(swiftide_core::chat_completion::ChatCompletionResponse {
                     message: Some("Persistence verified".to_string()),
                     tool_calls: None,
@@ -8767,34 +9635,57 @@ mod tests {
 
         let session_id = "session-disk-persist-test";
         let user_msg = MahoChatMessage::user(ChatContent::text("test persist to disk"));
-        let res = backend.run_turn(session_id, user_msg, None, None).await.unwrap();
+        let res = backend
+            .run_turn(session_id, user_msg, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(res.role, "assistant");
 
         // Verify journal file exists on disk
-        assert!(journal_path.exists(), "Journal file must exist on disk after turn");
+        assert!(
+            journal_path.exists(),
+            "Journal file must exist on disk after turn"
+        );
 
         // Verify disk contents via RunJournal loaded from store
         let reloaded = crate::run_journal::RunJournal::from_fs_path_or_new(&journal_path);
         let run_id = crate::run_journal::AgentRunId::new(session_id);
-        let entries = reloaded.get_entries(&run_id).expect("Run entries must exist in reloaded journal");
+        let entries = reloaded
+            .get_entries(&run_id)
+            .expect("Run entries must exist in reloaded journal");
 
-        assert!(entries.iter().any(|e| e.event_name == "step_started"), "Must contain step_started event");
-        assert!(entries.iter().any(|e| e.event_name == "status"), "Must contain status event");
+        assert!(
+            entries.iter().any(|e| e.event_name == "step_started"),
+            "Must contain step_started event"
+        );
+        assert!(
+            entries.iter().any(|e| e.event_name == "status"),
+            "Must contain status event"
+        );
 
-        let checkpoints = reloaded.get_checkpoints(&run_id).expect("Checkpoints must exist");
+        let checkpoints = reloaded
+            .get_checkpoints(&run_id)
+            .expect("Checkpoints must exist");
         assert!(!checkpoints.is_empty(), "Must have checkpoints");
 
         // Test mutating journal state writes through to disk immediately
         {
             let journal_arc = backend.run_journal();
             let mut j = journal_arc.lock_unpoison();
-            j.append_event(&run_id, "custom_audit_op", r#"{"verified":true}"#).unwrap();
+            j.append_event(&run_id, "custom_audit_op", r#"{"verified":true}"#)
+                .unwrap();
         }
 
-        let reloaded_after_mutation = crate::run_journal::RunJournal::from_fs_path_or_new(&journal_path);
+        let reloaded_after_mutation =
+            crate::run_journal::RunJournal::from_fs_path_or_new(&journal_path);
         let updated_entries = reloaded_after_mutation.get_entries(&run_id).unwrap();
-        assert!(updated_entries.iter().any(|e| e.event_name == "custom_audit_op"), "Mutation must be on disk");
+        assert!(
+            updated_entries
+                .iter()
+                .any(|e| e.event_name == "custom_audit_op"),
+            "Mutation must be on disk"
+        );
     }
 
     #[tokio::test]
@@ -8803,14 +9694,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
 
         let sqlite = SqliteStorage::open_in_memory_with_key("journal-session-key").unwrap();
-        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(sqlite))));
+        let storage = Arc::new(crate::MutexAgentStorage(Arc::new(std::sync::Mutex::new(
+            sqlite,
+        ))));
 
-        let backend = SwiftideBackend::new(
-            storage,
-            None,
-            temp_dir.path().to_path_buf(),
-            true,
-        );
+        let backend = SwiftideBackend::new(storage, None, temp_dir.path().to_path_buf(), true);
 
         let session_id = "sess-default-store-1";
         backend.attach_session_journal(session_id, &temp_dir.path());
@@ -8822,7 +9710,10 @@ mod tests {
             async fn complete(
                 &self,
                 _request: &ChatCompletionRequest,
-            ) -> Result<swiftide_core::chat_completion::ChatCompletionResponse, swiftide_core::chat_completion::errors::LanguageModelError> {
+            ) -> Result<
+                swiftide_core::chat_completion::ChatCompletionResponse,
+                swiftide_core::chat_completion::errors::LanguageModelError,
+            > {
                 Ok(swiftide_core::chat_completion::ChatCompletionResponse {
                     message: Some("Default path persistence verified".to_string()),
                     tool_calls: None,
@@ -8834,14 +9725,26 @@ mod tests {
         backend.set_llm_override(Box::new(SimpleMockLlm));
 
         let user_msg = MahoChatMessage::user(ChatContent::text("default journal path test"));
-        let _ = backend.run_turn(session_id, user_msg, None, None).await.unwrap();
+        let _ = backend
+            .run_turn(session_id, user_msg, None, None)
+            .await
+            .unwrap();
 
-        let expected_path = temp_dir.path().join(".maho").join("journals").join(format!("{session_id}.json"));
-        assert!(expected_path.exists(), "Default session journal file must exist at {expected_path:?}");
+        let expected_path = temp_dir
+            .path()
+            .join(".maho")
+            .join("journals")
+            .join(format!("{session_id}.json"));
+        assert!(
+            expected_path.exists(),
+            "Default session journal file must exist at {expected_path:?}"
+        );
 
         let reloaded = crate::run_journal::RunJournal::from_fs_path_or_new(&expected_path);
         let run_id = crate::run_journal::AgentRunId::new(session_id);
-        let entries = reloaded.get_entries(&run_id).expect("Run entries must exist in default path");
+        let entries = reloaded
+            .get_entries(&run_id)
+            .expect("Run entries must exist in default path");
         assert!(entries.iter().any(|e| e.event_name == "step_started"));
     }
 }

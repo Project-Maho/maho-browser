@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod browser;
 pub mod browser_pipe;
 pub mod config;

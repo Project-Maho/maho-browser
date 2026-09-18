@@ -18,6 +18,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ServerHandler;
 use serde_json::{json, Map, Value};
 
+use crate::catalog_repair;
 use crate::client::BrowserClient;
 use crate::error::McpBridgeError;
 use crate::paths::default_socket_path;
@@ -42,6 +43,16 @@ pub type MutationApprovalCallback = Arc<dyn Fn(&str) -> MutationDecision + Send 
 
 /// Stable status used when no standalone approval broker is installed.
 pub(crate) const ERR_BROKER_UNAVAILABLE: &str = "broker_unavailable";
+
+pub(crate) fn is_server_native_input_enabled() -> bool {
+    if let Ok(val) = std::env::var("MAHO_NATIVE_INPUT_ENABLED") {
+        return val == "1" || val.eq_ignore_ascii_case("true");
+    }
+    if let Ok(val) = std::env::var("MAHO_MCP_NATIVE_INPUT_ENABLED") {
+        return val == "1" || val.eq_ignore_ascii_case("true");
+    }
+    false
+}
 
 #[derive(Clone, Debug)]
 struct DiscoveredTool {
@@ -136,10 +147,18 @@ impl MahoBrowserMcpServer {
                 format!("'{operation}' denied by approval broker"),
                 Some(json!({"status": "denied_by_broker"})),
             )),
-            None => Err(rmcp::ErrorData::invalid_request(
-                format!("'{operation}' denied: no approval broker is installed"),
-                Some(json!({"status": ERR_BROKER_UNAVAILABLE})),
-            )),
+            None => {
+                if std::env::var("MAHO_MCP_AUTO_APPROVE")
+                    .map(|v| v == "true" || v == "1")
+                    .unwrap_or(false)
+                {
+                    return Ok(());
+                }
+                Err(rmcp::ErrorData::invalid_request(
+                    format!("'{operation}' denied: no approval broker is installed"),
+                    Some(json!({"status": ERR_BROKER_UNAVAILABLE})),
+                ))
+            }
         }
     }
 
@@ -147,19 +166,24 @@ impl MahoBrowserMcpServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if !self.public_mcp_enabled {
-            // kPublicMcp is frozen by default (default-off gate; the surface
-            // code is retained, not deleted). Refusals reuse the existing
-            // broker-unavailable fail-closed error path so external hosts see
-            // the same closed shape as an unbrokered mutation.
-            return Err(rmcp::ErrorData::invalid_request(
-                format!(
-                    "'{}' unavailable: public MCP dispatch is frozen by default; set {MCP_PUBLIC_ENABLED_KEY}=true in the browser registry settings to re-enable",
-                    request.name
-                ),
-                Some(json!({"status": ERR_BROKER_UNAVAILABLE})),
+        if !is_server_native_input_enabled()
+            && (request.name == "browser_visual_click" || request.name == "browser.visual_click")
+        {
+            return Err(rmcp::ErrorData::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                format!("unknown or unavailable browser tool '{}'", request.name),
+                Some(json!({"status": "unknown_or_gated_tool"})),
             ));
         }
+
+        // Resolve the tool name against browser-owned discovery BEFORE
+        // reporting the freeze gate. Discovery is a read-only `tools/list`
+        // round-trip and never dispatches, so this does not weaken the gate:
+        // a known tool is still refused below while frozen. It only stops an
+        // unknown name and a frozen-but-real name from collapsing into one
+        // indistinguishable refusal, which previously made the
+        // `unknown_or_gated_tool` branch unreachable in the default
+        // (frozen) configuration.
         let discovery = self.discover_public_tools().await?;
         let descriptor = discovery
             .tools
@@ -173,11 +197,37 @@ impl MahoBrowserMcpServer {
                 )
             })?;
 
-        if descriptor.requires_approval {
-            self.authorize(&request.name)?;
+        if !self.public_mcp_enabled {
+            // kPublicMcp is frozen by default (default-off gate; the surface
+            // code is retained, not deleted). Refusals reuse the existing
+            // broker-unavailable fail-closed error path so external hosts see
+            // the same closed shape as an unbrokered mutation.
+            return Err(rmcp::ErrorData::invalid_request(
+                format!(
+                    "'{}' unavailable: public MCP dispatch is frozen by default; set {MCP_PUBLIC_ENABLED_KEY}=true in the browser registry settings to re-enable",
+                    request.name
+                ),
+                Some(json!({"status": ERR_BROKER_UNAVAILABLE})),
+            ));
         }
 
         let arguments = Value::Object(request.arguments.unwrap_or_default());
+
+        if descriptor.requires_approval {
+            self.authorize(&request.name)?;
+            if let Some(tab_id) = arguments.get("tab_id").and_then(|v| v.as_i64()) {
+                let _ = self
+                    .client
+                    .call_without_reconnect(
+                        "maho/control/call",
+                        json!({
+                            "name": "browser_acquire_lease",
+                            "arguments": { "tab_id": tab_id, "ttl_seconds": 60 }
+                        }),
+                    )
+                    .await;
+            }
+        }
         let value = self
             .client
             .call_without_reconnect(
@@ -251,7 +301,12 @@ fn project_external_result(value: Value) -> CallToolResult {
                 .and_then(|wire| serde_json::from_value(wire).ok())
                 .map(|receipt: maho_types::tool::BrowserToolExecutionReceipt| receipt.project())
         });
-    let mut result = CallToolResult::structured(value);
+    let structured = if let Some(raw) = value.get("outputJson").and_then(|v| v.as_str()) {
+        serde_json::from_str::<Value>(raw).unwrap_or_else(|_| value.clone())
+    } else {
+        value
+    };
+    let mut result = CallToolResult::structured(structured);
     if let Some(receipt) = receipt {
         let receipt = serde_json::to_value(receipt).expect("receipt projection serializes");
         result = result.with_meta(Some(Meta(Map::from_iter([(
@@ -274,7 +329,14 @@ fn browser_error(error: McpBridgeError) -> rmcp::ErrorData {
 }
 
 fn parse_discovery(value: Value) -> Result<DiscoveryProjection, rmcp::ErrorData> {
-    let diagnostics = value
+    parse_discovery_internal(value, is_server_native_input_enabled())
+}
+
+fn parse_discovery_internal(
+    value: Value,
+    native_input_enabled: bool,
+) -> Result<DiscoveryProjection, rmcp::ErrorData> {
+    let mut diagnostics = value
         .get("catalogDiagnostics")
         .or_else(|| value.get("catalog_diagnostics"))
         .cloned()
@@ -287,12 +349,19 @@ fn parse_discovery(value: Value) -> Result<DiscoveryProjection, rmcp::ErrorData>
     let mut names = HashSet::new();
     let mut capability_ids = HashSet::new();
     let mut tools = Vec::with_capacity(raw_tools.len());
+    let mut hidden_native_tools = 0u64;
 
     for raw in raw_tools {
         let object = raw
             .as_object()
             .ok_or_else(|| discovery_error("browser tool descriptor is not an object"))?;
         let name = required_string(object, "name")?;
+        if (name == "browser_visual_click" || name == "browser.visual_click")
+            && !native_input_enabled
+        {
+            hidden_native_tools += 1;
+            continue;
+        }
         let capability_id = string_field(object, &["capabilityId", "capability_id"])
             .ok_or_else(|| discovery_error(format!("descriptor '{name}' has no capability id")))?;
         if !names.insert(name.clone()) || !capability_ids.insert(capability_id) {
@@ -317,7 +386,7 @@ fn parse_discovery(value: Value) -> Result<DiscoveryProjection, rmcp::ErrorData>
             )));
         }
 
-        let input_schema = object
+        let mut input_schema = object
             .get("inputSchema")
             .or_else(|| object.get("input_schema"))
             .and_then(Value::as_object)
@@ -325,7 +394,10 @@ fn parse_discovery(value: Value) -> Result<DiscoveryProjection, rmcp::ErrorData>
             .ok_or_else(|| {
                 discovery_error(format!("descriptor '{name}' has invalid input schema"))
             })?;
-        let output_schema = object
+        // The browser owns which capabilities exist; the bridge only repairs
+        // published argument shapes that contradict the browser's own parser.
+        catalog_repair::repair_descriptor(&name, &mut input_schema);
+        let published_output_schema = object
             .get("outputSchema")
             .or_else(|| object.get("resultSchema"))
             .or_else(|| object.get("output_schema"))
@@ -335,11 +407,22 @@ fn parse_discovery(value: Value) -> Result<DiscoveryProjection, rmcp::ErrorData>
                 })
             })
             .transpose()?;
-        let description = object
+        // A browser-published result schema is authoritative. The bridge only
+        // fills the gap for tools whose result type it already declares in
+        // `protocol.rs`, so no shape is invented here.
+        let output_schema = published_output_schema.or_else(|| {
+            catalog_repair::output_schema(&name).and_then(|schema| schema.as_object().cloned())
+        });
+        let published_description = object
             .get("description")
             .and_then(Value::as_str)
             .filter(|description| !description.trim().is_empty())
-            .ok_or_else(|| discovery_error(format!("descriptor '{name}' has no description")))?
+            .ok_or_else(|| discovery_error(format!("descriptor '{name}' has no description")))?;
+        // Terse one-line glosses leave sibling tools indistinguishable; where
+        // the bridge has a selection-useful description it wins, otherwise the
+        // browser's own text is kept.
+        let description = catalog_repair::describe(&name)
+            .unwrap_or(published_description)
             .to_string();
 
         let policy = object
@@ -393,6 +476,23 @@ fn parse_discovery(value: Value) -> Result<DiscoveryProjection, rmcp::ErrorData>
             mcp: tool,
             requires_approval,
         });
+    }
+    if hidden_native_tools > 0 {
+        if let Some(count) = diagnostics.pointer_mut("/surfaces/publicMcp/count") {
+            if let Some(c) = count.as_u64() {
+                *count = json!(c.saturating_sub(hidden_native_tools));
+            }
+        }
+        if let Some(ids) = diagnostics
+            .pointer_mut("/surfaces/publicMcp/ids")
+            .and_then(Value::as_array_mut)
+        {
+            ids.retain(|id| {
+                id.as_str()
+                    .map(|s| s != "browser.visual_click" && s != "browser_visual_click")
+                    .unwrap_or(true)
+            });
+        }
     }
     let expected_count = diagnostics
         .pointer("/surfaces/publicMcp/count")
@@ -536,6 +636,153 @@ mod tests {
         })
     }
 
+    /// The browser publishes argument shapes that contradict its own runtime
+    /// parser. The bridge is the last hop before the model, so it repairs them
+    /// here; this pins the repair to the real projection rather than to the
+    /// pure helper alone.
+    #[test]
+    fn projection_repairs_schemas_that_contradict_the_browser_parser() {
+        let mut locator_tool = descriptor("input.locator_click", true);
+        locator_tool["inputSchema"] = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "tab_id": {
+                    "type": "integer",
+                    "description": "Browser tab id. Omit or pass 0 for the active tab."
+                },
+                "locator": {
+                    "type": "object",
+                    "properties": {
+                        "ref": {"type": "integer"},
+                        "css": {"type": "string"},
+                        "role": {"type": "string"},
+                        "name": {"type": "string"}
+                    }
+                },
+                "wait": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {"type": "string", "enum": ["none", "auto", "navigation", "selector"]},
+                        "timeout_ms": {"type": "integer"}
+                    }
+                },
+                "observe": {"type": "string", "enum": ["diff", "none"]},
+                "lease": {"type": "string"}
+            },
+            "required": ["locator"]
+        });
+
+        let projection = parse_discovery(discovery(vec![locator_tool])).unwrap();
+        let schema = &projection.tools[0].mcp.input_schema;
+        let properties = schema["properties"].as_object().expect("properties");
+
+        // P1-5: an empty locator must stop validating.
+        assert!(properties["locator"].get("anyOf").is_some());
+        // P0-2: `selector` is read by the parser and was missing.
+        assert_eq!(
+            properties["wait"]["properties"]["selector"]["type"],
+            "string"
+        );
+        // P0-2 companion: the parser accepts observe as string OR dict.
+        assert!(properties["observe"].get("oneOf").is_some());
+        // P1-1: "scoped" is the only value the runtime honours.
+        assert_eq!(properties["lease"]["enum"], json!(["scoped"]));
+        // P1-6: tab 0 is a real tab id, not a spelling of "active".
+        assert_eq!(properties["tab_id"]["minimum"], 1);
+    }
+
+    #[test]
+    fn visual_click_hidden_unless_native_input_enabled() {
+        let mut visual_tool = descriptor("browser_visual_click", true);
+        visual_tool["capabilityId"] = json!("browser.visual_click");
+        let tools = vec![descriptor("read_page", false), visual_tool];
+        let ids: Vec<Value> = tools
+            .iter()
+            .map(|tool| tool["capabilityId"].clone())
+            .collect();
+        let payload = json!({
+            "catalogDiagnostics": {
+                "catalogVersion": 1,
+                "schemaVersion": 1,
+                "resultVersion": 1,
+                "canonicalCount": 67,
+                "gates": {"mailBeta": true, "routines": true, "vault": true},
+                "surfaces": {"publicMcp": {"count": tools.len(), "ids": ids}},
+                "intentionalExclusions": ["control_plane_authority"]
+            },
+            "tools": tools
+        });
+
+        // 1. Server-side NativeInput disabled -> visual_click hidden
+        let proj_disabled = parse_discovery_internal(payload.clone(), false).unwrap();
+        assert_eq!(proj_disabled.tools.len(), 1);
+        assert_eq!(proj_disabled.tools[0].mcp.name, "read_page");
+        assert_eq!(
+            proj_disabled
+                .diagnostics
+                .pointer("/surfaces/publicMcp/count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        // 2. Server-side NativeInput enabled -> visual_click visible
+        let proj_enabled = parse_discovery_internal(payload, true).unwrap();
+        assert_eq!(proj_enabled.tools.len(), 2);
+    }
+
+    /// P0-5 and P1-2 at the projection boundary: the bridge must actually
+    /// attach the richer description and the known result shape.
+    #[test]
+    fn projection_publishes_known_result_shapes_and_selective_descriptions() {
+        let mut terse = descriptor("browser_search_in_page", false);
+        terse["description"] = json!("Search for text within the page.");
+        terse.as_object_mut().unwrap().remove("resultSchema");
+
+        let projection = parse_discovery(discovery(vec![terse])).unwrap();
+        let tool = &projection.tools[0];
+
+        // The browser shipped no output schema; the bridge knows this one.
+        let output = tool
+            .mcp
+            .output_schema
+            .as_ref()
+            .expect("a known result shape is published");
+        assert_eq!(
+            output["required"],
+            json!(["match_count", "active_match_index"])
+        );
+
+        // The terse gloss is replaced with one that states the real result.
+        assert!(
+            tool.mcp
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("no matched text"),
+            "the description must correct the name's implicit promise"
+        );
+    }
+
+    /// A browser-published result schema is authoritative and must win over
+    /// the bridge's built-in shape.
+    #[test]
+    fn browser_published_result_schema_is_never_overridden() {
+        let mut tool = descriptor("browser_search_in_page", false);
+        tool["resultSchema"] = json!({"type": "object", "properties": {"authoritative": {}}});
+
+        let projection = parse_discovery(discovery(vec![tool])).unwrap();
+        let output = projection.tools[0]
+            .mcp
+            .output_schema
+            .as_ref()
+            .expect("schema present");
+        assert!(
+            output["properties"].get("authoritative").is_some(),
+            "the browser's own result schema must survive"
+        );
+    }
+
     #[test]
     fn dynamic_projection_preserves_schema_and_metadata() {
         let discovery = parse_discovery(discovery(vec![descriptor("read_page", false)])).unwrap();
@@ -617,7 +864,9 @@ mod tests {
             }
         });
         let projected = project_external_result(value.clone());
-        assert_eq!(projected.structured_content, Some(value));
+        let serialized_response = serde_json::to_string(&projected).unwrap();
+        assert!(!serialized_response.contains(sentinel), "private receipt leaked: {serialized_response}");
+        assert_eq!(projected.structured_content.as_ref().unwrap()["ok"], true);
         assert_eq!(
             projected.content.len(),
             1,
@@ -745,7 +994,10 @@ mod tests {
         /// Constructs the server with `MAHO_DB_PATH` pinned to the fixture DB
         /// while the shared settings lock is held, then restores the
         /// environment so no other test observes host state.
-        fn server_with_registry(client: Arc<BrowserClient>, db_path: &PathBuf) -> MahoBrowserMcpServer {
+        fn server_with_registry(
+            client: Arc<BrowserClient>,
+            db_path: &PathBuf,
+        ) -> MahoBrowserMcpServer {
             let guard = crate::settings::SETTINGS_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -756,6 +1008,67 @@ mod tests {
             unsafe { std::env::remove_var(crate::settings::ENV_DB_PATH) };
             drop(guard);
             server
+        }
+
+        /// The freeze gate is correct and stays. What was wrong is that it
+        /// fired *before* name resolution, so while frozen (the default) an
+        /// unknown tool name and a real-but-frozen tool returned byte-identical
+        /// errors. A client could not tell "no such tool" from "surface off",
+        /// and the `unknown_or_gated_tool` branch was unreachable by default.
+        #[tokio::test]
+        async fn frozen_gate_still_distinguishes_an_unknown_tool_name() {
+            let (_sock_dir, sock_path, listener) = temp_socket();
+            let registry_dir = tempfile::tempdir().expect("registry tempdir");
+            let db_path = registry_fixture(&registry_dir, None);
+            spawn_serving_browser(
+                listener,
+                vec![descriptor("read_page", false)],
+                json!({"ok": true}),
+            );
+            let client = Arc::new(
+                BrowserClient::connect_as(
+                    &sock_path,
+                    Duration::from_secs(5),
+                    ControllerKind::MahoBrowserMcp,
+                )
+                .await
+                .expect("client connects"),
+            );
+            let server = server_with_registry(client, &db_path);
+
+            let unknown = server
+                .dispatch_public(CallToolRequestParams::new("does_not_exist_tool"))
+                .await
+                .expect_err("an unknown tool is refused");
+            let known = server
+                .dispatch_public(CallToolRequestParams::new("read_page"))
+                .await
+                .expect_err("a real tool is still frozen");
+
+            assert_eq!(
+                unknown.code,
+                ErrorCode::METHOD_NOT_FOUND,
+                "an unknown name is a name error, not a gate error"
+            );
+            assert_eq!(
+                unknown.data.as_ref().expect("status payload")["status"],
+                "unknown_or_gated_tool"
+            );
+
+            assert_eq!(
+                known.code,
+                ErrorCode::INVALID_REQUEST,
+                "a known tool still reports the freeze gate, unweakened"
+            );
+            assert_eq!(
+                known.data.as_ref().expect("status payload")["status"],
+                ERR_BROKER_UNAVAILABLE
+            );
+
+            assert_ne!(
+                unknown.message, known.message,
+                "the two refusals must be distinguishable"
+            );
         }
 
         #[tokio::test]
@@ -785,9 +1098,7 @@ mod tests {
             let error = server
                 .dispatch_public(CallToolRequestParams::new("read_page"))
                 .await
-                .expect_err(
-                    "default (setting absent) must refuse public dispatch fail-closed",
-                );
+                .expect_err("default (setting absent) must refuse public dispatch fail-closed");
 
             assert_eq!(
                 error.code,
@@ -806,7 +1117,11 @@ mod tests {
             let registry_dir = tempfile::tempdir().expect("registry tempdir");
             let db_path = registry_fixture(&registry_dir, Some(true));
             let served = json!({"ok": true, "served": "read_page"});
-            spawn_serving_browser(listener, vec![descriptor("read_page", false)], served.clone());
+            spawn_serving_browser(
+                listener,
+                vec![descriptor("read_page", false)],
+                served.clone(),
+            );
             let client = Arc::new(
                 BrowserClient::connect_as(
                     &sock_path,

@@ -20,9 +20,31 @@ pub struct AuthResponse {
 }
 
 #[derive(Deserialize)]
-pub struct MeResponse {
+pub struct PublicUser {
+    pub id: i32,
     pub email: String,
+}
+
+#[derive(Deserialize)]
+pub struct MeResponse {
+    #[serde(default)]
+    pub account: Option<PublicUser>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
     pub tier: Option<String>,
+}
+
+impl MeResponse {
+    pub fn user_id(&self) -> Option<i32> {
+        self.account.as_ref().map(|account| account.id)
+    }
+
+    pub fn email(&self) -> Option<&str> {
+        self.email
+            .as_deref()
+            .or_else(|| self.account.as_ref().map(|a| a.email.as_str()))
+    }
 }
 
 #[derive(Deserialize)]

@@ -51,7 +51,8 @@ pub fn web_search_definition() -> ToolDefinition {
 pub fn image_search_definition() -> ToolDefinition {
     ToolDefinition {
         name: "image_search".to_string(),
-        description: "Search for images on the web returning metadata and image URLs only".to_string(),
+        description: "Search for images on the web returning metadata and image URLs only"
+            .to_string(),
         parameters_schema: serde_json::json!({
             "type": "object",
             "additionalProperties": false,
@@ -75,7 +76,8 @@ pub fn image_search_definition() -> ToolDefinition {
 pub fn notification_wait_definition() -> ToolDefinition {
     ToolDefinition {
         name: "notification_wait".to_string(),
-        description: "Suspend execution and wait for an external notification or wake event".to_string(),
+        description: "Suspend execution and wait for an external notification or wake event"
+            .to_string(),
         parameters_schema: serde_json::json!({
             "type": "object",
             "additionalProperties": false,
@@ -109,7 +111,8 @@ pub fn introspection_definition() -> ToolDefinition {
 pub fn skill_creator_definition() -> ToolDefinition {
     ToolDefinition {
         name: "skill_creator".to_string(),
-        description: "Propose creating a reusable skill manifest from a successful run journal".to_string(),
+        description: "Propose creating a reusable skill manifest from a successful run journal"
+            .to_string(),
         parameters_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -392,7 +395,10 @@ mod tests {
         assert_eq!(def.permission, ToolPermission::AlwaysAsk);
         assert!(def.sensitive);
         assert_eq!(def.provenance, ToolProvenance::BuiltinBrowser);
-        assert_eq!(def.parameters_schema["required"], serde_json::json!(["run_id"]));
+        assert_eq!(
+            def.parameters_schema["required"],
+            serde_json::json!(["run_id"])
+        );
     }
 
     #[test]
@@ -422,7 +428,10 @@ mod tests {
         assert_eq!(def.permission, ToolPermission::AutoApprove);
         assert!(!def.sensitive);
         assert_eq!(def.provenance, ToolProvenance::BuiltinBrowser);
-        assert_eq!(def.parameters_schema["required"], serde_json::json!(["query"]));
+        assert_eq!(
+            def.parameters_schema["required"],
+            serde_json::json!(["query"])
+        );
     }
 
     #[test]
@@ -432,7 +441,10 @@ mod tests {
         assert_eq!(def.permission, ToolPermission::AutoApprove);
         assert!(!def.sensitive);
         assert_eq!(def.provenance, ToolProvenance::BuiltinBrowser);
-        assert_eq!(def.parameters_schema["required"], serde_json::json!(["query"]));
+        assert_eq!(
+            def.parameters_schema["required"],
+            serde_json::json!(["query"])
+        );
     }
 
     #[test]

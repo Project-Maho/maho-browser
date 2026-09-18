@@ -1,0 +1,15 @@
+[2026-09-17 10:10] === Agent-session run attempt (maho agent task) ===
+Command: maho agent task --json "<Amazon purchase-flow goal, stop before payment>"
+Result:   Agent task failed: ExecutionError("No BYOK API key configured")
+ROOT CAUSE (swiftide_backend.rs resolve_llm_client):
+  - CLI agent runtime resolves LLM via storage.get_byok_key() only.
+  - SecureKeyBundle::from_key() carries NO base_url -> defaults to
+    https://api.openai.com/v1 (OPENAI_DEFAULT_API_BASE, swiftide_backend.rs:43).
+  - The profile provider (openai-compatible, base_url http://127.0.0.1:18801,
+    key in /maho/ai prefs) is never consulted by the CLI runtime -> structural
+    desync, same class as the 2026-09-11 omo-backend-swap note.
+  - Seeding byok:* into the (SQLCipher) workspace store would still target
+    api.openai.com -> not a fix.
+  - The working agent surface (AI panel, chrome://maho-ai side panel) is not
+    reachable from the CLI (no tab entry, no panel capability in the catalog).
+STATUS: AGENT_SESSION_BLOCKED_PRODUCT_GAP

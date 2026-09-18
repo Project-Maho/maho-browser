@@ -9,10 +9,11 @@ use maho_cli::browser_pipe;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use maho_agent::{AgentStreamEvent, SwiftideBackend};
+use maho_agent::{AgentRuntime, AgentStreamEvent};
+use maho_types::chat::{ChatContent, ChatMessage};
 use maho_cli::vault::{self, RecoveryUnlockResult};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use config::CliConfig;
 
@@ -908,7 +909,11 @@ pub struct HeadlessArgs {
 #[derive(Subcommand)]
 pub enum BrowserCommands {
     /// Interactive browser REPL
-    Repl,
+    Repl {
+        /// Execute a single REPL command and exit
+        #[arg(long, short = 'e')]
+        eval: Option<String>,
+    },
 
     /// Machine-readable persistent automation pipe over stdin/stdout NDJSON
     Pipe,
@@ -1167,7 +1172,7 @@ async fn main() -> Result<()> {
         Commands::Browser { command, timeout } => {
             browser::set_timeout_override(timeout)?;
             match command {
-                BrowserCommands::Repl => cmd_repl(socket_path.as_deref(), json_output).await,
+                BrowserCommands::Repl { eval } => cmd_repl(eval, socket_path.as_deref(), json_output).await,
                 BrowserCommands::Pipe => browser_pipe::run_pipe(socket_path.as_deref()).await,
             }
         }
@@ -1221,6 +1226,7 @@ async fn main() -> Result<()> {
                         approve_all,
                         resume: resume.as_deref(),
                         dirs: &dirs,
+                        socket_path: socket_path.as_deref(),
                     },
                     json_output,
                     stream,
@@ -1228,7 +1234,7 @@ async fn main() -> Result<()> {
                 .await
             }
             AgentCommands::Sessions { limit, all } => {
-                cmd_agent_sessions(limit, all, json_output).await
+                cmd_agent_sessions(limit, all, socket_path.as_deref(), json_output).await
             }
         },
 
@@ -2299,9 +2305,258 @@ async fn cmd_page(
 #[cfg(test)]
 mod tests {
     use super::{
-        format_agent_stream_event, mail_tool_request, AgentCommands, AgentStreamEvent,
-        AgentTaskOutput, AgentTaskRuntimeConfig, Cli, Commands, MailCommands, TierArg,
+        decode_browser_descriptors, decode_browser_execution, format_agent_stream_event,
+        mail_tool_request, AgentCommands, AgentStreamEvent, AgentTaskOutput,
+        AgentTaskRuntimeConfig, Cli, Commands, MailCommands, TierArg,
     };
+
+    #[test]
+    fn test_decode_browser_descriptors_mcp_translation() {
+        let mcp_response = serde_json::json!({
+            "tools": [
+                {
+                    "name": "browser_click",
+                    "capabilityId": "browser_click",
+                    "description": "Click an element",
+                    "schemaVersion": 2,
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"ref": {"type": "string"}}
+                    },
+                    "policy": {
+                        "mutability": "mutable",
+                        "changesAuthority": true,
+                        "sensitivity": "sensitive"
+                    }
+                },
+                {
+                    "name": "browser_tab_list",
+                    "capabilityId": "tab.list",
+                    "description": "List open tabs",
+                    "schemaVersion": 1,
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    },
+                    "policy": {
+                        "mutability": "readonly",
+                        "changesAuthority": false,
+                        "sensitivity": "low"
+                    }
+                }
+            ]
+        });
+
+        let decoded = decode_browser_descriptors(&mcp_response).expect("must decode MCP tools");
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].capability_id, "browser_click");
+        assert_eq!(decoded[0].name, "browser_click");
+        assert_eq!(decoded[0].description, "Click an element");
+        assert_eq!(decoded[0].schema_version, 2);
+        assert!(decoded[0].policy.sensitive);
+        assert_eq!(
+            decoded[0].policy.permission,
+            maho_types::tool::ToolPermission::AlwaysAsk
+        );
+
+        assert_eq!(decoded[1].capability_id, "tab.list");
+        assert_eq!(decoded[1].name, "browser_tab_list");
+        assert_eq!(decoded[1].schema_version, 1);
+        assert!(!decoded[1].policy.sensitive);
+        assert_eq!(
+            decoded[1].policy.permission,
+            maho_types::tool::ToolPermission::AutoApprove
+        );
+    }
+
+    #[test]
+    fn test_decode_browser_execution_mismatched_receipt_fails_closed() {
+        let mismatched_payload = serde_json::json!({
+            "structuredContent": {
+                "outputJson": "{\"status\":\"ok\"}",
+                "receipt": {
+                    "capabilityId": "unauthorized_capability",
+                    "executionId": "fake-exec-id",
+                    "metadata": {}
+                }
+            }
+        });
+
+        let result = decode_browser_execution("browser_click", mismatched_payload);
+        assert!(result.is_err(), "must fail closed on capability mismatch");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("structured receipt capability mismatch"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_malformed_structured_receipt_fails_closed() {
+        let malformed_structured = serde_json::json!({
+            "structuredContent": {
+                "outputJson": 12345, // invalid type: should be string
+                "receipt": "not a receipt object"
+            }
+        });
+
+        let result = decode_browser_execution("browser_click", malformed_structured);
+        assert!(result.is_err(), "must fail closed on malformed structured receipt");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("malformed structuredContent"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_typed_without_receipt_fails_closed() {
+        let typed_without_receipt = serde_json::json!({
+            "outputJson": "{\"status\":\"ok\"}"
+            // Missing "receipt" field
+        });
+
+        let result = decode_browser_execution("browser_click", typed_without_receipt);
+        assert!(result.is_err(), "must fail closed when typed execution lacks receipt");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("malformed typed execution: missing receipt field"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_malformed_direct_receipt_fails_closed() {
+        let malformed_direct = serde_json::json!({
+            "result": {"status": "ok"},
+            "receipt": "not a receipt object"
+        });
+
+        let result = decode_browser_execution("browser_click", malformed_direct);
+        assert!(result.is_err(), "must fail closed on malformed direct receipt");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("malformed direct receipt"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_malformed_typed_execution_fails_closed() {
+        let malformed_typed = serde_json::json!({
+            "outputJson": 12345, // invalid type for outputJson: must be string
+            "receipt": {
+                "capabilityId": "browser_click",
+                "executionId": "exec-123",
+                "metadata": {}
+            }
+        });
+
+        let result = decode_browser_execution("browser_click", malformed_typed);
+        assert!(result.is_err(), "must fail closed on malformed typed execution");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("malformed typed execution"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_missing_result_in_projection_fails_closed() {
+        let projection_without_result = serde_json::json!({
+            "receipt": {
+                "capabilityId": "browser_click",
+                "receiptId": "rec-123",
+                "metadata": {}
+            }
+            // Missing "result" and "content" fields
+        });
+
+        let result = decode_browser_execution("browser_click", projection_without_result);
+        assert!(result.is_err(), "must fail closed when projection envelope has no result");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing result or content field in receipt projection envelope"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_direct_receipt_mismatch_fails_closed() {
+        let mismatched_direct = serde_json::json!({
+            "result": {"status": "ok"},
+            "receipt": {
+                "capabilityId": "other_capability",
+                "receiptId": "rec-123",
+                "metadata": {}
+            }
+        });
+
+        let result = decode_browser_execution("browser_click", mismatched_direct);
+        assert!(result.is_err(), "must fail closed on direct capability mismatch");
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("direct receipt capability mismatch"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_legacy_output_untouched() {
+        let legacy = serde_json::json!({
+            "arbitraryKey": "data:image/png;base64,abc",
+            "count": 42
+        });
+
+        let exec = decode_browser_execution("legacy_tool", legacy).expect("must wrap legacy output");
+        assert_eq!(exec.receipt.capability_id, "legacy_tool");
+        assert!(exec.output_json.contains("arbitraryKey"));
+        assert!(exec.output_json.contains("data:image/png;base64,abc"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_error_preservation() {
+        let error_payload = serde_json::json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "permission denied by policy"}]
+        });
+
+        let result = decode_browser_execution("browser_click", error_payload);
+        assert!(result.is_err(), "must return Err when isError is true");
+        assert!(result.unwrap_err().to_string().contains("permission denied by policy"));
+    }
+
+    #[test]
+    fn test_decode_browser_execution_structured_receipt_preservation() {
+        let structured_payload = serde_json::json!({
+            "structuredContent": {
+                "outputJson": "{\"status\":\"ok\"}",
+                "receipt": {
+                    "capabilityId": "browser_click",
+                    "executionId": "authoritative-exec-id-1234",
+                    "metadata": {"broker": "native"}
+                }
+            }
+        });
+
+        let exec = decode_browser_execution("browser_click", structured_payload).expect("must decode structured receipt");
+        assert_eq!(exec.receipt.capability_id, "browser_click");
+        assert_eq!(exec.receipt.execution_id, "authoritative-exec-id-1234");
+    }
+
+    #[test]
+    fn test_decode_browser_execution_mcp_receipt_projection() {
+        let mcp_payload = serde_json::json!({
+            "receipt": {
+                "capabilityId": "tab.list",
+                "receiptId": "rec-12345:1",
+                "category": "tabs",
+                "sensitivity": "low"
+            },
+            "result": {
+                "tabs": [{"id": 1, "title": "Welcome"}]
+            }
+        });
+
+        let exec = decode_browser_execution("browser_tab_list", mcp_payload)
+            .expect("must decode MCP receipt projection for canonical alias");
+        assert_eq!(exec.receipt.capability_id, "browser_tab_list");
+        assert_eq!(exec.receipt.execution_id, "rec-12345:1");
+        assert!(exec.output_json.contains("Welcome"));
+    }
 
     /// Plan row 13: valid `maho agent task` args parse the GOAL positional and
     /// map the runtime-config flags onto the session runtime_config payload
@@ -2694,6 +2949,7 @@ mod tests {
         let backend = super::build_agent_task_session(
             &db_path,
             None,
+            None,
             &config,
             false,
             super::TaskSessionTarget::New {
@@ -2733,6 +2989,7 @@ mod tests {
         };
         let backend = super::build_agent_task_session(
             &db_path,
+            None,
             None,
             &config,
             false,
@@ -2780,6 +3037,7 @@ mod tests {
         let (_, backend) = super::build_agent_task_session(
             &db_path,
             None,
+            None,
             &AgentTaskRuntimeConfig::default(),
             false,
             super::TaskSessionTarget::New {
@@ -2809,6 +3067,7 @@ mod tests {
         };
         let (_, backend) = super::build_agent_task_session(
             &db_path,
+            None,
             None,
             &config,
             false,
@@ -2869,6 +3128,7 @@ mod tests {
         let (session_id, backend) = super::build_agent_task_session(
             &db_path,
             None,
+            None,
             &AgentTaskRuntimeConfig::default(),
             false,
             super::TaskSessionTarget::New {
@@ -2909,6 +3169,7 @@ mod tests {
         let (session_id, backend) = super::build_agent_task_session(
             &db_path,
             None,
+            None,
             &AgentTaskRuntimeConfig::default(),
             false,
             super::TaskSessionTarget::New {
@@ -2930,6 +3191,7 @@ mod tests {
         // title (no re-titling on resume).
         let (resumed_id, backend) = super::build_agent_task_session(
             &db_path,
+            None,
             None,
             &AgentTaskRuntimeConfig::default(),
             false,
@@ -2961,6 +3223,7 @@ mod tests {
         // Unknown resume id: fail closed, never fork a fresh session.
         let error = super::build_agent_task_session(
             &db_path,
+            None,
             None,
             &AgentTaskRuntimeConfig::default(),
             false,
@@ -3946,6 +4209,7 @@ struct AgentTaskSessionInputs<'a> {
     approve_all: bool,
     resume: Option<&'a str>,
     dirs: &'a [PathBuf],
+    socket_path: Option<&'a str>,
 }
 
 async fn cmd_agent_task(
@@ -3960,8 +4224,9 @@ async fn cmd_agent_task(
         approve_all,
         resume,
         dirs,
+        socket_path,
     } = session;
-    let db_path = maho_cli::workspace::default_db_path();
+    let db_path = maho_cli::workspace::resolve_db_path(socket_path);
     // Wave 1C (G10): a fresh run binds a new `task-<uuid>` conversation titled
     // from the goal; `--resume <id>` rebinds to the existing session instead
     // (stored turns and title reused, fail-closed on unknown ids).
@@ -3974,7 +4239,7 @@ async fn cmd_agent_task(
         },
     };
     let (session_id, backend) =
-        build_agent_task_session(&db_path, workspace, config, approve_all, target, dirs).await?;
+        build_agent_task_session(&db_path, workspace, socket_path, config, approve_all, target, dirs).await?;
 
     if !json_output {
         let tier = &config.permission_tier;
@@ -4015,10 +4280,21 @@ async fn cmd_agent_task(
         Some(agent_task_event_sink(stream))
     };
 
-    let response = backend
-        .run_prompt_in_session(&session_id, goal, on_event)
+    let chat_msg = ChatMessage::user(ChatContent::text(goal.to_string()));
+    let response_msg = maho_agent::AgentRuntime::run_turn(&backend, &session_id, chat_msg, None, on_event)
         .await
         .map_err(|e| anyhow::anyhow!("Agent task failed: {e:?}"))?;
+
+    let response = match response_msg.content {
+        ChatContent::Text(text) => text,
+        _ => String::new(),
+    };
+
+    let storage_db = maho_cli::workspace::open_storage(&db_path).ok();
+    if let Some(storage) = storage_db {
+        let _ = storage.save_conversation_message(&session_id, "user", goal, None);
+        let _ = storage.save_conversation_message(&session_id, "assistant", &response, None);
+    }
 
     if json_output {
         let out = AgentTaskOutput {
@@ -4053,8 +4329,13 @@ struct AgentSessionOutput {
 /// read from the same shared workspace store `--resume` resolves against
 /// (`workspace::default_db_path` → `open_storage` → `list_conversations`),
 /// so a listed id is always a resolvable one.
-async fn cmd_agent_sessions(limit: usize, all: bool, json_output: bool) -> Result<()> {
-    let db_path = maho_cli::workspace::default_db_path();
+async fn cmd_agent_sessions(
+    limit: usize,
+    all: bool,
+    socket_path: Option<&str>,
+    json_output: bool,
+) -> Result<()> {
+    let db_path = maho_cli::workspace::resolve_db_path(socket_path);
     let sessions = tokio::task::spawn_blocking(move || -> Result<Vec<AgentSessionOutput>> {
         let storage = maho_cli::workspace::open_storage(&db_path)
             .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?;
@@ -4129,14 +4410,47 @@ fn agent_task_title(goal: &str) -> String {
 /// `task-<uuid>` conversation row up front (so the title exists even before
 /// the first turn persists), `Resume` targets verify the session exists and
 /// fail closed otherwise.
+/// Resolve the profile's openai-compatible provider into an LLM client override.
+fn profile_custom_provider(user_data_dir: &std::path::Path) -> Option<maho_agent::omo::config::CustomProvider> {
+    let prefs_path = user_data_dir.join("Default").join("Preferences");
+    let raw = std::fs::read_to_string(prefs_path).ok()?;
+    let prefs: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let ai = prefs.get("maho")?.get("ai")?;
+    if ai.get("provider")?.as_str()? != "openai-compatible" {
+        return None;
+    }
+    let api_key = ai.get("api_key")?.as_str()?.trim().to_string();
+    let api_base = ai.get("base_url")?.as_str()?.trim().to_string();
+    if api_key.is_empty() || api_base.is_empty() {
+        return None;
+    }
+    let base_url = if api_base.ends_with("/v1") {
+        api_base
+    } else {
+        format!("{}/v1", api_base.trim_end_matches('/'))
+    };
+    let model = ai
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("gpt-5.6-luna")
+        .to_string();
+    Some(maho_agent::omo::config::CustomProvider {
+        name: "openai-compatible".to_string(),
+        base_url,
+        api_key,
+        models: vec![model],
+    })
+}
+
 async fn build_agent_task_session(
     db_path: &std::path::Path,
     workspace: Option<&str>,
+    socket_path: Option<&str>,
     config: &AgentTaskRuntimeConfig,
     approve_all: bool,
     target: TaskSessionTarget,
     dirs: &[PathBuf],
-) -> Result<(String, SwiftideBackend)> {
+) -> Result<(String, maho_agent::omo::backend::OmoBackend)> {
     let resolved_ws_id = maho_cli::workspace::resolve_workspace_id(db_path, workspace).await?;
 
     let storage = maho_cli::workspace::open_storage(db_path)
@@ -4178,16 +4492,83 @@ async fn build_agent_task_session(
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    let backend = SwiftideBackend::new(
-        Arc::new(maho_agent::MutexAgentStorage(Arc::new(Mutex::new(storage)))),
-        None,
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("/Applications/Maho.app/Contents/Helpers"));
+
+    let mut bundled = maho_agent::omo::config::BundledRuntime::from_executable_dir(&exe_dir);
+    if !bundled.missing().is_empty() {
+        let app_helpers = PathBuf::from("/Applications/Maho.app/Contents/Helpers");
+        if app_helpers.exists() {
+            bundled = maho_agent::omo::config::BundledRuntime::from_executable_dir(app_helpers);
+        }
+    }
+    let missing = bundled.missing();
+    if !missing.is_empty() {
+        anyhow::bail!("Omo bundled runtime artifacts missing: {missing:?}");
+    }
+
+    let agent_dir = maho_agent::omo::factory::agent_dir_for_workspace(&workspace_root);
+    let socket_path_rpc = maho_agent::omo::factory::resolve_rpc_socket_path(&agent_dir);
+
+    let mut config_builder = maho_agent::omo::config::OmoLaunchConfig::builder(&agent_dir)
+        .runtime_binary(&bundled.runtime_binary)
+        .rpc_entry(&bundled.rpc_entry)
+        .socket_path(&socket_path_rpc)
+        .add_cleanup_path(&socket_path_rpc);
+
+    let user_data_dir = maho_browser_mcp::paths::resolve_user_data_dir(socket_path);
+    if let Some(cp) = profile_custom_provider(&user_data_dir) {
+        let model_id = cp.models.first().cloned().unwrap_or_else(|| "gpt-5.6-luna".to_string());
+        config_builder = config_builder.custom_provider(cp);
+        config_builder = config_builder.provider("openai-compatible");
+        config_builder = config_builder.model_id(model_id);
+    } else if let (Some(p), Some(m)) = (&config.provider, &config.model) {
+        config_builder = config_builder.provider(p.clone());
+        config_builder = config_builder.model_id(m.clone());
+    }
+
+    let preset = match config.permission_tier.as_str() {
+        "read-only" | "read_only" => "read_only",
+        "full-access" | "full_access" => "full_access",
+        _ => "guard",
+    };
+    config_builder = config_builder.permission_preset(preset);
+
+    let omo_config = config_builder
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build omo config: {e}"))?;
+
+    // Ensure MAHO_MCP_SOCKET_PATH points to the resolved browser socket
+    if let Some(sp) = socket_path {
+        unsafe { std::env::set_var("MAHO_MCP_SOCKET_PATH", sp); }
+    } else if let Some(resolved_sock) = maho_browser_mcp::paths::resolve_user_data_dir(None)
+        .join("maho.sock")
+        .into_os_string()
+        .to_str()
+    {
+        unsafe { std::env::set_var("MAHO_MCP_SOCKET_PATH", resolved_sock); }
+    }
+
+    let backend = maho_agent::omo::backend::OmoBackend::new(
+        omo_config,
+        bundled.browser_mcp_binary,
         workspace_root.clone(),
-        true, // allow insecure key storage for CLI convenience (pre-existing CLI posture)
     );
 
     if let Some(space_id) = &ws.space_id {
         backend.set_active_space_id(Some(space_id.clone()));
     }
+
+    // Connect to the running browser's tool bridge so the CLI agent has
+    // the EXACT SAME tools (navigation, clicking, typing, screenshots, etc.)
+    // as the browser's internal agent.
+    let browser_bridge = Arc::new(CliBrowserToolBridge::new(socket_path.map(str::to_string)));
+    if let Err(e) = backend.set_browser_tool_bridge(browser_bridge) {
+        tracing::warn!("Failed to set browser tool bridge: {e:?}");
+    }
+    maho_agent::AgentRuntime::set_browser_action_tools_enabled(&backend, true);
 
     // Wave 1B + 1D: approval posture is explicit, never hard-coded, and the
     // session tier caps it (read_only → DenySensitive even with --approve-all;
@@ -4220,9 +4601,6 @@ async fn build_agent_task_session(
     // preserves the stored profile's preferred_model and fallback ladder.
     if config.provider.is_some() {
         backend.set_preferred_provider(config.provider.clone());
-    }
-    if let Some(model) = &config.model {
-        backend.set_available_models(vec![model.clone()]);
     }
 
     // Wave 3A (G8): the composite (batch) gate is bound ONCE here at session
@@ -4279,11 +4657,354 @@ fn resolve_fs_whitelist_roots(
     Ok(roots)
 }
 
-/// System prompt for a task session: the row-9 proactive instruction block
-/// gated on `proactive_mode`. With the flag off the composition is byte-
-/// identical to the plain (empty-base) composition — nothing appended.
+/// System prompt for a task session: full Aside-parity Maho AI browser system
+/// prompt, with the row-9 proactive instruction block gated on `proactive_mode`.
+/// This ensures `maho agent task` and the browser's internal agent share the
+/// exact same prompt, role, and behavioral contract.
 fn agent_task_system_prompt(config: &AgentTaskRuntimeConfig) -> String {
-    maho_agent::system_prompt::compose_system_prompt_proactive("", &[], None, config.proactive_mode)
+    maho_agent::system_prompt::compose_system_prompt_proactive(
+        maho_agent::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT,
+        &[],
+        None,
+        config.proactive_mode,
+    )
+}
+
+fn decode_browser_descriptors(
+    result: &serde_json::Value,
+) -> Result<Vec<maho_agent::BrowserToolDescriptor>> {
+    let tools = result
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("browser tools/list response is missing tools array"))?;
+
+    let mut descriptors = Vec::new();
+    for tool in tools {
+        if let Ok(desc) = serde_json::from_value::<maho_agent::BrowserToolDescriptor>(tool.clone()) {
+            descriptors.push(desc);
+            continue;
+        }
+        let name = tool.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let description = tool.get("description").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let input_schema = tool.get("inputSchema").cloned().unwrap_or_else(|| serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }));
+        let capability_id = tool
+            .get("capabilityId")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&name)
+            .to_string();
+        let schema_version = tool
+            .get("schemaVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1) as u32;
+
+        let policy_obj = tool.get("policy").and_then(|v| v.as_object());
+        let sensitive = policy_obj
+            .and_then(|p| p.get("sensitive").and_then(|v| v.as_bool()))
+            .unwrap_or_else(|| {
+                policy_obj
+                    .and_then(|p| p.get("sensitivity").and_then(|v| v.as_str()))
+                    .map_or(false, |s| s != "low")
+            });
+
+        let can_auto_approve = if let Some(perm) =
+            policy_obj.and_then(|p| p.get("permission").and_then(|v| v.as_str()))
+        {
+            perm == "auto_approve"
+        } else if let Some(p) = policy_obj {
+            let is_readonly = p
+                .get("mutability")
+                .and_then(|v| v.as_str())
+                .map_or(false, |m| m == "readonly");
+            let changes_authority = p
+                .get("changesAuthority")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let is_low_sensitivity = p
+                .get("sensitivity")
+                .and_then(|v| v.as_str())
+                .map_or(false, |s| s == "low");
+            is_readonly && !changes_authority && is_low_sensitivity
+        } else {
+            false
+        };
+
+        let permission = if can_auto_approve {
+            maho_types::tool::ToolPermission::AutoApprove
+        } else {
+            maho_types::tool::ToolPermission::AlwaysAsk
+        };
+
+        descriptors.push(maho_agent::BrowserToolDescriptor {
+            capability_id,
+            name,
+            description,
+            input_schema,
+            schema_version,
+            policy: maho_types::tool::BrowserToolPolicy {
+                sensitive,
+                permission,
+            },
+        });
+    }
+    Ok(descriptors)
+}
+
+fn decode_browser_execution(
+    capability_id: &str,
+    result: serde_json::Value,
+) -> Result<maho_agent::BrowserToolExecution> {
+    if result.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let err_msg = result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("browser tool execution returned an error");
+        anyhow::bail!("{err_msg}");
+    }
+
+    // 1. Check for structuredContent envelope
+    if let Some(structured) = result.get("structuredContent") {
+        let execution = serde_json::from_value::<maho_agent::BrowserToolExecution>(structured.clone())
+            .map_err(|e| anyhow::anyhow!("malformed structuredContent in tool execution response: {e}"))?;
+        if execution.receipt.capability_id != capability_id {
+            anyhow::bail!(
+                "structured receipt capability mismatch: expected {capability_id}, got {}",
+                execution.receipt.capability_id
+            );
+        }
+        return Ok(execution);
+    }
+
+    // 2. Format discrimination for typed execution:
+    // If it carries outputJson or output_json, it is explicitly attempting the typed BrowserToolExecution
+    // format. It MUST carry a valid receipt; missing receipt or deserialization errors must fail closed
+    // and must NOT fall through to projection or legacy branches.
+    if result.get("outputJson").is_some() || result.get("output_json").is_some() {
+        if result.get("receipt").is_none() {
+            anyhow::bail!("malformed typed execution: missing receipt field in tool execution response");
+        }
+        let execution = serde_json::from_value::<maho_agent::BrowserToolExecution>(result.clone())
+            .map_err(|e| anyhow::anyhow!("malformed typed execution in tool execution response: {e}"))?;
+        if execution.receipt.capability_id != capability_id {
+            anyhow::bail!(
+                "typed execution capability mismatch: expected {capability_id}, got {}",
+                execution.receipt.capability_id
+            );
+        }
+        return Ok(execution);
+    }
+
+    // 3. Authoritative MCP receipt projection: must contain a genuine "result" or "content" payload.
+    if let Some(receipt_val) = result.get("receipt") {
+        let output_val = result
+            .get("result")
+            .or_else(|| result.get("content"))
+            .ok_or_else(|| anyhow::anyhow!("missing result or content field in receipt projection envelope"))?;
+
+        let cap_id = receipt_val
+            .get("capabilityId")
+            .or_else(|| receipt_val.get("capability_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("malformed direct receipt in tool execution response: missing capabilityId"))?;
+
+        let matches = if cap_id == capability_id {
+            true
+        } else {
+            matches!(
+                (cap_id, capability_id),
+                ("tab.list", "browser_tab_list") | ("browser_tab_list", "tab.list")
+            )
+        };
+
+        if !matches {
+            anyhow::bail!(
+                "direct receipt capability mismatch: expected {capability_id}, got {cap_id}"
+            );
+        }
+
+        let exec_id = receipt_val
+            .get("executionId")
+            .or_else(|| receipt_val.get("execution_id"))
+            .or_else(|| receipt_val.get("receiptId"))
+            .or_else(|| receipt_val.get("receipt_id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("malformed direct receipt in tool execution response: missing executionId or receiptId"))?
+            .to_string();
+
+        let output_json = serde_json::to_string(output_val)?;
+
+        return Ok(maho_agent::BrowserToolExecution {
+            output_json,
+            receipt: maho_agent::BrowserToolExecutionReceipt {
+                capability_id: capability_id.to_string(),
+                execution_id: exec_id,
+                metadata: receipt_val.clone(),
+            },
+        });
+    }
+
+    // 3. Pure legacy untyped response without receipt: pass through verbatim
+    let serialized = serde_json::to_string(&result)?;
+    Ok(maho_agent::BrowserToolExecution {
+        output_json: serialized,
+        receipt: maho_agent::BrowserToolExecutionReceipt {
+            capability_id: capability_id.to_string(),
+            execution_id: uuid::Uuid::new_v4().to_string(),
+            metadata: serde_json::json!({"source":"maho-cli-browser-transport"}),
+        },
+    })
+}
+
+fn browser_session_transport_failed(message: &str) -> bool {
+    message.contains("socket connect failed")
+        || message.contains("io error")
+        || message.contains("response handler closed")
+        || message.contains("connection reset")
+        || message.contains("broken pipe")
+}
+
+struct CliBrowserToolBridge {
+    socket_path: Option<String>,
+    client: Arc<tokio::sync::Mutex<Option<Arc<maho_browser_mcp::client::BrowserClient>>>>,
+    canonical_map: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
+}
+
+impl CliBrowserToolBridge {
+    fn new(socket_path: Option<String>) -> Self {
+        Self {
+            socket_path,
+            client: Arc::new(tokio::sync::Mutex::new(None)),
+            canonical_map: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl maho_agent::BrowserToolBridge for CliBrowserToolBridge {
+    async fn list_tool_descriptors(
+        &self,
+    ) -> std::result::Result<
+        Vec<maho_agent::BrowserToolDescriptor>,
+        maho_agent::BrowserToolBridgeError,
+    > {
+        let socket_path = self.socket_path.clone();
+        let mut client = self.client.lock().await;
+        if client.is_none() {
+            let connected = browser::connect_autonomous(socket_path.as_deref())
+                .await
+                .map_err(|error| {
+                    maho_agent::BrowserToolBridgeError::new(
+                        "discovery_unavailable",
+                        error.to_string(),
+                        true,
+                    )
+                })?;
+            *client = Some(Arc::new(connected));
+        }
+        let connected = client.as_ref().ok_or_else(|| {
+            maho_agent::BrowserToolBridgeError::new(
+                "discovery_unavailable",
+                "browser client initialization produced no client",
+                true,
+            )
+        })?;
+        let descriptors_json = connected
+            .call("tools/list", serde_json::json!({}))
+            .await
+            .map_err(|error| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "discovery_unavailable",
+                    error.to_string(),
+                    true,
+                )
+            })?;
+        let descriptors = decode_browser_descriptors(&descriptors_json).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new(
+                "discovery_unavailable",
+                error.to_string(),
+                true,
+            )
+        })?;
+
+        {
+            let mut map = self.canonical_map.write().await;
+            for desc in &descriptors {
+                map.insert(desc.capability_id.clone(), desc.name.clone());
+                map.insert(desc.name.clone(), desc.name.clone());
+            }
+        }
+
+        Ok(descriptors)
+    }
+
+    async fn execute_tool(
+        &self,
+        capability_id: &str,
+        args_json: &str,
+    ) -> std::result::Result<maho_agent::BrowserToolExecution, maho_agent::BrowserToolBridgeError> {
+        let capability_id = capability_id.to_string();
+        let socket_path = self.socket_path.clone();
+        let args = serde_json::from_str(args_json).map_err(|error| {
+            maho_agent::BrowserToolBridgeError::new("invalid_arguments", error.to_string(), false)
+        })?;
+        let mut client = self.client.lock().await;
+        if client.is_none() {
+            let connected = browser::connect_autonomous(socket_path.as_deref())
+                .await
+                .map_err(|error| {
+                    maho_agent::BrowserToolBridgeError::new(
+                        "execution_unavailable",
+                        error.to_string(),
+                        true,
+                    )
+                })?;
+            *client = Some(Arc::new(connected));
+        }
+
+        let dispatch_name = {
+            let map = self.canonical_map.read().await;
+            map.get(&capability_id).cloned().unwrap_or_else(|| capability_id.clone())
+        };
+
+        let result = {
+            let connected = client.as_ref().ok_or_else(|| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "execution_unavailable",
+                    "browser client initialization produced no client",
+                    true,
+                )
+            })?;
+            browser::send_raw_tool_call_no_replay(connected, &dispatch_name, args).await
+        };
+        match result {
+            Ok(result) => decode_browser_execution(&capability_id, result).map_err(|error| {
+                maho_agent::BrowserToolBridgeError::new(
+                    "execution_failed",
+                    error.to_string(),
+                    false,
+                )
+            }),
+            Err(error) => {
+                let message = error.to_string();
+                if browser_session_transport_failed(&message) {
+                    *client = None;
+                }
+                Err(maho_agent::BrowserToolBridgeError::new(
+                    "execution_failed",
+                    message,
+                    false,
+                ))
+            }
+        }
+    }
 }
 
 /// JSON projection for `maho agent task --json`. A typed struct (not the
@@ -4971,8 +5692,16 @@ Commands:
   .quit / .exit         Exit REPL
 ";
 
-async fn cmd_repl(socket_path: Option<&str>, _json_output: bool) -> Result<()> {
+async fn cmd_repl(eval: Option<String>, socket_path: Option<&str>, _json_output: bool) -> Result<()> {
     let client = browser::connect_repl(socket_path).await?;
+
+    if let Some(cmd) = eval {
+        let trimmed = cmd.trim();
+        if !trimmed.is_empty() && trimmed != ".quit" && trimmed != ".exit" {
+            handle_repl_line(&client, trimmed).await?;
+        }
+        return Ok(());
+    }
 
     let history_dir = dirs_path();
     std::fs::create_dir_all(&history_dir).ok();

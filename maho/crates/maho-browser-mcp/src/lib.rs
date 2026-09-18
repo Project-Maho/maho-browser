@@ -5,6 +5,7 @@
 //! Maho Browser MCP — stdio→UDS bridge exposing browser tools to AI agents.
 #![warn(missing_docs)]
 
+mod catalog_repair;
 pub mod client;
 pub mod error;
 pub mod firewall;

@@ -330,3 +330,33 @@ async fn page_screenshot_writes_png_file() {
         "file does not start with PNG magic"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn page_screenshot_writes_png_from_capability_envelope() {
+    let resp = json!({
+        "result": {"data": "iVBORw0KGgo=", "content_type": "image/png"}
+    });
+    let (_dir, sock, server, calls) = make_mock_server(vec![resp]).await;
+
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("shot.png");
+    let output = run_cli(
+        &["page", "screenshot", "--out", out_path.to_str().unwrap()],
+        &sock,
+    );
+    server.abort();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        ["browser_screenshot_full"]
+    );
+    assert_eq!(
+        std::fs::read(&out_path).expect("screenshot file should be written"),
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+    );
+}

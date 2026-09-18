@@ -8,11 +8,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 /// Run the CLI with an explicit socket path and optional environment variables.
-fn run_cli_with_env(
-    args: &[&str],
-    socket: &str,
-    envs: &[(&str, &str)],
-) -> std::process::Output {
+fn run_cli_with_env(args: &[&str], socket: &str, envs: &[(&str, &str)]) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_maho");
     let mut cmd = Command::new(bin);
     cmd.args(args);
@@ -192,10 +188,7 @@ impl MockBrowserServer {
                         .and_then(|p| p.get("name"))
                         .and_then(|n| n.as_str())
                         .map(str::to_string);
-                    let arguments = req
-                        .get("params")
-                        .and_then(|p| p.get("arguments"))
-                        .cloned();
+                    let arguments = req.get("params").and_then(|p| p.get("arguments")).cloned();
 
                     calls.lock().unwrap().push(RecordedCall {
                         method: method.clone(),
@@ -227,7 +220,7 @@ impl MockBrowserServer {
                                     "lease_id": "mock_lease_1"
                                 }
                             })
-                        },
+                        }
                         "tools/call" => {
                             let name = tool_name.as_deref().unwrap_or("");
                             let result_content = match name {
@@ -264,7 +257,7 @@ impl MockBrowserServer {
                                         "attribute": attr,
                                         "value": val
                                     })
-                                },
+                                }
                                 "browser_accessibility_snapshot" => serde_json::json!({
                                     "ref": 42,
                                     "role": "button",
@@ -290,7 +283,7 @@ impl MockBrowserServer {
                                     "content": [{"type": "text", "text": serde_json::to_string(&result_content).unwrap()}]
                                 }
                             })
-                        },
+                        }
                         _ => serde_json::json!({
                             "jsonrpc": "2.0",
                             "id": id,
@@ -351,10 +344,7 @@ fn test_v2_click_uses_direct_locator_and_no_ax_snapshot() {
     );
 
     let calls = mock.calls();
-    let tool_call_names: Vec<String> = calls
-        .iter()
-        .filter_map(|c| c.tool_name.clone())
-        .collect();
+    let tool_call_names: Vec<String> = calls.iter().filter_map(|c| c.tool_name.clone()).collect();
 
     // 1. Direct locator call was dispatched
     assert!(
@@ -424,10 +414,7 @@ fn test_v2_type_submit_uses_direct_locator_type() {
     );
 
     let calls = mock.calls();
-    let tool_call_names: Vec<String> = calls
-        .iter()
-        .filter_map(|c| c.tool_name.clone())
-        .collect();
+    let tool_call_names: Vec<String> = calls.iter().filter_map(|c| c.tool_name.clone()).collect();
 
     assert!(
         tool_call_names.contains(&"input.locator_type".to_string()),
@@ -499,10 +486,7 @@ fn test_legacy_fallback_executes_full_fan_out() {
     );
 
     let calls = mock.calls();
-    let tool_call_names: Vec<String> = calls
-        .iter()
-        .filter_map(|c| c.tool_name.clone())
-        .collect();
+    let tool_call_names: Vec<String> = calls.iter().filter_map(|c| c.tool_name.clone()).collect();
 
     // 1. Accessibility snapshot WAS requested on legacy path
     assert!(
