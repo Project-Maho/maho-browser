@@ -2459,7 +2459,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     "ui/webui/resources/js/parse_html_subset.ts": [
         Replacement(
             old=(
-                "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL']);\n"
+                "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL']);\n"
             ),
             new=(
                 "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL', 'CODE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'DEL']);\n"
@@ -2470,10 +2470,47 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "'X is not supported' on persisted assistant messages — fixes blank "
                 "panel triggered by any markdown element beyond the upstream default whitelist"
             ),
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL']);\n"
+            ),
+            new=(
+                "const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL', 'CODE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'DEL']);\n"
+            ),
+            description=(
+                "Whitelist all markdown-safe tags (migration from intermediate OL-only form) "
+                "in parseHtmlSubset so renderTrustedMarkdown's output never throws "
+                "'X is not supported' on persisted assistant messages"
+            ),
+            idempotent=True,
         ),
     ],
     # ── app-Info.plist ────────────────────────────────────────────────────────
     "chrome/app/app-Info.plist": [
+        Replacement(
+            old=(
+                "\t<key>LSFileQuarantineEnabled</key>\n"
+                "\t<true/>\n"
+            ),
+            new=(
+                "\t<key>LSFileQuarantineEnabled</key>\n"
+                "\t<false/>\n"
+                "\t<key>SUFeedURL</key>\n"
+                "\t<string>https://github.com/Project-Maho/release/releases/latest/download/appcast.xml</string>\n"
+                "\t<key>SUPublicEDKey</key>\n"
+                "\t<string>iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=</string>\n"
+                "\t<key>SUEnableAutomaticChecks</key>\n"
+                "\t<false/>\n"
+                "\t<key>SUScheduledCheckInterval</key>\n"
+                "\t<integer>86400</integer>\n"
+            ),
+            description=(
+                "Disable LSFileQuarantineEnabled and inject Sparkle update keys to app-Info.plist"
+            ),
+            idempotent=True,
+        ),
         Replacement(
             old=(
                 "\t<key>LSFileQuarantineEnabled</key>\n"
@@ -2492,8 +2529,9 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "\t<integer>86400</integer>\n"
             ),
             description=(
-                "Disable LSFileQuarantineEnabled and inject Sparkle update keys to app-Info.plist"
+                "Disable LSFileQuarantineEnabled and inject Sparkle update keys to app-Info.plist (migration from false-only form)"
             ),
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -3064,6 +3102,30 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
         ),
         Replacement(
             old=(
+                "  BrowserWindowInterface* browser = chrome::FindLastActive();\n"
+                "  CHECK(browser);\n"
+                "  return browser;\n"
+            ),
+            new=(
+                "  BrowserWindowInterface* browser = chrome::FindLastActive();\n"
+                "  // Maho login gate: NewEmptyWindow() can intentionally show the onboarding\n"
+                "  // gate instead of creating a browser (see browser_commands.cc override), so a\n"
+                "  // null result is legitimate. Tolerate it instead of crashing on CHECK.\n"
+                "  if (!browser) {\n"
+                "    return nullptr;\n"
+                "  }\n"
+                "  return browser;\n"
+            ),
+            description=(
+                "Maho login gate: CreateBrowser tolerates a null browser when "
+                "NewEmptyWindow redirects to the onboarding gate (avoids CHECK crash "
+                "on Incognito/New Window while gated)"
+            ),
+            guard="Maho login gate: NewEmptyWindow() can intentionally show the onboarding",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
                 "  BrowserWindowInterface* browser =\n"
                 "      GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();\n"
                 "  CHECK(browser);\n"
@@ -3083,9 +3145,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             description=(
                 "Maho login gate: CreateBrowser tolerates a null browser when "
                 "NewEmptyWindow redirects to the onboarding gate (avoids CHECK crash "
-                "on Incognito/New Window while gated)"
+                "on Incognito/New Window while gated) (migration)"
             ),
             guard="Maho login gate: NewEmptyWindow() can intentionally show the onboarding",
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -3256,6 +3319,63 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             old=(
                 "- (void)setLastProfileForTesting:(Profile*)profile {\n"
                 "  _lastProfile = profile;\n"
+                "  Browser* browser = chrome::FindLastActiveWithProfile(profile);\n"
+                "  _lastActiveBrowser = browser->GetWeakPtr();\n"
+                "}\n"
+            ),
+            new=(
+                "- (void)setLastProfileForTesting:(Profile*)profile {\n"
+                "  _lastProfile = profile;\n"
+                "  Browser* browser = chrome::FindLastActiveWithProfile(profile);\n"
+                "  _lastActiveBrowser = browser->GetWeakPtr();\n"
+                "}\n"
+                "\n"
+                "- (void)queueNativeUrlsWhileMahoLoginGatedForProfile:(Profile*)profile\n"
+                "                                                urls:(std::vector<GURL>)urls {\n"
+                "  if (!profile || urls.empty()) {\n"
+                "    return;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  std::vector<GURL>& queued_urls =\n"
+                "      _mahoNativeUrlsQueuedWhileLoginGated[regular_profile->GetPath()];\n"
+                "  queued_urls.insert(queued_urls.end(), urls.begin(), urls.end());\n"
+                "}\n"
+                "\n"
+                "- (void)drainQueuedNativeUrlsAfterMahoWelcomeForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  if (regular_profile->GetPrefs()->GetBoolean(\n"
+                "          maho::welcome::kLoginGateActive)) {\n"
+                "    return;\n"
+                "  }\n"
+                "  // Todo 3 takes this profile's FIFO batch and dispatches it through the\n"
+                "  // existing native URL path after successful completion.\n"
+                "}\n"
+                "\n"
+                "- (size_t)queuedNativeUrlCountForTestingForProfile:(Profile*)profile {\n"
+                "  if (!profile) {\n"
+                "    return 0;\n"
+                "  }\n"
+                "  Profile* regular_profile = profile->GetOriginalProfile();\n"
+                "  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(\n"
+                "      regular_profile->GetPath());\n"
+                "  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()\n"
+                "             ? 0\n"
+                "             : it->second.size();\n"
+                "}\n"
+            ),
+            description=(
+                "Add AppController-owned deferred native URL queue operations"
+            ),
+            guard="queueNativeUrlsWhileMahoLoginGatedForProfile",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "- (void)setLastProfileForTesting:(Profile*)profile {\n"
+                "  _lastProfile = profile;\n"
                 "  BrowserWindowInterface* current_browser =\n"
                 "      chrome::FindLastActiveWithProfile(profile);\n"
                 "  Browser* browser =\n"
@@ -3310,9 +3430,10 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "}\n"
             ),
             description=(
-                "Add AppController-owned deferred native URL queue operations"
+                "Add AppController-owned deferred native URL queue operations (migration)"
             ),
             guard="queueNativeUrlsWhileMahoLoginGatedForProfile",
+            idempotent=True,
         ),
         Replacement(
             old=(

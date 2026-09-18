@@ -18,3 +18,4 @@ maho_root = "//maho"
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
 enable_traffic_annotation_auditor = true
+cc_wrapper = "/opt/homebrew/bin/sccache"

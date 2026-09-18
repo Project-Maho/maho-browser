@@ -16,3 +16,4 @@ maho_root = "//maho"
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
 use_sysroot = true
+cc_wrapper = "sccache"
