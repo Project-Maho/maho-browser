@@ -6,8 +6,8 @@
 //! (such as Google Docs canvas, complex React trees, or virtualized tables)
 //! with strict exact-origin matching and insertion-order determinism.
 
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Canonicalizes a URL or origin string to its standard `scheme://host[:port]` representation.
 ///
@@ -62,10 +62,7 @@ pub enum PageAdapterError {
     #[error("Adapter '{0}' execution failed: {1}")]
     ExecutionFailed(String, String),
     #[error("No page adapter found for origin '{origin}' and operation '{operation}'")]
-    NotFound {
-        origin: String,
-        operation: String,
-    },
+    NotFound { origin: String, operation: String },
 }
 
 /// Trait implemented by exact-origin page adapters.
@@ -84,9 +81,9 @@ pub trait PageAdapter: Send + Sync + std::fmt::Debug {
         let Some(target) = canonical_origin(origin_or_url) else {
             return false;
         };
-        self.exact_origins().iter().any(|pattern| {
-            canonical_origin(pattern).map_or(false, |pat| pat == target)
-        })
+        self.exact_origins()
+            .iter()
+            .any(|pattern| canonical_origin(pattern).map_or(false, |pat| pat == target))
     }
 
     /// Checks if this adapter supports the given operation name.
@@ -174,7 +171,8 @@ impl PageAdapterRegistry {
 
     /// Registers a descriptor-backed adapter.
     pub fn register_descriptor(&mut self, descriptor: PageAdapterDescriptor) {
-        self.adapters.push(Arc::new(SimplePageAdapter { descriptor }));
+        self.adapters
+            .push(Arc::new(SimplePageAdapter { descriptor }));
     }
 
     /// Convenience method to register a simple adapter by parts.
@@ -193,9 +191,10 @@ impl PageAdapterRegistry {
     pub fn lookup(&self, origin_or_url: &str, operation: &str) -> Option<Arc<dyn PageAdapter>> {
         let target_origin = canonical_origin(origin_or_url)?;
         for adapter in &self.adapters {
-            let origin_matches = adapter.exact_origins().iter().any(|pattern| {
-                canonical_origin(pattern).map_or(false, |pat| pat == target_origin)
-            });
+            let origin_matches = adapter
+                .exact_origins()
+                .iter()
+                .any(|pattern| canonical_origin(pattern).map_or(false, |pat| pat == target_origin));
             if origin_matches && adapter.supports_operation(operation) {
                 return Some(Arc::clone(adapter));
             }
@@ -204,7 +203,11 @@ impl PageAdapterRegistry {
     }
 
     /// Alias for lookup.
-    pub fn find_adapter(&self, origin_or_url: &str, operation: &str) -> Option<Arc<dyn PageAdapter>> {
+    pub fn find_adapter(
+        &self,
+        origin_or_url: &str,
+        operation: &str,
+    ) -> Option<Arc<dyn PageAdapter>> {
         self.lookup(origin_or_url, operation)
     }
 

@@ -175,17 +175,25 @@ impl ToolSlotRegistry {
     }
 
     pub fn set_limit(&mut self, tool_name: impl Into<String>, max_concurrent: usize) {
-        self.concurrency_limits.insert(tool_name.into(), max_concurrent);
+        self.concurrency_limits
+            .insert(tool_name.into(), max_concurrent);
     }
 
-    pub fn acquire_slot(&mut self, subagent_id: &str, tool_name: &str) -> Result<(), SubagentError> {
+    pub fn acquire_slot(
+        &mut self,
+        subagent_id: &str,
+        tool_name: &str,
+    ) -> Result<(), SubagentError> {
         let max_concurrent = self
             .concurrency_limits
             .get(tool_name)
             .copied()
             .unwrap_or(self.default_concurrency_limit);
 
-        let active_set = self.in_flight_slots.entry(tool_name.to_string()).or_default();
+        let active_set = self
+            .in_flight_slots
+            .entry(tool_name.to_string())
+            .or_default();
         if active_set.contains(subagent_id) {
             return Ok(());
         }
@@ -319,7 +327,11 @@ impl SubagentSupervisor {
         self.tool_registry.set_limit(tool_name, limit);
     }
 
-    pub fn acquire_tool_slot(&mut self, subagent_id: &str, tool_name: &str) -> Result<(), SubagentError> {
+    pub fn acquire_tool_slot(
+        &mut self,
+        subagent_id: &str,
+        tool_name: &str,
+    ) -> Result<(), SubagentError> {
         self.tool_registry.acquire_slot(subagent_id, tool_name)
     }
 
@@ -367,11 +379,8 @@ impl SubagentSupervisor {
 
         // 2. Concurrency limit check
         if self.active_runs.len() >= self.max_active {
-            self.queued_specs.push_back((
-                subagent_id.clone(),
-                parent_session_id.clone(),
-                spec,
-            ));
+            self.queued_specs
+                .push_back((subagent_id.clone(), parent_session_id.clone(), spec));
             return Ok(SubagentStatus::Queued);
         }
 
@@ -437,11 +446,14 @@ impl SubagentSupervisor {
                 subagent_id: child.subagent_id.clone(),
                 parent_session_id: child.parent_session_id.clone(),
                 status: SubagentStatus::Cancelled,
-                summary: summary.unwrap_or("Subagent cancelled by parent session").to_string(),
+                summary: summary
+                    .unwrap_or("Subagent cancelled by parent session")
+                    .to_string(),
                 artifacts: child.artifacts.clone(),
                 turns_used: child.turns_used,
             };
-            self.completed_results.insert(subagent_id.to_string(), result.clone());
+            self.completed_results
+                .insert(subagent_id.to_string(), result.clone());
             if !self.completion_order.iter().any(|id| id == subagent_id) {
                 self.completion_order.push(subagent_id.to_string());
             }
@@ -494,11 +506,14 @@ impl SubagentSupervisor {
                 subagent_id: child.subagent_id.clone(),
                 parent_session_id: child.parent_session_id.clone(),
                 status: SubagentStatus::Completed,
-                summary: summary.unwrap_or("Subagent execution completed successfully").to_string(),
+                summary: summary
+                    .unwrap_or("Subagent execution completed successfully")
+                    .to_string(),
                 artifacts: child.artifacts.clone(),
                 turns_used: child.turns_used,
             };
-            self.completed_results.insert(subagent_id.to_string(), result.clone());
+            self.completed_results
+                .insert(subagent_id.to_string(), result.clone());
             if !self.completion_order.iter().any(|id| id == subagent_id) {
                 self.completion_order.push(subagent_id.to_string());
             }
@@ -531,7 +546,8 @@ impl SubagentSupervisor {
                 artifacts: child.artifacts.clone(),
                 turns_used: child.turns_used,
             };
-            self.completed_results.insert(subagent_id.to_string(), result.clone());
+            self.completed_results
+                .insert(subagent_id.to_string(), result.clone());
             if !self.completion_order.iter().any(|id| id == subagent_id) {
                 self.completion_order.push(subagent_id.to_string());
             }
@@ -570,7 +586,8 @@ impl SubagentSupervisor {
                 artifacts: child.artifacts,
                 turns_used: child.turns_used,
             };
-            self.completed_results.insert(subagent_id.to_string(), result.clone());
+            self.completed_results
+                .insert(subagent_id.to_string(), result.clone());
             if !self.completion_order.iter().any(|id| id == subagent_id) {
                 self.completion_order.push(subagent_id.to_string());
             }
@@ -650,7 +667,10 @@ impl SubagentSupervisor {
             if !self.active_runs.contains_key(id)
                 && !self.queued_specs.iter().any(|(q_id, _, _)| q_id == id)
                 && !self.completed_results.contains_key(id)
-                && !self.completion_checkpoints.iter().any(|(_, c_id, _)| c_id == id)
+                && !self
+                    .completion_checkpoints
+                    .iter()
+                    .any(|(_, c_id, _)| c_id == id)
             {
                 return Err(SubagentError::SubagentNotFound(id.clone()));
             }
@@ -686,16 +706,14 @@ impl SubagentSupervisor {
             }
 
             // Find next eligible scheduled completion checkpoint <= deadline
-            if let Some(idx) = self.completion_checkpoints.iter().position(|(ts, _, _)| *ts <= deadline) {
+            if let Some(idx) = self
+                .completion_checkpoints
+                .iter()
+                .position(|(ts, _, _)| *ts <= deadline)
+            {
                 let (_, sub_id, summary) = self.completion_checkpoints.remove(idx);
                 if self.active_runs.contains_key(&sub_id) {
-                    let _ = self.execute_turn(
-                        &sub_id,
-                        None,
-                        None,
-                        true,
-                        summary.as_deref(),
-                    );
+                    let _ = self.execute_turn(&sub_id, None, None, true, summary.as_deref());
                 } else if !self.completed_results.contains_key(&sub_id) {
                     let res = SubagentResult {
                         subagent_id: sub_id.clone(),
@@ -812,7 +830,13 @@ mod tests {
         // Turn 1
         supervisor.add_artifact("sub-001", "report.md");
         let turn1 = supervisor
-            .execute_turn("sub-001", Some("web_search"), Some("found 3 links"), false, None)
+            .execute_turn(
+                "sub-001",
+                Some("web_search"),
+                Some("found 3 links"),
+                false,
+                None,
+            )
             .unwrap();
         assert!(turn1.is_none());
 
@@ -971,7 +995,9 @@ mod tests {
 
         let cancelled = supervisor.cancel_all();
         assert_eq!(cancelled.len(), 2);
-        assert!(cancelled.iter().all(|r| r.status == SubagentStatus::Cancelled));
+        assert!(cancelled
+            .iter()
+            .all(|r| r.status == SubagentStatus::Cancelled));
         assert_eq!(supervisor.active_count(), 0);
     }
 
@@ -985,9 +1011,15 @@ mod tests {
             vec!["web_search".into()],
         );
 
-        let s1 = supervisor.spawn_subagent("sub-1", "session", spec.clone()).unwrap();
-        let s2 = supervisor.spawn_subagent("sub-2", "session", spec.clone()).unwrap();
-        let s3 = supervisor.spawn_subagent("sub-3", "session", spec.clone()).unwrap();
+        let s1 = supervisor
+            .spawn_subagent("sub-1", "session", spec.clone())
+            .unwrap();
+        let s2 = supervisor
+            .spawn_subagent("sub-2", "session", spec.clone())
+            .unwrap();
+        let s3 = supervisor
+            .spawn_subagent("sub-3", "session", spec.clone())
+            .unwrap();
 
         assert_eq!(s1, SubagentStatus::Running);
         assert_eq!(s2, SubagentStatus::Running);
@@ -1025,12 +1057,7 @@ mod tests {
         );
 
         // Empty parent authority with ZERO child tools succeeds
-        let benign_spec = SubagentSpec::new(
-            "Zero tool worker",
-            3,
-            vec![],
-            vec![],
-        );
+        let benign_spec = SubagentSpec::new("Zero tool worker", 3, vec![], vec![]);
         let ok = supervisor.spawn_subagent("sub-zero", "session-parent-1", benign_spec);
         assert!(ok.is_ok());
     }
@@ -1064,12 +1091,24 @@ mod tests {
 
         // 1. sub-wait-2 completes FIRST
         supervisor
-            .execute_turn("sub-wait-2", Some("web_search"), None, true, Some("Sub 2 done first"))
+            .execute_turn(
+                "sub-wait-2",
+                Some("web_search"),
+                None,
+                true,
+                Some("Sub 2 done first"),
+            )
             .unwrap();
 
         // 2. sub-wait-1 completes SECOND
         supervisor
-            .execute_turn("sub-wait-1", Some("web_search"), None, true, Some("Sub 1 done second"))
+            .execute_turn(
+                "sub-wait-1",
+                Some("web_search"),
+                None,
+                true,
+                Some("Sub 1 done second"),
+            )
             .unwrap();
 
         // 3. wait returns both results in completion order (sub-wait-2, then sub-wait-1)
@@ -1119,9 +1158,15 @@ mod tests {
         let mut parent_journal = RunJournal::new();
         let parent_run_id = AgentRunId::new("parent-run-main");
 
-        parent_journal.start_run(parent_run_id.clone(), "parent-session-1").unwrap();
+        parent_journal
+            .start_run(parent_run_id.clone(), "parent-session-1")
+            .unwrap();
         let parent_entry1 = parent_journal
-            .append_event(&parent_run_id, "parent_user_msg", r#"{"prompt":"delegate research"}"#)
+            .append_event(
+                &parent_run_id,
+                "parent_user_msg",
+                r#"{"prompt":"delegate research"}"#,
+            )
             .unwrap();
         assert_eq!(parent_entry1.event_seq, 1);
 
@@ -1190,8 +1235,12 @@ mod tests {
             vec!["shell_exec".into()],
         );
 
-        supervisor.spawn_subagent("sub-shell-1", "session", spec1).unwrap();
-        supervisor.spawn_subagent("sub-shell-2", "session", spec2).unwrap();
+        supervisor
+            .spawn_subagent("sub-shell-1", "session", spec1)
+            .unwrap();
+        supervisor
+            .spawn_subagent("sub-shell-2", "session", spec2)
+            .unwrap();
 
         // Subagent 1 calls shell_exec without completing (holding in-flight slot)
         let res1 = supervisor.execute_turn("sub-shell-1", Some("shell_exec"), None, false, None);
@@ -1205,11 +1254,23 @@ mod tests {
         );
 
         // Subagent 1 completes turn and releases slot
-        let res1_done = supervisor.execute_turn("sub-shell-1", Some("shell_exec"), Some("output"), true, Some("done"));
+        let res1_done = supervisor.execute_turn(
+            "sub-shell-1",
+            Some("shell_exec"),
+            Some("output"),
+            true,
+            Some("done"),
+        );
         assert!(res1_done.is_ok());
 
         // Now Subagent 2 can acquire shell_exec successfully
-        let res2_retry = supervisor.execute_turn("sub-shell-2", Some("shell_exec"), Some("output 2"), true, Some("done 2"));
+        let res2_retry = supervisor.execute_turn(
+            "sub-shell-2",
+            Some("shell_exec"),
+            Some("output 2"),
+            true,
+            Some("done 2"),
+        );
         assert!(res2_retry.is_ok());
     }
 

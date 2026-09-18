@@ -37,8 +37,7 @@ pub const MAIL_WRITE_ACCOUNT_TOOLS: &[&str] = &[
     "mail_import_migration_archive",
 ];
 
-pub const CREDENTIAL_TYPING_APPROVAL_REQUIRED: &str =
-    "credential_typing_approval_required";
+pub const CREDENTIAL_TYPING_APPROVAL_REQUIRED: &str = "credential_typing_approval_required";
 pub const CREDENTIAL_TYPING_DENIED: &str = "credential_typing_denied";
 
 // Fixed denial reason codes emitted by the runtime permission-tier and
@@ -49,8 +48,7 @@ pub const CREDENTIAL_TYPING_DENIED: &str = "credential_typing_denied";
 pub const FINAL_CONFIRM_REQUIRED: &str = "final_confirm_required";
 pub const PERMISSION_TIER_DENIED_WRITE: &str = "permission_tier_denied_write";
 pub const PERMISSION_TIER_DENIED_READ: &str = "permission_tier_denied_read";
-pub const PERMISSION_TIER_ROUTINE_EXCEEDS_SESSION: &str =
-    "permission_tier_routine_exceeds_session";
+pub const PERMISSION_TIER_ROUTINE_EXCEEDS_SESSION: &str = "permission_tier_routine_exceeds_session";
 
 // Redacts the argument payload attached to a runtime-tier or final-confirmation
 // denial. The raw arguments routinely carry file paths and form contents that
@@ -187,6 +185,120 @@ pub fn clamp_routine_tier(session_raw: &str, routine_raw: &str) -> RuntimeTier {
     }
 }
 
+// ---- Kernel-tool tier gate (Wave 1D, plan D7) ------------------------------
+//
+// CLI-side application of the runtime-tier mirror to the kernel (non-browser)
+// tool dispatch. A CLI task session has no capability broker (the broker
+// gates browser tools inside the browser process — disjoint by surface, plan
+// R-F8), so the session tier is enforced directly in the dispatch path with
+// the same policy table as the broker's file/write branch.
+
+/// Kernel (non-browser) tools whose whole capability is write-class: they can
+/// mutate local system state outside any single file scope (fs_write emits
+/// artifacts, shell_exec runs arbitrary commands), so a read_only tier denies
+/// the class outright instead of relying on per-file scoping.
+pub const TIER_WRITE_CLASS_KERNEL_TOOLS: &[&str] = &["fs_write", "shell_exec"];
+
+/// Outcome of the tier gate for one kernel tool call at the dispatch
+/// boundary. `Allow` means the tier adds no restriction of its own and the
+/// approval policy stays authoritative; `RequireApproval` forces the call
+/// onto the interactive prompt path even when the policy would auto-allow;
+/// `Deny` refuses the call with the machine-consumed tier reason code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KernelTierDecision {
+    Allow,
+    RequireApproval,
+    Deny(&'static str),
+}
+
+/// Tier gate for one kernel tool call — the dispatch-boundary composition of
+/// the write-class rule and the file-scoped [`authorize_tier_fs_request`].
+/// `is_write`/`fs_path` carry the file-scoped part of the request (see
+/// [`kernel_fs_request`]); an empty `fs_path` means the call is not
+/// file-scoped and only the write-class rule applies. Unknown or empty tier
+/// input fails closed to guard via [`parse_runtime_tier`], like every other
+/// tier entry point.
+pub fn authorize_kernel_tool_request(
+    raw_tier: &str,
+    tool_name: &str,
+    is_write: bool,
+    fs_path: &str,
+    whitelist_roots: &[&str],
+) -> KernelTierDecision {
+    if parse_runtime_tier(raw_tier) == RuntimeTier::ReadOnly
+        && TIER_WRITE_CLASS_KERNEL_TOOLS.contains(&tool_name)
+    {
+        return KernelTierDecision::Deny(PERMISSION_TIER_DENIED_WRITE);
+    }
+    match authorize_tier_fs_request(raw_tier, is_write, fs_path, whitelist_roots) {
+        TierFileDecision::Allow => KernelTierDecision::Allow,
+        TierFileDecision::RequireApproval => KernelTierDecision::RequireApproval,
+        TierFileDecision::Deny(reason) => KernelTierDecision::Deny(reason),
+    }
+}
+
+/// File-scoped part of a kernel tool call: `(is_write, absolute fs_path)`,
+/// resolved lexically — no filesystem access, the tier gate must stay pure;
+/// canonicalization and symlink containment stay owned by the tools
+/// themselves. fs_read reads its `path` argument (workspace-relative input
+/// resolved against `workspace_root`); fs_write writes inside the artifact
+/// root (its `relative_path` resolved against `artifact_root`); shell_exec is
+/// not file-scoped and rides the write-class rule alone.
+pub fn kernel_fs_request(
+    tool_name: &str,
+    raw_args: &str,
+    workspace_root: &std::path::Path,
+    artifact_root: Option<&std::path::Path>,
+) -> (bool, String) {
+    let args: serde_json::Value = serde_json::from_str(raw_args).unwrap_or(serde_json::Value::Null);
+    match tool_name {
+        "fs_read" => {
+            let raw = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let path = std::path::Path::new(raw);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                workspace_root.join(path)
+            };
+            (false, resolved.to_string_lossy().into_owned())
+        }
+        "fs_write" => {
+            let raw = args
+                .get("relative_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            // Without a configured artifact root the tool itself fails; the
+            // gate still gets the workspace-relative resolution so a read_only
+            // tier denies the write class before any tool-level error leaks.
+            let base = artifact_root.unwrap_or(workspace_root);
+            (true, base.join(raw).to_string_lossy().into_owned())
+        }
+        _ => (false, String::new()),
+    }
+}
+
+/// Single provisioning source for the runtime-tier fs whitelist roots
+/// (plan R-N2): the workspace defaults. The CLI tier wiring (Wave 1D) and the
+/// Wave 2A C++ req_ctx stamping MUST both derive their root lists from this
+/// function (the C++ side via its same-input mirror) — independent root
+/// lists drift apart and reintroduce the cross-surface divergence the
+/// permission.rs mirror exists to prevent.
+///
+/// The workspace default is the workspace root itself, returned as an
+/// absolute lexical prefix. A relative or empty anchor provisions an EMPTY
+/// list, which [`fs_path_inside_whitelist`] fails closed against — the gate
+/// then ask-gates (guard) or denies (read_only) every file-scoped request.
+pub fn default_fs_whitelist_roots(workspace_root: &std::path::Path) -> Vec<String> {
+    let trimmed = workspace_root
+        .to_string_lossy()
+        .trim_end_matches('/')
+        .to_string();
+    if trimmed.is_empty() || !trimmed.starts_with('/') {
+        return Vec::new();
+    }
+    vec![trimmed]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialTypingAuthorizationAction {
     Allow,
@@ -199,9 +311,7 @@ pub const fn authorize_credential_typing(
     if !allow_credentials_requested {
         CredentialTypingAuthorizationAction::Allow
     } else {
-        CredentialTypingAuthorizationAction::RequireApproval(
-            CREDENTIAL_TYPING_APPROVAL_REQUIRED,
-        )
+        CredentialTypingAuthorizationAction::RequireApproval(CREDENTIAL_TYPING_APPROVAL_REQUIRED)
     }
 }
 
@@ -614,9 +724,7 @@ pub fn authorize_final_confirm(
         // Ordinary passes; NewOrigin (navigation) is reversible and stays
         // free per the row contract. Unknown — including the missing
         // validated-context case — fails closed to gated.
-        ActionConsequence::Ordinary | ActionConsequence::NewOrigin => {
-            FinalConfirmDecision::Allow
-        }
+        ActionConsequence::Ordinary | ActionConsequence::NewOrigin => FinalConfirmDecision::Allow,
         _ => FinalConfirmDecision::RequireApproval(FINAL_CONFIRM_REQUIRED),
     }
 }
@@ -969,13 +1077,160 @@ mod tests {
     }
 
     #[test]
+    fn kernel_write_class_tools_denied_under_read_only_regardless_of_path() {
+        // fs_write and shell_exec are write-class: read_only denies the whole
+        // class even with an empty (not-file-scoped) path, and even inside
+        // the whitelist.
+        for tool in TIER_WRITE_CLASS_KERNEL_TOOLS {
+            assert_eq!(
+                authorize_kernel_tool_request("read_only", tool, true, "", &[]),
+                KernelTierDecision::Deny(PERMISSION_TIER_DENIED_WRITE),
+                "{tool} must be class-denied under read_only"
+            );
+            assert_eq!(
+                authorize_kernel_tool_request(
+                    "read_only",
+                    tool,
+                    true,
+                    "/ws/artifacts/a.txt",
+                    &["/ws"]
+                ),
+                KernelTierDecision::Deny(PERMISSION_TIER_DENIED_WRITE),
+                "{tool} must be class-denied under read_only even in-whitelist"
+            );
+        }
+        // The class list is exactly the write-class kernel pair — browser
+        // tools stay broker-gated (plan R-F8) and must never appear here.
+        assert_eq!(TIER_WRITE_CLASS_KERNEL_TOOLS, &["fs_write", "shell_exec"]);
+    }
+
+    #[test]
+    fn kernel_tier_gate_mirrors_broker_file_branch_for_non_class_tools() {
+        let roots = ["/ws"];
+        // fs_read under read_only: in-whitelist allow, outside deny-with-code.
+        assert_eq!(
+            authorize_kernel_tool_request("read_only", "fs_read", false, "/ws/notes.md", &roots),
+            KernelTierDecision::Allow
+        );
+        assert_eq!(
+            authorize_kernel_tool_request("read_only", "fs_read", false, "/etc/passwd", &roots),
+            KernelTierDecision::Deny(PERMISSION_TIER_DENIED_READ)
+        );
+        // guard ask-gates outside the whitelist, is inert inside.
+        assert_eq!(
+            authorize_kernel_tool_request("guard", "fs_read", false, "/etc/passwd", &roots),
+            KernelTierDecision::RequireApproval
+        );
+        assert_eq!(
+            authorize_kernel_tool_request("guard", "fs_read", false, "/ws/notes.md", &roots),
+            KernelTierDecision::Allow
+        );
+        // full_access adds no restriction; non-fs tools are inert (empty path).
+        assert_eq!(
+            authorize_kernel_tool_request("full_access", "fs_read", false, "/etc/passwd", &roots),
+            KernelTierDecision::Allow
+        );
+        assert_eq!(
+            authorize_kernel_tool_request("read_only", "web_search", false, "", &[]),
+            KernelTierDecision::Allow
+        );
+        // Unknown tier strings fail closed to guard.
+        assert_eq!(
+            authorize_kernel_tool_request("bogus", "fs_read", false, "/etc/passwd", &roots),
+            KernelTierDecision::RequireApproval
+        );
+    }
+
+    #[test]
+    fn kernel_fs_request_resolves_each_tool_shape_lexically() {
+        let ws = std::path::Path::new("/ws");
+        let artifact = std::path::Path::new("/ws/.maho/artifacts");
+
+        // fs_read: absolute arg passes through; relative resolves against ws.
+        assert_eq!(
+            kernel_fs_request("fs_read", r#"{"path":"/etc/passwd"}"#, ws, None),
+            (false, "/etc/passwd".to_string())
+        );
+        assert_eq!(
+            kernel_fs_request("fs_read", r#"{"path":"src/lib.rs"}"#, ws, None),
+            (false, "/ws/src/lib.rs".to_string())
+        );
+
+        // fs_write: relative_path resolves against the artifact root when
+        // configured, workspace otherwise (is_write=true either way).
+        assert_eq!(
+            kernel_fs_request(
+                "fs_write",
+                r#"{"relative_path":"out.txt"}"#,
+                ws,
+                Some(artifact)
+            ),
+            (true, "/ws/.maho/artifacts/out.txt".to_string())
+        );
+        assert_eq!(
+            kernel_fs_request("fs_write", r#"{"relative_path":"out.txt"}"#, ws, None),
+            (true, "/ws/out.txt".to_string())
+        );
+
+        // shell_exec and non-kernel tools are not file-scoped.
+        assert_eq!(
+            kernel_fs_request("shell_exec", r#"{"command":"ls"}"#, ws, None),
+            (false, String::new())
+        );
+        assert_eq!(
+            kernel_fs_request("web_search", r#"{"query":"x"}"#, ws, None),
+            (false, String::new())
+        );
+        // Malformed args degrade to empty lookups, never panic (the empty
+        // relative path resolves against the workspace root).
+        let (is_write, resolved) = kernel_fs_request("fs_read", "not-json", ws, None);
+        assert!(!is_write);
+        assert!(
+            resolved.starts_with("/ws"),
+            "unexpected resolution: {resolved}"
+        );
+    }
+
+    #[test]
+    fn default_fs_whitelist_roots_provision_workspace_anchor_fail_closed() {
+        assert_eq!(
+            default_fs_whitelist_roots(std::path::Path::new("/home/u/project")),
+            vec!["/home/u/project".to_string()]
+        );
+        // Trailing slash is trimmed so prefix containment cannot be split.
+        assert_eq!(
+            default_fs_whitelist_roots(std::path::Path::new("/home/u/project/")),
+            vec!["/home/u/project".to_string()]
+        );
+        // Relative or empty anchors provision an EMPTY list: fs_path_inside_
+        // whitelist fails closed against an empty list.
+        assert!(default_fs_whitelist_roots(std::path::Path::new(".")).is_empty());
+        assert!(default_fs_whitelist_roots(std::path::Path::new("")).is_empty());
+    }
+
+    #[test]
     fn routine_tier_clamps_to_session_rank_at_admission() {
-        assert_eq!(clamp_routine_tier("read_only", "full_access"), RuntimeTier::ReadOnly);
-        assert_eq!(clamp_routine_tier("guard", "full_access"), RuntimeTier::Guard);
-        assert_eq!(clamp_routine_tier("guard", "read_only"), RuntimeTier::ReadOnly);
-        assert_eq!(clamp_routine_tier("full_access", "full_access"), RuntimeTier::FullAccess);
+        assert_eq!(
+            clamp_routine_tier("read_only", "full_access"),
+            RuntimeTier::ReadOnly
+        );
+        assert_eq!(
+            clamp_routine_tier("guard", "full_access"),
+            RuntimeTier::Guard
+        );
+        assert_eq!(
+            clamp_routine_tier("guard", "read_only"),
+            RuntimeTier::ReadOnly
+        );
+        assert_eq!(
+            clamp_routine_tier("full_access", "full_access"),
+            RuntimeTier::FullAccess
+        );
         // Unknown inputs fail closed to guard on both sides.
-        assert_eq!(clamp_routine_tier("full_access", "root"), RuntimeTier::Guard);
+        assert_eq!(
+            clamp_routine_tier("full_access", "root"),
+            RuntimeTier::Guard
+        );
         assert_eq!(clamp_routine_tier("bogus", "guard"), RuntimeTier::Guard);
     }
 

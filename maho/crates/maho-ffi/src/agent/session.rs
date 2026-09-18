@@ -3,7 +3,7 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use maho_agent::{AgentRuntime, SwiftideBackend};
+use maho_agent::AgentRuntime;
 use maho_core::maho_core::MahoCore;
 
 use crate::agent::browser_bridge::{maho_agent_create_session_impl, MahoAgentToolResult};
@@ -47,6 +47,78 @@ impl AgentRuntimeConfig {
             "read_only" | "guard" | "full_access" => raw_tier.to_string(),
             _ => "guard".to_string(),
         }
+    }
+
+    /// Rebuilds a config from persisted parts (Wave 1A session-open load).
+    /// The tier is re-normalized on load so a stale or hand-edited store row
+    /// cannot escalate above the canonical tiers.
+    pub(crate) fn from_parts(raw_tier: &str, final_confirm: bool, proactive_mode: bool) -> Self {
+        Self {
+            permission_tier: Self::normalize_tier(raw_tier),
+            final_confirm,
+            proactive_mode,
+        }
+    }
+}
+
+/// Session-open load (Wave 1A): read the persisted runtime-config row for
+/// `session_id` into a fresh `AgentRuntimeConfig`. An absent row — or any
+/// storage error — falls back to the plumbing defaults so session creation
+/// never fails on config restore.
+pub(crate) fn load_runtime_config_from_store(
+    storage: &maho_storage::sqlite::SqliteStorage,
+    session_id: &str,
+) -> AgentRuntimeConfig {
+    match storage.load_agent_runtime_config(session_id) {
+        Ok(Some(row)) => AgentRuntimeConfig::from_parts(
+            &row.permission_tier,
+            row.final_confirm,
+            row.proactive_mode,
+        ),
+        Ok(None) => AgentRuntimeConfig::default(),
+        Err(e) => {
+            tracing::warn!(
+                "[runtime_config] session-open load failed, using defaults \
+                 (session_id={session_id}): {e}"
+            );
+            AgentRuntimeConfig::default()
+        }
+    }
+}
+
+/// Write-through persistence for the runtime-config triple (Wave 1A).
+/// Best-effort: a missing db path or a storage failure is logged and
+/// swallowed — the in-memory session config stays authoritative for the
+/// live session and persistence must never break the FFI setter.
+pub(crate) fn persist_runtime_config_to_store(
+    db_path: Option<&str>,
+    session_id: &str,
+    config: &AgentRuntimeConfig,
+) {
+    let Some(db_path) = db_path else {
+        tracing::debug!(
+            "[runtime_config] core has no SQLite db path; skipping persist \
+             (session_id={session_id})"
+        );
+        return;
+    };
+    let storage = match maho_storage::sqlite::SqliteStorage::open(db_path) {
+        Ok(storage) => storage,
+        Err(e) => {
+            tracing::warn!(
+                "[runtime_config] store open failed, config not persisted \
+                 (session_id={session_id}): {e}"
+            );
+            return;
+        }
+    };
+    if let Err(e) = storage.save_agent_runtime_config(
+        session_id,
+        &config.permission_tier,
+        config.final_confirm,
+        config.proactive_mode,
+    ) {
+        tracing::warn!("[runtime_config] persist failed (session_id={session_id}): {e}");
     }
 }
 
@@ -96,17 +168,54 @@ pub use crate::MahoAgentSession;
 
 impl MahoAgentSession {
     pub fn create_for_test(session_id: &str) -> Box<Self> {
-        let sqlite = maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("test-key").unwrap();
+        Self::create_for_test_with_db(session_id, None)
+    }
+
+    /// Test constructor with an optional file-backed MahoCore storage handle.
+    /// With `db_path`, the core resolves the store through
+    /// `core.sqlite_db_path()` (runtime-config write-through) and the
+    /// session-open load reads the persisted row — mirroring
+    /// `maho_agent_create_session_impl`. The caller must have configured the
+    /// SQLCipher key (`maho_storage::sqlite::set_sqlcipher_key`) before use.
+    pub fn create_for_test_with_db(session_id: &str, db_path: Option<&str>) -> Box<Self> {
+        let sqlite =
+            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("test-key").unwrap();
         let agent_storage: Arc<dyn maho_agent::AgentStorage> =
             Arc::new(maho_agent::MutexAgentStorage(Arc::new(Mutex::new(sqlite))));
-        let runtime = Arc::new(maho_agent::SwiftideBackend::new(
+        let backend = maho_agent::omo::factory::create_agent_runtime(
             agent_storage,
             None,
             std::path::PathBuf::from("/tmp"),
             true,
-        ));
+        );
         let isolation = Arc::new(maho_agent::SessionRuntime::new().unwrap());
-        let mut core = Box::new(MahoCore::new());
+        let mut core = Box::new(match db_path {
+            Some(path) => MahoCore::new().with_storage(path),
+            None => MahoCore::new(),
+        });
+        if db_path.is_some() {
+            // Loud failure instead of a silently skipped persistence path:
+            // with_storage only attaches storage when the db opened, which
+            // requires the process-wide SQLCipher key to be configured.
+            assert!(
+                core.sqlite_db_path().is_some(),
+                "create_for_test_with_db: storage failed to attach (SQLCipher key configured?)"
+            );
+        }
+        // Session-open load (Wave 1A): restore the persisted runtime-config
+        // row into the initial Mutex value, defaults when absent.
+        let runtime_config = match core.storage_ref() {
+            Some(storage) => load_runtime_config_from_store(storage, session_id),
+            None => AgentRuntimeConfig::default(),
+        };
+        // Wave 1D panel-side tier binding (test path): mirror the live
+        // create_session_impl binding so tests exercise the same kernel-gate
+        // posture production sessions get at open.
+        backend.set_runtime_tier(Some(runtime_config.permission_tier.clone()));
+        backend.set_fs_whitelist_roots(maho_agent::permission::default_fs_whitelist_roots(
+            &std::path::PathBuf::from("/tmp"),
+        ));
+        let runtime: Arc<dyn AgentRuntime> = backend;
         let core_ptr = std::ptr::NonNull::new(core.as_mut() as *mut MahoCore).unwrap();
         std::mem::forget(core);
 
@@ -127,11 +236,13 @@ impl MahoAgentSession {
             artifact_created_cb: None,
             artifact_created_user_data: 0,
             unified_event_registration: Arc::new(Mutex::new(None)),
-            turn_controller: Arc::new(Mutex::new(maho_agent::turn_control::SessionTurnController::new(session_id))),
+            turn_controller: Arc::new(Mutex::new(
+                maho_agent::turn_control::SessionTurnController::new(session_id),
+            )),
             wait_registry: Arc::new(Mutex::new(maho_agent::event_wait::WaitRegistry::new())),
             event_seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             notification_permission_granted: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            runtime_config: Mutex::new(AgentRuntimeConfig::default()),
+            runtime_config: Mutex::new(runtime_config),
         })
     }
 }
@@ -168,28 +279,68 @@ impl Drop for ActiveConversationGuard {
     }
 }
 
-pub(crate) fn apply_agent_skill_system_prompt(session: &MahoAgentSession, runtime: &SwiftideBackend) {
+/// D8 (Wave 3B, panel proactive composition): appends the fixed
+/// `<proactivity_instruction>` block to the panel-composed prompt with the
+/// exact semantics of the CLI path (`compose_system_prompt_proactive`,
+/// maho-cli main.rs `agent_task_system_prompt`): when `proactive_mode` is on,
+/// "\n\n" + the block; when off, `prompt` is left byte-identical — the flag
+/// off must not change the pre-D8 panel composition.
+pub(crate) fn append_proactive_block(prompt: &mut String, proactive_mode: bool) {
+    if proactive_mode {
+        prompt.push_str("\n\n");
+        prompt.push_str(maho_agent::system_prompt::PROACTIVITY_INSTRUCTION_TEXT);
+    }
+}
+
+/// Pure composition tail of `apply_agent_skill_system_prompt`, split out so
+/// the proactive gating is unit-testable (runtime exposes no
+/// system-prompt getter). Returns the skill-context composition — or the
+/// empty fallback when no trusted-origin skill context exists — with the
+/// proactive block appended iff `proactive_mode`.
+pub(crate) fn compose_panel_system_prompt(
+    core: &MahoCore,
+    session: &MahoAgentSession,
+    proactive_mode: bool,
+) -> String {
+    let trusted_origin = core.trusted_active_tab_origin();
+    let workspace_root = session.workspace_root.to_string_lossy();
+    let mut base_system_prompt = core.resolve_agent_base_system_prompt(
+        &session.session_id,
+        workspace_root.as_ref(),
+        session.active_space_id.as_deref(),
+    );
+    if base_system_prompt.trim().is_empty() {
+        base_system_prompt = maho_agent::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT.to_string();
+    }
+    let mut system_prompt = core
+        .compose_agent_system_prompt_with_skill_context(
+            &base_system_prompt,
+            trusted_origin.as_deref(),
+            AGENT_SKILL_INJECT_BUDGET_CHARS,
+        )
+        .unwrap_or_else(|| base_system_prompt.clone());
+    append_proactive_block(&mut system_prompt, proactive_mode);
+    system_prompt
+}
+
+pub(crate) fn apply_agent_skill_system_prompt(
+    session: &MahoAgentSession,
+    runtime: &dyn AgentRuntime,
+) {
     // SAFETY: `MahoAgentSession` is only constructed by
     // `maho_agent_create_session`, which stores the non-null `MahoCore` pointer
     // supplied by the browser. The browser must keep that core alive for the
     // agent session lifetime.
     let core = unsafe { session.core.as_ref() };
-    let trusted_origin = core.trusted_active_tab_origin();
-    let workspace_root = session.workspace_root.to_string_lossy();
-    let base_system_prompt = core.resolve_agent_base_system_prompt(
-        &session.session_id,
-        workspace_root.as_ref(),
-        session.active_space_id.as_deref(),
-    );
-    if let Some(system_prompt) = core.compose_agent_system_prompt_with_skill_context(
-        &base_system_prompt,
-        trusted_origin.as_deref(),
-        AGENT_SKILL_INJECT_BUDGET_CHARS,
-    ) {
-        runtime.set_system_prompt(&system_prompt);
-    } else {
-        runtime.set_system_prompt("");
-    }
+    // D8 (Wave 3B): thread the session runtime-config's proactive_mode into
+    // the panel composition so the panel matches the CLI's row-9 gate.
+    let proactive_mode = session
+        .runtime_config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .proactive_mode;
+    let system_prompt = compose_panel_system_prompt(core, session, proactive_mode);
+    runtime.set_system_prompt(&system_prompt);
 }
 
 pub unsafe extern "C" fn maho_agent_create_session(
@@ -477,7 +628,8 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                             }
                             if unified_reg.is_some() {
                                 let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
-                                let payload = serde_json::json!({ "thinking": thinking }).to_string();
+                                let payload =
+                                    serde_json::json!({ "thinking": thinking }).to_string();
                                 dispatch_unified_event(
                                     &unified_reg,
                                     &turn_callback_lease,
@@ -502,7 +654,9 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                                 }
                             }
                             if unified_reg.is_some() {
-                                if name == "ask_user_question" || name == "request_action_confirmation" {
+                                if name == "ask_user_question"
+                                    || name == "request_action_confirmation"
+                                {
                                     let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
                                     let payload = serde_json::json!({
                                         "request_id": id,
@@ -524,7 +678,8 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                                     "id": id,
                                     "name": name,
                                     "args": args,
-                                }).to_string();
+                                })
+                                .to_string();
                                 dispatch_unified_event(
                                     &unified_reg,
                                     &turn_callback_lease,
@@ -566,7 +721,8 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                                     "name": name,
                                     "result": result,
                                     "succeeded": succeeded,
-                                }).to_string();
+                                })
+                                .to_string();
                                 dispatch_unified_event(
                                     &unified_reg,
                                     &turn_callback_lease,
@@ -612,7 +768,8 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                                 let payload = serde_json::json!({
                                     "elapsed_secs": elapsed_secs,
                                     "message": message,
-                                }).to_string();
+                                })
+                                .to_string();
                                 dispatch_unified_event(
                                     &unified_reg,
                                     &turn_callback_lease,
@@ -686,7 +843,8 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                             let payload = serde_json::json!({
                                 "full_text": text,
                                 "tool_calls": "[]",
-                            }).to_string();
+                            })
+                            .to_string();
                             dispatch_unified_event(
                                 &unified_reg,
                                 &turn_callback_lease,
@@ -710,7 +868,8 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
                             let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
                             let payload = serde_json::json!({
                                 "error": error_text,
-                            }).to_string();
+                            })
+                            .to_string();
                             dispatch_unified_event(
                                 &unified_reg,
                                 &turn_callback_lease,
@@ -736,7 +895,6 @@ pub(crate) unsafe fn maho_agent_send_message_impl(
         false
     )
 }
-
 
 /// # Safety
 /// `session` must be a valid pointer to a `MahoAgentSession`.
@@ -800,17 +958,38 @@ pub unsafe extern "C" fn maho_agent_set_runtime_config(
             let raw_tier = if permission_tier.is_null() {
                 ""
             } else {
-                CStr::from_ptr(permission_tier)
-                    .to_str()
-                    .unwrap_or_default()
+                CStr::from_ptr(permission_tier).to_str().unwrap_or_default()
             };
-            let mut config = session
-                .runtime_config
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            config.permission_tier = AgentRuntimeConfig::normalize_tier(raw_tier);
-            config.final_confirm = final_confirm;
-            config.proactive_mode = proactive_mode;
+            let persisted = {
+                let mut config = session
+                    .runtime_config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                config.permission_tier = AgentRuntimeConfig::normalize_tier(raw_tier);
+                config.final_confirm = final_confirm;
+                config.proactive_mode = proactive_mode;
+                config.clone()
+            };
+            // Wave 1A write-through: persist the normalized triple keyed by
+            // the FFI session id so a later session open restores it.
+            // SAFETY: `session.core` points to the live `MahoCore` that owns
+            // the session (see the create-path SAFETY notes).
+            let core_ref = unsafe { session.core.as_ref() };
+            let db_path = core_ref.sqlite_db_path();
+            persist_runtime_config_to_store(db_path, &session.session_id, &persisted);
+            // Wave 1D panel-side tier binding (D9 live rebind): mirror the
+            // CLI's kernel-gate wiring (maho-cli main.rs) so a mid-session
+            // tier change takes effect on the next kernel tool call without
+            // reopening the session. Roots come from the shared provisioning
+            // source (plan R-N2) — never an ad-hoc list. Kept in lockstep
+            // with the lib.rs `#[no_mangle]` copy (single semantics, two
+            // symbols — see the F3-R4 duplication-hazard note).
+            session
+                .runtime
+                .set_runtime_tier(Some(persisted.permission_tier.clone()));
+            session.runtime.set_fs_whitelist_roots(
+                maho_agent::permission::default_fs_whitelist_roots(&session.workspace_root),
+            );
         },
         ()
     )
@@ -846,7 +1025,6 @@ pub unsafe extern "C" fn maho_agent_set_mail_authorization_state(
 
 /// # Safety
 /// `session` must be a valid pointer returned by a `maho_agent_create_session*`
-
 
 /// # Safety
 /// `session` must be a valid pointer to a `MahoAgentSession`.
@@ -895,7 +1073,10 @@ mod runtime_config_tests {
         assert_eq!(AgentRuntimeConfig::normalize_tier(""), "guard");
         assert_eq!(AgentRuntimeConfig::normalize_tier("read_only"), "read_only");
         assert_eq!(AgentRuntimeConfig::normalize_tier("guard"), "guard");
-        assert_eq!(AgentRuntimeConfig::normalize_tier("full_access"), "full_access");
+        assert_eq!(
+            AgentRuntimeConfig::normalize_tier("full_access"),
+            "full_access"
+        );
     }
 
     #[test]
@@ -927,6 +1108,20 @@ mod runtime_config_tests {
         assert_eq!(cfg.permission_tier, "read_only");
         assert!(!cfg.final_confirm);
         assert!(cfg.proactive_mode);
+
+        // Wave 1D panel-side tier binding: the setter must rebind the
+        // session backend's kernel dispatch gate (D9 live rebind) and
+        // provision the R-N2 single-source whitelist roots, mirroring the
+        // CLI wiring (maho-cli main.rs) so cross-surface verdicts match
+        // (SC8).
+        assert_eq!(
+            session.runtime.runtime_tier(),
+            Some("read_only".to_string())
+        );
+        assert_eq!(
+            session.runtime.fs_whitelist_roots(),
+            maho_agent::permission::default_fs_whitelist_roots(&session.workspace_root)
+        );
     }
 
     #[test]
@@ -944,6 +1139,121 @@ mod runtime_config_tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         assert_eq!(cfg.permission_tier, "guard");
+
+        // The binding mirrors the normalized (fail-closed) tier, not the raw
+        // input.
+        assert_eq!(session.runtime.runtime_tier(), Some("guard".to_string()));
+    }
+
+    /// Wave 1D panel-side binding: a session with NO set_runtime_config call
+    /// keeps the kernel gate inert (back-compat — today's unconfigured
+    /// posture is unchanged), and the session-open binding after a stored
+    /// row restores the persisted tier (SC8 seeded-row semantics).
+    #[test]
+    fn test_unconfigured_session_keeps_kernel_gate_inert() {
+        let session = MahoAgentSession::create_for_test("runtime-config-unbound");
+
+        // No setter call, no stored row → the FFI session constructor binds
+        // the fail-closed default "guard" from the loaded default config.
+        assert_eq!(session.runtime.runtime_tier(), Some("guard".to_string()));
+        assert_eq!(
+            session.runtime.fs_whitelist_roots(),
+            maho_agent::permission::default_fs_whitelist_roots(&session.workspace_root)
+        );
+    }
+
+    #[test]
+    fn test_append_proactive_block_matches_cli_composer_byte_for_byte() {
+        use maho_agent::system_prompt::{
+            compose_system_prompt_proactive, PROACTIVITY_INSTRUCTION_SENTINEL,
+            PROACTIVITY_INSTRUCTION_TEXT,
+        };
+
+        // WITH the flag: "\n\n" + the fixed block — the appended segment is
+        // byte-identical to the CLI path (maho-cli main.rs
+        // agent_task_system_prompt) applied to the same base content (the CLI
+        // composer additionally prepends the baseline contract, so the panel
+        // prompt must be its tail).
+        let mut panel = "skill block".to_string();
+        append_proactive_block(&mut panel, true);
+        assert!(compose_system_prompt_proactive("skill block", &[], None, true).ends_with(&panel));
+        assert!(panel.ends_with(PROACTIVITY_INSTRUCTION_TEXT));
+        assert!(panel.contains(PROACTIVITY_INSTRUCTION_SENTINEL));
+
+        // WITHOUT the flag: byte-identical to the pre-D8 composition.
+        let mut plain = "skill block".to_string();
+        append_proactive_block(&mut plain, false);
+        assert_eq!(plain, "skill block");
+        assert!(compose_system_prompt_proactive("skill block", &[], None, false).ends_with(&plain));
+        assert!(!plain.contains(PROACTIVITY_INSTRUCTION_SENTINEL));
+    }
+
+    /// D8 (Wave 3B) deliverable test: the panel prompt carries the proactive
+    /// block when the session runtime-config flag is on, and stays free of it
+    /// when off. Runs through the same composition path
+    /// `apply_agent_skill_system_prompt` uses, with the flag sourced from the
+    /// session's runtime_config (set via the FFI setter, as the panel does).
+    #[test]
+    fn test_panel_prompt_proactive_block_gated_on_runtime_config() {
+        use maho_agent::system_prompt::{
+            PROACTIVITY_INSTRUCTION_SENTINEL, PROACTIVITY_INSTRUCTION_TEXT,
+        };
+
+        // OFF (plumbing default): no proactive block anywhere.
+        let session = MahoAgentSession::create_for_test("proactive-prompt-off");
+        let flag = session
+            .runtime_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .proactive_mode;
+        assert!(!flag);
+        // SAFETY: session-owned core pointer, same contract as the apply path.
+        let core = unsafe { session.core.as_ref() };
+        let prompt_off = compose_panel_system_prompt(core, &session, flag);
+        assert!(!prompt_off.contains(PROACTIVITY_INSTRUCTION_SENTINEL));
+
+        // ON: flag set through the FFI setter (the panel's runtime-config
+        // card path), block present, appended after the composed content.
+        let mut session_on = MahoAgentSession::create_for_test("proactive-prompt-on");
+        let session_ptr: *mut MahoAgentSession = session_on.as_mut();
+        let tier = CString::new("guard").unwrap();
+        unsafe {
+            maho_agent_set_runtime_config(session_ptr, tier.as_ptr(), true, true);
+        }
+        let flag_on = session_on
+            .runtime_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .proactive_mode;
+        assert!(flag_on);
+        // SAFETY: session-owned core pointer, same contract as the apply path.
+        let core_on = unsafe { session_on.core.as_ref() };
+        let prompt_on = compose_panel_system_prompt(core_on, &session_on, flag_on);
+        assert!(prompt_on.contains(PROACTIVITY_INSTRUCTION_SENTINEL));
+        assert!(prompt_on.ends_with(PROACTIVITY_INSTRUCTION_TEXT));
+        assert!(!prompt_off.is_empty());
+        // Same base composition, only the block differs.
+        assert_eq!(
+            prompt_on
+                .trim_end_matches(['\n'])
+                .strip_suffix(PROACTIVITY_INSTRUCTION_TEXT)
+                .map(str::trim_end)
+                .unwrap_or_default(),
+            prompt_off.trim_end(),
+        );
+    }
+
+    #[test]
+    fn test_compose_panel_system_prompt_preserves_base_prompt_when_skill_context_is_none() {
+        let session = MahoAgentSession::create_for_test("prompt-fallback-test");
+        // SAFETY: test session owns a valid MahoCore.
+        let core = unsafe { session.core.as_ref() };
+        let prompt = compose_panel_system_prompt(core, &session, false);
+        assert!(
+            !prompt.is_empty(),
+            "System prompt must never be empty when skills are absent"
+        );
+        assert_eq!(prompt, maho_agent::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT);
     }
 
     #[test]
@@ -951,6 +1261,91 @@ mod runtime_config_tests {
         let tier = CString::new("guard").unwrap();
         unsafe {
             maho_agent_set_runtime_config(std::ptr::null_mut(), tier.as_ptr(), true, false);
+        }
+    }
+
+    /// Wave 1A roundtrip: set → persist → reopen → read matches.
+    #[test]
+    fn test_runtime_config_set_persists_and_reopen_restores() {
+        const KEY: &str = "test_key";
+        // The key is process-global; hold the test-key lock so parallel
+        // key-flipping tests cannot corrupt this test's database opens.
+        let _key_lock = crate::common::sqlcipher_test_key_lock();
+        maho_storage::sqlite::set_sqlcipher_key(KEY).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("reopen.sqlite");
+        let db_str = db_path.to_str().unwrap();
+
+        // 1) set: the FFI setter updates the live Mutex AND writes through to
+        //    the store row keyed by the FFI session id.
+        let mut session = MahoAgentSession::create_for_test_with_db("reopen-sess", Some(db_str));
+        {
+            let session_ptr: *mut MahoAgentSession = session.as_mut();
+            let tier = CString::new("full_access").unwrap();
+            unsafe {
+                maho_agent_set_runtime_config(session_ptr, tier.as_ptr(), false, true);
+            }
+            let cfg = session
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(cfg.permission_tier, "full_access");
+            assert!(!cfg.final_confirm);
+            assert!(cfg.proactive_mode);
+        }
+
+        // 2) persist: the row is visible to an independent store handle
+        //    (explicit key — no reliance on the process-wide injection here).
+        {
+            let storage = maho_storage::sqlite::SqliteStorage::open_with_key(db_str, KEY).unwrap();
+            let row = storage
+                .load_agent_runtime_config("reopen-sess")
+                .unwrap()
+                .expect("runtime-config row persisted by the FFI setter");
+            assert_eq!(row.permission_tier, "full_access");
+            assert!(!row.final_confirm);
+            assert!(row.proactive_mode);
+        }
+
+        // 3) reopen: a fresh session over the same db loads the persisted row
+        //    into the runtime_config Mutex.
+        let reopened = MahoAgentSession::create_for_test_with_db("reopen-sess", Some(db_str));
+        {
+            let cfg = reopened
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(cfg.permission_tier, "full_access");
+            assert!(!cfg.final_confirm);
+            assert!(cfg.proactive_mode);
+        }
+
+        // 4) a different session id on the same db still gets the defaults.
+        let other = MahoAgentSession::create_for_test_with_db("other-sess", Some(db_str));
+        {
+            let cfg = other
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(cfg.permission_tier, "guard");
+            assert!(cfg.final_confirm);
+            assert!(!cfg.proactive_mode);
+        }
+
+        // 5) a hand-edited store row fails closed to "guard" on load.
+        {
+            let storage = maho_storage::sqlite::SqliteStorage::open_with_key(db_str, KEY).unwrap();
+            storage
+                .save_agent_runtime_config("tampered-sess", "root", true, false)
+                .unwrap();
+        }
+        let tampered = MahoAgentSession::create_for_test_with_db("tampered-sess", Some(db_str));
+        {
+            let cfg = tampered
+                .runtime_config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            assert_eq!(cfg.permission_tier, "guard");
         }
     }
 }

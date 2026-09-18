@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use maho_agent::permission::RuntimeTier;
 use maho_agent::{
     ApprovalDecisionReason, ApprovalPolicy, PermissionCallback, PermissionDecision,
-    PermissionRequest, SwiftideBackend, ToolSensitivity,
+    PermissionRequest, ToolSensitivity,
 };
 
 use maho_cli::approval::{
@@ -226,11 +226,11 @@ fn rendered_prompt_caps_oversized_payloads() {
 
 // ─── Backend wiring ────────────────────────────────────────────────────────
 
-fn dry_backend(dir: &tempfile::TempDir) -> SwiftideBackend {
+fn dry_backend(dir: &tempfile::TempDir) -> Arc<dyn maho_agent::AgentRuntime> {
     let db_path = dir.path().join("maho.db");
     let storage =
         maho_cli::workspace::open_storage(&db_path).expect("temp profile storage must open");
-    SwiftideBackend::new(
+    maho_agent::omo::factory::create_agent_runtime(
         Arc::new(maho_agent::MutexAgentStorage(Arc::new(Mutex::new(storage)))),
         None,
         dir.path().to_path_buf(),
@@ -248,15 +248,15 @@ fn apply_cli_approval_wires_every_posture_into_a_real_backend() {
     let backend = dry_backend(&dir);
 
     assert_eq!(
-        apply_cli_approval(&backend, true, false, "guard"),
+        apply_cli_approval(backend.as_ref(), true, false, "guard"),
         ApprovalPolicy::AllowAll
     );
     assert_eq!(
-        apply_cli_approval(&backend, false, false, "guard"),
+        apply_cli_approval(backend.as_ref(), false, false, "guard"),
         ApprovalPolicy::DenySensitive
     );
     assert_eq!(
-        apply_cli_approval(&backend, false, true, "guard"),
+        apply_cli_approval(backend.as_ref(), false, true, "guard"),
         ApprovalPolicy::Prompt
     );
 }

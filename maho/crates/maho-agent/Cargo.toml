@@ -18,15 +18,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
-swiftide-agents = "0.32"
-swiftide-integrations = { version = "0.32", features = ["openai", "anthropic"] }
-async-openai = { version = "=0.30.1" }
 rmcp = { version = "1.7", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "transport-async-rw"] }
 futures = "0.3"
 anyhow = "1"
 dyn-clone = "1"
-swiftide-core = "0.32"
-async-anthropic = "0.6"
 uuid = { workspace = true }
 chrono = { workspace = true }
 libc = "0.2"

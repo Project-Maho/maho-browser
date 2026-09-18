@@ -6,7 +6,9 @@
 //! Invariant: No automatic installation—skills require explicit user approval
 //! through the interaction broker or confirmation gate before installation.
 
-use crate::interaction::{InteractionBroker, InteractionError, InteractionOption, InteractionRequestId};
+use crate::interaction::{
+    InteractionBroker, InteractionError, InteractionOption, InteractionRequestId,
+};
 use crate::run_journal::{AgentRunId, RunCheckpointKind, RunJournal};
 use maho_core::skills_manager::{Skill, SkillsManager};
 use serde::{Deserialize, Serialize};
@@ -124,9 +126,17 @@ pub fn propose_skill_from_journal(
     for entry in entries {
         let name = &entry.event_name;
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&entry.payload_json) {
-            if let Some(user_input) = val.get("user_input").or_else(|| val.get("prompt")).and_then(|v| v.as_str()) {
+            if let Some(user_input) = val
+                .get("user_input")
+                .or_else(|| val.get("prompt"))
+                .and_then(|v| v.as_str())
+            {
                 user_prompts.push(user_input.to_string());
-            } else if let Some(tool) = val.get("tool").or_else(|| val.get("tool_call")).and_then(|v| v.as_str()) {
+            } else if let Some(tool) = val
+                .get("tool")
+                .or_else(|| val.get("tool_call"))
+                .and_then(|v| v.as_str())
+            {
                 allowed_tools_set.insert(tool.to_string());
                 steps_summary.push(format!("Execute tool '{}'", tool));
             } else if name != "started"
@@ -141,10 +151,16 @@ pub fn propose_skill_from_journal(
         }
     }
 
-    let raw_trigger = user_prompts.first().cloned().unwrap_or_else(|| "Automated workflow".to_string());
-    let skill_name = custom_name
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("Skill for {}", raw_trigger.chars().take(30).collect::<String>()));
+    let raw_trigger = user_prompts
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Automated workflow".to_string());
+    let skill_name = custom_name.map(|s| s.to_string()).unwrap_or_else(|| {
+        format!(
+            "Skill for {}",
+            raw_trigger.chars().take(30).collect::<String>()
+        )
+    });
 
     let slug = skill_name
         .to_lowercase()
@@ -182,7 +198,10 @@ pub fn propose_skill_from_journal(
         id: safe_id,
         name: skill_name,
         slash_command,
-        description: format!("Automatically created skill from user workflow: {}", raw_trigger),
+        description: format!(
+            "Automatically created skill from user workflow: {}",
+            raw_trigger
+        ),
         trigger_prompt: raw_trigger,
         system_prompt_template,
         allowed_tools,
@@ -244,7 +263,10 @@ pub fn update_skill(
             proposal: proposal.clone(),
             status: SkillActivationStatus::NotInstalled,
             installed_skill_id: None,
-            message: format!("Cannot update skill '{}': skill does not exist in catalog", proposal.id),
+            message: format!(
+                "Cannot update skill '{}': skill does not exist in catalog",
+                proposal.id
+            ),
         };
     }
 
@@ -386,7 +408,10 @@ mod tests {
         // User approves installation
         let outcome = activate_skill_proposal(&proposal, true, &mut catalog);
         assert_eq!(outcome.status, SkillActivationStatus::Installed);
-        assert_eq!(outcome.installed_skill_id, Some("approved-skill".to_string()));
+        assert_eq!(
+            outcome.installed_skill_id,
+            Some("approved-skill".to_string())
+        );
         assert!(catalog.contains_skill("approved-skill"));
 
         let installed = catalog.get_skill("approved-skill").unwrap();
@@ -413,12 +438,14 @@ mod tests {
         let req_id = request_skill_approval_interaction(&mut broker, &proposal).unwrap();
 
         // 1. First scenario: Deny
-        broker.resolve(&req_id, InteractionAnswer::option("install_reject")).unwrap();
+        broker
+            .resolve(&req_id, InteractionAnswer::option("install_reject"))
+            .unwrap();
         let req = broker.get(&req_id).unwrap();
         let is_approved = match &req.state {
-            crate::interaction::InteractionState::Resolved(InteractionAnswer::SelectedOption(opt)) => {
-                opt == "install_approve"
-            }
+            crate::interaction::InteractionState::Resolved(InteractionAnswer::SelectedOption(
+                opt,
+            )) => opt == "install_approve",
             _ => false,
         };
         let outcome1 = activate_skill_proposal(&proposal, is_approved, &mut catalog);
@@ -427,12 +454,14 @@ mod tests {
 
         // 2. Second scenario: Approve
         let req_id2 = request_skill_approval_interaction(&mut broker, &proposal).unwrap();
-        broker.resolve(&req_id2, InteractionAnswer::option("install_approve")).unwrap();
+        broker
+            .resolve(&req_id2, InteractionAnswer::option("install_approve"))
+            .unwrap();
         let req2 = broker.get(&req_id2).unwrap();
         let is_approved2 = match &req2.state {
-            crate::interaction::InteractionState::Resolved(InteractionAnswer::SelectedOption(opt)) => {
-                opt == "install_approve"
-            }
+            crate::interaction::InteractionState::Resolved(InteractionAnswer::SelectedOption(
+                opt,
+            )) => opt == "install_approve",
             _ => false,
         };
         let outcome2 = activate_skill_proposal(&proposal, is_approved2, &mut catalog);
@@ -483,7 +512,10 @@ mod tests {
         let approved_update = update_skill(&updated_proposal, true, &mut catalog);
         assert_eq!(approved_update.status, SkillActivationStatus::Installed);
         let updated = catalog.get_skill("custom-summarizer").unwrap();
-        assert_eq!(updated.description, "Updated description v2 with extra context");
+        assert_eq!(
+            updated.description,
+            "Updated description v2 with extra context"
+        );
         assert_eq!(updated.system_prompt, "Template v2 modified");
         assert_eq!(updated.allowed_tools, vec!["web_search", "fs_write"]);
 

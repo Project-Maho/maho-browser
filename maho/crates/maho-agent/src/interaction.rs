@@ -6,9 +6,9 @@
 //! round-trip interactive questions (`ask_user_question`) and action confirmations
 //! (`request_action_confirmation`) with suspend/resume/timeout/cancel semantics.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use serde::{Deserialize, Serialize};
 
 /// Unique identifier for an interaction request.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -409,7 +409,10 @@ mod tests {
         assert_eq!(req.id, id);
         assert_eq!(req.state, InteractionState::Pending);
         match &req.kind {
-            InteractionKind::Question { question, options: opts } => {
+            InteractionKind::Question {
+                question,
+                options: opts,
+            } => {
                 assert_eq!(question, "Which deployment target should we use?");
                 assert_eq!(opts.len(), 2);
             }
@@ -480,7 +483,10 @@ mod tests {
         if broker.can_resume(&id_approve) && broker.is_confirmed(&id_approve) {
             side_effect_executed = true;
         }
-        assert!(side_effect_executed, "Side effect executes on Confirmed state");
+        assert!(
+            side_effect_executed,
+            "Side effect executes on Confirmed state"
+        );
     }
 
     #[test]
@@ -490,13 +496,18 @@ mod tests {
             .request_action_confirmation("Delete all inactive users")
             .expect("Valid confirmation request should be created");
 
-        broker.timeout(&id).expect("Timeout transition must succeed");
+        broker
+            .timeout(&id)
+            .expect("Timeout transition must succeed");
 
         let req = broker.get(&id).expect("Request must exist");
         assert_eq!(req.state, InteractionState::Expired);
         // Fail-closed invariants
         assert!(!broker.can_resume(&id), "Expired request must not resume");
-        assert!(!broker.is_confirmed(&id), "Expired request must never auto-approve");
+        assert!(
+            !broker.is_confirmed(&id),
+            "Expired request must never auto-approve"
+        );
 
         // Attempting to resolve after timeout fails
         let res = broker.resolve(&id, InteractionAnswer::Confirmed);
@@ -535,11 +546,17 @@ mod tests {
         broker.timeout(&id1).expect("timeout");
         assert!(matches!(
             broker.cancel(&id1),
-            Err(InteractionError::AlreadyTerminal { state: InteractionState::Expired, .. })
+            Err(InteractionError::AlreadyTerminal {
+                state: InteractionState::Expired,
+                ..
+            })
         ));
         assert!(matches!(
             broker.resolve(&id1, InteractionAnswer::Confirmed),
-            Err(InteractionError::AlreadyTerminal { state: InteractionState::Expired, .. })
+            Err(InteractionError::AlreadyTerminal {
+                state: InteractionState::Expired,
+                ..
+            })
         ));
 
         // Probe 2: Cancelled request cannot be timed out or resolved
@@ -549,11 +566,17 @@ mod tests {
         broker.cancel(&id2).expect("cancel");
         assert!(matches!(
             broker.timeout(&id2),
-            Err(InteractionError::AlreadyTerminal { state: InteractionState::Cancelled, .. })
+            Err(InteractionError::AlreadyTerminal {
+                state: InteractionState::Cancelled,
+                ..
+            })
         ));
         assert!(matches!(
             broker.resolve(&id2, InteractionAnswer::Confirmed),
-            Err(InteractionError::AlreadyTerminal { state: InteractionState::Cancelled, .. })
+            Err(InteractionError::AlreadyTerminal {
+                state: InteractionState::Cancelled,
+                ..
+            })
         ));
 
         // Probe 3: Non-existent request returns NotFound

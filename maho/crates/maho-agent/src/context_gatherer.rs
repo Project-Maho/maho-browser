@@ -64,7 +64,11 @@ pub struct AccountContextEntry {
 }
 
 impl AccountContextEntry {
-    pub fn new(service: impl Into<String>, handle_label: impl Into<String>, scopes: Vec<String>) -> Self {
+    pub fn new(
+        service: impl Into<String>,
+        handle_label: impl Into<String>,
+        scopes: Vec<String>,
+    ) -> Self {
         Self {
             service: service.into(),
             handle_label: handle_label.into(),
@@ -142,7 +146,8 @@ impl AccountContextSlot {
         if accounts.is_empty() {
             Self::unavailable("No authenticated broker accounts found")
         } else {
-            accounts.sort_by(|a, b| (&a.service, &a.handle_label).cmp(&(&b.service, &b.handle_label)));
+            accounts
+                .sort_by(|a, b| (&a.service, &a.handle_label).cmp(&(&b.service, &b.handle_label)));
             Self::available(accounts)
         }
     }
@@ -191,7 +196,8 @@ mod tests {
 
     #[test]
     fn test_account_context_slot_unavailable_honest_reason() {
-        let slot = AccountContextSlot::unavailable("Direct API integration disabled for security policy");
+        let slot =
+            AccountContextSlot::unavailable("Direct API integration disabled for security policy");
         assert!(!slot.available);
         assert!(slot.accounts.is_empty());
         assert_eq!(

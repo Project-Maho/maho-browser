@@ -2,14 +2,29 @@ use std::collections::HashMap;
 
 use crate::approval::ToolSensitivity;
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FallbackTier {
     TypedDomainApi,
     #[serde(alias = "page_adapter", alias = "adapter_tier", alias = "adapter")]
     ExactOriginPageAdapter,
+    #[serde(
+        alias = "dom_ref_locator",
+        alias = "dom_tier",
+        alias = "v2_locator",
+        alias = "locator"
+    )]
     DomRefLocator,
+    #[serde(
+        alias = "accessibility_snapshot",
+        alias = "v1_ref",
+        alias = "snapshot",
+        alias = "accessibility"
+    )]
     AccessibilitySnapshot,
+    #[serde(alias = "screenshot_cua", alias = "screenshot", alias = "cua")]
     ScreenshotCua,
 }
 
@@ -20,10 +35,19 @@ impl FallbackTier {
     pub const AdapterTier: Self = Self::ExactOriginPageAdapter;
     #[allow(non_upper_case_globals)]
     pub const DomTier: Self = Self::DomRefLocator;
+    #[allow(non_upper_case_globals)]
+    pub const V2Locator: Self = Self::DomRefLocator;
+    #[allow(non_upper_case_globals)]
+    pub const V1Ref: Self = Self::AccessibilitySnapshot;
+    #[allow(non_upper_case_globals)]
+    pub const Screenshot: Self = Self::ScreenshotCua;
 
     pub const PAGE_ADAPTER: Self = Self::ExactOriginPageAdapter;
     pub const ADAPTER_TIER: Self = Self::ExactOriginPageAdapter;
     pub const DOM_TIER: Self = Self::DomRefLocator;
+    pub const V2_LOCATOR: Self = Self::DomRefLocator;
+    pub const V1_REF: Self = Self::AccessibilitySnapshot;
+    pub const SCREENSHOT: Self = Self::ScreenshotCua;
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -154,7 +178,7 @@ impl FallbackActionClass {
     fn for_tool_name(tool_name: &str) -> Self {
         match tool_name {
             "browser_navigate" | "browser_wait_for_navigation" => Self::Navigation,
-            "browser_key_press" => Self::Keyboard,
+            "browser_key_press" | "input.key_press" | "input_key_press" => Self::Keyboard,
             "read_current_page"
             | "list_browser_tabs"
             | "get_selected_text"
@@ -164,13 +188,31 @@ impl FallbackActionClass {
             | "page_query_selector"
             | "page_get_text"
             | "page_get_attribute"
-            | "page_wait_for_selector" => Self::PageRead,
-            "browser_accessibility_snapshot" => Self::AccessibilitySnapshot,
-            "browser_click" => Self::Click,
-            "browser_type" => Self::Type,
-            "browser_select" => Self::Select,
-            "browser_scroll" => Self::Scroll,
-            "browser_hover" => Self::Hover,
+            | "page_wait_for_selector"
+            | "browser_file_upload_select"
+            | "input.file_upload_select" => Self::PageRead,
+            "browser_accessibility_snapshot"
+            | "page.accessibility_snapshot"
+            | "page.accessibility_snapshot_v2"
+            | "page_accessibility_snapshot_v2"
+            | "browser_accessibility_snapshot_v2" => Self::AccessibilitySnapshot,
+            "browser_click"
+            | "input.click"
+            | "input.locator_click"
+            | "locator_click"
+            | "browser_locator_click"
+            | "input_locator_click"
+            | "browser_act_and_observe"
+            | "browser.act_and_observe" => Self::Click,
+            "browser_type"
+            | "input.type"
+            | "input.locator_type"
+            | "locator_type"
+            | "browser_locator_type"
+            | "input_locator_type" => Self::Type,
+            "browser_select" | "input.select" => Self::Select,
+            "browser_scroll" | "input.scroll" => Self::Scroll,
+            "browser_hover" | "input.hover" => Self::Hover,
             _ => Self::PageRead,
         }
     }

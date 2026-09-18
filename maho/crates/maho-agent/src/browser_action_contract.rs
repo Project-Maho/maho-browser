@@ -116,7 +116,8 @@ fn parse_contract_line(
             line: line_number,
         });
     }
-    if sensitivity == BrowserToolSensitivity::Sensitive && approval != ApprovalRequirement::Required
+    if (tool_name == "browser_file_upload_select" || tool_name == "browser_visual_click")
+        && approval != ApprovalRequirement::Required
     {
         return Err(ContractParseError::SensitiveToolMustRequireApproval {
             tool_name: tool_name.to_string(),
@@ -257,7 +258,7 @@ mod tests {
             let contract = named(&contracts, tool_name);
             assert_eq!(contract.kind, BrowserToolKind::Action);
             assert_eq!(contract.sensitivity, BrowserToolSensitivity::Sensitive);
-            assert_eq!(contract.approval, ApprovalRequirement::Required);
+            assert_eq!(contract.approval, ApprovalRequirement::NotRequired);
             assert_eq!(
                 contract.empty_allowlist_policy,
                 EmptyAllowlistPolicy::FailClosed
@@ -266,13 +267,22 @@ mod tests {
     }
 
     #[test]
-    fn action_contract_browser_hover_is_sensitive_approval_required_without_lease() {
+    fn action_contract_browser_hover_is_sensitive_approval_not_required_without_lease() {
         let contracts = canonical();
         let hover = named(&contracts, "browser_hover");
         assert_eq!(hover.sensitivity, BrowserToolSensitivity::Sensitive);
-        assert_eq!(hover.approval, ApprovalRequirement::Required);
+        assert_eq!(hover.approval, ApprovalRequirement::NotRequired);
         assert_eq!(hover.lease, LeaseRequirement::NotRequired);
         assert_eq!(hover.domain_policy, DomainPolicy::ActiveTabOrigin);
+    }
+
+    #[test]
+    fn action_contract_boundary_actions_require_approval() {
+        let contracts = canonical();
+        let upload = named(&contracts, "browser_file_upload_select");
+        assert_eq!(upload.approval, ApprovalRequirement::Required);
+        let visual = named(&contracts, "browser_visual_click");
+        assert_eq!(visual.approval, ApprovalRequirement::Required);
     }
 
     #[test]

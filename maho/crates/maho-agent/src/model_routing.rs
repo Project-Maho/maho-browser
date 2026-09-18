@@ -4,8 +4,8 @@
 //!
 //! Routes requests to optimal models per category with explicit fallback reasons.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Task category classified from user intent or agent execution context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -74,27 +74,87 @@ impl Default for ModelRoutingConfig {
         let mut default_map = HashMap::new();
         let mut fallback_map = HashMap::new();
 
-        default_map.insert(TaskCategory::Chat, "google/gemini-3-flash-lite:free".to_string());
-        default_map.insert(TaskCategory::GeneralChat, "google/gemini-3-flash-lite:free".to_string());
-        default_map.insert(TaskCategory::Code, "anthropic/claude-3-7-sonnet".to_string());
-        default_map.insert(TaskCategory::Coding, "anthropic/claude-3-7-sonnet".to_string());
-        default_map.insert(TaskCategory::Research, "anthropic/claude-3-7-sonnet".to_string());
-        default_map.insert(TaskCategory::DeepResearch, "anthropic/claude-3-7-sonnet".to_string());
-        default_map.insert(TaskCategory::FastReasoning, "google/gemini-3-flash-lite:free".to_string());
-        default_map.insert(TaskCategory::Vision, "google/gemini-3-flash-lite:free".to_string());
-        default_map.insert(TaskCategory::TabAutomation, "anthropic/claude-3-7-sonnet".to_string());
-        default_map.insert(TaskCategory::ToolUse, "anthropic/claude-3-7-sonnet".to_string());
+        default_map.insert(
+            TaskCategory::Chat,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::GeneralChat,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::Code,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::Coding,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::Research,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::DeepResearch,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::FastReasoning,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::Vision,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::TabAutomation,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        default_map.insert(
+            TaskCategory::ToolUse,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
 
-        fallback_map.insert(TaskCategory::Chat, "anthropic/claude-3-7-sonnet".to_string());
-        fallback_map.insert(TaskCategory::GeneralChat, "anthropic/claude-3-7-sonnet".to_string());
-        fallback_map.insert(TaskCategory::Code, "google/gemini-3-flash-lite:free".to_string());
-        fallback_map.insert(TaskCategory::Coding, "google/gemini-3-flash-lite:free".to_string());
-        fallback_map.insert(TaskCategory::Research, "google/gemini-3-flash-lite:free".to_string());
-        fallback_map.insert(TaskCategory::DeepResearch, "google/gemini-3-flash-lite:free".to_string());
-        fallback_map.insert(TaskCategory::FastReasoning, "anthropic/claude-3-7-sonnet".to_string());
-        fallback_map.insert(TaskCategory::Vision, "anthropic/claude-3-7-sonnet".to_string());
-        fallback_map.insert(TaskCategory::TabAutomation, "google/gemini-3-flash-lite:free".to_string());
-        fallback_map.insert(TaskCategory::ToolUse, "google/gemini-3-flash-lite:free".to_string());
+        fallback_map.insert(
+            TaskCategory::Chat,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::GeneralChat,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::Code,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::Coding,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::Research,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::DeepResearch,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::FastReasoning,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::Vision,
+            "anthropic/claude-3-7-sonnet".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::TabAutomation,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
+        fallback_map.insert(
+            TaskCategory::ToolUse,
+            "google/gemini-3-flash-lite:free".to_string(),
+        );
 
         Self {
             default_model_by_category: default_map,
@@ -279,7 +339,10 @@ mod tests {
         // Chat -> default chat model
         let chat_decision = RoutingPolicy::resolve(TaskCategory::Chat, None, &available)
             .expect("should resolve chat default");
-        assert_eq!(chat_decision.selected_model, "google/gemini-3-flash-lite:free");
+        assert_eq!(
+            chat_decision.selected_model,
+            "google/gemini-3-flash-lite:free"
+        );
         assert_eq!(chat_decision.model, "google/gemini-3-flash-lite:free");
         assert!(!chat_decision.is_fallback);
         assert!(!chat_decision.reason.is_empty());
@@ -287,7 +350,10 @@ mod tests {
         // GeneralChat -> default chat model
         let gen_chat_decision = RoutingPolicy::resolve(TaskCategory::GeneralChat, None, &available)
             .expect("should resolve general chat default");
-        assert_eq!(gen_chat_decision.selected_model, "google/gemini-3-flash-lite:free");
+        assert_eq!(
+            gen_chat_decision.selected_model,
+            "google/gemini-3-flash-lite:free"
+        );
         assert_eq!(gen_chat_decision.model, "google/gemini-3-flash-lite:free");
         assert!(!gen_chat_decision.is_fallback);
         assert!(!gen_chat_decision.reason.is_empty());
@@ -295,15 +361,22 @@ mod tests {
         // Research -> research-default
         let research_decision = RoutingPolicy::resolve(TaskCategory::Research, None, &available)
             .expect("should resolve research default");
-        assert_eq!(research_decision.selected_model, "anthropic/claude-3-7-sonnet");
+        assert_eq!(
+            research_decision.selected_model,
+            "anthropic/claude-3-7-sonnet"
+        );
         assert_eq!(research_decision.model, "anthropic/claude-3-7-sonnet");
         assert!(!research_decision.is_fallback);
         assert!(!research_decision.reason.is_empty());
 
         // DeepResearch -> research-default
-        let deep_research_decision = RoutingPolicy::resolve(TaskCategory::DeepResearch, None, &available)
-            .expect("should resolve deep research default");
-        assert_eq!(deep_research_decision.selected_model, "anthropic/claude-3-7-sonnet");
+        let deep_research_decision =
+            RoutingPolicy::resolve(TaskCategory::DeepResearch, None, &available)
+                .expect("should resolve deep research default");
+        assert_eq!(
+            deep_research_decision.selected_model,
+            "anthropic/claude-3-7-sonnet"
+        );
         assert_eq!(deep_research_decision.model, "anthropic/claude-3-7-sonnet");
         assert!(!deep_research_decision.is_fallback);
         assert!(!deep_research_decision.reason.is_empty());
@@ -319,7 +392,10 @@ mod tests {
         // Coding -> code-default
         let coding_decision = RoutingPolicy::resolve(TaskCategory::Coding, None, &available)
             .expect("should resolve coding default");
-        assert_eq!(coding_decision.selected_model, "anthropic/claude-3-7-sonnet");
+        assert_eq!(
+            coding_decision.selected_model,
+            "anthropic/claude-3-7-sonnet"
+        );
         assert_eq!(coding_decision.model, "anthropic/claude-3-7-sonnet");
         assert!(!coding_decision.is_fallback);
         assert!(!coding_decision.reason.is_empty());
@@ -373,7 +449,8 @@ mod tests {
             "Fallback reason must be recorded and non-empty"
         );
         assert!(
-            decision.reason.contains("openai/gpt-4o-nonexistent") && decision.reason.contains("unavailable"),
+            decision.reason.contains("openai/gpt-4o-nonexistent")
+                && decision.reason.contains("unavailable"),
             "Fallback reason must explain why fallback happened: got '{}'",
             decision.reason
         );
@@ -390,14 +467,24 @@ mod tests {
         );
 
         match result {
-            Err(ModelRoutingError::TypedUnavailable { category, attempted, reason }) => {
+            Err(ModelRoutingError::TypedUnavailable {
+                category,
+                attempted,
+                reason,
+            }) => {
                 assert_eq!(category, TaskCategory::Code);
                 assert!(attempted.contains(&"preferred-offline-model".to_string()));
                 assert!(attempted.contains(&"anthropic/claude-3-7-sonnet".to_string()));
-                assert!(!reason.is_empty(), "Reason must describe why no candidate is available");
+                assert!(
+                    !reason.is_empty(),
+                    "Reason must describe why no candidate is available"
+                );
             }
             Err(other) => panic!("Expected TypedUnavailable error variant, got {:?}", other),
-            Ok(decision) => panic!("Expected failure on no available models, but got silent pick {:?}", decision),
+            Ok(decision) => panic!(
+                "Expected failure on no available models, but got silent pick {:?}",
+                decision
+            ),
         }
     }
 
@@ -408,13 +495,20 @@ mod tests {
         let result = RoutingPolicy::resolve(TaskCategory::GeneralChat, None, &available);
 
         match result {
-            Err(ModelRoutingError::TypedUnavailable { category, attempted, reason }) => {
+            Err(ModelRoutingError::TypedUnavailable {
+                category,
+                attempted,
+                reason,
+            }) => {
                 assert_eq!(category, TaskCategory::GeneralChat);
                 assert!(!attempted.is_empty());
                 assert!(!reason.is_empty());
             }
             Err(other) => panic!("Expected TypedUnavailable, got {:?}", other),
-            Ok(decision) => panic!("Expected failure on empty available list, got {:?}", decision),
+            Ok(decision) => panic!(
+                "Expected failure on empty available list, got {:?}",
+                decision
+            ),
         }
     }
 
@@ -429,16 +523,18 @@ mod tests {
         assert_eq!(decision.selected_model, "google/gemini-3-flash-lite:free");
         assert!(decision.is_fallback);
         assert!(!decision.reason.is_empty());
-        assert_eq!(decision.fallback_model.as_deref(), Some("google/gemini-3-flash-lite:free"));
+        assert_eq!(
+            decision.fallback_model.as_deref(),
+            Some("google/gemini-3-flash-lite:free")
+        );
     }
 
     #[test]
     fn test_custom_model_routing_config() {
         let mut custom_config = ModelRoutingConfig::default();
-        custom_config.default_model_by_category.insert(
-            TaskCategory::Chat,
-            "custom/llama-3-70b".to_string(),
-        );
+        custom_config
+            .default_model_by_category
+            .insert(TaskCategory::Chat, "custom/llama-3-70b".to_string());
 
         let policy = RoutingPolicy::new(custom_config);
         let available = vec!["custom/llama-3-70b".to_string()];

@@ -7,15 +7,13 @@ use std::ptr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Arc as FfiArc, Mutex, OnceLock};
 
-use maho_agent::{MutexAgentStorage, SwiftideBackend};
+use maho_agent::MutexAgentStorage;
 use maho_core::maho_core::MahoCore;
 use maho_core::workspace_manager::WorkspaceManager;
 use maho_storage::sqlite::SqliteStorage;
 
 use crate::agent::callback_lease::{SendableCallback, SendableUserData};
-use crate::common::{
-    to_json_cstring, CallbackLease, NEXT_CALLBACK_TOKEN,
-};
+use crate::common::{to_json_cstring, CallbackLease, NEXT_CALLBACK_TOKEN};
 use crate::ffi_safe;
 use crate::import_gate;
 
@@ -825,7 +823,7 @@ fn spawn_tracked_routine(
                     }
                 })
             });
-            let backend = SwiftideBackend::new(
+            let backend = maho_agent::omo::factory::create_agent_runtime(
                 Arc::new(agent_storage),
                 Some(permission_callback),
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
@@ -1368,7 +1366,7 @@ pub unsafe extern "C" fn maho_routines_fire_event(core: *mut MahoCore, event_jso
                                     }
                                 })
                             });
-                        let backend = SwiftideBackend::new(
+                        let backend = maho_agent::omo::factory::create_agent_runtime(
                             Arc::new(agent_storage),
                             Some(permission_callback),
                             std::env::current_dir()
@@ -1420,11 +1418,17 @@ static ROUTINES_OCCURRENCE_GUARD: OnceLock<StdMutex<HashMap<String, i64>>> = Onc
 static CUSTOM_OCCURRENCE_GUARD_PATH: StdMutex<Option<PathBuf>> = StdMutex::new(None);
 
 pub fn set_custom_occurrence_guard_path(path: Option<PathBuf>) {
-    *CUSTOM_OCCURRENCE_GUARD_PATH.lock().unwrap_or_else(|e| e.into_inner()) = path;
+    *CUSTOM_OCCURRENCE_GUARD_PATH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = path;
 }
 
 pub(crate) fn occurrence_guard_file_path(db_path: &str) -> PathBuf {
-    if let Some(custom) = CUSTOM_OCCURRENCE_GUARD_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(custom) = CUSTOM_OCCURRENCE_GUARD_PATH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
         return custom;
     }
     std::path::Path::new(db_path).with_extension("routine_occurrences.json")
@@ -1451,12 +1455,16 @@ pub fn save_occurrence_guard_to_disk(path: &std::path::Path, guard: &HashMap<Str
 
 pub fn reload_occurrence_guard_from_disk(path: &std::path::Path) {
     let loaded = load_occurrence_guard_from_disk(path);
-    let mut guard = get_occurrence_guard().lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = get_occurrence_guard()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *guard = loaded;
 }
 
 pub fn clear_occurrence_guard() {
-    let mut guard = get_occurrence_guard().lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = get_occurrence_guard()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     guard.clear();
 }
 
@@ -1508,11 +1516,7 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
             // Prune occurrence guard entries older than 2 minutes (120s)
             occurrence_guard.retain(|_, fired_at| now_sec.saturating_sub(*fired_at) <= 120);
 
-            let minute_bucket = if now_sec > 0 {
-                (now_sec / 60) * 60
-            } else {
-                0
-            };
+            let minute_bucket = if now_sec > 0 { (now_sec / 60) * 60 } else { 0 };
 
             let routines = maho_core::routines::list_routines();
             for routine in routines {
@@ -1624,7 +1628,7 @@ pub unsafe extern "C" fn maho_routines_tick(core: *mut MahoCore, now_sec: i64) -
                                         }
                                     })
                                 });
-                            let backend = SwiftideBackend::new(
+                            let backend = maho_agent::omo::factory::create_agent_runtime(
                                 Arc::new(agent_storage),
                                 Some(permission_callback),
                                 std::env::current_dir()
@@ -1826,7 +1830,10 @@ mod tests {
         clear_occurrence_guard();
         {
             let guard = get_occurrence_guard().lock().unwrap();
-            assert!(guard.is_empty(), "In-memory guard should be empty after clear");
+            assert!(
+                guard.is_empty(),
+                "In-memory guard should be empty after clear"
+            );
         }
 
         reload_occurrence_guard_from_disk(&state_path);
@@ -1834,7 +1841,10 @@ mod tests {
         // 3. Verify same occurrence is NOT re-fired
         {
             let guard = get_occurrence_guard().lock().unwrap();
-            assert!(guard.contains_key(&occurrence_key), "Reloaded guard must contain previous occurrence");
+            assert!(
+                guard.contains_key(&occurrence_key),
+                "Reloaded guard must contain previous occurrence"
+            );
         }
 
         // 4. New occurrence in next minute bucket fires successfully
@@ -1844,7 +1854,10 @@ mod tests {
 
         {
             let mut guard = get_occurrence_guard().lock().unwrap();
-            assert!(!guard.contains_key(&next_occurrence_key), "New minute bucket must not be blocked");
+            assert!(
+                !guard.contains_key(&next_occurrence_key),
+                "New minute bucket must not be blocked"
+            );
             guard.insert(next_occurrence_key.clone(), next_now_sec);
             save_occurrence_guard_to_disk(&state_path, &guard);
         }
@@ -1856,5 +1869,3 @@ mod tests {
         set_custom_occurrence_guard_path(None);
     }
 }
-
-

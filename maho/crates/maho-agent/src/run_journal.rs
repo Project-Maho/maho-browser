@@ -120,7 +120,10 @@ pub enum RunJournalError {
     #[error("duplicate terminal marker for run {0}")]
     DuplicateTerminalMarker(AgentRunId),
     #[error("invalid sequence number: expected {expected}, got {actual}")]
-    InvalidSequence { expected: EventSeq, actual: EventSeq },
+    InvalidSequence {
+        expected: EventSeq,
+        actual: EventSeq,
+    },
     #[error("serialization error: {0}")]
     SerializationError(String),
     #[error("storage error: {0}")]
@@ -141,9 +144,7 @@ pub struct FsJsonStore {
 
 impl FsJsonStore {
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
-        Self {
-            path: path.into(),
-        }
+        Self { path: path.into() }
     }
 
     pub fn path(&self) -> &std::path::Path {
@@ -157,7 +158,8 @@ impl JournalStore for FsJsonStore {
             let _ = std::fs::create_dir_all(parent);
         }
         let json = journal.to_json()?;
-        std::fs::write(&self.path, json).map_err(|e| RunJournalError::StorageError(e.to_string()))?;
+        std::fs::write(&self.path, json)
+            .map_err(|e| RunJournalError::StorageError(e.to_string()))?;
         Ok(())
     }
 
@@ -187,7 +189,9 @@ pub fn classify_entry(entry: &RunJournalEntry) -> RestartClassification {
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&entry.payload_json) {
         if let Some(effect) = val.get("effect").and_then(|v| v.as_str()) {
             match effect {
-                "read_only" | "wait" | "query" | "status" => return RestartClassification::Recoverable,
+                "read_only" | "wait" | "query" | "status" => {
+                    return RestartClassification::Recoverable
+                }
                 "mutation" | "external_mutation" | "write" | "action" | "approval" => {
                     return RestartClassification::NeedsUserResume
                 }
@@ -436,7 +440,9 @@ impl RunJournal {
             }
             run.terminal_kind = Some(checkpoint.kind);
         } else if run.terminal_kind.is_some() {
-            return Err(RunJournalError::RunAlreadyTerminal(checkpoint.run_id.clone()));
+            return Err(RunJournalError::RunAlreadyTerminal(
+                checkpoint.run_id.clone(),
+            ));
         }
 
         run.checkpoints.push(checkpoint);
@@ -591,22 +597,26 @@ impl RunJournal {
         for entry in run.entries.iter().rev() {
             if entry.event_name == "compacting" || entry.event_name == "context_compaction" {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&entry.payload_json) {
-                    let triggered_at = val.get("triggered_at")
+                    let triggered_at = val
+                        .get("triggered_at")
                         .and_then(|v| v.as_u64())
                         .or_else(|| val.get("compacted_at").and_then(|v| v.as_u64()))
                         .unwrap_or(entry.timestamp);
 
-                    let dropped_turns = val.get("dropped_turns")
+                    let dropped_turns = val
+                        .get("dropped_turns")
                         .or_else(|| val.get("dropped_indices"))
                         .and_then(|v| serde_json::from_value::<Vec<usize>>(v.clone()).ok())
                         .unwrap_or_default();
 
-                    let kept_markers = val.get("kept_markers")
+                    let kept_markers = val
+                        .get("kept_markers")
                         .or_else(|| val.get("preserved_keys"))
                         .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
                         .unwrap_or_default();
 
-                    let session_id = val.get("session_id")
+                    let session_id = val
+                        .get("session_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or(&run.session_id)
                         .to_string();
@@ -623,7 +633,6 @@ impl RunJournal {
         None
     }
 
-
     pub fn get_record(&self, run_id: &AgentRunId) -> Option<&RunRecord> {
         self.runs.get(run_id)
     }
@@ -632,7 +641,10 @@ impl RunJournal {
         self.runs.values().collect()
     }
 
-    pub fn get_checkpoints(&self, run_id: &AgentRunId) -> Result<&[RunCheckpoint], RunJournalError> {
+    pub fn get_checkpoints(
+        &self,
+        run_id: &AgentRunId,
+    ) -> Result<&[RunCheckpoint], RunJournalError> {
         self.runs
             .get(run_id)
             .map(|r| r.checkpoints.as_slice())
@@ -666,18 +678,26 @@ mod tests {
         journal.start_run(run_id.clone(), "session-abc").unwrap();
 
         // 1. Seq starts at 1 and increments monotonically
-        let e1 = journal.append_event(&run_id, "status", r#"{"state":"started"}"#).unwrap();
+        let e1 = journal
+            .append_event(&run_id, "status", r#"{"state":"started"}"#)
+            .unwrap();
         assert_eq!(e1.event_seq, 1);
         assert_eq!(e1.run_id, run_id);
 
-        let e2 = journal.append_event(&run_id, "read", r#"{"url":"https://example.com"}"#).unwrap();
+        let e2 = journal
+            .append_event(&run_id, "read", r#"{"url":"https://example.com"}"#)
+            .unwrap();
         assert_eq!(e2.event_seq, 2);
 
-        let e3 = journal.append_event(&run_id, "progress", r#"{"percent":50}"#).unwrap();
+        let e3 = journal
+            .append_event(&run_id, "progress", r#"{"percent":50}"#)
+            .unwrap();
         assert_eq!(e3.event_seq, 3);
 
         // 2. Record terminal marker (Completed)
-        let term = journal.record_terminal(&run_id, RunCheckpointKind::Completed, None).unwrap();
+        let term = journal
+            .record_terminal(&run_id, RunCheckpointKind::Completed, None)
+            .unwrap();
         assert_eq!(term.kind, RunCheckpointKind::Completed);
         assert_eq!(term.last_event_seq, 3);
 
@@ -703,28 +723,48 @@ mod tests {
         journal.start_run(run_id.clone(), "session-xyz").unwrap();
 
         // Event 1: Read-only op -> Recoverable
-        let e1 = journal.append_event(&run_id, "history_search", r#"{"query":"docs"}"#).unwrap();
+        let e1 = journal
+            .append_event(&run_id, "history_search", r#"{"query":"docs"}"#)
+            .unwrap();
         assert_eq!(journal.classify(&e1), RestartClassification::Recoverable);
 
         // Event 2: Wait op -> Recoverable
-        let e2 = journal.append_event(&run_id, "wait_for_event", r#"{"deadline":1000}"#).unwrap();
+        let e2 = journal
+            .append_event(&run_id, "wait_for_event", r#"{"deadline":1000}"#)
+            .unwrap();
         assert_eq!(journal.classify(&e2), RestartClassification::Recoverable);
 
         // Event 3: External mutation -> NeedsUserResume (uncertain external state)
-        let e3 = journal.append_event(&run_id, "fs_write", r#"{"path":"/tmp/out.txt"}"#).unwrap();
-        assert_eq!(journal.classify(&e3), RestartClassification::NeedsUserResume);
+        let e3 = journal
+            .append_event(&run_id, "fs_write", r#"{"path":"/tmp/out.txt"}"#)
+            .unwrap();
+        assert_eq!(
+            journal.classify(&e3),
+            RestartClassification::NeedsUserResume
+        );
 
         // Event 4: Mail send -> NeedsUserResume
-        let e4 = journal.append_event(&run_id, "mail_send", r#"{"to":"alice@example.com"}"#).unwrap();
-        assert_eq!(journal.classify(&e4), RestartClassification::NeedsUserResume);
+        let e4 = journal
+            .append_event(&run_id, "mail_send", r#"{"to":"alice@example.com"}"#)
+            .unwrap();
+        assert_eq!(
+            journal.classify(&e4),
+            RestartClassification::NeedsUserResume
+        );
 
         // Resume plan inspects all steps and strictly forbids auto-retry if uncertain mutation exists
         let plan = journal.resume_plan(&run_id).unwrap();
         assert!(!plan.is_terminal);
-        assert!(!plan.can_auto_resume, "Journal must NEVER auto-retry uncertain mutations");
+        assert!(
+            !plan.can_auto_resume,
+            "Journal must NEVER auto-retry uncertain mutations"
+        );
         assert_eq!(plan.recoverable_steps.len(), 2);
         assert_eq!(plan.uncertain_steps.len(), 2);
-        assert!(plan.uncertain_steps.iter().all(|s| s.user_decision_required));
+        assert!(plan
+            .uncertain_steps
+            .iter()
+            .all(|s| s.user_decision_required));
     }
 
     #[test]
@@ -734,15 +774,29 @@ mod tests {
         // Run 1: Clean completed run
         let completed_run = AgentRunId::new("run-completed");
         journal.start_run(completed_run.clone(), "sess-1").unwrap();
-        journal.append_event(&completed_run, "status", r#"{"msg":"start"}"#).unwrap();
-        journal.append_event(&completed_run, "read", r#"{"target":"page"}"#).unwrap();
-        journal.record_terminal(&completed_run, RunCheckpointKind::Completed, None).unwrap();
+        journal
+            .append_event(&completed_run, "status", r#"{"msg":"start"}"#)
+            .unwrap();
+        journal
+            .append_event(&completed_run, "read", r#"{"target":"page"}"#)
+            .unwrap();
+        journal
+            .record_terminal(&completed_run, RunCheckpointKind::Completed, None)
+            .unwrap();
 
         // Run 2: In-flight uncertain mutation interrupted by crash/restart
         let uncertain_run = AgentRunId::new("run-uncertain");
         journal.start_run(uncertain_run.clone(), "sess-2").unwrap();
-        journal.append_event(&uncertain_run, "page_context", r#"{"title":"Form"}"#).unwrap();
-        journal.append_event(&uncertain_run, "click_element", "{\"selector\":\"#submit-payment\"}").unwrap();
+        journal
+            .append_event(&uncertain_run, "page_context", r#"{"title":"Form"}"#)
+            .unwrap();
+        journal
+            .append_event(
+                &uncertain_run,
+                "click_element",
+                "{\"selector\":\"#submit-payment\"}",
+            )
+            .unwrap();
 
         // Persist journal to JSON (simulating disk storage across restart)
         let json_dump = journal.to_json().expect("Serialization must succeed");
@@ -758,9 +812,15 @@ mod tests {
         // Assert uncertain run is NOT auto-executed and flags uncertain step
         let uncertain_plan = reloaded.resume_plan(&uncertain_run).unwrap();
         assert!(!uncertain_plan.is_terminal);
-        assert!(!uncertain_plan.can_auto_resume, "Uncertain interrupted run MUST NOT auto-execute");
+        assert!(
+            !uncertain_plan.can_auto_resume,
+            "Uncertain interrupted run MUST NOT auto-execute"
+        );
         assert_eq!(uncertain_plan.uncertain_steps.len(), 1);
-        assert_eq!(uncertain_plan.uncertain_steps[0].event_name, "click_element");
+        assert_eq!(
+            uncertain_plan.uncertain_steps[0].event_name,
+            "click_element"
+        );
         assert!(uncertain_plan.uncertain_steps[0].user_decision_required);
     }
 
@@ -770,14 +830,25 @@ mod tests {
         let run_id = AgentRunId::new("run-pure-read");
         journal.start_run(run_id.clone(), "sess-read").unwrap();
 
-        journal.append_event(&run_id, "status", r#"{"state":"started"}"#).unwrap();
-        journal.append_event(&run_id, "web_search", r#"{"query":"weather"}"#).unwrap();
-        journal.append_event(&run_id, "page_context", r#"{"url":"https://example.com"}"#).unwrap();
-        journal.append_event(&run_id, "wait_for_event", r#"{"event":"dom_ready"}"#).unwrap();
+        journal
+            .append_event(&run_id, "status", r#"{"state":"started"}"#)
+            .unwrap();
+        journal
+            .append_event(&run_id, "web_search", r#"{"query":"weather"}"#)
+            .unwrap();
+        journal
+            .append_event(&run_id, "page_context", r#"{"url":"https://example.com"}"#)
+            .unwrap();
+        journal
+            .append_event(&run_id, "wait_for_event", r#"{"event":"dom_ready"}"#)
+            .unwrap();
 
         let plan = journal.resume_plan(&run_id).unwrap();
         assert!(!plan.is_terminal);
-        assert!(plan.can_auto_resume, "Pure read-only and wait states are safe to auto-resume");
+        assert!(
+            plan.can_auto_resume,
+            "Pure read-only and wait states are safe to auto-resume"
+        );
         assert_eq!(plan.recoverable_steps.len(), 4);
         assert_eq!(plan.uncertain_steps.len(), 0);
         assert!(!plan.requires_user_decision());
@@ -790,15 +861,20 @@ mod tests {
         journal.start_run(run_id.clone(), "sess-fail").unwrap();
 
         journal.append_event(&run_id, "started", "{}").unwrap();
-        let term = journal.record_terminal(
-            &run_id,
-            RunCheckpointKind::Failed,
-            Some(serde_json::json!({"error": "network timeout"})),
-        ).unwrap();
+        let term = journal
+            .record_terminal(
+                &run_id,
+                RunCheckpointKind::Failed,
+                Some(serde_json::json!({"error": "network timeout"})),
+            )
+            .unwrap();
         assert_eq!(term.kind, RunCheckpointKind::Failed);
 
         let dup = journal.record_terminal(&run_id, RunCheckpointKind::Completed, None);
-        assert_eq!(dup.unwrap_err(), RunJournalError::DuplicateTerminalMarker(run_id.clone()));
+        assert_eq!(
+            dup.unwrap_err(),
+            RunJournalError::DuplicateTerminalMarker(run_id.clone())
+        );
 
         assert!(journal.is_terminal(&run_id).unwrap());
     }
@@ -810,8 +886,13 @@ mod tests {
         journal.start_run(run_id.clone(), "sess-unknown").unwrap();
 
         // Any unknown operation defaults to NeedsUserResume (fail-closed)
-        let unk = journal.append_event(&run_id, "custom_arbitrary_plugin_op", "{}").unwrap();
-        assert_eq!(journal.classify(&unk), RestartClassification::NeedsUserResume);
+        let unk = journal
+            .append_event(&run_id, "custom_arbitrary_plugin_op", "{}")
+            .unwrap();
+        assert_eq!(
+            journal.classify(&unk),
+            RestartClassification::NeedsUserResume
+        );
 
         let plan = journal.resume_plan(&run_id).unwrap();
         assert!(!plan.can_auto_resume);
@@ -820,25 +901,37 @@ mod tests {
 
     #[test]
     fn test_journal_with_fs_store_drop_and_reload_events_intact() {
-        let temp_dir = std::env::temp_dir().join(format!("maho_journal_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("maho_journal_test_{}", uuid::Uuid::new_v4()));
         let store_path = temp_dir.join("journal.json");
         let store = Arc::new(FsJsonStore::new(&store_path));
 
         let run_id = AgentRunId::new("run-durable-1");
         {
-            let mut journal = RunJournal::new().with_store(Arc::clone(&store) as Arc<dyn JournalStore>);
+            let mut journal =
+                RunJournal::new().with_store(Arc::clone(&store) as Arc<dyn JournalStore>);
             journal.persist_on_append();
 
-            journal.start_run(run_id.clone(), "session-durable").unwrap();
-            journal.append_event(&run_id, "status", r#"{"state":"started"}"#).unwrap();
-            journal.append_event(&run_id, "web_search", r#"{"query":"rust persistence"}"#).unwrap();
-            journal.append_event(&run_id, "fs_write", r#"{"path":"/tmp/test.txt"}"#).unwrap();
+            journal
+                .start_run(run_id.clone(), "session-durable")
+                .unwrap();
+            journal
+                .append_event(&run_id, "status", r#"{"state":"started"}"#)
+                .unwrap();
+            journal
+                .append_event(&run_id, "web_search", r#"{"query":"rust persistence"}"#)
+                .unwrap();
+            journal
+                .append_event(&run_id, "fs_write", r#"{"path":"/tmp/test.txt"}"#)
+                .unwrap();
             // Drop journal here
         }
 
         // Reload from store
         let reloaded = RunJournal::load_from_store(store).expect("Reload from store must succeed");
-        let entries = reloaded.get_entries(&run_id).expect("Run entries must exist");
+        let entries = reloaded
+            .get_entries(&run_id)
+            .expect("Run entries must exist");
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].event_seq, 1);
         assert_eq!(entries[0].event_name, "status");
@@ -852,44 +945,64 @@ mod tests {
 
     #[test]
     fn test_approval_pending_restart_classification_needs_user_resume() {
-        let temp_dir = std::env::temp_dir().join(format!("maho_approval_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("maho_approval_test_{}", uuid::Uuid::new_v4()));
         let store_path = temp_dir.join("journal.json");
         let store = Arc::new(FsJsonStore::new(&store_path));
 
         let run_id = AgentRunId::new("run-approval-pending");
         {
-            let mut journal = RunJournal::new().with_store(Arc::clone(&store) as Arc<dyn JournalStore>);
+            let mut journal =
+                RunJournal::new().with_store(Arc::clone(&store) as Arc<dyn JournalStore>);
             journal.persist_on_append();
 
-            journal.start_run(run_id.clone(), "session-approval").unwrap();
-            journal.append_event(&run_id, "status", r#"{"state":"started"}"#).unwrap();
-            journal.append_event(&run_id, "page_context", r#"{"url":"https://bank.com"}"#).unwrap();
+            journal
+                .start_run(run_id.clone(), "session-approval")
+                .unwrap();
+            journal
+                .append_event(&run_id, "status", r#"{"state":"started"}"#)
+                .unwrap();
+            journal
+                .append_event(&run_id, "page_context", r#"{"url":"https://bank.com"}"#)
+                .unwrap();
 
             // Record WaitingApproval checkpoint
-            journal.record_checkpoint(RunCheckpoint {
-                run_id: run_id.clone(),
-                session_id: "session-approval".to_string(),
-                last_event_seq: 2,
-                kind: RunCheckpointKind::WaitingApproval,
-                classification: RestartClassification::NeedsUserResume,
-                state_payload: Some(serde_json::json!({
-                    "action": "transfer_funds",
-                    "requires_approval": true
-                })),
-                timestamp: 100,
-            }).unwrap();
+            journal
+                .record_checkpoint(RunCheckpoint {
+                    run_id: run_id.clone(),
+                    session_id: "session-approval".to_string(),
+                    last_event_seq: 2,
+                    kind: RunCheckpointKind::WaitingApproval,
+                    classification: RestartClassification::NeedsUserResume,
+                    state_payload: Some(serde_json::json!({
+                        "action": "transfer_funds",
+                        "requires_approval": true
+                    })),
+                    timestamp: 100,
+                })
+                .unwrap();
             // Drop journal here
         }
 
         // Reload from store
         let reloaded = RunJournal::load_from_store(store).expect("Reload must succeed");
-        let plan = reloaded.resume_plan(&run_id).expect("Resume plan generation must succeed");
+        let plan = reloaded
+            .resume_plan(&run_id)
+            .expect("Resume plan generation must succeed");
 
-        assert!(!plan.is_terminal, "Run waiting for approval is not terminal");
-        assert!(!plan.can_auto_resume, "Run in WaitingApproval state MUST NEVER auto-resume");
+        assert!(
+            !plan.is_terminal,
+            "Run waiting for approval is not terminal"
+        );
+        assert!(
+            !plan.can_auto_resume,
+            "Run in WaitingApproval state MUST NEVER auto-resume"
+        );
         assert!(plan.requires_user_decision(), "Must require user decision");
         assert!(
-            plan.uncertain_steps.iter().any(|step| step.classification == RestartClassification::NeedsUserResume),
+            plan.uncertain_steps
+                .iter()
+                .any(|step| step.classification == RestartClassification::NeedsUserResume),
             "Classification must return NeedsUserResume"
         );
 
@@ -898,7 +1011,8 @@ mod tests {
 
     #[test]
     fn test_helper_constructors_and_automatic_fs_write_through() {
-        let temp_dir = std::env::temp_dir().join(format!("maho_helper_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("maho_helper_test_{}", uuid::Uuid::new_v4()));
         let session_id = "session-helper-test";
         let store_path = temp_dir.join(format!("{session_id}.journal.json"));
 
@@ -910,19 +1024,28 @@ mod tests {
             assert!(journal.is_persist_on_append());
 
             journal.start_run(run_id.clone(), session_id).unwrap();
-            assert!(store_path.exists(), "File must exist immediately after start_run");
+            assert!(
+                store_path.exists(),
+                "File must exist immediately after start_run"
+            );
 
-            journal.append_event(&run_id, "step_started", r#"{"role":"user"}"#).unwrap();
-            journal.append_event(&run_id, "web_search", r#"{"query":"rust"}"#).unwrap();
-            journal.record_checkpoint(RunCheckpoint {
-                run_id: run_id.clone(),
-                session_id: session_id.to_string(),
-                last_event_seq: 2,
-                kind: RunCheckpointKind::StepProgress,
-                classification: RestartClassification::Recoverable,
-                state_payload: None,
-                timestamp: 10,
-            }).unwrap();
+            journal
+                .append_event(&run_id, "step_started", r#"{"role":"user"}"#)
+                .unwrap();
+            journal
+                .append_event(&run_id, "web_search", r#"{"query":"rust"}"#)
+                .unwrap();
+            journal
+                .record_checkpoint(RunCheckpoint {
+                    run_id: run_id.clone(),
+                    session_id: session_id.to_string(),
+                    last_event_seq: 2,
+                    kind: RunCheckpointKind::StepProgress,
+                    classification: RestartClassification::Recoverable,
+                    state_payload: None,
+                    timestamp: 10,
+                })
+                .unwrap();
         }
 
         // 2. Test `RunJournal::from_fs_path_or_new` restores the persisted state
@@ -940,7 +1063,9 @@ mod tests {
             assert_eq!(checkpoints[0].kind, RunCheckpointKind::StepProgress);
 
             // Append another event and check that disk file updates
-            journal.append_event(&run_id, "status", r#"{"status":"completed"}"#).unwrap();
+            journal
+                .append_event(&run_id, "status", r#"{"status":"completed"}"#)
+                .unwrap();
         }
 
         // 3. Test `RunJournal::for_session` helper
@@ -949,7 +1074,9 @@ mod tests {
             assert!(journal.has_store());
             assert!(journal.is_persist_on_append());
             // Since it points to the same file path, loading from store will recover 3 entries
-            let loaded = RunJournal::from_fs_path_or_new(temp_dir.join(format!("{session_id}.journal.json")));
+            let loaded = RunJournal::from_fs_path_or_new(
+                temp_dir.join(format!("{session_id}.journal.json")),
+            );
             let entries = loaded.get_entries(&run_id).unwrap();
             assert_eq!(entries.len(), 3);
         }

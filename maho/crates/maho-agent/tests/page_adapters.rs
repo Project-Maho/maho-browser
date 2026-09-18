@@ -1,7 +1,7 @@
 use maho_agent::approval::ToolSensitivity;
 use maho_agent::fallback_ladder::{
-    FallbackDecisionReason, FallbackLadderState, FallbackSafetyState,
-    FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval,
+    FallbackDecisionReason, FallbackLadderState, FallbackSafetyState, FallbackSelectionRequest,
+    FallbackTier, ScreenshotCuaApproval,
 };
 use maho_agent::page_adapters::PageAdapterRegistry;
 
@@ -53,41 +53,61 @@ fn page_adapters_evil_origin_and_different_origin_probes_not_matched() {
 
     // Evil origin subdomain attack: https://docs.google.com.evil.io must NOT match
     assert!(
-        registry.lookup("https://docs.google.com.evil.io", "get_selection").is_none(),
+        registry
+            .lookup("https://docs.google.com.evil.io", "get_selection")
+            .is_none(),
         "evil.io suffix probe must fail closed"
     );
     assert!(
-        registry.lookup("https://docs.google.com.evil.io/document/d/1", "get_selection").is_none(),
+        registry
+            .lookup(
+                "https://docs.google.com.evil.io/document/d/1",
+                "get_selection"
+            )
+            .is_none(),
         "evil.io path probe must fail closed"
     );
 
     // Evil target parameter probe
     assert!(
-        registry.lookup("https://evil.io/?target=https://docs.google.com", "get_selection").is_none(),
+        registry
+            .lookup(
+                "https://evil.io/?target=https://docs.google.com",
+                "get_selection"
+            )
+            .is_none(),
         "query param evil origin must fail closed"
     );
 
     // Different subdomain
     assert!(
-        registry.lookup("https://sheets.google.com", "get_selection").is_none(),
+        registry
+            .lookup("https://sheets.google.com", "get_selection")
+            .is_none(),
         "different subdomain must not match"
     );
 
     // Different scheme (http vs https)
     assert!(
-        registry.lookup("http://docs.google.com", "get_selection").is_none(),
+        registry
+            .lookup("http://docs.google.com", "get_selection")
+            .is_none(),
         "http scheme must not match https origin"
     );
 
     // Different port
     assert!(
-        registry.lookup("https://docs.google.com:8443", "get_selection").is_none(),
+        registry
+            .lookup("https://docs.google.com:8443", "get_selection")
+            .is_none(),
         "different port must not match standard 443 origin"
     );
 
     // Exact matching origin matches
     assert!(
-        registry.lookup("https://docs.google.com", "get_selection").is_some(),
+        registry
+            .lookup("https://docs.google.com", "get_selection")
+            .is_some(),
         "exact origin must match"
     );
 }
@@ -103,7 +123,9 @@ fn page_adapters_unsupported_op_falls_through_to_next_tier() {
 
     // Unsupported op returns None from registry
     assert!(
-        registry.lookup("https://docs.google.com", "unsupported_op").is_none(),
+        registry
+            .lookup("https://docs.google.com", "unsupported_op")
+            .is_none(),
         "unsupported op must return None"
     );
 
@@ -158,8 +180,14 @@ fn page_adapters_ladder_gains_adapter_tier_before_dom_tier_order() {
     );
 
     // Also verify aliases / as_str representation
-    assert_eq!(FallbackTier::ExactOriginPageAdapter.as_str(), "exact_origin_page_adapter");
-    assert_eq!(FallbackTier::AdapterTier, FallbackTier::ExactOriginPageAdapter);
+    assert_eq!(
+        FallbackTier::ExactOriginPageAdapter.as_str(),
+        "exact_origin_page_adapter"
+    );
+    assert_eq!(
+        FallbackTier::AdapterTier,
+        FallbackTier::ExactOriginPageAdapter
+    );
     assert_eq!(FallbackTier::DomTier, FallbackTier::DomRefLocator);
 
     // Test Ladder State transitions:

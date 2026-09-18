@@ -207,8 +207,12 @@ impl RetryPolicy {
         }
 
         // Guardrail 2: Uncertain mutation is NEVER auto-retried without resolution/confirmation
-        if error_class == ErrorClass::UncertainMutation || (idempotency == IdempotencyClass::NonIdempotentMutation && error_class != ErrorClass::ContextTooLarge) {
-            if !self.allow_uncertain_mutation_retry || error_class == ErrorClass::UncertainMutation {
+        if error_class == ErrorClass::UncertainMutation
+            || (idempotency == IdempotencyClass::NonIdempotentMutation
+                && error_class != ErrorClass::ContextTooLarge)
+        {
+            if !self.allow_uncertain_mutation_retry || error_class == ErrorClass::UncertainMutation
+            {
                 return Err(DoNotRetryReason::NeedsResolution(
                     "Uncertain mutation requires fresh read verification or explicit user confirmation before retry".to_string(),
                 ));
@@ -229,7 +233,9 @@ impl RetryPolicy {
         }
 
         // Calculate bounded backoff with jitter
-        let delay_ms = self.backoff.calculate_backoff(current_attempt, jitter_factor);
+        let delay_ms = self
+            .backoff
+            .calculate_backoff(current_attempt, jitter_factor);
         Ok(RetryDecision::RetryAfter(delay_ms))
     }
 
@@ -279,12 +285,8 @@ mod tests {
         let policy = RetryPolicy::default();
 
         // PolicyDenied -> DoNotRetryReason::PolicyDenied
-        let res_policy = policy.evaluate(
-            ErrorClass::PolicyDenied,
-            IdempotencyClass::ReadOnly,
-            1,
-            0.5,
-        );
+        let res_policy =
+            policy.evaluate(ErrorClass::PolicyDenied, IdempotencyClass::ReadOnly, 1, 0.5);
         assert!(matches!(res_policy, Err(DoNotRetryReason::PolicyDenied(_))));
 
         // PermanentFailure -> DoNotRetryReason::PermanentFailure
@@ -294,7 +296,10 @@ mod tests {
             1,
             0.5,
         );
-        assert!(matches!(res_perm, Err(DoNotRetryReason::PermanentFailure(_))));
+        assert!(matches!(
+            res_perm,
+            Err(DoNotRetryReason::PermanentFailure(_))
+        ));
     }
 
     #[test]
@@ -343,7 +348,12 @@ mod tests {
         let mut rng_reproduced = DeterministicRng::seeded(42);
         let d1 = config.calculate_backoff(1, rng_reproduced.next_f64());
         let _d2 = config.calculate_backoff(2, rng_reproduced.next_f64());
-        if let Ok(RetryDecision::RetryAfter(delay1)) = policy.evaluate(ErrorClass::TransientNetwork, IdempotencyClass::ReadOnly, 1, DeterministicRng::seeded(42).next_f64()) {
+        if let Ok(RetryDecision::RetryAfter(delay1)) = policy.evaluate(
+            ErrorClass::TransientNetwork,
+            IdempotencyClass::ReadOnly,
+            1,
+            DeterministicRng::seeded(42).next_f64(),
+        ) {
             assert_eq!(d1, delay1);
         }
     }
@@ -356,11 +366,30 @@ mod tests {
         };
 
         // Attempt 1 and 2 succeed
-        assert!(policy.evaluate(ErrorClass::TransientNetwork, IdempotencyClass::ReadOnly, 1, 0.5).is_ok());
-        assert!(policy.evaluate(ErrorClass::TransientNetwork, IdempotencyClass::ReadOnly, 2, 0.5).is_ok());
+        assert!(policy
+            .evaluate(
+                ErrorClass::TransientNetwork,
+                IdempotencyClass::ReadOnly,
+                1,
+                0.5
+            )
+            .is_ok());
+        assert!(policy
+            .evaluate(
+                ErrorClass::TransientNetwork,
+                IdempotencyClass::ReadOnly,
+                2,
+                0.5
+            )
+            .is_ok());
 
         // Attempt 3 reaches max_attempts (3) -> giving up
-        let res3 = policy.evaluate(ErrorClass::TransientNetwork, IdempotencyClass::ReadOnly, 3, 0.5);
+        let res3 = policy.evaluate(
+            ErrorClass::TransientNetwork,
+            IdempotencyClass::ReadOnly,
+            3,
+            0.5,
+        );
         assert_eq!(
             res3,
             Err(DoNotRetryReason::MaxAttemptsExceeded {

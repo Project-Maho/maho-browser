@@ -361,7 +361,8 @@ impl MockClock {
     }
 
     pub fn advance(&self, millis: u64) {
-        self.now.fetch_add(millis, std::sync::atomic::Ordering::SeqCst);
+        self.now
+            .fetch_add(millis, std::sync::atomic::Ordering::SeqCst);
     }
 
     pub fn set(&self, millis: u64) {
@@ -727,7 +728,10 @@ mod tests {
         let wake_ev = WakeEvent::for_run(run_id.clone(), EventKind::Notification, 5001)
             .with_sender("alice@example.com");
         let tokens = registry.wake(&wake_ev);
-        assert!(tokens.is_empty(), "Expired wait must not produce resume tokens");
+        assert!(
+            tokens.is_empty(),
+            "Expired wait must not produce resume tokens"
+        );
 
         let status = registry.poll(&run_id).expect("poll should succeed");
         assert_eq!(
@@ -784,21 +788,14 @@ mod tests {
             denied_activation,
         );
 
-        assert_eq!(
-            result,
-            Err(EventWaitError::NotificationPermissionDenied)
-        );
+        assert_eq!(result, Err(EventWaitError::NotificationPermissionDenied));
         assert_eq!(registry.len(), 0);
         assert!(registry.poll(&run_id).is_err());
 
         // Granted activation proceeds normally
         let granted_activation = NotificationActivation::granted();
-        let ok_result = registry.suspend_with_activation(
-            run_id.clone(),
-            filter,
-            5000,
-            granted_activation,
-        );
+        let ok_result =
+            registry.suspend_with_activation(run_id.clone(), filter, 5000, granted_activation);
         assert!(ok_result.is_ok());
         assert_eq!(registry.active_wait_count(), 1);
     }
@@ -822,9 +819,18 @@ mod tests {
 
         // Query debug output for run B
         let debug_b = registry.run_debug_context(&run_b).unwrap();
-        assert!(!debug_b.contains(secret_sender), "Run B context must not leak Run A's private sender");
-        assert!(!debug_b.contains("confidential_op"), "Run B context must not leak Run A's filter op");
-        assert!(!debug_b.contains(&run_a.to_string()), "Run B context must not leak Run A's ID");
+        assert!(
+            !debug_b.contains(secret_sender),
+            "Run B context must not leak Run A's private sender"
+        );
+        assert!(
+            !debug_b.contains("confidential_op"),
+            "Run B context must not leak Run A's filter op"
+        );
+        assert!(
+            !debug_b.contains(&run_a.to_string()),
+            "Run B context must not leak Run A's ID"
+        );
 
         // Registry top-level debug output should not dump sensitive filter contents
         let registry_debug = format!("{:?}", registry);
@@ -845,7 +851,10 @@ mod tests {
         // Double cancel returns AlreadyTerminal error
         registry.cancel(&run_id).unwrap();
         let double_cancel = registry.cancel(&run_id);
-        assert!(matches!(double_cancel, Err(EventWaitError::AlreadyTerminal(_))));
+        assert!(matches!(
+            double_cancel,
+            Err(EventWaitError::AlreadyTerminal(_))
+        ));
 
         // Waking a cancelled handle by general event returns empty
         let ev = WakeEvent::new(EventKind::Notification, 2000).with_sender("sender-adv");
@@ -915,23 +924,49 @@ mod tests {
 
         // Deadline in the past or now
         let past_err = registry.register(run_id.clone(), filter.clone(), 1999);
-        assert!(matches!(past_err, Err(EventWaitError::InvalidDeadline { deadline: 1999, current_time: 2000 })));
+        assert!(matches!(
+            past_err,
+            Err(EventWaitError::InvalidDeadline {
+                deadline: 1999,
+                current_time: 2000
+            })
+        ));
 
         let eq_err = registry.register(run_id.clone(), filter.clone(), 2000);
-        assert!(matches!(eq_err, Err(EventWaitError::InvalidDeadline { deadline: 2000, current_time: 2000 })));
+        assert!(matches!(
+            eq_err,
+            Err(EventWaitError::InvalidDeadline {
+                deadline: 2000,
+                current_time: 2000
+            })
+        ));
 
         // Valid registration
-        let handle = registry.register(run_id.clone(), filter.clone(), 3000).unwrap();
+        let handle = registry
+            .register(run_id.clone(), filter.clone(), 3000)
+            .unwrap();
 
         // Duplicate registration while active returns AlreadyWaiting
         let dup_err = registry.register(run_id.clone(), filter.clone(), 4000);
         assert!(matches!(dup_err, Err(EventWaitError::AlreadyWaiting(_))));
 
         // Unknown run / handle error checks
-        assert!(matches!(registry.poll(&AgentRunId::new("unknown")), Err(EventWaitError::RunNotFound(_))));
-        assert!(matches!(registry.poll_handle(&WaitHandle::new("nonexistent")), Err(EventWaitError::NotFound(_))));
-        assert!(matches!(registry.cancel(&AgentRunId::new("unknown")), Err(EventWaitError::RunNotFound(_))));
-        assert!(matches!(registry.cancel_handle(&WaitHandle::new("nonexistent")), Err(EventWaitError::NotFound(_))));
+        assert!(matches!(
+            registry.poll(&AgentRunId::new("unknown")),
+            Err(EventWaitError::RunNotFound(_))
+        ));
+        assert!(matches!(
+            registry.poll_handle(&WaitHandle::new("nonexistent")),
+            Err(EventWaitError::NotFound(_))
+        ));
+        assert!(matches!(
+            registry.cancel(&AgentRunId::new("unknown")),
+            Err(EventWaitError::RunNotFound(_))
+        ));
+        assert!(matches!(
+            registry.cancel_handle(&WaitHandle::new("nonexistent")),
+            Err(EventWaitError::NotFound(_))
+        ));
 
         // After expiring, re-registering the same run succeeds
         clock.advance(1500); // now = 3500 > 3000

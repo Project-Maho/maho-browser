@@ -212,3 +212,243 @@ fn fallback_ladder_page_adapter_tier_precedes_dom_tier() {
     assert_eq!(err.decision().safety_state, FallbackSafetyState::Blocked);
 }
 
+#[test]
+fn fallback_ladder_v2_locator_failure_routes_down_ladder_to_v1_then_screenshot() {
+    let mut ladder = FallbackLadderState::new("session-v2-fallback");
+
+    // Tier 1: V2 Locator attempt
+    let v2_decision = ladder
+        .decide(request(
+            "input.locator_click",
+            FallbackTier::DomRefLocator,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect("V2 locator selection succeeds");
+
+    assert_eq!(v2_decision.attempted_tier, FallbackTier::TypedDomainApi);
+    assert_eq!(v2_decision.selected_tier, FallbackTier::DomRefLocator);
+    assert_eq!(
+        v2_decision.reason,
+        FallbackDecisionReason::TypedDomainUnavailable
+    );
+    assert_eq!(v2_decision.safety_state, FallbackSafetyState::Downgraded);
+
+    // Tier 2: V2 Locator fails -> V1 accessibility snapshot/ref flow fallback
+    let v1_decision = ladder
+        .decide(request(
+            "browser_click",
+            FallbackTier::AccessibilitySnapshot,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect("V1 ref flow fallback succeeds after V2 locator failure");
+
+    assert_eq!(v1_decision.attempted_tier, FallbackTier::DomRefLocator);
+    assert_eq!(
+        v1_decision.selected_tier,
+        FallbackTier::AccessibilitySnapshot
+    );
+    assert_eq!(v1_decision.reason, FallbackDecisionReason::DomRefMissing);
+    assert_eq!(v1_decision.safety_state, FallbackSafetyState::Downgraded);
+
+    // Tier 3: V1 ref fails -> Screenshot / CUA escalation
+    // Without approval: blocked with escalation approval required
+    let cua_err = ladder
+        .decide(request(
+            "browser_click",
+            FallbackTier::ScreenshotCua,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect_err("screenshot/CUA escalation requires approval");
+
+    assert!(matches!(
+        cua_err,
+        FallbackLadderError::ScreenshotCuaApprovalRequired(_)
+    ));
+    assert_eq!(
+        cua_err.decision().safety_state,
+        FallbackSafetyState::EscalationApprovalRequired
+    );
+    assert_eq!(
+        cua_err.decision().selected_tier,
+        FallbackTier::ScreenshotCua
+    );
+
+    // With approval: succeeds
+    let cua_approved = ladder
+        .decide(request(
+            "browser_click",
+            FallbackTier::ScreenshotCua,
+            ScreenshotCuaApproval::Approved,
+        ))
+        .expect("approved screenshot/CUA escalation succeeds");
+
+    assert_eq!(
+        cua_approved.attempted_tier,
+        FallbackTier::AccessibilitySnapshot
+    );
+    assert_eq!(cua_approved.selected_tier, FallbackTier::ScreenshotCua);
+    assert_eq!(
+        cua_approved.reason,
+        FallbackDecisionReason::ScreenshotCuaApproved
+    );
+    assert_eq!(
+        cua_approved.safety_state,
+        FallbackSafetyState::EscalationApproved
+    );
+}
+
+#[test]
+fn fallback_ladder_browser_tool_request_infers_v2_tiers() {
+    let v2_locator = browser_tool_fallback_request(
+        "input.locator_click",
+        r#"{"locator":{"css":"button"}}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(v2_locator.requested_tier, FallbackTier::DomRefLocator);
+
+    let v2_type = browser_tool_fallback_request(
+        "input.locator_type",
+        r#"{"locator":{"role":"textbox","name":"Search"}}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(v2_type.requested_tier, FallbackTier::DomRefLocator);
+
+    let v2_snapshot = browser_tool_fallback_request(
+        "page.accessibility_snapshot_v2",
+        r#"{"mode":"interactive"}"#,
+        ToolSensitivity::ReadOnly,
+    );
+    assert_eq!(
+        v2_snapshot.requested_tier,
+        FallbackTier::AccessibilitySnapshot
+    );
+
+    let v2_cua_escalation = browser_tool_fallback_request(
+        "input.locator_click",
+        r#"{"locator":{"css":"button"},"screenshot_cua":true}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        v2_cua_escalation.requested_tier,
+        FallbackTier::ScreenshotCua
+    );
+}
+
+#[test]
+fn fallback_ladder_model_supplied_screenshot_cua_approved_is_never_trusted_as_consent() {
+    let mut ladder = FallbackLadderState::new("session-untrusted-model-consent");
+
+    // The model injects screenshot_cua_approved: true in tool arguments.
+    // The ladder must NOT treat this as consent/approval!
+    let untrusted_request = browser_tool_fallback_request(
+        "browser_click",
+        r#"{"screenshot_cua_approved":true,"screenshot_cua":true}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        untrusted_request.screenshot_cua_approval,
+        ScreenshotCuaApproval::NotRequested,
+        "model-supplied screenshot_cua_approved MUST NOT be trusted as consent"
+    );
+
+    let error = ladder
+        .decide(untrusted_request)
+        .expect_err("model cannot approve its own escalation");
+    assert!(matches!(
+        error,
+        FallbackLadderError::ScreenshotCuaApprovalRequired(_)
+    ));
+    assert_eq!(
+        error.decision().safety_state,
+        FallbackSafetyState::EscalationApprovalRequired
+    );
+}
+
+#[test]
+fn fallback_ladder_active_sentinel_request_triggers_screenshot_cua() {
+    let sentinel_req = browser_tool_fallback_request(
+        "browser_click",
+        r#"{"sentinel":true}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        sentinel_req.requested_tier,
+        FallbackTier::ScreenshotCua,
+        "active sentinel request triggers ScreenshotCua"
+    );
+
+    let fallback_tier_req = browser_tool_fallback_request(
+        "input.locator_click",
+        r#"{"fallback_tier":"screenshot_cua"}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        fallback_tier_req.requested_tier,
+        FallbackTier::ScreenshotCua,
+        "fallback_tier screenshot_cua triggers ScreenshotCua"
+    );
+}
+
+#[test]
+fn fallback_ladder_native_aliases_and_subactions_classified() {
+    let req_key = browser_tool_fallback_request(
+        "input.key_press",
+        r#"{"key":"Enter"}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(req_key.requested_tier, FallbackTier::TypedDomainApi);
+
+    let req_locator_click = browser_tool_fallback_request(
+        "input_locator_click",
+        r##"{"locator":{"css":"#btn"}}"##,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        req_locator_click.requested_tier,
+        FallbackTier::DomRefLocator
+    );
+
+    let req_locator_type = browser_tool_fallback_request(
+        "input_locator_type",
+        r##"{"locator":{"css":"#input"},"text":"hello"}"##,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(req_locator_type.requested_tier, FallbackTier::DomRefLocator);
+
+    let req_act_and_observe = browser_tool_fallback_request(
+        "browser_act_and_observe",
+        r#"{"action":{"kind":"click"}}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        req_act_and_observe.requested_tier,
+        FallbackTier::DomRefLocator
+    );
+
+    let req_act_and_observe_alias = browser_tool_fallback_request(
+        "browser.act_and_observe",
+        r#"{"action":{"kind":"click"}}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        req_act_and_observe_alias.requested_tier,
+        FallbackTier::DomRefLocator
+    );
+
+    let req_select = browser_tool_fallback_request(
+        "input.select",
+        r#"{"ref":1,"value":"option1"}"#,
+        ToolSensitivity::Sensitive,
+    );
+    assert_eq!(
+        req_select.requested_tier,
+        FallbackTier::AccessibilitySnapshot
+    );
+
+    let req_hover =
+        browser_tool_fallback_request("input.hover", r#"{"ref":1}"#, ToolSensitivity::Sensitive);
+    assert_eq!(
+        req_hover.requested_tier,
+        FallbackTier::AccessibilitySnapshot
+    );
+}

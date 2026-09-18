@@ -15,10 +15,10 @@
 //! - All outcomes are strictly typed (never raw HTTP HTML/dumps into model context)
 //! - Uncertain mutations or cancelled requests delegate to retry policy (never auto-retried)
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 /// Outcome of invoking a direct service API operation (legacy and high-level contract).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -224,9 +224,7 @@ pub enum DirectApiExecutionOutcome {
         retryable: bool,
     },
     /// Operation was explicitly cancelled mid-execution.
-    Cancelled {
-        reason: String,
-    },
+    Cancelled { reason: String },
 }
 
 impl DirectApiExecutionOutcome {
@@ -263,13 +261,11 @@ impl DirectApiExecutionOutcome {
                 | DirectApiErrorCode::InvalidAuthHandle
                 | DirectApiErrorCode::ConfirmationRequired
                 | DirectApiErrorCode::InvalidApprovalToken
-                | DirectApiErrorCode::ApprovalTokenAlreadyUsed => {
-                    DirectApiOutcome::HardFailure {
-                        code: code.to_string().to_uppercase(),
-                        message: message.clone(),
-                        is_policy_denial: true,
-                    }
-                }
+                | DirectApiErrorCode::ApprovalTokenAlreadyUsed => DirectApiOutcome::HardFailure {
+                    code: code.to_string().to_uppercase(),
+                    message: message.clone(),
+                    is_policy_denial: true,
+                },
                 _ => DirectApiOutcome::HardFailure {
                     code: code.to_string().to_uppercase(),
                     message: message.clone(),
@@ -587,7 +583,8 @@ pub trait DirectApiTransport: Send + Sync {
 
 /// Canned mock transport for tests with header and invocation inspection.
 pub struct InMemoryDirectApiTransport {
-    canned_responses: Mutex<HashMap<(DirectApiServiceKind, String), Result<TransportResponse, TransportError>>>,
+    canned_responses:
+        Mutex<HashMap<(DirectApiServiceKind, String), Result<TransportResponse, TransportError>>>,
     sent_requests: Mutex<Vec<TransportRequest>>,
 }
 
@@ -820,7 +817,10 @@ impl DirectApiBroker for InMemoryDirectApiBroker {
                     payload: resp.body,
                 },
                 401 | 403 => DirectApiExecutionOutcome::Forbidden {
-                    reason: format!("Upstream service rejected authorization ({})", resp.status_code),
+                    reason: format!(
+                        "Upstream service rejected authorization ({})",
+                        resp.status_code
+                    ),
                     missing_scopes: Vec::new(),
                 },
                 429 => DirectApiExecutionOutcome::TypedError {
@@ -891,7 +891,8 @@ mod tests {
     // broker injects Authorization header at transport layer;
     // model-facing op/request struct contains provider + scopes only (assert no credential field serializes).
     #[tokio::test]
-    async fn test_credential_resolution_never_returns_raw_token_to_model_context_header_injection_probe() {
+    async fn test_credential_resolution_never_returns_raw_token_to_model_context_header_injection_probe(
+    ) {
         let vault = Arc::new(InMemoryCredentialVault::new());
         let approval_store = Arc::new(InMemoryApprovalTokenStore::new());
         let scope_registry = Arc::new(InMemoryScopeRegistry::new());
@@ -919,12 +920,8 @@ mod tests {
             }),
         );
 
-        let broker = InMemoryDirectApiBroker::new(
-            vault,
-            approval_store,
-            scope_registry,
-            transport.clone(),
-        );
+        let broker =
+            InMemoryDirectApiBroker::new(vault, approval_store, scope_registry, transport.clone());
 
         let op = DirectApiOperation::new(
             DirectApiServiceKind::Gmail,
@@ -944,8 +941,7 @@ mod tests {
 
         let exec_req = DirectApiExecutionRequest::new(
             op,
-            DirectApiExecutionContext::new("session-1")
-                .with_auth_handle("gmail-handle-1"),
+            DirectApiExecutionContext::new("session-1").with_auth_handle("gmail-handle-1"),
         );
 
         // Serialization probe on execution request
@@ -974,7 +970,10 @@ mod tests {
         // Transport header injection assertion: Transport received injected Authorization header
         let sent = transport.get_sent_requests();
         assert_eq!(sent.len(), 1);
-        let auth_hdr = sent[0].headers.get("Authorization").expect("Auth header injected");
+        let auth_hdr = sent[0]
+            .headers
+            .get("Authorization")
+            .expect("Auth header injected");
         assert_eq!(auth_hdr, &format!("Bearer {raw_secret}"));
     }
 
@@ -1040,7 +1039,9 @@ mod tests {
         // 4. Second execution with the SAME approval token -> REJECTED (single-use invariant)
         let outcome3 = broker.execute(req_approved).await;
         match outcome3 {
-            DirectApiExecutionOutcome::TypedError { code, retryable, .. } => {
+            DirectApiExecutionOutcome::TypedError {
+                code, retryable, ..
+            } => {
                 assert_eq!(code, DirectApiErrorCode::ApprovalTokenAlreadyUsed);
                 assert!(!retryable);
             }
@@ -1062,7 +1063,10 @@ mod tests {
         let services = vec![
             (DirectApiServiceKind::Gmail, "users.messages.get"),
             (DirectApiServiceKind::GoogleCalendar, "events.list"),
-            (DirectApiServiceKind::GoogleSheets, "spreadsheets.values.get"),
+            (
+                DirectApiServiceKind::GoogleSheets,
+                "spreadsheets.values.get",
+            ),
             (DirectApiServiceKind::GoogleDrive, "files.list"),
             (DirectApiServiceKind::Slack, "conversations.history"),
             (DirectApiServiceKind::Discord, "channels.messages.list"),
@@ -1129,11 +1133,19 @@ mod tests {
             }),
         );
         let req_forbidden = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::Gmail, "forbidden_op", serde_json::json!({}), true),
+            DirectApiOperation::new(
+                DirectApiServiceKind::Gmail,
+                "forbidden_op",
+                serde_json::json!({}),
+                true,
+            ),
             DirectApiExecutionContext::new("s").with_auth_handle("gmail-handle"),
         );
         let out_forbidden = broker.execute(req_forbidden).await;
-        assert!(matches!(out_forbidden, DirectApiExecutionOutcome::Forbidden { .. }));
+        assert!(matches!(
+            out_forbidden,
+            DirectApiExecutionOutcome::Forbidden { .. }
+        ));
 
         // 429 RateLimited
         transport.set_response(
@@ -1146,12 +1158,19 @@ mod tests {
             }),
         );
         let req_429 = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::GoogleCalendar, "rate_limited_op", serde_json::json!({}), true),
+            DirectApiOperation::new(
+                DirectApiServiceKind::GoogleCalendar,
+                "rate_limited_op",
+                serde_json::json!({}),
+                true,
+            ),
             DirectApiExecutionContext::new("s").with_auth_handle("google_calendar-handle"),
         );
         let out_429 = broker.execute(req_429).await;
         match out_429 {
-            DirectApiExecutionOutcome::TypedError { code, retryable, .. } => {
+            DirectApiExecutionOutcome::TypedError {
+                code, retryable, ..
+            } => {
                 assert_eq!(code, DirectApiErrorCode::RateLimited);
                 assert!(retryable);
             }
@@ -1164,12 +1183,19 @@ mod tests {
             "bad_gateway",
             Ok(TransportResponse {
                 status_code: 400,
-                body: serde_json::json!("<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>"),
+                body: serde_json::json!(
+                    "<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>"
+                ),
                 headers: HashMap::new(),
             }),
         );
         let req_html = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::GoogleSheets, "bad_gateway", serde_json::json!({}), true),
+            DirectApiOperation::new(
+                DirectApiServiceKind::GoogleSheets,
+                "bad_gateway",
+                serde_json::json!({}),
+                true,
+            ),
             DirectApiExecutionContext::new("s").with_auth_handle("google_sheets-handle"),
         );
         let out_html = broker.execute(req_html).await;
@@ -1198,12 +1224,8 @@ mod tests {
             vec!["gmail.readonly".to_string()],
         );
 
-        let broker = InMemoryDirectApiBroker::new(
-            vault,
-            approval_store,
-            scope_registry,
-            transport.clone(),
-        );
+        let broker =
+            InMemoryDirectApiBroker::new(vault, approval_store, scope_registry, transport.clone());
 
         let op_unauthorized_scope = DirectApiOperation::new(
             DirectApiServiceKind::Gmail,
@@ -1249,12 +1271,8 @@ mod tests {
             Err(TransportError::Cancelled),
         );
 
-        let broker = InMemoryDirectApiBroker::new(
-            vault,
-            approval_store.clone(),
-            scope_registry,
-            transport,
-        );
+        let broker =
+            InMemoryDirectApiBroker::new(vault, approval_store.clone(), scope_registry, transport);
 
         let action_id = "telegram:sendMessage";
         let token = approval_store.issue_token(action_id);
@@ -1289,7 +1307,10 @@ mod tests {
             0.5,
         );
         assert!(
-            matches!(retry_eval, Err(crate::retry_policy::DoNotRetryReason::NeedsResolution(_))),
+            matches!(
+                retry_eval,
+                Err(crate::retry_policy::DoNotRetryReason::NeedsResolution(_))
+            ),
             "Cancelled mutation must never auto-retry under retry policy"
         );
     }
@@ -1330,7 +1351,12 @@ mod tests {
 
         // 1. Empty operation name
         let req_empty_op = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::Gmail, "   ", serde_json::json!({}), true),
+            DirectApiOperation::new(
+                DirectApiServiceKind::Gmail,
+                "   ",
+                serde_json::json!({}),
+                true,
+            ),
             DirectApiExecutionContext::new("s").with_auth_handle("h1"),
         );
         let out1 = broker.execute(req_empty_op).await;
@@ -1344,7 +1370,12 @@ mod tests {
 
         // 2. Missing credentials / no handle
         let req_no_handle = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::Gmail, "list", serde_json::json!({}), true),
+            DirectApiOperation::new(
+                DirectApiServiceKind::Gmail,
+                "list",
+                serde_json::json!({}),
+                true,
+            ),
             DirectApiExecutionContext::new("s"),
         );
         let out2 = broker.execute(req_no_handle).await;
@@ -1358,7 +1389,12 @@ mod tests {
 
         // 3. Invalid auth handle (not found in vault)
         let req_invalid_handle = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::Gmail, "list", serde_json::json!({}), true),
+            DirectApiOperation::new(
+                DirectApiServiceKind::Gmail,
+                "list",
+                serde_json::json!({}),
+                true,
+            ),
             DirectApiExecutionContext::new("s").with_auth_handle("non-existent-handle"),
         );
         let out3 = broker.execute(req_invalid_handle).await;
@@ -1385,7 +1421,10 @@ mod tests {
         let cred = vault.get_credential("h1");
         assert!(cred.is_some());
         vault.store_credential("h2".to_string(), VaultCredential::bearer("tok2"));
-        assert_eq!(vault.get_credential("h2").unwrap().format_auth_header(), "Bearer tok2");
+        assert_eq!(
+            vault.get_credential("h2").unwrap().format_auth_header(),
+            "Bearer tok2"
+        );
 
         // Test InMemoryApprovalTokenStore poison resilience
         let approval_store = Arc::new(InMemoryApprovalTokenStore::new());
@@ -1400,7 +1439,11 @@ mod tests {
 
         // Test InMemoryScopeRegistry poison resilience
         let registry = Arc::new(InMemoryScopeRegistry::new());
-        registry.grant_scopes("h1", DirectApiServiceKind::Gmail, vec!["scope1".to_string()]);
+        registry.grant_scopes(
+            "h1",
+            DirectApiServiceKind::Gmail,
+            vec!["scope1".to_string()],
+        );
         let r_clone = registry.clone();
         let _ = std::panic::catch_unwind(move || {
             let _guard = r_clone.grants.lock().unwrap();
@@ -1425,13 +1468,15 @@ mod tests {
             let _guard = t_clone.sent_requests.lock().unwrap();
             panic!("poisoning sent_requests lock");
         });
-        let res = transport.send(TransportRequest {
-            service: DirectApiServiceKind::Gmail,
-            operation_name: "op1".to_string(),
-            method: "POST".to_string(),
-            headers: HashMap::new(),
-            body: None,
-        }).await;
+        let res = transport
+            .send(TransportRequest {
+                service: DirectApiServiceKind::Gmail,
+                operation_name: "op1".to_string(),
+                method: "POST".to_string(),
+                headers: HashMap::new(),
+                body: None,
+            })
+            .await;
         assert!(res.is_ok());
         assert_eq!(transport.sent_count(), 1);
     }
@@ -1446,12 +1491,8 @@ mod tests {
         vault.store_credential("h1".to_string(), VaultCredential::bearer("tok"));
         scope_registry.grant_scopes("h1", DirectApiServiceKind::Gmail, vec!["read".to_string()]);
 
-        let broker = InMemoryDirectApiBroker::new(
-            vault,
-            approval_store,
-            scope_registry,
-            transport.clone(),
-        );
+        let broker =
+            InMemoryDirectApiBroker::new(vault, approval_store, scope_registry, transport.clone());
 
         // 400 Bad Request with malformed error payload
         transport.set_response(
@@ -1465,14 +1506,23 @@ mod tests {
         );
 
         let req = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::Gmail, "op_bad", serde_json::json!({}), true)
-                .with_scopes(vec!["read".to_string()]),
+            DirectApiOperation::new(
+                DirectApiServiceKind::Gmail,
+                "op_bad",
+                serde_json::json!({}),
+                true,
+            )
+            .with_scopes(vec!["read".to_string()]),
             DirectApiExecutionContext::new("s").with_auth_handle("h1"),
         );
 
         let outcome = broker.execute(req).await;
         match outcome {
-            DirectApiExecutionOutcome::TypedError { code, message, retryable } => {
+            DirectApiExecutionOutcome::TypedError {
+                code,
+                message,
+                retryable,
+            } => {
                 assert_eq!(code, DirectApiErrorCode::BadRequest);
                 assert!(!retryable);
                 assert!(!message.is_empty());
@@ -1492,14 +1542,23 @@ mod tests {
         );
 
         let req2 = DirectApiExecutionRequest::new(
-            DirectApiOperation::new(DirectApiServiceKind::Gmail, "op_err", serde_json::json!({}), true)
-                .with_scopes(vec!["read".to_string()]),
+            DirectApiOperation::new(
+                DirectApiServiceKind::Gmail,
+                "op_err",
+                serde_json::json!({}),
+                true,
+            )
+            .with_scopes(vec!["read".to_string()]),
             DirectApiExecutionContext::new("s").with_auth_handle("h1"),
         );
 
         let outcome2 = broker.execute(req2).await;
         match outcome2 {
-            DirectApiExecutionOutcome::TypedError { code, message, retryable } => {
+            DirectApiExecutionOutcome::TypedError {
+                code,
+                message,
+                retryable,
+            } => {
                 assert_eq!(code, DirectApiErrorCode::ServiceUnavailable);
                 assert!(retryable);
                 assert!(message.contains("500"));

@@ -43,6 +43,7 @@ pub fn rpc_argv(entry: &Path, socket: &Path, system_prompt: Option<&Path>) -> Ve
         entry.display().to_string(),
         "--listen".to_string(),
         format!("unix://{}", socket.display()),
+        "--no-builtin-tools".to_string(),
     ];
     if let Some(sp) = system_prompt {
         args.push("--system-prompt".to_string());
@@ -168,6 +169,7 @@ mod tests {
         assert_eq!(argv[0], "/opt/omo/rpc-entry.js");
         assert_eq!(argv[1], "--listen");
         assert_eq!(argv[2], "unix:///tmp/x/rpc.sock");
+        assert_eq!(argv[3], "--no-builtin-tools");
         assert!(
             !argv.iter().any(|a| a == "--multi-session"),
             "--listen already implies multi-session; passing it again is redundant: {argv:?}"
@@ -185,8 +187,9 @@ mod tests {
         assert_eq!(argv[0], "/opt/omo/rpc-entry.js");
         assert_eq!(argv[1], "--listen");
         assert_eq!(argv[2], "unix:///tmp/x/rpc.sock");
-        assert_eq!(argv[3], "--system-prompt");
-        assert_eq!(argv[4], "/tmp/system_prompt.txt");
+        assert_eq!(argv[3], "--no-builtin-tools");
+        assert_eq!(argv[4], "--system-prompt");
+        assert_eq!(argv[5], "/tmp/system_prompt.txt");
     }
 
     #[test]

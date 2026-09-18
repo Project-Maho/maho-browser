@@ -66,8 +66,21 @@ pub fn resolve_uds_permission(
 }
 
 /// Return whether browser-authoritative discovery metadata proves a dogfood
-/// MCP tool read-only. Every required field must be present with a safe value;
-/// unknown, missing, or malformed policy remains sensitive (fail closed).
+/// MCP tool read-only. The load-bearing fields must be present with a safe
+/// value; unknown, missing, or malformed policy remains sensitive (fail closed).
+///
+/// `requiresApproval` and `permission` are treated as OPTIONAL negative
+/// assertions: the browser does not publish them (measured: 0 of 48 tools on a
+/// live `tools/list`), so demanding them made this predicate return false for
+/// every browser tool and silently disabled the dogfood auto-approve path.
+/// Absent means "not asserted" and does not disqualify; an explicitly unsafe
+/// value still does.
+///
+/// `sensitivity` IS published on every tool and is therefore REQUIRED to be
+/// `"low"`. Read-only does not imply safe to auto-run: on the live catalog 26
+/// tools are read-only but 16 are `"sensitive"` (page content, history,
+/// bookmarks, mail readers) and `mail_extract_otp` is `"credential"`. Auto-
+/// running those would exfiltrate PII and one-time passcodes without a prompt.
 fn discovered_tool_is_readonly(tool: &Value) -> bool {
     let annotations_read_only = tool
         .pointer("/annotations/readOnlyHint")
@@ -77,10 +90,18 @@ fn discovered_tool_is_readonly(tool: &Value) -> bool {
 
     annotations_read_only
         && policy.is_some_and(|policy| {
+            let requires_approval_is_safe = policy
+                .get("requiresApproval")
+                .is_none_or(|value| value.as_bool() == Some(false));
+            let permission_is_safe = policy
+                .get("permission")
+                .is_none_or(|value| value.as_str() == Some("auto_approve"));
+
             policy.get("mutability").and_then(Value::as_str) == Some("read_only")
                 && policy.get("changesAuthority").and_then(Value::as_bool) == Some(false)
-                && policy.get("requiresApproval").and_then(Value::as_bool) == Some(false)
-                && policy.get("permission").and_then(Value::as_str) == Some("auto_approve")
+                && policy.get("sensitivity").and_then(Value::as_str) == Some("low")
+                && requires_approval_is_safe
+                && permission_is_safe
         })
 }
 
@@ -686,10 +707,115 @@ mod tests {
         let tool = discovered_tool(serde_json::json!({
             "mutability": "read_only",
             "changesAuthority": false,
+            "sensitivity": "low",
             "requiresApproval": false,
             "permission": "auto_approve"
         }));
         assert!(discovered_tool_is_readonly(&tool));
+    }
+
+    /// The policy shape the browser ACTUALLY publishes, captured verbatim from a
+    /// live `tools/list` against `maho-browser-mcp` (browser_tab_list). It carries
+    /// neither `requiresApproval` nor `permission` — measured: 0 of 48 published
+    /// tools carry either field. Requiring them made the predicate return false for
+    /// every browser tool, so the dogfood auto-approve path was dead in practice.
+    #[test]
+    fn real_browser_published_policy_proves_a_read_only_tool() {
+        let tool = serde_json::json!({
+            "name": "browser_tab_list",
+            "annotations": {"readOnlyHint": true, "destructiveHint": false},
+            "_meta": {"policy": {
+                "changesAuthority": false,
+                "featureGate": "always",
+                "missingPolicy": "fail_closed",
+                "mutability": "read_only",
+                "requiredBoundary": "profile",
+                "requiredBroker": "browser",
+                "sensitivity": "low"
+            }}
+        });
+        assert!(
+            discovered_tool_is_readonly(&tool),
+            "the browser's own read-only descriptor must prove read-only"
+        );
+    }
+
+    /// Read-only does NOT imply safe to auto-run. Both descriptors below are
+    /// verbatim from the same live `tools/list` and are `readOnlyHint: true` +
+    /// `mutability: "read_only"` + `changesAuthority: false`, exactly like
+    /// `browser_tab_list`. Only the published `sensitivity` separates them, so
+    /// without that conjunct these auto-run with no prompt and leak one-time
+    /// passcodes and page/history PII.
+    #[test]
+    fn read_only_but_sensitive_or_credential_tools_still_require_approval() {
+        let otp = serde_json::json!({
+            "name": "mail_extract_otp",
+            "annotations": {"readOnlyHint": true},
+            "_meta": {"policy": {
+                "changesAuthority": false,
+                "featureGate": "mail_beta",
+                "missingPolicy": "fail_closed",
+                "mutability": "read_only",
+                "requiredBoundary": "profile",
+                "requiredBroker": "mail",
+                "sensitivity": "credential"
+            }}
+        });
+        assert!(
+            !discovered_tool_is_readonly(&otp),
+            "a credential-sensitivity OTP reader must never auto-run"
+        );
+
+        let page_content = serde_json::json!({
+            "name": "browser_page_content",
+            "annotations": {"readOnlyHint": true},
+            "_meta": {"policy": {
+                "changesAuthority": false,
+                "featureGate": "always",
+                "missingPolicy": "fail_closed",
+                "mutability": "read_only",
+                "requiredBoundary": "tab",
+                "requiredBroker": "browser",
+                "sensitivity": "sensitive"
+            }}
+        });
+        assert!(
+            !discovered_tool_is_readonly(&page_content),
+            "a sensitive-sensitivity page reader must never auto-run"
+        );
+
+        let mut missing_sensitivity = otp.clone();
+        missing_sensitivity["_meta"]["policy"]
+            .as_object_mut()
+            .expect("policy object")
+            .remove("sensitivity");
+        assert!(
+            !discovered_tool_is_readonly(&missing_sensitivity),
+            "absent sensitivity must fail closed"
+        );
+    }
+
+    /// An explicit unsafe value still fails closed even though the field is optional.
+    #[test]
+    fn explicitly_unsafe_optional_policy_fields_still_fail_closed() {
+        for (key, value) in [
+            ("requiresApproval", serde_json::json!(true)),
+            ("permission", serde_json::json!("always_ask")),
+        ] {
+            let mut tool = serde_json::json!({
+                "annotations": {"readOnlyHint": true},
+                "_meta": {"policy": {
+                    "mutability": "read_only",
+                    "changesAuthority": false,
+                    "sensitivity": "low"
+                }}
+            });
+            tool["_meta"]["policy"][key] = value;
+            assert!(
+                !discovered_tool_is_readonly(&tool),
+                "an explicit unsafe {key} must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -697,15 +823,19 @@ mod tests {
         let safe = serde_json::json!({
             "mutability": "read_only",
             "changesAuthority": false,
+            "sensitivity": "low",
             "requiresApproval": false,
             "permission": "auto_approve"
         });
+        // Only the fields the browser actually publishes are load-bearing.
+        // requiresApproval/permission are absent from every real descriptor, so
+        // their ABSENCE must not disqualify; an explicitly unsafe VALUE still does
+        // (covered by explicitly_unsafe_optional_policy_fields_still_fail_closed).
         for pointer in [
             "/annotations/readOnlyHint",
             "/_meta/policy/mutability",
             "/_meta/policy/changesAuthority",
-            "/_meta/policy/requiresApproval",
-            "/_meta/policy/permission",
+            "/_meta/policy/sensitivity",
         ] {
             let mut tool = discovered_tool(safe.clone());
             tool.pointer_mut(pointer).expect("test field exists").take();

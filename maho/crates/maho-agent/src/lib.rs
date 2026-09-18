@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use maho_types::chat::ChatMessage;
+use maho_types::chat::{ChatContent, ChatMessage};
 
 pub mod approval;
 pub mod approval_audit;
@@ -7,7 +7,7 @@ pub mod browser_action_contract;
 pub mod channels;
 pub mod cli_tool_executor;
 pub mod composite;
-pub mod context_compaction;
+
 pub mod context_gatherer;
 pub mod deep_research;
 pub mod direct_api;
@@ -17,7 +17,7 @@ pub mod fallback_ladder_browser;
 pub mod image_search;
 pub mod interaction;
 pub mod introspection;
-pub mod maho_reasoning_openai;
+
 #[cfg(not(target_os = "ios"))]
 pub mod mcp_client;
 #[cfg(target_os = "ios")]
@@ -33,7 +33,25 @@ pub mod runtime_isolation;
 pub mod skill_creator;
 pub mod subagents;
 pub mod suggestions;
-pub mod swiftide_backend;
+/// State of browser action tools exposed to the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrowserActionToolsState {
+    #[default]
+    Disabled,
+    Enabled,
+    Mocked,
+}
+
+impl BrowserActionToolsState {
+    /// Convert a boolean flag to the corresponding tool state.
+    pub fn from_enabled(enabled: bool) -> Self {
+        if enabled {
+            Self::Enabled
+        } else {
+            Self::Disabled
+        }
+    }
+}
 pub mod system_prompt;
 pub mod tool_registry;
 pub mod turn_control;
@@ -70,7 +88,7 @@ pub use introspection::{
     collect_introspection, execute_introspection_tool, ActiveRunSummary, ModelRoutingSummary,
     SessionIntrospectionReport,
 };
-pub use maho_reasoning_openai::MahoReasoningOpenAI;
+
 pub use permission::{
     authorize_action_consequence, authorize_final_confirm, authorize_mail_tool,
     classify_action_consequence, classify_mail_tool, sanitize_tool_arguments, sanitize_tool_result,
@@ -94,7 +112,7 @@ pub use suggestions::{
     validate_routine_manifest, RoutineManifest, RoutineValidationError, Suggestion,
     SuggestionSettings, MAX_PASSIVE_SUGGESTIONS,
 };
-pub use swiftide_backend::{BrowserActionToolsState, SwiftideBackend};
+
 pub use visual_cua::*;
 pub use web_search::{
     FreeWebSearchBackend, PremiumWebSearchBackend, SearchEntitlement, SearchTier, WebSearchClient,
@@ -684,6 +702,16 @@ pub trait AgentRuntime: Send + Sync {
     ) -> Result<ChatMessage, AgentError> {
         self.run_turn(session_id, message, on_token, on_event).await
     }
+    /// One-shot prompt runner defaulting to a fresh isolated session turn.
+    async fn run_prompt(&self, prompt: &str) -> Result<String, AgentError> {
+        let session_id = format!("turn-{}", uuid::Uuid::new_v4());
+        let msg = ChatMessage::user(ChatContent::text(prompt.to_string()));
+        let resp = self.run_turn(&session_id, msg, None, None).await?;
+        match resp.content {
+            ChatContent::Text(text) => Ok(text),
+            _ => Ok(String::new()),
+        }
+    }
     async fn cancel(&self, session_id: &str) -> Result<(), AgentError>;
     async fn list_tools(&self) -> Result<Vec<ToolDefinition>, AgentError>;
     fn set_permission_callback(
@@ -806,6 +834,10 @@ pub trait AgentRuntime: Send + Sync {
     /// unset: the composite gate stays fail-closed disabled.
     fn set_composite_config(&self, _config: crate::composite::CompositeExecutionConfig) {}
 
+    fn composite_config(&self) -> crate::composite::CompositeExecutionConfig {
+        crate::composite::CompositeExecutionConfig::default()
+    }
+
     fn set_mail_authorization_state(&self, _state: MailAuthorizationState) {}
 
     fn set_browser_action_tools_enabled(&self, enabled: bool) {
@@ -813,6 +845,14 @@ pub trait AgentRuntime: Send + Sync {
     }
 
     fn set_system_prompt(&self, _prompt: &str) {}
+
+    fn system_prompt(&self) -> Option<String> {
+        None
+    }
+
+    fn artifact_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
     fn set_allowed_tools(&self, _tools: Option<Vec<String>>) {}
 }
 

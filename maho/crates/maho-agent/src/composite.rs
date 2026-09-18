@@ -383,7 +383,10 @@ mod tests {
                     "browser_navigate",
                     Ok(jobj(&[("url", Value::from("https://a.example"))])),
                 ),
-                ("browser_click", Err("element not found: #submit".to_string())),
+                (
+                    "browser_click",
+                    Err("element not found: #submit".to_string()),
+                ),
                 (
                     "browser_snapshot",
                     Ok(jobj(&[("text", Value::from("page text"))])),
@@ -458,7 +461,10 @@ mod tests {
         assert_eq!(progress[1].phase, CompositeProgressPhase::Finished);
         assert_eq!(progress[1].status, Some(CompositeStepStatus::Succeeded));
         assert_eq!(progress[3].status, Some(CompositeStepStatus::Failed));
-        assert_eq!(progress[3].error.as_deref(), Some("element not found: #submit"));
+        assert_eq!(
+            progress[3].error.as_deref(),
+            Some("element not found: #submit")
+        );
         assert_eq!(progress[5].status, Some(CompositeStepStatus::Succeeded));
         assert_eq!(progress[5].completed, 3);
         assert_eq!(progress[5].total, 3);
@@ -530,13 +536,7 @@ mod tests {
                 .await
                 .unwrap_err()
         });
-        assert_eq!(
-            outcome,
-            CompositeError::TooManySteps {
-                max: 2,
-                got: 3
-            }
-        );
+        assert_eq!(outcome, CompositeError::TooManySteps { max: 2, got: 3 });
     }
 
     #[test]
@@ -569,7 +569,10 @@ mod tests {
                 .await
                 .expect("all-succeed batch returns results")
         });
-        assert_eq!(batch.aggregate_status(), CompositeAggregateStatus::Completed);
+        assert_eq!(
+            batch.aggregate_status(),
+            CompositeAggregateStatus::Completed
+        );
         assert_eq!(batch.succeeded(), 2);
         assert_eq!(batch.failed(), 0);
     }
@@ -619,7 +622,9 @@ mod tests {
         let bridge = Arc::new(RecordingBridge {
             calls: Mutex::new(Vec::new()),
         });
-        let executor = BridgeStepExecutor::new(Some(Arc::clone(&bridge) as Arc<dyn crate::BrowserToolBridge>));
+        let executor = BridgeStepExecutor::new(Some(
+            Arc::clone(&bridge) as Arc<dyn crate::BrowserToolBridge>
+        ));
         let request = three_step_request("batch-bridge");
         let runner = CompositeRunner::new(CompositeExecutionConfig {
             enabled: true,
@@ -654,7 +659,10 @@ mod tests {
             Some("element_not_found: element not found: #submit")
         );
         assert_eq!(batch.steps[2].status, CompositeStepStatus::Succeeded);
-        assert_eq!(batch.aggregate_status(), CompositeAggregateStatus::CompletedWithFailures);
+        assert_eq!(
+            batch.aggregate_status(),
+            CompositeAggregateStatus::CompletedWithFailures
+        );
     }
 
     #[tokio::test]
@@ -677,6 +685,9 @@ mod tests {
             .steps
             .iter()
             .all(|step| step.error.as_deref() == Some("browser tool bridge unavailable")));
-        assert_eq!(batch.aggregate_status(), CompositeAggregateStatus::CompletedWithFailures);
+        assert_eq!(
+            batch.aggregate_status(),
+            CompositeAggregateStatus::CompletedWithFailures
+        );
     }
 }

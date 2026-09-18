@@ -206,6 +206,9 @@ pub enum ApprovalDecisionReason {
     CallbackTimeout,
     PriorDeny,
     SessionCancel,
+    /// Runtime-tier gate refusal (Wave 1D); the machine-consumed tier code
+    /// rides the denial message, the audit reason only marks the class.
+    TierDeny,
 }
 
 impl ApprovalDecisionReason {
@@ -222,6 +225,7 @@ impl ApprovalDecisionReason {
             Self::CallbackTimeout => "callback_timeout",
             Self::PriorDeny => "prior_deny",
             Self::SessionCancel => "session_cancel",
+            Self::TierDeny => "tier_deny",
         }
     }
 }

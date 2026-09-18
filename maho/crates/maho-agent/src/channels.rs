@@ -5,9 +5,9 @@
 //! Provides channel event ingestion, cursor-based deduplication, and
 //! outbound message dispatch through the direct API broker.
 
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use serde::{Deserialize, Serialize};
 
 use crate::direct_api::{
     DirectApiExecutionContext, DirectApiOperation, DirectApiOutcome, DirectApiServiceKind,
@@ -268,9 +268,7 @@ fn compare_cursor_positions(a: &str, b: &str) -> Ordering {
         }
     };
 
-    if let (Some((prefix_a, num_a)), Some((prefix_b, num_b))) =
-        (strip_prefix(a), strip_prefix(b))
-    {
+    if let (Some((prefix_a, num_a)), Some((prefix_b, num_b))) = (strip_prefix(a), strip_prefix(b)) {
         if prefix_a == prefix_b {
             return num_a.cmp(&num_b);
         }
@@ -344,10 +342,7 @@ pub fn handle_direct_api_outcome(
                 .get("message_id")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
-            let timestamp = val
-                .get("timestamp")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let timestamp = val.get("timestamp").and_then(|v| v.as_u64()).unwrap_or(0);
             Ok(OutboundSendReceipt {
                 channel_id: ChannelId::new(channel_id_str),
                 message_id,
@@ -825,8 +820,14 @@ mod tests {
         let op = send_via_direct_api(&config, msg).expect("op");
         let op_debug = format!("{:?}", op);
         let op_json = serde_json::to_string(&op).expect("op json");
-        assert!(!op_debug.contains(secret_token), "DirectApiOp Debug leaked token!");
-        assert!(!op_json.contains(secret_token), "DirectApiOp JSON leaked token!");
+        assert!(
+            !op_debug.contains(secret_token),
+            "DirectApiOp Debug leaked token!"
+        );
+        assert!(
+            !op_json.contains(secret_token),
+            "DirectApiOp JSON leaked token!"
+        );
     }
 
     #[test]
@@ -912,7 +913,10 @@ mod tests {
         ));
 
         // Cursor should still be uninitialized since all bad events were rejected
-        assert_eq!(registry.last_cursor(&ChannelId::new("slack-malformed")), None);
+        assert_eq!(
+            registry.last_cursor(&ChannelId::new("slack-malformed")),
+            None
+        );
 
         // Unknown channel
         let unknown_event = ChannelEvent {

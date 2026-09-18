@@ -210,7 +210,10 @@ impl WebSearchClient for FreeWebSearchBackend {
             results.push(WebSearchResult {
                 title: format!("Free Result {} for '{}'", i, query.query),
                 url: format!("https://example-free.org/page-{}", i),
-                snippet: format!("Free index snippet summary for '{}' item {}.", query.query, i),
+                snippet: format!(
+                    "Free index snippet summary for '{}' item {}.",
+                    query.query, i
+                ),
                 published_date: Some("2026-08-01".to_string()),
                 score: Some(1.0 / (i as f32)),
                 source: "free_web_index".to_string(),
@@ -457,17 +460,26 @@ mod tests {
 
         // Default max_results is 10
         let default_query = WebSearchQuery::new("test");
-        let res = router.execute_search(&free_user, default_query).await.unwrap();
+        let res = router
+            .execute_search(&free_user, default_query)
+            .await
+            .unwrap();
         assert_eq!(res.results.len(), 10);
 
         // Custom max_results = 3
         let bounded_query = WebSearchQuery::new("test").with_max_results(3);
-        let res2 = router.execute_search(&free_user, bounded_query).await.unwrap();
+        let res2 = router
+            .execute_search(&free_user, bounded_query)
+            .await
+            .unwrap();
         assert_eq!(res2.results.len(), 3);
 
         // Clamped to hard cap if excessive
         let oversized_query = WebSearchQuery::new("test").with_max_results(9999);
-        let res3 = router.execute_search(&free_user, oversized_query).await.unwrap();
+        let res3 = router
+            .execute_search(&free_user, oversized_query)
+            .await
+            .unwrap();
         assert_eq!(res3.results.len(), MAX_RESULTS_HARD_CAP);
     }
 
@@ -475,15 +487,23 @@ mod tests {
     async fn test_provenance_fields_present_on_each_result() {
         let router = WebSearchEntitlementRouter::default();
         let max_user = SearchEntitlement::max();
-        let query = WebSearchQuery::new("provenance check").with_tier(SearchTier::Premium).with_max_results(5);
+        let query = WebSearchQuery::new("provenance check")
+            .with_tier(SearchTier::Premium)
+            .with_max_results(5);
 
         let res = router.execute_search(&max_user, query).await.unwrap();
         assert_eq!(res.results.len(), 5);
 
         for item in &res.results {
             assert!(!item.url.is_empty(), "result must carry non-empty url");
-            assert!(!item.source.is_empty(), "result must carry non-empty source provenance");
-            assert!(item.retrieved_at > 0, "result must carry positive retrieved_at timestamp");
+            assert!(
+                !item.source.is_empty(),
+                "result must carry non-empty source provenance"
+            );
+            assert!(
+                item.retrieved_at > 0,
+                "result must carry positive retrieved_at timestamp"
+            );
             assert!(item.url.starts_with("https://"));
         }
     }

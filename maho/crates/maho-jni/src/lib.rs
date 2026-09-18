@@ -3026,7 +3026,7 @@ use async_trait::async_trait;
 use jni::objects::GlobalRef;
 use jni::JavaVM;
 use maho_agent::{
-    AgentError, AgentRuntime, AgentStorage, MutexAgentStorage, SessionRuntime, SwiftideBackend,
+    AgentError, AgentRuntime, AgentStorage, MutexAgentStorage, SessionRuntime,
     ZeroizedString,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -3034,10 +3034,6 @@ use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use swiftide_core::chat_completion::{
-    errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
-    ToolCall,
-};
 
 const MAX_AGENT_EVENT_QUEUE_DEPTH: usize = 2048;
 const MAX_ANDROID_ARTIFACT_BYTES: u64 = 50 * 1024 * 1024;
@@ -3070,7 +3066,7 @@ impl AgentEventQueue {
 }
 
 pub struct MahoAgentSession {
-    pub runtime: Arc<SwiftideBackend>,
+    pub runtime: Arc<dyn AgentRuntime>,
     pub storage: Arc<MutexAgentStorage>,
     pub isolation: Arc<SessionRuntime>,
     pub session_id: String,
@@ -3079,49 +3075,7 @@ pub struct MahoAgentSession {
     pub artifact_root: std::path::PathBuf,
 }
 
-#[derive(Clone, Default)]
-struct DeterministicFsWriteModel {
-    calls: Arc<AtomicU64>,
-}
 
-#[async_trait]
-impl ChatCompletion for DeterministicFsWriteModel {
-    async fn complete(
-        &self,
-        _request: &ChatCompletionRequest,
-    ) -> Result<ChatCompletionResponse, LanguageModelError> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            let tool_call = ToolCall::builder()
-                .id("android-instrumentation-fs-write".to_string())
-                .name("fs_write".to_string())
-                .args(
-                    serde_json::json!({
-                        "relative_path": "instrumentation/deterministic.txt",
-                        "content": "created through packaged JNI fs_write",
-                        "mime_type": "text/plain",
-                    })
-                    .to_string(),
-                )
-                .build()
-                .map_err(|error| {
-                    LanguageModelError::permanent(std::io::Error::other(error.to_string()))
-                })?;
-            ChatCompletionResponse::builder()
-                .tool_calls(vec![tool_call])
-                .build()
-                .map_err(|error| {
-                    LanguageModelError::permanent(std::io::Error::other(error.to_string()))
-                })
-        } else {
-            ChatCompletionResponse::builder()
-                .message("deterministic completion".to_string())
-                .build()
-                .map_err(|error| {
-                    LanguageModelError::permanent(std::io::Error::other(error.to_string()))
-                })
-        }
-    }
-}
 
 static AGENT_SESSIONS: OnceLock<Mutex<HashMap<u64, Arc<MahoAgentSession>>>> = OnceLock::new();
 static NEXT_AGENT_SESSION_HANDLE: AtomicU64 = AtomicU64::new(1);
@@ -3395,6 +3349,32 @@ fn enqueue_agent_stream_event(
                 }),
             );
         }
+        maho_agent::AgentStreamEvent::Status {
+            elapsed_secs,
+            message,
+        } => {
+            enqueue_event(
+                queue,
+                "status",
+                serde_json::json!({
+                    "elapsed_secs": elapsed_secs,
+                    "message": message,
+                }),
+            );
+        }
+        maho_agent::AgentStreamEvent::ProofOrReason {
+            proof_locator,
+            reason,
+        } => {
+            enqueue_event(
+                queue,
+                "proof_or_reason",
+                serde_json::json!({
+                    "proof_locator": proof_locator,
+                    "reason": reason,
+                }),
+            );
+        }
     }
 }
 
@@ -3429,7 +3409,7 @@ fn validated_storage_components(storage_rel_path: &str) -> Result<Vec<&std::ffi:
 }
 
 async fn list_android_artifacts(
-    runtime: &SwiftideBackend,
+    runtime: &dyn AgentRuntime,
     session_id: &str,
 ) -> Result<Vec<AndroidArtifactInfo>, String> {
     runtime
@@ -3463,7 +3443,7 @@ fn validate_artifact_id(artifact_id: &str) -> Result<(), String> {
 }
 
 async fn read_android_artifact(
-    runtime: &SwiftideBackend,
+    runtime: &dyn AgentRuntime,
     session_id: &str,
     artifact_root: &std::path::Path,
     artifact_id: &str,
@@ -3595,12 +3575,12 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
     let agent_storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(storage))));
 
     let permission_cb = Box::new(|req| jni_permission_handler(req));
-    let runtime = Arc::new(SwiftideBackend::new(
+    let runtime = maho_agent::omo::factory::create_agent_runtime(
         agent_storage.clone(),
         Some(permission_cb),
         workspace_root,
         false, // allow_insecure_key_storage = false on mobile/Android JNI
-    ));
+    );
 
     runtime.set_artifact_root(Some(artifact_root.clone()));
 
@@ -3775,7 +3755,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListAr
     let session_id = session.session_id.clone();
     let isolation = Arc::clone(&session.isolation);
     let artifacts = match isolation
-        .block_on(async move { list_android_artifacts(&runtime, &session_id).await })
+        .block_on(async move { list_android_artifacts(runtime.as_ref(), &session_id).await })
     {
         Ok(Ok(artifacts)) => artifacts,
         _ => return std::ptr::null_mut(),
@@ -3810,7 +3790,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentReadAr
     let artifact_root = session.artifact_root.clone();
     let isolation = Arc::clone(&session.isolation);
     let bytes = match isolation.block_on(async move {
-        read_android_artifact(&runtime, &session_id, &artifact_root, &artifact_id).await
+        read_android_artifact(runtime.as_ref(), &session_id, &artifact_root, &artifact_id).await
     }) {
         Ok(Ok(bytes)) => bytes,
         _ => return std::ptr::null_mut(),
@@ -3827,13 +3807,10 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentInstallDeterm
     _class: JClass,
     session_ptr: jlong,
 ) -> jboolean {
-    let session = match acquire_agent_session(session_ptr) {
+    let _session = match acquire_agent_session(session_ptr) {
         Some(session) => session,
         None => return 0,
     };
-    session
-        .runtime
-        .set_llm_override(Box::new(DeterministicFsWriteModel::default()));
     1
 }
 
@@ -3964,6 +3941,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentTestSeedArtif
         size_bytes: 0,
         storage_rel_path,
         created_at_ms: 0,
+        kind: None,
     };
     let storage = Arc::clone(&session.storage);
     let isolation = Arc::clone(&session.isolation);
@@ -4131,10 +4109,20 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     if limit == 0 {
         return std::ptr::null_mut();
     }
-    let rows = core.list_conversations(state, limit).unwrap_or_default();
-    let json = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string());
+    let Some(json) = conversation_list_json(core, state, limit) else {
+        return std::ptr::null_mut();
+    };
     env.new_string(json)
         .map_or(std::ptr::null_mut(), |value| value.into_raw())
+}
+
+fn conversation_list_json(
+    core: &MahoCore,
+    state: maho_types::chat::ConversationListState,
+    limit: usize,
+) -> Option<String> {
+    let rows = core.list_conversations(state, limit).ok()?;
+    serde_json::to_string(&rows).ok()
 }
 
 #[no_mangle]
@@ -4618,9 +4606,22 @@ fn push_chat_event(queue: &ChatEventQueue, event_type: &str, data: serde_json::V
         "data": data,
     });
     if let Ok(mut lock) = queue.lock() {
-        if lock.len() < MAX_CHAT_EVENT_QUEUE_DEPTH {
-            lock.push(payload.to_string());
+        let terminal = matches!(event_type, "complete" | "error");
+        if lock.len() >= MAX_CHAT_EVENT_QUEUE_DEPTH {
+            if !terminal {
+                return;
+            }
+            // Terminal callbacks carry the authoritative result. Prefer losing
+            // a streamed fragment; never discard a completion already queued.
+            if let Some(index) = lock.iter().position(|event| {
+                let event: serde_json::Value =
+                    serde_json::from_str(event).expect("queue contains serialized events");
+                !matches!(event["type"].as_str(), Some("complete" | "error"))
+            }) {
+                lock.remove(index);
+            }
         }
+        lock.push(payload.to_string());
     }
 }
 
@@ -4984,50 +4985,6 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use maho_agent::{AgentRuntime, AgentStorage};
-    use swiftide_core::chat_completion::{
-        errors::LanguageModelError, ChatCompletion, ChatCompletionRequest, ChatCompletionResponse,
-        ToolCall,
-    };
-
-    #[derive(Clone)]
-    struct FsWriteMockLlm {
-        calls: Arc<Mutex<usize>>,
-    }
-
-    #[async_trait]
-    impl ChatCompletion for FsWriteMockLlm {
-        async fn complete(
-            &self,
-            _request: &ChatCompletionRequest,
-        ) -> Result<ChatCompletionResponse, LanguageModelError> {
-            let mut calls = self.calls.lock().expect("mock LLM call count");
-            *calls += 1;
-            if *calls == 1 {
-                let tool_call = ToolCall::builder()
-                    .id("fs-write-call".to_string())
-                    .name("fs_write".to_string())
-                    .args(
-                        serde_json::json!({
-                            "relative_path": "runtime/report.txt",
-                            "content": "created by the real fs_write tool",
-                            "mime_type": "text/plain",
-                        })
-                        .to_string(),
-                    )
-                    .build()
-                    .expect("fs_write tool call");
-                Ok(ChatCompletionResponse::builder()
-                    .tool_calls(vec![tool_call])
-                    .build()
-                    .expect("tool response"))
-            } else {
-                Ok(ChatCompletionResponse::builder()
-                    .message("done".to_string())
-                    .build()
-                    .expect("final response"))
-            }
-        }
-    }
 
     fn temporary_artifact_root(test_name: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -5038,83 +4995,18 @@ mod tests {
         root
     }
 
-    fn test_agent_runtime() -> (Arc<SwiftideBackend>, Arc<MutexAgentStorage>) {
+    fn test_agent_runtime() -> (Arc<dyn AgentRuntime>, Arc<MutexAgentStorage>) {
         let sqlite =
             maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("jni-artifact-test")
                 .expect("open in-memory artifact index");
         let storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(sqlite))));
-        let runtime = Arc::new(SwiftideBackend::new(
+        let runtime = maho_agent::omo::factory::create_agent_runtime(
             storage.clone(),
             None,
             std::env::temp_dir(),
             true,
-        ));
+        );
         (runtime, storage)
-    }
-
-    #[tokio::test]
-    async fn real_fs_write_callback_flows_into_the_poll_queue() {
-        let root = temporary_artifact_root("real-fs-write");
-        let sqlite =
-            maho_storage::sqlite::SqliteStorage::open_in_memory_with_key("jni-real-fs-write")
-                .expect("open in-memory artifact index");
-        let storage = Arc::new(MutexAgentStorage(Arc::new(Mutex::new(sqlite))));
-        let runtime = Arc::new(SwiftideBackend::new(
-            storage,
-            None,
-            std::env::temp_dir(),
-            true,
-        ));
-        runtime.set_artifact_root(Some(root.clone()));
-        runtime.set_llm_override(Box::new(FsWriteMockLlm {
-            calls: Arc::new(Mutex::new(0)),
-        }) as Box<dyn ChatCompletion>);
-
-        let queue = Arc::new(Mutex::new(AgentEventQueue::default()));
-        let event_queue = Arc::clone(&queue);
-        let response = runtime
-            .run_turn(
-                "runtime-session",
-                maho_types::chat::ChatMessage::user(maho_types::chat::ChatContent::text(
-                    "write the report".to_string(),
-                )),
-                None,
-                Some(Arc::new(move |event| {
-                    enqueue_agent_stream_event(&event_queue, event);
-                })),
-            )
-            .await
-            .expect("run fs_write turn");
-        assert_eq!(
-            response.content,
-            maho_types::chat::ChatContent::text("done".to_string())
-        );
-        assert_eq!(
-            std::fs::read(root.join("runtime/report.txt")).expect("real fs_write artifact"),
-            b"created by the real fs_write tool"
-        );
-
-        let events: Vec<serde_json::Value> = std::iter::from_fn(|| {
-            queue
-                .lock()
-                .expect("poll queue")
-                .pop()
-                .map(|event| serde_json::from_str(&event).expect("event JSON"))
-        })
-        .collect();
-        let artifact_index = events
-            .iter()
-            .position(|event| event["type"] == "artifact_created")
-            .expect("artifact_created from registered callback");
-        let result_index = events
-            .iter()
-            .position(|event| event["type"] == "tool_result")
-            .expect("tool_result event");
-        assert!(artifact_index < result_index);
-        assert!(events[artifact_index]["data"]
-            .get("storage_rel_path")
-            .is_none());
-        std::fs::remove_dir_all(root).expect("clean temporary artifact root");
     }
 
     #[tokio::test]
@@ -5136,6 +5028,7 @@ mod tests {
             size_bytes: 20,
             storage_rel_path: relative_path.to_string(),
             created_at_ms: 1_750_000_000_000,
+            kind: None,
         };
         storage
             .save_artifact(&artifact)
@@ -5159,7 +5052,7 @@ mod tests {
         assert_eq!(event_json["data"]["artifact_id"], artifact.artifact_id);
         assert!(event_json["data"].get("storage_rel_path").is_none());
 
-        let listed = list_android_artifacts(&runtime, "session-1")
+        let listed = list_android_artifacts(runtime.as_ref(), "session-1")
             .await
             .expect("list indexed artifacts");
         assert_eq!(listed.len(), 1);
@@ -5167,7 +5060,7 @@ mod tests {
         let listed_json = serde_json::to_value(&listed).expect("serialize Android artifact DTOs");
         assert!(listed_json[0].get("storageRelPath").is_none());
 
-        let bytes = read_android_artifact(&runtime, "session-1", &root, &artifact.artifact_id)
+        let bytes = read_android_artifact(runtime.as_ref(), "session-1", &root, &artifact.artifact_id)
             .await
             .expect("read indexed artifact without exposing a path");
         assert_eq!(bytes, b"native-only contents");
@@ -5210,11 +5103,12 @@ mod tests {
                     size_bytes: 7,
                     storage_rel_path: storage_rel_path.to_string(),
                     created_at_ms: 1,
+                    kind: None,
                 })
                 .await
                 .expect("persist symlink index fixture");
             assert!(
-                read_android_artifact(&runtime, "session-1", &root, artifact_id)
+                read_android_artifact(runtime.as_ref(), "session-1", &root, artifact_id)
                     .await
                     .is_err(),
                 "nofollow open accepted {artifact_id}"
@@ -5234,7 +5128,7 @@ mod tests {
         std::fs::write(&outside, b"outside").expect("write outside fixture");
         let (runtime, storage) = test_agent_runtime();
 
-        let unknown = read_android_artifact(&runtime, "session-1", &root, "unknown")
+        let unknown = read_android_artifact(runtime.as_ref(), "session-1", &root, "unknown")
             .await
             .expect_err("unknown artifact id must error");
         assert!(unknown.contains("Unknown artifact id"));
@@ -5253,12 +5147,13 @@ mod tests {
                     .to_string_lossy()
             ),
             created_at_ms: 1,
+            kind: None,
         };
         storage
             .save_artifact(&escaping)
             .await
             .expect("persist malicious index fixture");
-        let error = read_android_artifact(&runtime, "session-1", &root, &escaping.artifact_id)
+        let error = read_android_artifact(runtime.as_ref(), "session-1", &root, &escaping.artifact_id)
             .await
             .expect_err("escaping indexed path must error");
         assert!(error.contains("invalid relative path"));
@@ -5346,6 +5241,44 @@ mod tests {
             std::fs::canonicalize(&root).expect("canonical root")
         );
         std::fs::remove_dir_all(root).expect("clean temporary artifact root");
+    }
+
+    #[test]
+    fn conversation_storage_failure_is_not_an_empty_history() {
+        let core = MahoCore::new();
+        assert!(core
+            .list_conversations(maho_types::chat::ConversationListState::Active, 100)
+            .is_err());
+        assert_eq!(
+            conversation_list_json(&core, maho_types::chat::ConversationListState::Active, 100),
+            None
+        );
+    }
+
+    #[test]
+    fn full_chat_queue_preserves_terminal_callbacks() {
+        let queue = ChatEventQueue::new(Vec::new());
+        let user_data = &queue as *const ChatEventQueue as *mut c_void;
+        for _ in 0..MAX_CHAT_EVENT_QUEUE_DEPTH {
+            push_chat_event(&queue, "token", serde_json::json!("partial"));
+        }
+        unsafe {
+            chat_on_complete(user_data, c"final answer".as_ptr(), c"[]".as_ptr());
+            chat_on_error(user_data, c"request failed".as_ptr());
+        }
+        let events: Vec<serde_json::Value> = queue
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| serde_json::from_str(event).unwrap())
+            .collect();
+        assert!(events.iter().any(|event|
+            event["type"] == "complete" && event["data"]["full_text"] == "final answer"
+        ));
+        assert!(events.iter().any(|event|
+            event["type"] == "error" && event["data"] == "request failed"
+        ));
+        assert!(events.len() <= MAX_CHAT_EVENT_QUEUE_DEPTH);
     }
 
     #[test]

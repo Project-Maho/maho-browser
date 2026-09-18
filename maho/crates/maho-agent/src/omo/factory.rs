@@ -4,7 +4,7 @@ use std::sync::Arc;
 #[cfg(unix)]
 use crate::omo::backend::OmoBackend;
 use crate::omo::config::{BundledRuntime, OmoLaunchConfig};
-use crate::{AgentRuntime, AgentStorage, PermissionCallback, SwiftideBackend};
+use crate::{AgentRuntime, AgentStorage, PermissionCallback};
 
 /// Derived from Maho's workspace so a developer's `~/.omo` or `~/.senpi` is never used.
 pub fn agent_dir_for_workspace(workspace_root: &Path) -> PathBuf {
@@ -67,65 +67,62 @@ pub fn omo_runtime_from_bundle(
     ))
 }
 
-/// Falls back to the existing backend when the build did not stage the omo runtime,
-/// or when automatic selection is disabled (preventing premature selection from dropping
-/// host credentials and durable session history until full host-integration parity).
+/// Creates the canonical Omo agent runtime instance.
 pub fn create_agent_runtime(
     storage: Arc<dyn AgentStorage>,
     permission_callback: Option<PermissionCallback>,
     workspace_root: PathBuf,
-    allow_insecure_key_storage: bool,
+    _allow_insecure_key_storage: bool,
 ) -> Arc<dyn AgentRuntime> {
     #[cfg(unix)]
     {
-        let omo_disabled = std::env::var("MAHO_AI_BACKEND")
-            .map(|v| {
-                v.eq_ignore_ascii_case("swiftide")
-                    || v.eq_ignore_ascii_case("legacy")
-                    || v == "0"
-                    || v.eq_ignore_ascii_case("false")
-            })
-            .unwrap_or(false);
+        let executable_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("/Applications/Maho.app/Contents/Helpers"));
 
-        if !omo_disabled {
-            let executable_dir = std::env::current_exe()
-                .ok()
-                .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        if let Ok(backend) = omo_runtime_from_bundle(&executable_dir, &workspace_root) {
+            backend.set_storage(storage.clone());
+            if let Some(callback) = permission_callback {
+                let _ = backend.set_permission_callback(callback);
+            }
+            return Arc::new(backend);
+        }
 
-            match executable_dir {
-                Some(dir) => match omo_runtime_from_bundle(&dir, &workspace_root) {
-                    Ok(backend) => {
-                        if let Some(callback) = permission_callback {
-                            if let Err(error) = backend.set_permission_callback(callback) {
-                                tracing::error!(
-                                    "omo runtime kept Maho's permission callback out: {error}; \
-                                     approvals now rest entirely on the MCP boundary broker"
-                                );
-                            }
-                        }
-                        return Arc::new(backend);
-                    }
-                    Err(reason) => {
-                        tracing::info!(
-                            "omo runtime unavailable ({reason:?}); using the existing agent backend"
-                        );
-                    }
-                },
-                None => {
-                    tracing::info!(
-                        "executable directory unknown; using the existing agent backend"
-                    );
+        let fallback_dirs = [
+            PathBuf::from("/Applications/Maho.app/Contents/Helpers"),
+            PathBuf::from("/usr/local/bin"),
+            workspace_root.join("target/debug"),
+        ];
+        for dir in &fallback_dirs {
+            if let Ok(backend) = omo_runtime_from_bundle(dir, &workspace_root) {
+                backend.set_storage(storage.clone());
+                if let Some(callback) = permission_callback {
+                    let _ = backend.set_permission_callback(callback);
                 }
+                return Arc::new(backend);
             }
         }
     }
 
-    Arc::new(SwiftideBackend::new(
-        storage,
-        permission_callback,
-        workspace_root,
-        allow_insecure_key_storage,
-    ))
+    let agent_dir = agent_dir_for_workspace(&workspace_root);
+    let socket_path = resolve_rpc_socket_path(&agent_dir);
+    let bundled = BundledRuntime::from_executable_dir(&workspace_root);
+    let config = OmoLaunchConfig::builder(&agent_dir)
+        .runtime_binary(&bundled.runtime_binary)
+        .rpc_entry(&bundled.rpc_entry)
+        .socket_path(&socket_path)
+        .add_cleanup_path(&socket_path)
+        .build()
+        .unwrap_or_else(|_| OmoLaunchConfig::builder(&agent_dir).build().unwrap());
+
+    let backend = OmoBackend::new(
+        config,
+        bundled.browser_mcp_binary,
+        &workspace_root,
+    );
+    backend.set_storage(storage);
+    Arc::new(backend)
 }
 
 #[cfg(all(test, unix))]

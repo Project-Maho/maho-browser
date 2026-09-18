@@ -30,10 +30,7 @@ pub enum FollowUpBehavior {
 #[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
 pub enum TurnControlError {
     #[error("Queue capacity exceeded for session {session_id}: limit is {limit}")]
-    QueueCapacityExceeded {
-        session_id: String,
-        limit: usize,
-    },
+    QueueCapacityExceeded { session_id: String, limit: usize },
     #[error("Session is not currently active")]
     SessionNotActive,
     #[error("Invalid follow-up operation: {0}")]
@@ -54,18 +51,11 @@ pub struct QueuedFollowUp {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FollowUpSubmissionResult {
     /// Follow-up was enqueued to be executed after the current turn.
-    Queued {
-        id: String,
-        position: usize,
-    },
+    Queued { id: String, position: usize },
     /// Active turn was cancelled; new turn can begin.
-    Interrupted {
-        cancelled_turn_id: String,
-    },
+    Interrupted { cancelled_turn_id: String },
     /// Steering guidance was accepted for the current turn.
-    Steered {
-        guidance: String,
-    },
+    Steered { guidance: String },
     /// Message was merged directly into the active streaming turn.
     Continued,
 }
@@ -197,7 +187,10 @@ impl SessionTurnController {
     }
 
     /// Start a new turn. If a turn is already active, returns an error.
-    pub fn start_turn(&mut self, turn_id: impl Into<String>) -> Result<Arc<AtomicBool>, TurnControlError> {
+    pub fn start_turn(
+        &mut self,
+        turn_id: impl Into<String>,
+    ) -> Result<Arc<AtomicBool>, TurnControlError> {
         if self.is_active() {
             return Err(TurnControlError::InvalidOperation(
                 "A turn is already active in this session".to_string(),
@@ -285,17 +278,43 @@ mod tests {
         assert!(controller.is_active());
 
         // Submit multiple follow-ups with Queue behavior
-        let res1 = controller.submit_follow_up("msg 1", FollowUpBehavior::Queue, 100).unwrap();
-        let res2 = controller.submit_follow_up("msg 2", FollowUpBehavior::Queue, 101).unwrap();
-        let res3 = controller.submit_follow_up("msg 3", FollowUpBehavior::Queue, 102).unwrap();
+        let res1 = controller
+            .submit_follow_up("msg 1", FollowUpBehavior::Queue, 100)
+            .unwrap();
+        let res2 = controller
+            .submit_follow_up("msg 2", FollowUpBehavior::Queue, 101)
+            .unwrap();
+        let res3 = controller
+            .submit_follow_up("msg 3", FollowUpBehavior::Queue, 102)
+            .unwrap();
 
-        assert_eq!(res1, FollowUpSubmissionResult::Queued { id: "followup-1".to_string(), position: 1 });
-        assert_eq!(res2, FollowUpSubmissionResult::Queued { id: "followup-2".to_string(), position: 2 });
-        assert_eq!(res3, FollowUpSubmissionResult::Queued { id: "followup-3".to_string(), position: 3 });
+        assert_eq!(
+            res1,
+            FollowUpSubmissionResult::Queued {
+                id: "followup-1".to_string(),
+                position: 1
+            }
+        );
+        assert_eq!(
+            res2,
+            FollowUpSubmissionResult::Queued {
+                id: "followup-2".to_string(),
+                position: 2
+            }
+        );
+        assert_eq!(
+            res3,
+            FollowUpSubmissionResult::Queued {
+                id: "followup-3".to_string(),
+                position: 3
+            }
+        );
         assert_eq!(controller.queue.len(), 3);
 
         // Turn 1 completes -> first queued follow-up popped exactly once
-        let next1 = controller.complete_current_turn().expect("should have item 1");
+        let next1 = controller
+            .complete_current_turn()
+            .expect("should have item 1");
         assert_eq!(next1.message, "msg 1");
         assert_eq!(next1.id, "followup-1");
         assert_eq!(controller.queue.len(), 2);
@@ -303,14 +322,18 @@ mod tests {
 
         // Start turn for item 1 and complete it
         let _ = controller.start_turn("turn-2").unwrap();
-        let next2 = controller.complete_current_turn().expect("should have item 2");
+        let next2 = controller
+            .complete_current_turn()
+            .expect("should have item 2");
         assert_eq!(next2.message, "msg 2");
         assert_eq!(next2.id, "followup-2");
         assert_eq!(controller.queue.len(), 1);
 
         // Start turn for item 2 and complete it
         let _ = controller.start_turn("turn-3").unwrap();
-        let next3 = controller.complete_current_turn().expect("should have item 3");
+        let next3 = controller
+            .complete_current_turn()
+            .expect("should have item 3");
         assert_eq!(next3.message, "msg 3");
         assert_eq!(next3.id, "followup-3");
         assert_eq!(controller.queue.len(), 0);
@@ -327,10 +350,15 @@ mod tests {
         let mut controller = SessionTurnController::new("session-steer");
         let _ = controller.start_turn("turn-1").unwrap();
 
-        let result = controller.submit_follow_up("focus only on rust files", FollowUpBehavior::Steer, 100).unwrap();
-        assert_eq!(result, FollowUpSubmissionResult::Steered {
-            guidance: "focus only on rust files".to_string(),
-        });
+        let result = controller
+            .submit_follow_up("focus only on rust files", FollowUpBehavior::Steer, 100)
+            .unwrap();
+        assert_eq!(
+            result,
+            FollowUpSubmissionResult::Steered {
+                guidance: "focus only on rust files".to_string(),
+            }
+        );
 
         // Active turn is still running and not cancelled
         assert!(controller.is_active());
@@ -347,10 +375,19 @@ mod tests {
         assert!(!cancel_token.load(Ordering::SeqCst));
 
         // Submit Interrupt
-        let result = controller.submit_follow_up("stop and do something else", FollowUpBehavior::Interrupt, 100).unwrap();
-        assert_eq!(result, FollowUpSubmissionResult::Interrupted {
-            cancelled_turn_id: "turn-active".to_string(),
-        });
+        let result = controller
+            .submit_follow_up(
+                "stop and do something else",
+                FollowUpBehavior::Interrupt,
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            result,
+            FollowUpSubmissionResult::Interrupted {
+                cancelled_turn_id: "turn-active".to_string(),
+            }
+        );
 
         // Current turn's cancellation token must be true
         assert!(cancel_token.load(Ordering::SeqCst));
@@ -371,7 +408,11 @@ mod tests {
 
         // Enqueue 8 messages (up to capacity)
         for i in 1..=8 {
-            let res = controller.submit_follow_up(format!("msg {i}"), FollowUpBehavior::Queue, 100 + i as u64);
+            let res = controller.submit_follow_up(
+                format!("msg {i}"),
+                FollowUpBehavior::Queue,
+                100 + i as u64,
+            );
             assert!(res.is_ok(), "item {i} should be accepted");
         }
         assert_eq!(controller.queue.len(), 8);

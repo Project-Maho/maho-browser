@@ -107,8 +107,10 @@ pub fn execute_introspection_tool(
     supervisor: Option<&SubagentSupervisor>,
     capabilities_count: usize,
 ) -> serde_json::Value {
-    let report = collect_introspection(journal, queue, last_routing, supervisor, capabilities_count);
-    serde_json::to_value(&report).unwrap_or_else(|_| serde_json::json!({ "error": "introspection_failed" }))
+    let report =
+        collect_introspection(journal, queue, last_routing, supervisor, capabilities_count);
+    serde_json::to_value(&report)
+        .unwrap_or_else(|_| serde_json::json!({ "error": "introspection_failed" }))
 }
 
 #[cfg(test)]
@@ -126,11 +128,17 @@ mod tests {
         let run2 = AgentRunId::new("run-002");
 
         journal.start_run(run1.clone(), "session-a").unwrap();
-        journal.append_event(&run1, "step_1", r#"{"op":"start"}"#).unwrap();
+        journal
+            .append_event(&run1, "step_1", r#"{"op":"start"}"#)
+            .unwrap();
 
         journal.start_run(run2.clone(), "session-b").unwrap();
-        journal.append_event(&run2, "step_1", r#"{"op":"start"}"#).unwrap();
-        journal.record_terminal(&run2, RunCheckpointKind::Completed, None).unwrap();
+        journal
+            .append_event(&run2, "step_1", r#"{"op":"start"}"#)
+            .unwrap();
+        journal
+            .record_terminal(&run2, RunCheckpointKind::Completed, None)
+            .unwrap();
 
         let mut queue_items = VecDeque::new();
         queue_items.push_back(QueuedFollowUp {
@@ -172,7 +180,10 @@ mod tests {
         assert_eq!(report.enabled_capabilities_count, 8);
 
         let routing_summary = report.model_routing.expect("routing summary present");
-        assert_eq!(routing_summary.selected_model, "anthropic/claude-3-7-sonnet");
+        assert_eq!(
+            routing_summary.selected_model,
+            "anthropic/claude-3-7-sonnet"
+        );
         assert_eq!(routing_summary.reason, "Preferred coding model selected");
         assert!(!routing_summary.is_fallback);
     }
@@ -183,7 +194,9 @@ mod tests {
         let run_id = AgentRunId::new("run-sec");
         journal.start_run(run_id.clone(), "session-sec").unwrap();
         // Even if some internal event payload had sensitive keys:
-        journal.append_event(&run_id, "auth_attempt", r#"{"api_key":"sk-secret-12345"}"#).unwrap();
+        journal
+            .append_event(&run_id, "auth_attempt", r#"{"api_key":"sk-secret-12345"}"#)
+            .unwrap();
 
         let routing = RoutingDecision {
             category: TaskCategory::GeneralChat,

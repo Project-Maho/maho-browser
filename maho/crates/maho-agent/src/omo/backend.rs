@@ -22,7 +22,7 @@ use crate::omo::proto::{
 };
 use crate::run_journal::{AgentRunId, RunCheckpointKind, RunJournal};
 use crate::{
-    AgentError, AgentRuntime, AgentStorage, AgentStreamEvent, BrowserActionToolsState,
+    AgentError, AgentRuntime, AgentStorage, AgentStreamEvent,
     PermissionCallback, SecureKeyBundle, ToolDefinition,
 };
 
@@ -430,6 +430,7 @@ pub struct OmoBackend {
     system_prompt: Mutex<String>,
     fs_whitelist_roots: Mutex<Vec<String>>,
     artifact_root: Mutex<Option<PathBuf>>,
+    storage: Mutex<Option<Arc<dyn AgentStorage>>>,
     composite_cfg: Mutex<crate::composite::CompositeExecutionConfig>,
 }
 
@@ -457,8 +458,14 @@ impl OmoBackend {
             system_prompt: Mutex::new(crate::system_prompt::MAHO_BROWSER_SYSTEM_PROMPT.to_string()),
             fs_whitelist_roots: Mutex::new(Vec::new()),
             artifact_root: Mutex::new(None),
+            storage: Mutex::new(None),
             composite_cfg: Mutex::new(crate::composite::CompositeExecutionConfig::default()),
         }
+    }
+
+    /// Attach backing agent storage for artifact and setting queries.
+    pub fn set_storage(&self, storage: Arc<dyn AgentStorage>) {
+        *lock_unpoison(&self.storage) = Some(storage);
     }
 
     pub fn composite_config(&self) -> crate::composite::CompositeExecutionConfig {
@@ -1068,6 +1075,33 @@ impl AgentRuntime for OmoBackend {
 
     fn set_artifact_root(&self, artifact_root: Option<PathBuf>) {
         *lock_unpoison(&self.artifact_root) = artifact_root;
+    }
+
+    async fn list_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        let storage = lock_unpoison(&self.storage).clone();
+        if let Some(storage) = storage {
+            return storage.list_artifacts(session_id).await;
+        }
+        Ok(Vec::new())
+    }
+
+    async fn artifact_storage_rel_path(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        let storage = lock_unpoison(&self.storage).clone();
+        if let Some(storage) = storage {
+            let list = storage.list_artifacts(session_id).await?;
+            return Ok(list
+                .into_iter()
+                .find(|a| a.artifact_id == artifact_id)
+                .map(|a| a.storage_rel_path));
+        }
+        Ok(None)
     }
 
     fn artifact_root(&self) -> Option<PathBuf> {

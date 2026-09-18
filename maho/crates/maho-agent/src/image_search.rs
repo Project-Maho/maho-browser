@@ -115,7 +115,10 @@ pub enum ImageSearchError {
 /// Trait defining an image search client backend.
 #[async_trait]
 pub trait ImageSearchClient: Send + Sync {
-    async fn search(&self, query: &ImageSearchQuery) -> Result<ImageSearchResponse, ImageSearchError>;
+    async fn search(
+        &self,
+        query: &ImageSearchQuery,
+    ) -> Result<ImageSearchResponse, ImageSearchError>;
     fn backend_name(&self) -> &'static str;
     fn tier(&self) -> SearchTier;
 }
@@ -136,7 +139,10 @@ pub struct FreeImageSearchBackend;
 
 #[async_trait]
 impl ImageSearchClient for FreeImageSearchBackend {
-    async fn search(&self, query: &ImageSearchQuery) -> Result<ImageSearchResponse, ImageSearchError> {
+    async fn search(
+        &self,
+        query: &ImageSearchQuery,
+    ) -> Result<ImageSearchResponse, ImageSearchError> {
         let now = now_epoch_secs();
         let limit = query.max_results.clamp(1, MAX_RESULTS_HARD_CAP);
         let mut results = Vec::with_capacity(limit);
@@ -144,7 +150,10 @@ impl ImageSearchClient for FreeImageSearchBackend {
         for i in 1..=limit {
             results.push(ImageSearchResult {
                 image_url: format!("https://images-free.example.com/{}-{}.jpg", query.query, i),
-                thumbnail_url: Some(format!("https://thumbs-free.example.com/{}-{}-thumb.jpg", query.query, i)),
+                thumbnail_url: Some(format!(
+                    "https://thumbs-free.example.com/{}-{}-thumb.jpg",
+                    query.query, i
+                )),
                 title: format!("Free Image {} for '{}'", i, query.query),
                 source_page_url: format!("https://example-free.org/gallery/{}", i),
                 width: Some(800),
@@ -181,15 +190,24 @@ pub struct PremiumImageSearchBackend;
 
 #[async_trait]
 impl ImageSearchClient for PremiumImageSearchBackend {
-    async fn search(&self, query: &ImageSearchQuery) -> Result<ImageSearchResponse, ImageSearchError> {
+    async fn search(
+        &self,
+        query: &ImageSearchQuery,
+    ) -> Result<ImageSearchResponse, ImageSearchError> {
         let now = now_epoch_secs();
         let limit = query.max_results.clamp(1, MAX_RESULTS_HARD_CAP);
         let mut results = Vec::with_capacity(limit);
 
         for i in 1..=limit {
             results.push(ImageSearchResult {
-                image_url: format!("https://premium-cdn.example.com/highres/{}-{}.png", query.query, i),
-                thumbnail_url: Some(format!("https://premium-cdn.example.com/thumb/{}-{}.webp", query.query, i)),
+                image_url: format!(
+                    "https://premium-cdn.example.com/highres/{}-{}.png",
+                    query.query, i
+                ),
+                thumbnail_url: Some(format!(
+                    "https://premium-cdn.example.com/thumb/{}-{}.webp",
+                    query.query, i
+                )),
                 title: format!("High-Res Premium Image {} for '{}'", i, query.query),
                 source_page_url: format!("https://premium-art.com/work/{}", i),
                 width: Some(3840),
@@ -390,12 +408,18 @@ mod tests {
 
         // Default max_results is 10
         let default_query = ImageSearchQuery::new("scenery");
-        let res = router.execute_search(&free_user, default_query).await.unwrap();
+        let res = router
+            .execute_search(&free_user, default_query)
+            .await
+            .unwrap();
         assert_eq!(res.results.len(), 10);
 
         // Custom max_results = 4
         let custom_query = ImageSearchQuery::new("scenery").with_max_results(4);
-        let res2 = router.execute_search(&free_user, custom_query).await.unwrap();
+        let res2 = router
+            .execute_search(&free_user, custom_query)
+            .await
+            .unwrap();
         assert_eq!(res2.results.len(), 4);
 
         // Clamped to hard cap if excessive
@@ -408,7 +432,9 @@ mod tests {
     async fn test_provenance_and_url_metadata_only_no_binary_bytes() {
         let router = ImageSearchEntitlementRouter::default();
         let max_user = SearchEntitlement::max();
-        let query = ImageSearchQuery::new("diagram").with_tier(SearchTier::Premium).with_max_results(3);
+        let query = ImageSearchQuery::new("diagram")
+            .with_tier(SearchTier::Premium)
+            .with_max_results(3);
 
         let res = router.execute_search(&max_user, query).await.unwrap();
         assert_eq!(res.results.len(), 3);
@@ -416,7 +442,10 @@ mod tests {
         for item in &res.results {
             // Provenance assertions
             assert!(!item.image_url.is_empty(), "image_url must be populated");
-            assert!(!item.source_page_url.is_empty(), "source_page_url must be populated");
+            assert!(
+                !item.source_page_url.is_empty(),
+                "source_page_url must be populated"
+            );
             assert!(!item.source.is_empty(), "source must be populated");
             assert!(item.retrieved_at > 0, "retrieved_at must be positive");
 
@@ -427,7 +456,7 @@ mod tests {
             // Serialized representation must only contain string/number fields, NEVER base64 or raw byte arrays
             let serialized = serde_json::to_value(item).unwrap();
             let obj = serialized.as_object().expect("result must be JSON object");
-            
+
             for (key, val) in obj {
                 assert!(
                     val.is_string() || val.is_number() || val.is_null(),

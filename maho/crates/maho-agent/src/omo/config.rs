@@ -192,8 +192,26 @@ impl BundledRuntime {
             .filter(|p| p.exists());
         let rpc_entry = resources_rpc.unwrap_or_else(|| dir.join("omo").join("dist").join("rpc-entry.js"));
 
+        let macos_bun = dir
+            .parent()
+            .map(|p| p.join("MacOS").join("bun"))
+            .filter(|p| p.exists());
+        let helpers_bun = dir
+            .parent()
+            .map(|p| p.join("Helpers").join("bun"))
+            .filter(|p| p.exists());
+        let runtime_binary = if dir.join("bun").exists() {
+            dir.join("bun")
+        } else if let Some(p) = macos_bun {
+            p
+        } else if let Some(p) = helpers_bun {
+            p
+        } else {
+            dir.join("bun")
+        };
+
         Self {
-            runtime_binary: dir.join("bun"),
+            runtime_binary,
             rpc_entry,
             browser_mcp_binary,
         }
@@ -594,6 +612,10 @@ impl OmoLaunchConfigBuilder {
         env_vars.insert(BRAND_ENV_VAR.to_string(), brand_json);
         env_vars.insert(agent_dir_key, self.agent_dir.to_string_lossy().to_string());
         env_vars.insert(session_dir_key, session_dir.to_string_lossy().to_string());
+
+        let dir_str = self.agent_dir.to_string_lossy().to_string();
+        env_vars.insert("SENPI_CODING_AGENT_DIR".to_string(), dir_str.clone());
+        env_vars.insert("OMO_CODING_AGENT_DIR".to_string(), dir_str);
         // omo/senpi builtin brand prefix fallback: rpc-entry scrubs SENPI_BRAND before
         // the engine reads it, falling back to the OMO brand prefix. We emit OMO_CODING_AGENT_DIR
         // and SENPI_CODING_AGENT_DIR pointing to our isolated agent_dir so omo's globalPath
