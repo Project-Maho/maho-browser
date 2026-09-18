@@ -9,5 +9,7 @@ target_cpu = "arm64"
 maho_root = "//maho"
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true
 enable_traffic_annotation_auditor = true
 

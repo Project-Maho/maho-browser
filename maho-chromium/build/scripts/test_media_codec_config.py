@@ -20,7 +20,7 @@ class TestMediaCodecConfig(unittest.TestCase):
 
                     arguments = dict(
                         re.findall(
-                            r'^\s*(proprietary_codecs|ffmpeg_branding)\s*=\s*'
+                            r'^\s*(proprietary_codecs|ffmpeg_branding|enable_widevine)\s*=\s*'
                             r'(true|false|"[^"]*")\s*(?:#.*)?$',
                             template.read_text(encoding="utf-8"),
                             re.MULTILINE,
@@ -32,6 +32,7 @@ class TestMediaCodecConfig(unittest.TestCase):
                         {
                             "proprietary_codecs": "true",
                             "ffmpeg_branding": '"Chrome"',
+                            "enable_widevine": "true",
                         },
                         f"Failed for args_{platform}{variant}.gn",
                     )

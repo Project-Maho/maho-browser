@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build the Rust prebuilt and Chromium app under one shared lock."""
 
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import os
@@ -13,9 +15,22 @@ import sys
 import time
 from subprocess import SubprocessError
 
-_cargo_bin = os.path.expanduser('~/.cargo/bin')
-if os.path.isdir(_cargo_bin) and _cargo_bin not in os.environ.get('PATH', ''):
-    os.environ['PATH'] = f"{_cargo_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+# Bootstrap developer toolpaths onto PATH up front so all child processes
+# (ninja, siso, python scripts, node scripts, subshells) find bun, sccache, cargo, etc.
+_extra_tool_dirs = [
+    os.path.expanduser('~/.bun/bin'),
+    os.path.expanduser('~/.local/bin'),
+    os.path.expanduser('~/.cargo/bin'),
+    os.path.expanduser('~/depot_tools'),
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+]
+_current_paths = os.environ.get('PATH', '').split(os.pathsep)
+for _d in _extra_tool_dirs:
+    if os.path.isdir(_d) and _d not in _current_paths:
+        _current_paths.insert(0, _d)
+os.environ['PATH'] = os.pathsep.join(_current_paths)
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _MAHO_CHROMIUM_DIR = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..'))
@@ -36,6 +51,7 @@ _BUILD_CONFIG_DIR = os.path.join(_MAHO_CHROMIUM_DIR, 'build', 'config')
 _MAHO_APP_PATH = os.path.join(_CHROMIUM_SRC_ROOT, 'out', 'Default', 'Maho.app')
 _PKG_DMG = os.path.join(_CHROMIUM_SRC_ROOT, 'chrome', 'installer', 'mac', 'pkg-dmg')
 _VERSION_TXT = os.path.join(_WORKSPACE_ROOT, 'maho', 'version.txt')
+_DMG_BACKGROUND = os.path.join(_MAHO_CHROMIUM_DIR, 'branding', 'mac', 'dmg-background.png')
 
 
 def host_platform() -> str:
@@ -742,6 +758,23 @@ def _load_apple_notarization_env():
 
 def notarize_app(app_path: str) -> bool:
     import tempfile
+
+    # Fast path: if the app is already stapled and accepted by Gatekeeper, avoid redundant upload
+    try:
+        staple_check = subprocess.run(
+            ['xcrun', 'stapler', 'validate', app_path],
+            capture_output=True, text=True
+        )
+        spctl_check = subprocess.run(
+            ['spctl', '-a', '-t', 'exec', app_path],
+            capture_output=True, text=True
+        )
+        if staple_check.returncode == 0 and spctl_check.returncode == 0:
+            print(f"{app_path} is already notarized, stapled, and accepted by Gatekeeper.")
+            return True
+    except Exception:
+        pass
+
     _load_apple_notarization_env()
     api_key = os.environ.get('APPLE_API_KEY')
     key_id = os.environ.get('APPLE_API_KEY_ID')
@@ -820,24 +853,127 @@ def read_maho_version() -> str:
         return f.read().strip()
 
 
-def _create_dmg_image(staging_dir: str, dmg_path: str, volname: str) -> None:
-    """Synthesize a read-only compressed DMG from a staging folder.
+_DMG_CONTENT_SIZE = (664, 400)
+_DMG_TITLE_BAR_HEIGHT = 28
+_DMG_WINDOW_XY = (100, 100)
+_DMG_ICON_SIZE_PT = 68
+_DMG_APP_ICON_CENTER = (215, 272)
+_DMG_APPLICATIONS_CENTER = (450, 272)
 
-    Uses `hdiutil create -srcfolder ... -format UDZO` directly. This
-    deliberately avoids Chromium's pkg-dmg, whose read-only path runs
-    `hdiutil makehybrid -hfs`; makehybrid synthesizes `com.apple.FinderInfo`
-    on every catalog entry of the resulting HFS filesystem even when the
-    source tree is completely clean, which makes the embedded app fail
-    `codesign --verify --deep --strict` ("resource fork, Finder information,
-    or similar detritus not allowed"). `hdiutil create -srcfolder` does not
-    inject FinderInfo, producing a detritus-free, deep-strict-clean app.
-    Raises on failure (subprocess check=True).
+
+def _write_dmg_layout(mount_point: str) -> None:
+    """Write the branded Finder layout (.DS_Store) onto the mounted volume.
+
+    Mirrors dmgbuild's mechanism: a picture background recorded via an alias
+    to `.background.png` inside the image, explicit icon coordinates, and
+    window bounds, all written as .DS_Store records with the ds_store package.
+    No AppleScript or Finder interaction is involved. Coordinates are in
+    points and match the approved 1328x800 (664x400pt @2x) background art in
+    branding/mac/dmg-background.png.
     """
-    subprocess.run(
-        ['hdiutil', 'create', '-ov', '-srcfolder', staging_dir,
-         '-volname', volname, '-fs', 'HFS+', '-format', 'UDZO', dmg_path],
-        check=True, timeout=600,
-    )
+    try:
+        from ds_store import DSStore
+        from mac_alias import Alias
+    except ImportError as e:
+        raise RuntimeError("dmg layout requires the ds_store/mac_alias packages "
+                           "(pip3 install dmgbuild)") from e
+
+    background_in_image = os.path.join(mount_point, '.background.png')
+    shutil.copyfile(_DMG_BACKGROUND, background_in_image)
+    alias = Alias.for_file(background_in_image)
+
+    window_left, window_top = _DMG_WINDOW_XY
+    content_width, content_height = _DMG_CONTENT_SIZE
+    bwsp = {
+        'ShowStatusBar': False,
+        'WindowBounds': f'{{{{{window_left}, {window_top}}}, {{{content_width}, '
+                        f'{content_height + _DMG_TITLE_BAR_HEIGHT}}}}}',
+        'ContainerShowSidebar': False,
+        'PreviewPaneVisibility': False,
+        'SidebarWidth': 180,
+        'ShowTabView': False,
+        'ShowToolbar': False,
+        'ShowPathbar': False,
+        'ShowSidebar': False,
+    }
+    icvp = {
+        'viewOptionsVersion': 1,
+        'backgroundType': 2,
+        'backgroundColorRed': 1.0,
+        'backgroundColorGreen': 1.0,
+        'backgroundColorBlue': 1.0,
+        'gridOffsetX': 0.0,
+        'gridOffsetY': 0.0,
+        'gridSpacing': 100.0,
+        'arrangeBy': 'none',
+        'showIconPreview': False,
+        'showItemInfo': False,
+        'labelOnBottom': True,
+        'textSize': 16.0,
+        'iconSize': float(_DMG_ICON_SIZE_PT),
+        'scrollPositionX': 0.0,
+        'scrollPositionY': 0.0,
+        'backgroundImageAlias': alias.to_bytes(),
+    }
+    with DSStore.open(os.path.join(mount_point, '.DS_Store'), 'w+') as store:
+        store['.']['vSrn'] = ('long', 1)
+        store['.']['bwsp'] = bwsp
+        store['.']['icvp'] = icvp
+        store['.']['icvl'] = (b'type', 'icnv')
+        for item, center in (('Maho.app', _DMG_APP_ICON_CENTER),
+                             ('Applications', _DMG_APPLICATIONS_CENTER)):
+            store[item]['Iloc'] = (
+                center[0] - _DMG_ICON_SIZE_PT // 2,
+                center[1] - _DMG_ICON_SIZE_PT // 2,
+            )
+
+
+def _create_dmg_image(staging_dir: str, dmg_path: str, volname: str) -> None:
+    """Synthesize a read-only compressed DMG carrying the branded layout.
+
+    Flow: `hdiutil create -srcfolder ... -format UDRW`, attach read-write,
+    write the Finder layout (.DS_Store + background alias) on the mounted
+    volume, detach, then convert to UDZO. Writing the layout on the mounted
+    image (never via AppleScript/Finder) records the background alias against
+    the image's own volume, exactly as dmgbuild does. This still deliberately
+    avoids Chromium's pkg-dmg, whose read-only path runs `hdiutil makehybrid
+    -hfs`; makehybrid synthesizes `com.apple.FinderInfo` on every catalog
+    entry of the resulting HFS filesystem even when the source tree is
+    completely clean, which makes the embedded app fail
+    `codesign --verify --deep --strict` ("resource fork, Finder information,
+    or similar detritus not allowed"). Raises on failure (subprocess
+    check=True).
+    """
+    import tempfile
+
+    rw_dmg = dmg_path + '.rw.dmg'
+    if os.path.exists(rw_dmg):
+        os.remove(rw_dmg)
+    mount_point = tempfile.mkdtemp(prefix='maho-dmg-layout-')
+    try:
+        subprocess.run(
+            ['hdiutil', 'create', '-ov', '-srcfolder', staging_dir,
+             '-volname', volname, '-fs', 'HFS+', '-format', 'UDRW', rw_dmg],
+            check=True, timeout=600,
+        )
+        subprocess.run(
+            ['hdiutil', 'attach', '-nobrowse', '-readwrite',
+             '-mountpoint', mount_point, rw_dmg],
+            check=True, capture_output=True, text=True, timeout=120,
+        )
+        try:
+            _write_dmg_layout(mount_point)
+        finally:
+            subprocess.run(['hdiutil', 'detach', '-force', mount_point],
+                           check=True, timeout=120)
+        subprocess.run(
+            ['hdiutil', 'convert', rw_dmg, '-format', 'UDZO', '-o', dmg_path],
+            check=True, timeout=600,
+        )
+    finally:
+        if os.path.exists(rw_dmg):
+            os.remove(rw_dmg)
+        shutil.rmtree(mount_point, ignore_errors=True)
 
 
 def verify_dmg_app_signature(dmg_path: str) -> bool:
@@ -1149,6 +1285,8 @@ def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=
                 )
         if not stale_release:
             print(f'args.gn already exists: {args_gn_path} (use --force-args-template to overwrite)')
+            sync_cc_wrapper(args_gn_path, platform)
+            sync_media_codec_flags(args_gn_path)
             return
 
     out_dir_abs = os.path.join(chromium_src, out_dir)
@@ -1157,6 +1295,100 @@ def ensure_args_gn(chromium_src, out_dir, platform, force, release=False, debug=
     shutil.copy2(template_path, args_gn_path)
     action = 'Overwrote' if already_existed else 'Created'
     print(f'{action} args.gn from {template_path}')
+    sync_cc_wrapper(args_gn_path, platform)
+    sync_media_codec_flags(args_gn_path)
+
+
+def sync_media_codec_flags(args_gn_path: str) -> bool:
+    """Ensure mandatory media codecs and Widevine DRM flags are present in args.gn."""
+    if not os.path.isfile(args_gn_path):
+        return False
+    with open(args_gn_path, encoding='utf-8') as f:
+        content = f.read()
+
+    required_flags = [
+        ('proprietary_codecs', 'proprietary_codecs = true'),
+        ('ffmpeg_branding', 'ffmpeg_branding = "Chrome"'),
+        ('enable_widevine', 'enable_widevine = true'),
+        ('ignore_missing_widevine_signing_cert', 'ignore_missing_widevine_signing_cert = true'),
+    ]
+
+    missing = []
+    for key, assignment in required_flags:
+        if not re.search(rf'^\s*{key}\s*=', content, re.MULTILINE):
+            missing.append(assignment)
+
+    if not missing:
+        return False
+
+    updated = content.rstrip() + '\n' + '\n'.join(missing) + '\n'
+    with open(args_gn_path, 'w', encoding='utf-8') as f:
+        f.write(updated)
+    print(f'Synchronized mandatory media flags into {args_gn_path}: {", ".join(m.split()[0] for m in missing)}')
+    return True
+
+
+def sync_cc_wrapper(args_gn_path: str, platform: str) -> bool:
+    """Ensure cc_wrapper is configured in args.gn so builds always use sccache."""
+    if not os.path.isfile(args_gn_path):
+        return False
+    with open(args_gn_path, encoding='utf-8') as f:
+        content = f.read()
+    if re.search(r'^\s*cc_wrapper\s*=', content, re.MULTILINE):
+        return False
+
+    if platform == 'mac':
+        wrapper = '/opt/homebrew/bin/sccache' if os.path.exists('/opt/homebrew/bin/sccache') else 'sccache'
+    elif platform == 'win':
+        wrapper = 'sccache.exe'
+    else:
+        wrapper = 'sccache'
+
+    assignment = f'cc_wrapper = "{wrapper}"'
+    updated = f"{content.rstrip()}\n{assignment}\n"
+    with open(args_gn_path, 'w', encoding='utf-8') as f:
+        f.write(updated)
+    print(f'Synchronized mandatory cc_wrapper = "{wrapper}" into {args_gn_path}')
+    return True
+
+
+def ensure_webui_dependencies(workspace_root: str) -> None:
+    """Verify that WebUI dependencies and Tailwind CLI are installed and functional.
+    Auto-bootstraps missing website/node_modules and @tailwindcss/cli so builds never
+    break mid-flight during the long Chromium compile phase."""
+    website_dir = os.path.join(workspace_root, 'website')
+    if not os.path.isdir(website_dir):
+        return
+
+    node_modules = os.path.join(website_dir, 'node_modules')
+    tailwind_bin = os.path.join(node_modules, '.bin', 'tailwindcss')
+    esbuild_pkg = os.path.join(node_modules, 'esbuild')
+
+    needs_install = (
+        not os.path.isdir(node_modules)
+        or not os.path.isfile(tailwind_bin)
+        or not os.path.isdir(esbuild_pkg)
+    )
+
+    if needs_install:
+        bun_bin = shutil.which('bun') or (
+            os.path.expanduser('~/.bun/bin/bun')
+            if os.path.exists(os.path.expanduser('~/.bun/bin/bun'))
+            else None
+        )
+        if bun_bin:
+            print('Preflight: bootstrapping WebUI dependencies in website/ via bun install...')
+            subprocess.run([bun_bin, 'install'], cwd=website_dir, check=True)
+            if not os.path.isfile(tailwind_bin):
+                print('Preflight: installing @tailwindcss/cli in website/...')
+                subprocess.run([bun_bin, 'add', '@tailwindcss/cli'], cwd=website_dir, check=True)
+        else:
+            npm_bin = shutil.which('npm')
+            if npm_bin:
+                print('warning: bun not found; installing website dependencies via npm...')
+                subprocess.run([npm_bin, 'install'], cwd=website_dir, check=True)
+            else:
+                print('warning: neither bun nor npm found on PATH; skipping WebUI dependency bootstrap')
 
 
 def sync_local_google_api_key(workspace_root, args_gn_path, release):
@@ -1581,6 +1813,7 @@ def main():
         out_dir = assigned_out_dir or args.out_dir
         verify_remote_sccache(args.skip_sccache_check)
         run_lucide_icon_check(args.skip_lucide_check)
+        ensure_webui_dependencies(_WORKSPACE_ROOT)
         # Narrow builds link the existing Rust prebuilt; only full builds rebuild it.
         if not args.skip_rust and build_class != 'narrow':
             build_maho_core.build_rust_prebuilt(args.target, incremental=not args.release)
@@ -1594,16 +1827,19 @@ def main():
                 args.release,
                 args.debug,
             )
+            args_gn_file = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'args.gn')
+            cc_wrapper_synced = sync_cc_wrapper(args_gn_file, platform)
+            media_synced = sync_media_codec_flags(args_gn_file)
             key_synced = sync_local_google_api_key(
                 _WORKSPACE_ROOT,
-                os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'args.gn'),
+                args_gn_file,
                 args.release,
             )
             apply_tracked_chromium_overrides(platform)
             apply_branding(platform)
             build_ninja_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir, 'build.ninja')
             if (not os.path.isfile(build_ninja_path)
-                    or args.force_gn_gen or args.release or key_synced):
+                    or args.force_gn_gen or args.release or key_synced or cc_wrapper_synced or media_synced):
                 run_gn_gen(_CHROMIUM_SRC_ROOT, out_dir, _DEPOT_TOOLS_DIR)
 
             targets = list(args.ninja_target) if args.ninja_target else ['chrome']

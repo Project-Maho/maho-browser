@@ -15,5 +15,7 @@ target_cpu = "x64"
 maho_root = "//maho"
 proprietary_codecs = true
 ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true
 use_sysroot = true
 cc_wrapper = "sccache"

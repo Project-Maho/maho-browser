@@ -30,4 +30,5 @@ python3 maho-chromium/build/scripts/build_maho.py \
   --no-launch \
   --skip-lucide-check \
   --skip-rust \
+  --force-args-template \
   "$@"

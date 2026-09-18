@@ -70,12 +70,24 @@ class MacBundleFixture:
             / 'Maho Framework'
         )
         self.framework.parent.mkdir(parents=True)
-        self.framework.write_bytes(b'framework')
+        self.framework.write_bytes(
+            b'framework ffmpeg_video_decoder ffmpeg_audio_decoder avcodec_open2'
+        )
         self.framework.chmod(0o755)
         (self.app / 'Contents' / 'Frameworks' / 'Sparkle.framework').mkdir()
 
 
 class TestMacBundleValidation(unittest.TestCase):
+
+    def test_media_capabilities_rejects_missing_ffmpeg_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = MacBundleFixture(temp_dir)
+            fixture.framework.write_bytes(b'stripped framework without ffmpeg')
+            with self.assertRaisesRegex(
+                _verify.VerificationError,
+                'missing mandatory FFmpeg media decoder symbols',
+            ):
+                _verify._verify_media_capabilities(fixture.app)
 
     def test_metadata_requires_executable_permission(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

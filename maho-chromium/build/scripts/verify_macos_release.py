@@ -204,6 +204,41 @@ def _verify_xattrs(app_path: Path) -> None:
     # survive Gatekeeper *with* quarantine rather than depending on stripping it.
 
 
+def _verify_media_capabilities(app_path: Path) -> None:
+    """Verify that Maho Framework contains required FFmpeg audio/video decoders."""
+    framework = (
+        app_path
+        / "Contents"
+        / "Frameworks"
+        / "Maho Framework.framework"
+        / "Versions"
+        / "Current"
+        / "Maho Framework"
+    )
+    if not framework.is_file():
+        framework = (
+            app_path
+            / "Contents"
+            / "Frameworks"
+            / "Maho Framework.framework"
+            / "Maho Framework"
+        )
+    if not framework.is_file():
+        raise VerificationError(f"Maho Framework executable is missing: {framework}")
+
+    try:
+        content = framework.read_bytes()
+    except OSError as exc:
+        raise VerificationError(f"cannot read Maho Framework: {exc}") from exc
+
+    required_markers = [b"ffmpeg_video_decoder", b"ffmpeg_audio_decoder", b"avcodec_open2"]
+    missing = [m.decode("ascii") for m in required_markers if m not in content]
+    if missing:
+        raise VerificationError(
+            f"Maho Framework is missing mandatory FFmpeg media decoder symbols: {', '.join(missing)}"
+        )
+
+
 def verify_app_bundle(
     app_path: str | os.PathLike[str],
     *,
@@ -218,6 +253,7 @@ def verify_app_bundle(
     _verify_code_signature(app)
     _verify_runtime_dependencies(app, executable)
     _verify_xattrs(app)
+    _verify_media_capabilities(app)
     if require_stapled:
         _run(["xcrun", "stapler", "validate", str(app)], timeout=180)
     if require_gatekeeper:
