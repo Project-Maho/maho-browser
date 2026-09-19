@@ -1,6 +1,38 @@
 {
   "releases": [
     {
+      "version": "2026.9.19",
+      "date": "2026-09-19",
+      "channel": "stable",
+      "highlights": [
+        "Complete Arc browser ergonomic parity across shortcuts, split view, and gesture navigation",
+        "Keyboard-driven Split View: Arc shortcut (⌘⌥= / ⌃⌥+), keyboard resize (⌘⇧←/→), and Option-click link split",
+        "Two-finger horizontal trackpad swipe for seamless space switching and sidebar download drag-out"
+      ],
+      "sections": [
+        {
+          "type": "added",
+          "title": "Arc Ergonomic Parity",
+          "items": [
+            "Add Split View (Arc) shortcut (⌘⌥= / ⌃⌥+) and keyboard split ratio resize (⌘⇧←/→ / ⌃⇧←/→)",
+            "Option/Alt-click web link navigation opens target URL directly in split view side-by-side",
+            "Trackpad horizontal fling/swipe gesture navigation across Maho spaces on sidebar and content",
+            "Sidebar downloads view now supports direct drag-out to Finder, file managers, Slack, and external apps",
+            "Preserve Maho browser window with a new tab when closing the final active tab (Arc parity)"
+          ]
+        },
+        {
+          "type": "fixed",
+          "title": "Shortcuts & Routing",
+          "items": [
+            "Fixed Show Archive (⌘⇧A) to toggle sidebar archive mode directly instead of collapsing the panel",
+            "Fixed ATC routing rules shortcut to directly open Maho Mini settings pane"
+          ]
+        }
+      ],
+      "body": "# Maho 2026.9.19\n\nArc ergonomic parity release.\n\n## Overview\n\nThis release closes core ergonomic parity gaps with Arc browser, bringing keyboard split view shortcuts, link Option-click split open, trackpad swipe space switching, download drag-out, and final tab window preservation.\n\n### What's New\n\n- **Arc Split Shortcuts**: Add split view with ⌘⌥= and resize split view proportion with ⌘⇧←/→.\n- **Option-Click Split Open**: Option/Alt-clicking any web link opens it directly into a split pane.\n- **Trackpad Swipe**: Two-finger horizontal swipe navigates between spaces smoothly.\n- **Download Drag-out**: Completed download rows can be dragged directly into Finder or external desktop apps.\n- **Window Preservation**: Closing the last tab keeps the browser window alive with a fresh new tab."
+    },
+    {
       "version": "2026.9.18",
       "date": "2026-09-18",
       "channel": "stable",

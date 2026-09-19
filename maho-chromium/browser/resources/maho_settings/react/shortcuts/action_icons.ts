@@ -71,6 +71,9 @@ export const ACTION_ICONS: Record<ShortcutActionId, React.ComponentType<any>> = 
 
   // Split-view
   "add_split_view": ExternalLink,
+  "add_split_view_arc": ExternalLink,
+  "increase_split_view": ExternalLink,
+  "decrease_split_view": ExternalLink,
   "remove_split_view": ExternalLink,
   "next_split_view": ExternalLink,
   "prev_split_view": ExternalLink,

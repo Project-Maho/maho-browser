@@ -3,11 +3,13 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "base/functional/bind.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/prefs/pref_service.h"
@@ -785,6 +787,65 @@ void MahoSidebarContainerView::TogglePanelExpanded() {
     return;
   }
   sidebar_prefs::ToggleSidebarPanelExpanded(browser_->profile()->GetPrefs());
+}
+
+void MahoSidebarContainerView::OnScrollEvent(ui::ScrollEvent* event) {
+  if (!event || !browser_) {
+    return;
+  }
+  const float dx = event->x_offset();
+  const float dy = event->y_offset();
+
+  if (event->type() == ui::EventType::kScrollFlingCancel) {
+    swipe_accumulated_x_ = 0.0f;
+    return;
+  }
+
+  // Only consider predominantly horizontal swipe gestures.
+  if (std::abs(dx) >= std::abs(dy) * 1.2f) {
+    swipe_accumulated_x_ += dx;
+    constexpr float kSwipeThreshold = 80.0f;
+    if (swipe_accumulated_x_ >= kSwipeThreshold) {
+      // Swiping right -> prev_space
+      ExecuteCommandAction(browser_, "prev_space");
+      swipe_accumulated_x_ = 0.0f;
+      event->SetHandled();
+      return;
+    } else if (swipe_accumulated_x_ <= -kSwipeThreshold) {
+      // Swiping left -> next_space
+      ExecuteCommandAction(browser_, "next_space");
+      swipe_accumulated_x_ = 0.0f;
+      event->SetHandled();
+      return;
+    }
+  }
+
+  if (event->type() == ui::EventType::kScrollFlingStart) {
+    swipe_accumulated_x_ = 0.0f;
+  }
+}
+
+bool MahoSidebarContainerView::OnMouseWheel(const ui::MouseWheelEvent& event) {
+  if (!browser_) {
+    return views::View::OnMouseWheel(event);
+  }
+  const int dx = event.x_offset();
+  const int dy = event.y_offset();
+
+  if (std::abs(dx) > std::abs(dy) * 1.2f) {
+    swipe_accumulated_x_ += dx;
+    constexpr float kWheelThreshold = 100.0f;
+    if (swipe_accumulated_x_ >= kWheelThreshold) {
+      ExecuteCommandAction(browser_, "prev_space");
+      swipe_accumulated_x_ = 0.0f;
+      return true;
+    } else if (swipe_accumulated_x_ <= -kWheelThreshold) {
+      ExecuteCommandAction(browser_, "next_space");
+      swipe_accumulated_x_ = 0.0f;
+      return true;
+    }
+  }
+  return views::View::OnMouseWheel(event);
 }
 
 }  // namespace maho

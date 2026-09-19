@@ -3,7 +3,11 @@
 #ifndef MAHO_BROWSER_UI_VIEWS_SPLIT_VIEW_MAHO_SPLIT_VIEW_CONTROLLER_H_
 #define MAHO_BROWSER_UI_VIEWS_SPLIT_VIEW_MAHO_SPLIT_VIEW_CONTROLLER_H_
 
+#include <cstddef>
+#include <optional>
+
 #include "base/memory/raw_ptr.h"
+#include "components/split_tabs/split_tab_visual_data.h"
 #include "url/gurl.h"
 
 class Browser;
@@ -65,12 +69,25 @@ class MahoSplitViewController {
   // falls back to AddSplit() (blank partner) when it is the active tab, and is
   // a no-op if either the clicked or active tab is already split.
   void AddSplitForExistingTab(int clicked_index);
+  bool AddViewportSplitForExistingTab(
+      int source_index,
+      split_tabs::SplitTabLayout layout,
+      bool source_before_target = false);
+  bool AddViewportSplitForExistingTab(
+      int source_index,
+      size_t target_pane_index,
+      split_tabs::SplitTabLayout layout,
+      bool source_before_target = false);
   void RemoveSplit();
   void RemoveSplitForTab(int tab_strip_index);
   void SwapSplit();
   void ToggleSplit();
   void ToggleSplitWithURL(const GURL& url);
+  bool ResizeSplit(double delta);
   bool IsSplitActive() const;
+  std::optional<split_tabs::SplitTabLayout> GetSplitOrientation() const;
+  bool SetSplitOrientation(split_tabs::SplitTabLayout orientation);
+  std::optional<split_tabs::SplitTabLayout> ToggleSplitOrientation();
 
  private:
   raw_ptr<Browser> browser_;

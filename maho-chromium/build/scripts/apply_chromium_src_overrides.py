@@ -2766,13 +2766,29 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             old='#include "chrome/browser/ui/views/frame/browser_view.h"\n',
             new=(
                 '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "chrome/browser/ui/tabs/tab_enums.h"\n'
                 '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
             ),
             description=(
                 "Re-add Maho sidebar container include for Cmd+N favorite "
-                "activation"
+                "activation and tab_enums for TabCloseTypes"
             ),
-            guard='#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"',
+            guard='#include "chrome/browser/ui/tabs/tab_enums.h"',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/ui/views/frame/browser_view.h"\n'
+                '#include "chrome/browser/ui/tabs/tab_enums.h"\n'
+                '#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"\n'
+            ),
+            description="Migrate includes to add tab_enums.h",
+            guard='#include "chrome/browser/ui/tabs/tab_enums.h"',
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -2794,15 +2810,102 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "          maho_browser_view->MaybeHandleMultiTabClose()) {\n"
                 "        break;\n"
                 "      }\n"
+                "      if (browser_->is_type_normal() &&\n"
+                "          !browser_->profile()->IsOffTheRecord() &&\n"
+                "          browser_->tab_strip_model()->count() == 1) {\n"
+                "        content::WebContents* active_wc =\n"
+                "            browser_->tab_strip_model()->GetActiveWebContents();\n"
+                "        if (active_wc) {\n"
+                "          const GURL& url = active_wc->GetVisibleURL();\n"
+                "          const bool is_empty_ntp =\n"
+                "              (url.is_empty() || url == GURL(chrome::kChromeUINewTabURL) ||\n"
+                "               url == GURL(\"about:blank\")) &&\n"
+                "              !active_wc->GetController().CanGoBack();\n"
+                "          if (is_empty_ntp) {\n"
+                "            break;\n"
+                "          }\n"
+                "        }\n"
+                "        int old_index = browser_->tab_strip_model()->active_index();\n"
+                "        chrome::NewTab(browser_);\n"
+                "        if (browser_->tab_strip_model()->ContainsIndex(old_index)) {\n"
+                "          browser_->tab_strip_model()->CloseWebContentsAt(\n"
+                "              old_index, TabCloseTypes::CLOSE_USER_GESTURE |\n"
+                "                             TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);\n"
+                "        }\n"
+                "        break;\n"
+                "      }\n"
                 "      CloseTab(browser_);\n"
                 "      break;\n"
             ),
             description=(
                 "Route Cmd+W through BrowserView so sidebar multi-selected tabs "
                 "close together instead of only the active tab; close the window "
-                "when the strip is already empty (zero-tab Maho window)"
+                "when the strip is already empty (zero-tab Maho window); keep "
+                "window open on last tab close by opening New Tab (Arc parity)"
             ),
-            guard="if (browser_->tab_strip_model()->empty()) {\n        CloseWindow(browser_);",
+            guard="browser_->tab_strip_model()->count() == 1",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "    case IDC_CLOSE_TAB:\n"
+                '      base::RecordAction(base::UserMetricsAction("CloseTabByKey"));\n'
+                "      if (browser_->tab_strip_model()->empty()) {\n"
+                "        CloseWindow(browser_);\n"
+                "        break;\n"
+                "      }\n"
+                "      if (auto* maho_browser_view =\n"
+                "              BrowserView::GetBrowserViewForBrowser(browser_);\n"
+                "          maho_browser_view &&\n"
+                "          maho_browser_view->MaybeHandleMultiTabClose()) {\n"
+                "        break;\n"
+                "      }\n"
+                "      CloseTab(browser_);\n"
+                "      break;\n"
+            ),
+            new=(
+                "    case IDC_CLOSE_TAB:\n"
+                '      base::RecordAction(base::UserMetricsAction("CloseTabByKey"));\n'
+                "      if (browser_->tab_strip_model()->empty()) {\n"
+                "        CloseWindow(browser_);\n"
+                "        break;\n"
+                "      }\n"
+                "      if (auto* maho_browser_view =\n"
+                "              BrowserView::GetBrowserViewForBrowser(browser_);\n"
+                "          maho_browser_view &&\n"
+                "          maho_browser_view->MaybeHandleMultiTabClose()) {\n"
+                "        break;\n"
+                "      }\n"
+                "      if (browser_->is_type_normal() &&\n"
+                "          !browser_->profile()->IsOffTheRecord() &&\n"
+                "          browser_->tab_strip_model()->count() == 1) {\n"
+                "        content::WebContents* active_wc =\n"
+                "            browser_->tab_strip_model()->GetActiveWebContents();\n"
+                "        if (active_wc) {\n"
+                "          const GURL& url = active_wc->GetVisibleURL();\n"
+                "          const bool is_empty_ntp =\n"
+                "              (url.is_empty() || url == GURL(chrome::kChromeUINewTabURL) ||\n"
+                "               url == GURL(\"about:blank\")) &&\n"
+                "              !active_wc->GetController().CanGoBack();\n"
+                "          if (is_empty_ntp) {\n"
+                "            break;\n"
+                "          }\n"
+                "        }\n"
+                "        int old_index = browser_->tab_strip_model()->active_index();\n"
+                "        chrome::NewTab(browser_);\n"
+                "        if (browser_->tab_strip_model()->ContainsIndex(old_index)) {\n"
+                "          browser_->tab_strip_model()->CloseWebContentsAt(\n"
+                "              old_index, TabCloseTypes::CLOSE_USER_GESTURE |\n"
+                "                             TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);\n"
+                "        }\n"
+                "        break;\n"
+                "      }\n"
+                "      CloseTab(browser_);\n"
+                "      break;\n"
+            ),
+            description="Migrate IDC_CLOSE_TAB to keep window open on last tab close",
+            guard="browser_->tab_strip_model()->count() == 1",
+            idempotent=True,
         ),
         Replacement(
             old=(
@@ -9636,6 +9739,63 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             old="BASE_FEATURE(kSplitViewLinkOpen, base::FEATURE_DISABLED_BY_DEFAULT);",
             new="BASE_FEATURE(kSplitViewLinkOpen, base::FEATURE_ENABLED_BY_DEFAULT);",
             description="Maho: Enable split view link open by default",
+        ),
+    ],
+    "ui/base/window_open_disposition_utils.cc": [
+        Replacement(
+            old=(
+                "  if (split_view_modifier && alt_key && !shift_key &&\n"
+                "      base::FeatureList::IsEnabled(features::kSplitViewLinkOpen)) {\n"
+                "    return WindowOpenDisposition::NEW_SPLIT_VIEW;\n"
+                "  }"
+            ),
+            new=(
+                "  (void)split_view_modifier;\n"
+                "  if (alt_key && !shift_key &&\n"
+                "      base::FeatureList::IsEnabled(features::kSplitViewLinkOpen)) {\n"
+                "    return WindowOpenDisposition::NEW_SPLIT_VIEW;\n"
+                "  }"
+            ),
+            description="Maho: Arc parity - Option/Alt-click opens link in split view",
+            guard="(void)split_view_modifier;",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                "  if (alt_key && !shift_key &&\n"
+                "      base::FeatureList::IsEnabled(features::kSplitViewLinkOpen)) {\n"
+                "    return WindowOpenDisposition::NEW_SPLIT_VIEW;\n"
+                "  }"
+            ),
+            new=(
+                "  (void)split_view_modifier;\n"
+                "  if (alt_key && !shift_key &&\n"
+                "      base::FeatureList::IsEnabled(features::kSplitViewLinkOpen)) {\n"
+                "    return WindowOpenDisposition::NEW_SPLIT_VIEW;\n"
+                "  }"
+            ),
+            description="Maho: Arc parity - suppress unused split_view_modifier warning",
+            guard="(void)split_view_modifier;",
+            idempotent=True,
+        ),
+    ],
+    "third_party/blink/renderer/core/loader/navigation_policy.cc": [
+        Replacement(
+            old=(
+                "  if (new_tab_modifier && alt && !shift &&\n"
+                "      base::FeatureList::IsEnabled(::features::kSplitViewLinkOpen)) {\n"
+                "    return kNavigationPolicySplitView;\n"
+                "  }"
+            ),
+            new=(
+                "  if (alt && !shift &&\n"
+                "      base::FeatureList::IsEnabled(::features::kSplitViewLinkOpen)) {\n"
+                "    return kNavigationPolicySplitView;\n"
+                "  }"
+            ),
+            description="Maho: Arc parity - Option/Alt-click opens web link in split view",
+            guard="if (alt && !shift &&",
+            idempotent=True,
         ),
     ],
     "chrome/browser/renderer_context_menu/render_view_context_menu.cc": [

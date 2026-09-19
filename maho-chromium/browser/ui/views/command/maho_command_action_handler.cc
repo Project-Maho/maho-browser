@@ -437,8 +437,13 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     chrome::NewIncognitoWindow(browser->profile());
   } else if (action_id == "focus_url_bar") {
     chrome::FocusLocationBar(browser);
-  } else if (action_id == "add_split_view") {
+  } else if (action_id == "add_split_view" ||
+             action_id == "add_split_view_arc") {
     MahoSplitViewController(browser).AddSplit();
+  } else if (action_id == "increase_split_view") {
+    MahoSplitViewController(browser).ResizeSplit(0.1);
+  } else if (action_id == "decrease_split_view") {
+    MahoSplitViewController(browser).ResizeSplit(-0.1);
   } else if (action_id == "remove_split_view") {
     MahoSplitViewController(browser).RemoveSplit();
   } else if (action_id == "next_split_view") {
@@ -449,6 +454,10 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     MahoSplitViewController(browser).SwapSplit();
   } else if (action_id == "toggle_split_view") {
     MahoSplitViewController(browser).ToggleSplit();
+  } else if (action_id == "toggle_split_orientation") {
+    // No-op when the active tab is not split: ToggleSplitOrientation() returns
+    // nullopt rather than mutating anything.
+    MahoSplitViewController(browser).ToggleSplitOrientation();
   } else if (action_id == "toggle_sidebar") {
     maho::sidebar_prefs::ToggleSidebarPanelExpanded(
         browser->profile()->GetPrefs());
@@ -518,24 +527,21 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       tab_num = action_id[11] - '0';
     }
     if (tab_num >= 1 && tab_num <= 9) {
-      bool activated = false;
-      if (tab_num <= 8) {
-        auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
-        auto* container = browser_view
-                              ? static_cast<MahoSidebarContainerView*>(
-                                    browser_view->maho_sidebar_container())
-                              : nullptr;
-        if (container) {
-          activated = container->TryActivateFavoriteByIndex(
-              static_cast<size_t>(tab_num - 1));
-        }
-      }
-      if (!activated) {
-        if (tab_num == 9) {
-          chrome::SelectLastTab(browser);
-        } else {
-          chrome::SelectNumberedTab(browser, tab_num - 1);
-        }
+      auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+      auto* container = browser_view
+                            ? static_cast<MahoSidebarContainerView*>(
+                                  browser_view->maho_sidebar_container())
+                            : nullptr;
+      if (container && tab_num <= 8) {
+        // Maho windows address the sidebar favorites with Cmd+1..8. Asking for
+        // a favorite that does not exist is a no-op: the old fallback to the
+        // Chromium tab strip moved focus to an unrelated tab (Cmd+2 on a
+        // profile with a single favorite).
+        container->TryActivateFavoriteByIndex(static_cast<size_t>(tab_num - 1));
+      } else if (tab_num == 9) {
+        chrome::SelectLastTab(browser);
+      } else {
+        chrome::SelectNumberedTab(browser, tab_num - 1);
       }
     }
   } else if (action_id == "copy_url") {
@@ -681,14 +687,30 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
       }
     }
   } else if (action_id == "show_archive") {
-    maho::sidebar_prefs::ToggleSidebarPanelExpanded(
-        browser->profile()->GetPrefs());
+    // Routes through the sidebar so the Archive opens exactly like a library
+    // rail selection (body mode, rail highlight, overlay, OTR guard). Toggling
+    // the sidebar panel here would just duplicate `toggle_sidebar` and leave
+    // the Archive unreachable from the keyboard.
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    auto* container = browser_view ? static_cast<MahoSidebarContainerView*>(
+                                         browser_view->maho_sidebar_container())
+                                   : nullptr;
+    if (container) {
+      auto* sidebar =
+          views::AsViewClass<maho::MahoSidebarView>(container->sidebar_view());
+      if (sidebar) {
+        sidebar->ToggleArchiveMode();
+      }
+    }
   } else if (action_id == "open_boost_editor") {
     MahoBoostWindowController::GetForBrowser(browser, browser->profile())
         .ShowForActiveDomain(
             browser->tab_strip_model()->GetActiveWebContents());
   } else if (action_id == "open_atc_rules") {
-    maho::OpenMahoSettingsPane(browser, "");
+    // "maho-mini" is the pane that owns the URL routing rules (ATC). An empty
+    // pane key is not targeted at all (see OpenMahoSettingsPane) and would drop
+    // the user on the settings root.
+    maho::OpenMahoSettingsPane(browser, "maho-mini");
   } else if (const MahoMailCommand* mail_command =
                  FindMahoMailCommand(action_id)) {
     MahoMailService* mail_service =

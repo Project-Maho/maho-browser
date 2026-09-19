@@ -90,6 +90,8 @@ class MahoSidebarContainerView : public views::View,
   void Layout(PassKey) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
+  void OnScrollEvent(ui::ScrollEvent* event) override;
+  bool OnMouseWheel(const ui::MouseWheelEvent& event) override;
   void OnThemeChanged() override;
   void AddedToWidget() override;
   void RemovedFromWidget() override;
@@ -155,6 +157,8 @@ class MahoSidebarContainerView : public views::View,
   raw_ptr<views::View> resize_handle_view_ = nullptr;
   raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
   PrefChangeRegistrar pref_registrar_;
+
+  float swipe_accumulated_x_ = 0.0f;
 
   gfx::SlideAnimation reveal_animation_;
   bool is_hover_revealed_ = false;

@@ -41,6 +41,9 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_tile_helpers.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
+#include "ui/views/drag_controller.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/base/text/bytes_formatting.h"
@@ -676,7 +679,7 @@ std::unique_ptr<views::ImageButton> CreateActionButton(
   return button;
 }
 
-class DownloadRowView : public views::View {
+class DownloadRowView : public views::View, public views::DragController {
   METADATA_HEADER(DownloadRowView, views::View)
 
  public:
@@ -714,9 +717,11 @@ class DownloadRowView : public views::View {
     icon_view_->GetViewAccessibility().SetIsIgnored(true);
 
     if (item.state == "completed" && item.file_path.has_value() && !item.file_path->empty()) {
+      file_path_ = base::FilePath::FromUTF8Unsafe(*item.file_path);
+      set_drag_controller(this);
       visual_loader_ = std::make_unique<MahoSidebarDownloadVisualLoader>();
       visual_loader_->Start(
-          base::FilePath::FromUTF8Unsafe(*item.file_path), 28,
+          file_path_, 28,
           base::BindOnce(&DownloadRowView::OnThumbnailLoaded,
                          weak_factory_.GetWeakPtr()));
     }
@@ -808,6 +813,57 @@ class DownloadRowView : public views::View {
     UpdateAppearance();
   }
 
+  bool OnMousePressed(const ui::MouseEvent& event) override {
+    if (event.IsOnlyLeftMouseButton()) {
+      drag_start_pos_ = event.location();
+      return true;
+    }
+    return views::View::OnMousePressed(event);
+  }
+
+  void OnMouseReleased(const ui::MouseEvent& event) override {
+    if (event.IsOnlyLeftMouseButton() && !file_path_.empty()) {
+      const int drag_distance = (event.location() - drag_start_pos_).Length();
+      if (drag_distance < 4) {
+        HandleActionPressed(DownloadActionKind::kOpen);
+      }
+    }
+    views::View::OnMouseReleased(event);
+  }
+
+  bool OnKeyPressed(const ui::KeyEvent& event) override {
+    if (event.key_code() == ui::VKEY_RETURN || event.key_code() == ui::VKEY_SPACE) {
+      if (!file_path_.empty()) {
+        HandleActionPressed(DownloadActionKind::kOpen);
+        return true;
+      }
+    }
+    return views::View::OnKeyPressed(event);
+  }
+
+  // views::DragController:
+  void WriteDragDataForView(views::View* sender,
+                            const gfx::Point& press_pt,
+                            ui::OSExchangeData* data) override {
+    if (!file_path_.empty() && data) {
+      data->SetFilename(file_path_);
+    }
+  }
+
+  int GetDragOperationsForView(views::View* sender,
+                               const gfx::Point& p) override {
+    if (!file_path_.empty()) {
+      return static_cast<int>(ui::mojom::DragOperation::kCopy);
+    }
+    return static_cast<int>(ui::mojom::DragOperation::kNone);
+  }
+
+  bool CanStartDragForView(views::View* sender,
+                           const gfx::Point& press_pt,
+                           const gfx::Point& p) override {
+    return !file_path_.empty() && (press_pt - p).Length() >= 4;
+  }
+
   bool MatchesDownloadId(const std::string& download_id) const {
     return download_id_ == download_id;
   }
@@ -858,6 +914,8 @@ class DownloadRowView : public views::View {
   }
 
   std::string download_id_;
+  base::FilePath file_path_;
+  gfx::Point drag_start_pos_;
   ActionCallback action_callback_;
   raw_ptr<views::View> badge_slot_ = nullptr;
   raw_ptr<views::ImageView> icon_view_ = nullptr;

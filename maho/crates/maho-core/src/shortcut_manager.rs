@@ -327,12 +327,17 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
             vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
         ),
     ));
+    let space_num_modifier = if cfg!(target_os = "macos") {
+        vec![KeyModifier::Ctrl]
+    } else {
+        vec![KeyModifier::Ctrl, KeyModifier::Alt]
+    };
     for i in 1..=9 {
         bindings.push(ShortcutBinding::new(
             &format!("select_space_{}", i),
             &format!("Select Space {}", i),
             spaces.clone(),
-            KeyCombo::new(&i.to_string(), vec![KeyModifier::Ctrl]),
+            KeyCombo::new(&i.to_string(), space_num_modifier.clone()),
         ));
     }
 
@@ -405,6 +410,24 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         KeyCombo::new("+", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
     ));
     bindings.push(ShortcutBinding::new(
+        "add_split_view_arc",
+        "Add Split View (Arc)",
+        window.clone(),
+        KeyCombo::new("+", vec![primary_modifier(), KeyModifier::Alt]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "increase_split_view",
+        "Increase Split View",
+        window.clone(),
+        KeyCombo::new("arrowright", vec![primary_modifier(), KeyModifier::Shift]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "decrease_split_view",
+        "Decrease Split View",
+        window.clone(),
+        KeyCombo::new("arrowleft", vec![primary_modifier(), KeyModifier::Shift]),
+    ));
+    bindings.push(ShortcutBinding::new(
         "remove_split_view",
         "Remove Split View",
         window.clone(),
@@ -433,6 +456,15 @@ fn register_default_bindings() -> Vec<ShortcutBinding> {
         "Toggle Split View",
         window.clone(),
         KeyCombo::new("enter", vec![KeyModifier::Ctrl, KeyModifier::Shift]),
+    ));
+    bindings.push(ShortcutBinding::new(
+        "toggle_split_orientation",
+        "Toggle Split Orientation",
+        window.clone(),
+        KeyCombo::new(
+            "s",
+            vec![primary_modifier(), KeyModifier::Shift, KeyModifier::Alt],
+        ),
     ));
     bindings.push(ShortcutBinding::new(
         "show_archive",
@@ -540,8 +572,19 @@ mod contract_tests {
     // maho_shortcut_contract_unittest.cc; maho-chromium/docs/shortcut-registry-contract.md
     // documents the full triple-sync contract.
     const CODEC_NAMED_KEYS: &[&str] = &[
-        "enter", "escape", "tab", "space", "backspace", "delete", "arrowup",
-        "arrowdown", "arrowleft", "arrowright", "home", "end", "pageup",
+        "enter",
+        "escape",
+        "tab",
+        "space",
+        "backspace",
+        "delete",
+        "arrowup",
+        "arrowdown",
+        "arrowleft",
+        "arrowright",
+        "home",
+        "end",
+        "pageup",
         "pagedown",
     ];
     const CODEC_SINGLE_CHARS: &str = "abcdefghijklmnopqrstuvwxyz0123456789,./[]-=+\\";
@@ -561,10 +604,7 @@ mod contract_tests {
     #[test]
     fn all_binding_keys_are_in_cpp_codec_alphabet() {
         let manager = ShortcutManager::new();
-        assert!(
-            manager.bindings.len() > 20,
-            "default registry looks empty"
-        );
+        assert!(manager.bindings.len() > 20, "default registry looks empty");
         for binding in &manager.bindings {
             assert!(
                 is_codec_key(&binding.key_combo.key),

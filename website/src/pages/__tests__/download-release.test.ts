@@ -23,10 +23,10 @@ test("release page URL stays on the release listing", () => {
   expect(
     latestReleaseAssetUrl(
       "https://github.com/Project-Maho/release/",
-      "Maho-2026.9.18.dmg",
+      "Maho-2026.9.19.dmg",
     ),
   ).toBe(
-    "https://github.com/Project-Maho/release/releases/latest/download/Maho-2026.9.18.dmg",
+    "https://github.com/Project-Maho/release/releases/latest/download/Maho-2026.9.19.dmg",
   );
 });
 
@@ -34,11 +34,11 @@ test("download page publishes every desktop package format", async () => {
   const page = await readFile(downloadPagePath, "utf8");
 
   expect(page).not.toContain("PUBLIC_RELEASE_LIVE");
-  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'Maho-2026.9.18.dmg')");
-  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'MahoSetup-2026.9.18.exe')");
-  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'maho_2026.9.18_amd64.deb')");
-  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'maho-2026.9.18-1.x86_64.rpm')");
-  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'maho-2026.9.18-x86_64.tar.gz')");
+  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'Maho-2026.9.19.dmg')");
+  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'MahoSetup-2026.9.19.exe')");
+  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'maho_2026.9.19_amd64.deb')");
+  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'maho-2026.9.19-1.x86_64.rpm')");
+  expect(page).toContain("latestReleaseAssetUrl(RELEASE_REPO, 'maho-2026.9.19-x86_64.tar.gz')");
   expect(page).toContain('href={platform.downloadUrl}');
   expect(page).toContain('href={RELEASE_PAGE_URL}');
   expect(page).toContain("View all releases");

@@ -3,8 +3,11 @@
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sessions/session_service.h"
+#include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/split_tab_metrics.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -190,7 +193,7 @@ bool MahoSplitViewController::AddViewportSplitForExistingTab(
     size_t target_pane_index,
     split_tabs::SplitTabLayout layout,
     bool source_before_target) {
-  TabStripModel* model = browser_->tab_strip_model();
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
   if (!model || !model->ContainsIndex(source_index)) {
     return false;
   }
@@ -204,10 +207,45 @@ bool MahoSplitViewController::AddViewportSplitForExistingTab(
     return false;
   }
 
+  if (std::optional<split_tabs::SplitTabId> split_id =
+          model->GetSplitForTab(active_index)) {
+    split_tabs::SplitTabData* split_data = model->GetSplitData(*split_id);
+    if (!split_data) {
+      return false;
+    }
+    const std::vector<tabs::TabInterface*> tabs = split_data->ListTabs();
+    if (tabs.size() < 2u || tabs.size() >= 4u ||
+        target_pane_index >= tabs.size()) {
+      return false;
+    }
+
+    if (!split_data->visual_data()) {
+      return false;
+    }
+
+    split_tabs::SplitTabVisualData visual_data = *split_data->visual_data();
+    const split_tabs::SplitPaneInsertionSide insertion_side =
+        source_before_target
+            ? split_tabs::SplitPaneInsertionSide::kBefore
+            : split_tabs::SplitPaneInsertionSide::kAfter;
+    if (!visual_data.InsertPaneAtLeaf(target_pane_index, layout, 0.5,
+                                      insertion_side)) {
+      return false;
+    }
+
+    const size_t insertion_index =
+        target_pane_index + (source_before_target ? 0u : 1u);
+    return model->AddToExistingSplit(
+        *split_id, source_index, insertion_index, visual_data,
+        split_tabs::SplitTabCreatedSource::kDragAndDropTab);
+  }
+
   split_tabs::SplitTabVisualData visual_data(layout, 0.5);
-  model->AddToNewSplit({source_index}, visual_data,
-                       split_tabs::SplitTabCreatedSource::kTabContextMenu);
-  return true;
+  return !model
+              ->AddToNewSplit(
+                  {source_index}, visual_data,
+                  split_tabs::SplitTabCreatedSource::kDragAndDropTab)
+              .is_empty();
 }
 
 void MahoSplitViewController::ToggleSplit() {
@@ -352,15 +390,101 @@ void MahoSplitViewController::RestoreForWindow(Browser* /*browser*/) {
 
 std::optional<split_tabs::SplitTabLayout>
 MahoSplitViewController::GetSplitOrientation() const {
-  return std::nullopt;
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!model) {
+    return std::nullopt;
+  }
+  int active_index = model->active_index();
+  if (active_index == TabStripModel::kNoTab) {
+    return std::nullopt;
+  }
+  std::optional<split_tabs::SplitTabId> split_id =
+      model->GetSplitForTab(active_index);
+  if (!split_id.has_value()) {
+    return std::nullopt;
+  }
+  split_tabs::SplitTabData* split_data = model->GetSplitData(*split_id);
+  if (!split_data || !split_data->visual_data()) {
+    return std::nullopt;
+  }
+  return split_data->visual_data()->split_layout();
 }
 
 bool MahoSplitViewController::SetSplitOrientation(
     split_tabs::SplitTabLayout orientation) {
-  return false;
+  TabStripModel* model = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!model) {
+    return false;
+  }
+  int active_index = model->active_index();
+  if (active_index == TabStripModel::kNoTab) {
+    return false;
+  }
+  std::optional<split_tabs::SplitTabId> split_id =
+      model->GetSplitForTab(active_index);
+  if (!split_id.has_value()) {
+    return false;
+  }
+  split_tabs::SplitTabData* split_data = model->GetSplitData(*split_id);
+  if (!split_data || !split_data->visual_data()) {
+    return false;
+  }
+  split_tabs::SplitTabVisualData visual_data = *split_data->visual_data();
+  if (visual_data.split_layout() == orientation) {
+    return true;
+  }
+  visual_data.set_split_layout(orientation);
+  // No layout tree at this upstream pin: SplitTabVisualData is layout+ratio.
+  *split_data->visual_data() = visual_data;
+  return true;
 }
 
 std::optional<split_tabs::SplitTabLayout>
 MahoSplitViewController::ToggleSplitOrientation() {
+  auto current = GetSplitOrientation();
+  if (!current.has_value()) {
+    return std::nullopt;
+  }
+  auto target = (*current == split_tabs::SplitTabLayout::kVertical)
+                    ? split_tabs::SplitTabLayout::kHorizontal
+                    : split_tabs::SplitTabLayout::kVertical;
+  if (SetSplitOrientation(target)) {
+    return target;
+  }
   return std::nullopt;
+}
+
+bool MahoSplitViewController::ResizeSplit(double delta) {
+  TabStripModel* model = browser_->tab_strip_model();
+  if (!model) {
+    return false;
+  }
+  const int active_index = model->active_index();
+  if (active_index == TabStripModel::kNoTab) {
+    return false;
+  }
+  const std::optional<split_tabs::SplitTabId> split_id =
+      model->GetSplitForTab(active_index);
+  if (!split_id.has_value()) {
+    return false;
+  }
+  split_tabs::SplitTabData* split_data = model->GetSplitData(*split_id);
+  if (!split_data || !split_data->visual_data()) {
+    return false;
+  }
+  const double current_ratio = split_data->visual_data()->split_ratio();
+  const double new_ratio = std::clamp(current_ratio + delta, 0.05, 0.95);
+  if (std::abs(new_ratio - current_ratio) < 0.001) {
+    return false;
+  }
+  model->UpdateSplitRatio(*split_id, new_ratio);
+  if (auto* session_service =
+          SessionServiceFactory::GetForProfile(browser_->profile())) {
+    if (const split_tabs::SplitTabVisualData* visual_data =
+            model->GetSplitData(*split_id)->visual_data()) {
+      session_service->SetSplitTabData(browser_->session_id(), *split_id,
+                                       visual_data);
+    }
+  }
+  return true;
 }
