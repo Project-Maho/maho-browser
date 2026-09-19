@@ -272,7 +272,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
   const isPasswordSetupPage = pageForRender === WelcomePage.PasswordSetup;
   const isSyncKeyBackupPage = pageForRender === WelcomePage.SyncKeyBackup;
   const isSourceSelectPage = pageForRender === WelcomePage.SourceSelect;
-  const canGoBack = !isAuthPage && !snapshot.auth.isReauthMode && (pageForRender > WelcomePage.Appearance ||
+  const canGoBack = !isAuthPage && !snapshot.auth.isReauthMode && !snapshot.isVaultRepairMode && (pageForRender > WelcomePage.Appearance ||
       (isSourceSelectPage && snapshot.importStage === 'B'));
   const stepIndicatorPage = pageForRender === WelcomePage.ImportProgress
       ? WelcomePage.SourceSelect
@@ -318,8 +318,9 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
       store.advanceFromSyncKeyBackup();
       return;
     }
-    await store.startSync();
-    store.advanceFromSyncKeyBackup();
+    if (await store.startSync()) {
+      store.advanceFromSyncKeyBackup();
+    }
   }
 
   const primaryLabel = isSourceSelectPage && snapshot.importStage === 'A'
@@ -334,7 +335,7 @@ function WelcomeApp({store}: {store: MahoWelcomeStore}) {
 
   const isDefaultBrowserStage =
       isSourceSelectPage && snapshot.importStage === 'B';
-  const hideSidebarChrome = isAuthPage || snapshot.auth.isReauthMode;
+  const hideSidebarChrome = isAuthPage || snapshot.auth.isReauthMode || snapshot.isVaultRepairMode;
 
   return (
     <main
@@ -747,6 +748,11 @@ async function submitAuth(store: MahoWelcomeStore): Promise<void> {
 }
 
 function finishAuthenticated(store: MahoWelcomeStore, isReauthMode: boolean) {
+  if (store.getSnapshot().isVaultRepairMode) {
+    store.navigateToPasswordSetup();
+    return;
+  }
+
   if (isReauthMode) {
     store.complete();
     return;
@@ -763,8 +769,8 @@ function getAuthSubmitLabel(auth: AuthState): string {
   return getEffectiveAuthMode(auth) === 'signup' ? 'Create account' : 'Sign in';
 }
 
-function getAuthSidebarCopy(auth: AuthState): {title: string; body: string} {
-  if (auth.hasStoredSession) {
+export function getAuthSidebarCopy(auth: AuthState): {title: string; body: string} {
+  if (auth.hasStoredSession && auth.status !== 'success') {
     return {
       title: 'Session expired',
       body: 'Sign in again to restore your Maho session.',
@@ -1009,14 +1015,15 @@ function StepIndicator({current, total, compact}: {
   );
 }
 
-const rootElement = document.getElementById('app');
-if (!rootElement) throw new Error('Missing #app root for maho_welcome.');
-const store = new MahoWelcomeStore();
-// Expose for CDP-based visual regression testing.
-// chrome:// pages are not web-accessible, so this is not a security surface.
-(window as unknown as {__mahoWelcomeStore?: unknown}).__mahoWelcomeStore = store;
-createRoot(rootElement).render(
-    <React.StrictMode>
-      <WelcomeApp store={store} />
-    </React.StrictMode>
-);
+const rootElement = typeof document !== 'undefined' ? document.getElementById('app') : null;
+if (rootElement) {
+  const store = new MahoWelcomeStore();
+  // Expose for CDP-based visual regression testing.
+  // chrome:// pages are not web-accessible, so this is not a security surface.
+  (window as unknown as {__mahoWelcomeStore?: unknown}).__mahoWelcomeStore = store;
+  createRoot(rootElement).render(
+      <React.StrictMode>
+        <WelcomeApp store={store} />
+      </React.StrictMode>
+  );
+}

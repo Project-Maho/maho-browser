@@ -39,6 +39,10 @@ export default defineConfig({
   resolve: {
     alias: [
       {
+        find: /^@radix-ui\/(.+)$/,
+        replacement: path.join(featureDir, '../../../../website/node_modules/@radix-ui/$1'),
+      },
+      {
         find: /^\.\.\/maho_welcome\.mojom-webui\.js$/,
         replacement: path.join(featureDir, 'standalone/maho_welcome.mojom-webui.js'),
       },

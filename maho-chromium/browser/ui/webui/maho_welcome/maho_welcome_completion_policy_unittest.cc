@@ -13,6 +13,28 @@ TEST(MahoWelcomeCompletionPolicyTest,
 }
 
 TEST(MahoWelcomeCompletionPolicyTest,
+     RequiresVaultSetupRepairWhenOnboardedProfileHasNoVaultKeyMaterial) {
+  // The regression this pins: `kWelcomeCompleted` lives in profile Preferences
+  // while Vault key material lives in the profile database. When the database is
+  // reset/replaced under an already-onboarded profile the Vault is left
+  // uninitialized forever, and onboarding (the only initializer) never re-runs,
+  // so every native password write is silently refused for the profile's life.
+  EXPECT_TRUE(RequiresVaultSetupRepair(/*welcome_completed=*/true,
+                                       /*vault_is_uninitialized=*/true));
+
+  // An onboarded profile whose Vault holds key material is left alone.
+  EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/true,
+                                        /*vault_is_uninitialized=*/false));
+
+  // A profile that never finished onboarding is already routed through setup by
+  // RequiresPasswordSetup; repair must not double-handle it.
+  EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/false,
+                                        /*vault_is_uninitialized=*/true));
+  EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/false,
+                                        /*vault_is_uninitialized=*/false));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest,
      RequiresVaultSetupRepairOnlyForSelectedNativeProvider) {
   // A returning profile that selected the native manager and whose Vault
   // affirmatively reports no key material is sent back through setup.
@@ -34,6 +56,36 @@ TEST(MahoWelcomeCompletionPolicyTest,
   EXPECT_FALSE(RequiresVaultSetupRepair(/*welcome_completed=*/false,
                                         /*vault_is_uninitialized=*/true,
                                         /*selected_provider_is_native=*/true));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, StoredValidSessionSkipsOnboarding) {
+  for (bool completed : {false, true}) {
+    const bool reconciled = ReconcileWelcomeCompleted(completed, true, true);
+    EXPECT_TRUE(reconciled);
+    EXPECT_FALSE(RequiresPasswordSetup(reconciled));
+    EXPECT_FALSE(IsLoginGateActive(false, true, reconciled));
+  }
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, StoredExpiredSessionRequiresOnlyLogin) {
+  const bool reconciled = ReconcileWelcomeCompleted(false, false, true);
+  EXPECT_TRUE(reconciled);
+  EXPECT_FALSE(RequiresPasswordSetup(reconciled));
+  EXPECT_TRUE(IsLoginGateActive(false, false, reconciled));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, NoCredentialsStillRequiresFullOnboarding) {
+  const bool reconciled = ReconcileWelcomeCompleted(false, false, false);
+  EXPECT_FALSE(reconciled);
+  EXPECT_TRUE(RequiresPasswordSetup(reconciled));
+  EXPECT_TRUE(IsLoginGateActive(false, false, reconciled));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, RestoredSessionStillRequiresNativeVaultRepair) {
+  const bool reconciled = ReconcileWelcomeCompleted(false, true, true);
+  EXPECT_TRUE(RequiresVaultSetupRepair(reconciled, true, true));
+  EXPECT_FALSE(RequiresVaultSetupRepair(reconciled, false, true));
+  EXPECT_FALSE(RequiresVaultSetupRepair(reconciled, true, false));
 }
 
 TEST(MahoWelcomeCompletionPolicyTest, IsLoginGateActivePolicyMatrix) {

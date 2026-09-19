@@ -33,6 +33,10 @@ export class PageCallbackRouter {
   $: {
     bindNewPipeAndPassRemote(): unknown;
   };
+  removeListener(id: number): boolean;
+  onMailAccountsChanged: {
+    addListener(listener: () => void): number;
+  };
   onImportProgress: {
     addListener(listener: (type: number, itemsImported: number, error: string, complete: boolean) => void): void;
   };
@@ -71,6 +75,13 @@ export class PageHandlerRemote {
   generateSyncKey(): Promise<{syncKey: string, roomId: string, recoveryPhrase: string}>;
   saveSyncKeyBackup(content: string): Promise<{saved: boolean, errorMessage: string}>;
   startSync(roomId: string, recoveryPhrase: string): Promise<{ok: boolean, errorMessage: string}>;
+  mailListAccounts(): Promise<{ok: boolean, resultJson: string}>;
+  mailAddAccount(requestJson: string): Promise<{ok: boolean, resultJson: string}>;
+  mailTestConnection(paramsJson: string): Promise<{ok: boolean, resultJson: string}>;
+  mailDeleteAccount(accountId: string): Promise<{ok: boolean, resultJson: string}>;
+  mailBeginOAuth(provider: string): Promise<{ok: boolean, errorJson: string, state: string}>;
+  mailOAuthCancel(state: string): Promise<{accepted: boolean}>;
+  getAiProviderConfigured(): Promise<{configured: boolean}>;
   setTranslationProvider(provider: string): Promise<{ok: boolean}>;
   getByokCredentialConfigured(): Promise<{configured: boolean}>;
   openByokSettingsDialog(): Promise<{configured: boolean}>;

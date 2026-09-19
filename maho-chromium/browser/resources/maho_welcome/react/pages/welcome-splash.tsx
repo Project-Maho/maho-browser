@@ -77,7 +77,8 @@ export function WelcomeSplash({onStart}: {onStart: () => void}) {
       <Button
         ref={ctaRef}
         type="button"
-        className="absolute bottom-[10%] left-1/2 z-10 size-24 min-w-24 -translate-x-1/2 rounded-full border-border bg-card/80 text-foreground opacity-0 shadow-2xl shadow-black/30 backdrop-blur-xl transition-transform hover:-translate-x-1/2 hover:scale-105 hover:bg-muted"
+        size="icon"
+        className="absolute bottom-[10%] left-1/2 z-10 size-24 min-w-24 -translate-x-1/2 rounded-full border-border bg-card/80 p-0 text-foreground opacity-0 shadow-2xl shadow-black/30 backdrop-blur-xl transition-transform hover:-translate-x-1/2 hover:scale-105 hover:bg-muted [&_svg]:size-8"
         aria-label="Get started"
         onClick={async () => {
           const container = splashRef.current;
@@ -98,7 +99,7 @@ export function WelcomeSplash({onStart}: {onStart: () => void}) {
           await exit.finished.catch(() => undefined);
           onStart();
         }}>
-        <ArrowRight className="size-8" aria-hidden="true" />
+        <ArrowRight className="size-8 translate-x-[1px]" aria-hidden="true" />
       </Button>
     </div>
   );

@@ -16,6 +16,8 @@ import type {
   VaultStatus,
 } from '../../maho_settings/maho_settings.mojom-webui.js';
 
+import type {MailAccount, MailOnboardingVisualFixture} from '../../maho_common/react/mail/mail_onboarding_api.js';
+
 export enum WelcomePage {
   Auth = 0,
   Splash = 1,
@@ -120,6 +122,8 @@ export interface AiSetupState {
 }
 
 export interface WelcomeState {
+  readonly mailAccounts: readonly MailAccount[];
+  readonly visualMailStage?: MailOnboardingVisualFixture;
   readonly currentPage: WelcomePage;
   readonly direction: 'forward' | 'backward';
   readonly appearance: AppearanceMode;
@@ -138,6 +142,7 @@ export interface WelcomeState {
   readonly selectedEssentials: ReadonlySet<string>;
 
   readonly auth: AuthState;
+  readonly isVaultRepairMode: boolean;
   readonly aiSetup: AiSetupState;
   readonly passwordSetup: PasswordSetupState;
   readonly syncKeyBackup: SyncKeyBackupState;
@@ -149,6 +154,7 @@ export interface WelcomeState {
 
 export function createInitialState(): WelcomeState {
   return {
+    mailAccounts: [],
     currentPage: WelcomePage.Auth,
     direction: 'forward',
     appearance: 'system',
@@ -172,6 +178,7 @@ export function createInitialState(): WelcomeState {
       isReauthMode: false,
       hasStoredSession: false,
     },
+    isVaultRepairMode: false,
     aiSetup: {
       provider: '',
       status: 'idle',

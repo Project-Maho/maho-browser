@@ -18,6 +18,7 @@ import type {
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {notifyListeners} from '../../maho_common/react/store_utils.js';
 import type {Listener} from '../../maho_common/react/store_utils.js';
+import type {MailAccount} from '../../maho_common/react/mail/mail_onboarding_api.js';
 import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
 import {
   createInitialState,
@@ -51,7 +52,9 @@ interface MutableWelcomeState {
   essentialSites: EssentialSite[];
   selectedEssentials: Set<string>;
   auth: AuthState;
+  isVaultRepairMode: boolean;
   aiSetup: AiSetupState;
+  mailAccounts: readonly MailAccount[];
   passwordSetup: PasswordSetupState;
   syncKeyBackup: SyncKeyBackupState;
   selectedTheme: string | null;
@@ -124,6 +127,9 @@ export class MahoWelcomeStore {
     const {signedIn, welcomeCompleted, hasStoredSession, isLocalDev} =
         await this.pageHandler.getRelayAccountStatusFromWelcome();
 
+    const isVaultRepairNeeded = Boolean(hasStoredSession && await this.checkVaultRepairNeeded());
+    const isReauthMode = welcomeCompleted || (hasStoredSession && !signedIn);
+
       this.patch(draft => {
         draft.searchEngines = engines;
         draft.selectedEngine = engines.find(e => e.isDefault)?.keyword ?? null;
@@ -146,18 +152,24 @@ export class MahoWelcomeStore {
           ...Object.entries(strings),
         ]);
         draft.isLocalDev = isLocalDev;
+        draft.isVaultRepairMode = isVaultRepairNeeded;
 
       draft.auth = {
         ...draft.auth,
         status: signedIn ? 'success' : 'idle',
-        isReauthMode: welcomeCompleted,
+        isReauthMode,
         hasStoredSession,
       };
-      if (welcomeCompleted) {
+      if (isVaultRepairNeeded) {
+        draft.currentPage = signedIn ? WelcomePage.PasswordSetup : WelcomePage.Auth;
+      } else if (isReauthMode) {
         draft.currentPage = WelcomePage.Auth;
       }
     });
     applyAppearanceMode(this.state.appearance);
+    if (isVaultRepairNeeded && signedIn) {
+      void this.refreshPasswordSetup();
+    }
   }
 
   getString(key: string): string {
@@ -476,6 +488,31 @@ export class MahoWelcomeStore {
     }
   }
 
+  async checkVaultRepairNeeded(): Promise<boolean> {
+    try {
+      if (typeof this.pageHandler.getVaultStatus !== 'function' ||
+          typeof this.pageHandler.getPasswordProviderStatus !== 'function') {
+        return false;
+      }
+      const [{status}, {result}] = await Promise.all([
+        this.pageHandler.getPasswordProviderStatus(),
+        this.pageHandler.getVaultStatus(),
+      ]);
+      const isNative = status?.provider === PASSWORD_PROVIDER_KIND.MahoNative;
+      const isUninitialized = result?.status?.lockState === VAULT_LOCK_STATE.Uninitialized;
+      return Boolean(isNative && isUninitialized);
+    } catch {
+      return false;
+    }
+  }
+
+  navigateToPasswordSetup(): void {
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.PasswordSetup;
+      draft.direction = 'forward';
+    });
+  }
+
   goToAuth(): void {
     this.authReturnPage = null;
     this.patch(draft => {
@@ -499,6 +536,50 @@ export class MahoWelcomeStore {
       draft.currentPage = WelcomePage.PasswordSetup;
       draft.direction = 'forward';
     });
+  }
+
+  mailListAccounts() {
+    return this.pageHandler.mailListAccounts();
+  }
+
+  mailAddAccount(requestJson: string) {
+    return this.pageHandler.mailAddAccount(requestJson);
+  }
+
+  mailTestConnection(paramsJson: string) {
+    return this.pageHandler.mailTestConnection(paramsJson);
+  }
+
+  mailDeleteAccount(accountId: string) {
+    return this.pageHandler.mailDeleteAccount(accountId);
+  }
+
+  mailBeginOAuth(provider: string) {
+    return this.pageHandler.mailBeginOAuth(provider);
+  }
+
+  async mailOAuthCancel(state: string): Promise<boolean> {
+    const {accepted} = await this.pageHandler.mailOAuthCancel(state);
+    return accepted;
+  }
+
+  subscribeMailAccountsChanged(listener: () => void): () => void {
+    const id = this.callbackRouter.onMailAccountsChanged.addListener(listener);
+    return () => { this.callbackRouter.removeListener(id); };
+  }
+
+  patchMailAccounts(accounts: readonly MailAccount[]): void {
+    this.patch(draft => { draft.mailAccounts = [...accounts]; });
+  }
+
+  async getAiProviderConfigured(): Promise<boolean> {
+    const {configured} = await this.pageHandler.getAiProviderConfigured();
+    return configured;
+  }
+
+  async setTranslationProvider(provider: string): Promise<boolean> {
+    const {ok} = await this.pageHandler.setTranslationProvider(provider);
+    return ok;
   }
 
   async refreshPasswordSetup(): Promise<boolean> {
@@ -585,6 +666,11 @@ export class MahoWelcomeStore {
       return false;
     }
 
+    if (this.state.isVaultRepairMode) {
+      this.complete();
+      return true;
+    }
+
     this.patch(draft => {
       draft.currentPage = WelcomePage.SyncKeyBackup;
       draft.direction = 'forward';
@@ -625,6 +711,11 @@ export class MahoWelcomeStore {
     }
 
     if (this.state.currentPage !== WelcomePage.PasswordSetup) {
+      return persisted;
+    }
+
+    if (this.state.isVaultRepairMode) {
+      this.complete();
       return persisted;
     }
 
@@ -676,9 +767,21 @@ export class MahoWelcomeStore {
       return false;
     }
     try {
-      const {ok} = await this.pageHandler.startSync(roomId, recoveryPhrase);
+      const {ok, errorMessage} = await this.pageHandler.startSync(roomId, recoveryPhrase);
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          errorMessage: ok ? '' : (errorMessage || 'Failed to start sync. Please try again.'),
+        };
+      });
       return ok;
     } catch {
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          errorMessage: 'Failed to start sync. Please try again.',
+        };
+      });
       return false;
     }
   }
@@ -1003,6 +1106,7 @@ export class MahoWelcomeStore {
 
 function makeMutableState(state: WelcomeState): MutableWelcomeState {
   return {
+    mailAccounts: state.mailAccounts,
     currentPage: state.currentPage,
     direction: state.direction,
     appearance: state.appearance,
@@ -1017,6 +1121,7 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    isVaultRepairMode: state.isVaultRepairMode,
     aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
     syncKeyBackup: state.syncKeyBackup,
@@ -1028,6 +1133,7 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
 
 function freezeMutableState(state: MutableWelcomeState): WelcomeState {
   return {
+    mailAccounts: state.mailAccounts,
     currentPage: state.currentPage,
     direction: state.direction,
     appearance: state.appearance,
@@ -1042,6 +1148,7 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    isVaultRepairMode: state.isVaultRepairMode,
     aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
     syncKeyBackup: state.syncKeyBackup,
