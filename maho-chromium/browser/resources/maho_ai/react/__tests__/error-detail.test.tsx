@@ -5,9 +5,10 @@ import {toast} from 'sonner';
 
 import {ErrorDetail} from '../components/error-detail.js';
 import {ConversationSystemItem} from '../features/compact/conversation-system-item.js';
+import {ConversationThread} from '../features/compact/conversation-thread.js';
 import {CompactShell} from '../features/compact/compact-shell.js';
 import {EventCard} from '../features/developer/event-card.js';
-import type {ConversationItem} from '../../views/conversation_thread.js';
+import {collectConversationItems, type ConversationItem} from '../../views/conversation_thread.js';
 import {
   PageCallbackRouter,
   PageHandlerRemote,
@@ -258,6 +259,51 @@ describe('ErrorDetail component and AI agent panel outputs absence', () => {
 
       const copyBtn = container.querySelector<HTMLButtonElement>('[data-action="copy-error"]');
       expect(copyBtn).not.toBeNull();
+    });
+
+    it('renders runtime errors via ConversationThread as ConversationSystemItem with ErrorDetail, NOT as ToolExecutionGroup', () => {
+      const runtimeErrorText = 'no available accounts for this model';
+      const event: RuntimeEventRecord = {
+        kind: RuntimeEventKind.kError,
+        sequence: 1,
+        sessionId: 'session-1',
+        text: runtimeErrorText,
+        timestamp: 1000,
+      };
+
+      const entries: TimelineEntry[] = [{sessionId: 'session-1', event}];
+      const items = collectConversationItems(entries);
+
+      // Verify collectConversationItems does NOT set kind: 'activity' on generic kError
+      expect(items[0]?.kind).toBeUndefined();
+      expect(items[0]?.text).toBe('Something went wrong');
+      expect(items[0]?.errorDetail).toBe(runtimeErrorText);
+
+      act(() => {
+        root.render(
+          <ConversationThread
+            bottomPadding={0}
+            entries={entries}
+            onOpenSettings={vi.fn()}
+            onRegenerate={vi.fn()}
+            onRespondToApproval={vi.fn()}
+            readOnly={false}
+            thinkingLabel={null}
+            topPadding={0}
+          />
+        );
+      });
+
+      // Must NOT be grouped into ToolExecutionGroup / "Ran commands"
+      expect(container.textContent).not.toContain('Ran commands');
+      expect(container.querySelector('[data-testid="tool-execution-group"]')).toBeNull();
+
+      // Must render ErrorDetail with the verbatim error message and copy button
+      const pre = container.querySelector('[data-testid="error-detail"]');
+      expect(pre).not.toBeNull();
+      expect(pre?.textContent).toBe(runtimeErrorText);
+      expect(container.querySelector('[data-action="copy-error"]')).not.toBeNull();
+      expect(container.textContent).toContain('Something went wrong');
     });
   });
 

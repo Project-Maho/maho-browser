@@ -128,4 +128,32 @@ describe('ToolExecutionGroup — Aside parity collapsible tool grouping', () => 
     expect(subButton.getAttribute('aria-expanded')).toBe('true');
     expect(container.textContent).toContain('Checking yt-dlp and ffmpeg');
   });
+
+  it('renders tool step error detail when a step has isError and errorDetail', () => {
+    const stepsWithError: ToolStep[] = [
+      {
+        key: 'step-err',
+        text: 'Executing bash command',
+        isError: true,
+        toolName: 'bash',
+        errorDetail: 'Command failed with exit code 127: mutagen: command not found',
+        timestamp: 1000,
+      },
+    ];
+
+    act(() => {
+      root.render(
+        <ToolExecutionGroup
+          steps={stepsWithError}
+          startTime={1000}
+          endTime={2000}
+          isRunning={false}
+        />
+      );
+    });
+
+    const errorDetailEl = container.querySelector('[data-testid="tool-step-error-detail"]');
+    expect(errorDetailEl).not.toBeNull();
+    expect(errorDetailEl?.textContent).toContain('Command failed with exit code 127: mutagen: command not found');
+  });
 });

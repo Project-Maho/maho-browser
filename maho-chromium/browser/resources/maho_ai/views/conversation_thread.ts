@@ -701,7 +701,6 @@ export function collectConversationItems(entries: TimelineEntry[]): Conversation
           const isConn = text ? isConnectionErrorMessage(text) : false;
           items.push({
             errorDetail: text || undefined,
-            kind: 'activity',
             key,
             markdown: false,
             role: 'system',
