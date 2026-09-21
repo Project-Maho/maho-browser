@@ -30,7 +30,7 @@ use crate::{BrowserType, DetectedBrowser, ImportError, ImportResult, PasswordEnt
 use crate::decrypt::chromium_keychain::ChromiumKey;
 
 #[cfg(target_os = "macos")]
-use super::{fetch_keychain_key_with_timeout, keychain_service_account};
+use super::{fetch_keychain_key_cancellable, keychain_service_account};
 use super::{is_cancelled, send_update, ImportWorker};
 
 pub struct PasswordWorker {
@@ -75,7 +75,7 @@ impl ImportWorker for PasswordWorker {
                     return Ok(0);
                 }
 
-                match chromium_decryption_key(browser.browser_type, profile_dir) {
+                match chromium_decryption_key(browser.browser_type, profile_dir, cancelled) {
                     Some(key) => parse_chromium_passwords(profile_dir, &key)?,
                     None => Vec::new(),
                 }
@@ -124,9 +124,10 @@ impl ImportWorker for PasswordWorker {
 fn chromium_decryption_key(
     browser_type: BrowserType,
     _profile_dir: &std::path::Path,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Option<ChromiumKey> {
     keychain_service_account(browser_type).and_then(|(service, account)| {
-        fetch_keychain_key_with_timeout(service, account, std::time::Duration::from_secs(60))
+        fetch_keychain_key_cancellable(service, account, None, Some(cancelled))
     })
 }
 
@@ -134,6 +135,7 @@ fn chromium_decryption_key(
 fn chromium_decryption_key(
     browser_type: BrowserType,
     _profile_dir: &std::path::Path,
+    _cancelled: &std::sync::atomic::AtomicBool,
 ) -> Option<ChromiumKey> {
     let browser_name = match browser_type {
         BrowserType::Chrome => "Chrome",
@@ -150,6 +152,7 @@ fn chromium_decryption_key(
 fn chromium_decryption_key(
     _browser_type: BrowserType,
     _profile_dir: &std::path::Path,
+    _cancelled: &std::sync::atomic::AtomicBool,
 ) -> Option<crate::decrypt::chromium_keychain::ChromiumKey> {
     None
 }

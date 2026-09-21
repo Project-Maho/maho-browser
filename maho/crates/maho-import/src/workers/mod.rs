@@ -129,19 +129,20 @@ pub(crate) fn set_keychain_timeout_override_for_test(timeout: Option<std::time::
 /// to the attempt and its waiters. Thread spawn failures are reported and
 /// retire the attempt instead of being swallowed as successful empty results.
 #[cfg(target_os = "macos")]
-pub(crate) fn fetch_keychain_key_with_timeout(
+pub(crate) fn fetch_keychain_key_cancellable(
     service: &'static str,
     account: &'static str,
-    timeout: std::time::Duration,
+    timeout: Option<std::time::Duration>,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
 ) -> Option<crate::decrypt::chromium_keychain::ChromiumKey> {
     use crate::decrypt::chromium_keychain::{derive_aes_key, KeychainProvider, MacOsKeychain};
 
     let test_provider = TEST_KEYCHAIN_PROVIDER.read().unwrap().clone();
-    let effective_timeout = TEST_KEYCHAIN_TIMEOUT_OVERRIDE
-        .read()
-        .unwrap()
-        .unwrap_or(timeout);
-    let deadline = std::time::Instant::now() + effective_timeout;
+    let effective_timeout = match *TEST_KEYCHAIN_TIMEOUT_OVERRIDE.read().unwrap() {
+        Some(t) => Some(t),
+        None => timeout,
+    };
+    let deadline = effective_timeout.map(|t| std::time::Instant::now() + t);
 
     let attempt = match keychain_single_flight::coordinator().admit(service, account) {
         keychain_single_flight::Admission::Leader(attempt) => {
@@ -176,11 +177,20 @@ pub(crate) fn fetch_keychain_key_with_timeout(
         }
     };
 
-    // Each caller waits on the shared attempt with its OWN deadline. A caller
-    // timeout leaves the active slot and the executing worker untouched.
-    let resolved = attempt.wait_for_password(deadline)?;
+    // Each caller waits on the shared attempt with its OWN deadline / cancellation.
+    let resolved = attempt.wait_for_password(deadline, cancelled)?;
     let password = resolved?;
     Some(derive_aes_key(password.as_slice()))
+}
+
+#[allow(dead_code)]
+#[cfg(target_os = "macos")]
+pub(crate) fn fetch_keychain_key_with_timeout(
+    service: &'static str,
+    account: &'static str,
+    timeout: std::time::Duration,
+) -> Option<crate::decrypt::chromium_keychain::ChromiumKey> {
+    fetch_keychain_key_cancellable(service, account, Some(timeout), None)
 }
 
 /// Process-wide single-flight coordination for native Keychain workers.
@@ -217,26 +227,43 @@ mod keychain_single_flight {
             self.completed.notify_all();
         }
 
-        /// Waits for completion or the caller deadline. `None` means the
-        /// caller's own deadline expired; the attempt itself stays untouched.
+        /// Waits for completion, caller cancellation, or the caller deadline.
+        /// `None` means the caller cancelled or its deadline expired.
         pub(super) fn wait_for_password(
             &self,
-            deadline: Instant,
+            deadline: Option<Instant>,
+            cancelled: Option<&std::sync::atomic::AtomicBool>,
         ) -> Option<Option<Zeroizing<Vec<u8>>>> {
             let mut guard = self.result.lock().unwrap();
             loop {
                 if let Some(resolved) = &*guard {
                     return Some(resolved.clone());
                 }
-                let now = Instant::now();
-                if now >= deadline {
-                    return None;
+                if let Some(c) = cancelled {
+                    if c.load(std::sync::atomic::Ordering::Relaxed) {
+                        return None;
+                    }
                 }
+                let now = Instant::now();
+                if let Some(dl) = deadline {
+                    if now >= dl {
+                        return None;
+                    }
+                }
+                let chunk_dur = std::time::Duration::from_millis(250);
+                let wait_dur = match deadline {
+                    Some(dl) => (dl - now).min(chunk_dur),
+                    None => chunk_dur,
+                };
                 let (next, wait_result) =
-                    self.completed.wait_timeout(guard, deadline - now).unwrap();
+                    self.completed.wait_timeout(guard, wait_dur).unwrap();
                 guard = next;
                 if wait_result.timed_out() && guard.is_none() {
-                    return None;
+                    if let Some(dl) = deadline {
+                        if Instant::now() >= dl {
+                            return None;
+                        }
+                    }
                 }
             }
         }

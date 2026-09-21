@@ -20,7 +20,7 @@ use crate::{BrowserType, DetectedBrowser, ImportResult};
 use crate::decrypt::chromium_keychain::{decrypt_cookie_v10, ChromiumKey};
 
 #[cfg(target_os = "macos")]
-use super::{fetch_keychain_key_with_timeout, keychain_service_account};
+use super::{fetch_keychain_key_cancellable, keychain_service_account};
 use super::{is_cancelled, send_update, ImportWorker};
 
 pub struct CookieWorker;
@@ -106,10 +106,11 @@ impl ImportWorker for CookieWorker {
                     browser.browser_type,
                 )
                 .and_then(|(service, account)| {
-                    fetch_keychain_key_with_timeout(
+                    fetch_keychain_key_cancellable(
                         service,
                         account,
-                        std::time::Duration::from_secs(60),
+                        None,
+                        Some(cancelled),
                     )
                 });
 
