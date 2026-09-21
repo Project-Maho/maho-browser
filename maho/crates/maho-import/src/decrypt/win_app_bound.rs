@@ -4,16 +4,23 @@
 
 //! Windows cookie decryption using DPAPI and Chrome's COM elevator service.
 
-#![cfg(windows)]
+#![cfg(any(windows, test))]
 
 use aes_gcm::aead::{Aead, KeyInit};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::{Aes256Gcm, Nonce};
+#[cfg(windows)]
 use serde_json::Value;
+#[cfg(windows)]
 use std::path::Path;
+#[cfg(windows)]
 use std::ptr;
+#[cfg(windows)]
 use windows::core::{IUnknown, Interface, GUID};
+#[cfg(windows)]
 use windows::Win32::Foundation::{LocalFree, HLOCAL};
+#[cfg(windows)]
 use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+#[cfg(windows)]
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_LOCAL_SERVER, COINIT_MULTITHREADED,
 };
@@ -29,6 +36,7 @@ impl WindowsAppBoundDecryptor {
     /// Tries the IElevator2 (Chrome 144+ v2) COM interface first, falling back
     /// to IElevator (v1) if available, and finally falling back to user-context DPAPI
     /// (for browsers that do not use App-Bound encryption).
+    #[cfg(windows)]
     pub fn for_browser(browser_name: &str, local_state_path: &Path) -> Result<Self, String> {
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 
@@ -109,8 +117,8 @@ impl WindowsAppBoundDecryptor {
         let iv = &encrypted_value[..12];
         let payload = &encrypted_value[12..];
 
-        let key = Key::<Aes256Gcm>::from_slice(&self.aes_key);
-        let cipher = Aes256Gcm::new(key);
+        let cipher = Aes256Gcm::new_from_slice(&self.aes_key)
+            .map_err(|_| "Invalid AES-256 key length".to_string())?;
         let nonce = Nonce::from_slice(iv);
 
         let decrypted = cipher
@@ -122,7 +130,21 @@ impl WindowsAppBoundDecryptor {
     }
 }
 
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn review_invalid_windows_key_returns_error_without_panicking() {
+        for len in [0, 16, 31, 33] {
+            let decryptor = WindowsAppBoundDecryptor { aes_key: vec![0; len] };
+            assert!(decryptor.decrypt_cookie(&[0; 28]).is_err());
+        }
+    }
+}
+
 // Browser config containing CLSID and vtable slot offset for IElevator.
+#[cfg(windows)]
 struct BrowserComConfig {
     clsid: &'static str,
     iid_v1: &'static str,
@@ -130,6 +152,7 @@ struct BrowserComConfig {
     vtable_slot: usize,
 }
 
+#[cfg(windows)]
 fn get_browser_config(browser_name: &str) -> Option<BrowserComConfig> {
     match browser_name {
         "Chrome" | "google-chrome" => Some(BrowserComConfig {
@@ -154,6 +177,7 @@ fn get_browser_config(browser_name: &str) -> Option<BrowserComConfig> {
     }
 }
 
+#[cfg(windows)]
 fn decrypt_via_com(browser_name: &str, encrypted_key: &[u8]) -> Result<Vec<u8>, String> {
     let config = get_browser_config(browser_name)
         .ok_or_else(|| format!("COM configuration missing for browser {}", browser_name))?;
@@ -189,6 +213,7 @@ fn decrypt_via_com(browser_name: &str, encrypted_key: &[u8]) -> Result<Vec<u8>, 
     }
 }
 
+#[cfg(windows)]
 unsafe fn call_decrypt_data(
     unknown_ptr: *mut std::ffi::c_void,
     slot: usize,

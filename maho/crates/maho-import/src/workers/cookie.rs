@@ -109,7 +109,7 @@ impl ImportWorker for CookieWorker {
                     fetch_keychain_key_with_timeout(
                         service,
                         account,
-                        std::time::Duration::from_secs(5),
+                        std::time::Duration::from_secs(60),
                     )
                 });
 
@@ -161,7 +161,7 @@ impl ImportWorker for CookieWorker {
                                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                                 {
                                     decryption_key.as_ref().and_then(|key| {
-                                        decrypt_cookie_v10(&entry.encrypted_value, key).ok()
+                                        decrypt_cookie_v10(&entry.encrypted_value, key, entry.database_version, &c.host).ok()
                                     })
                                 }
                                 #[cfg(target_os = "windows")]

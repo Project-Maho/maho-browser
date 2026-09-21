@@ -88,7 +88,7 @@ pub fn parse_chromium_passwords(
             Ok(pw) => pw,
             Err(DecryptError::MissingPrefix | DecryptError::InvalidLength) => continue,
             Err(DecryptError::AesFailed | DecryptError::InvalidPadding) => continue,
-            Err(DecryptError::InvalidUtf8) => continue,
+            Err(DecryptError::InvalidUtf8 | DecryptError::HostBindingMismatch) => continue,
         };
 
         if password.is_empty() {

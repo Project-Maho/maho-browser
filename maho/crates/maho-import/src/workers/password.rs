@@ -97,7 +97,9 @@ impl ImportWorker for PasswordWorker {
             if entry.password.is_empty() || entry.origin_url.is_empty() {
                 continue;
             }
-            destination.add_password(entry);
+            if !destination.add_password(entry) {
+                return Err(ImportError::Io("password destination rejected the import".into()));
+            }
             count += 1;
             if count % 100 == 0 {
                 send_update(
@@ -124,7 +126,7 @@ fn chromium_decryption_key(
     _profile_dir: &std::path::Path,
 ) -> Option<ChromiumKey> {
     keychain_service_account(browser_type).and_then(|(service, account)| {
-        fetch_keychain_key_with_timeout(service, account, std::time::Duration::from_secs(5))
+        fetch_keychain_key_with_timeout(service, account, std::time::Duration::from_secs(60))
     })
 }
 
@@ -166,6 +168,22 @@ mod tests {
             services_supported: 0xFF,
             requires_full_disk_access: false,
         }
+    }
+
+    #[test]
+    fn review_destination_rejection_is_not_reported_as_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("passwords.csv");
+        std::fs::write(&path, "Title,URL,Username,Password\nExample,https://example.com,user,secret\n").unwrap();
+        let mut destination = MockDestination::new();
+        destination.reject_passwords = true;
+        let (tx, _rx) = mpsc::channel();
+        let result = PasswordWorker::new(Some(path)).run(
+            &safari_browser("/dev/null"), &destination,
+            &Arc::new(AtomicBool::new(false)), &tx,
+        );
+        assert!(result.is_err(), "destination rejected the password, got {result:?}");
+        assert!(destination.passwords.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -36,7 +36,7 @@ impl ImportWorker for WorkspaceWorker {
             }
             BrowserType::Arc => {
                 let result = parsers::arc::sidebar::parse_arc_sidebar(profile_dir)?;
-                (result.workspaces, String::new())
+                (result.workspaces, result.active_workspace_uuid)
             }
             _ => return Ok(0),
         };

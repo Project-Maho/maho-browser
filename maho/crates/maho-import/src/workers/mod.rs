@@ -78,34 +78,236 @@ pub(crate) fn keychain_service_account(
     }
 }
 
-/// Fetches a Keychain-derived Chromium key on a background thread with a timeout.
+// allow: SIZE_OK — Lane K exact allowlist mandates inline tests in workers/mod.rs without structural/build edits
+
+#[cfg(target_os = "macos")]
+static TEST_KEYCHAIN_PROVIDER: std::sync::RwLock<
+    Option<std::sync::Arc<dyn crate::decrypt::chromium_keychain::KeychainProvider + Send + Sync>>,
+> = std::sync::RwLock::new(None);
+
+#[cfg(target_os = "macos")]
+static TEST_KEYCHAIN_TIMEOUT_OVERRIDE: std::sync::RwLock<Option<std::time::Duration>> =
+    std::sync::RwLock::new(None);
+
+/// Test-only hook to inject a KeychainProvider override for automated regression testing.
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub(crate) fn set_keychain_provider_override_for_test(
+    provider: Option<
+        std::sync::Arc<dyn crate::decrypt::chromium_keychain::KeychainProvider + Send + Sync>,
+    >,
+) -> Option<std::sync::Arc<dyn crate::decrypt::chromium_keychain::KeychainProvider + Send + Sync>> {
+    let mut lock = TEST_KEYCHAIN_PROVIDER.write().unwrap();
+    let old = lock.clone();
+    *lock = provider;
+    old
+}
+
+/// Test-only hook to inject a timeout override for automated regression testing.
+#[doc(hidden)]
+#[cfg(target_os = "macos")]
+pub(crate) fn set_keychain_timeout_override_for_test(timeout: Option<std::time::Duration>) {
+    let mut lock = TEST_KEYCHAIN_TIMEOUT_OVERRIDE.write().unwrap();
+    *lock = timeout;
+}
+
+/// Fetches a Keychain-derived Chromium key through the process-wide
+/// single-flight coordinator (design U11).
 ///
 /// macOS Security framework's `SecKeychainFindGenericPassword` blocks the
 /// caller indefinitely when the process is ad-hoc signed / lacks a stable ACL
-/// (the system prompt may be hidden behind the welcome window). Wrapping the
-/// call in a worker thread + `recv_timeout` lets us abandon the attempt after
-/// `timeout` and proceed with the rest of the import.
+/// (the system prompt may be hidden behind the welcome window).
 ///
-/// SAFETY: the spawned thread is leaked on timeout — the Keychain call will
-/// eventually return and drop the receiver send. This is acceptable because the
-/// keychain is queried at most once per worker per import session.
+/// U11 contract: at most ONE native Keychain worker executes globally. Callers
+/// requesting the SAME (service, account) key while an attempt is in flight
+/// SHARE that attempt (each with their own deadline; an expired caller simply
+/// stops waiting and NEVER retires the active slot). A caller requesting a
+/// DIFFERENT key while the slot is busy gets `None` immediately without
+/// queueing another thread. The slot reopens only after the executing worker
+/// completes. The shared attempt carries the Keychain password (zeroizing) and
+/// each waiter derives its own `ChromiumKey`, so derived secrets stay scoped
+/// to the attempt and its waiters. Thread spawn failures are reported and
+/// retire the attempt instead of being swallowed as successful empty results.
 #[cfg(target_os = "macos")]
 pub(crate) fn fetch_keychain_key_with_timeout(
     service: &'static str,
     account: &'static str,
     timeout: std::time::Duration,
 ) -> Option<crate::decrypt::chromium_keychain::ChromiumKey> {
-    use crate::decrypt::chromium_keychain::{fetch_and_derive_key, MacOsKeychain};
+    use crate::decrypt::chromium_keychain::{derive_aes_key, KeychainProvider, MacOsKeychain};
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name(format!("maho-import-keychain-{service}"))
-        .spawn(move || {
-            let result = fetch_and_derive_key(&MacOsKeychain, service, account).ok();
-            let _ = tx.send(result);
-        })
-        .ok()?;
-    rx.recv_timeout(timeout).ok().flatten()
+    let test_provider = TEST_KEYCHAIN_PROVIDER.read().unwrap().clone();
+    let effective_timeout = TEST_KEYCHAIN_TIMEOUT_OVERRIDE
+        .read()
+        .unwrap()
+        .unwrap_or(timeout);
+    let deadline = std::time::Instant::now() + effective_timeout;
+
+    let attempt = match keychain_single_flight::coordinator().admit(service, account) {
+        keychain_single_flight::Admission::Leader(attempt) => {
+            // This caller installed a fresh attempt: spawn the one native
+            // worker allowed to execute for it.
+            let worker_attempt = std::sync::Arc::clone(&attempt);
+            let spawned = std::thread::Builder::new()
+                .name(format!("maho-import-keychain-{service}"))
+                .spawn(move || {
+                    let password = match &test_provider {
+                        Some(provider) => provider.get_password(service, account).ok(),
+                        None => MacOsKeychain.get_password(service, account).ok(),
+                    };
+                    worker_attempt.finish(password);
+                    keychain_single_flight::coordinator().retire(service, account);
+                });
+            if let Err(spawn_error) = spawned {
+                // Report the failure; nothing will ever complete this attempt,
+                // so retire it and fail every waiter explicitly.
+                eprintln!("maho-import: keychain worker thread spawn failed: {spawn_error}");
+                attempt.finish(None);
+                keychain_single_flight::coordinator().retire(service, account);
+                return None;
+            }
+            attempt
+        }
+        keychain_single_flight::Admission::Follower(attempt) => attempt,
+        keychain_single_flight::Admission::SlotBusy => {
+            // A different key is executing globally: unavailable immediately,
+            // without queueing another native thread.
+            return None;
+        }
+    };
+
+    // Each caller waits on the shared attempt with its OWN deadline. A caller
+    // timeout leaves the active slot and the executing worker untouched.
+    let resolved = attempt.wait_for_password(deadline)?;
+    let password = resolved?;
+    Some(derive_aes_key(password.as_slice()))
+}
+
+/// Process-wide single-flight coordination for native Keychain workers.
+#[cfg(target_os = "macos")]
+mod keychain_single_flight {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Instant;
+    use zeroize::Zeroizing;
+
+    /// One in-flight Keychain attempt shared by every caller of the same
+    /// (service, account) key. The Keychain password — not the derived key,
+    /// which zeroizes per owner — is shared, so each waiter derives its own
+    /// `ChromiumKey` and no derived secret outlives the attempt's waiters.
+    pub(super) struct SharedAttempt {
+        result: Mutex<Option<Option<Zeroizing<Vec<u8>>>>>,
+        completed: Condvar,
+    }
+
+    impl SharedAttempt {
+        fn new() -> Self {
+            Self {
+                result: Mutex::new(None),
+                completed: Condvar::new(),
+            }
+        }
+
+        /// Publishes the outcome exactly once and wakes every waiter.
+        pub(super) fn finish(&self, password: Option<Zeroizing<Vec<u8>>>) {
+            let mut guard = self.result.lock().unwrap();
+            if guard.is_none() {
+                *guard = Some(password);
+            }
+            self.completed.notify_all();
+        }
+
+        /// Waits for completion or the caller deadline. `None` means the
+        /// caller's own deadline expired; the attempt itself stays untouched.
+        pub(super) fn wait_for_password(
+            &self,
+            deadline: Instant,
+        ) -> Option<Option<Zeroizing<Vec<u8>>>> {
+            let mut guard = self.result.lock().unwrap();
+            loop {
+                if let Some(resolved) = &*guard {
+                    return Some(resolved.clone());
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    return None;
+                }
+                let (next, wait_result) =
+                    self.completed.wait_timeout(guard, deadline - now).unwrap();
+                guard = next;
+                if wait_result.timed_out() && guard.is_none() {
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// Mutex-protected slot: `None` while idle, otherwise the single globally
+    /// executing attempt keyed by (service, account).
+    pub(super) struct Coordinator {
+        active: Mutex<HashMap<(String, String), Arc<SharedAttempt>>>,
+        #[cfg(test)]
+        retired: Condvar,
+    }
+
+    impl Coordinator {
+        fn new() -> Self {
+            Self {
+                active: Mutex::new(HashMap::new()),
+                #[cfg(test)]
+                retired: Condvar::new(),
+            }
+        }
+
+        pub(super) fn admit(&self, service: &str, account: &str) -> Admission {
+            let mut active = self.active.lock().unwrap();
+            if active.is_empty() {
+                let attempt = Arc::new(SharedAttempt::new());
+                active.insert(
+                    (service.to_string(), account.to_string()),
+                    Arc::clone(&attempt),
+                );
+                return Admission::Leader(attempt);
+            }
+            if let Some(attempt) = active.get(&(service.to_string(), account.to_string())) {
+                return Admission::Follower(Arc::clone(attempt));
+            }
+            Admission::SlotBusy
+        }
+
+        /// Reopens the slot after the executing worker completed. Waiters that
+        /// joined just before retirement still read the published result.
+        pub(super) fn retire(&self, service: &str, account: &str) {
+            let mut active = self.active.lock().unwrap();
+            active.remove(&(service.to_string(), account.to_string()));
+            #[cfg(test)]
+            self.retired.notify_all();
+        }
+
+        #[cfg(test)]
+        pub(super) fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
+            let active = self.active.lock().unwrap();
+            let (active, _) = self.retired.wait_timeout_while(active, timeout, |active| {
+                !active.is_empty()
+            }).unwrap();
+            active.is_empty()
+        }
+    }
+
+    pub(super) enum Admission {
+        /// The caller installed a fresh attempt and must spawn the worker.
+        Leader(Arc<SharedAttempt>),
+        /// The caller joins an already-executing attempt for the same key.
+        Follower(Arc<SharedAttempt>),
+        /// A different key is executing: unavailable, no new thread.
+        SlotBusy,
+    }
+
+    /// Process-wide coordinator accessor (`HashMap::new` is not const).
+    pub(super) fn coordinator() -> &'static Coordinator {
+        static COORDINATOR: std::sync::OnceLock<Coordinator> = std::sync::OnceLock::new();
+        COORDINATOR.get_or_init(Coordinator::new)
+    }
 }
 
 #[cfg(test)]
@@ -129,6 +331,7 @@ pub mod tests {
         pub autofill: Mutex<Vec<MockAutofill>>,
         pub favicons: Mutex<Vec<MockFavicon>>,
         pub passwords: Mutex<Vec<MockPassword>>,
+        pub reject_passwords: bool,
         pub pinned: Mutex<Vec<String>>,
         pub favorited: Mutex<Vec<String>>,
         pub active_space: Mutex<Option<String>>,
@@ -147,6 +350,7 @@ pub mod tests {
                 autofill: Mutex::new(Vec::new()),
                 favicons: Mutex::new(Vec::new()),
                 passwords: Mutex::new(Vec::new()),
+                reject_passwords: false,
                 pinned: Mutex::new(Vec::new()),
                 favorited: Mutex::new(Vec::new()),
                 active_space: Mutex::new(Some("default-space".to_string())),
@@ -295,11 +499,476 @@ pub mod tests {
         }
 
         fn add_password(&self, entry: crate::PasswordEntry) -> bool {
+            if self.reject_passwords {
+                return false;
+            }
             self.passwords.lock().unwrap().push(MockPassword {
                 origin_url: entry.origin_url,
                 username: entry.username,
             });
             true
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    use super::super::{BrowserType, DetectedBrowser};
+    #[cfg(target_os = "macos")]
+    use super::password::PasswordWorker;
+    #[cfg(target_os = "macos")]
+    use super::ImportWorker;
+    #[cfg(target_os = "macos")]
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    #[cfg(target_os = "macos")]
+    use std::sync::{Arc, Condvar};
+
+    #[cfg(target_os = "macos")]
+    struct BlockingKeychainBoundary {
+        active_workers: AtomicUsize,
+        max_active_workers: AtomicUsize,
+        total_spawned_attempts: AtomicUsize,
+        entered_services: Mutex<Vec<String>>,
+        entered_pair: (Mutex<bool>, Condvar),
+        release_pair: (Mutex<bool>, Condvar),
+        password: Vec<u8>,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl BlockingKeychainBoundary {
+        fn new(password: &[u8]) -> Self {
+            Self {
+                active_workers: AtomicUsize::new(0),
+                max_active_workers: AtomicUsize::new(0),
+                total_spawned_attempts: AtomicUsize::new(0),
+                entered_services: Mutex::new(Vec::new()),
+                entered_pair: (Mutex::new(false), Condvar::new()),
+                release_pair: (Mutex::new(false), Condvar::new()),
+                password: password.to_vec(),
+            }
+        }
+
+        fn wait_for_entered(&self, timeout: std::time::Duration) -> bool {
+            let (lock, cvar) = &self.entered_pair;
+            let mut guard = lock.lock().unwrap();
+            let start = std::time::Instant::now();
+            while !*guard {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    return false;
+                }
+                let (next_guard, timeout_res) =
+                    cvar.wait_timeout(guard, timeout - elapsed).unwrap();
+                guard = next_guard;
+                if timeout_res.timed_out() {
+                    break;
+                }
+            }
+            *guard
+        }
+
+        fn wait_for_attempts(&self, target: usize, timeout: std::time::Duration) -> bool {
+            let (lock, cvar) = &self.entered_pair;
+            let mut guard = lock.lock().unwrap();
+            let start = std::time::Instant::now();
+            while self.total_spawned_attempts.load(Ordering::SeqCst) < target {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    return false;
+                }
+                let (next_guard, timeout_res) =
+                    cvar.wait_timeout(guard, timeout - elapsed).unwrap();
+                guard = next_guard;
+                if timeout_res.timed_out() {
+                    break;
+                }
+            }
+            self.total_spawned_attempts.load(Ordering::SeqCst) >= target
+        }
+
+        fn wait_for_active_workers(&self, target: usize, timeout: std::time::Duration) -> bool {
+            assert_eq!(target, 0);
+            // Provider return is not worker completion. Wait on the coordinator's
+            // retirement event, under the same mutex that protects its slot.
+            super::keychain_single_flight::coordinator().wait_for_idle(timeout)
+        }
+
+        fn release_all(&self) {
+            let (lock, cvar) = &self.release_pair;
+            let mut guard = lock.lock().unwrap();
+            *guard = true;
+            cvar.notify_all();
+        }
+
+        fn reset_release_gate(&self) {
+            let (lock, _) = &self.release_pair;
+            let mut guard = lock.lock().unwrap();
+            *guard = false;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl crate::decrypt::chromium_keychain::KeychainProvider for BlockingKeychainBoundary {
+        fn get_password(
+            &self,
+            service: &str,
+            account: &str,
+        ) -> Result<zeroize::Zeroizing<Vec<u8>>, crate::decrypt::chromium_keychain::KeychainError>
+        {
+            self.total_spawned_attempts.fetch_add(1, Ordering::SeqCst);
+            let cur = self.active_workers.fetch_add(1, Ordering::SeqCst) + 1;
+            let mut max = self.max_active_workers.load(Ordering::SeqCst);
+            while cur > max {
+                match self.max_active_workers.compare_exchange_weak(
+                    max,
+                    cur,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => max = actual,
+                }
+            }
+            {
+                let mut list = self.entered_services.lock().unwrap();
+                list.push(format!("{service}/{account}"));
+            }
+            {
+                let (lock, cvar) = &self.entered_pair;
+                let mut guard = lock.lock().unwrap();
+                *guard = true;
+                cvar.notify_all();
+            }
+            {
+                let (lock, cvar) = &self.release_pair;
+                let mut guard = lock.lock().unwrap();
+                while !*guard {
+                    guard = cvar.wait(guard).unwrap();
+                }
+            }
+            self.active_workers.fetch_sub(1, Ordering::SeqCst);
+            {
+                let (lock, cvar) = &self.entered_pair;
+                let _guard = lock.lock().unwrap();
+                cvar.notify_all();
+            }
+            Ok(zeroize::Zeroizing::new(self.password.clone()))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    struct TestCleanupGuard {
+        boundary: Arc<BlockingKeychainBoundary>,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for TestCleanupGuard {
+        fn drop(&mut self) {
+            self.boundary.release_all();
+            assert!(self.boundary.wait_for_active_workers(0, std::time::Duration::from_secs(3)),
+                "native worker must retire before releasing the serial test guard");
+            super::set_keychain_provider_override_for_test(None);
+            super::set_keychain_timeout_override_for_test(None);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    static TEST_SERIAL_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn review_provider_idle_is_not_coordinator_retirement() {
+        let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();
+        let boundary = BlockingKeychainBoundary::new(b"retirement-test");
+        let coordinator = super::keychain_single_flight::coordinator();
+        // Deterministically reproduce the interval after the provider decrements
+        // its counter but before the native closure retires the installed slot.
+        let attempt = coordinator.admit("Chrome Safe Storage", "Chrome");
+        assert!(matches!(attempt, super::keychain_single_flight::Admission::Leader(_)));
+        let prematurely_finished = boundary.wait_for_active_workers(0, std::time::Duration::ZERO);
+        coordinator.retire("Chrome Safe Storage", "Chrome");
+        assert!(!prematurely_finished, "provider counter must not release the test's retirement barrier");
+        assert!(boundary.wait_for_active_workers(0, std::time::Duration::ZERO));
+    }
+
+    #[test]
+    fn memory_thread_keychain_timeout_keeps_single_flight() {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();
+            let boundary = Arc::new(BlockingKeychainBoundary::new(b"single-flight-key"));
+            let _guard = TestCleanupGuard {
+                boundary: boundary.clone(),
+            };
+            super::set_keychain_provider_override_for_test(Some(boundary.clone()));
+            super::set_keychain_timeout_override_for_test(Some(std::time::Duration::from_millis(
+                40,
+            )));
+
+            // Given: Attempt 1 starts with a short timeout and enters Keychain boundary
+            let t1 = std::thread::spawn(|| {
+                super::fetch_keychain_key_with_timeout(
+                    "Chrome Safe Storage",
+                    "Chrome",
+                    std::time::Duration::from_millis(40),
+                )
+            });
+
+            assert!(
+                boundary.wait_for_entered(std::time::Duration::from_secs(3)),
+                "deadlock guard: attempt 1 failed to enter Keychain boundary"
+            );
+
+            // Wait for attempt 1 caller to observe timeout
+            let res1 = t1.join().expect("caller thread 1 panicked");
+            assert!(
+                res1.is_none(),
+                "attempt 1 should have returned None after timeout"
+            );
+
+            // Verify attempt 1's native worker is STILL parked inside Keychain
+            assert_eq!(
+                boundary.active_workers.load(Ordering::SeqCst),
+                1,
+                "attempt 1 worker must still be parked in Keychain"
+            );
+
+            // When: while attempt 1's worker is STILL executing in Keychain, issue repeated requests
+            // for the SAME key ("Chrome Safe Storage", "Chrome") across both PasswordWorker and
+            // fetch_keychain_key_with_timeout.
+            let temp_dir = tempfile::tempdir().unwrap();
+            let profile_dir = temp_dir.path();
+            std::fs::write(profile_dir.join("Login Data"), b"").unwrap();
+            let browser = DetectedBrowser {
+                browser_type: BrowserType::Chrome,
+                display_name: "Chrome".to_string(),
+                profile_path: profile_dir.join("Preferences"),
+                services_supported: 0xFF,
+                requires_full_disk_access: false,
+            };
+            let dest = Arc::new(MockDestination::new());
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let (tx, _rx) = std::sync::mpsc::channel();
+            let pw_worker = PasswordWorker::new(None);
+            let pw_handle =
+                std::thread::spawn(move || pw_worker.run(&browser, &*dest, &cancelled, &tx));
+
+            let mut handles = Vec::new();
+            for _ in 0..4 {
+                handles.push(std::thread::spawn(|| {
+                    super::fetch_keychain_key_with_timeout(
+                        "Chrome Safe Storage",
+                        "Chrome",
+                        std::time::Duration::from_millis(40),
+                    )
+                }));
+            }
+
+            let _ = pw_handle.join().expect("password worker panicked");
+            for h in handles {
+                let _ = h.join().expect("fetch thread panicked");
+            }
+
+            // Then: under U11 single-flight coordination, all callers for the same active key
+            // MUST share the single active attempt. Caller timeout must NOT clear the active slot
+            // or spawn duplicate replacement native worker threads while the attempt is executing.
+            // Baseline failure: every repeated call unconditionally spawns a new thread and enters
+            // get_password, causing max_active_workers > 1 and total_spawned_attempts > 1.
+            let peak_active = boundary.max_active_workers.load(Ordering::SeqCst);
+            let total_spawned = boundary.total_spawned_attempts.load(Ordering::SeqCst);
+
+            assert_eq!(
+                peak_active,
+                1,
+                "U11 single-flight violation: expected at most 1 active worker globally, but observed {peak_active}"
+            );
+            assert_eq!(
+                total_spawned,
+                1,
+                "U11 single-flight violation: expected repeated requests while busy to share the single in-flight attempt, but observed {total_spawned} spawned attempts"
+            );
+
+            boundary.release_all();
+            assert!(
+                boundary.wait_for_active_workers(0, std::time::Duration::from_secs(3)),
+                "workers failed to drain after release"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_thread_keychain_different_key_does_not_spawn() {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();
+            let boundary = Arc::new(BlockingKeychainBoundary::new(b"different-key-test"));
+            let _guard = TestCleanupGuard {
+                boundary: boundary.clone(),
+            };
+            super::set_keychain_provider_override_for_test(Some(boundary.clone()));
+
+            // Given: worker 1 for "Chrome Safe Storage" is parked inside Keychain boundary
+            let t1 = std::thread::spawn(|| {
+                super::fetch_keychain_key_with_timeout(
+                    "Chrome Safe Storage",
+                    "Chrome",
+                    std::time::Duration::from_secs(5),
+                )
+            });
+
+            assert!(
+                boundary.wait_for_entered(std::time::Duration::from_secs(3)),
+                "deadlock guard: Chrome attempt failed to enter Keychain boundary"
+            );
+            assert_eq!(
+                boundary.active_workers.load(Ordering::SeqCst),
+                1,
+                "expected exactly 1 active Chrome worker"
+            );
+
+            // When: while Chrome worker is actively running globally, attempt a DIFFERENT key
+            // ("Brave Safe Storage", "Brave")
+            let different_key_res = super::fetch_keychain_key_with_timeout(
+                "Brave Safe Storage",
+                "Brave",
+                std::time::Duration::from_millis(50),
+            );
+
+            // Then: U11 contract states: "At most one native worker runs globally;
+            // a different key while busy returns unavailable immediately, without queueing another thread."
+            // Baseline failure: baseline ignores global concurrency and spawns a thread for Brave,
+            // entering Keychain concurrently so max_active_workers reaches 2 and Brave is recorded.
+            assert!(
+                different_key_res.is_none(),
+                "U11 concurrency violation: expected distinct key while busy to return unavailable (None) immediately"
+            );
+
+            let peak_active = boundary.max_active_workers.load(Ordering::SeqCst);
+            let total_spawned = boundary.total_spawned_attempts.load(Ordering::SeqCst);
+            let services = boundary.entered_services.lock().unwrap().clone();
+
+            assert_eq!(
+                peak_active,
+                1,
+                "U11 global limit violation: expected at most 1 global worker, but observed {peak_active}"
+            );
+            assert_eq!(
+                total_spawned,
+                1,
+                "U11 global limit violation: expected only Chrome to have entered Keychain, but total attempts = {total_spawned}"
+            );
+            assert!(
+                !services.iter().any(|s| s.contains("Brave")),
+                "U11 violation: Brave should NOT have entered Keychain while Chrome worker was executing, entered: {services:?}"
+            );
+
+            // Release Chrome worker and await completion
+            boundary.release_all();
+            let chrome_res = t1.join().expect("Chrome caller thread panicked");
+            assert!(
+                chrome_res.is_some(),
+                "Chrome should successfully derive key upon release"
+            );
+            assert!(
+                boundary.wait_for_active_workers(0, std::time::Duration::from_secs(3)),
+                "workers failed to drain after release"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_thread_keychain_completion_reopens_slot() {
+        #[cfg(not(target_os = "macos"))]
+        {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _serial_lock = TEST_SERIAL_LOCK.lock().unwrap();
+            let boundary = Arc::new(BlockingKeychainBoundary::new(b"reopen-slot-key"));
+            let _guard = TestCleanupGuard {
+                boundary: boundary.clone(),
+            };
+            super::set_keychain_provider_override_for_test(Some(boundary.clone()));
+            super::set_keychain_timeout_override_for_test(Some(std::time::Duration::from_millis(
+                40,
+            )));
+
+            // Given: attempt 1 for Chrome is started with short timeout (40ms)
+            let t1 = std::thread::spawn(|| {
+                super::fetch_keychain_key_with_timeout(
+                    "Chrome Safe Storage",
+                    "Chrome",
+                    std::time::Duration::from_millis(40),
+                )
+            });
+
+            assert!(
+                boundary.wait_for_entered(std::time::Duration::from_secs(3)),
+                "deadlock guard: Chrome attempt failed to enter Keychain boundary"
+            );
+
+            let res1 = t1.join().expect("Chrome caller thread panicked");
+            assert!(res1.is_none(), "expected attempt 1 to time out");
+
+            // Verify that while attempt 1's worker is STILL executing in Keychain, the slot remains busy
+            let busy_check = super::fetch_keychain_key_with_timeout(
+                "Edge Safe Storage",
+                "Edge",
+                std::time::Duration::from_millis(40),
+            );
+            assert!(
+                busy_check.is_none(),
+                "U11 violation: distinct key must return unavailable while worker is busy"
+            );
+            let active_during_busy = boundary.max_active_workers.load(Ordering::SeqCst);
+            assert_eq!(
+                active_during_busy,
+                1,
+                "U11 violation: active workers must not exceed 1 while slot is busy, got {active_during_busy}"
+            );
+
+            // When: Attempt 1's worker is released and completes
+            boundary.release_all();
+            assert!(
+                boundary.wait_for_active_workers(0, std::time::Duration::from_secs(3)),
+                "attempt 1 worker failed to drain after release"
+            );
+
+            // Reset release gate for next attempt
+            boundary.reset_release_gate();
+            super::set_keychain_timeout_override_for_test(Some(std::time::Duration::from_secs(3)));
+
+            // Now that attempt 1 worker has completed, attempt 2 (Edge) must be able to acquire slot and succeed
+            let t2 = std::thread::spawn(|| {
+                super::fetch_keychain_key_with_timeout(
+                    "Edge Safe Storage",
+                    "Edge",
+                    std::time::Duration::from_secs(3),
+                )
+            });
+
+            assert!(
+                boundary.wait_for_attempts(2, std::time::Duration::from_secs(3)),
+                "deadlock guard: second attempt failed to enter Keychain after slot reopened"
+            );
+
+            boundary.release_all();
+            let res2 = t2.join().expect("Edge caller thread panicked");
+            assert!(
+                res2.is_some(),
+                "U11 contract violation: after worker completion, slot must reopen and next attempt must succeed"
+            );
+            assert!(
+                boundary.wait_for_active_workers(0, std::time::Duration::from_secs(3)),
+                "second worker failed to drain after release"
+            );
         }
     }
 }

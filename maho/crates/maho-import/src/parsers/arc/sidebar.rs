@@ -17,6 +17,7 @@ use crate::{ImportError, ImportResult, ParsedFolder, ParsedTab, ParsedWorkspace}
 #[derive(Debug, Default)]
 pub struct ArcParseResult {
     pub workspaces: Vec<ParsedWorkspace>,
+    pub active_workspace_uuid: String,
 }
 
 fn resolve_sidebar_path(start: &Path) -> ImportResult<std::path::PathBuf> {
@@ -94,18 +95,47 @@ pub fn parse_arc_sidebar(arc_user_data_dir: &Path) -> ImportResult<ArcParseResul
     };
 
     let all_items = parse_alternating_array(items_list);
-    let spaces = parse_alternating_array(space_models);
+    let mut spaces = parse_alternating_spaces(space_models);
+
+    // Read StorableWindows.json if present to detect the active focused space
+    let windows_path = sidebar_path.parent().map(|p| p.join("StorableWindows.json"));
+    let mut last_focused_space_id: Option<String> = None;
+    if let Some(ref win_file) = windows_path {
+        if win_file.exists() {
+            if let Ok(win_content) = std::fs::read_to_string(win_file) {
+                if let Ok(win_json) = serde_json::from_str::<Value>(&win_content) {
+                    if let Some(focused) = win_json.get("lastFocusedSpaceID").and_then(|v| v.as_str()) {
+                        last_focused_space_id = Some(focused.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Arc syncData stores spaceModels in reverse chronological order (newest space at the end).
+    // If the last space matches lastFocusedSpaceID, reverse spaces to place the active/primary space first.
+    if let Some(ref focused_id) = last_focused_space_id {
+        if let Some(pos) = spaces.iter().position(|(id, _)| id == focused_id) {
+            if pos > 0 && pos == spaces.len() - 1 {
+                spaces.reverse();
+            }
+        }
+    }
 
     let mut result = ArcParseResult::default();
 
-    for space_dict in spaces {
+    for (space_id, space_dict) in spaces {
         let mut ws = ParsedWorkspace {
             name: space_dict
                 .get("title")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Space")
                 .to_string(),
-            uuid: result.workspaces.len().to_string(),
+            uuid: if !space_id.is_empty() {
+                space_id
+            } else {
+                result.workspaces.len().to_string()
+            },
             ..Default::default()
         };
 
@@ -150,6 +180,74 @@ pub fn parse_arc_sidebar(arc_user_data_dir: &Path) -> ImportResult<ArcParseResul
         result.workspaces.push(ws);
     }
 
+    // Resolve active workspace UUID
+    if let Some(ref focused_id) = last_focused_space_id {
+        if result.workspaces.iter().any(|w| &w.uuid == focused_id) {
+            result.active_workspace_uuid = focused_id.clone();
+        }
+    }
+    if result.active_workspace_uuid.is_empty() && !result.workspaces.is_empty() {
+        result.active_workspace_uuid = result.workspaces[0].uuid.clone();
+    }
+
+    // Extract global favorites from topAppsContainerIDs if present
+    let mut top_apps_id: Option<String> = None;
+    if let Some(containers) = root_obj
+        .get("sidebar")
+        .and_then(|v| v.as_object())
+        .and_then(|s| s.get("containers"))
+        .and_then(|v| v.as_array())
+    {
+        if containers.len() > 1 {
+            if let Some(c1) = containers[1].as_object() {
+                if let Some(arr) = c1.get("topAppsContainerIDs").and_then(|v| v.as_array()) {
+                    for v in arr {
+                        if let Some(id_str) = v.as_str() {
+                            top_apps_id = Some(id_str.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(ref tid) = top_apps_id {
+        if let Some(top_item) = find_item_by_id(&all_items, tid) {
+            if let Some(children) = find_children_ids(top_item) {
+                let mut fav_tabs = Vec::new();
+                for child in children {
+                    let Some(child_id) = child.as_str() else { continue; };
+                    if let Some(tab_item) = find_item_by_id(&all_items, child_id) {
+                        if is_tab_item(tab_item) {
+                            let url = extract_tab_url(tab_item);
+                            if !url.is_empty() {
+                                if let Ok(parsed) = url::Url::parse(&url) {
+                                    let scheme = parsed.scheme();
+                                    if scheme == "http" || scheme == "https" {
+                                        fav_tabs.push(ParsedTab {
+                                            url,
+                                            title: extract_tab_title(tab_item),
+                                            is_pinned: true,
+                                            is_essential: false,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if !fav_tabs.is_empty() && !result.workspaces.is_empty() {
+                    let target_idx = result
+                        .workspaces
+                        .iter()
+                        .position(|w| w.uuid == result.active_workspace_uuid)
+                        .unwrap_or(0);
+                    result.workspaces[target_idx].favorites = fav_tabs;
+                }
+            }
+        }
+    }
+
     Ok(result)
 }
 
@@ -170,6 +268,20 @@ fn parse_alternating_array(list: &[Value]) -> Vec<&serde_json::Map<String, Value
     while i < list.len() {
         if let Some(unwrapped) = unwrap_value(&list[i]) {
             result.push(unwrapped);
+        }
+        i += 2;
+    }
+    result
+}
+
+/// Arc alternating space arrays: `[uuid, obj, uuid, obj, ...]`. Retains (space_id, space_obj).
+fn parse_alternating_spaces(list: &[Value]) -> Vec<(String, &serde_json::Map<String, Value>)> {
+    let mut result = Vec::with_capacity(list.len() / 2);
+    let mut i = 0;
+    while i + 1 < list.len() {
+        let id_str = list[i].as_str().unwrap_or("").to_string();
+        if let Some(unwrapped) = unwrap_value(&list[i + 1]) {
+            result.push((id_str, unwrapped));
         }
         i += 2;
     }
@@ -264,13 +376,10 @@ fn parse_items_into_workspace(
     current_folder_id: Option<&str>,
     visited: &mut std::collections::HashSet<String>,
 ) {
-    let mut i = 1;
-    while i < container_ids.len() {
-        let Some(item_id) = container_ids[i].as_str() else {
-            i += 2;
+    for child in container_ids {
+        let Some(item_id) = child.as_str() else {
             continue;
         };
-        i += 2;
 
         if !visited.insert(item_id.to_string()) {
             continue;
@@ -650,5 +759,125 @@ mod tests {
         let tmp = write_fixture("maho-import-test-arc-cycle", fixture);
         let res = parse_arc_sidebar(&tmp).unwrap();
         assert_eq!(res.workspaces[0].folders.len(), 2);
+    }
+
+    #[test]
+    fn arc_real_format_parses_flat_children_favorites_and_focused_space() {
+        let fixture = serde_json::json!({
+            "firebaseSyncState": {
+                "syncData": {
+                    "spaceModels": [
+                        "space-sap",
+                        {
+                            "title": "SAP",
+                            "containerIDs": ["pinned", "sap-pinned", "unpinned", "sap-unpinned"]
+                        },
+                        "space-porsche",
+                        {
+                            "title": "Porsche",
+                            "containerIDs": ["pinned", "porsche-pinned", "unpinned", "porsche-unpinned"]
+                        }
+                    ],
+                    "items": [
+                        "top-apps-container",
+                        {
+                            "id": "top-apps-container",
+                            "data": { "itemContainer": {} },
+                            "childrenIds": ["fav-1", "fav-2"]
+                        },
+                        "fav-1",
+                        {
+                            "id": "fav-1",
+                            "data": { "tab": { "savedURL": "https://notion.so", "savedTitle": "Notion" } }
+                        },
+                        "fav-2",
+                        {
+                            "id": "fav-2",
+                            "data": { "tab": { "savedURL": "https://youtube.com", "savedTitle": "YouTube" } }
+                        },
+                        "porsche-pinned",
+                        {
+                            "id": "porsche-pinned",
+                            "data": { "itemContainer": {} },
+                            "childrenIds": ["pin-1", "pin-2"]
+                        },
+                        "pin-1",
+                        {
+                            "id": "pin-1",
+                            "data": { "tab": { "savedURL": "https://github.com", "savedTitle": "GitHub" } }
+                        },
+                        "pin-2",
+                        {
+                            "id": "pin-2",
+                            "data": { "tab": { "savedURL": "https://google.com", "savedTitle": "Google" } }
+                        },
+                        "porsche-unpinned",
+                        {
+                            "id": "porsche-unpinned",
+                            "data": { "itemContainer": {} },
+                            "childrenIds": ["unpin-1"]
+                        },
+                        "unpin-1",
+                        {
+                            "id": "unpin-1",
+                            "data": { "tab": { "savedURL": "https://news.ycombinator.com", "savedTitle": "Hacker News" } }
+                        },
+                        "sap-pinned",
+                        {
+                            "id": "sap-pinned",
+                            "data": { "itemContainer": {} },
+                            "childrenIds": []
+                        },
+                        "sap-unpinned",
+                        {
+                            "id": "sap-unpinned",
+                            "data": { "itemContainer": {} },
+                            "childrenIds": []
+                        }
+                    ]
+                }
+            },
+            "sidebar": {
+                "containers": [
+                    {},
+                    {
+                        "topAppsContainerIDs": ["top-apps-container"],
+                        "spaces": [],
+                        "items": []
+                    }
+                ]
+            }
+        });
+
+        let tmp = write_fixture("maho-import-test-arc-real-format", fixture);
+        // Also write StorableWindows.json pointing to space-porsche
+        let win_fixture = serde_json::json!({
+            "lastFocusedSpaceID": "space-porsche"
+        });
+        std::fs::write(
+            tmp.join("StorableWindows.json"),
+            serde_json::to_string(&win_fixture).unwrap(),
+        ).unwrap();
+
+        let res = parse_arc_sidebar(&tmp).unwrap();
+        assert_eq!(res.workspaces.len(), 2);
+        // Focused space (Porsche) is reversed to index 0
+        assert_eq!(res.workspaces[0].name, "Porsche");
+        assert_eq!(res.workspaces[0].uuid, "space-porsche");
+        assert_eq!(res.active_workspace_uuid, "space-porsche");
+
+        // Favorites are extracted into the active workspace
+        assert_eq!(res.workspaces[0].favorites.len(), 2);
+        assert_eq!(res.workspaces[0].favorites[0].title, "Notion");
+        assert_eq!(res.workspaces[0].favorites[1].title, "YouTube");
+
+        // Flat childrenIds: both pin-1 and pin-2 are parsed (neither was skipped)
+        assert_eq!(res.workspaces[0].pinned_tabs.len(), 2);
+        assert_eq!(res.workspaces[0].pinned_tabs[0].title, "GitHub");
+        assert_eq!(res.workspaces[0].pinned_tabs[1].title, "Google");
+
+        // Unpinned tab is parsed
+        assert_eq!(res.workspaces[0].regular_tabs.len(), 1);
+        assert_eq!(res.workspaces[0].regular_tabs[0].title, "Hacker News");
     }
 }

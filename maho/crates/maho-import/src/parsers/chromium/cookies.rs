@@ -41,6 +41,9 @@ pub struct ChromiumCookieEntry {
     pub encrypted_value: Vec<u8>,
     /// Detected encryption version from the 3-byte prefix.
     pub encryption_version: EncryptionVersion,
+    /// Source database schema version; version 24 introduced host binding.
+    #[serde(default)]
+    pub database_version: i64,
 }
 
 fn chromium_time_to_unix_seconds(chromium_time: i64) -> i64 {
@@ -85,6 +88,17 @@ pub fn parse_chromium_cookies(profile_dir: &Path) -> ImportResult<Vec<ChromiumCo
     if !table_exists(&conn, "cookies") {
         return Err(ImportError::Parse("cookies table not found".into()));
     }
+
+    let database_version = if table_exists(&conn, "meta") {
+        conn.query_row("SELECT value FROM meta WHERE key = 'version'", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|e| ImportError::Parse(format!("reading cookie database version: {e}")))?
+        .parse::<i64>()
+        .map_err(|e| ImportError::Parse(format!("invalid cookie database version: {e}")))?
+    } else {
+        0 // Legacy exports and fixtures without a meta table have no host binding.
+    };
 
     let mut stmt = conn
         .prepare(
@@ -150,6 +164,7 @@ pub fn parse_chromium_cookies(profile_dir: &Path) -> ImportResult<Vec<ChromiumCo
             },
             encrypted_value: encrypted_bytes,
             encryption_version,
+            database_version,
         });
     }
 
@@ -298,6 +313,18 @@ mod tests {
         assert!(enc.cookie.value.is_empty()); // Not decrypted in Phase 1
         assert!(!enc.encrypted_value.is_empty());
         assert_eq!(enc.encryption_version, EncryptionVersion::V10);
+    }
+
+    #[test]
+    fn review_cookie_parser_carries_database_version() {
+        let dir = tempfile::tempdir().unwrap();
+        create_cookies_db(dir.path());
+        {
+            let conn = Connection::open(dir.path().join("Cookies")).unwrap();
+            conn.execute_batch("CREATE TABLE meta(key TEXT, value TEXT); INSERT INTO meta VALUES ('version', '24');").unwrap();
+        }
+        let entries = parse_chromium_cookies(dir.path()).unwrap();
+        assert!(entries.iter().all(|entry| entry.database_version == 24));
     }
 
     #[test]

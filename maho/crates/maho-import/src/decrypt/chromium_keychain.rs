@@ -38,6 +38,8 @@ pub enum DecryptError {
     InvalidUtf8,
     #[error("invalid padding")]
     InvalidPadding,
+    #[error("cookie host binding mismatch")]
+    HostBindingMismatch,
 }
 
 // ---------- Keychain provider trait ----------
@@ -168,14 +170,15 @@ pub fn decrypt_v10(ciphertext: &[u8], key: &ChromiumKey) -> Result<String, Decry
 
 /// Decrypts a v10-prefixed Chromium **cookie** blob.
 ///
-/// Cookies (unlike passwords) include a 32-byte SHA-256 prefix of the
-/// canonical eTLD+1 to bind the cookie to its origin domain (Chrome 80+
-/// "encrypted_value" format). This function strips that prefix before
-/// returning the plaintext value.
-///
-/// For pre-Chrome-80 cookies (no SHA-256 binding) the function falls back to
-/// returning the full plaintext if it parses as UTF-8 without the strip.
-pub fn decrypt_cookie_v10(ciphertext: &[u8], key: &ChromiumKey) -> Result<String, DecryptError> {
+/// Cookie database versions 24 and later prefix plaintext with SHA-256 of
+/// the exact host_key. Verify that binding before stripping it. Earlier
+/// database versions contain only the cookie value, regardless of its length.
+pub fn decrypt_cookie_v10(
+    ciphertext: &[u8],
+    key: &ChromiumKey,
+    database_version: i64,
+    host: &str,
+) -> Result<String, DecryptError> {
     if ciphertext.len() < 3 {
         return Err(DecryptError::MissingPrefix);
     }
@@ -191,12 +194,17 @@ pub fn decrypt_cookie_v10(ciphertext: &[u8], key: &ChromiumKey) -> Result<String
         .decrypt_padded_mut::<Pkcs7>(&mut buf)
         .map_err(|_| DecryptError::InvalidPadding)?;
 
-    if decrypted.len() >= 32 {
-        if let Ok(s) = std::str::from_utf8(&decrypted[32..]) {
-            return Ok(s.to_string());
+    let value = if database_version >= 24 {
+        use sha2::{Digest, Sha256};
+        let expected = Sha256::digest(host.as_bytes());
+        if decrypted.get(..32) != Some(expected.as_slice()) {
+            return Err(DecryptError::HostBindingMismatch);
         }
-    }
-    String::from_utf8(decrypted.to_vec()).map_err(|_| DecryptError::InvalidUtf8)
+        &decrypted[32..]
+    } else {
+        decrypted
+    };
+    String::from_utf8(value.to_vec()).map_err(|_| DecryptError::InvalidUtf8)
 }
 
 // ---------- Convenience: fetch + derive ----------
@@ -244,6 +252,38 @@ mod tests {
 
     fn test_key() -> ChromiumKey {
         ChromiumKey(TEST_KEY_BYTES)
+    }
+
+    #[test]
+    fn review_legacy_cookie_preserves_long_values() {
+        use aes::cipher::BlockEncryptMut;
+        for len in [32, 40] {
+            let plain = vec![b'A'; len];
+            let mut buf = vec![0; len + 16];
+            buf[..len].copy_from_slice(&plain);
+            let encrypted = cbc::Encryptor::<aes::Aes128>::new(TEST_KEY_BYTES.as_ref().into(), &IV.into())
+                .encrypt_padded_mut::<Pkcs7>(&mut buf, len).unwrap();
+            let mut blob = b"v10".to_vec();
+            blob.extend_from_slice(encrypted);
+            assert_eq!(decrypt_cookie_v10(&blob, &test_key(), 23, ".example.com").unwrap(), "A".repeat(len));
+        }
+    }
+
+    #[test]
+    fn review_bound_cookie_verifies_exact_host() {
+        use aes::cipher::BlockEncryptMut;
+        use sha2::{Digest, Sha256};
+        let mut plain = Sha256::digest(b".example.com").to_vec();
+        plain.extend_from_slice(b"session-value");
+        let mut buf = vec![0; plain.len() + 16];
+        buf[..plain.len()].copy_from_slice(&plain);
+        let encrypted = cbc::Encryptor::<aes::Aes128>::new(TEST_KEY_BYTES.as_ref().into(), &IV.into())
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, plain.len()).unwrap();
+        let mut blob = b"v10".to_vec();
+        blob.extend_from_slice(encrypted);
+        assert_eq!(decrypt_cookie_v10(&blob, &test_key(), 24, ".example.com").unwrap(), "session-value");
+        assert!(matches!(decrypt_cookie_v10(&blob, &test_key(), 24, "example.com"), Err(DecryptError::HostBindingMismatch)));
+        assert!(matches!(decrypt_cookie_v10(TEST_CIPHERTEXT, &test_key(), 24, ".example.com"), Err(DecryptError::HostBindingMismatch)));
     }
 
     #[test]

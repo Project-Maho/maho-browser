@@ -156,14 +156,14 @@ fn parse_csv_source(
         }
         if let Some(type_column) = columns.type_column {
             let supported_type = spec.supported_type.unwrap_or("");
-            if !field(row, type_column).eq_ignore_ascii_case(supported_type) {
+            if !field(row, type_column).trim().eq_ignore_ascii_case(supported_type) {
                 builder.skip_unsupported_item("non-login CSV item");
                 continue;
             }
         }
 
         builder.import_credential(CredentialCandidate {
-            origin_url: field(row, columns.origin_url).to_string(),
+            origin_url: field(row, columns.origin_url).trim().to_string(),
             username: field(row, columns.username).to_string(),
             password: field(row, columns.password).to_string(),
         });
@@ -203,7 +203,31 @@ fn find_header(header: &[String], name: &str) -> Option<usize> {
 }
 
 fn field(row: &[String], idx: usize) -> &str {
-    row.get(idx).map(String::as_str).unwrap_or("").trim()
+    row.get(idx).map(String::as_str).unwrap_or("")
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+
+    #[test]
+    fn review_csv_credentials_preserve_significant_whitespace() {
+        for (parser, header) in [
+            (parse_onepassword_csv as fn(&[u8]) -> ImportResult<PasswordImportParsedFile>, "Website,Username,Password"),
+            (parse_apple_csv, "URL,Username,Password"),
+            (parse_keepassxc_csv, "URL,Username,Password"),
+            (parse_keepass_classic_csv, "Web Site,Login Name,Password"),
+            (parse_bitwarden_individual_csv, "login_uri,login_username,login_password"),
+            (parse_bitwarden_organization_csv, "login_uri,login_username,login_password"),
+        ] {
+            let input = format!("{header}\nhttps://example.com,\" user \",\" secret \"\nhttps://example.org,user,\"   \"\n");
+            let parsed = parser(input.as_bytes()).unwrap();
+            assert_eq!(parsed.credentials.len(), 2, "whitespace-only password must survive");
+            assert_eq!(parsed.credentials[0].username, " user ");
+            assert_eq!(parsed.credentials[0].password.as_str(), " secret ");
+            assert_eq!(parsed.credentials[1].password.as_str(), "   ");
+        }
+    }
 }
 
 fn missing_required(label: &str, column: &str) -> ImportError {
