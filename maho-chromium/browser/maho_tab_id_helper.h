@@ -28,6 +28,11 @@ class MahoTabIdHelper
   bool has_been_announced() const { return has_been_announced_; }
   void set_has_been_announced(bool announced) { has_been_announced_ = announced; }
 
+  // Process-scoped handle handed to MCP clients. It is bound to this
+  // WebContents for its lifetime, never to the mutable stable tab id.
+  int mcp_id() const { return mcp_id_; }
+  void set_mcp_id(int id) { mcp_id_ = id; }
+
   // Session extra_data key used for persist/restore.
   static constexpr char kExtraDataKey[] = "maho_stable_tab_id";
 
@@ -37,6 +42,7 @@ class MahoTabIdHelper
 
   std::string stable_tab_id_;
   bool has_been_announced_ = false;
+  int mcp_id_ = 0;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };

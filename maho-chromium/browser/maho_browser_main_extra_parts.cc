@@ -945,28 +945,38 @@ class McpTabIdRegistry {
     if (!web_contents) {
       return 0;
     }
-    MahoTabIdHelper::CreateForWebContents(web_contents);
-    MahoTabIdHelper* helper =
-        MahoTabIdHelper::FromWebContents(web_contents);
+    // Enumeration must stay read-only. Minting a helper here (the old
+    // CreateForWebContents call) consumed the session-restore pending-id FIFO
+    // and could brand the wrong WebContents, which is how a listed tab became
+    // unresolvable moments later (-32004). A contents without a helper is not
+    // yet targetable.
+    MahoTabIdHelper* helper = MahoTabIdHelper::FromWebContents(web_contents);
     if (!helper || helper->stable_tab_id().empty() ||
         next_id_ == std::numeric_limits<int>::max()) {
       return 0;
     }
-    auto [it, inserted] = ids_.try_emplace(helper->stable_tab_id(), next_id_);
-    if (inserted) {
-      ++next_id_;
+    // The handle is bound to the WebContents for its lifetime, never to the
+    // mutable stable tab id: restore migration, suspended-tab wake and discard
+    // swaps all re-key the stable id, and re-issuing would orphan a handle a
+    // client already holds.
+    if (helper->mcp_id() != 0) {
+      return helper->mcp_id();
     }
-    return it->second;
+    const int id = next_id_++;
+    helper->set_mcp_id(id);
+    return id;
   }
 
  private:
-  std::map<std::string, int> ids_;
   int next_id_ = 1;
 };
 
 int McpSessionIdOf(content::WebContents* web_contents) {
-  static base::NoDestructor<McpTabIdRegistry> registry;
-  return registry->GetIdFor(web_contents);
+  // McpTabIdRegistry holds only an int, so it is trivially destructible and
+  // base::NoDestructor rejects it; a function-local static is the sanctioned
+  // form for that case and has the same never-destroyed lifetime here.
+  static McpTabIdRegistry registry;
+  return registry.GetIdFor(web_contents);
 }
 
 bool IsStandaloneOnboardingContentsMcpEligible(
@@ -2355,6 +2365,26 @@ std::string FormatMailActionDetails(const std::string& action_name,
           return true;
         });
     AppendStandaloneOnboardingTabInfos(&list);
+    // The inventory aggregates per-window strip state with core-persisted and
+    // standalone entries, so it can report zero active tabs (right after
+    // restore) or several (standalone onboarding is forced active) while the
+    // target resolver addresses exactly one WebContents. Stamp that one so a
+    // listed id and the tab an unqualified call acts on always agree.
+    content::WebContents* resolved = GetActiveWebContents();
+    const int resolved_id = resolved ? McpSessionIdOf(resolved) : 0;
+    bool stamped_active = false;
+    for (auto& tab : list) {
+      tab.is_active = resolved_id != 0 && tab.id == resolved_id;
+      stamped_active = stamped_active || tab.is_active;
+    }
+    if (!stamped_active) {
+      for (auto& tab : list) {
+        if (tab.targetable && tab.tab_strip_index < 0) {
+          tab.is_active = true;
+          break;
+        }
+      }
+    }
     return list;
   }
 
@@ -3752,21 +3782,43 @@ std::string FormatMailActionDetails(const std::string& action_name,
       }
     };
     const uint64_t navigation_epoch = GetNavigationEpoch(tab_id);
-    const RefFrameSignature frame_signature = CaptureRefFrameSignature(wc);
-    std::string frame_sig_str;
-    for (const auto& entry : frame_signature) {
-      if (!frame_sig_str.empty()) {
-        frame_sig_str += ",";
+    auto frame_sig_to_string = [](const RefFrameSignature& signature) {
+      std::string out;
+      for (const auto& entry : signature) {
+        if (!out.empty()) {
+          out += ",";
+        }
+        out += std::to_string(entry.first.child_id.value()) + ":" +
+               std::to_string(entry.first.frame_routing_id) + ":" +
+               entry.second;
       }
-      frame_sig_str += std::to_string(entry.first.child_id.value()) + ":" +
-                       std::to_string(entry.first.frame_routing_id) +
-                       ":" + entry.second;
-    }
+      return out;
+    };
+    RefFrameSignature frame_signature = CaptureRefFrameSignature(wc);
+    std::string frame_sig_str = frame_sig_to_string(frame_signature);
 
     base::TimeTicks t0 = base::TimeTicks::Now();
     ui::AXTreeUpdate update = SnapshotAXTree(wc);
     base::TimeTicks t1 = base::TimeTicks::Now();
     result.renderer_snapshot_ms = (t1 - t0).InMillisecondsF();
+
+    // Frame churn (ad iframes, OOPIF swaps) between the baseline above and the
+    // capture invalidates every ref frame. Retry once from a fresh baseline
+    // before falling through: the fallback still reports an empty tree with no
+    // error field, which callers cannot distinguish from a genuinely blank
+    // page.
+    if (navigation_epoch == GetNavigationEpoch(tab_id) &&
+        frame_signature != CaptureRefFrameSignature(wc)) {
+      RefFrameSignature retry_signature = CaptureRefFrameSignature(wc);
+      ui::AXTreeUpdate retry_update = SnapshotAXTree(wc);
+      if (!retry_update.nodes.empty() &&
+          retry_signature == CaptureRefFrameSignature(wc) &&
+          navigation_epoch == GetNavigationEpoch(tab_id)) {
+        update = std::move(retry_update);
+        frame_signature = std::move(retry_signature);
+        frame_sig_str = frame_sig_to_string(frame_signature);
+      }
+    }
 
     if (navigation_epoch != GetNavigationEpoch(tab_id) ||
         frame_signature != CaptureRefFrameSignature(wc) ||
