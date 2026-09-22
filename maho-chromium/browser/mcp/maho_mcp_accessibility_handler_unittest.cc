@@ -564,6 +564,89 @@ TEST(MahoMcpAccessibilityHandlerTest, HiddenFiltering) {
   }
 }
 
+TEST(MahoMcpAccessibilityHandlerTest, IgnoredWrapperKeepsDescendants) {
+  // Blink serializes <html> as ignored-but-included. The V2 filter must not
+  // prune the whole document at that wrapper: the ignored node itself stays
+  // out of the tree, but its descendants must survive. Regression guard: every
+  // real page collapsed to captured_nodes==2 / serialized_nodes==1 before the
+  // ignored-vs-invisible split.
+  ui::AXTreeUpdate update;
+  update.root_id = 1;
+  update.nodes.resize(4);
+
+  update.nodes[0].id = 1;
+  update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  update.nodes[0].child_ids = {2};
+
+  // Node 2: ignored wrapper (State::kIgnored) — the <html> shape.
+  update.nodes[1].id = 2;
+  update.nodes[1].role = ax::mojom::Role::kGenericContainer;
+  update.nodes[1].AddState(ax::mojom::State::kIgnored);
+  update.nodes[1].child_ids = {3};
+
+  // Node 3: visible button inside the ignored wrapper.
+  update.nodes[2].id = 3;
+  update.nodes[2].role = ax::mojom::Role::kButton;
+  update.nodes[2].SetName("Inside Wrapper");
+  update.nodes[2].child_ids = {4};
+
+  // Node 4: static text inside the same wrapper.
+  update.nodes[3].id = 4;
+  update.nodes[3].role = ax::mojom::Role::kStaticText;
+  update.nodes[3].SetName("Wrapper Label");
+
+  ui::AXTree tree(update);
+  MahoMcpAccessibilityHandler::SnapshotV2Result::TabMetadata tab{
+      .id = 1, .url = "https://example.com/", .title = "Wrapper Test"};
+
+  MahoMcpAccessibilityHandler::RefTable refs;
+  MahoMcpAccessibilityHandler::ObservationCache cache;
+  MahoMcpAccessibilityHandler::SnapshotV2Options options;
+  options.mode = MahoMcpAccessibilityHandler::SnapshotMode::kInteractive;
+  options.include_hidden = false;
+
+  auto res = MahoMcpAccessibilityHandler::BuildSnapshotV2(
+      tree, options, refs, tab, /*navigation_epoch=*/1, "sig1", cache, 1);
+
+  EXPECT_EQ(refs.size(), 1u);
+  EXPECT_NE(res.tree.find("Inside Wrapper"), std::string::npos);
+  EXPECT_NE(res.tree.find("Wrapper Label"), std::string::npos);
+  EXPECT_EQ(res.stats.captured_nodes, 4u);
+
+  // Genuinely invisible subtrees are still pruned whole.
+  ui::AXTreeUpdate hidden_update;
+  hidden_update.root_id = 1;
+  hidden_update.nodes.resize(4);
+
+  hidden_update.nodes[0].id = 1;
+  hidden_update.nodes[0].role = ax::mojom::Role::kRootWebArea;
+  hidden_update.nodes[0].child_ids = {2, 3};
+
+  hidden_update.nodes[1].id = 2;
+  hidden_update.nodes[1].role = ax::mojom::Role::kGenericContainer;
+  hidden_update.nodes[1].AddState(ax::mojom::State::kInvisible);
+  hidden_update.nodes[1].child_ids = {4};
+
+  hidden_update.nodes[2].id = 3;
+  hidden_update.nodes[2].role = ax::mojom::Role::kButton;
+  hidden_update.nodes[2].SetName("Visible Outer");
+
+  hidden_update.nodes[3].id = 4;
+  hidden_update.nodes[3].role = ax::mojom::Role::kButton;
+  hidden_update.nodes[3].SetName("Hidden Inner");
+
+  ui::AXTree hidden_tree(hidden_update);
+  MahoMcpAccessibilityHandler::RefTable hidden_refs;
+  MahoMcpAccessibilityHandler::ObservationCache hidden_cache;
+  auto hidden_res = MahoMcpAccessibilityHandler::BuildSnapshotV2(
+      hidden_tree, options, hidden_refs, tab, /*navigation_epoch=*/1, "sig2",
+      hidden_cache, 1);
+
+  EXPECT_EQ(hidden_refs.size(), 1u);
+  EXPECT_EQ(hidden_res.tree.find("Hidden Inner"), std::string::npos);
+  EXPECT_NE(hidden_res.tree.find("Visible Outer"), std::string::npos);
+}
+
 TEST(MahoMcpAccessibilityHandlerTest, DiffAddRemoveChange) {
   // Snapshot 1: Dialog with email textbox and sign in button
   ui::AXTreeUpdate update1;

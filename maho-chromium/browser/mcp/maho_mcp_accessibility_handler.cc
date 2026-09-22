@@ -128,6 +128,35 @@ struct IntermediateNode {
   std::vector<IntermediateNode> children;
 };
 
+// Hidden-ness has two different consequences for a snapshot. A genuinely
+// invisible subtree (State::kInvisible, aria-hidden, hidden attribute) is
+// pruned whole. An *ignored-but-present* container is never emitted itself,
+// but its descendants still belong to the snapshot: Blink deliberately keeps
+// the <html> element (and similar wrappers) in the tree as ignored-but-
+// included (ui::AXNodeData::IsIgnored() == State::kIgnored || Role::kNone).
+// Pruning the subtree at such a wrapper severed every document at <html>,
+// collapsing real-page snapshots to a single serialized node.
+bool IsInvisibleSubtree(const ui::AXNodeData& data) {
+  if (data.IsInvisible()) {
+    return true;
+  }
+  for (const auto& attr : data.html_attributes) {
+    if (attr.first == "aria-hidden" && attr.second == "true") {
+      return true;
+    }
+    if (attr.first == "hidden") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Ignored wrappers are traversed but never emitted; the keep/flatten decision
+// splices their descendants up into the parent.
+bool IsIgnoredButTraversable(const ui::AXNodeData& data) {
+  return data.IsIgnored();
+}
+
 void FilterSubtreeRecursive(
     const ui::AXNode* node,
     int current_depth,
@@ -141,8 +170,13 @@ void FilterSubtreeRecursive(
   }
   ++captured_count;
 
-  if (!options.include_hidden && MahoMcpAccessibilityHandler::IsNodeHidden(node)) {
-    return;
+  bool traversable_only = false;
+  if (!options.include_hidden) {
+    const ui::AXNodeData& node_data = node->data();
+    if (IsInvisibleSubtree(node_data)) {
+      return;
+    }
+    traversable_only = IsIgnoredButTraversable(node_data);
   }
 
   if (options.max_depth.has_value() && current_depth > *options.max_depth) {
@@ -269,7 +303,10 @@ void FilterSubtreeRecursive(
 
   // Decide whether to keep or flatten
   bool keep = false;
-  if (options.mode == MahoMcpAccessibilityHandler::SnapshotMode::kFull) {
+  if (traversable_only) {
+    // Ignored wrapper: never emitted; children flatten up to the parent.
+    keep = false;
+  } else if (options.mode == MahoMcpAccessibilityHandler::SnapshotMode::kFull) {
     keep = true;
   } else if (options.mode ==
              MahoMcpAccessibilityHandler::SnapshotMode::kCompact) {
