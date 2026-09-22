@@ -40,7 +40,7 @@ import {Toaster} from '@ui/sonner';
 import {ArrowLeft, ArrowUpRight} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
-import {BookmarksPane, BrowserDataImportCard as DomainBrowserDataImportCard, DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
+import {BrowserDataImportCard as DomainBrowserDataImportCard, DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
 import {DiscordCommunitySettingsSection} from './discord_community_settings_section.js';
 import {MahoSettingsStore} from './store.js';
 
@@ -228,9 +228,6 @@ function SettingsApp({store}: {store: MahoSettingsStore}) {
                               if (pane.externalAction === 'openExtensions' &&
                                   externalActionDisposition === 'pane') {
                                 store.getHandler().openExtensionsPage();
-                              } else if (pane.externalAction === 'openBookmarks' &&
-                                         externalActionDisposition === 'pane') {
-                                store.getHandler().openBookmarksPage();
                               } else {
                                 store.selectPane(pane.key);
                               }
@@ -482,6 +479,12 @@ function LivePaneSection(
   const cards = useMemo(() => {
     const sections = LIVE_PANE_SECTION_MANIFEST[pane.key];
     if (!sections) {
+      // Panes that declare no sections and expose no live settings (e.g. the
+      // import pane, which is entirely custom content) must not render an
+      // empty settings card; it reads as a broken surface.
+      if (relevantSettings.length === 0) {
+        return [];
+      }
       return [{
         description: '',
         missingSettingKeys: [],
@@ -521,14 +524,9 @@ function LivePaneSection(
       ) : null}
       {pane.key === 'general' ? <DiscordCommunitySettingsSection /> : null}
       {pane.key === 'general' ? <BrowserVersionCard store={store} /> : null}
-      {pane.key === 'general' ? (
+      {pane.key === 'import' ? (
         <div className="mb-6">
           <DomainBrowserDataImportCard handler={store.getHandler()} />
-        </div>
-      ) : null}
-      {pane.key === 'bookmarks' ? (
-        <div className="mb-6">
-          <BookmarksPane handler={store.getHandler()} />
         </div>
       ) : null}
       {pane.key === 'extensions' ? (

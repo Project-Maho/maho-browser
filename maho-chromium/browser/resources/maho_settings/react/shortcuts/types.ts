@@ -5,7 +5,6 @@ export type ShortcutActionId =
   | 'focus_url_bar'
   | 'copy_url'
   | 'open_history'
-  | 'open_bookmarks'
   | 'open_downloads'
   | 'new_space'
   | 'go_back'

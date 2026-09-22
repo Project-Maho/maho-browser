@@ -3413,28 +3413,6 @@ function ActionError({message}: {message: string}) {
   );
 }
 
-export function BookmarksPane({handler}: {handler: PageHandlerRemote}) {
-  return (
-    <SectionCard
-      title="Bookmarks"
-      description="Manage bookmarks and folders in the browser."
-    >
-      <div className="flex items-center justify-between border-t border-border px-6 py-4">
-        <div>
-          <div className="text-sm font-medium text-foreground">Bookmark Manager</div>
-          <div className="text-xs text-muted-foreground">
-            Opens chrome://bookmarks in a new tab.
-          </div>
-        </div>
-        <ActionButton
-          label="Open Bookmark Manager"
-          onClick={() => handler.openBookmarksPage()}
-        />
-      </div>
-    </SectionCard>
-  );
-}
-
 export function BrowserDataImportCard({handler}: {handler: PageHandlerRemote}) {
   return (
     <SectionCard
@@ -3457,10 +3435,4 @@ export function BrowserDataImportCard({handler}: {handler: PageHandlerRemote}) {
   );
 }
 
-export function GeneralPane({store, handler}: {store?: MahoSettingsStore; handler: PageHandlerRemote}) {
-  return (
-    <div className="space-y-6">
-      <BrowserDataImportCard handler={handler} />
-    </div>
-  );
-}
+

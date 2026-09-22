@@ -19,7 +19,6 @@ export const ACTION_ICONS: Record<ShortcutActionId, React.ComponentType<any>> = 
   "focus_url_bar": Search,
   "copy_url": Copy,
   "open_history": History,
-  "open_bookmarks": Pin,
   "open_downloads": Download,
   "new_space": Sparkles,
   "go_back": Check,

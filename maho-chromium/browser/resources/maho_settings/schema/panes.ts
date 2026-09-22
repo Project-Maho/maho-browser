@@ -263,16 +263,17 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
     domain: 'productivity',
     externalAction: 'openExtensions',
   },
+  // Maho has no bookmark surface of its own, so Settings owns the import of
+  // other browsers' bookmarks/profiles instead of linking to chrome://bookmarks.
   {
-    key: 'bookmarks',
+    key: 'import',
     scope: 'profile',
     selectedProfileSupport: 'host-only',
-    symbol: 'BM',
-    navTitle: 'Bookmarks',
-    title: 'Bookmarks',
+    symbol: 'IM',
+    navTitle: 'Import data',
+    title: 'Import browser data',
     kind: 'live',
     domain: 'productivity',
-    externalAction: 'openBookmarks',
   },
   {
     key: 'maho-mini',

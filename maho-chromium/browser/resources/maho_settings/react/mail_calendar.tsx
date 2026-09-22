@@ -31,13 +31,52 @@ interface AccountCalendar {
   visible: boolean;
 }
 
-const DEFAULT_CALENDAR_PREFS: CalendarPrefs = {
+// Mirrors the rows seeded by the mail-core migration (calendar.*), which is
+// also what the Mail calendar falls back to, so Settings and the calendar
+// agree even before the first write.
+export const DEFAULT_CALENDAR_PREFS: CalendarPrefs = {
   hide_weekends: false,
-  week_start: 1,
+  week_start: 0,
   working_hours_start: '09:00',
-  working_hours_end: '17:00',
-  default_reminder_minutes: 15,
+  working_hours_end: '18:00',
+  default_reminder_minutes: 10,
 };
+
+// The page handler always answers with a complete object, but a failed or
+// stale backend can still put `null`, a bare string, or a partial dict on the
+// wire. Normalizing at this boundary keeps pane state a real CalendarPrefs:
+// reading `hide_weekends` off a null payload threw during render and tore down
+// the whole settings app.
+export function normalizeCalendarPrefs(prefsJson: string): CalendarPrefs {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(prefsJson);
+  } catch {
+    return DEFAULT_CALENDAR_PREFS;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return DEFAULT_CALENDAR_PREFS;
+  }
+  const source = parsed as Record<string, unknown>;
+  return {
+    hide_weekends: typeof source.hide_weekends === 'boolean' ?
+        source.hide_weekends :
+        DEFAULT_CALENDAR_PREFS.hide_weekends,
+    week_start: typeof source.week_start === 'number' ?
+        source.week_start :
+        DEFAULT_CALENDAR_PREFS.week_start,
+    working_hours_start: typeof source.working_hours_start === 'string' ?
+        source.working_hours_start :
+        DEFAULT_CALENDAR_PREFS.working_hours_start,
+    working_hours_end: typeof source.working_hours_end === 'string' ?
+        source.working_hours_end :
+        DEFAULT_CALENDAR_PREFS.working_hours_end,
+    default_reminder_minutes:
+        typeof source.default_reminder_minutes === 'number' ?
+        source.default_reminder_minutes :
+        DEFAULT_CALENDAR_PREFS.default_reminder_minutes,
+  };
+}
 
 export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const handler = store.getHandler();
@@ -64,11 +103,8 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
         setModelState(classifyMailSettingsFailure(prefsJson, 'Failed to load calendar settings'));
         return;
       }
-      let nextPrefs = DEFAULT_CALENDAR_PREFS;
-      if (prefsJson) {
-        nextPrefs = JSON.parse(prefsJson) as CalendarPrefs;
-        setPrefs(nextPrefs);
-      }
+      const nextPrefs = normalizeCalendarPrefs(prefsJson);
+      setPrefs(nextPrefs);
 
       const {ok: okCat, resultJson: catJson} = await handler.mailListCalendarCategories('');
       if (mountedRef.current) {
@@ -182,6 +218,7 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="5">5 minutes before</SelectItem>
+                    <SelectItem value="10">10 minutes before</SelectItem>
                     <SelectItem value="15">15 minutes before</SelectItem>
                     <SelectItem value="30">30 minutes before</SelectItem>
                     <SelectItem value="60">1 hour before</SelectItem>

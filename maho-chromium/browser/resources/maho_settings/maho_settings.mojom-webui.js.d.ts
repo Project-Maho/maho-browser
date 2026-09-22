@@ -915,7 +915,6 @@ export class PageHandlerRemote {
   }>;
   openExtensionsPage(): void;
   openChromiumSettingsPage(): void;
-  openBookmarksPage(): void;
   openMigrationDialog(): void;
   setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
   clearBYOKKey(provider: string): Promise<{success: boolean}>;
