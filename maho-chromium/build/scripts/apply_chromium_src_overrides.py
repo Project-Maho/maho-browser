@@ -11645,6 +11645,63 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard='    "//maho/browser:maho_core_holder",\n',
         ),
     ],
+    "chrome/browser/ui/views/permissions/permission_prompt_factory.cc": [
+        Replacement(
+            old=(
+                "  // Suppress permission prompts if the omnibox is being edited or is empty.\n"
+                "  LocationBar* location_bar = GetLocationBar(browser);\n"
+                "  bool can_display_prompt = !(location_bar && location_bar->IsEditingOrEmpty());\n"
+            ),
+            new=(
+                "  // Suppress permission prompts if the omnibox is being edited or is empty.\n"
+                "  // Maho hides the toolbar, so an undrawn location bar is not an editing\n"
+                "  // omnibox. Dropping the prompt here skips the bubble and the OS dialog.\n"
+                "  LocationBar* location_bar = GetLocationBar(browser);\n"
+                "  bool can_display_prompt = !(location_bar && location_bar->IsDrawn() &&\n"
+                "                              location_bar->IsEditingOrEmpty());\n"
+            ),
+            description=(
+                "Maho: do not drop site permission prompts when the toolbar is hidden"
+            ),
+            guard=(
+                "Maho hides the toolbar, so an undrawn location bar is not an editing"
+            ),
+        ),
+    ],
+    "chrome/browser/ui/views/bubble_anchor_util_views.cc": [
+        Replacement(
+            old=(
+                "  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);\n"
+                "  // Get position in view (taking RTL UI into account).\n"
+                "  int x_within_browser_view = browser_view->GetMirroredXInView(\n"
+                "      bubble_anchor_util::kNoToolbarLeftOffset);\n"
+            ),
+            new=(
+                "  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);\n"
+                "  // Maho hides the toolbar. The window-origin fallback lands in the sidebar\n"
+                "  // rail, so anchor at the top of the visible page when it is drawn.\n"
+                "  if (auto* contents = browser_view->contents_container()) {\n"
+                "    if (contents->IsDrawn()) {\n"
+                "      const gfx::Rect contents_bounds = contents->GetBoundsInScreen();\n"
+                "      if (!contents_bounds.IsEmpty()) {\n"
+                "        return gfx::Rect(\n"
+                "            contents_bounds.x() + bubble_anchor_util::kNoToolbarLeftOffset,\n"
+                "            contents_bounds.y(), 0, 0);\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "  // Get position in view (taking RTL UI into account).\n"
+                "  int x_within_browser_view = browser_view->GetMirroredXInView(\n"
+                "      bubble_anchor_util::kNoToolbarLeftOffset);\n"
+            ),
+            description=(
+                "Maho: anchor hidden-toolbar permission bubbles to the visible page"
+            ),
+            guard=(
+                "Maho hides the toolbar. The window-origin fallback lands in the sidebar"
+            ),
+        ),
+    ],
 }
 
 

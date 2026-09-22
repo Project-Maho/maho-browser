@@ -61,6 +61,22 @@ _STARTUP_BROWSER_CREATOR_IMPL_PATH = (
     "chrome/browser/ui/startup/startup_browser_creator_impl.cc"
 )
 _BROWSER_CC_PATH = "chrome/browser/ui/browser.cc"
+_PERMISSION_PROMPT_FACTORY_PATH = (
+    "chrome/browser/ui/views/permissions/permission_prompt_factory.cc"
+)
+_BUBBLE_ANCHOR_UTIL_PATH = "chrome/browser/ui/views/bubble_anchor_util_views.cc"
+
+_UPSTREAM_IGNORE_EMPTY_OMNIBOX = (
+    "  // Suppress permission prompts if the omnibox is being edited or is empty.\n"
+    "  LocationBar* location_bar = GetLocationBar(browser);\n"
+    "  bool can_display_prompt = !(location_bar && location_bar->IsEditingOrEmpty());\n"
+)
+_UPSTREAM_PAGE_INFO_ANCHOR_RECT = (
+    "  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);\n"
+    "  // Get position in view (taking RTL UI into account).\n"
+    "  int x_within_browser_view = browser_view->GetMirroredXInView(\n"
+    "      bubble_anchor_util::kNoToolbarLeftOffset);\n"
+)
 
 _UPSTREAM_RUN_FILE_CHOOSER = (
     "void Browser::RunFileChooser(\n"
@@ -1848,6 +1864,43 @@ class MahoDesktopDefectRegressionTest(unittest.TestCase):
         body_end = output.index("\n}\n", body_start)
         body = output[body_start:body_end]
         self.assertIn("maho::OpenMahoSettingsPane(", body)
+
+    def test_hidden_toolbar_still_shows_site_permission_prompt(self):
+        ignore = next(
+            item
+            for item in REPLACEMENTS[_PERMISSION_PROMPT_FACTORY_PATH]
+            if item.old == _UPSTREAM_IGNORE_EMPTY_OMNIBOX
+        )
+        anchor = next(
+            item
+            for item in REPLACEMENTS[_BUBBLE_ANCHOR_UTIL_PATH]
+            if item.old == _UPSTREAM_PAGE_INFO_ANCHOR_RECT
+        )
+
+        _changed, _applied, ignore_output = self._apply(
+            _PERMISSION_PROMPT_FACTORY_PATH,
+            "permission_prompt_factory.cc",
+            _UPSTREAM_IGNORE_EMPTY_OMNIBOX,
+            [ignore],
+        )
+        self.assertIn("location_bar->IsDrawn()", ignore_output)
+        self.assertNotIn(
+            "!(location_bar && location_bar->IsEditingOrEmpty())",
+            ignore_output,
+        )
+
+        _changed, _applied, anchor_output = self._apply(
+            _BUBBLE_ANCHOR_UTIL_PATH,
+            "bubble_anchor_util_views.cc",
+            _UPSTREAM_PAGE_INFO_ANCHOR_RECT,
+            [anchor],
+        )
+        self.assertIn("contents_container()", anchor_output)
+        self.assertIn("contents->GetBoundsInScreen()", anchor_output)
+        self.assertIn(
+            "bubble_anchor_util::kNoToolbarLeftOffset",
+            anchor_output,
+        )
 
 
 if __name__ == "__main__":
