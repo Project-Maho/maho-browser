@@ -131,6 +131,22 @@ class MahoSpacesOverlayControllerTest : public views::ViewsTestBase {
     ctrl.OnWidgetDestroying(widget);
   }
 
+  bool IsHideWatchdogRunning(const MahoSpacesOverlayController& ctrl) const {
+    return ctrl.hide_watchdog_.IsRunning();
+  }
+
+  // Invokes the same completion path that both the fade-out animation
+  // callbacks and the hide watchdog use.
+  void CallFinishHide(MahoSpacesOverlayController& ctrl) {
+    ctrl.FinishHide();
+  }
+
+  // Enables the real (animated) hide path on a controller built by
+  // MakeController(), which otherwise short-circuits animations.
+  void EnableAnimatedHide(MahoSpacesOverlayController& ctrl) {
+    ctrl.set_disable_animation_for_testing(false);
+  }
+
  private:
   gfx::ScopedAnimationDurationScaleMode non_zero_duration_;
 };
@@ -295,8 +311,17 @@ TEST_F(MahoSpacesOverlayControllerTest,
 // ---------------------------------------------------------------------------
 
 // Parent-widget deactivation while NOT in the is_showing_ window must trigger
-// Dismiss (setting is_hiding_), provided the overlay widget is not itself
-// active.
+// Dismiss, provided the overlay widget is not itself active.
+//
+// The observable outcome is that the overlay is gone, not that is_hiding_ is
+// momentarily true: with no MahoSpacesOverlayView attached there is no layer
+// to animate, so Hide() closes the widget synchronously and clears is_hiding_
+// again before this test can observe it. Asserting on is_hiding_ therefore
+// only ever passed when Dismiss was NOT reached (as on a window manager that
+// keeps the overlay active), which is the opposite of this contract.
+//
+// Widget activation is owned by the window manager and Deactivate() merely
+// posts a request, so the precondition is checked rather than assumed.
 TEST_F(MahoSpacesOverlayControllerTest,
        ParentDeactivationWhileOverlayNotActiveTriggersDismiss) {
   auto ctrl = MakeController();
@@ -304,19 +329,27 @@ TEST_F(MahoSpacesOverlayControllerTest,
   std::unique_ptr<views::Widget> parent = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
   parent->Show();
 
+  // Use the real hide path so the dismissal runs to completion instead of
+  // parking behind the animation short-circuit.
+  EnableAnimatedHide(*ctrl);
   InjectVisibleWidget(*ctrl, parent.get());
   ASSERT_TRUE(ctrl->IsVisible());
   ASSERT_FALSE(GetIsShowing(*ctrl));
 
-  // Simulate overlay widget NOT active (not the currently active widget).
-  // Our injected widget is separate from parent, and GetWidget() returns it.
-  // Since it was not Activated via Show(), IsActive() is false on it → the
-  // guard condition `widget_->IsActive()` is false → Dismiss fires.
   parent->Activate();
   GetWidget(*ctrl)->Deactivate();
+
+  if (GetWidget(*ctrl)->IsActive()) {
+    GTEST_SKIP() << "Window manager kept the overlay widget active; the "
+                    "not-active precondition of this contract does not hold.";
+  }
+
   CallOnWidgetActivationChanged(*ctrl, parent.get(), false);
 
-  EXPECT_TRUE(GetIsHiding(*ctrl));
+  EXPECT_EQ(GetWidget(*ctrl), nullptr)
+      << "Parent deactivation outside the activation-handoff window must "
+         "dismiss the overlay";
+  EXPECT_FALSE(ctrl->IsVisible());
 
   ReleaseInjectedWidget(*ctrl);
 }
@@ -536,6 +569,83 @@ TEST_F(MahoSpacesOverlayControllerTest,
 
   // Destructor calls CloseWidget(false) — must not crash.
   ctrl.reset();
+}
+
+// ---------------------------------------------------------------------------
+// Hide — the overlay must never keep eating mouse input
+//
+// The overlay widget covers the whole web-contents area. Hiding only animates
+// a child layer's opacity, so until the widget is destroyed it still
+// hit-tests. If teardown is delayed or lost, the window looks normal but every
+// click and scroll over the page is swallowed while the sidebar and keyboard
+// keep working. These tests pin both halves of the structural fix: input is
+// dropped immediately, and destruction cannot depend on an animation callback
+// that may never arrive.
+// ---------------------------------------------------------------------------
+
+TEST_F(MahoSpacesOverlayControllerTest,
+       HideStopsProcessingInputBeforeWidgetIsDestroyed) {
+  std::unique_ptr<views::Widget> parent = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto ctrl = MakeController();
+  InjectVisibleWidget(*ctrl, parent.get());
+
+  views::View* root_view = GetWidget(*ctrl)->GetRootView();
+  ASSERT_NE(root_view, nullptr);
+  ASSERT_TRUE(root_view->GetCanProcessEventsWithinSubtree());
+
+  ctrl->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
+
+  // The widget still exists here (teardown is asynchronous), so the only thing
+  // preventing it from swallowing mouse events is this flag.
+  ASSERT_NE(GetWidget(*ctrl), nullptr);
+  EXPECT_FALSE(root_view->GetCanProcessEventsWithinSubtree());
+
+  ReleaseInjectedWidget(*ctrl);
+}
+
+TEST_F(MahoSpacesOverlayControllerTest,
+       HideWithoutAnimatableSurfaceDestroysWidgetSynchronously) {
+  std::unique_ptr<views::Widget> parent = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto ctrl = MakeController();
+  EnableAnimatedHide(*ctrl);
+  InjectVisibleWidget(*ctrl, parent.get());
+
+  // No MahoSpacesOverlayView is attached, so there is no layer to animate and
+  // no animation callback will ever fire. The widget must still go away rather
+  // than linger over the web contents.
+  ctrl->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
+
+  EXPECT_EQ(GetWidget(*ctrl), nullptr)
+      << "Hide() must not leave a widget alive when no animation can report "
+         "completion";
+  EXPECT_FALSE(IsHideWatchdogRunning(*ctrl));
+  EXPECT_FALSE(GetIsHiding(*ctrl));
+}
+
+TEST_F(MahoSpacesOverlayControllerTest,
+       FinishHideDestroysWidgetStrandedByHide) {
+  std::unique_ptr<views::Widget> parent = CreateTestWidget(views::Widget::InitParams::CLIENT_OWNS_WIDGET);
+  parent->Show();
+
+  auto ctrl = MakeController();
+  InjectVisibleWidget(*ctrl, parent.get());
+
+  // MakeController() disables animations, so Hide() returns with is_hiding_
+  // set and the widget still alive - the same stranded state a dropped
+  // OnEnded/OnAborted leaves behind in production.
+  ctrl->Dismiss(MahoSpacesOverlayController::DismissReason::kExplicitCancel);
+  ASSERT_TRUE(GetIsHiding(*ctrl));
+  ASSERT_NE(GetWidget(*ctrl), nullptr);
+
+  // FinishHide() is the completion path the watchdog invokes on timeout.
+  CallFinishHide(*ctrl);
+
+  EXPECT_EQ(GetWidget(*ctrl), nullptr);
+  EXPECT_FALSE(GetIsHiding(*ctrl));
 }
 
 }  // namespace

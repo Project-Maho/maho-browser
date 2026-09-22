@@ -8,6 +8,7 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/timer/timer.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/gfx/geometry/rect.h"
@@ -91,6 +92,10 @@ class MahoSpacesOverlayController : public views::WidgetObserver,
   // the new active state.
   bool is_showing_ = false;
   bool disable_animation_for_testing_ = false;
+  // Guarantees the overlay widget is destroyed even when the fade-out
+  // animation never reports completion. Without it a dropped OnEnded/OnAborted
+  // leaves a full-size, invisible widget hit-testing over the web contents.
+  base::OneShotTimer hide_watchdog_;
   base::RepeatingClosure dismiss_callback_;
   MahoSidebarPalette palette_;
   base::WeakPtrFactory<MahoSpacesOverlayController> weak_factory_{this};

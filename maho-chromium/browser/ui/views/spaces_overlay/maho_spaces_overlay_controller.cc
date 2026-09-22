@@ -27,6 +27,11 @@ constexpr base::TimeDelta kFadeInDuration = base::Milliseconds(180);
 constexpr base::TimeDelta kFadeOutDuration = base::Milliseconds(140);
 constexpr int kShowSlideOffsetDp = 12;
 
+// Grace added to the fade-out duration before the hide watchdog force-closes
+// the widget. Long enough that the animation callback normally wins the race,
+// short enough that a dropped callback cannot strand the overlay.
+constexpr base::TimeDelta kHideWatchdogGrace = base::Milliseconds(250);
+
 }  // namespace
 
 MahoSpacesOverlayController::MahoSpacesOverlayController(Browser* browser)
@@ -172,6 +177,7 @@ void MahoSpacesOverlayController::OnWidgetDestroying(views::Widget* widget) {
 
   if (widget == widget_.get()) {
     widget_->RemoveObserver(this);
+    hide_watchdog_.Stop();
     weak_factory_.InvalidateWeakPtrs();
     is_hiding_ = false;
     is_showing_ = false;
@@ -223,6 +229,18 @@ void MahoSpacesOverlayController::Hide() {
 
   is_hiding_ = true;
 
+  // The overlay widget spans the whole web-contents area and keeps hit-testing
+  // for as long as it exists. The fade-out below only animates a child layer's
+  // opacity, so an overlay that has visually disappeared still swallows mouse
+  // input. Drop input at the start of the hide rather than relying on teardown
+  // to arrive: a delayed or dropped close can then never leave an invisible
+  // widget eating clicks and scrolls over the page. Keyboard input is
+  // unaffected by widget hit-testing, which is why that failure mode presents
+  // as "mouse dead, keyboard fine".
+  if (views::View* root_view = widget_->GetRootView()) {
+    root_view->SetCanProcessEventsWithinSubtree(false);
+  }
+
   if (parent_widget_) {
     parent_widget_->RemoveObserver(this);
     parent_widget_ = nullptr;
@@ -237,6 +255,15 @@ void MahoSpacesOverlayController::Hide() {
     CloseWidget(restore_focus_on_hide_);
     return;
   }
+
+  // Destruction must not hang off the animation callbacks alone. A preempted
+  // animation, or one whose layer leaves the tree mid-flight, delivers neither
+  // OnEnded nor OnAborted and would strand the widget forever. The watchdog
+  // closes it regardless; whichever path runs first wins, since CloseWidget()
+  // stops the timer and FinishHide() is a no-op once widget_ is gone.
+  hide_watchdog_.Start(FROM_HERE, kFadeOutDuration + kHideWatchdogGrace,
+                       base::BindOnce(&MahoSpacesOverlayController::FinishHide,
+                                      base::Unretained(this)));
 
   views::AnimationBuilder()
       .OnEnded(base::BindOnce(&MahoSpacesOverlayController::FinishHide,
@@ -253,6 +280,7 @@ void MahoSpacesOverlayController::Hide() {
 
 void MahoSpacesOverlayController::CloseWidget(bool restore_focus,
                                               bool suppress_dismiss_callback) {
+  hide_watchdog_.Stop();
   weak_factory_.InvalidateWeakPtrs();
   if (dismiss_callback_ && !suppress_dismiss_callback) {
     dismiss_callback_.Run();

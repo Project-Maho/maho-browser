@@ -386,7 +386,11 @@ void MahoTabWakeHelper::DidFirstVisuallyNonEmptyPaint() {
 }
 
 void MahoTabWakeHelper::WebContentsDestroyed() {
-  overlay_ = nullptr;
+  // Detach the overlay from the contents view rather than only dropping the
+  // pointer: the view is owned by contents_web_view(), which outlives this
+  // helper. Clearing overlay_ alone made the destructor's RemoveOverlay() a
+  // no-op and left the wake screenshot parented to the live contents view.
+  RemoveOverlay();
 }
 
 void MahoTabWakeHelper::RemoveOverlay() {
