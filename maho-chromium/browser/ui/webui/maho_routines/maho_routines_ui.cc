@@ -3,6 +3,7 @@
 #include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"
 
 #include "base/functional/bind.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/task/single_thread_task_runner.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -12,6 +13,7 @@
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_data_source.h"
 #include "content/public/common/url_constants.h"
 #include "maho/browser/ui/webui/maho_ai/maho_ai_pending_surface.h"
 #include "maho/browser/ui/webui/maho_webui_private_boundary.h"
@@ -30,6 +32,27 @@ WEB_UI_CONTROLLER_TYPE_IMPL(MahoRoutinesUI)
 MahoRoutinesUI::MahoRoutinesUI(content::WebUI* web_ui)
     : ui::MojoWebUIController(web_ui, /*enable_chrome_send=*/false) {
   Profile* profile = Profile::FromWebUI(web_ui);
+  // The handoff below runs from this constructor, so the navigation has to
+  // reach commit. A chrome:// load goes through the WebUI URL loader, which
+  // fails with ERR_INVALID_URL when no WebUIDataSource is registered for the
+  // host (content/browser/webui/web_ui_url_loader_factory.cc); that failure
+  // precedes commit, so without a data source this controller is never
+  // constructed and the redirect silently never happens. Serve a throwaway
+  // document: the handoff closes this tab on the next task regardless.
+  if (profile) {
+    content::WebUIDataSource* source = content::WebUIDataSource::CreateAndAdd(
+        profile, maho::kMahoRoutinesHost);
+    source->SetRequestFilter(
+        base::BindRepeating([](const std::string&) { return true; }),
+        base::BindRepeating([](const std::string&,
+                               content::WebUIDataSource::GotDataCallback
+                                   callback) {
+          std::move(callback).Run(
+              base::MakeRefCounted<base::RefCountedString>(std::string(
+                  "<!doctype html><meta charset=\"utf-8\">"
+                  "<title>Maho Routines</title>")));
+        }));
+  }
   content::WebContents* host = web_ui->GetWebContents();
   Browser* browser = host ? chrome::FindBrowserWithTab(host) : nullptr;
   if (!profile || !browser || browser->is_type_popup() ||

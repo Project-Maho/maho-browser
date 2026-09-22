@@ -3080,15 +3080,23 @@ std::string FormatMailActionDetails(const std::string& action_name,
               CreateSessionServiceTabHelper(new_contents.get());
               MahoTabIdHelper::CreateForWebContents(new_contents.get());
               new_tab_id = McpSessionIdOf(new_contents.get());
+              // Attach BEFORE navigating. WebUI controllers whose constructor
+              // resolves the owning Browser (chrome::FindBrowserWithTab) run
+              // at commit time; starting the navigation first commits while
+              // the WebContents is still detached from every tab strip, so
+              // such controllers bail and their handoff (e.g.
+              // chrome://maho-routines) silently never runs. This matches the
+              // upstream AddTabAt-then-LoadURL order.
+              content::WebContents* raw_contents = new_contents.get();
+              model->AppendWebContents(std::move(new_contents),
+                                       /*foreground=*/true);
               if (!url.is_empty() && url.spec() != "about:blank") {
                 content::NavigationController::LoadURLParams nav_params(url);
                 nav_params.transition_type = ui::PageTransitionFromInt(
                     ui::PAGE_TRANSITION_TYPED |
                     ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
-                new_contents->GetController().LoadURLWithParams(nav_params);
+                raw_contents->GetController().LoadURLWithParams(nav_params);
               }
-              model->AppendWebContents(std::move(new_contents),
-                                       /*foreground=*/true);
             }
             return false;
           }
