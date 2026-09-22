@@ -14594,6 +14594,24 @@ struct CreateCustomRoutineInput {
     trigger: Option<String>,
 }
 
+/// Partial-update payload for `maho_routines_update_custom`. Absent fields
+/// keep the stored value. When `schedule` (cron) is supplied any event
+/// `trigger` is cleared, and when `trigger` (an event string) is supplied the
+/// cron `schedule` is cleared, so a routine carries at most one trigger kind.
+#[derive(serde::Deserialize)]
+struct UpdateCustomRoutineInput {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    schedule: Option<String>,
+    #[serde(default)]
+    trigger: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
 #[derive(serde::Deserialize)]
 struct FireRoutineEventInput {
     kind: String,
@@ -14746,6 +14764,104 @@ pub unsafe extern "C" fn maho_routines_delete_custom(
             match storage.delete_custom_routine(id_str) {
                 Ok(true) => 0,
                 Ok(false) => -1,
+                Err(_) => -1,
+            }
+        },
+        -1
+    )
+}
+
+/// Update fields of a user-defined routine identified by `id`. JSON payload
+/// `{name?,prompt?,schedule?,trigger?,enabled?}` where absent fields keep the
+/// stored value; supplying `schedule` clears any event `trigger` and vice
+/// versa. Built-in routine ids are never updatable. Returns 0 on success, -1
+/// on error (null args / parse failure / invalid schedule-or-trigger / empty
+/// name-or-prompt / storage failure), -2 when no custom routine exists with
+/// `id`.
+///
+/// # Safety
+/// `core` must be a valid pointer returned by `maho_core_new`.
+/// `id` and `json` must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn maho_routines_update_custom(
+    core: *mut MahoCore,
+    id: *const c_char,
+    json: *const c_char,
+) -> i32 {
+    ffi_safe!(
+        {
+            if core.is_null() || id.is_null() || json.is_null() {
+                return -1;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return -1;
+            }
+            let id_str = match CStr::from_ptr(id).to_str() {
+                Ok(s) => s,
+                Err(_) => return -1,
+            };
+            if id_str.trim().is_empty() {
+                return -1;
+            }
+            let json_str = match CStr::from_ptr(json).to_str() {
+                Ok(s) => s,
+                Err(_) => return -1,
+            };
+            let input: UpdateCustomRoutineInput = match serde_json::from_str(json_str) {
+                Ok(v) => v,
+                Err(_) => return -1,
+            };
+            if input.name.as_ref().is_some_and(|n| n.trim().is_empty())
+                || input.prompt.as_ref().is_some_and(|p| p.trim().is_empty())
+            {
+                return -1;
+            }
+            // Normalize blank strings to None so an empty form field is treated as
+            // "no trigger change" rather than an invalid one.
+            let schedule = input.schedule.filter(|s| !s.trim().is_empty());
+            let trigger = input.trigger.filter(|s| !s.trim().is_empty());
+            if let Some(ref cron) = schedule {
+                if maho_core::routines::CronSchedule::parse(cron).is_none() {
+                    return -1;
+                }
+            }
+            if let Some(ref ev) = trigger {
+                if maho_core::routines::RoutineEvent::parse(ev).is_none() {
+                    return -1;
+                }
+            }
+            let db_path = match (&*core).sqlite_db_path() {
+                Some(p) => p.to_string(),
+                None => return -1,
+            };
+            let storage = match maho_storage::sqlite::SqliteStorage::open(&db_path) {
+                Ok(s) => s,
+                Err(_) => return -1,
+            };
+            let existing = match storage.get_custom_routine(id_str) {
+                Ok(Some(existing)) => existing,
+                Ok(None) => return -2,
+                Err(_) => return -1,
+            };
+            // A routine carries at most one trigger kind: supplying one clears
+            // the other instead of letting both linger.
+            let (schedule, trigger) = match (&schedule, &trigger) {
+                (Some(_), _) => (schedule, None),
+                (None, Some(_)) => (None, trigger),
+                (None, None) => (existing.schedule.clone(), existing.trigger.clone()),
+            };
+            let routine = maho_storage::CustomRoutine {
+                id: id_str.to_string(),
+                name: input.name.unwrap_or(existing.name),
+                prompt: input.prompt.unwrap_or(existing.prompt),
+                schedule,
+                trigger,
+                enabled: input.enabled.unwrap_or(existing.enabled),
+                created_at: existing.created_at,
+            };
+            match storage.create_custom_routine(&routine) {
+                Ok(()) => 0,
                 Err(_) => -1,
             }
         },
@@ -17336,6 +17452,99 @@ mod tests {
         unsafe { maho_string_free(list_ptr2) };
         let views2: Vec<serde_json::Value> = serde_json::from_str(&list_json2).unwrap();
         assert_eq!(views2.len(), 4, "custom routine must be gone after delete");
+
+        let _ = std::fs::remove_file(&db);
+    }
+
+    /// `maho_routines_update_custom` must patch an existing custom routine in
+    /// place (same id, untouched fields survive), switch trigger kinds by
+    /// clearing the other, reject invalid triggers with -1, and return -2 for
+    /// unknown or built-in ids.
+    #[test]
+    fn custom_routine_ffi_update_patches_in_place() {
+        let _gate_idle = crate::common::import_gate_idle();
+        let _key_lock = crate::common::sqlcipher_test_key_lock();
+        let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+        use maho_core::maho_core::MahoCore;
+        use std::ffi::{CStr, CString};
+
+        let db = std::env::temp_dir().join(format!(
+            "maho_routines_ffi_update_{}.sqlite",
+            std::process::id()
+        ));
+        let db_path = db.to_string_lossy().to_string();
+        let mut core = MahoCore::new().with_storage(&db_path);
+        let core_ptr: *mut MahoCore = &mut core;
+
+        let list_json = || -> String {
+            let ptr = unsafe { maho_routines_list_all(core_ptr) };
+            assert!(!ptr.is_null(), "list_all must return JSON");
+            let json = unsafe { CStr::from_ptr(ptr).to_str().unwrap().to_string() };
+            unsafe { maho_string_free(ptr) };
+            json
+        };
+
+        // Create a cron-scheduled custom routine.
+        let create_json = CString::new(
+            r#"{"name":"Patch Me","prompt":"Original prompt","schedule":"0 9 * * *"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            unsafe { maho_routines_create_custom(core_ptr, create_json.as_ptr()) },
+            0
+        );
+        let views: Vec<serde_json::Value> = serde_json::from_str(&list_json()).unwrap();
+        let rid = views
+            .iter()
+            .find(|v| v["source"] == "custom")
+            .map(|v| v["id"].as_str().unwrap().to_string())
+            .unwrap();
+        let id_c = CString::new(rid.clone()).unwrap();
+
+        // Partial update: rename + disable only. Prompt and schedule survive,
+        // and the id is unchanged (no duplicate row).
+        let patch = CString::new(r#"{"name":"Patched","enabled":false}"#).unwrap();
+        assert_eq!(
+            unsafe { maho_routines_update_custom(core_ptr, id_c.as_ptr(), patch.as_ptr()) },
+            0
+        );
+        let views: Vec<serde_json::Value> = serde_json::from_str(&list_json()).unwrap();
+        assert_eq!(views.len(), 5, "update must not create a new row");
+        let custom = views.iter().find(|v| v["id"] == rid).unwrap();
+        assert_eq!(custom["name"], "Patched");
+        assert_eq!(custom["cron"], "0 9 * * *", "untouched schedule survives");
+        assert_eq!(custom["enabled"], false);
+
+        // Switching to an event trigger clears the cron schedule.
+        let to_event = CString::new(r#"{"trigger":"on_startup"}"#).unwrap();
+        assert_eq!(
+            unsafe { maho_routines_update_custom(core_ptr, id_c.as_ptr(), to_event.as_ptr()) },
+            0
+        );
+        let views: Vec<serde_json::Value> = serde_json::from_str(&list_json()).unwrap();
+        let custom = views.iter().find(|v| v["id"] == rid).unwrap();
+        assert!(custom["cron"].is_null(), "cron must be cleared by event switch");
+        assert_eq!(custom["trigger"], "on_startup");
+
+        // Invalid cron must be rejected.
+        let bad = CString::new(r#"{"schedule":"not a cron"}"#).unwrap();
+        assert_eq!(
+            unsafe { maho_routines_update_custom(core_ptr, id_c.as_ptr(), bad.as_ptr()) },
+            -1
+        );
+
+        // Unknown ids and built-in ids are not updatable (-2).
+        let missing = CString::new("nonexistent-id").unwrap();
+        let any = CString::new(r#"{"name":"X"}"#).unwrap();
+        assert_eq!(
+            unsafe { maho_routines_update_custom(core_ptr, missing.as_ptr(), any.as_ptr()) },
+            -2
+        );
+        let builtin = CString::new("morning_briefing").unwrap();
+        assert_eq!(
+            unsafe { maho_routines_update_custom(core_ptr, builtin.as_ptr(), any.as_ptr()) },
+            -2
+        );
 
         let _ = std::fs::remove_file(&db);
     }

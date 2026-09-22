@@ -913,6 +913,73 @@ TEST(MahoBrowserToolRegistryTest, RoutineRegistryHandlersBridgeToRoutinesFFI) {
   EXPECT_EQ(history_json, "[]");
 }
 
+TEST(MahoBrowserToolRegistryTest, RoutineUpdateValidationAndBridging) {
+  // Missing id fails validation.
+  base::DictValue no_id;
+  no_id.Set("name", "Renamed");
+  std::string no_id_err;
+  EXPECT_FALSE(
+      MahoBrowserToolRegistry::ExecuteRoutineUpdate(no_id, nullptr, &no_id_err));
+  EXPECT_EQ(no_id_err, "Missing or empty routine 'id'");
+
+  // Script payloads are rejected.
+  base::DictValue script;
+  script.Set("id", "r1");
+  script.Set("script", "console.log('pwn')");
+  std::string script_err;
+  EXPECT_FALSE(
+      MahoBrowserToolRegistry::ExecuteRoutineUpdate(script, nullptr, &script_err));
+  EXPECT_TRUE(script_err.find("Script and code payloads are not accepted") !=
+              std::string::npos);
+
+  // A 'cron' trigger kind requires a schedule expression.
+  base::DictValue cron_without_schedule;
+  cron_without_schedule.Set("id", "r1");
+  cron_without_schedule.Set("trigger", "cron");
+  std::string cron_err;
+  EXPECT_FALSE(MahoBrowserToolRegistry::ExecuteRoutineUpdate(
+      cron_without_schedule, nullptr, &cron_err));
+  EXPECT_EQ(cron_err, "A 'cron' trigger requires a 'schedule' expression");
+
+  // An event name cannot ride along a 'cron' trigger kind.
+  base::DictValue event_on_cron;
+  event_on_cron.Set("id", "r1");
+  event_on_cron.Set("trigger", "cron");
+  event_on_cron.Set("event", "on_startup");
+  std::string conflict_err;
+  EXPECT_FALSE(MahoBrowserToolRegistry::ExecuteRoutineUpdate(
+      event_on_cron, nullptr, &conflict_err));
+  EXPECT_EQ(conflict_err, "'event' cannot be combined with a 'cron' trigger");
+
+  // An id with no updatable fields is a validation failure.
+  base::DictValue id_only;
+  id_only.Set("id", "r1");
+  std::string id_only_err;
+  EXPECT_FALSE(MahoBrowserToolRegistry::ExecuteRoutineUpdate(
+      id_only, nullptr, &id_only_err));
+  EXPECT_EQ(id_only_err,
+            "No fields to update; provide name, prompt, schedule, event, or enabled");
+
+  // An empty name is rejected.
+  base::DictValue empty_name;
+  empty_name.Set("id", "r1");
+  empty_name.Set("name", "");
+  std::string empty_name_err;
+  EXPECT_FALSE(MahoBrowserToolRegistry::ExecuteRoutineUpdate(
+      empty_name, nullptr, &empty_name_err));
+  EXPECT_EQ(empty_name_err, "Routine 'name' cannot be empty");
+
+  // A fully valid payload bridges to the routines FFI (null core -> error).
+  base::DictValue valid;
+  valid.Set("id", "r1");
+  valid.Set("name", "Renamed");
+  valid.Set("enabled", false);
+  std::string bridge_err;
+  EXPECT_FALSE(
+      MahoBrowserToolRegistry::ExecuteRoutineUpdate(valid, nullptr, &bridge_err));
+  EXPECT_EQ(bridge_err, "MahoCore is not initialized");
+}
+
 TEST(MahoBrowserToolRegistryTest,
      BrowserHistorySearchDesktopDiscoverableOnDesktopAgentWithoutBrowserMcp) {
   const auto* desc =

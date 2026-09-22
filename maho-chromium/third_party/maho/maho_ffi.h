@@ -3227,6 +3227,21 @@ int32_t maho_routines_create_custom(struct MahoCore *core, const char *json);
 int32_t maho_routines_delete_custom(struct MahoCore *core, const char *id);
 
 /**
+ * Update fields of a user-defined routine identified by `id`. JSON payload
+ * `{name?,prompt?,schedule?,trigger?,enabled?}` where absent fields keep the
+ * stored value; supplying `schedule` clears any event `trigger` and vice
+ * versa. Built-in routine ids are never updatable. Returns 0 on success, -1
+ * on error (null args / parse failure / invalid schedule-or-trigger / empty
+ * name-or-prompt / storage failure), -2 when no custom routine exists with
+ * `id`.
+ *
+ * # Safety
+ * `core` must be a valid pointer returned by `maho_core_new`.
+ * `id` and `json` must be valid null-terminated C strings.
+ */
+int32_t maho_routines_update_custom(struct MahoCore *core, const char *id, const char *json);
+
+/**
  * Fire browser-event-triggered custom routines matching `event_json`
  * (`{"kind":"on_startup"}` or `{"kind":"on_many_tabs","count":N}`). Max-tier
  * gated (mirrors the scheduler tick); fire-and-forget — the batch runs async

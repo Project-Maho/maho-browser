@@ -1653,17 +1653,86 @@ bool MahoBrowserToolRegistry::ExecuteRoutineUpdate(
       }
       return false;
     }
-    if (*trigger == "event" && !IsRoutineEventTriggerSupported()) {
+  }
+
+  const std::string* schedule = params.FindString("schedule");
+  const std::string* event = params.FindString("event");
+  if (schedule && trigger && *trigger == "event") {
+    if (error_out) {
+      *error_out = "'schedule' cannot be combined with an 'event' trigger";
+    }
+    return false;
+  }
+  if (event && trigger && *trigger == "cron") {
+    if (error_out) {
+      *error_out = "'event' cannot be combined with a 'cron' trigger";
+    }
+    return false;
+  }
+
+  if ((trigger && *trigger == "event") || event) {
+    if (!IsRoutineEventTriggerSupported()) {
       if (error_out) {
-        *error_out = "Event triggers are deferred and currently disabled until emitters are wired";
+        *error_out =
+            "Event triggers are deferred and currently disabled until emitters are wired";
       }
       return false;
     }
   }
 
-  if (params.Find("event") && !IsRoutineEventTriggerSupported()) {
+  if (trigger && *trigger == "cron" && !schedule) {
     if (error_out) {
-      *error_out = "Event triggers are deferred and currently disabled until emitters are wired";
+      *error_out = "A 'cron' trigger requires a 'schedule' expression";
+    }
+    return false;
+  }
+  if (trigger && *trigger == "event" && !event) {
+    if (error_out) {
+      *error_out = "An 'event' trigger requires an 'event' name";
+    }
+    return false;
+  }
+
+  base::DictValue update_dict;
+  if (const std::string* name = params.FindString("name")) {
+    if (name->empty()) {
+      if (error_out) {
+        *error_out = "Routine 'name' cannot be empty";
+      }
+      return false;
+    }
+    update_dict.Set("name", *name);
+  }
+  if (const std::string* prompt = params.FindString("prompt")) {
+    if (prompt->empty()) {
+      if (error_out) {
+        *error_out = "Routine 'prompt' cannot be empty";
+      }
+      return false;
+    }
+    update_dict.Set("prompt", *prompt);
+  }
+  if (schedule) {
+    update_dict.Set("schedule", *schedule);
+  }
+  if (event) {
+    update_dict.Set("trigger", *event);
+  }
+  if (std::optional<bool> enabled = params.FindBool("enabled")) {
+    update_dict.Set("enabled", *enabled);
+  }
+  if (update_dict.empty()) {
+    if (error_out) {
+      *error_out =
+          "No fields to update; provide name, prompt, schedule, event, or enabled";
+    }
+    return false;
+  }
+
+  std::string json_str;
+  if (!base::JSONWriter::Write(update_dict, &json_str)) {
+    if (error_out) {
+      *error_out = "Failed to serialize routine update payload";
     }
     return false;
   }
@@ -1676,18 +1745,19 @@ bool MahoBrowserToolRegistry::ExecuteRoutineUpdate(
     return false;
   }
 
-  std::string json_str;
-  if (!base::JSONWriter::Write(params, &json_str)) {
+  int32_t rc =
+      maho_routines_update_custom(live_core, id->c_str(), json_str.c_str());
+  if (rc == -2) {
     if (error_out) {
-      *error_out = "Failed to serialize routine update payload";
+      *error_out = "Routine not found: " + *id;
     }
     return false;
   }
-
-  int32_t rc = maho_routines_create_custom(live_core, json_str.c_str());
   if (rc != 0) {
     if (error_out) {
-      *error_out = "maho_routines_create_custom update returned error code " + base::NumberToString(rc);
+      *error_out =
+          "maho_routines_update_custom returned error code " +
+          base::NumberToString(rc);
     }
     return false;
   }

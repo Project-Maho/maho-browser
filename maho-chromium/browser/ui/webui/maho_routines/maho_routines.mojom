@@ -56,8 +56,9 @@ enum RoutineRunState {
   kFailed,
 };
 
-// Reserved for the truthful approval integration in the next routines slice.
-// Slice 2 never emits this payload or the awaiting-approval state.
+// Emitted while a run is paused in kAwaitingApproval: the run's agent hit a
+// sensitive tool call and waits for the user's decision via
+// RespondToRoutineApproval.
 struct RoutineRunApproval {
   string approval_id;
   string tool_name;
