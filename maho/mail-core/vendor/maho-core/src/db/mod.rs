@@ -1,116 +1,24 @@
 pub mod migrations;
 
-use std::path::Path;
+use std::ops::{Deref, DerefMut};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use rand::Rng;
 use rusqlite::Connection;
 
 use crate::error::AppError;
 
-fn load_or_generate_encryption_key(db_path: &Path) -> Result<String, AppError> {
-    let key_path = db_path.with_extension(match db_path.extension() {
-        Some(ext) => format!("{}.key", ext.to_string_lossy()),
-        None => "key".to_string(),
-    });
-
-    if key_path.exists() {
-        let key = std::fs::read_to_string(&key_path)?;
-        return Ok(key.trim().to_string());
-    }
-
-    let mut rng = rand::thread_rng();
-    let mut bytes = [0u8; 32];
-    rng.fill(&mut bytes);
-    let hex_key: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-
-    if let Some(parent) = key_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&key_path, &hex_key)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
-    }
-
-    Ok(hex_key)
-}
-
-/// Must be called BEFORE `init_database` opens the file with a key.
-fn migrate_plain_to_encrypted(db_path: &Path, key: &str) -> Result<(), AppError> {
-    if !db_path.exists() {
-        return Ok(());
-    }
-
-    let plain_conn = Connection::open(db_path)?;
-    let is_plain = plain_conn
-        .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .is_ok();
-
-    if !is_plain {
-        drop(plain_conn);
-        return Ok(());
-    }
-
-    let encrypted_path = db_path.with_extension("db.encrypted");
-    let encrypted_path_str = encrypted_path.to_string_lossy().to_string();
-
-    if encrypted_path.exists() {
-        std::fs::remove_file(&encrypted_path)?;
-    }
-
-    plain_conn.execute_batch(&format!(
-        "ATTACH DATABASE '{}' AS encrypted KEY '{}';",
-        encrypted_path_str.replace('\'', "''"),
-        key.replace('\'', "''"),
-    ))?;
-    plain_conn.execute_batch("SELECT sqlcipher_export('encrypted');")?;
-    plain_conn.execute_batch("DETACH DATABASE encrypted;")?;
-    drop(plain_conn);
-
-    let backup_path = db_path.with_extension("db.plain_backup");
-    std::fs::rename(db_path, &backup_path)?;
-    std::fs::rename(&encrypted_path, db_path)?;
-
-    // Verify the encrypted DB can be opened before deleting the backup
-    let verify_conn = Connection::open(db_path)?;
-    verify_conn.pragma_update(None, "key", key)?;
-    let verified = verify_conn
-        .query_row("SELECT count(*) FROM sqlite_master", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .is_ok();
-    drop(verify_conn);
-
-    if verified {
-        let _ = std::fs::remove_file(&backup_path);
-    } else {
-        // Rollback: restore backup
-        let _ = std::fs::rename(&backup_path, db_path);
-        return Err(AppError::Internal(
-            "Encrypted DB verification failed after migration; backup restored".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
+/// Opens a single standalone connection to a mail database.
+///
+/// Used by tooling that owns the file for the duration of one operation, such
+/// as the transfer importer. The mail helper itself goes through
+/// [`init_database_pool`].
 pub fn init_database(db_path: &Path) -> Result<Connection, AppError> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let key = load_or_generate_encryption_key(db_path)?;
-
-    migrate_plain_to_encrypted(db_path, &key)?;
-
     let conn = Connection::open(db_path)?;
-
-    // PRAGMA key MUST be the first statement after open
-    conn.pragma_update(None, "key", &key)?;
 
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     conn.execute_batch("PRAGMA foreign_keys=ON;")?;
@@ -123,60 +31,260 @@ pub fn init_database(db_path: &Path) -> Result<Connection, AppError> {
     Ok(conn)
 }
 
-pub fn init_database_with_key(db_path: &Path, key: &str) -> Result<Connection, AppError> {
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)?;
+/// The one connection to a mail database, shared by every caller.
+///
+/// The mail helper is a single process owning a single database, so a pool of
+/// interchangeable connections buys nothing and costs a whole class of
+/// handover bugs. One connection behind a mutex is the whole contract.
+///
+/// Cloning shares the same connection.
+#[derive(Clone)]
+pub struct DbPool(Arc<Mutex<Connection>>);
+
+/// Exclusive access to the shared connection. Derefs to [`Connection`], so
+/// call sites keep the `let conn = pool.get()?; service::foo(&conn, ..)` shape.
+///
+/// This is a `std::sync::MutexGuard`, hence `!Send`: it must not be held across
+/// an `.await`. Scope it in a block when async code follows.
+pub struct DbConnection<'a>(MutexGuard<'a, Connection>);
+
+impl Deref for DbConnection<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        &self.0
+    }
+}
+
+impl DerefMut for DbConnection<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        &mut self.0
+    }
+}
+
+impl DbPool {
+    fn new(conn: Connection) -> Self {
+        Self(Arc::new(Mutex::new(conn)))
     }
 
-    migrate_plain_to_encrypted(db_path, key)?;
+    /// Waits for the shared connection and hands it out.
+    ///
+    /// Poisoning is recovered from deliberately: a thread that panicked while
+    /// holding the connection has already had its `Transaction` rolled back by
+    /// `Drop` during unwinding, and refusing every later query would turn one
+    /// panicking mail operation into a dead helper process.
+    pub fn get(&self) -> Result<DbConnection<'_>, AppError> {
+        Ok(DbConnection(
+            self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+        ))
+    }
+}
 
-    let conn = Connection::open(db_path)?;
+pub type SqlitePool = DbPool;
 
-    // PRAGMA key MUST be the first statement after open
-    conn.pragma_update(None, "key", key)?;
+/// Contention window against writers outside this process (a backup tool, an
+/// interrupted previous run still flushing). Within the process the mutex
+/// already serializes access.
+const POOL_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-    conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-    conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
-    conn.execute_batch("PRAGMA cache_size=-8000;")?;
-    conn.execute_batch("PRAGMA temp_store=MEMORY;")?;
+/// Names the failing step and carries SQLite's own codes, so a caller such as
+/// the mail helper can tell lock contention apart from a key mismatch instead
+/// of logging a bare "database is locked".
+fn db_step_error(step: &str, db_path: &Path, err: &rusqlite::Error) -> AppError {
+    let codes = match err {
+        rusqlite::Error::SqliteFailure(ffi_err, _) => format!(
+            " [sqlite code={:?} extended={}]",
+            ffi_err.code, ffi_err.extended_code
+        ),
+        _ => String::new(),
+    };
+    AppError::Internal(format!(
+        "database {step} failed for {}{codes}: {err}",
+        db_path.display()
+    ))
+}
 
-    migrations::run_migrations(&conn)?;
+/// Puts the database into WAL mode, tolerating a concurrent converter.
+///
+/// `PRAGMA journal_mode=WAL` needs an exclusive lock and, unlike ordinary
+/// statements, never goes through SQLite's busy handler: when another process
+/// holds the database it returns `SQLITE_BUSY` immediately, no matter how long
+/// `busy_timeout` is. The conversion only has to happen once per database, so a
+/// busy answer is retried for a short while and the mode another writer
+/// installed is accepted.
+fn ensure_wal_journal(conn: &Connection, db_path: &Path) -> Result<(), AppError> {
+    const ATTEMPTS: u32 = 20;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(25);
 
+    let mut last_busy: Option<rusqlite::Error> = None;
+    for attempt in 0..ATTEMPTS {
+        match conn.query_row("PRAGMA journal_mode=WAL;", [], |row| row.get::<_, String>(0)) {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(()),
+            Ok(_) => {}
+            Err(err) => {
+                let busy = matches!(
+                    &err,
+                    rusqlite::Error::SqliteFailure(ffi_err, _)
+                        if ffi_err.code == rusqlite::ErrorCode::DatabaseBusy
+                            || ffi_err.code == rusqlite::ErrorCode::DatabaseLocked
+                );
+                if !busy {
+                    return Err(db_step_error("journal_mode=WAL", db_path, &err));
+                }
+                last_busy = Some(err);
+            }
+        }
+
+        match conn.query_row("PRAGMA journal_mode;", [], |row| row.get::<_, String>(0)) {
+            Ok(mode) if mode.eq_ignore_ascii_case("wal") => return Ok(()),
+            Ok(_) => {}
+            Err(err) => return Err(db_step_error("journal_mode read", db_path, &err)),
+        }
+
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(RETRY_DELAY);
+        }
+    }
+
+    match last_busy {
+        Some(err) => Err(db_step_error("journal_mode=WAL", db_path, &err)),
+        None => Err(AppError::Internal(format!(
+            "database {} stayed out of WAL mode after {ATTEMPTS} attempts",
+            db_path.display()
+        ))),
+    }
+}
+
+/// Names the POSIX VFS explicitly through a URI filename.
+///
+/// The mail helper is a Chromium process, and Chromium installs its own SQLite
+/// VFS as the default one. Naming the VFS keeps every launch of the helper
+/// opening the file the same way regardless of what the surrounding process
+/// installed.
+fn vfs_uri(db_path: &Path) -> String {
+    format!(
+        "file:{}?vfs=unix",
+        db_path.to_string_lossy().replace('?', "%3f").replace('#', "%23")
+    )
+}
+
+fn open_flags() -> rusqlite::OpenFlags {
+    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+        | rusqlite::OpenFlags::SQLITE_OPEN_URI
+        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+}
+
+/// Opens `db_path` and gives writers a contention window.
+fn open_mail_database(db_path: &Path) -> Result<Connection, AppError> {
+    let conn = Connection::open_with_flags(vfs_uri(db_path), open_flags())
+        .map_err(|e| db_step_error("open", db_path, &e))?;
+    conn.busy_timeout(POOL_BUSY_TIMEOUT)
+        .map_err(|e| db_step_error("busy_timeout", db_path, &e))?;
     Ok(conn)
 }
 
-pub type SqlitePool = r2d2::Pool<r2d2_sqlite::SqliteConnectionManager>;
+/// SQLite reads the header lazily, on the first page read. This forces that
+/// read so a damaged file surfaces here instead of inside a later step.
+fn probe_readable(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.query_row("SELECT count(*) FROM sqlite_master;", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|_| ())
+}
 
-pub fn init_database_pool(db_path: &Path, key: &str) -> Result<SqlitePool, AppError> {
+fn is_not_a_database(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(ffi_err, _)
+            if ffi_err.code == rusqlite::ErrorCode::NotADatabase
+    )
+}
+
+/// Moves aside a file that SQLite refuses to read as a database.
+///
+/// The file keeps its bytes under a timestamped name so it can be inspected or
+/// recovered later; the write-ahead sidecars belong to it and are dropped.
+fn quarantine_unreadable_database(db_path: &Path) -> Result<PathBuf, AppError> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default();
+    let mut quarantined = db_path.as_os_str().to_os_string();
+    quarantined.push(format!(".unreadable-{stamp}"));
+    let quarantined = PathBuf::from(quarantined);
+    std::fs::rename(db_path, &quarantined)?;
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = db_path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let sidecar = PathBuf::from(sidecar);
+        if sidecar.exists() {
+            std::fs::remove_file(&sidecar)?;
+        }
+    }
+    Ok(quarantined)
+}
+
+/// Returns a connection to a database SQLite can actually read.
+///
+/// A truncated file, a half-written copy, or a database left behind by a build
+/// that encrypted the whole file answers every open with `NotADatabase`. Mail
+/// content is a re-syncable cache of the server, so such a file is quarantined
+/// and a fresh database takes its place; leaving it in place would crash-loop
+/// the mail helper forever.
+fn open_setup_connection(db_path: &Path) -> Result<Connection, AppError> {
+    let conn = open_mail_database(db_path)?;
+    match probe_readable(&conn) {
+        Ok(()) => return Ok(conn),
+        Err(err) if is_not_a_database(&err) => {
+            drop(conn);
+            let quarantined = quarantine_unreadable_database(db_path)?;
+            log::error!(
+                "file {} is not a readable database; moved to {} and recreating",
+                db_path.display(),
+                quarantined.display()
+            );
+        }
+        Err(err) => return Err(db_step_error("header read", db_path, &err)),
+    }
+
+    let conn = open_mail_database(db_path)?;
+    probe_readable(&conn).map_err(|e| db_step_error("header read", db_path, &e))?;
+    Ok(conn)
+}
+
+/// Opens the one connection the caller will use for the whole database's life.
+///
+/// The mail database is a plain SQLite file inside the profile directory, the
+/// same shape Chromium gives its own History and Cookies stores. Nothing about
+/// reopening it depends on a key: secrets are encrypted per field, by the
+/// credential store, with a key the helper is given at startup. A database the
+/// previous run wrote is therefore always readable by the next one.
+pub fn init_database_pool(db_path: &Path) -> Result<SqlitePool, AppError> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    migrate_plain_to_encrypted(db_path, key)?;
+    let conn = open_setup_connection(db_path)?;
+    ensure_wal_journal(&conn, db_path)?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON;\
+         PRAGMA synchronous=NORMAL;\
+         PRAGMA cache_size=-8000;\
+         PRAGMA temp_store=MEMORY;",
+    )
+    .map_err(|e| db_step_error("connection pragmas", db_path, &e))?;
 
-    let key_owned = key.to_string();
-    let manager = r2d2_sqlite::SqliteConnectionManager::file(db_path).with_init(move |conn| {
-        conn.pragma_update(None, "key", &key_owned)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
-        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
-        conn.execute_batch("PRAGMA cache_size=-8000;")?;
-        conn.execute_batch("PRAGMA temp_store=MEMORY;")?;
-        Ok(())
-    });
-
-    let pool = r2d2::Pool::builder()
-        .max_size(10)
-        .build(manager)
-        .map_err(|e| AppError::Internal(format!("Failed to build connection pool: {}", e)))?;
-
-    let conn = pool
-        .get()
-        .map_err(|e| AppError::Internal(format!("Failed to get connection from pool: {}", e)))?;
     migrations::run_migrations(&conn)?;
 
-    Ok(pool)
+    // Fold the schema the migrations just wrote into the database file itself.
+    // With one long-lived connection nothing else would ever checkpoint, so the
+    // main file would stay at its 4 KiB header while a multi-megabyte WAL
+    // carried every page — and a crash before any later checkpoint would leave
+    // exactly that pair on disk.
+    let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |_| Ok(()));
+
+    Ok(DbPool::new(conn))
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ pub(crate) mod test_support {
 
     pub(crate) fn pool_with_seeded_data() -> maho_core::db::SqlitePool {
         let path = db_path();
-        let pool = maho_core::db::init_database_pool(&path, "test-key-not-for-production")
+        let pool = maho_core::db::init_database_pool(&path)
             .expect("test database pool");
         {
             let conn = pool.get().expect("test connection");

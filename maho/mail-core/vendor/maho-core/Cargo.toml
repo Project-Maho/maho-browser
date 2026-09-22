@@ -21,8 +21,6 @@ thiserror = { workspace = true }
 dirs = "6"
 rand = "0.8"
 tokio = { workspace = true }
-r2d2 = { workspace = true }
-r2d2_sqlite = { workspace = true }
 
 reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
 aes-gcm = "0.10"
@@ -46,7 +44,7 @@ urlencoding = "2"
 md-5 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

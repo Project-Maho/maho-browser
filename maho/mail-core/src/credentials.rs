@@ -3,7 +3,8 @@
 //! Injected-key handling and per-account credential decryption.
 //!
 //! The mail helper injects two keys via `MahoMailInjectKeys`:
-//!   * `sqlcipher_key`  — applied verbatim as `PRAGMA key` (opaque string).
+//!   * `sqlcipher_key`  — carried for the transfer artifact format only; the
+//!     mail database itself is a plain SQLite file and is never keyed.
 //!   * `credential_key` — a 32-byte AES-256-GCM key used to decrypt per-account
 //!     credentials stored in the `encrypted_credentials` table.
 //!
@@ -13,6 +14,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
+use rand::RngCore;
 use rusqlite::Connection;
 
 use crate::error::{MailFfiError, Result};
@@ -87,14 +89,8 @@ fn decrypt(key: &[u8; 32], ciphertext: &[u8], nonce_bytes: &[u8]) -> Result<Stri
 /// by [`get_encrypted_credential`]: a fresh 12-byte nonce plus the AEAD
 /// ciphertext (with the appended GCM tag). Returns `(ciphertext, nonce)`.
 fn encrypt(key: &[u8; 32], plaintext: &str) -> Result<(Vec<u8>, Vec<u8>)> {
-    // aead's `getrandom` feature is not enabled for this crate (no
-    // `aes_gcm::aead::OsRng`), so source 12 random nonce bytes from a UUIDv4,
-    // which `uuid` already provides as a dependency. GCM requires the nonce to
-    // be unique per key; per-account credential writes are rare, so 96-bit
-    // random uniqueness is more than sufficient.
-    let uuid_bytes = uuid::Uuid::new_v4().into_bytes();
     let mut nonce_bytes = [0u8; 12];
-    nonce_bytes.copy_from_slice(&uuid_bytes[..12]);
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| MailFfiError::CredentialEncrypt(format!("cipher init: {e}")))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -249,6 +245,24 @@ mod tests {
 
         let wrong = [2u8; 32];
         assert!(get_encrypted_credential(&conn, &wrong, "acc1", "password").is_err());
+    }
+
+    #[test]
+    fn test_nonce_entropy_not_fixed_uuid_version() {
+        let key = [0u8; 32];
+        let mut all_have_uuid_v4_nibble = true;
+        for _ in 0..50 {
+            let (_, nonce) = super::encrypt(&key, "test").unwrap();
+            // UUIDv4 has version 4 in byte 6: high nibble == 4
+            if (nonce[6] >> 4) != 0x4 {
+                all_have_uuid_v4_nibble = false;
+                break;
+            }
+        }
+        assert!(
+            !all_have_uuid_v4_nibble,
+            "nonce should not be derived from UUIDv4 (fixed version bit 0x4 in byte 6)"
+        );
     }
 
     fn creds_table(conn: &Connection) {

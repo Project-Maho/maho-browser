@@ -157,7 +157,7 @@ fn inject_keys(sqlcipher_key: *const c_char, credential_key: *const c_char) -> R
     let sqlcipher_key = c_string(sqlcipher_key, "sqlcipher_key")?;
     let credential_key = decode_credential_key(&c_string(credential_key, "credential_key")?)?;
     let init = state::init_info().ok_or(MailFfiError::NotInitialized)?;
-    let pool = maho_core::db::init_database_pool(&init.db_path, &sqlcipher_key)?;
+    let pool = maho_core::db::init_database_pool(&init.db_path)?;
     state::set_ctx(Arc::new(AppCtx {
         pool,
         db_path: init.db_path.clone(),

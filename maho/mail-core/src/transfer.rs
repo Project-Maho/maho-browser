@@ -29,7 +29,7 @@ pub fn open_imported_database(
     passphrase: &str,
 ) -> Result<AppCtx> {
     let imported = import_transfer_artifact_bytes(artifact_bytes, passphrase)?;
-    let pool = maho_core::db::init_database_pool(db_path, &imported.sqlcipher_key)?;
+    let pool = maho_core::db::init_database_pool(db_path)?;
     Ok(AppCtx {
         pool,
         db_path: db_path.to_path_buf(),
@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn imported_artifact_opens_copied_sqlcipher_database() {
         let path = db_path();
-        let conn = maho_core::db::init_database_with_key(&path, "import-sql-key").unwrap();
+        let conn = maho_core::db::init_database(&path).unwrap();
         conn.execute(
             "INSERT INTO accounts (id, email, display_name, imap_host, imap_port, imap_encryption, smtp_host, smtp_port, smtp_encryption, username)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

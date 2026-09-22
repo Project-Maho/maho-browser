@@ -14,7 +14,16 @@ resolver = "2"
 # Vendored from the former mail/ workspace (now discarded). These mirror the
 # versions that vendor/maho-core's `{ workspace = true }` deps resolved against.
 [workspace.dependencies]
-rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+# Plain SQLite, deliberately not SQLCipher. Whole-file encryption made every
+# helper start depend on a key derivation performed inside the Chromium binary,
+# which supplies BoringSSL under OpenSSL's symbol names: the helper could create
+# a database and use it through its own page cache, yet could not decrypt any
+# database read back from disk - not even one a standalone process had written
+# with the same key. The mail database now sits in the profile directory like
+# Chromium's own History and Cookies stores, and secrets stay protected by the
+# credential store's per-field AES-256-GCM, which is pure Rust and binds to no
+# ambient crypto library.
+rusqlite = { version = "0.33", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.26"
 serde = { version = "1", features = ["derive"] }
@@ -36,7 +45,7 @@ maho-core = { path = "vendor/maho-core" }
 
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 tokio-util = "0.7"
-rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -63,7 +72,7 @@ rand = "0.8"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(windows)'.dependencies]
-rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
