@@ -624,7 +624,11 @@ async fn try_execute_v2_semantic_call(
     }
 
     let raw = client
-        .call_capability(capability_id, capability_args)
+        .call_capability_with_timeout(
+            capability_id,
+            capability_args,
+            crate::browser::tool_timeout(capability_id),
+        )
         .await
         .map_err(|err| super::describe_tool_call_failure(capability_id, err))?;
 

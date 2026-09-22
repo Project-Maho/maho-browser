@@ -257,7 +257,11 @@ async fn handle_act(
         }
     }
     match client
-        .call_capability("browser.act_and_observe", Value::Object(args))
+        .call_capability_with_timeout(
+            "browser.act_and_observe",
+            Value::Object(args),
+            crate::browser::tool_timeout("browser.act_and_observe"),
+        )
         .await
     {
         Ok(raw) => {
@@ -504,7 +508,11 @@ async fn handle_native(
     }
 
     match client
-        .call_capability("input.native_action", Value::Object(args))
+        .call_capability_with_timeout(
+            "input.native_action",
+            Value::Object(args),
+            crate::browser::tool_timeout("input.native_action"),
+        )
         .await
     {
         Ok(raw) => {
@@ -555,7 +563,11 @@ async fn handle_observe(
     }
 
     match client
-        .call_capability("page.accessibility_snapshot_v2", Value::Object(args))
+        .call_capability_with_timeout(
+            "page.accessibility_snapshot_v2",
+            Value::Object(args),
+            crate::browser::tool_timeout("page.accessibility_snapshot_v2"),
+        )
         .await
     {
         Ok(raw) => {
@@ -601,7 +613,11 @@ async fn handle_click(
     }
 
     match client
-        .call_capability("input.locator_click", Value::Object(args))
+        .call_capability_with_timeout(
+            "input.locator_click",
+            Value::Object(args),
+            crate::browser::tool_timeout("input.locator_click"),
+        )
         .await
     {
         Ok(raw) => {
@@ -663,7 +679,11 @@ async fn handle_type(
     }
 
     match client
-        .call_capability("input.locator_type", Value::Object(args))
+        .call_capability_with_timeout(
+            "input.locator_type",
+            Value::Object(args),
+            crate::browser::tool_timeout("input.locator_type"),
+        )
         .await
     {
         Ok(raw) => {
@@ -698,7 +718,11 @@ async fn handle_grant(
     };
 
     match client
-        .call_capability("browser_grant_exact_origin", json!({ "origin": origin }))
+        .call_capability_with_timeout(
+            "browser_grant_exact_origin",
+            json!({ "origin": origin }),
+            crate::browser::tool_timeout("browser_grant_exact_origin"),
+        )
         .await
     {
         Ok(raw) => {
@@ -734,7 +758,11 @@ async fn handle_navigate(
     }
 
     let nav_result = match client
-        .call_capability("navigation.navigate", Value::Object(args))
+        .call_capability_with_timeout(
+            "navigation.navigate",
+            Value::Object(args),
+            crate::browser::tool_timeout("navigation.navigate"),
+        )
         .await
     {
         Ok(raw) => unwrap_mcp_result(raw),
@@ -768,7 +796,11 @@ async fn handle_navigate(
                 wait_args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
             }
             let _ = client
-                .call_capability("navigation.wait", Value::Object(wait_args))
+                .call_capability_with_timeout(
+            "navigation.wait",
+            Value::Object(wait_args),
+            crate::browser::tool_timeout("navigation.wait"),
+        )
                 .await;
         } else if let Value::Object(map) = wait_val {
             if let Some(sel) = map.get("selector").and_then(Value::as_str) {
@@ -783,7 +815,11 @@ async fn handle_navigate(
                     sel_args.insert("tab_id".to_string(), Value::Number(tab_id.into()));
                 }
                 let _ = client
-                    .call_capability("page.wait_for_selector", Value::Object(sel_args))
+                    .call_capability_with_timeout(
+            "page.wait_for_selector",
+            Value::Object(sel_args),
+            crate::browser::tool_timeout("page.wait_for_selector"),
+        )
                     .await;
             }
         }
@@ -818,7 +854,11 @@ async fn handle_wait(
         }
 
         match client
-            .call_capability("page.wait_for_selector", Value::Object(args))
+            .call_capability_with_timeout(
+            "page.wait_for_selector",
+            Value::Object(args),
+            crate::browser::tool_timeout("page.wait_for_selector"),
+        )
             .await
         {
             Ok(raw) => {
@@ -833,7 +873,13 @@ async fn handle_wait(
         let mut matched_url: Option<String> = None;
 
         while start.elapsed() < timeout {
-            let tab_list_res = client.call_capability("tab.list", json!({})).await;
+            let tab_list_res = client
+            .call_capability_with_timeout(
+                "tab.list",
+                json!({}),
+                crate::browser::tool_timeout("tab.list"),
+            )
+            .await;
             if let Ok(raw) = tab_list_res {
                 let res = unwrap_mcp_result(raw);
                 if let Some(tabs) = res.get("tabs").and_then(Value::as_array) {

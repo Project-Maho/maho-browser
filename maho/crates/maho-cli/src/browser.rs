@@ -67,7 +67,7 @@ fn default_tool_timeout(tool: &str) -> Duration {
     }
 }
 
-fn tool_timeout(tool: &str) -> Duration {
+pub(crate) fn tool_timeout(tool: &str) -> Duration {
     timeout_override().unwrap_or_else(|| default_tool_timeout(tool))
 }
 
