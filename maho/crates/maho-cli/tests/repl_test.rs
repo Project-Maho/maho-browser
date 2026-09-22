@@ -527,3 +527,45 @@ async fn repl_upload_dispatches_exact_path_matrix() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn repl_lease_pins_target_for_subsequent_commands() {
+    // `lease <tab_id>` pins the session: later tab-scoped commands must carry
+    // that tab_id explicitly instead of following whatever tab is active.
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let lease_resp = json!({ "session_id": "test-lease" });
+    let nav_resp = json!({ "ok": true });
+    let (_dir, sock_path, server) =
+        make_mock_server_capturing(vec![lease_resp, nav_resp], captured.clone()).await;
+
+    let output = run_cli_with_stdin(
+        &["browser", "repl"],
+        &sock_path,
+        "lease 2\nnavigate https://example.com\n.quit\n",
+    );
+    server.abort();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Lease acquired."),
+        "expected lease confirmation in stdout, got: {stdout}"
+    );
+
+    let requests = captured.lock().unwrap();
+    let lease_req = requests
+        .iter()
+        .find(|req| req["method"] == "maho/control/call")
+        .expect("lease must issue a maho/control/call");
+    assert_eq!(lease_req["params"]["name"], "browser_acquire_lease");
+    assert_eq!(lease_req["params"]["arguments"]["tab_id"], 2);
+
+    let nav_req = requests
+        .iter()
+        .find(|req| req["method"] == "tools/call" && req["params"]["name"] == "browser_navigate")
+        .expect("navigate must issue a tools/call");
+    assert_eq!(
+        nav_req["params"]["arguments"]["tab_id"], 2,
+        "navigate must carry the pinned tab_id"
+    );
+    assert_eq!(nav_req["params"]["arguments"]["url"], "https://example.com");
+}
+

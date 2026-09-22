@@ -1515,22 +1515,22 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
+                let tab = tool_payload(&result);
                 println!(
                     "id: {}",
-                    result.get("id").and_then(|v| v.as_i64()).unwrap_or(0)
+                    tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0)
                 );
                 println!(
                     "title: {}",
-                    result.get("title").and_then(|v| v.as_str()).unwrap_or("")
+                    tab.get("title").and_then(|v| v.as_str()).unwrap_or("")
                 );
                 println!(
                     "url: {}",
-                    result.get("url").and_then(|v| v.as_str()).unwrap_or("")
+                    tab.get("url").and_then(|v| v.as_str()).unwrap_or("")
                 );
                 println!(
                     "active: {}",
-                    result
-                        .get("is_active")
+                    tab.get("is_active")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
                 );
@@ -1567,7 +1567,8 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                let tab = result.get("tab").unwrap_or(&result);
+                let payload = tool_payload(&result);
+                let tab = payload.get("tab").unwrap_or(payload);
                 let id = tab.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
                 let tab_url = tab
                     .get("url")
@@ -1625,7 +1626,10 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
-                let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let text = tool_payload(&result)
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 print!("{text}");
             }
             Ok(())
@@ -5686,19 +5690,25 @@ Commands:
   select <ref> <value>  Choose an option by value (also: select @<name>=<value>)
   refs [filter]         List interactive elements: <ref> <role> <name>[=<value>]
   key <name> [mods]     Press a key (e.g. Enter, ArrowDown; mods: shift,ctrl,alt,meta)
-  lease [tab_id]        Acquire active-tab lease (auto-acquired before mutations)
+  target [tab_id|none]  Pin this session's default tab (none: follow the active tab)
+  lease [tab_id]        Lease a tab and pin it as this session's default target
   grant <origin>        Grant exact origin to this session's sandbox
   help                  Show this help
   .quit / .exit         Exit REPL
+
+Tab scoping: a pinned target makes every tab-scoped command carry that tab_id
+explicitly; with no target, commands follow the active tab. Scripted automation
+should prefer `maho tab <command> --tab <id>` or `maho browser pipe`.
 ";
 
 async fn cmd_repl(eval: Option<String>, socket_path: Option<&str>, _json_output: bool) -> Result<()> {
     let client = browser::connect_repl(socket_path).await?;
+    let mut state = ReplState::default();
 
     if let Some(cmd) = eval {
         let trimmed = cmd.trim();
         if !trimmed.is_empty() && trimmed != ".quit" && trimmed != ".exit" {
-            handle_repl_line(&client, trimmed).await?;
+            handle_repl_line(&client, &mut state, trimmed).await?;
         }
         return Ok(());
     }
@@ -5732,7 +5742,7 @@ async fn cmd_repl(eval: Option<String>, socket_path: Option<&str>, _json_output:
             break;
         }
 
-        if let Err(e) = handle_repl_line(&client, trimmed).await {
+        if let Err(e) = handle_repl_line(&client, &mut state, trimmed).await {
             eprintln!("error: {e}");
         }
     }
@@ -5748,10 +5758,40 @@ fn dirs_path() -> std::path::PathBuf {
         .join(".maho")
 }
 
-/// Acquire an (auto-stealing) lease on the active tab so subsequent mutations
-/// pass the active-tab lease gate. Stateful transport failures are propagated
-/// because their outcome may be ambiguous and must never be replayed.
-async fn ensure_active_lease(client: &maho_browser_mcp::client::BrowserClient) -> Result<()> {
+/// Per-session REPL state. `target_tab` is set by `lease <tab_id>` / `target
+/// <tab_id>` and makes tab-scoped commands address that tab explicitly instead
+/// of following whatever tab happens to be active.
+#[derive(Default)]
+struct ReplState {
+    target_tab: Option<i64>,
+}
+
+/// Copy the session's pinned target tab (when set) into a tool-call argument
+/// object, so the browser resolves the call against that tab and not against
+/// the active tab.
+fn with_target(args: &mut serde_json::Value, state: &ReplState) {
+    if let Some(tab_id) = state.target_tab {
+        args["tab_id"] = serde_json::json!(tab_id);
+    }
+}
+
+/// Acquire an (auto-stealing) lease on the session's pinned target tab, or on
+/// the active tab when nothing is pinned, so subsequent mutations pass the
+/// active-tab lease gate. Stateful transport failures are propagated because
+/// their outcome may be ambiguous and must never be replayed.
+async fn ensure_active_lease(
+    client: &maho_browser_mcp::client::BrowserClient,
+    state: &ReplState,
+) -> Result<()> {
+    if let Some(id) = state.target_tab {
+        browser::send_control_call(
+            client,
+            "browser_acquire_lease",
+            serde_json::json!({ "tab_id": id, "ttl_seconds": 300 }),
+        )
+        .await?;
+        return Ok(());
+    }
     let result = browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
     if let Some(tabs) = tool_payload(&result).get("tabs").and_then(|t| t.as_array()) {
         if let Some(active) = tabs
@@ -5777,13 +5817,14 @@ async fn ensure_active_lease(client: &maho_browser_mcp::client::BrowserClient) -
 /// needed and "lease required" never surfaces during a session.
 async fn mutate(
     client: &maho_browser_mcp::client::BrowserClient,
+    state: &ReplState,
     tool: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value> {
     match browser::send_tool_call(client, tool, args.clone()).await {
         Ok(v) => Ok(v),
         Err(e) if format!("{e}").contains("lease required") => {
-            ensure_active_lease(client).await?;
+            ensure_active_lease(client, state).await?;
             browser::send_tool_call(client, tool, args).await
         }
         Err(e) => Err(e),
@@ -5794,13 +5835,14 @@ async fn mutate(
 /// while still auto-acquiring the active-tab lease on pre-dispatch lease rejection.
 async fn mutate_no_replay(
     client: &maho_browser_mcp::client::BrowserClient,
+    state: &ReplState,
     tool: &str,
     args: serde_json::Value,
 ) -> Result<serde_json::Value> {
     match browser::send_tool_call_no_replay(client, tool, args.clone()).await {
         Ok(v) => Ok(v),
         Err(e) if format!("{e}").contains("lease required") => {
-            ensure_active_lease(client).await?;
+            ensure_active_lease(client, state).await?;
             browser::send_tool_call_no_replay(client, tool, args).await
         }
         Err(e) => Err(e),
@@ -5814,18 +5856,16 @@ async fn mutate_no_replay(
 /// an integer `ref` (interactive elements) are considered.
 async fn resolve_ref_by_name(
     client: &maho_browser_mcp::client::BrowserClient,
+    state: &ReplState,
     name: &str,
 ) -> Result<Option<i64>> {
     let needle = name.trim().to_lowercase();
     if needle.is_empty() {
         return Ok(None);
     }
-    let snapshot = browser::send_tool_call(
-        client,
-        "browser_accessibility_snapshot",
-        serde_json::json!({}),
-    )
-    .await?;
+    let mut args = serde_json::json!({});
+    with_target(&mut args, state);
+    let snapshot = browser::send_tool_call(client, "browser_accessibility_snapshot", args).await?;
     let mut exact: Option<i64> = None;
     let mut substring: Option<i64> = None;
     let mut stack = vec![&snapshot];
@@ -5860,6 +5900,7 @@ async fn resolve_ref_by_name(
 
 async fn handle_repl_line(
     client: &maho_browser_mcp::client::BrowserClient,
+    state: &mut ReplState,
     line: &str,
 ) -> Result<()> {
     let parts: Vec<&str> = line.splitn(3, ' ').collect();
@@ -5890,6 +5931,9 @@ async fn handle_repl_line(
                         if active { "*" } else { "" }
                     );
                 }
+                if let Some(id) = state.target_tab {
+                    println!("(pinned target: tab {id})");
+                }
             }
         }
         "tab" if parts.get(1) == Some(&"info") => {
@@ -5897,8 +5941,16 @@ async fn handle_repl_line(
                 browser::send_tool_call(client, "browser_tab_list", serde_json::json!({})).await?;
             let tabs = tool_payload(&result).get("tabs").and_then(|t| t.as_array());
             let active = tabs.and_then(|arr| {
-                arr.iter()
-                    .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
+                state
+                    .target_tab
+                    .and_then(|id| {
+                        arr.iter()
+                            .find(|t| t.get("id").and_then(|v| v.as_i64()) == Some(id))
+                    })
+                    .or_else(|| {
+                        arr.iter()
+                            .find(|t| t.get("is_active") == Some(&serde_json::Value::Bool(true)))
+                    })
             });
             if let Some(tab) = active {
                 println!(
@@ -5913,7 +5965,14 @@ async fn handle_repl_line(
                     "url: {}",
                     tab.get("url").and_then(|v| v.as_str()).unwrap_or("")
                 );
-                println!("active: true");
+                println!(
+                    "active: {}",
+                    tab.get("is_active")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                );
+            } else if let Some(id) = state.target_tab {
+                println!("Pinned target tab {id} not found.");
             } else {
                 println!("No active tab.");
             }
@@ -5924,25 +5983,27 @@ async fn handle_repl_line(
                 println!("Usage: navigate <url>");
                 return Ok(());
             }
-            mutate(
-                client,
-                "browser_navigate",
-                serde_json::json!({ "url": *url }),
-            )
-            .await?;
+            let mut args = serde_json::json!({ "url": *url });
+            with_target(&mut args, state);
+            mutate(client, state, "browser_navigate", args).await?;
             println!("ok");
         }
         "text" => {
-            let result =
-                browser::send_tool_call(client, "browser_page_text", serde_json::json!({})).await?;
-            let text = result.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let mut args = serde_json::json!({});
+            with_target(&mut args, state);
+            let result = browser::send_tool_call(client, "browser_page_text", args).await?;
+            let text = tool_payload(&result)
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             println!("{}", browser::truncate(text, 2000));
         }
         "screenshot" => {
             let rest = line[cmd.len()..].trim();
+            let mut args = serde_json::json!({});
+            with_target(&mut args, state);
             let result =
-                browser::send_tool_call(client, "browser_screenshot_full", serde_json::json!({}))
-                    .await?;
+                browser::send_tool_call(client, "browser_screenshot_full", args).await?;
             let payload = tool_payload(&result);
             let data = payload.get("data").and_then(|v| v.as_str()).unwrap_or("");
             if data.is_empty() {
@@ -5967,13 +6028,15 @@ async fn handle_repl_line(
             println!("{path}");
         }
         "snapshot" => {
+            let mut args = serde_json::json!({});
+            with_target(&mut args, state);
             let result = browser::send_tool_call(
                 client,
                 "browser_accessibility_snapshot",
-                serde_json::json!({}),
+                args,
             )
             .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            println!("{}", serde_json::to_string_pretty(tool_payload(&result))?);
         }
         "observe" => {
             let rest = line[cmd.len()..].trim();
@@ -6026,12 +6089,11 @@ async fn handle_repl_line(
                         println!("Usage: wait selector <css>");
                         return Ok(());
                     }
-                    let result = browser::send_tool_call(
-                        client,
-                        "page_wait_for_selector",
-                        serde_json::json!({ "selector": target, "timeout_ms": 10000 }),
-                    )
-                    .await?;
+                    let mut args =
+                        serde_json::json!({ "selector": target, "timeout_ms": 10000 });
+                    with_target(&mut args, state);
+                    let result =
+                        browser::send_tool_call(client, "page_wait_for_selector", args).await?;
                     let found = result
                         .get("found")
                         .and_then(|v| v.as_bool())
@@ -6061,9 +6123,16 @@ async fn handle_repl_line(
                             .get("tabs")
                             .and_then(|t| t.as_array())
                         {
-                            if let Some(active) = tabs.iter().find(|t| {
-                                t.get("is_active") == Some(&serde_json::Value::Bool(true))
-                            }) {
+                            let pinned = state.target_tab.and_then(|id| {
+                                tabs.iter()
+                                    .find(|t| t.get("id").and_then(|v| v.as_i64()) == Some(id))
+                            });
+                            let active = pinned.or_else(|| {
+                                tabs.iter().find(|t| {
+                                    t.get("is_active") == Some(&serde_json::Value::Bool(true))
+                                })
+                            });
+                            if let Some(active) = active {
                                 if let Some(url) = active.get("url").and_then(|v| v.as_str()) {
                                     if browser_pipe::matches_url_pattern(url, target) {
                                         matched = true;
@@ -6087,12 +6156,10 @@ async fn handle_repl_line(
         }
         "refs" => {
             let filter = line[cmd.len()..].trim().to_lowercase();
-            let snapshot = browser::send_tool_call(
-                client,
-                "browser_accessibility_snapshot",
-                serde_json::json!({}),
-            )
-            .await?;
+            let mut args = serde_json::json!({});
+            with_target(&mut args, state);
+            let snapshot =
+                browser::send_tool_call(client, "browser_accessibility_snapshot", args).await?;
             let mut rows: Vec<(i64, String)> = Vec::new();
             let mut stack = vec![&snapshot];
             while let Some(node) = stack.pop() {
@@ -6136,7 +6203,7 @@ async fn handle_repl_line(
         "click" => {
             let rest = line[cmd.len()..].trim_start();
             let target: Option<i64> = if let Some(name) = rest.strip_prefix('@') {
-                match resolve_ref_by_name(client, name).await? {
+                match resolve_ref_by_name(client, state, name).await? {
                     Some(r) => Some(r),
                     None => {
                         println!("no element matching: {}", name.trim());
@@ -6157,7 +6224,9 @@ async fn handle_repl_line(
                 }
             };
             if let Some(n) = target {
-                mutate(client, "browser_click", serde_json::json!({ "ref": n })).await?;
+                let mut args = serde_json::json!({ "ref": n });
+                with_target(&mut args, state);
+                mutate(client, state, "browser_click", args).await?;
                 println!("ok");
             }
         }
@@ -6165,7 +6234,7 @@ async fn handle_repl_line(
             let rest = line[cmd.len()..].trim_start();
             let (target, text): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@') {
                 match sel.split_once('=') {
-                    Some((name, val)) => match resolve_ref_by_name(client, name).await? {
+                    Some((name, val)) => match resolve_ref_by_name(client, state, name).await? {
                         Some(r) => (Some(r), val.to_string()),
                         None => {
                             println!("no element matching: {}", name.trim());
@@ -6186,12 +6255,13 @@ async fn handle_repl_line(
             };
             match target {
                 Some(n) if !text.is_empty() => {
-                    mutate(
-                        client,
-                        "browser_type",
-                        serde_json::json!({ "ref": n, "text": text, "allow_credentials": true }),
-                    )
-                    .await?;
+                    let mut args = serde_json::json!({
+                        "ref": n,
+                        "text": text,
+                        "allow_credentials": true,
+                    });
+                    with_target(&mut args, state);
+                    mutate(client, state, "browser_type", args).await?;
                     println!("ok");
                 }
                 _ => println!("Usage: type <ref> <text> | type @<name>=<text>"),
@@ -6203,12 +6273,9 @@ async fn handle_repl_line(
                 println!("Usage: upload <absolute-path>");
                 return Ok(());
             }
-            mutate_no_replay(
-                client,
-                "browser_file_upload_select",
-                serde_json::json!({ "path": path }),
-            )
-            .await?;
+            let mut args = serde_json::json!({ "path": path });
+            with_target(&mut args, state);
+            mutate_no_replay(client, state, "browser_file_upload_select", args).await?;
             println!("ok");
         }
         "key" => {
@@ -6228,14 +6295,15 @@ async fn handle_repl_line(
                     list.into_iter().map(serde_json::Value::String).collect(),
                 );
             }
-            mutate(client, "browser_key_press", args).await?;
+            with_target(&mut args, state);
+            mutate(client, state, "browser_key_press", args).await?;
             println!("ok");
         }
         "select" => {
             let rest = line[cmd.len()..].trim_start();
             let (target, value): (Option<i64>, String) = if let Some(sel) = rest.strip_prefix('@') {
                 match sel.split_once('=') {
-                    Some((name, val)) => match resolve_ref_by_name(client, name).await? {
+                    Some((name, val)) => match resolve_ref_by_name(client, state, name).await? {
                         Some(r) => (Some(r), val.to_string()),
                         None => {
                             println!("no element matching: {}", name.trim());
@@ -6256,12 +6324,9 @@ async fn handle_repl_line(
             };
             match target {
                 Some(n) if !value.is_empty() => {
-                    mutate(
-                        client,
-                        "browser_select",
-                        serde_json::json!({ "ref": n, "value": value }),
-                    )
-                    .await?;
+                    let mut args = serde_json::json!({ "ref": n, "value": value });
+                    with_target(&mut args, state);
+                    mutate(client, state, "browser_select", args).await?;
                     println!("ok");
                 }
                 _ => println!("Usage: select <ref> <value> | select @<name>=<value>"),
@@ -6287,11 +6352,35 @@ async fn handle_repl_line(
                 }
             }
         }
+        "target" => {
+            // Pin (or clear) this session's default tab. Tab-scoped commands
+            // then carry that tab_id explicitly instead of following whatever
+            // tab happens to be active.
+            match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                None => match state.target_tab {
+                    Some(id) => println!("Pinned target: tab {id}"),
+                    None => println!("Pinned target: none (commands follow the active tab)"),
+                },
+                Some(arg) if arg == "none" || arg == "clear" => {
+                    state.target_tab = None;
+                    println!("Pinned target cleared; commands follow the active tab.");
+                }
+                Some(arg) => match arg.parse::<i64>() {
+                    Ok(id) => {
+                        state.target_tab = Some(id);
+                        println!("Pinned target: tab {id}");
+                    }
+                    Err(_) => println!("Usage: target <tab_id>|none"),
+                },
+            }
+        }
         "lease" => {
-            // Resolve the target tab: an explicit `lease <tab_id>`, otherwise the
-            // active tab. Acquisition auto-steals any existing lease, so no user
-            // confirmation is needed; the lease is held on this REPL session's
-            // connection and gates subsequent click/type mutations.
+            // Resolve the target tab: an explicit `lease <tab_id>`, else the
+            // session's pinned target, else the active tab. Acquisition
+            // auto-steals any existing lease, so no user confirmation is
+            // needed; the lease is held on this REPL session's connection and
+            // gates subsequent click/type mutations. Acquiring also pins the
+            // tab so later commands address it explicitly.
             let tab_id = match parts.get(1).map(|s| s.trim()).filter(|s| !s.is_empty()) {
                 Some(explicit) => match explicit.parse::<i64>() {
                     Ok(id) => id,
@@ -6301,24 +6390,31 @@ async fn handle_repl_line(
                     }
                 },
                 None => {
-                    let result =
-                        browser::send_tool_call(client, "browser_tab_list", serde_json::json!({}))
-                            .await?;
-                    let active = tool_payload(&result)
-                        .get("tabs")
-                        .and_then(|t| t.as_array())
-                        .and_then(|arr| {
-                            arr.iter().find(|t| {
-                                t.get("is_active") == Some(&serde_json::Value::Bool(true))
+                    if let Some(id) = state.target_tab {
+                        id
+                    } else {
+                        let result = browser::send_tool_call(
+                            client,
+                            "browser_tab_list",
+                            serde_json::json!({}),
+                        )
+                        .await?;
+                        let active = tool_payload(&result)
+                            .get("tabs")
+                            .and_then(|t| t.as_array())
+                            .and_then(|arr| {
+                                arr.iter().find(|t| {
+                                    t.get("is_active") == Some(&serde_json::Value::Bool(true))
+                                })
                             })
-                        })
-                        .and_then(|t| t.get("id"))
-                        .and_then(|v| v.as_i64());
-                    match active {
-                        Some(id) => id,
-                        None => {
-                            println!("No active tab to lease.");
-                            return Ok(());
+                            .and_then(|t| t.get("id"))
+                            .and_then(|v| v.as_i64());
+                        match active {
+                            Some(id) => id,
+                            None => {
+                                println!("No active tab to lease.");
+                                return Ok(());
+                            }
                         }
                     }
                 }
@@ -6329,7 +6425,8 @@ async fn handle_repl_line(
                 serde_json::json!({ "tab_id": tab_id, "ttl_seconds": 300 }),
             )
             .await?;
-            println!("Lease acquired.");
+            state.target_tab = Some(tab_id);
+            println!("Lease acquired. This session now targets tab {tab_id}.");
         }
         other => {
             println!("unknown command: {other}");
