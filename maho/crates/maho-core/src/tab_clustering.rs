@@ -125,6 +125,7 @@ mod tests {
             url: Url(url.to_string()),
             title: "Test".to_string(),
             custom_title: None,
+            custom_icon: None,
             favicon: None,
             state: TabLifecycleState::Active,
             role: TabRole::Normal,

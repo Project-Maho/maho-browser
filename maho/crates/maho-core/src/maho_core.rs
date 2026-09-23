@@ -904,6 +904,175 @@ mod tests {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Favorites item features: custom icon + pinned (home) URL
+    // ------------------------------------------------------------------
+
+    fn favorite_json_for(
+        core: &MahoCore,
+        space_id: &SpaceId,
+        tab_id: &TabId,
+    ) -> serde_json::Value {
+        let favorites = core.get_favorite_tabs(space_id);
+        let favorite = favorites
+            .iter()
+            .find(|tab| &tab.id == tab_id)
+            .expect("favorited tab must be readable");
+        serde_json::to_value(favorite).expect("favorite tab must serialize")
+    }
+
+    #[test]
+    fn favoriting_seeds_pinned_url_and_serializes_it_for_views() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+        core.handle_event(ShellEvent::TabUrlUpdated {
+            tab_id: tab_id.clone(),
+            url: Url::new("https://home.example.com"),
+        });
+        core.favorite_tab(&tab_id);
+
+        let value = favorite_json_for(&core, &active_space_id, &tab_id);
+        assert_eq!(
+            value.get("pinnedUrl").and_then(|v| v.as_str()),
+            Some("https://home.example.com"),
+            "favorites must expose their pinned (home) URL to the views, got: {value}"
+        );
+    }
+
+    #[test]
+    fn demoting_a_favorite_keeps_the_authored_pinned_url() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+        core.handle_event(ShellEvent::TabUrlUpdated {
+            tab_id: tab_id.clone(),
+            url: Url::new("https://home.example.com"),
+        });
+        core.favorite_tab(&tab_id);
+
+        // The user authors a new home URL through "Edit Pinned Page".
+        let json = format!(
+            r#"{{"kind":"set_tab_pinned_url","tab_id":"{}","url":"https://authored.example.com"}}"#,
+            tab_id.0
+        );
+        core.handle_event(
+            serde_json::from_str::<ShellEvent>(&json).expect("set pinned url must parse"),
+        );
+
+        // Remove-from-favorites / Move-to-folder demotes the tab to Normal.
+        core.handle_event(ShellEvent::ChangeTabRole {
+            tab_id: tab_id.clone(),
+            new_role: TabRole::Normal,
+        });
+        // Re-favoriting must not clobber the authored value with the live URL.
+        core.favorite_tab(&tab_id);
+
+        let value = favorite_json_for(&core, &active_space_id, &tab_id);
+        assert_eq!(
+            value.get("pinnedUrl").and_then(|v| v.as_str()),
+            Some("https://authored.example.com"),
+            "demotion plus re-favoriting must keep the authored pinned URL, got: {value}"
+        );
+    }
+
+    #[test]
+    fn set_tab_pinned_url_json_event_replaces_the_home_url() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+        core.favorite_tab(&tab_id);
+
+        // Exact JSON shape the C++ DispatchShellEvent path produces.
+        let json = format!(
+            r#"{{"kind":"set_tab_pinned_url","tab_id":"{}","url":"https://new-home.example.com"}}"#,
+            tab_id.0
+        );
+        let event: Result<ShellEvent, _> = serde_json::from_str(&json);
+        let event =
+            event.unwrap_or_else(|e| panic!("set_tab_pinned_url must deserialize: {e}"));
+        let updates = core.handle_event(event);
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, CoreUpdate::TabUpdated { tab_id: id, .. } if *id == tab_id)),
+            "set_tab_pinned_url must emit TabUpdated so views invalidate their cache, got: {updates:?}"
+        );
+
+        let value = favorite_json_for(&core, &active_space_id, &tab_id);
+        assert_eq!(
+            value.get("pinnedUrl").and_then(|v| v.as_str()),
+            Some("https://new-home.example.com"),
+            "replace-pinned-url must update the favorite home URL, got: {value}"
+        );
+    }
+
+    #[test]
+    fn set_tab_custom_icon_json_event_persists_and_serializes() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+        core.favorite_tab(&tab_id);
+
+        let json = format!(
+            r#"{{"kind":"set_tab_custom_icon","tab_id":"{}","custom_icon":"\ud83d\ude80"}}"#,
+            tab_id.0
+        );
+        let event: Result<ShellEvent, _> = serde_json::from_str(&json);
+        let event =
+            event.unwrap_or_else(|e| panic!("set_tab_custom_icon must deserialize: {e}"));
+        let updates = core.handle_event(event);
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, CoreUpdate::TabUpdated { tab_id: id, .. } if *id == tab_id)),
+            "set_tab_custom_icon must emit TabUpdated so views invalidate their cache, got: {updates:?}"
+        );
+
+        let value = favorite_json_for(&core, &active_space_id, &tab_id);
+        assert_eq!(
+            value.get("customIcon").and_then(|v| v.as_str()),
+            Some("\u{1f680}"),
+            "custom icon must ride the favorites JSON to the views, got: {value}"
+        );
+    }
+
+    #[test]
+    fn set_tab_custom_icon_null_clears_the_override() {
+        let mut core = MahoCore::new();
+        let active_space_id = core.get_active_space_id().clone();
+        let tab_id = create_tab(&mut core);
+        core.favorite_tab(&tab_id);
+
+        let set_json = format!(
+            r#"{{"kind":"set_tab_custom_icon","tab_id":"{}","custom_icon":"\ud83d\ude80"}}"#,
+            tab_id.0
+        );
+        core.handle_event(
+            serde_json::from_str::<ShellEvent>(&set_json).expect("set icon must parse"),
+        );
+        let clear_json = format!(
+            r#"{{"kind":"set_tab_custom_icon","tab_id":"{}","custom_icon":null}}"#,
+            tab_id.0
+        );
+        let clear_updates = core.handle_event(
+            serde_json::from_str::<ShellEvent>(&clear_json).expect("clear icon must parse"),
+        );
+        assert!(
+            clear_updates.iter().any(|u| matches!(
+                u,
+                CoreUpdate::TabUpdated { tab_id: id, .. } if *id == tab_id
+            )),
+            "clearing the custom icon must emit TabUpdated, got: {clear_updates:?}"
+        );
+
+        let value = favorite_json_for(&core, &active_space_id, &tab_id);
+        assert!(
+            value.get("customIcon").is_none(),
+            "cleared custom icon must drop out of the JSON, got: {value}"
+        );
+    }
+
     #[test]
     fn reorder_favorite_move_to_end() {
         let mut core = MahoCore::new();
@@ -5504,6 +5673,8 @@ impl MahoCore {
             | ShellEvent::SetZoom { tab_id, .. }
             | ShellEvent::ResetZoom { tab_id }
             | ShellEvent::SetTabCustomTitle { tab_id, .. }
+            | ShellEvent::SetTabCustomIcon { tab_id, .. }
+            | ShellEvent::SetTabPinnedUrl { tab_id, .. }
             | ShellEvent::ResetPinnedTab { tab_id }
             | ShellEvent::SetTabParent { tab_id, .. } => {
                 self.push_tab_sync(tab_id);
@@ -5578,6 +5749,8 @@ impl MahoCore {
             | ShellEvent::ChangeTabRole { .. }
             | ShellEvent::UnpinTab { .. }
             | ShellEvent::SetTabCustomTitle { .. }
+            | ShellEvent::SetTabCustomIcon { .. }
+            | ShellEvent::SetTabPinnedUrl { .. }
             | ShellEvent::ResetPinnedTab { .. }
             | ShellEvent::SetTabParent { .. } => LMDB_DIRTY_TABS,
 
@@ -6981,6 +7154,8 @@ impl MahoCore {
                     space_id: tab.space_id.clone(),
                     title: tab.title.clone(),
                     custom_title: tab.custom_title.clone(),
+                    custom_icon: tab.custom_icon.clone(),
+                    pinned_url: tab.pinned_url.as_ref().map(|u| u.0.clone()),
                     url: tab.url.0.clone(),
                     favicon: tab.favicon.clone(),
                     is_loading: self.tab_manager.is_tab_loading(&tab.id),
@@ -7883,6 +8058,20 @@ impl MahoCore {
 
     pub fn reset_pinned_tab(&mut self, tab_id: &TabId) -> bool {
         self.tab_manager.reset_pinned_tab(tab_id)
+    }
+
+    /// Replaces the tab's home (pinned) URL - the views' "Edit Pinned Page"
+    /// target. Routed through the event pipeline so the change is persisted and
+    /// synced like every other tab mutation. Returns false for unknown tabs.
+    pub fn set_tab_pinned_url(&mut self, tab_id: &TabId, url: Url) -> bool {
+        if self.tab_manager.get_tab(tab_id).is_none() {
+            return false;
+        }
+        self.handle_event(ShellEvent::SetTabPinnedUrl {
+            tab_id: tab_id.clone(),
+            url,
+        });
+        true
     }
 
     pub fn check_pinned_navigation(&self, tab_id: &TabId, new_url: &Url) -> Option<CoreUpdate> {
@@ -9084,6 +9273,8 @@ impl MahoCore {
             space_id: tab.space_id.clone(),
             title: tab.title.clone(),
             custom_title: tab.custom_title.clone(),
+            custom_icon: tab.custom_icon.clone(),
+            pinned_url: tab.pinned_url.as_ref().map(|u| u.0.clone()),
             url: tab.url.0.clone(),
             favicon: tab.favicon.clone(),
             is_loading: self.tab_manager.is_tab_loading(&tab.id),
@@ -13427,6 +13618,14 @@ impl TabManagerInterface for TabLifecycleManager {
 
     fn update_tab_custom_title(&mut self, tab_id: &TabId, custom_title: Option<String>) {
         self.update_tab_custom_title(tab_id, custom_title)
+    }
+
+    fn update_tab_custom_icon(&mut self, tab_id: &TabId, custom_icon: Option<String>) {
+        TabLifecycleManager::update_tab_custom_icon(self, tab_id, custom_icon)
+    }
+
+    fn set_tab_pinned_url(&mut self, tab_id: &TabId, url: Url) -> bool {
+        TabLifecycleManager::set_tab_pinned_url(self, tab_id, url)
     }
 
     fn update_tab_url(&mut self, tab_id: &TabId, url: Url) {

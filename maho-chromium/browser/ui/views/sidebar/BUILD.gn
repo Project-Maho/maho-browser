@@ -112,6 +112,8 @@ source_set("maho_sidebar_core") {
   sources = [
     "maho_control_activity_indicator_view.cc",
     "maho_control_activity_indicator_view.h",
+    "maho_favorite_edit_dialog.cc",
+    "maho_favorite_edit_dialog.h",
     "maho_sidebar_container_view.cc",
     "maho_sidebar_container_view.h",
     "maho_sidebar_favorites_grid_view.cc",

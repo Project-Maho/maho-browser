@@ -89,4 +89,14 @@ class MahoNotificationOverlay
   base::WeakPtrFactory<MahoNotificationOverlay> weak_factory_{this};
 };
 
+namespace maho {
+// Shows the shared upper-right "Link copied" toast (2s) for |browser| via the
+// MahoNotificationOverlay; no-ops on null |browser| or a browser without a
+// live BrowserView widget. Serves every clipboard-writing copy surface:
+// Cmd+Shift+C / command-palette copy_url, and the favorites-menu Copy Link.
+// Lives here (moved from maho_command_action_handler.cc) so all copy surfaces
+// link one shared helper — clipboard-copy must confirm with a toast.
+void ShowLinkCopiedToast(Browser* browser);
+}  // namespace maho
+
 #endif  // MAHO_BROWSER_UI_NOTIFICATIONS_MAHO_NOTIFICATION_OVERLAY_H_

@@ -1064,6 +1064,26 @@ void maho_core_set_tab_custom_title(struct MahoCore *ptr,
 
 /**
  * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new` or `maho_core_new_with_storage`.
+ * `tab_id_ptr` must be a valid null-terminated C string.
+ * `icon_ptr` may be null (or an empty/whitespace string) to clear the custom icon.
+ */
+void maho_core_set_tab_custom_icon(struct MahoCore *ptr,
+                                   const char *tab_id_ptr,
+                                   const char *icon_ptr);
+
+/**
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new` or `maho_core_new_with_storage`.
+ * `tab_id_ptr` and `url_ptr` must be valid null-terminated C strings.
+ * Returns true when the tab exists and its home (pinned) URL was replaced.
+ */
+bool maho_core_set_tab_pinned_url(struct MahoCore *ptr,
+                                  const char *tab_id_ptr,
+                                  const char *url_ptr);
+
+/**
+ * # Safety
  * `ptr` must be a valid pointer returned by `maho_core_new`.
  * `url` and `title` must be valid null-terminated C strings.
  * `folder_id` may be null to use the default folder.

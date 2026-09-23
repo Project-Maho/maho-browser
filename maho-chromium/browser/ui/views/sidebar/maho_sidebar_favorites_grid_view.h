@@ -17,7 +17,9 @@
 #include "base/memory/weak_ptr.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/favicon_base/favicon_types.h"
+#include "maho/browser/ui/context_menu/maho_favorites_context_menu.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
+#include "maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
@@ -35,7 +37,6 @@
 #include "url/gurl.h"
 
 class Browser;
-class MahoFavoritesContextMenu;
 class PrefService;
 
 namespace ui {
@@ -52,7 +53,8 @@ class View;
 
 namespace maho {
 
-class MahoSidebarFavoritesGridView : public views::View {
+class MahoSidebarFavoritesGridView : public views::View,
+                                     public MahoFavoritesContextMenu::Delegate {
   METADATA_HEADER(MahoSidebarFavoritesGridView, views::View)
 
  public:
@@ -194,6 +196,12 @@ class MahoSidebarFavoritesGridView : public views::View {
                            const gfx::Point& point,
                            ui::mojom::MenuSourceType source_type);
 
+  // MahoFavoritesContextMenu::Delegate:
+  void OnFavoriteShareRequested() override;
+  void OnFavoriteRenameRequested() override;
+  void OnFavoriteIconChangeRequested() override;
+  void OnFavoritePinnedUrlEditRequested() override;
+
   void MarkDropAccepted(const std::string& tab_id);
 
  private:
@@ -257,6 +265,21 @@ class MahoSidebarFavoritesGridView : public views::View {
 
   ui::ImageModel ResolveFaviconForTabId(const std::string& tab_id);
 
+  // Applies the tile's custom glyph when set: the glyph Label takes over the
+  // favicon ImageView's slot inside the glyph container.
+  void ApplyTileCustomIcon(size_t index);
+  void OpenEditDialog(MahoFavoriteEditDialog::Focus focus);
+  // |original_name| / |original_url| are the values the dialog was prefilled
+  // with; Save dispatches set_tab_custom_title / set_tab_pinned_url only for
+  // fields the user actually changed, so saving a dialog opened for one field
+  // cannot freeze a derived title or author an unset pinned URL.
+  void OnEditDialogAccepted(const std::string& tab_id,
+                            std::u16string original_name,
+                            std::string original_url,
+                            std::u16string name,
+                            std::string icon,
+                            std::string url);
+
   raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<PrefService> prefs_ = nullptr;
   raw_ptr<views::View> content_view_ = nullptr;
@@ -268,8 +291,14 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::array<raw_ptr<views::View>, kTileCount> tile_glyph_containers_ = {};
   std::array<raw_ptr<views::ImageView>, kTileCount> tile_icons_ = {};
   std::array<raw_ptr<views::Label>, kTileCount> tile_labels_ = {};
+  std::array<raw_ptr<views::Label>, kTileCount> tile_icon_labels_ = {};
+  std::array<std::u16string, kTileCount> tile_custom_icons_ = {};
+  std::array<std::string, kTileCount> tile_pinned_urls_ = {};
   std::array<GURL, kTileCount> tile_urls_ = {};
   std::array<std::u16string, kTileCount> tile_titles_ = {};
+  // Raw authored custom titles per slot (empty = never renamed); feeds the
+  // edit-dialog prefill. Never derived from the resolved display text.
+  std::array<std::u16string, kTileCount> tile_custom_titles_ = {};
   std::array<std::string, kTileCount> tile_tab_ids_ = {};
   std::array<uint64_t, kTileCount> tile_favicon_generations_ = {};
   base::flat_map<std::string, ui::ImageModel> cached_favicons_by_tab_id_;
@@ -288,6 +317,17 @@ class MahoSidebarFavoritesGridView : public views::View {
   std::string pending_external_drag_tab_id_;
 
   std::unique_ptr<MahoFavoritesContextMenu> active_context_menu_;
+  size_t active_context_menu_index_ = 0;
+  // Identity snapshot captured at menu-open time. Delegate callbacks and the
+  // edit dialog must not re-read the tile arrays by index: a background
+  // Update() while the menu is open would re-point them and apply Share/
+  // Rename/Icon/Pinned actions to a different favorite.
+  std::string active_context_menu_tab_id_;
+  GURL active_context_menu_url_;
+  std::u16string active_context_menu_title_;
+  std::string active_context_menu_pinned_url_;
+  std::u16string active_context_menu_custom_icon_;
+  std::u16string active_context_menu_custom_title_;
   std::unique_ptr<ui::SimpleMenuModel> active_menu_model_;
   std::unique_ptr<views::MenuRunner> active_menu_runner_;
 

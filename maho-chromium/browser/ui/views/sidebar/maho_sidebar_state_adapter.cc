@@ -1465,6 +1465,9 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
 
     favorite_item.title = MahoDisplayPolicy::ResolveTabDisplayText(
         favorite_url, title_u16, custom_title_u16);
+    // Preserve the raw authored name separately: the edit dialog prefills
+    // with this, never with the resolved projection in |title|.
+    favorite_item.custom_title = custom_title_u16;
 
     const std::string* id = dict->FindString("id");
     if (id) {
@@ -1477,6 +1480,17 @@ MahoSidebarStateAdapter::BuildFavoritesModelForSpaceIdJson(
         favorite_item.favicon_png_data =
             std::vector<uint8_t>(decoded_bytes.begin(), decoded_bytes.end());
       }
+    }
+    // Optional user overrides: a curated glyph replacing the favicon, and a
+    // pinned destination URL replacing the live tab URL. Both keys are omitted
+    // by maho-core when unset, which maps to the empty field default.
+    const std::string* custom_icon = dict->FindString("customIcon");
+    if (custom_icon && !custom_icon->empty()) {
+      favorite_item.custom_icon = base::UTF8ToUTF16(*custom_icon);
+    }
+    const std::string* pinned_url = dict->FindString("pinnedUrl");
+    if (pinned_url && !pinned_url->empty()) {
+      favorite_item.pinned_url = *pinned_url;
     }
     if (!MahoDisplayPolicy::IsNtpOrBlankUrl(favorite_url)) {
       favorite_item.subtitle = favorite_url.host().empty()

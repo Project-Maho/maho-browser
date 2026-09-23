@@ -2963,6 +2963,8 @@ fn make_tab_vm(id: &str, title: &str, url: &str) -> TabViewModel {
         space_id,
         title: title.to_string(),
         custom_title: None,
+        custom_icon: None,
+        pinned_url: None,
         url: url.to_string(),
         favicon: None,
         is_loading: false,

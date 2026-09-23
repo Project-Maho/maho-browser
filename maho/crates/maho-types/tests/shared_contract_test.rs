@@ -363,6 +363,8 @@ fn is_tab_update() {
             space_id: SpaceId::new("s1"),
             title: "Test".to_string(),
             custom_title: None,
+            custom_icon: None,
+            pinned_url: None,
             url: "https://x.com".to_string(),
             favicon: None,
             is_loading: false,

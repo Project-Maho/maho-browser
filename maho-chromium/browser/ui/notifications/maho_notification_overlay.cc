@@ -10,11 +10,35 @@
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/grit/generated_resources.h"  // nogncheck
 #include "maho/browser/ui/notifications/maho_toast_vibrancy.h"
 #include "maho/browser/ui/notifications/maho_toast_view.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/views/widget/widget.h"
+
+namespace maho {
+
+// Shows the upper-right "Link copied" toast after a clipboard-writing copy
+// command (Cmd+Shift+C / command-palette copy_url / favorites Copy Link).
+// The command-palette copy path previously wrote the clipboard but never
+// showed the toast, so Cmd+Shift+C copied silently; every copy surface now
+// routes through this one helper. Show() no-ops when the browser has no live
+// BrowserView widget (e.g. headless), so this is safe to call unconditionally
+// on the UI thread.
+void ShowLinkCopiedToast(Browser* browser) {
+  if (!browser) {
+    return;
+  }
+  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser);
+  if (overlay) {
+    overlay->Show(l10n_util::GetStringUTF16(IDS_MAHO_TOAST_LINK_COPIED),
+                  std::u16string(), base::Seconds(2));
+  }
+}
+
+}  // namespace maho
 
 MahoNotificationOverlay::MahoNotificationOverlay(Browser* browser)
     : BrowserUserData<MahoNotificationOverlay>(browser), browser_(browser) {

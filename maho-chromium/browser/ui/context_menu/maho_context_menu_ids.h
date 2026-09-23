@@ -88,6 +88,10 @@ enum MahoFavoritesContextMenuCommand {
   IDC_MAHO_FAV_RELOAD = 57059,
   IDC_MAHO_FAV_MUTE = 57060,
   IDC_MAHO_FAV_UNMUTE = 57061,
+  IDC_MAHO_FAV_SHARE = 57062,
+  IDC_MAHO_FAV_EDIT_PINNED_REPLACE = 57063,
+  IDC_MAHO_FAV_EDIT_PINNED_EDIT = 57064,
+  IDC_MAHO_FAV_EDIT_PINNED = 57065,
 };
 
 // Folder context menu: 57070-57079
@@ -110,6 +114,20 @@ inline bool IsMoveToSpaceCommand(int id) {
 
 inline int MoveToSpaceIndex(int id) {
   return id - IDC_MAHO_TAB_MOVE_SPACE_BASE;
+}
+
+// Dynamic "Move to Folder" submenu: 57400-57499
+// 57400 + folder_index = Move to folder[i]
+constexpr int IDC_MAHO_FAV_MOVE_FOLDER_BASE = 57400;
+constexpr int IDC_MAHO_FAV_MOVE_FOLDER_MAX = 57499;
+
+inline bool IsMoveToFolderCommand(int id) {
+  return id >= IDC_MAHO_FAV_MOVE_FOLDER_BASE &&
+         id <= IDC_MAHO_FAV_MOVE_FOLDER_MAX;
+}
+
+inline int MoveToFolderIndex(int id) {
+  return id - IDC_MAHO_FAV_MOVE_FOLDER_BASE;
 }
 
 // Link context menu: 57300-57304

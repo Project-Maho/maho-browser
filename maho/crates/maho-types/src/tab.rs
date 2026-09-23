@@ -65,6 +65,10 @@ pub struct Tab {
     pub url: Url,
     pub title: String,
     pub custom_title: Option<String>,
+    /// User-chosen glyph (emoji or short symbol) rendered in place of the
+    /// favicon on favorites tiles and tab rows. Empty/whitespace is
+    /// normalized to `None` by the lifecycle manager.
+    pub custom_icon: Option<String>,
     pub favicon: Option<ImageData>,
     pub state: TabLifecycleState,
     pub role: TabRole,
@@ -93,6 +97,9 @@ impl Serialize for Tab {
         if self.custom_title.is_some() {
             count += 1;
         }
+        if self.custom_icon.is_some() {
+            count += 1;
+        }
         if self.pinned_url.is_some() {
             count += 1;
         }
@@ -111,6 +118,9 @@ impl Serialize for Tab {
         state.serialize_field("title", &self.title)?;
         if let Some(ref ct) = self.custom_title {
             state.serialize_field("customTitle", ct)?;
+        }
+        if let Some(ref icon) = self.custom_icon {
+            state.serialize_field("customIcon", icon)?;
         }
         state.serialize_field("favicon", &self.favicon)?;
         state.serialize_field("state", &self.state)?;
@@ -155,6 +165,8 @@ impl<'de> Deserialize<'de> for Tab {
             title: String,
             #[serde(default)]
             custom_title: Option<String>,
+            #[serde(default)]
+            custom_icon: Option<String>,
             favicon: Option<ImageData>,
             state: TabLifecycleState,
             #[serde(default)]
@@ -200,6 +212,7 @@ impl<'de> Deserialize<'de> for Tab {
             url: helper.url,
             title: helper.title,
             custom_title: helper.custom_title,
+            custom_icon: helper.custom_icon,
             favicon: helper.favicon,
             state: helper.state,
             role,
@@ -273,6 +286,47 @@ mod tests {
         );
         let tab: Tab = serde_json::from_str(&old_pinned_json).unwrap();
         assert_eq!(tab.role, TabRole::Pinned);
+    }
+
+    #[test]
+    fn test_custom_icon_and_pinned_url_lmdb_round_trip() {
+        // New-schema write: both fields set.
+        let tab = Tab {
+            id: TabId::new("tab-rt-1"),
+            parent_id: None,
+            space_id: SpaceId::new("space-rt"),
+            url: Url::new("https://home.example.com"),
+            title: "Home".to_string(),
+            custom_title: Some("My Home".to_string()),
+            custom_icon: Some("\u{1f531}".to_string()),
+            favicon: None,
+            state: TabLifecycleState::Active,
+            role: TabRole::Favorite { order: 0 },
+            is_muted: false,
+            zoom_level: 1.0,
+            created_at: DateTime("2026-09-22T00:00:00Z".to_string()),
+            last_active_at: DateTime("2026-09-22T00:00:00Z".to_string()),
+            scroll_position: Default::default(),
+            pinned_url: Some(Url::new("https://home.example.com")),
+            window_id: None,
+            is_private: false,
+        };
+        let json = serde_json::to_string(&tab).expect("new-schema serialize");
+        assert!(
+            json.contains("customIcon"),
+            "custom icon must serialize, got: {json}"
+        );
+        assert!(
+            json.contains("pinnedUrl"),
+            "pinned url must serialize, got: {json}"
+        );
+        let round: Tab = serde_json::from_str(&json).expect("new-schema deserialize");
+        assert_eq!(round.custom_icon.as_deref(), Some("\u{1f531}"));
+        assert_eq!(
+            round.pinned_url.as_ref().map(|u| u.to_string()),
+            Some("https://home.example.com".to_string())
+        );
+        assert_eq!(round.custom_title.as_deref(), Some("My Home"));
     }
 
     #[test]

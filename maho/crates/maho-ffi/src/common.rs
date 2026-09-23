@@ -23,6 +23,47 @@ thread_local! {
 
 pub(crate) static NEXT_CALLBACK_TOKEN: AtomicU64 = AtomicU64::new(1);
 
+
+#[cfg(test)]
+fn import_gate_rwlock() -> &'static std::sync::RwLock<()> {
+    use std::sync::{OnceLock, RwLock};
+    static LOCK: OnceLock<RwLock<()>> = OnceLock::new();
+    LOCK.get_or_init(|| RwLock::new(()))
+}
+
+/// Shared guard for tests that call gated `maho_core_*` entry points and
+/// assert they succeed. Readers run in parallel with each other.
+#[cfg(test)]
+pub(crate) fn import_gate_idle() -> std::sync::RwLockReadGuard<'static, ()> {
+    import_gate_rwlock()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
+/// Exclusive guard for tests that raise or lower `import_gate::IMPORT_ACTIVE`.
+/// Excludes every `import_gate_idle` reader, and lowers the gate on drop so a
+/// panicking test cannot leave it raised for the rest of the binary.
+#[cfg(test)]
+pub(crate) struct ImportGateExclusive(#[allow(dead_code)] std::sync::RwLockWriteGuard<'static, ()>);
+
+#[cfg(test)]
+impl Drop for ImportGateExclusive {
+    fn drop(&mut self) {
+        // Runs before the write guard field is released, so the gate is always
+        // lowered before any `import_gate_idle` reader can be admitted.
+        crate::import_gate::exit();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn import_gate_exclusive() -> ImportGateExclusive {
+    ImportGateExclusive(
+        import_gate_rwlock()
+            .write()
+            .unwrap_or_else(|e| e.into_inner()),
+    )
+}
+
 #[derive(Default)]
 pub(crate) struct CallbackLeaseState {
     pub(crate) removed: bool,

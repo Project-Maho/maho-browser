@@ -182,6 +182,17 @@ pub enum ShellEvent {
         tab_id: TabId,
         custom_title: Option<String>,
     },
+    /// Sets or clears the user-chosen glyph rendered in place of the favicon
+    /// on favorites tiles / tab rows (empty string clears).
+    SetTabCustomIcon {
+        tab_id: TabId,
+        custom_icon: Option<String>,
+    },
+    /// Replaces the tab's home (pinned) URL - the "Edit Pinned Page" target.
+    SetTabPinnedUrl {
+        tab_id: TabId,
+        url: Url,
+    },
     TabFaviconUpdated {
         tab_id: TabId,
         favicon: Option<ImageData>,
@@ -779,6 +790,8 @@ impl ShellEvent {
                 | Self::MoveTabToSpace { .. }
                 | Self::SetTabParent { .. }
                 | Self::SetTabCustomTitle { .. }
+                | Self::SetTabCustomIcon { .. }
+                | Self::SetTabPinnedUrl { .. }
                 | Self::TabFaviconUpdated { .. }
                 | Self::ReorderTab { .. }
                 | Self::CloseOtherTabs { .. }

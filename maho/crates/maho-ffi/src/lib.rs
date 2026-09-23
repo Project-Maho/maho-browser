@@ -3790,6 +3790,8 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
                         space_id: SpaceId::default(),
                         title: t.title,
                         custom_title: None,
+                        custom_icon: None,
+                        pinned_url: None,
                         url: t.url,
                         favicon: t.favicon.clone(),
                         is_loading: false,
@@ -4074,6 +4076,85 @@ pub unsafe extern "C" fn maho_core_set_tab_custom_title(
             core.handle_event(event);
         },
         ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new` or `maho_core_new_with_storage`.
+/// `tab_id_ptr` must be a valid null-terminated C string.
+/// `icon_ptr` may be null (or an empty/whitespace string) to clear the custom icon.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_tab_custom_icon(
+    ptr: *mut MahoCore,
+    tab_id_ptr: *const std::os::raw::c_char,
+    icon_ptr: *const std::os::raw::c_char,
+) {
+    ffi_safe!(
+        {
+            if ptr.is_null() || tab_id_ptr.is_null() {
+                return;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return;
+            }
+            let core = &mut *ptr;
+            let tab_id_str = std::ffi::CStr::from_ptr(tab_id_ptr).to_string_lossy();
+            let tab_id = maho_types::identifiers::TabId::new(tab_id_str.as_ref());
+
+            let custom_icon = if icon_ptr.is_null() {
+                None
+            } else {
+                let icon_str = std::ffi::CStr::from_ptr(icon_ptr).to_string_lossy();
+                let trimmed = icon_str.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            };
+
+            let event = maho_types::events::shell_event::ShellEvent::SetTabCustomIcon {
+                tab_id,
+                custom_icon,
+            };
+            core.handle_event(event);
+        },
+        ()
+    )
+}
+
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new` or `maho_core_new_with_storage`.
+/// `tab_id_ptr` and `url_ptr` must be valid null-terminated C strings.
+/// Returns true when the tab exists and its home (pinned) URL was replaced.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_tab_pinned_url(
+    ptr: *mut MahoCore,
+    tab_id_ptr: *const std::os::raw::c_char,
+    url_ptr: *const std::os::raw::c_char,
+) -> bool {
+    ffi_safe!(
+        {
+            if ptr.is_null() || tab_id_ptr.is_null() || url_ptr.is_null() {
+                return false;
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return false;
+            }
+            let core = &mut *ptr;
+            let tab_id_str = std::ffi::CStr::from_ptr(tab_id_ptr).to_string_lossy();
+            let tab_id = maho_types::identifiers::TabId::new(tab_id_str.as_ref());
+            let url_str = std::ffi::CStr::from_ptr(url_ptr).to_string_lossy();
+            let trimmed = url_str.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+
+            core.set_tab_pinned_url(&tab_id, maho_types::common::Url::new(trimmed))
+        },
+        false
     )
 }
 
@@ -16119,6 +16200,107 @@ mod tests {
         let null_json = unsafe { maho_skills_set_available_capabilities(core, std::ptr::null()) };
         assert!(null_json.is_null());
 
+        unsafe { maho_core_free(core) };
+    }
+
+    #[test]
+    fn test_set_tab_custom_icon_and_pinned_url_ffi() {
+        use maho_types::events::shell_event::ShellEvent;
+
+        fn view_models_json(core: *mut MahoCore) -> String {
+            // SAFETY: |core| is a valid MahoCore for the test's lifetime; the
+            // returned string is copied and freed before this helper returns.
+            let ptr = unsafe { maho_core_get_tab_view_models(core) };
+            assert!(!ptr.is_null());
+            let text = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap().to_string();
+            unsafe { maho_string_free(ptr) };
+            text
+        }
+
+        let _gate_idle = crate::common::import_gate_idle();
+        let core = maho_core_new();
+        assert!(!core.is_null());
+        // SAFETY: |core| comes from maho_core_new and outlives every use below.
+        let core_ref = unsafe { &mut *core };
+
+        // Create and favorite a tab.
+        let space_id = core_ref.get_active_space_id().clone();
+        let before: Vec<_> = core_ref
+            .get_tab_view_models()
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        core_ref.handle_event(ShellEvent::CreateTab {
+            space_id,
+            url: None,
+            parent_id: None,
+            tab_id: None,
+            window_id: None,
+            is_private: false,
+        });
+        let tab_id = core_ref
+            .get_tab_view_models()
+            .iter()
+            .find(|t| !before.contains(&t.id))
+            .expect("new tab should be visible in view models")
+            .id
+            .clone();
+        core_ref.handle_event(ShellEvent::FavoriteTab {
+            tab_id: tab_id.clone(),
+        });
+
+        let tab_cstr = CString::new(tab_id.0.as_str()).unwrap();
+
+        // Setting a custom icon persists and round-trips through the JSON.
+        let icon = CString::new("\u{1f680}").unwrap();
+        // SAFETY: valid core pointer + NUL-terminated C strings owned by this test.
+        unsafe { maho_core_set_tab_custom_icon(core, tab_cstr.as_ptr(), icon.as_ptr()) };
+        let json = view_models_json(core);
+        assert!(
+            json.contains("customIcon"),
+            "set icon must surface in the view-model JSON, got: {json}"
+        );
+
+        // Whitespace-only icon clears the override.
+        let blank_icon = CString::new("   ").unwrap();
+        // SAFETY: valid core pointer + NUL-terminated C strings owned by this test.
+        unsafe { maho_core_set_tab_custom_icon(core, tab_cstr.as_ptr(), blank_icon.as_ptr()) };
+        let json = view_models_json(core);
+        assert!(
+            !json.contains("customIcon"),
+            "whitespace icon must clear the override, got: {json}"
+        );
+
+        // Null icon clears as well (no crash, stays cleared).
+        // SAFETY: valid core pointer; null icon is the documented clear input.
+        unsafe { maho_core_set_tab_custom_icon(core, tab_cstr.as_ptr(), std::ptr::null()) };
+        let json = view_models_json(core);
+        assert!(!json.contains("customIcon"));
+
+        // Pinned URL: unknown tab and blank input must be rejected.
+        let unknown = CString::new("00000000-0000-0000-0000-000000000000").unwrap();
+        let url = CString::new("https://home.example.com").unwrap();
+        let blank_url = CString::new("   ").unwrap();
+        // SAFETY: valid core pointer + NUL-terminated C strings owned by this test.
+        assert!(!unsafe {
+            maho_core_set_tab_pinned_url(core, unknown.as_ptr(), url.as_ptr())
+        });
+        assert!(!unsafe {
+            maho_core_set_tab_pinned_url(core, tab_cstr.as_ptr(), blank_url.as_ptr())
+        });
+
+        // Known tab + valid URL replaces the home URL.
+        // SAFETY: valid core pointer + NUL-terminated C strings owned by this test.
+        assert!(unsafe {
+            maho_core_set_tab_pinned_url(core, tab_cstr.as_ptr(), url.as_ptr())
+        });
+        let json = view_models_json(core);
+        assert!(
+            json.contains("https://home.example.com"),
+            "set pinned url must surface in the view-model JSON, got: {json}"
+        );
+
+        // SAFETY: |core| was created by maho_core_new in this test.
         unsafe { maho_core_free(core) };
     }
 

@@ -19,6 +19,8 @@
 #include "base/logging.h"
 #include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/tab_ui_helper.h"
@@ -35,7 +37,12 @@
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/maho_tab_id_helper.h"
 #include "maho/browser/ui/context_menu/maho_favorites_context_menu.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"  // nogncheck
+#if BUILDFLAG(IS_MAC)
+#include "maho/browser/ui/notifications/maho_notification_share_mac.h"  // nogncheck
+#endif
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -43,6 +50,8 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/clipboard/scoped_clipboard_writer.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
@@ -59,6 +68,8 @@
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_analysis.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/font_list.h"
 #include "ui/color/color_variant.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect_f.h"
@@ -116,6 +127,7 @@ constexpr int kFavoriteEmptyCloseSizeDp = 12;
 constexpr int kFavoriteEmptyCloseHitTargetDp = 22;
 constexpr int kFavoriteEmptyCloseInsetDp = 8;
 constexpr int kDragStartThresholdDp = 5;
+constexpr int kFavoriteCustomGlyphFontSizeDelta = 6;
 
 constexpr base::TimeDelta kReorderDuration = base::Milliseconds(220);
 constexpr base::TimeDelta kInsertionDuration = base::Milliseconds(220);
@@ -499,10 +511,14 @@ class FavoriteTileButton : public views::Button,
 struct FavoriteTileSpec {
   raw_ptr<const gfx::VectorIcon> icon;
   std::u16string text;
+  // Raw authored custom title (empty = never renamed). Dialog prefill source.
+  std::u16string custom_title;
   GURL url;
   std::string tab_id;
   bool is_active = false;
   std::vector<uint8_t> favicon_png_data;
+  std::u16string custom_icon;
+  std::string pinned_url;
 };
 
 std::u16string BuildFavoriteText(const MahoSidebarFavoriteItemModel& item) {
@@ -534,10 +550,13 @@ BuildTileSpecs(const MahoSidebarFavoritesModel& model) {
   for (size_t index = 0; index < model.items.size() && index < specs.size();
        ++index) {
     specs[index].text = BuildFavoriteText(model.items[index]);
+    specs[index].custom_title = model.items[index].custom_title;
     specs[index].url = model.items[index].url;
     specs[index].tab_id = model.items[index].tab_id;
     specs[index].is_active = model.items[index].is_active;
     specs[index].favicon_png_data = model.items[index].favicon_png_data;
+    specs[index].custom_icon = model.items[index].custom_icon;
+    specs[index].pinned_url = model.items[index].pinned_url;
   }
   return specs;
 }
@@ -688,6 +707,21 @@ MahoSidebarFavoritesGridView::MahoSidebarFavoritesGridView(Browser* browser)
 
     tile_icons_[index] = glyph_container->AddChildView(
         std::make_unique<views::ImageView>());
+    auto icon_label = std::make_unique<views::Label>(std::u16string());
+    icon_label->SetHorizontalAlignment(gfx::ALIGN_CENTER);
+    icon_label->SetVerticalAlignment(gfx::ALIGN_MIDDLE);
+    icon_label->SetAutoColorReadabilityEnabled(false);
+    icon_label->SetSubpixelRenderingEnabled(false);
+    icon_label->SetMultiLine(false);
+    icon_label->SetFontList(icon_label->font_list().Derive(
+        kFavoriteCustomGlyphFontSizeDelta, gfx::Font::NORMAL,
+        gfx::Font::Weight::NORMAL));
+    icon_label->SetPreferredSize(
+        gfx::Size(sidebar_layout::kFavoriteGlyphContainerSizeDp,
+                  sidebar_layout::kFavoriteGlyphContainerSizeDp));
+    icon_label->SetVisible(false);
+    tile_icon_labels_[index] =
+        glyph_container->AddChildView(std::move(icon_label));
     glyph_container->SetBorder(nullptr);
     tile_glyph_containers_[index] = glyph_container.get();
     tile->AddChildView(std::move(glyph_container));
@@ -781,6 +815,9 @@ void MahoSidebarFavoritesGridView::OnSidebarPaletteChanged(
     if (tile_labels_[index]) {
       tile_labels_[index]->SetEnabledColor(palette_.secondary_text);
     }
+    if (tile_icon_labels_[index]) {
+      tile_icon_labels_[index]->SetEnabledColor(palette_.primary_text);
+    }
   }
   if (drag_preview_tile_) {
     drag_preview_tile_->SetBackground(views::CreateRoundedRectBackground(
@@ -837,7 +874,16 @@ void MahoSidebarFavoritesGridView::Update(
       tile_views_[index]->SetVisible(false);
       tile_urls_[index] = GURL();
       tile_titles_[index] = std::u16string();
+      tile_custom_titles_[index] = std::u16string();
       tile_tab_ids_[index].clear();
+      tile_custom_icons_[index].clear();
+      tile_pinned_urls_[index].clear();
+      if (tile_icon_labels_[index]) {
+        tile_icon_labels_[index]->SetVisible(false);
+      }
+      if (tile_icons_[index]) {
+        tile_icons_[index]->SetVisible(true);
+      }
     }
     return;
   }
@@ -850,7 +896,13 @@ void MahoSidebarFavoritesGridView::Update(
     const std::string previous_tab_id = tile_tab_ids_[index];
     tile_urls_[index] = has_item ? specs[index].url : GURL();
     tile_titles_[index] = has_item ? specs[index].text : std::u16string();
+    tile_custom_titles_[index] =
+        has_item ? specs[index].custom_title : std::u16string();
     tile_tab_ids_[index] = has_item ? specs[index].tab_id : std::string();
+    tile_custom_icons_[index] =
+        has_item ? specs[index].custom_icon : std::u16string();
+    tile_pinned_urls_[index] =
+        has_item ? specs[index].pinned_url : std::string();
     if (previous_url != tile_urls_[index] ||
         previous_tab_id != tile_tab_ids_[index]) {
       ++tile_favicon_generations_[index];
@@ -908,6 +960,7 @@ void MahoSidebarFavoritesGridView::Update(
       }
 
       ApplyTileFavicon(index, specs[index].tab_id, fav, cache_by_tab_id);
+      ApplyTileCustomIcon(index);
       if (tile_glyph_containers_[index]) {
         tile_glyph_containers_[index]->SetBackground(nullptr);
         tile_glyph_containers_[index]->SetBorder(nullptr);
@@ -927,6 +980,12 @@ void MahoSidebarFavoritesGridView::Update(
       }
     } else {
       tile_labels_[index]->SetVisible(false);
+      if (tile_icon_labels_[index]) {
+        tile_icon_labels_[index]->SetVisible(false);
+      }
+      if (tile_icons_[index]) {
+        tile_icons_[index]->SetVisible(true);
+      }
     }
   }
 
@@ -984,6 +1043,22 @@ void MahoSidebarFavoritesGridView::OnFaviconLoaded(
               : cached_it->second;
   }
   ApplyTileFavicon(current_index, tab_id, fav, cache_by_tab_id);
+  ApplyTileCustomIcon(current_index);
+}
+
+void MahoSidebarFavoritesGridView::ApplyTileCustomIcon(size_t index) {
+  if (index >= kTileCount) {
+    return;
+  }
+  const bool has_custom_icon = !tile_custom_icons_[index].empty();
+  if (tile_icon_labels_[index]) {
+    tile_icon_labels_[index]->SetText(tile_custom_icons_[index]);
+    tile_icon_labels_[index]->SetEnabledColor(palette_.primary_text);
+    tile_icon_labels_[index]->SetVisible(has_custom_icon);
+  }
+  if (tile_icons_[index]) {
+    tile_icons_[index]->SetVisible(!has_custom_icon);
+  }
 }
 
 bool MahoSidebarFavoritesGridView::IsCurrentFaviconRequest(
@@ -1258,11 +1333,11 @@ int MahoSidebarFavoritesGridView::OnDragUpdated(
   }
 
   if (!os_ghost_hidden_) {
-    if (views::Widget* widget = GetWidget()) {
-      widget->UpdateDragImage(CreateTransparentPixelDragImage(),
-                              gfx::Vector2d());
-      os_ghost_hidden_ = true;
-    }
+    // Widget::UpdateDragImage() does not exist at this upstream pin; the OS
+    // drag ghost already shows the custom image set via WriteDragDataForView,
+    // so there is nothing to hide. Keep the flag consistent for the restore
+    // path, which is also a no-op without the widget API.
+    os_ghost_hidden_ = true;
   }
 
   active_drag_tab_id_ = payload.node_id;
@@ -1437,13 +1512,8 @@ void MahoSidebarFavoritesGridView::SetActiveDragGhostImage(
 }
 
 void MahoSidebarFavoritesGridView::RestoreOsDragGhostImage() {
-  if (!os_ghost_hidden_) {
-    return;
-  }
-  if (views::Widget* widget = GetWidget();
-      widget && !active_drag_ghost_image_.isNull()) {
-    widget->UpdateDragImage(active_drag_ghost_image_, active_drag_ghost_offset_);
-  }
+  // No-op at this upstream pin: without Widget::UpdateDragImage() the OS
+  // ghost was never replaced, so there is nothing to restore.
   os_ghost_hidden_ = false;
 }
 
@@ -1729,8 +1799,19 @@ void MahoSidebarFavoritesGridView::ShowTileContextMenu(
     active_context_menu_.reset();
   }
 
+  // Snapshot the tile's values: the tile arrays are re-pointed by background
+  // Update() while the menu is open, so deferred delegate callbacks must never
+  // re-read them by index.
+  active_context_menu_index_ = index;
+  active_context_menu_tab_id_ = tile_tab_ids_[index];
+  active_context_menu_url_ = tile_urls_[index];
+  active_context_menu_title_ = tile_titles_[index];
+  active_context_menu_pinned_url_ = tile_pinned_urls_[index];
+  active_context_menu_custom_icon_ = tile_custom_icons_[index];
+  active_context_menu_custom_title_ = tile_custom_titles_[index];
   active_context_menu_ = std::make_unique<MahoFavoritesContextMenu>(
-      browser_, tile_urls_[index], tile_titles_[index], tile_tab_ids_[index]);
+      browser_, active_context_menu_url_, active_context_menu_title_,
+      active_context_menu_tab_id_, this);
   active_menu_model_ = active_context_menu_->BuildMenuModel();
   active_menu_runner_ = std::make_unique<views::MenuRunner>(
       active_menu_model_.get(),
@@ -1743,6 +1824,97 @@ void MahoSidebarFavoritesGridView::ShowTileContextMenu(
       gfx::Rect(point, gfx::Size()),
       views::MenuAnchorPosition::kTopLeft,
       source_type);
+}
+
+void MahoSidebarFavoritesGridView::OnFavoriteShareRequested() {
+  const GURL url = active_context_menu_pinned_url_.empty()
+                       ? active_context_menu_url_
+                       : GURL(active_context_menu_pinned_url_);
+  if (!url.is_valid()) {
+    return;
+  }
+
+#if BUILDFLAG(IS_MAC)
+  const std::u16string& title = active_context_menu_custom_title_.empty()
+                                    ? active_context_menu_title_
+                                    : active_context_menu_custom_title_;
+  const size_t index = active_context_menu_index_;
+  views::View* anchor = this;
+  if (index < kTileCount && tile_views_[index]) {
+    anchor = tile_views_[index];
+  }
+  if (anchor->GetWidget()) {
+    maho::ShowNativeSharePicker(anchor, url, title, base::DoNothing());
+    return;
+  }
+#endif
+
+  {
+    ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+    writer.WriteText(base::UTF8ToUTF16(url.spec()));
+  }
+  maho::ShowLinkCopiedToast(browser_);
+}
+
+void MahoSidebarFavoritesGridView::OnFavoriteRenameRequested() {
+  OpenEditDialog(MahoFavoriteEditDialog::Focus::kName);
+}
+
+void MahoSidebarFavoritesGridView::OnFavoriteIconChangeRequested() {
+  OpenEditDialog(MahoFavoriteEditDialog::Focus::kIcon);
+}
+
+void MahoSidebarFavoritesGridView::OnFavoritePinnedUrlEditRequested() {
+  OpenEditDialog(MahoFavoriteEditDialog::Focus::kUrl);
+}
+
+void MahoSidebarFavoritesGridView::OpenEditDialog(
+    MahoFavoriteEditDialog::Focus focus) {
+  if (active_context_menu_tab_id_.empty()) {
+    return;
+  }
+  const std::string initial_url = active_context_menu_pinned_url_.empty()
+                                      ? active_context_menu_url_.spec()
+                                      : active_context_menu_pinned_url_;
+  // Prefill with what the tile currently shows (authored title if any, else
+  // the derived one) and remember both values as the change-detection
+  // baseline, so saving a dialog without touching a field cannot author it.
+  const std::u16string initial_name =
+      active_context_menu_custom_title_.empty()
+          ? active_context_menu_title_
+          : active_context_menu_custom_title_;
+  views::Widget* widget = GetWidget();
+  MahoFavoriteEditDialog::Show(
+      widget ? widget->GetNativeWindow() : gfx::NativeWindow(), focus,
+      initial_name, base::UTF16ToUTF8(active_context_menu_custom_icon_),
+      initial_url,
+      base::BindOnce(&MahoSidebarFavoritesGridView::OnEditDialogAccepted,
+                     weak_factory_.GetWeakPtr(), active_context_menu_tab_id_,
+                     initial_name, initial_url));
+}
+
+void MahoSidebarFavoritesGridView::OnEditDialogAccepted(
+    const std::string& tab_id,
+    std::u16string original_name,
+    std::string original_url,
+    std::u16string name,
+    std::string icon,
+    std::string url) {
+  if (tab_id.empty()) {
+    return;
+  }
+  if (name != original_name) {
+    DispatchShellEvent("set_tab_custom_title",
+                       {{"tab_id", tab_id},
+                        {"custom_title", base::UTF16ToUTF8(name)}});
+  }
+  DispatchShellEvent("set_tab_custom_icon",
+                     {{"tab_id", tab_id}, {"custom_icon", icon}});
+  if (!url.empty() && url != original_url && GURL(url).is_valid()) {
+    DispatchShellEvent("set_tab_pinned_url",
+                       {{"tab_id", tab_id}, {"url", url}});
+  }
+  ForceRefreshFromDrop();
 }
 
 void MahoSidebarFavoritesGridView::ApplyImmediateLayoutForAnimation() {

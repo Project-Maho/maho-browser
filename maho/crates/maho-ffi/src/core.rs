@@ -2567,6 +2567,8 @@ pub unsafe extern "C" fn maho_core_command_bar_search(
                         space_id: SpaceId::default(),
                         title: t.title,
                         custom_title: None,
+                        custom_icon: None,
+                        pinned_url: None,
                         url: t.url,
                         favicon: t.favicon.clone(),
                         is_loading: false,

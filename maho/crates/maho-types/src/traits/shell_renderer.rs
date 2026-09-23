@@ -18,6 +18,13 @@ pub struct TabViewModel {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_title: Option<String>,
+    /// User-chosen glyph rendered in place of the favicon (favorites tiles).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_icon: Option<String>,
+    /// Home (pinned) URL for pinned/favorite tabs; views use it for the
+    /// "Edit Pinned Page" actions. Omitted when the tab has no home URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_url: Option<String>,
     pub url: String,
     pub favicon: Option<ImageData>,
     pub is_loading: bool,

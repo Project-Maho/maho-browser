@@ -1472,6 +1472,22 @@ source_set("maho_theme_io_unittests") {
   ]
 }
 
+test("maho_context_menus_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_context_menus_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/menus",
+    "//ui/views:test_support",
+  ]
+}
+
 test("maho_theme_io_test") {
   sources = [ "run_all_maho_unittests_main.cc" ]
   deps = [

@@ -247,6 +247,9 @@ fn map_key(name: &str) -> Result<enigo::Key, String> {
         "f3" => Key::F3,
         "f4" => Key::F4,
         "f5" => Key::F5,
+        "f10" => Key::F10,
+        "f11" => Key::F11,
+        "f12" => Key::F12,
         other => return Err(format!("unknown key: {other}")),
     })
 }

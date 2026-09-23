@@ -138,6 +138,7 @@ impl TabLifecycleManager {
             url: url.unwrap_or_else(|| Url::new("about:blank")),
             title: "New Tab".to_string(),
             custom_title: None,
+            custom_icon: None,
             favicon: None,
             state: TabLifecycleState::Active,
             role: TabRole::Normal,
@@ -480,7 +481,8 @@ impl TabLifecycleManager {
     /// Sets `tab.role` to `new_role` and emits a `TabUpdated` event.
     ///
     /// Also manages `pinned_url` side-effect: seeds `pinned_url` on Normal/Favorite -> Pinned,
-    /// and clears it when transitioning away from Pinned.
+    /// and preserves it when transitioning away from Pinned so the user-authored value survives
+    /// a demotion (re-favoriting only seeds an empty slot, so a cleared value was unrecoverable).
     /// See ADR 11 (docs/decisions/0011-favorites-close-protection-policy.md).
     pub fn transition_tab_role(&mut self, id: &TabId, new_role: TabRole) -> bool {
         if self.tabs.get(id).map(|t| &t.role) == Some(&new_role) {
@@ -488,12 +490,8 @@ impl TabLifecycleManager {
         }
         if let Some(tab) = self.tabs.get_mut(id) {
             tab.role = new_role.clone();
-            if new_role.is_pinned() {
-                if tab.pinned_url.is_none() {
-                    tab.pinned_url = Some(tab.url.clone());
-                }
-            } else {
-                tab.pinned_url = None;
+            if new_role.is_pinned() && tab.pinned_url.is_none() {
+                tab.pinned_url = Some(tab.url.clone());
             }
             (self.on_update)(CoreUpdate::TabUpdated {
                 tab_id: id.clone(),
@@ -1103,6 +1101,8 @@ impl TabLifecycleManager {
             id: tab.id.clone(),
             title: tab.title.clone(),
             custom_title: tab.custom_title.clone(),
+            custom_icon: tab.custom_icon.clone(),
+            pinned_url: tab.pinned_url.as_ref().map(|u| u.0.clone()),
             url: tab.url.0.clone(),
             favicon: tab.favicon.clone(),
             is_loading: self.loading_states.get(&tab.id).copied().unwrap_or(false),
@@ -1127,10 +1127,47 @@ impl TabLifecycleManager {
         }
     }
 
+    /// Sets or clears the user-chosen title. Whitespace-only input clears the
+    /// override (mirrors update_tab_custom_icon) so an erased field falls back
+    /// to the derived tab title instead of persisting as authored state.
     pub fn update_tab_custom_title(&mut self, tab_id: &TabId, custom_title: Option<String>) {
+        let normalized = custom_title.and_then(|title| {
+            let trimmed = title.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
         if let Some(tab) = self.tabs.get_mut(tab_id) {
-            tab.custom_title = custom_title;
+            tab.custom_title = normalized;
         }
+    }
+
+    /// Sets or clears the user-chosen glyph override. Empty/whitespace input
+    /// clears the override so an erased field falls back to the favicon.
+    pub fn update_tab_custom_icon(&mut self, tab_id: &TabId, custom_icon: Option<String>) {
+        let normalized = custom_icon.and_then(|icon| {
+            let trimmed = icon.trim().to_string();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
+            tab.custom_icon = normalized;
+        }
+    }
+
+    /// Replaces the tab's home (pinned) URL - the target of the views'
+    /// "Replace Pinned URL with Current" / "Edit Pinned Page" actions.
+    pub fn set_tab_pinned_url(&mut self, tab_id: &TabId, url: Url) -> bool {
+        if let Some(tab) = self.tabs.get_mut(tab_id) {
+            tab.pinned_url = Some(url);
+            return true;
+        }
+        false
     }
 
     pub fn update_tab_url(&mut self, tab_id: &TabId, url: Url) {

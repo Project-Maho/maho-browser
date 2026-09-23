@@ -64,6 +64,8 @@ pub trait TabManagerInterface {
     fn handle_memory_pressure(&mut self, level: MemoryPressureLevel) -> MemoryAction;
     fn update_tab_title(&mut self, tab_id: &TabId, title: String);
     fn update_tab_custom_title(&mut self, tab_id: &TabId, custom_title: Option<String>);
+    fn update_tab_custom_icon(&mut self, tab_id: &TabId, custom_icon: Option<String>);
+    fn set_tab_pinned_url(&mut self, tab_id: &TabId, url: Url) -> bool;
     fn update_tab_url(&mut self, tab_id: &TabId, url: Url);
     fn update_tab_loading(&mut self, tab_id: &TabId, is_loading: bool);
     fn update_tab_favicon(
@@ -612,7 +614,34 @@ impl EventDispatcher {
             }
             ShellEvent::SetTabCustomTitle { tab_id, custom_title } => {
                 tab_mgr.update_tab_custom_title(&tab_id, custom_title);
-                vec![]
+                // Same cache-invalidation rationale as SetTabCustomIcon below:
+                // without TabUpdated the sidebar's favorites/tree cache keeps
+                // serving the stale title after a Rename save.
+                vec![CoreUpdate::TabUpdated {
+                    tab_id,
+                    changes: TabStateUpdate::default(),
+                }]
+            }
+            ShellEvent::SetTabCustomIcon {
+                tab_id,
+                custom_icon,
+            } => {
+                tab_mgr.update_tab_custom_icon(&tab_id, custom_icon);
+                // Emit TabUpdated so the sidebar adapter invalidates its
+                // favorites/tree cache (tab_updated -> kTreeBundle|kFavorites);
+                // returning [] left Change Icon/Rename edits invisible until an
+                // unrelated event evicted the cache.
+                vec![CoreUpdate::TabUpdated {
+                    tab_id,
+                    changes: TabStateUpdate::default(),
+                }]
+            }
+            ShellEvent::SetTabPinnedUrl { tab_id, url } => {
+                tab_mgr.set_tab_pinned_url(&tab_id, url);
+                vec![CoreUpdate::TabUpdated {
+                    tab_id,
+                    changes: TabStateUpdate::default(),
+                }]
             }
             ShellEvent::ReorderTab { tab_id, before_tab_id } => {
                 let active_space_id = space_mgr.get_active_space_id().clone();

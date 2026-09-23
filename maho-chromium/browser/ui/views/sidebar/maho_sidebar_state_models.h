@@ -165,6 +165,11 @@ struct MahoSidebarFavoriteItemModel {
   ~MahoSidebarFavoriteItemModel();
 
   std::u16string title;
+  // Raw authored custom title (maho-core customTitle). Empty when the user
+  // has never renamed the favorite. Distinct from |title|, which is a
+  // resolved display projection (page title/host fallback) and must never be
+  // written back as authored state.
+  std::u16string custom_title;
   std::u16string subtitle;
   GURL url;
   // Stable tab ID from maho-core, empty if no matching tab.
@@ -172,6 +177,12 @@ struct MahoSidebarFavoriteItemModel {
   bool is_favorite = true;  // L3-EXEMPT: derived from role in state_adapter.cc
   bool is_active = false;
   std::vector<uint8_t> favicon_png_data;
+  // User-chosen tile glyph (emoji) from the favorite edit dialog. Empty when
+  // the tile should render its favicon instead.
+  std::u16string custom_icon;
+  // User-pinned destination URL for this favorite. Empty when the tile follows
+  // the live tab URL.
+  std::string pinned_url;
 };
 
 struct MahoSidebarFavoritesModel {
