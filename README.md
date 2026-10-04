@@ -1,110 +1,93 @@
-# Maho Browser — client source
+# Maho
 
-This repository contains the **client source** of the Maho Browser: a Chromium
-overlay plus the Rust crates and WebUI surfaces that implement Maho's own
+**A browser that works for you, not on you.**
+
+Maho is a Chromium-based browser built around a simple idea: your attention is
+yours. It organizes your work into **spaces** instead of one endless window,
+blocks ads and trackers by default, and puts an AI assistant and your email
+inside the browser so you stop switching between apps.
+
+This repository is the **client source code** of that browser.
+
+---
+
+**English** · [中文](./README.zh-CN.md) · [日本語](./README.ja.md)
+
+---
+
+## Why Maho
+
+Most browsers are built to keep you looking at them. Maho is built to get out
+of your way.
+
+- **Spaces, not tabs sprawl.** Group tabs by what you're actually doing —
+  work, research, a trip — and switch between them instead of drowning in one
+  flat tab strip.
+- **Ads and trackers off by default.** Built-in blocking, tuned so pages stay
+  readable and fast. No extension roulette.
+- **An assistant that reads the page.** Ask questions about what you're
+  looking at, summarize it, or have routine work run on a schedule — from the
+  browser, not a separate app.
+- **Email in the browser.** Your inbox lives next to your browsing, so
+  checking mail doesn't mean leaving your work.
+- **Your data stays yours.** No telemetry. The client does not phone home, and
+  usage metrics are never sent from the app. You can also bring your own AI
+  key and keep full control.
+
+---
+
+## About this source code
+
+This is the **source-available** code for the Maho client: the Chromium overlay
+and the Rust crates, WebUI, and native shells that implement Maho's own
 features.
 
-It is **source-available, not OSI open source.** The Sustainable Use License
-(`LICENSE`) permits use and modification for your own internal or personal
-purposes, and free-of-charge non-commercial distribution, but it does **not**
-permit selling or hosting the software commercially, and it does **not** grant
-any rights to the Maho name or logo (`TRADEMARK.md`).
+It is **not OSI open source.** The [Sustainable Use License](LICENSE) lets you
+use and modify the code for your own internal or personal use, and to share it
+for free, non-commercially. It does **not** let you sell or host it
+commercially, and it does **not** grant rights to the Maho name or logo
+([TRADEMARK](TRADEMARK.md)).
 
-## What is in this repository
+**What's here:** the client — the Chromium overlay (`maho-chromium/`), the Rust
+crates (`maho/crates/`), the WebView bundle (`maho/web-ai/`), the mail backend
+(`maho/mail-core/`), and the native shells (`maho/ios-shell/`,
+`maho/android-shell/`).
 
-| Path | Contents |
-|---|---|
-| `maho/crates/` | Rust workspace: core engine, agent runtime, storage, CLI, MCP server, platform glue |
-| `maho-chromium/` | The Chromium overlay: C++ browser code, WebUI resources, GN config, build scripts, branding |
-| `maho-chromium/chromium_src/` | Overrides applied on top of upstream Chromium (Brave-style `#define`/`#include` pattern) |
-| `maho/mail-core/` | Mail backend (isolated Cargo workspace, FFI static lib for the mail helper) |
-| `maho/web-ai/` | Cross-platform AI WebView bundle (Preact) |
-| `maho/ios-shell/`, `maho/android-shell/` | Native shells |
-| `maho-chromium/build/scripts/` | Build entry points, including the Chromium source-override patcher |
+**What's not here:** the hosted service (accounts, sync, the AI billing proxy,
+the update feed) — it runs separately and is not part of this tree. Upstream
+Chromium is also not here; you fetch it yourself.
 
-## What is not in this repository
+---
 
-- **The hosted service.** Accounts, sync, the AI billing proxy, and the update
-  feed are operated separately and are not part of this source tree. The client
-  can be built and used without them.
-- **Upstream Chromium.** You fetch that yourself (see below). It is large
-  (~100 GB) and is not vendored here.
-- **Release engineering.** The signing, notarization, packaging, and store
-  publication pipelines are not published.
+## Build it yourself
 
-## Building
-
-Prerequisites: a Chromium checkout for the supported revision, Rust toolchain,
-Node/Bun for the WebUI bundles, and the platform SDK for your target.
+You need a Chromium checkout, a Rust toolchain, and your platform's SDK.
 
 ```bash
-# 1) Fetch and set up upstream Chromium in ./chromium per the Chromium docs,
-#    then place this overlay where the build expects it:
+# 1) Fetch upstream Chromium (large), then place this overlay:
 ln -s ../../maho-chromium chromium/src/maho
 
-# 2) Build the Rust core static library the C++ build links against
+# 2) Build the Rust core the C++ build links against
 python3 maho-chromium/build/scripts/build_maho_core.py
 
 # 3) Build
 python3 maho-chromium/build/scripts/build_maho.py
 ```
 
-Notes:
-
-- `build_maho.py` serializes builds through a workspace lock. One build at a
-  time is intentional — concurrent Chromium builds exhaust memory and make every
-  build slower.
+- Builds serialize through a lock — one at a time on purpose.
 - Build the narrowest target that verifies your change.
-- Do not pass a production OAuth client or any credential you do not own: the
-  build takes provider keys and OAuth client ids as build arguments. **Create
-  your own** if you need sign-in features in your own build.
-- Artifacts produced from this source are not official builds and carry no
-  support, update, or security-patch commitment from Maho.
+- Use **your own** API keys and OAuth clients for any build you run.
 
-### Branding, signing, and third-party marks
+---
 
-- **Do not ship Maho branding.** `maho-chromium/branding/` (icons, logo, installer
-  artwork) and the product name are covered by `TRADEMARK.md`, not by the source
-  license. A build you distribute must be rebranded.
-- **Code signing.** `maho-chromium/branding/mac/{entitlements,helper-entitlements}.plist`
-  and `maho-chromium/branding/BRANDING` reference Maho's Apple Developer Team ID
-  (`5DUM8WPB4C`) and bundle id `com.maho.browser`. **Replace these with your own
-  team id and bundle id** for any build you sign or distribute — they are not yours
-  to use. `maho/ios-shell/Signing.xcconfig` intentionally ships with an empty
-  `DEVELOPMENT_TEAM`; set your own there too.
-- **Third-party browser logos.** The onboarding/Welcome WebUI shows small icons for
-  other browsers (Chrome, Edge, Firefox, Safari, Brave, Opera, Zen, Arc). Those
-  marks belong to their respective owners; Maho makes no claim to them. They are
-  shown for identification only, and a rebranded build should not reuse them.
+## Good to know
 
-## Tests
+- **Source-available, not open source.** Please don't call it open source.
+- **No telemetry.** Don't add any.
+- **Commercial use is restricted** by the license — read it before building on this.
+- **Contributions need a CLA** — see [CONTRIBUTING](CONTRIBUTING.md).
+- **Report security issues privately** — see [SECURITY](SECURITY.md).
 
-```bash
-cd maho && bun run typecheck   # cargo check --workspace
-cd maho && bun run test        # cargo test --workspace
-```
+---
 
-## Project facts you should know before contributing
-
-- **English only.** Localization infrastructure is intentionally out of scope.
-- **No telemetry.** The client does not add outbound calls to Maho hosts. Usage
-  and funnel metrics are derived server-side, never from client pings. Please do
-  not add any.
-- **Source-available, not open source.** Do not describe this project as open
-  source in issues, documentation, or third-party material.
-- **Commercial use is restricted** by `LICENSE`. Read it before building a
-  business on this code.
-- **Contributions require a CLA** — see `CONTRIBUTING.md`.
-
-## Documentation
-
-- `CONTRIBUTING.md` — contribution rules, CLA, build and test expectations
-- `SECURITY.md` — how to report a vulnerability (do not use public issues)
-- `TRADEMARK.md` — what you may and may not do with the Maho name
-- `LICENSES/` — third-party licenses for bundled components
-
-## Status
-
-This is a young project maintained by a small team. Interfaces, file layout, and
-the supported Chromium revision change often. Community support is best-effort;
-there is no service-level commitment for builds made from this source.
+*This is the source code. For the product, see [mahobrowser.com](https://mahobrowser.com).*
