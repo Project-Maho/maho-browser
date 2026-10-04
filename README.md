@@ -18,7 +18,7 @@
     <img src="https://img.shields.io/badge/telemetry-none-success" alt="Telemetry: none">
   </p>
 
-  <img src="./docs/assets/hero.png" alt="Maho browser — organized spaces, built-in blocking, AI and email in the browser" width="90%">
+  <img src="./docs/assets/hero.gif" alt="Maho browser — organized spaces, built-in blocking, AI and email in the browser" width="90%">
 
   <p><a href="./README.zh-CN.md">中文</a> · <a href="./README.ja.md">日本語</a> · English</p>
 </div>

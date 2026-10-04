@@ -18,7 +18,7 @@
     <img src="https://img.shields.io/badge/telemetry-none-success" alt="遥测: 无">
   </p>
 
-  <img src="./docs/assets/hero.png" alt="Maho 浏览器 — 整理好的空间、内置拦截、浏览器里的 AI 和邮箱" width="90%">
+  <img src="./docs/assets/hero.gif" alt="Maho 浏览器 — 整理好的空间、内置拦截、浏览器里的 AI 和邮箱" width="90%">
 
   <p><a href="./README.md">English</a> · <a href="./README.ja.md">日本語</a> · <strong>中文</strong></p>
 </div>
