@@ -54,14 +54,6 @@ def _load_private_seed(path=None):
     else:
         raw = os.environ.get("SPARKLE_ED_PRIVATE_KEY", "").strip()
         if not raw:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            default_secrets_path = os.path.normpath(
-                os.path.join(script_dir, "..", "..", "..", ".secrets", "signing", "sparkle_ed_private.pem")
-            )
-            if os.path.isfile(default_secrets_path):
-                with open(default_secrets_path, "r", encoding="utf-8") as f:
-                    raw = f.read().strip()
-        if not raw:
             _eprint("error: no private key. Pass --private-key FILE or set "
                     "SPARKLE_ED_PRIVATE_KEY.")
             sys.exit(2)

@@ -1,0 +1,199 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+config("whisper_public_config") {
+  include_dirs = [
+    "include",
+    "ggml/include",
+  ]
+}
+
+config("whisper_private_config") {
+  include_dirs = [
+    "src",
+    "ggml/src",
+    "ggml/src/ggml-cpu",
+  ]
+  defines = [
+    "GGML_COMMIT=\"f049fff95a089aa9969deb009cdd4892b3e74916\"",
+    "GGML_VERSION=\"v1.9.1\"",
+    "GGML_USE_CPU",
+    "GGML_STATIC",
+    "WHISPER_VERSION=\"v1.9.1\"",
+    "WHISPER_STATIC",
+
+    # whisper.cpp's Windows (_MSC_VER) model-load path uses std::wstring_convert
+    # / std::codecvt_utf8, which Chromium's libc++ removes. Re-enable the
+    # C++26-removed facets for this vendored code so it builds on clang-cl.
+    # POSIX builds never compile that block (#ifdef _MSC_VER).
+    "_LIBCPP_ENABLE_CXX26_REMOVED_WSTRING_CONVERT",
+    "_LIBCPP_ENABLE_CXX26_REMOVED_CODECVT",
+  ]
+  cflags = [
+    "-Wno-deprecated-declarations",
+    "-Wno-shorten-64-to-32",
+    "-Wno-sign-compare",
+    "-Wno-unsafe-buffer-usage",
+    "-Wno-unused-function",
+    "-Wno-unused-variable",
+    "-Wno-macro-redefined",
+  ]
+  cflags_cc = [
+    "-Wno-c++98-compat-extra-semi",
+    "-Wno-covered-switch-default",
+    "-Wno-implicit-fallthrough",
+    "-Wno-missing-field-initializers",
+    "-Wno-macro-redefined",
+    "-Wno-unused-function",
+    "-Wno-unused-variable",
+  ]
+
+  # ggml sources rely on errno.h being force-included. Use the clang-cl
+  # force-include flag on Windows (`-include` is not a valid clang-cl arg and
+  # trips -Werror,-Wunknown-argument); keep the GCC/clang syntax elsewhere.
+  if (is_win) {
+    cflags_cc += [ "/FIerrno.h" ]
+  } else {
+    cflags_cc += [
+      "-include",
+      "errno.h",
+    ]
+  }
+}
+
+template("whisper_source_set") {
+  source_set(target_name) {
+    forward_variables_from(invoker, [
+                             "deps",
+                             "sources",
+                             "testonly",
+                           ])
+
+    public_configs = [ ":whisper_public_config" ]
+
+    configs -= [
+      "//build/config/compiler:chromium_code",
+      "//build/config/compiler:no_exceptions",
+    ]
+    configs += [
+      "//build/config/compiler:no_chromium_code",
+      "//build/config/compiler:exceptions",
+    ]
+
+    # Added AFTER no_chromium_code so its -Wno-* suppressions land last and win
+    # over the /W3 warning level no_chromium_code sets for clang-cl on Windows
+    # (otherwise -Wunused-function etc. are re-enabled and /WX fails the
+    # vendored ggml/whisper sources). No-op ordering change on POSIX.
+    configs += [ ":whisper_private_config" ]
+
+    cflags = [
+      "-Wno-deprecated-declarations",
+      "-Wno-shorten-64-to-32",
+      "-Wno-sign-compare",
+      "-Wno-unsafe-buffer-usage",
+      "-Wno-unused-function",
+      "-Wno-unused-variable",
+    ]
+    cflags_cc = [
+      "-Wno-c++98-compat-extra-semi",
+      "-Wno-covered-switch-default",
+      "-Wno-implicit-fallthrough",
+      "-Wno-missing-field-initializers",
+    ]
+  }
+}
+
+whisper_source_set("ggml_c") {
+  sources = [
+    "ggml/src/ggml-alloc.c",
+    "ggml/src/ggml-quants.c",
+    "ggml/src/ggml.c",
+  ]
+}
+
+whisper_source_set("ggml_cpp") {
+  sources = [
+    "ggml/src/ggml-backend-dl.cpp",
+    "ggml/src/ggml-backend-meta.cpp",
+    "ggml/src/ggml-backend-reg.cpp",
+    "ggml/src/ggml-backend.cpp",
+    "ggml/src/ggml-opt.cpp",
+    "ggml/src/ggml-threading.cpp",
+    "ggml/src/ggml.cpp",
+    "ggml/src/gguf.cpp",
+  ]
+}
+
+whisper_source_set("ggml_cpu_c") {
+  sources = [
+    "ggml/src/ggml-cpu/ggml-cpu.c",
+    "ggml/src/ggml-cpu/quants.c",
+  ]
+}
+
+whisper_source_set("ggml_cpu_cpp") {
+  sources = [
+    "ggml/src/ggml-cpu/amx/amx.cpp",
+    "ggml/src/ggml-cpu/amx/mmq.cpp",
+    "ggml/src/ggml-cpu/binary-ops.cpp",
+    "ggml/src/ggml-cpu/ggml-cpu.cpp",
+    "ggml/src/ggml-cpu/hbm.cpp",
+    "ggml/src/ggml-cpu/ops.cpp",
+    "ggml/src/ggml-cpu/repack.cpp",
+    "ggml/src/ggml-cpu/traits.cpp",
+    "ggml/src/ggml-cpu/unary-ops.cpp",
+    "ggml/src/ggml-cpu/vec.cpp",
+  ]
+}
+
+whisper_source_set("ggml_cpu_arch") {
+  sources = []
+  if (current_cpu == "arm" || current_cpu == "arm64") {
+    sources += [
+      "ggml/src/ggml-cpu/arch/arm/quants.c",
+      "ggml/src/ggml-cpu/arch/arm/repack.cpp",
+    ]
+  } else if (current_cpu == "x86" || current_cpu == "x64") {
+    sources += [
+      "ggml/src/ggml-cpu/arch/x86/quants.c",
+      "ggml/src/ggml-cpu/arch/x86/repack.cpp",
+    ]
+  } else if (current_cpu == "riscv64") {
+    sources += [
+      "ggml/src/ggml-cpu/arch/riscv/quants.c",
+      "ggml/src/ggml-cpu/arch/riscv/repack.cpp",
+    ]
+  } else if (current_cpu == "ppc64" || current_cpu == "ppc64le") {
+    sources += [ "ggml/src/ggml-cpu/arch/powerpc/quants.c" ]
+  } else if (current_cpu == "s390x") {
+    sources += [ "ggml/src/ggml-cpu/arch/s390/quants.c" ]
+  } else if (current_cpu == "loong64") {
+    sources += [ "ggml/src/ggml-cpu/arch/loongarch/quants.c" ]
+  }
+}
+
+static_library("whisper") {
+  sources = [ "src/whisper.cpp" ]
+  public_configs = [ ":whisper_public_config" ]
+  configs += [ ":whisper_private_config" ]
+
+  configs -= [
+    "//build/config/compiler:chromium_code",
+    "//build/config/compiler:no_exceptions",
+  ]
+  configs += [
+    "//build/config/compiler:no_chromium_code",
+    "//build/config/compiler:exceptions",
+  ]
+
+  deps = [
+    ":ggml_c",
+    ":ggml_cpu_arch",
+    ":ggml_cpu_c",
+    ":ggml_cpu_cpp",
+    ":ggml_cpp",
+  ]
+
+  if (is_linux) {
+    libs = [ "dl" ]
+  }
+}
