@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./docs/assets/product_logo.svg" width="80" alt="Maho">
+  <img src="./docs/assets/product_logo.png" width="80" alt="Maho">
 
   <h1>Maho</h1>
 
