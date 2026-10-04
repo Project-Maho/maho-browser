@@ -1135,8 +1135,9 @@ class TestVerifyRemoteSccache(unittest.TestCase):
         mock_sock = MagicMock()
         mock_socket.return_value = mock_sock
 
-        _bm.verify_remote_sccache(skip=False)
-        mock_socket.assert_called_once_with(('100.126.171.58', 9000), timeout=3.0)
+        with patch.dict('os.environ', {'SCCACHE_ENDPOINT': 'cache.internal.example:9000'}):
+            _bm.verify_remote_sccache(skip=False)
+        mock_socket.assert_called_once_with(('cache.internal.example', 9000), timeout=3.0)
         mock_sock.close.assert_called_once()
 
     def test_verify_remote_sccache_skip(self):
@@ -1144,18 +1145,27 @@ class TestVerifyRemoteSccache(unittest.TestCase):
             _bm.verify_remote_sccache(skip=True)
             mock_which.assert_not_called()
 
+    @patch.dict('os.environ', {}, clear=True)
+    def test_verify_remote_sccache_no_endpoint_skips(self):
+        # Third-party builders without SCCACHE_ENDPOINT just build locally.
+        with patch('shutil.which') as mock_which:
+            _bm.verify_remote_sccache(skip=False)
+            mock_which.assert_not_called()
+
     @patch('shutil.which', return_value=None)
     @patch('os.path.exists', return_value=False)
     def test_verify_remote_sccache_missing_binary(self, mock_exists, mock_which):
-        with self.assertRaises(SystemExit) as cm:
-            _bm.verify_remote_sccache(skip=False)
+        with patch.dict('os.environ', {'SCCACHE_ENDPOINT': 'cache.internal.example:9000'}):
+            with self.assertRaises(SystemExit) as cm:
+                _bm.verify_remote_sccache(skip=False)
         self.assertIn('sccache binary not found', str(cm.exception))
 
     @patch('shutil.which', return_value='/usr/bin/sccache')
     @patch('subprocess.run', side_effect=Exception('daemon dead'))
     def test_verify_remote_sccache_daemon_down(self, mock_run, mock_which):
-        with self.assertRaises(SystemExit) as cm:
-            _bm.verify_remote_sccache(skip=False)
+        with patch.dict('os.environ', {'SCCACHE_ENDPOINT': 'cache.internal.example:9000'}):
+            with self.assertRaises(SystemExit) as cm:
+                _bm.verify_remote_sccache(skip=False)
         self.assertIn('cannot query sccache daemon', str(cm.exception))
 
     @patch('shutil.which', return_value='/usr/bin/sccache')
@@ -1164,8 +1174,9 @@ class TestVerifyRemoteSccache(unittest.TestCase):
         mock_run.return_value = MagicMock(
             stdout="Compile requests 100\nCache location disk, path: /tmp/sccache\n"
         )
-        with self.assertRaises(SystemExit) as cm:
-            _bm.verify_remote_sccache(skip=False)
+        with patch.dict('os.environ', {'SCCACHE_ENDPOINT': 'cache.internal.example:9000'}):
+            with self.assertRaises(SystemExit) as cm:
+                _bm.verify_remote_sccache(skip=False)
         self.assertIn('cache location is not S3', str(cm.exception))
 
     @patch('shutil.which', return_value='/usr/bin/sccache')
@@ -1175,8 +1186,9 @@ class TestVerifyRemoteSccache(unittest.TestCase):
         mock_run.return_value = MagicMock(
             stdout="Compile requests 100\nCache location s3, name: sccache, prefix: /maho/\n"
         )
-        with self.assertRaises(SystemExit) as cm:
-            _bm.verify_remote_sccache(skip=False)
+        with patch.dict('os.environ', {'SCCACHE_ENDPOINT': 'cache.internal.example:9000'}):
+            with self.assertRaises(SystemExit) as cm:
+                _bm.verify_remote_sccache(skip=False)
         self.assertIn('remote MinIO endpoint', str(cm.exception))
 
 

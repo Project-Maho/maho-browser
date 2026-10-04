@@ -7,11 +7,11 @@ Unknown old files, including files with unrelated edits, are rejected unchanged.
 Pristine/current files retain ordinary git-apply behavior, preserving unrelated
 edits outside patch hunks.
 
-The six initial old states were observed on both local Chromium and omarchy at
+The six initial old states were observed on both local Chromium and a remote builder at
 revision `f89f3a4363808e117c592adedcf9947882ac3b79` on 2026-09-30. The
 app-controller state includes the duplicated `IDC_NEW_TAB` block. Patch index
 lines are not trusted as content hashes; the SHA-256 values were checked against
-omarchy's actual files.
+a remote builder's actual files.
 
 The final API repair wave extends registration to fifteen paths. The nine
 additional hashes match saved applied diffs and actual local Chromium files.
@@ -50,10 +50,10 @@ not automatically trusted migration registrations.
 ## Remote verification commands
 
 After the parent synchronizes the script, tests, canonical patches, and migration
-directory to omarchy, run from the parent session:
+directory to a remote builder, run from the parent session:
 
 ```sh
-ssh omarchy 'cd /home/indo/maho-workspace/maho-chromium/build/scripts && MAHO_CHROMIUM_SRC=/home/indo/maho-workspace/chromium/src python3 -B -m unittest test_updated154_base_migrations test_apply_chromium_src_overrides.MahoBasePatchLayerTest -v'
+ssh a remote builder 'cd /home/indo/maho-workspace/maho-chromium/build/scripts && MAHO_CHROMIUM_SRC=/home/indo/maho-workspace/chromium/src python3 -B -m unittest test_updated154_base_migrations test_apply_chromium_src_overrides.MahoBasePatchLayerTest -v'
 ```
 
 This uses temporary file fixtures and real git apply; it does not change the
@@ -62,10 +62,10 @@ upstream working tree. Missing pinned blobs fail rather than skip tests.
 Read-only preflight of the registered paths against the actual remote tree:
 
 ```sh
-ssh omarchy 'cd /home/indo/maho-workspace/maho-chromium/build/scripts && python3 -B -c '\''from apply_chromium_src_overrides import _UPDATED154_OLD_SHA256, _UPDATED154_REVISION, apply_base_patch, default_chromium_src, repo_root; root = repo_root() / "build" / "chromium_base_patches" / _UPDATED154_REVISION; [print(path, apply_base_patch(default_chromium_src(), path, root / (path + ".patch"), True)) for path in _UPDATED154_OLD_SHA256]'\'''
+ssh a remote builder 'cd /home/indo/maho-workspace/maho-chromium/build/scripts && python3 -B -c '\''from apply_chromium_src_overrides import _UPDATED154_OLD_SHA256, _UPDATED154_REVISION, apply_base_patch, default_chromium_src, repo_root; root = repo_root() / "build" / "chromium_base_patches" / _UPDATED154_REVISION; [print(path, apply_base_patch(default_chromium_src(), path, root / (path + ".patch"), True)) for path in _UPDATED154_OLD_SHA256]'\'''
 ```
 
 Neither command starts a build. The parent reported eight tests passing on
-omarchy for the initial six-path implementation. The fifteen-path extension
+a remote builder for the initial six-path implementation. The fifteen-path extension
 and added registration-coverage test still require the commands above; no tests
 or builds were run in the migration implementation session.

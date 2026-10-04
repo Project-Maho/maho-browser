@@ -13680,7 +13680,7 @@ REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.h"].extend([
 
 # Per-(path, index) guard overrides for SPLIT_VIEW_REPLACEMENTS hunks whose
 # inserted text can already be present in a tree patched by an older
-# REPLACEMENTS entry before this hunk existed (e.g. omarchy's live tree
+# REPLACEMENTS entry before this hunk existed (e.g. a remote builder's live tree
 # already carried ContentsContainerView::SetMahoAiPanelAdjacent from an
 # earlier, unrelated REPLACEMENTS guard at a different anchor). Without an
 # explicit guard, the anchor line used in `old` (boilerplate that is NOT the

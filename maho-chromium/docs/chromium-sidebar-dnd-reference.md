@@ -67,7 +67,7 @@ runbook. The current desktop lifecycle is documented in
 
 It is no longer a shipped executable surface. References below to AX runs or
 observations are retained as historical context only and must not be presented
-as current executable evidence. Desktop E2E/검증은 omarchy(100.91.254.71)에서 실행하며,
+as current executable evidence. Desktop E2E/검증은 a remote builder(<remote-builder>)에서 실행하며,
 참고 문서는 `docs/chromium-desktop-e2e.md`이다. (VM 기반 라이프사이클과 런북은 2026-09-18
 완전 삭제되었다.)
 
@@ -432,7 +432,7 @@ This is now the main non-AX verification layer for current Chromium sidebar DnD 
 
 ### 7.3 Supported desktop E2E and artifacts
 
-Desktop E2E/검증은 omarchy(100.91.254.71)에서 실행한다(VM 기반 macOS 라이프사이클은
+Desktop E2E/검증은 a remote builder(<remote-builder>)에서 실행한다(VM 기반 macOS 라이프사이클은
 2026-09-18 완전 삭제됨). Treat historical AX observations only as diagnostic
 context; the former harness is unavailable and must not be invoked or cited as
 current evidence.
@@ -485,7 +485,7 @@ The correct framing for future work is:
 At the time of writing:
 
 - Chromium already wires **tab pinned/normal transfers**, **folder pinned/normal transfers**, **tab into folder**, **folder into folder**, **root folder reorder**, **same-parent nested folder reorder**, **folder-scoped tab reorder**, **tab out of folder to root**, and **favorite drag paths**;
-- archived AX observations are non-authoritative context, while native dispatch tests and omarchy desktop E2E are the current proof surfaces;
+- archived AX observations are non-authoritative context, while native dispatch tests and a remote builder desktop E2E are the current proof surfaces;
 - the live macOS accessibility tree is still the limiting factor for strong end-to-end proof on folder-heavy flows.
 
 Any future sidebar DnD implementation or review should begin from this document.

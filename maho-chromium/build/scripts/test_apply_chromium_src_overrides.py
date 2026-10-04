@@ -2464,7 +2464,7 @@ class MahoContentsHeaderSlotTest(unittest.TestCase):
             return target.read_text()
 
     def test_split_hunks_do_not_duplicate_already_present_set_maho_ai_panel_adjacent_in_source(self):
-        # Regression for the omarchy task-9 build failure: a tree that already
+        # Regression for the a remote builder task-9 build failure: a tree that already
         # carries ContentsContainerView::SetMahoAiPanelAdjacent at a DIFFERENT
         # location than this hunk's anchor (an older REPLACEMENTS entry put it
         # at the end of the file) must not gain a second copy. The definition
@@ -2537,7 +2537,7 @@ class MahoContentsHeaderSlotTest(unittest.TestCase):
             output.count("void SetMahoAiPanelAdjacent(bool adjacent);"), 1, output)
 
 
-# Pinned 72f18f12 excerpts (fetched read-only from omarchy
+# Pinned 72f18f12 excerpts (fetched read-only from a remote builder
 # ~/maho-workspace/chromium/src) and the legacy search_view construction block
 # still present in that builder's patched browser_view.cc.
 _BV72_INCLUDE = (

@@ -1743,7 +1743,7 @@ def build_chromium_app(out_dir, targets, extra_args):
     path = env.get('PATH', '')
     env['PATH'] = os.pathsep.join([_DEPOT_TOOLS_DIR, path]) if path else _DEPOT_TOOLS_DIR
     # Keep the default low enough to avoid exhausting memory on local builds.
-    # Windows is the exception: the maho-win builder (6C/12T, 32 GB) sat at ~20%
+    # Windows is the exception: the the Windows builder builder (6C/12T, 32 GB) sat at ~20%
     # CPU on 4 jobs and crawled through a full Chromium build, so it always runs
     # 12. MAHO_NINJA_JOBS and a caller-supplied -j continue to override it.
     default_jobs = '12' if sys.platform == 'win32' else '4'
@@ -1943,12 +1943,21 @@ def run_lucide_icon_check(skip):
 def verify_remote_sccache(skip: bool = False) -> None:
     """Verify that sccache is running and backed by the remote shared S3 cache.
 
-    Fails closed: if sccache is not installed, the daemon is not running,
-    the cache location is not remote S3, or the remote endpoint is unreachable,
-    aborts the build immediately with a clear error and resolution hints.
+    Maho CI / release builders opt in by setting SCCACHE_ENDPOINT. Fails closed in
+    that case: if sccache is not installed, the daemon is not running, the cache
+    location is not remote S3, or the remote endpoint is unreachable, aborts the
+    build immediately. Third-party builders that do not set SCCACHE_ENDPOINT skip
+    this check entirely — they just build locally.
     """
     if skip:
         print('warning: remote sccache check skipped (--skip-sccache-check)')
+        return
+
+    # Maho CI opt-in only. Without an endpoint configured there is nothing to
+    # verify, so let the local build proceed (uncached) instead of aborting.
+    endpoint = os.environ.get('SCCACHE_ENDPOINT', '').strip()
+    if not endpoint:
+        print('info: SCCACHE_ENDPOINT not set; skipping remote sccache verification.')
         return
 
     sccache_bin = shutil.which('sccache') or (
@@ -1992,7 +2001,6 @@ def verify_remote_sccache(skip: bool = False) -> None:
             '  launchctl kickstart -k gui/$(id -u)/com.maho.sccache'
         )
 
-    endpoint = os.environ.get('SCCACHE_ENDPOINT', '100.126.171.58:9000')
     if ':' in endpoint:
         endpoint_host, port_str = endpoint.split(':', 1)
         endpoint_port = int(port_str)
