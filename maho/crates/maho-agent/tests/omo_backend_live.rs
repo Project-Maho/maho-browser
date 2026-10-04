@@ -10,13 +10,27 @@ use maho_agent::{AgentRuntime, AgentStreamEvent};
 use maho_types::chat::{ChatContent, ChatMessage};
 
 fn rpc_entry() -> PathBuf {
-    PathBuf::from(
-        "/Users/indo/.bun/install/global/node_modules/@code-yeongyu/senpi/dist/rpc-entry.js",
-    )
+    std::env::var("MAHO_TEST_RPC_ENTRY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("/Users/indo/.bun/install/global/node_modules/@code-yeongyu/senpi/dist/rpc-entry.js")
+        })
 }
 
 fn browser_mcp_binary() -> PathBuf {
-    PathBuf::from("/Users/indo/code/project/maho-workspace/maho/target/debug/maho-browser-mcp")
+    std::env::var("MAHO_TEST_BROWSER_MCP")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("/Users/indo/code/project/maho-workspace/maho/target/debug/maho-browser-mcp")
+        })
+}
+
+fn helpers_mcp_bundle() -> PathBuf {
+    std::env::var("MAHO_TEST_HELPERS_MCP")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from("/Volumes/T9-Mac/chromium/src/out/Default/Maho.app/Contents/Helpers/maho-browser-mcp")
+        })
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -168,7 +182,7 @@ async fn streams_real_assistant_tokens_through_a_configured_provider() {
 async fn omo_returns_auth_providers_with_oauth_and_api_key() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let sock = scratch.path().join("omo.sock");
-    let helpers_mcp = std::path::PathBuf::from("/Volumes/T9-Mac/chromium/src/out/Default/Maho.app/Contents/Helpers/maho-browser-mcp");
+    let helpers_mcp = helpers_mcp_bundle();
 
     let config = OmoLaunchConfig::builder(scratch.path())
         .runtime_binary("bun")
@@ -208,7 +222,7 @@ fn resolver_agrees_with_the_build_staging_layout() {
 async fn omo_invokes_browser_tab_list_through_mcp() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let sock = scratch.path().join("omo.sock");
-    let helpers_mcp = std::path::PathBuf::from("/Volumes/T9-Mac/chromium/src/out/Default/Maho.app/Contents/Helpers/maho-browser-mcp");
+    let helpers_mcp = helpers_mcp_bundle();
     if !helpers_mcp.exists() {
         eprintln!("skipping: helpers_mcp not built yet");
         return;
@@ -285,7 +299,7 @@ async fn omo_invokes_browser_tab_list_through_mcp() {
 async fn omo_gates_boundary_tools_as_always_ask() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let sock = scratch.path().join("omo.sock");
-    let helpers_mcp = std::path::PathBuf::from("/Volumes/T9-Mac/chromium/src/out/Default/Maho.app/Contents/Helpers/maho-browser-mcp");
+    let helpers_mcp = helpers_mcp_bundle();
     if !helpers_mcp.exists() {
         eprintln!("skipping: helpers_mcp not built yet");
         return;
