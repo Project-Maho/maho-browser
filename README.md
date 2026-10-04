@@ -61,6 +61,22 @@ Notes:
 - Artifacts produced from this source are not official builds and carry no
   support, update, or security-patch commitment from Maho.
 
+### Branding, signing, and third-party marks
+
+- **Do not ship Maho branding.** `maho-chromium/branding/` (icons, logo, installer
+  artwork) and the product name are covered by `TRADEMARK.md`, not by the source
+  license. A build you distribute must be rebranded.
+- **Code signing.** `maho-chromium/branding/mac/{entitlements,helper-entitlements}.plist`
+  and `maho-chromium/branding/BRANDING` reference Maho's Apple Developer Team ID
+  (`5DUM8WPB4C`) and bundle id `com.maho.browser`. **Replace these with your own
+  team id and bundle id** for any build you sign or distribute — they are not yours
+  to use. `maho/ios-shell/Signing.xcconfig` intentionally ships with an empty
+  `DEVELOPMENT_TEAM`; set your own there too.
+- **Third-party browser logos.** The onboarding/Welcome WebUI shows small icons for
+  other browsers (Chrome, Edge, Firefox, Safari, Brave, Opera, Zen, Arc). Those
+  marks belong to their respective owners; Maho makes no claim to them. They are
+  shown for identification only, and a rebranded build should not reuse them.
+
 ## Tests
 
 ```bash

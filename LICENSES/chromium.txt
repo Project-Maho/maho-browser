@@ -1,0 +1,20 @@
+Chromium
+https://chromium.googlesource.com/chromium/src
+
+Chromium and its many bundled third-party components are licensed under a
+permissive BSD-style license. The upstream Chromium source is NOT vendored into
+this repository; the overlay (chromium_src/, browser/, etc.) is applied on top of
+a Chromium checkout you fetch yourself. Keep upstream license notices intact on
+any Chromium-derived file.
+
+Full upstream license text: see the LICENSE file in your Chromium checkout.
+
+BSD 3-Clause License (summary of obligations):
+- Redistributions of source code must retain the copyright notice, the list of
+  conditions, and the disclaimer.
+- Redistributions in binary form must reproduce the copyright notice, the list
+  of conditions, and the disclaimer in the documentation and/or other materials
+  provided with the distribution.
+- Neither the name of Google Inc. nor the names of its contributors may be used
+  to endorse or promote products derived from this software without specific
+  prior written permission.
