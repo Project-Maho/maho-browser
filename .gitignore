@@ -1,0 +1,21 @@
+# Build output
+maho/target/
+maho-chromium/third_party/maho/prebuilt/
+chromium/
+out/
+
+# JS / WebUI
+node_modules/
+**/node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS / OS
+.DS_Store
+
+# Local secrets & state (never commit)
+.secrets/
+*.env
