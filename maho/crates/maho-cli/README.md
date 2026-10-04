@@ -136,7 +136,7 @@ Supported providers for `maho run` and `maho chat --byok`:
 
 Prebuilt binaries and official packaging (dmg, exe, deb, rpm, tar.gz, apk) are hosted exclusively in the release-only repository.
 
-Download releases here: [Maho Browser Releases](https://github.com/Project-Maho/release/releases)
+Download releases here: [Maho Browser Releases](https://github.com/Project-Maho/maho-browser/releases)
 
 ---
 

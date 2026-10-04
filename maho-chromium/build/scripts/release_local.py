@@ -56,7 +56,7 @@ _PACKAGE_MSIX = os.path.join(_SCRIPT_DIR, 'package_windows_msix.py')
 _GEN_CHANGELOG = os.path.join(_SCRIPT_DIR, 'generate_changelog_json.py')
 _VERIFY_MACOS_RELEASE = os.path.join(_SCRIPT_DIR, 'verify_macos_release.py')
 
-DEFAULT_REPO = os.environ.get('MAHO_RELEASE_REPO', 'Project-Maho/release')
+DEFAULT_REPO = os.environ.get('MAHO_RELEASE_REPO', 'Project-Maho/maho-browser')
 DEFAULT_RELAY_URL = os.environ.get(
     'MAHO_RELAY_URL', 'https://relay.mahobrowser.com/updates/release'
 )
@@ -695,8 +695,8 @@ def run_self_test() -> int:
     <item>
       <title>Version 1.0.0</title>
       <pubDate>Mon, 31 Aug 2026 12:00:00 GMT</pubDate>
-      <sparkle:releaseNotesLink>https://github.com/Project-Maho/release/releases/latest/download/release-notes.html</sparkle:releaseNotesLink>
-      <enclosure url="https://github.com/Project-Maho/release/releases/latest/download/Maho-1.0.0.dmg"
+      <sparkle:releaseNotesLink>https://github.com/Project-Maho/maho-browser/releases/latest/download/release-notes.html</sparkle:releaseNotesLink>
+      <enclosure url="https://github.com/Project-Maho/maho-browser/releases/latest/download/Maho-1.0.0.dmg"
                  sparkle:version="1.0.0"
                  sparkle:shortVersionString="1.0.0"
                  type="application/octet-stream"
@@ -759,7 +759,7 @@ def run_self_test() -> int:
         exe_sha256 = hashlib.sha256(exe_bytes).hexdigest()
         win_payload_obj = {
             'version': '1.0.0',
-            'installer_url': 'https://github.com/Project-Maho/release/releases/latest/download/MahoSetup-1.0.0.exe',
+            'installer_url': 'https://github.com/Project-Maho/maho-browser/releases/latest/download/MahoSetup-1.0.0.exe',
             'installer_sha256': exe_sha256,
             'installer_signer_cn': 'Maho Browser',
             'rollout_bucket': 100,

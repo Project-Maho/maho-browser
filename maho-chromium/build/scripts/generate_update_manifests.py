@@ -34,7 +34,7 @@ import tempfile
 from email.utils import formatdate
 from xml.sax.saxutils import escape
 
-RELEASE_BASE = "https://github.com/Project-Maho/release/releases/latest/download"
+RELEASE_BASE = "https://github.com/Project-Maho/maho-browser/releases/latest/download"
 MANIFEST_PUBKEY_HEX = "8b076b75cb7896810997c59b1ec7e184730d714ca0679e0deae22f7aba0d4dbc"
 MANIFEST_PUBKEY_BYTES = bytes.fromhex(MANIFEST_PUBKEY_HEX)
 
