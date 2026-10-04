@@ -1,0 +1,19 @@
+diff --git a/third_party/blink/common/loader/throttling_url_loader.cc b/third_party/blink/common/loader/throttling_url_loader.cc
+index e72cf39fb1f0ffa459ebb123a990d833b0e5e25f..863c68ff2981cc86d8014608a080ac4b0a2a2018 100644
+--- a/third_party/blink/common/loader/throttling_url_loader.cc
++++ b/third_party/blink/common/loader/throttling_url_loader.cc
+@@ -491,6 +491,14 @@ void ThrottlingURLLoader::Start(
+ }
+ 
+ void ThrottlingURLLoader::StartNow() {
++  for (const auto& entry : throttles_) {
++    if (const GURL* url = entry.throttle->TakeDeferredStartRedirectUrl()) {
++      CHECK(throttle_will_start_redirect_url_.is_empty());
++      CHECK(url->is_valid());
++      CHECK(!original_url_.SchemeIsHTTPOrHTTPS() || url->SchemeIsHTTPOrHTTPS());
++      throttle_will_start_redirect_url_ = *url;
++    }
++  }
+   TRACE_EVENT("loading", "ThrottlingURLLoader::StartNow",
+               perfetto::Flow::FromPointer(this));
+   DCHECK(start_info_);

@@ -1,0 +1,66 @@
+diff --git c/chrome/browser/ui/window_metadata/window_metadata_controller.cc w/chrome/browser/ui/window_metadata/window_metadata_controller.cc
+index 7b132613b32a3443a3ced92470447f2de0414fdd..531daf00b6ba58b96d2d28694e33754478e12e24 100644
+--- c/chrome/browser/ui/window_metadata/window_metadata_controller.cc
++++ w/chrome/browser/ui/window_metadata/window_metadata_controller.cc
+@@ -8,6 +8,7 @@
+ 
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_service.h"
+ #include "chrome/browser/sessions/session_service_factory.h"
+ #include "chrome/browser/sessions/session_service_lookup.h"
+@@ -94,6 +95,17 @@ std::u16string WindowMetadataController::GetWindowTitleForCurrentTab(
+ 
+ std::u16string WindowMetadataController::GetWindowTitleForTab(
+     const tabs::TabHandle& tab) const {
++  // Maho: incognito windows show "Incognito" instead of the raw
++  // chrome://newtab URL in the Window menu and title bar.
++  if (browser_->GetProfile()->IsOffTheRecord()) {
++    content::WebContents* otr_contents = tab.Get()->GetContents();
++    if (otr_contents) {
++      const GURL& otr_url = otr_contents->GetVisibleURL();
++      if (otr_url.SchemeIs("chrome") && otr_url.host() == "newtab") {
++        return u"Incognito";
++      }
++    }
++  }
+   std::u16string title = base::UTF8ToUTF16(user_title_);
+ 
+   if (title.empty()) {
+@@ -161,11 +173,17 @@ std::u16string WindowMetadataController::GetWindowTitleForMaxWidth(
+   // |contents| can be NULL if GetWindowTitleForMenu is called during the
+   // window's creation (before tabs have been added).
+   if (contents) {
+-    auto* const app_browser_controller =
+-        web_app::AppBrowserController::From(browser_);
+-    title = FormatTitleForDisplay(app_browser_controller
+-                                      ? app_browser_controller->GetTitle()
+-                                      : contents->GetTitle());
++    const GURL& otr_url = contents->GetVisibleURL();
++    if (browser_->GetProfile()->IsOffTheRecord() &&
++        otr_url.SchemeIs("chrome") && otr_url.host() == "newtab") {
++      title = u"Incognito";
++    } else {
++      auto* const app_browser_controller =
++          web_app::AppBrowserController::From(browser_);
++      title = FormatTitleForDisplay(app_browser_controller
++                                        ? app_browser_controller->GetTitle()
++                                        : contents->GetTitle());
++    }
+   }
+ 
+   // If there is no title, leave it empty for apps.
+@@ -193,6 +211,12 @@ std::u16string WindowMetadataController::GetWindowTitleForMaxWidth(
+ std::u16string WindowMetadataController::GetWindowTitleFromWebContents(
+     bool include_app_name,
+     content::WebContents* contents) const {
++  if (browser_->GetProfile()->IsOffTheRecord() && contents) {
++    const GURL& otr_url = contents->GetVisibleURL();
++    if (otr_url.SchemeIs("chrome") && otr_url.host() == "newtab") {
++      return u"Incognito";
++    }
++  }
+   std::u16string title = base::UTF8ToUTF16(user_title_);
+ 
+   // |contents| can be NULL because GetWindowTitleForCurrentTab is called by the

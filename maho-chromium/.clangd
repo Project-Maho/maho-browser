@@ -1,0 +1,9 @@
+# clangd configuration for the Maho Chromium overlay.
+#
+# C++ sources here live in maho-chromium/ but are compiled via the symlink
+# chromium/src/maho -> ../../maho-chromium, so the compilation database at
+# chromium/src/out/Default references them as ../../maho/browser/...
+# Point clangd at that database; it canonicalizes the symlink so the real
+# maho-chromium/... path matches the chromium/src/maho/... entry.
+CompileFlags:
+  CompilationDatabase: ../chromium/src/out/Default

@@ -1,0 +1,24 @@
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
+index 0713f0cbbbd93be954758f0b1ddb20b9f9701228..709accd1670b8197c152825a74e1fb7ad9bb7f96 100644
+--- a/content/public/browser/content_browser_client.cc
++++ b/content/public/browser/content_browser_client.cc
+@@ -58,6 +58,7 @@
+ #include "content/public/browser/webid/identity_request_dialog_controller.h"
+ #include "content/public/common/alternative_error_page_override_info.mojom.h"
+ #include "content/public/common/content_features.h"
++#include "ui/base/webui/resource_path.h"
+ #include "content/public/common/url_utils.h"
+ #include "media/audio/audio_manager.h"
+ #include "media/capture/content/screen_enumerator.h"
+@@ -275,6 +276,11 @@ void ContentBrowserClient::LogWebUIUsage(
+   return;
+ }
+ 
++std::vector<base::span<const webui::ResourcePath>>
++ContentBrowserClient::GetAdditionalWebUIResourcePaths() {
++  return {};
++}
++
+ bool ContentBrowserClient::IsWebUIAllowedToMakeNetworkRequests(
+     const url::Origin& origin) {
+   return false;

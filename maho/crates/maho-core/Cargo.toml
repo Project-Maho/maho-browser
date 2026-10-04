@@ -1,0 +1,64 @@
+[package]
+name = "maho-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+maho-types = { path = "../maho-types" }
+maho-storage = { path = "../maho-storage" }
+uuid = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc"] }
+toml = "0.8"
+lru = "0.12"
+psl = { workspace = true }
+idna = "1.0"
+adblock = "0.12.2"
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+bip39 = "2.1"
+pbkdf2 = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "charset", "http2", "system-proxy"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+instant-distance = { version = "0.6.1", features = ["with-serde"] }
+bincode = "1.3"
+futures-util = "0.3"
+thiserror = { workspace = true }
+zeroize = { version = "1", features = ["zeroize_derive"] }
+tracing = { workspace = true }
+
+# TLS backend is platform-split so the desktop Chromium link stays satisfiable.
+# Linux resolves reqwest's crypto against Chromium's BoringSSL, which cannot
+# provide OpenSSL-3 / full-OpenSSL symbols pulled by native-tls -> openssl-sys,
+# so Linux uses rustls (matching every other reqwest consumer in this
+# workspace). mac/win keep native-tls (SChannel / Security.framework).
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+secret-service = { version = "3.0", features = ["rt-async-io-crypto-rust"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["default-tls"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+serde_json = { workspace = true }
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+
+[[bench]]
+name = "core_bench"
+harness = false

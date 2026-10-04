@@ -1,0 +1,29 @@
+diff --git c/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc w/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
+index 3aa24d5f23b46422bb857ca1b24e12c698175dac..6b65ad958adc8bcdc2512b7956aed883e504e5d0 100644
+--- c/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
++++ w/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
+@@ -54,6 +54,7 @@
+   CHECK(proxy);
+   return std::make_unique<DeviceAuthenticatorAndroid>(
+       std::make_unique<DeviceAuthenticatorBridgeImpl>(window), proxy, params);
++
+ #else
+   return ChromeDeviceAuthenticatorFactory::GetForProfile(profile, params);
+ #endif
+@@ -94,10 +95,15 @@
+ #elif BUILDFLAG(IS_CHROMEOS)
+   auto device_authenticator = std::make_unique<DeviceAuthenticatorChromeOS>(
+       std::make_unique<AuthenticatorChromeOS>(), proxy, params);
++#elif BUILDFLAG(IS_LINUX)
++  // Maho Linux: upstream Chromium ships no Linux-desktop DeviceAuthenticator.
++  // Return null so reauth-gated operations fail closed; every caller in
++  // maho_settings_page_handler.cc checks for null and declines gracefully.
++  std::unique_ptr<DeviceAuthenticator> device_authenticator;
+ #else
+   static_assert(false);
+ #endif
+-  return std::move(device_authenticator);
++  return device_authenticator;
+ }
+ #endif
+ 

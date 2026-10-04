@@ -1,0 +1,24 @@
+diff --git a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc
+index 571ed2313ded67e4cb313eda268495b3ed353723..0d56eabae00720d75b634e7a2057cb55a97aa089 100644
+--- a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc
++++ b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc
+@@ -20,13 +20,12 @@
+ 
+ // static
+ infobars::InfoBar* DefaultBrowserInfoBarDelegate::Create(
+-    infobars::ContentInfoBarManager* infobar_manager,
+-    Profile* profile,
+-    bool can_pin_to_taskbar) {
+-  return infobar_manager->AddInfoBar(
+-      CreateConfirmInfoBar(std::make_unique<DefaultBrowserInfoBarDelegate>(
+-          base::PassKey<DefaultBrowserInfoBarDelegate>(), profile,
+-          can_pin_to_taskbar)));
++    infobars::ContentInfoBarManager* /*infobar_manager*/,
++    Profile* /*profile*/,
++    bool /*can_pin_to_taskbar*/) {
++  // Maho: permanently suppress default browser infobar. Maho handles default browser
++  // prompts in Welcome (chrome://maho-welcome) and Settings (chrome://maho-settings).
++  return nullptr;
+ }
+ 
+ DefaultBrowserInfoBarDelegate::DefaultBrowserInfoBarDelegate(

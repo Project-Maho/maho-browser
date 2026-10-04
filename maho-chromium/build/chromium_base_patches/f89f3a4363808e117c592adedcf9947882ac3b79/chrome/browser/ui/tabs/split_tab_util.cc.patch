@@ -1,0 +1,14 @@
+diff --git c/chrome/browser/ui/tabs/split_tab_util.cc w/chrome/browser/ui/tabs/split_tab_util.cc
+index 6382385b3f5f85ddcf3d12d9dd56cd5429486faa..00a197b9cbe6430660a5303a0c07fdc70164704b 100644
+--- c/chrome/browser/ui/tabs/split_tab_util.cc
++++ w/chrome/browser/ui/tabs/split_tab_util.cc
+@@ -51,7 +51,8 @@ SplitTabActiveLocation GetLastActiveTabLocation(
+   split_tabs::SplitTabData* const split_tab_data =
+       tab_strip_model->GetSplitData(split_id);
+   std::vector<tabs::TabInterface*> tabs_in_split = split_tab_data->ListTabs();
+-  CHECK_EQ(tabs_in_split.size(), 2U);
++  // Maho four-way splits hold up to four panes; only require at least two.
++  CHECK_GE(tabs_in_split.size(), 2U);
+ 
+   const int last_active_index =
+       GetIndexOfLastActiveTab(tab_strip_model, split_id);

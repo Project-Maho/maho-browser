@@ -1,0 +1,24 @@
+diff --git c/ui/views/widget/native_widget_mac.h w/ui/views/widget/native_widget_mac.h
+index 32f7443a390a257abdfe112fcfdd2aa1e6b39fbc..526c1e5470449bef56a02cb48468dff703ece040 100644
+--- c/ui/views/widget/native_widget_mac.h
++++ w/ui/views/widget/native_widget_mac.h
+@@ -37,6 +37,10 @@ class ApplicationHost;
+ class NativeWidgetNSWindowBridge;
+ }  // namespace remote_cocoa
+ 
++namespace gfx {
++class Vector2d;
++}  // namespace gfx
++
+ namespace views {
+ namespace test {
+ class MockNativeWidgetMac;
+@@ -213,6 +217,8 @@ class VIEWS_EXPORT NativeWidgetMac : public internal::NativeWidgetPrivate,
+                        int operation,
+                        ui::mojom::DragEventSource source) override;
+   void CancelDragDropLoop(View* view) override;
++  void UpdateDragImage(const gfx::ImageSkia& image,
++                       const gfx::Vector2d& offset) override;
+   void SchedulePaintInRect(const gfx::Rect& rect) override;
+   void ScheduleLayout() override;
+   void SetCursor(const ui::Cursor& cursor) override;

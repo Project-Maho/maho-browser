@@ -1,0 +1,395 @@
+{
+  "agentGrant": {
+    "allowedFields": [
+      "username",
+      "password"
+    ],
+    "expiresAt": "2026-07-22T00:05:00Z",
+    "handle": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6e",
+    "itemAlias": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d",
+    "remainingUses": 1,
+    "schemaVersion": 1,
+    "state": "active"
+  },
+  "agentItem": {
+    "alias": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d",
+    "availableFields": [
+      "username",
+      "password"
+    ],
+    "displayLabel": "Example",
+    "itemKind": "login",
+    "schemaVersion": 1,
+    "usernameHint": "u***@example.com"
+  },
+  "auditPublic": {
+    "decision": "allowed",
+    "deviceName": "Test Device",
+    "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b72",
+    "itemAlias": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d",
+    "operation": "fill",
+    "origin": "https://example.com",
+    "policy": "allow_for_task",
+    "reason": null,
+    "schemaVersion": 1,
+    "taskId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b70",
+    "timestamp": "2026-07-22T00:02:00Z"
+  },
+  "auditRecord": {
+    "decision": "allowed",
+    "deviceName": "Test Device",
+    "frameOrigin": "https://login.example.com",
+    "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b72",
+    "itemAlias": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d",
+    "itemId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
+    "operation": "fill",
+    "policy": "allow_for_task",
+    "profileId": "profile-1",
+    "reason": null,
+    "schemaVersion": 1,
+    "sessionId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6f",
+    "taskId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b70",
+    "timestamp": "2026-07-22T00:02:00Z",
+    "topOrigin": "https://example.com",
+    "workspaceId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b71"
+  },
+  "ciphertextEnvelope": {
+    "algorithm": "aes_256_gcm",
+    "ciphertext": [
+      3,
+      4
+    ],
+    "keyVersion": 2,
+    "nonce": [
+      1,
+      2
+    ],
+    "purpose": "vault_item",
+    "schemaVersion": 1,
+    "tag": [
+      5,
+      6
+    ]
+  },
+  "encryptedItem": {
+    "createdAt": "2026-07-22T00:00:00Z",
+    "deletedAt": null,
+    "envelope": {
+      "algorithm": "aes_256_gcm",
+      "ciphertext": [
+        3,
+        4
+      ],
+      "keyVersion": 2,
+      "nonce": [
+        1,
+        2
+      ],
+      "purpose": "vault_item",
+      "schemaVersion": 1,
+      "tag": [
+        5,
+        6
+      ]
+    },
+    "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
+    "itemKind": "login",
+    "provider": "maho_native",
+    "revision": 3,
+    "schemaVersion": 1,
+    "updatedAt": "2026-07-22T00:01:00Z"
+  },
+  "error": {
+    "code": "rate_limited",
+    "message": "Unlock temporarily rate limited",
+    "retryAt": "2026-07-22T00:05:00Z",
+    "schemaVersion": 1
+  },
+  "grant": {
+    "allowedFields": [
+      "username",
+      "password"
+    ],
+    "expiresAt": "2026-07-22T00:05:00Z",
+    "frameOrigin": "https://login.example.com",
+    "handle": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6e",
+    "issuedAt": "2026-07-22T00:00:00Z",
+    "itemAlias": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6d",
+    "itemId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
+    "maxUses": 2,
+    "policy": "allow_for_task",
+    "profileId": "profile-1",
+    "revocationReason": null,
+    "revokedAt": null,
+    "schemaVersion": 1,
+    "sessionId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6f",
+    "state": "active",
+    "tabGeneration": 7,
+    "tabId": "tab-1",
+    "taskId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b70",
+    "topOrigin": "https://example.com",
+    "usedCount": 1,
+    "workspaceId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b71"
+  },
+  "listRequest": {
+    "cursor": null,
+    "favoritesOnly": false,
+    "kinds": [
+      "login",
+      "passkey"
+    ],
+    "limit": 50,
+    "provider": "maho_native",
+    "schemaVersion": 1,
+    "trash": "exclude"
+  },
+  "passkey": {
+    "backupEligible": true,
+    "backupState": false,
+    "createdAt": "2026-07-22T00:00:00Z",
+    "credentialId": [
+      12,
+      13
+    ],
+    "discoverable": true,
+    "displayName": "Example passkey",
+    "lastUsedAt": null,
+    "rpId": "example.com",
+    "transports": [
+      "internal",
+      "hybrid"
+    ],
+    "userNameHint": "u***@example.com",
+    "userVerification": "required"
+  },
+  "policy": {
+    "expiresAt": "2026-07-22T00:05:00Z",
+    "itemId": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
+    "origin": "https://example.com",
+    "policy": "ask_every_use",
+    "schemaVersion": 1
+  },
+  "providerStatus": {
+    "effectiveProvider": "maho_native",
+    "providers": [
+      {
+        "capabilities": {
+          "canAddSavedPasswords": true,
+          "canDeleteSavedPasswords": true,
+          "canEditSavedPasswords": true,
+          "canListSavedPasswords": true,
+          "canSearchSavedPasswords": true
+        },
+        "description": "Use Maho's native password manager.",
+        "displayName": "Maho Native",
+        "extensionIds": [],
+        "providerId": "maho_native"
+      },
+      {
+        "capabilities": {
+          "canAddSavedPasswords": false,
+          "canDeleteSavedPasswords": false,
+          "canEditSavedPasswords": false,
+          "canListSavedPasswords": false,
+          "canSearchSavedPasswords": false
+        },
+        "description": "Use Bitwarden as the password provider.",
+        "displayName": "Bitwarden",
+        "extensionIds": [
+          "nngceckbapebfimnlniiiahkandclblb"
+        ],
+        "providerId": "bitwarden"
+      },
+      {
+        "capabilities": {
+          "canAddSavedPasswords": false,
+          "canDeleteSavedPasswords": false,
+          "canEditSavedPasswords": false,
+          "canListSavedPasswords": false,
+          "canSearchSavedPasswords": false
+        },
+        "description": "Use 1Password as the password provider.",
+        "displayName": "1Password",
+        "extensionIds": [
+          "aeblfdkhhhdcdjpifhhbdiojplfjncoa"
+        ],
+        "providerId": "onepassword"
+      }
+    ],
+    "schemaVersion": 1,
+    "selectedProvider": "onepassword"
+  },
+  "publicItem": {
+    "createdAt": "2026-07-22T00:00:00Z",
+    "favorite": false,
+    "hasNotes": false,
+    "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
+    "itemKind": "login",
+    "lastUsedAt": null,
+    "origins": [
+      "https://example.com"
+    ],
+    "passkey": {
+      "backupEligible": true,
+      "backupState": false,
+      "createdAt": "2026-07-22T00:00:00Z",
+      "credentialId": [
+        12,
+        13
+      ],
+      "discoverable": true,
+      "displayName": "Example passkey",
+      "lastUsedAt": null,
+      "rpId": "example.com",
+      "transports": [
+        "internal",
+        "hybrid"
+      ],
+      "userNameHint": "u***@example.com",
+      "userVerification": "required"
+    },
+    "provider": "maho_native",
+    "revision": 3,
+    "schemaVersion": 1,
+    "title": "Example",
+    "totp": {
+      "accountLabel": "u***@example.com",
+      "algorithm": "sha256",
+      "createdAt": "2026-07-22T00:00:00Z",
+      "digits": 6,
+      "issuer": "Example",
+      "lastUsedAt": null,
+      "periodSeconds": 30
+    },
+    "updatedAt": "2026-07-22T00:01:00Z",
+    "usernameHint": "u***@example.com"
+  },
+  "publicMetadata": {
+    "favorite": false,
+    "hasNotes": false,
+    "itemKind": "login",
+    "origins": [
+      "https://example.com"
+    ],
+    "passkey": {
+      "backupEligible": true,
+      "backupState": false,
+      "createdAt": "2026-07-22T00:00:00Z",
+      "credentialId": [
+        12,
+        13
+      ],
+      "discoverable": true,
+      "displayName": "Example passkey",
+      "lastUsedAt": null,
+      "rpId": "example.com",
+      "transports": [
+        "internal",
+        "hybrid"
+      ],
+      "userNameHint": "u***@example.com",
+      "userVerification": "required"
+    },
+    "title": "Example",
+    "totp": {
+      "accountLabel": "u***@example.com",
+      "algorithm": "sha256",
+      "createdAt": "2026-07-22T00:00:00Z",
+      "digits": 6,
+      "issuer": "Example",
+      "lastUsedAt": null,
+      "periodSeconds": 30
+    },
+    "usernameHint": "u***@example.com"
+  },
+  "searchRequest": {
+    "kinds": [
+      "login"
+    ],
+    "origin": "https://example.com",
+    "provider": null,
+    "schemaVersion": 1
+  },
+  "status": {
+    "accountEscrowed": false,
+    "agentPolicyDefault": "deny",
+    "autoLockMinutes": 15,
+    "effectiveProvider": "maho_native",
+    "failedUnlockCount": 1,
+    "itemCount": 2,
+    "lockState": "locked",
+    "retryAt": null,
+    "schemaVersion": 1,
+    "selectedProvider": "onepassword"
+  },
+  "totp": {
+    "accountLabel": "u***@example.com",
+    "algorithm": "sha256",
+    "createdAt": "2026-07-22T00:00:00Z",
+    "digits": 6,
+    "issuer": "Example",
+    "lastUsedAt": null,
+    "periodSeconds": 30
+  },
+  "updateRequest": {
+    "encryptedPayload": {
+      "algorithm": "aes_256_gcm",
+      "ciphertext": [
+        3,
+        4
+      ],
+      "keyVersion": 2,
+      "nonce": [
+        1,
+        2
+      ],
+      "purpose": "vault_item",
+      "schemaVersion": 1,
+      "tag": [
+        5,
+        6
+      ]
+    },
+    "expectedRevision": 3,
+    "id": "018f47a6-7c2a-7d6e-9a1b-1d2e3f4a5b6c",
+    "publicMetadata": {
+      "favorite": false,
+      "hasNotes": false,
+      "itemKind": "login",
+      "origins": [
+        "https://example.com"
+      ],
+      "passkey": {
+        "backupEligible": true,
+        "backupState": false,
+        "createdAt": "2026-07-22T00:00:00Z",
+        "credentialId": [
+          12,
+          13
+        ],
+        "discoverable": true,
+        "displayName": "Example passkey",
+        "lastUsedAt": null,
+        "rpId": "example.com",
+        "transports": [
+          "internal",
+          "hybrid"
+        ],
+        "userNameHint": "u***@example.com",
+        "userVerification": "required"
+      },
+      "title": "Example",
+      "totp": {
+        "accountLabel": "u***@example.com",
+        "algorithm": "sha256",
+        "createdAt": "2026-07-22T00:00:00Z",
+        "digits": 6,
+        "issuer": "Example",
+        "lastUsedAt": null,
+        "periodSeconds": 30
+      },
+      "usernameHint": "u***@example.com"
+    },
+    "schemaVersion": 1
+  }
+}

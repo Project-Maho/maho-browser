@@ -1,0 +1,218 @@
+import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
+import("//maho/build/templates/tailwind_css.gni")
+
+assert(!is_android)
+
+tailwind_css("build_tailwind") {
+  input = "react/theme/app.css"
+  output = "$target_gen_dir/app.generated.css"
+  sources = [
+    "../maho_common/react/theme/tokens.css",
+    "../maho_common/react/ui/alert.tsx",
+    "../maho_common/react/ui/badge.tsx",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/context-menu.tsx",
+    "../maho_common/react/ui/dialog.tsx",
+    "../maho_common/react/ui/dropdown-menu.tsx",
+    "../maho_common/react/ui/glass-ambient.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/label.tsx",
+    "../maho_common/react/ui/agent-brand-icons.tsx",
+    "../maho_common/react/ui/mcp-agent-guidance-card.tsx",
+    "../maho_common/react/ui/plan-picker.tsx",
+    "../maho_common/react/ui/popover.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/separator.tsx",
+    "../maho_common/react/ui/skeleton.tsx",
+    "../maho_common/react/ui/slider.tsx",
+    "../maho_common/react/ui/sonner.tsx",
+    "../maho_common/react/ui/switch.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "../maho_common/react/ui/textarea.tsx",
+    "../maho_common/react/ui/toggle-group.tsx",
+    "../maho_common/react/ui/tooltip.tsx",
+    "react/app.tsx",
+    "react/ai_developers.tsx",
+    "react/domain_panes.tsx",
+    "react/mcp_agent_guidance_settings_section.tsx",
+    "react/passwords_library.tsx",
+    "react/passwords_import_flow.tsx",
+    "react/passwords_import_model.ts",
+    "react/passwords_import_panels.tsx",
+    "react/saved_passwords_content.tsx",
+    "react/saved_passwords_drawer.tsx",
+    "react/search_engine_settings.tsx",
+    "react/passwords_settings.tsx",
+    "react/passwords_vault_gate.tsx",
+    "react/mail_overview.tsx",
+    "react/mail_accounts.tsx",
+    "react/mail_signatures.tsx",
+    "react/mail_rules.tsx",
+    "react/mail_calendar.tsx",
+    "react/mail_behavior.tsx",
+    "react/mail_behavior_prefs.ts",
+    "react/mail_security.tsx",
+    "react/theme/app.css",
+    "react/shortcuts/ShortcutContextMenu.tsx",
+    "react/shortcuts/ShortcutList.tsx",
+    "react/shortcuts/ShortcutRecordingDialog.tsx",
+    "react/shortcuts/ShortcutsCheatSheet.tsx",
+    "react/shortcuts/ShortcutsDetailPanel.tsx",
+    "react/shortcuts/ShortcutsHelpBanner.tsx",
+    "react/shortcuts/ShortcutsKebabMenu.tsx",
+    "react/shortcuts/ShortcutsPane.tsx",
+    "react/shortcuts/ShortcutsSearchBar.tsx",
+    "react/shortcuts/ShortcutsSection.tsx",
+  ]
+}
+
+action("bundle_react") {
+  script = "//third_party/node/node.py"
+  inputs = [
+    "//third_party/node/node.py",
+    "maho_settings.mojom-webui.js.d.ts",
+    "mojo.ts",
+    "models.ts",
+    "schema/domains.ts",
+    "schema/panes.ts",
+    "schema/setting_schema.ts",
+    "react/app.tsx",
+    "react/ai_developers.tsx",
+    "react/domain_panes.tsx",
+    "react/discord_community_settings_section.tsx",
+    "react/mcp_agent_guidance_settings_section.tsx",
+    "react/passwords_library.tsx",
+    "react/passwords_import_flow.tsx",
+    "react/passwords_import_model.ts",
+    "react/passwords_import_panels.tsx",
+    "react/passwords_model.ts",
+    "react/saved_passwords_content.tsx",
+    "react/saved_passwords_drawer.tsx",
+    "react/saved_passwords_model.ts",
+    "react/search_engine_settings.tsx",
+    "react/passwords_settings.tsx",
+    "react/passwords_vault_gate.tsx",
+    "react/profile_validation.ts",
+    "react/profiles_editor.tsx",
+    "react/mail_accounts.tsx",
+    "react/mail_overview.tsx",
+    "react/mail_signatures.tsx",
+    "react/mail_rules.tsx",
+    "react/mail_calendar.tsx",
+    "react/mail_behavior.tsx",
+    "react/mail_behavior_prefs.ts",
+    "react/mail_security.tsx",
+    "react/mail_overview.tsx",
+    "react/mail_settings_state.ts",
+    "react/store.ts",
+    "react/tsconfig.json",
+    "bundle_react.mjs",
+    "../maho_common/react/mcp-agent-guidance-card.tsx",
+    "../maho_common/react/mcp-agent-guidance-copy.ts",
+    "../maho_common/react/ui/alert.tsx",
+    "../maho_common/react/ui/badge.tsx",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/context-menu.tsx",
+    "../maho_common/react/ui/dialog.tsx",
+    "../maho_common/react/ui/dropdown-menu.tsx",
+    "../maho_common/react/ui/glass-ambient.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/label.tsx",
+    "../maho_common/react/ui/agent-brand-icons.tsx",
+    "../maho_common/react/ui/mcp-agent-guidance-card.tsx",
+    "../maho_common/react/ui/plan-picker.tsx",
+    "../maho_common/react/ui/popover.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/separator.tsx",
+    "../maho_common/react/ui/skeleton.tsx",
+    "../maho_common/react/ui/slider.tsx",
+    "../maho_common/react/ui/sonner.tsx",
+    "../maho_common/react/ui/switch.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "../maho_common/react/ui/textarea.tsx",
+    "../maho_common/react/ui/toggle-group.tsx",
+    "../maho_common/react/ui/tooltip.tsx",
+    "../maho_common/react/icons/lucide.ts",
+    "../maho_common/react/bundle_guard.mjs",
+    "../maho_common/react/store_utils.ts",
+    "../maho_common/react/use_mojo.ts",
+    "../maho_common/react/lemonsqueezy.ts",
+    "../maho_common/react/theme/apply_theme.ts",
+    "react/use_shortcut_interceptor.ts",
+    "react/shortcuts/ShortcutContextMenu.tsx",
+    "react/shortcuts/ShortcutList.tsx",
+    "react/shortcuts/ShortcutRecordingDialog.tsx",
+    "react/shortcuts/ShortcutsCheatSheet.tsx",
+    "react/shortcuts/ShortcutsDetailPanel.tsx",
+    "react/shortcuts/ShortcutsHelpBanner.tsx",
+    "react/shortcuts/ShortcutsKebabMenu.tsx",
+    "react/shortcuts/ShortcutsPane.tsx",
+    "react/shortcuts/ShortcutsSearchBar.tsx",
+    "react/shortcuts/ShortcutsSection.tsx",
+    "react/shortcuts/action_icons.ts",
+    "react/shortcuts/format_action_name.ts",
+    "react/shortcuts/import_export.ts",
+    "react/shortcuts/index.ts",
+    "react/shortcuts/key_combo.ts",
+    "react/shortcuts/types.ts",
+    "react/shortcuts/useShortcuts.ts",
+    "../maho_common/react/lib/utils.ts",
+  ]
+  outputs = [ "$target_gen_dir/app_bundle.js" ]
+  args = [
+    rebase_path("//maho/browser/resources/maho_settings/bundle_react.mjs",
+                root_build_dir),
+    rebase_path(".", root_build_dir),
+    rebase_path("$target_gen_dir/app_bundle.js", root_build_dir),
+  ]
+}
+
+generate_grd("bundle_grdp") {
+  grd_prefix = "maho_settings_bundle"
+  out_grd = "$target_gen_dir/maho_settings_bundle.grdp"
+  input_files = [
+    "app_bundle.js",
+    "app.generated.css",
+  ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [
+    ":bundle_react",
+    ":build_tailwind",
+  ]
+}
+
+build_webui("build") {
+  grd_prefix = "maho_settings"
+
+  static_files = [
+    "settings.html",
+    "icons/arrow-right.svg",
+    "icons/arrow-up-right.svg",
+    "icons/chevron-down.svg",
+    "icons/x.svg",
+  ]
+
+  ts_files = [
+    "mojo.ts",
+    "models.ts",
+    "schema/domains.ts",
+    "schema/panes.ts",
+    "schema/setting_schema.ts",
+  ]
+
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+
+  webui_context_type = "trusted"
+
+  mojo_files_deps =
+      [ "//maho/browser/ui/webui/maho_settings:mojo_bindings_ts__generator" ]
+  mojo_files = [ "$root_gen_dir/maho/browser/ui/webui/maho_settings/maho_settings.mojom-webui.ts" ]
+
+  extra_grdp_deps = [ ":bundle_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_settings_bundle.grdp" ]
+}

@@ -1,0 +1,25 @@
+@import "../../../maho_common/react/theme/tokens.css";
+
+@keyframes maho-managed-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--primary) 28%, transparent),
+      0 0 12px 0 color-mix(in srgb, var(--primary) 18%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent),
+      0 0 22px 2px color-mix(in srgb, var(--primary) 38%, transparent);
+  }
+}
+
+.maho-managed-glow {
+  animation: maho-managed-glow 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .maho-managed-glow {
+    animation: none;
+  }
+}

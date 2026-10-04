@@ -1,0 +1,23 @@
+diff --git c/ui/aura/client/drag_drop_client.h w/ui/aura/client/drag_drop_client.h
+index 630226832ee92c9a2fe0783cd065eeb7497f8136..680a98abf90c728fe07310b9aa00f868f304baba 100644
+--- c/ui/aura/client/drag_drop_client.h
++++ w/ui/aura/client/drag_drop_client.h
+@@ -44,15 +44,15 @@ class AURA_EXPORT DragDropClient {
+       int allowed_operations,
+       ui::mojom::DragEventSource source) = 0;
+ 
+-#if BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+   // Updates the drag image. An empty |image| may be used to hide a previously
+   // set non-empty drag image, and a non-empty |image| shows the drag image
+   // again if it was previously hidden.
+   //
+   // This must be called during an active drag and drop session.
+   virtual void UpdateDragImage(const gfx::ImageSkia& image,
+-                               const gfx::Vector2d& offset) = 0;
+-#endif  // BUILDFLAG(IS_LINUX)
++                               const gfx::Vector2d& offset) {}
++#endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+ 
+   // Called when a drag and drop session is cancelled.
+   virtual void DragCancel() = 0;

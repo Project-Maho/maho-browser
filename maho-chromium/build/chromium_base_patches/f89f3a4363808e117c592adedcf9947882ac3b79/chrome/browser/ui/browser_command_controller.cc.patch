@@ -1,0 +1,347 @@
+diff --git c/chrome/browser/ui/browser_command_controller.cc w/chrome/browser/ui/browser_command_controller.cc
+index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda304623c6879c6 100644
+--- c/chrome/browser/ui/browser_command_controller.cc
++++ w/chrome/browser/ui/browser_command_controller.cc
+@@ -15,6 +15,7 @@
+ #include "base/debug/profiler.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
+ #include "base/i18n/rtl.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/user_metrics.h"
+@@ -93,6 +94,8 @@
+ #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_utils.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/tabs/tab_enums.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+ #include "chrome/browser/ui/views/side_panel/tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+ #include "chrome/browser/ui/web_applications/web_app_dialog_utils.h"
+@@ -202,6 +205,89 @@ namespace chrome {
+ 
+ namespace {
+ 
++void ShowMahoCommandOverlayForNewTabWhenReady(base::WeakPtr<BrowserWindowInterface> browser,
++                                              int remaining_attempts) {
++  if (!browser) {
++    return;
++  }
++
++  if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
++    NewTab(browser.get(), NewTabTypes::kNewTabCommand);
++    return;
++  }
++
++  if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser.get())) {
++    if (!browser_view->maho_sidebar_container()) {
++      NewTab(browser.get(), NewTabTypes::kNewTabCommand);
++      return;
++    }
++    browser_view->ShowMahoCommandOverlayForNewTab();
++    return;
++  }
++
++  if (remaining_attempts <= 0) {
++    NewTab(browser.get(), NewTabTypes::kNewTabCommand);
++    return;
++  }
++
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&ShowMahoCommandOverlayForNewTabWhenReady, browser,
++                     remaining_attempts - 1),
++      base::Milliseconds(25));
++}
++
++bool ShouldDeferStartupCommandUntilTabSelected(int id) {
++  switch (id) {
++    case IDC_SELECT_NEXT_TAB:
++    case IDC_SELECT_PREVIOUS_TAB:
++    case IDC_SELECT_TAB_0:
++    case IDC_SELECT_TAB_1:
++    case IDC_SELECT_TAB_2:
++    case IDC_SELECT_TAB_3:
++    case IDC_SELECT_TAB_4:
++    case IDC_SELECT_TAB_5:
++    case IDC_SELECT_TAB_6:
++    case IDC_SELECT_TAB_7:
++    case IDC_SELECT_LAST_TAB:
++    case IDC_FOCUS_LOCATION:
++    case IDC_FOCUS_SEARCH:
++    case IDC_SHOW_HISTORY:
++    case IDC_SHOW_DOWNLOADS:
++    case IDC_SHOW_BOOKMARK_MANAGER:
++    case IDC_MAHO_COMMAND_BAR:
++    case IDC_MAHO_AI_PANEL:
++      return true;
++    default:
++      return false;
++  }
++}
++
++void ExecuteStartupCommandWhenTabSelected(base::WeakPtr<BrowserWindowInterface> browser,
++                                          int id,
++                                          WindowOpenDisposition disposition,
++                                          base::TimeTicks time_stamp,
++                                          int remaining_attempts) {
++  if (!browser) {
++    return;
++  }
++
++  if (browser->GetTabStripModel()->active_index() != TabStripModel::kNoTab) {
++    ExecuteCommandWithDisposition(browser.get(), id, disposition, time_stamp);
++    return;
++  }
++
++  if (remaining_attempts <= 0) {
++    return;
++  }
++
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&ExecuteStartupCommandWhenTabSelected, browser, id,
++                     disposition, time_stamp, remaining_attempts - 1),
++      base::Milliseconds(25));
++}
++
+ // Ensures that - if we have not popped up an infobar to prompt the user to e.g.
+ // reload the current page - that the content pane of the browser is refocused.
+ void AppInfoDialogClosedCallback(SessionID session_id,
+@@ -486,14 +572,14 @@ bool BrowserCommandController::IsReservedCommandOrKey(
+   if (window()->IsFullscreen()) {
+     // In fullscreen, all commands except for IDC_FULLSCREEN and IDC_EXIT should
+     // be delivered to the web page. The intent to implement and ship can be
+-    // found in http://crbug.com/40501396.
++    // found in http://crbug.com/680809.
+     const bool is_exit_fullscreen =
+         (command_id == IDC_EXIT || command_id == IDC_FULLSCREEN);
+ #if BUILDFLAG(IS_MAC)
+     // This behavior is different on Mac OS, which has a unique user-initiated
+-    // full-screen mode. According to the discussion in
+-    // http://crbug.com/40511102, the commands should be reserved for
+-    // browser-side handling if the browser window's toolbar is visible.
++    // full-screen mode. According to the discussion in http://crbug.com/702251,
++    // the commands should be reserved for browser-side handling if the browser
++    // window's toolbar is visible.
+     if (window()->IsToolbarShowing()) {
+       if (command_id == IDC_FULLSCREEN) {
+         return true;
+@@ -645,6 +731,12 @@ bool BrowserCommandController::ExecuteCommandWithDispositionAndContext(
+   // crashes, e.g. from Windows sending WM_COMMANDs at random times during
+   // window construction.  This probably could use closer examination someday.
+   if (browser_->tab_strip_model()->active_index() == TabStripModel::kNoTab) {
++    if (id == IDC_NEW_TAB && (browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL)) {
++      ShowMahoCommandOverlayForNewTabWhenReady(browser_->GetWeakPtr(), 200);
++    } else if (ShouldDeferStartupCommandUntilTabSelected(id)) {
++      ExecuteStartupCommandWhenTabSelected(browser_->GetWeakPtr(), id,
++                                           disposition, time_stamp, 200);
++    }
+     return true;
+   }
+ 
+@@ -694,12 +786,7 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     case IDC_TAB_SEARCH_CLOSE:
+       CloseTabSearch(browser_);
+       break;
+-    case IDC_TAB_SEARCH_TOGGLE_PIN:
+-      ToggleTabSearchPin(browser_);
+-      break;
+-    case IDC_TAB_SCROLL_BUTTONS_TOGGLE_PIN:
+-      ToggleTabScrollButtonsPin(browser_);
+-      break;
++
+     case IDC_TOGGLE_VERTICAL_TABS:
+       ToggleVerticalTabs(browser_);
+       break;
+@@ -746,7 +833,16 @@ void BrowserCommandController::HandleCommandWithDisposition(
+       CloseWindow(browser_);
+       break;
+     case IDC_NEW_TAB: {
+-      NewTab(browser_, NewTabTypes::kNewTabCommand);
++      if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
++        if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) &&
++            browser_view->maho_sidebar_container()) {
++          browser_view->ShowMahoCommandOverlayForNewTab();
++        } else {
++          NewTab(browser_, NewTabTypes::kNewTabCommand);
++        }
++        break;
++      }
++      ShowMahoCommandOverlayForNewTabWhenReady(browser_->GetWeakPtr(), 200);
+       break;
+     }
+     case IDC_NEW_TAB_TO_RIGHT: {
+@@ -755,22 +851,70 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     }
+     case IDC_CLOSE_TAB:
+       base::RecordAction(base::UserMetricsAction("CloseTabByKey"));
++      if (browser_->GetTabStripModel()->empty()) {
++        CloseWindow(browser_);
++        break;
++      }
++      if (auto* maho_browser_view =
++              BrowserView::GetBrowserViewForBrowser(browser_);
++          maho_browser_view &&
++          maho_browser_view->MaybeHandleMultiTabClose()) {
++        break;
++      }
++      if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) &&
++          !browser_->GetProfile()->IsOffTheRecord() &&
++          browser_->GetTabStripModel()->count() == 1) {
++        content::WebContents* active_wc =
++            browser_->GetTabStripModel()->GetActiveWebContents();
++        if (active_wc) {
++          const GURL& url = active_wc->GetVisibleURL();
++          const bool is_empty_ntp =
++              (url.is_empty() || url == GURL(chrome::kChromeUINewTabURL) ||
++               url == GURL("about:blank")) &&
++              !active_wc->GetController().CanGoBack();
++          if (is_empty_ntp) {
++            break;
++          }
++        }
++        int old_index = browser_->GetTabStripModel()->active_index();
++        chrome::NewTab(browser_, NewTabTypes::kNoUserAction);
++        if (browser_->GetTabStripModel()->ContainsIndex(old_index)) {
++          browser_->GetTabStripModel()->CloseWebContentsAt(
++              old_index, TabCloseTypes::CLOSE_USER_GESTURE |
++                             TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
++        }
++        break;
++      }
+       CloseTab(browser_);
+       break;
+-    case IDC_SELECT_NEXT_TAB:
++    case IDC_SELECT_NEXT_TAB: {
+       base::RecordAction(base::UserMetricsAction("Accel_SelectNextTab"));
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      if (maho_browser_view &&
++          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/true)) {
++        break;
++      }
+       SelectNextTab(
+           browser_,
+           TabStripUserGestureDetails(
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
+       break;
+-    case IDC_SELECT_PREVIOUS_TAB:
++    }
++    case IDC_SELECT_PREVIOUS_TAB: {
+       base::RecordAction(base::UserMetricsAction("Accel_SelectPreviousTab"));
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      if (maho_browser_view &&
++          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/false)) {
++        break;
++      }
+       SelectPreviousTab(
+           browser_,
+           TabStripUserGestureDetails(
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
+       break;
++    }
+     case IDC_CYCLE_TO_NEXT_TAB:
+       if (IsCtrlTabMruEnabled(browser_)) {
+         base::RecordAction(base::UserMetricsAction("Accel_CycleToNextTab"));
+@@ -814,13 +958,29 @@ void BrowserCommandController::HandleCommandWithDisposition(
+     case IDC_SELECT_TAB_4:
+     case IDC_SELECT_TAB_5:
+     case IDC_SELECT_TAB_6:
+-    case IDC_SELECT_TAB_7:
++    case IDC_SELECT_TAB_7: {
+       base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      auto* maho_sidebar_container =
++          maho_browser_view
++              ? static_cast<maho::MahoSidebarContainerView*>(
++                    maho_browser_view->maho_sidebar_container())
++              : nullptr;
++      if (maho_sidebar_container) {
++        // Maho windows address favorites with Cmd+1..8. An index past the
++        // last favorite is a no-op; falling through to the Chromium tab
++        // strip would move focus to an unrelated tab.
++        maho_sidebar_container->TryActivateFavoriteByIndex(
++            id - IDC_SELECT_TAB_0);
++        break;
++      }
+       SelectNumberedTab(
+           browser_, id - IDC_SELECT_TAB_0,
+           TabStripUserGestureDetails(
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
+       break;
++    }
+     case IDC_SELECT_LAST_TAB:
+       base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));
+       SelectLastTab(
+@@ -1767,7 +1927,7 @@ void BrowserCommandController::InitCommandState() {
+   // The VisitDesktop command is only supported for up to 5 logged in users
+   // because that's the max number of user sessions. If that number is increased
+   // the IDC_VISIT_DESKTOP_OF_LRU_USER_ command ids should be updated as well.
+-  // crbug.com/41446075
++  // crbug.com/940461
+   static_assert(
+       session_manager::kMaximumNumberOfUserSessions <=
+           IDC_VISIT_DESKTOP_OF_LRU_USER_LAST -
+@@ -1988,22 +2148,11 @@ void BrowserCommandController::InitCommandState() {
+   // Safety Hub commands.
+   command_updater_->UpdateCommandEnabled(IDC_OPEN_SAFETY_HUB, true);
+ 
+-  command_updater_->UpdateCommandEnabled(IDC_WINDOW_MUTE_SITE, normal_window);
+-  command_updater_->UpdateCommandEnabled(IDC_WINDOW_PIN_TAB, normal_window);
+-  command_updater_->UpdateCommandEnabled(IDC_WINDOW_GROUP_TAB, normal_window);
+-  command_updater_->UpdateCommandEnabled(IDC_WINDOW_CLOSE_TABS_TO_RIGHT,
+-                                         normal_window);
+-  command_updater_->UpdateCommandEnabled(IDC_WINDOW_CLOSE_OTHER_TABS,
+-                                         normal_window);
+-
+-  const bool enable_tab_search_commands =
+-      browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL;
+-  command_updater_->UpdateCommandEnabled(IDC_TAB_SEARCH,
+-                                         enable_tab_search_commands);
+-  command_updater_->UpdateCommandEnabled(IDC_TAB_SEARCH_CLOSE,
+-                                         enable_tab_search_commands);
+-  command_updater_->UpdateCommandEnabled(IDC_TAB_SEARCH_TOGGLE_PIN,
+-                                         enable_tab_search_commands);
++  command_updater_->UpdateCommandEnabled(IDC_WINDOW_MUTE_SITE, true);
++  command_updater_->UpdateCommandEnabled(IDC_WINDOW_PIN_TAB, true);
++  command_updater_->UpdateCommandEnabled(IDC_WINDOW_GROUP_TAB, true);
++  command_updater_->UpdateCommandEnabled(IDC_WINDOW_CLOSE_TABS_TO_RIGHT, true);
++  command_updater_->UpdateCommandEnabled(IDC_WINDOW_CLOSE_OTHER_TABS, true);
+ 
+   if (base::FeatureList::IsEnabled(features::kUIDebugTools)) {
+     command_updater_->UpdateCommandEnabled(IDC_DEBUG_TOGGLE_TABLET_MODE, true);
+@@ -2375,6 +2524,5 @@
+ 
+   const bool is_fullscreen = window() && window()->IsFullscreen();
+   const bool show_main_ui = IsShowingMainUI();
+-  const bool show_location_bar = IsShowingLocationBar();
+ 
+   const bool main_not_fullscreen = show_main_ui && !is_fullscreen;
+@@ -2393,7 +2542,7 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
+ 
+   // Focus various bits of UI
+   command_updater_->UpdateCommandEnabled(IDC_FOCUS_TOOLBAR, show_main_ui);
+-  command_updater_->UpdateCommandEnabled(IDC_FOCUS_LOCATION, show_location_bar);
++  command_updater_->UpdateCommandEnabled(IDC_FOCUS_LOCATION, show_main_ui);
+   command_updater_->UpdateCommandEnabled(IDC_FOCUS_SEARCH, show_main_ui);
+   command_updater_->UpdateCommandEnabled(IDC_FOCUS_MENU_BAR,
+                                          main_not_fullscreen);
+@@ -2401,13 +2550,10 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
+                                          main_not_fullscreen);
+   command_updater_->UpdateCommandEnabled(IDC_FOCUS_PREVIOUS_PANE,
+                                          main_not_fullscreen);
+-  command_updater_->UpdateCommandEnabled(IDC_FOCUS_WEB_CONTENTS_PANE,
++  command_updater_->UpdateCommandEnabled(IDC_FOCUS_BOOKMARKS,
+                                          main_not_fullscreen);
+-  // Just use show_main_ui because the condition for bookmark bar shortcut is
+-  // handled in `BrowserView::FocusBookmarksToolbar()`,
+-  command_updater_->UpdateCommandEnabled(IDC_FOCUS_BOOKMARKS, show_main_ui);
+   command_updater_->UpdateCommandEnabled(
+       IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY, main_not_fullscreen);
+ 
+   // Show various bits of UI
+   command_updater_->UpdateCommandEnabled(IDC_DEVELOPER_MENU, show_main_ui);

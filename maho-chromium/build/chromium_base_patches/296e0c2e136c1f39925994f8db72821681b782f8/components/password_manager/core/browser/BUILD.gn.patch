@@ -1,0 +1,12 @@
+diff --git a/components/password_manager/core/browser/BUILD.gn b/components/password_manager/core/browser/BUILD.gn
+index 89370651cd86836974d83c692c627101fab79011..a14e4e65abcd03d2d91eb8c4076c7f034572c171 100644
+--- a/components/password_manager/core/browser/BUILD.gn
++++ b/components/password_manager/core/browser/BUILD.gn
+@@ -20,6 +20,7 @@ config("password_reuse_detection_config") {
+ 
+ static_library("browser") {
+   sources = [
++    "password_manager_driver.cc",
+     "browser_save_password_progress_logger.cc",
+     "browser_save_password_progress_logger.h",
+     "credential_cache.cc",

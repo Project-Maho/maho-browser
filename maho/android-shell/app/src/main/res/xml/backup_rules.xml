@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="sharedpref" path="maho_db_keys.xml"/>
+    <exclude domain="file" path="MahoData/maho.db"/>
+    <exclude domain="file" path="MahoData/maho.db-wal"/>
+    <exclude domain="file" path="MahoData/maho.db-shm"/>
+</full-backup-content>

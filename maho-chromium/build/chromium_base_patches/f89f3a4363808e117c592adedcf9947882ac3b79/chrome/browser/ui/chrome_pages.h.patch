@@ -1,0 +1,19 @@
+diff --git c/chrome/browser/ui/chrome_pages.h w/chrome/browser/ui/chrome_pages.h
+index e736f58a09a0181a9e23732aa2ab02487fad0e5f..6fb78549a44cc809f6eca974545b1059fae4964e 100644
+--- c/chrome/browser/ui/chrome_pages.h
++++ w/chrome/browser/ui/chrome_pages.h
+@@ -105,9 +105,14 @@ bool IsTrustedPopupWindowWithScheme(const BrowserWindowInterface* browser,
+ // Various things that open in a settings UI.
+ // NOTE: For Chrome OS settings, use SettingsWindowManager::ShowOSSettings().
+ void ShowSettings(BrowserWindowInterface* browser);
++void ShowMahoSettings(BrowserWindowInterface* browser);
++void ShowMahoSettingsForProfile(Profile* profile);
+ void ShowSettingsSubPage(BrowserWindowInterface* browser,
+                          std::string_view sub_page);
+ void ShowSettingsSubPageForProfile(Profile* profile, std::string_view sub_page);
++// If a chrome://maho-settings surface is already open for the current profile,
++// focuses and activates it. Returns true when an existing surface was reused.
++bool ActivateMahoSettingsTabIfOpen(BrowserWindowInterface* browser);
+ void ShowPageWithPromoForProfile(Profile* profile,
+                                  ShowPromoInPage::Params promo_params);
+ void ShowContentSettingsExceptions(BrowserWindowInterface* browser,

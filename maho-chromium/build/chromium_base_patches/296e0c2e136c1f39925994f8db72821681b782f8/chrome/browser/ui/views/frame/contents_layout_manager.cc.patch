@@ -1,0 +1,61 @@
+diff --git a/chrome/browser/ui/views/frame/contents_layout_manager.cc b/chrome/browser/ui/views/frame/contents_layout_manager.cc
+index c689d3e0c5be7dfbb8427ce3ca8479a7ebf182cf..fa66a15d55785e2fa31a441a2969eb3927ca6c1b 100644
+--- a/chrome/browser/ui/views/frame/contents_layout_manager.cc
++++ b/chrome/browser/ui/views/frame/contents_layout_manager.cc
+@@ -4,7 +4,12 @@
+ 
+ #include "chrome/browser/ui/views/frame/contents_layout_manager.h"
+ 
++#include <cstdio>
++#include <string>
++
+ #include "base/check.h"
++#include "base/logging.h"
++#include "base/process/process_handle.h"
+ #include "ui/views/view.h"
+ 
+ ContentsLayoutManager::ContentsLayoutManager(
+@@ -50,6 +55,43 @@ views::ProposedLayout ContentsLayoutManager::CalculateProposedLayout(
+                                      context_highlight_view_->GetVisible(),
+                                      contents_rect, optional_size_bound);
+ 
++  // Maho: size any extra content-area child (the zero-tab theme gradient
++  // view MahoContentGradientView, injected by BrowserView into
++  // contents_container) to fill the full contents bounds so it paints the
++  // theme gradient over the opaque gray empty MultiContentsView. The
++  // child's own visibility is honored, so once a real tab exists (the
++  // gradient is SetVisible(false)) it is laid out hidden and never
++  // occludes live web content. contents_container is the only view that
++  // uses ContentsLayoutManager, so the gradient is the sole extra child
++  // this loop ever touches.
++  for (views::View* maho_extra_child : host_view()->children()) {
++    if (maho_extra_child == contents_view_ ||
++        maho_extra_child == lens_overlay_view_ ||
++        maho_extra_child == context_highlight_view_) {
++      continue;
++    }
++    LOG(WARNING) << "[MAHO_GRAD] LayoutManager extra_child rect="
++                 << contents_rect.ToString()
++                 << " child_visible=" << maho_extra_child->GetVisible()
++                 << " class=" << maho_extra_child->GetClassName();
++    {
++      FILE* f = fopen("/tmp/maho_grad_all.log", "a");
++      if (f) {
++        fprintf(f,
++                "[MAHO_GRAD] LayoutManager pid=%lu rect=%s child_visible=%d "
++                "class=%s\n",
++                static_cast<unsigned long>(base::GetCurrentProcId()),
++                contents_rect.ToString().c_str(),
++                maho_extra_child->GetVisible() ? 1 : 0,
++                std::string(maho_extra_child->GetClassName()).c_str());
++        fclose(f);
++      }
++    }
++    layouts.child_layouts.emplace_back(maho_extra_child,
++                                       maho_extra_child->GetVisible(),
++                                       contents_rect, optional_size_bound);
++  }
++
+   layouts.host_size = gfx::Size(width, height);
+   return layouts;
+ }

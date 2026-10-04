@@ -1,0 +1,28 @@
+diff --git a/components/ssl_errors_strings.grdp b/components/ssl_errors_strings.grdp
+index b071895a60c7f05fdafa8ed76b41a9ad970ee60a..0d0d8b790dd4099a4e2c4c7bd6565113474c5890 100644
+--- a/components/ssl_errors_strings.grdp
++++ b/components/ssl_errors_strings.grdp
+@@ -158,7 +158,7 @@
+   <if expr="not _google_chrome">
+     <if expr="is_ios">
+       <message name="IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS" desc="Details for an X509 certificate with an invalid authority">
+-        This server could not prove that it is <ph name="DOMAIN">&lt;strong&gt;$1<ex>paypal.com</ex>&lt;/strong&gt;</ph>; its security certificate is not trusted by Chromium. This may be caused by a misconfiguration or an attacker intercepting your connection.
++        This server could not prove that it is <ph name="DOMAIN">&lt;strong&gt;$1<ex>paypal.com</ex>&lt;/strong&gt;</ph>; its security certificate is not trusted by Maho. This may be caused by a misconfiguration or an attacker intercepting your connection.
+       </message>
+     </if>
+     <if expr="is_android">
+@@ -188,12 +188,12 @@
+   <if expr="not _google_chrome">
+     <if expr="is_ios or is_android">
+       <message name="IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS_V2" desc="Details for an X509 certificate with an invalid authority, V2.">
+-        This server could not prove that it is <ph name="DOMAIN">&lt;strong&gt;$1<ex>paypal.com</ex>&lt;/strong&gt;</ph> because it is using a security certificate that is not trusted by Chromium or your system configuration for web traffic encryption. This may be caused by a misconfiguration, or an attacker intercepting your connection.
++        This server could not prove that it is <ph name="DOMAIN">&lt;strong&gt;$1<ex>paypal.com</ex>&lt;/strong&gt;</ph> because it is using a security certificate that is not trusted by Maho or your system configuration for web traffic encryption. This may be caused by a misconfiguration, or an attacker intercepting your connection.
+       </message>
+     </if>
+     <if expr="not is_ios and not is_android">
+       <message name="IDS_CERT_ERROR_AUTHORITY_INVALID_DETAILS_V2" desc="Details for an X509 certificate with an invalid authority, V2.">
+-        This server could not prove that it is <ph name="DOMAIN">&lt;strong&gt;$1<ex>paypal.com</ex>&lt;/strong&gt;</ph> because it is using a security certificate that is not trusted by Chromium or your system configuration for web traffic encryption. This may be caused by a misconfiguration, or an attacker intercepting your connection. <ph name="BEGIN_VIEW_CERTIFICATE_LINK">&lt;a href="#" id="view-certificate-link"&gt;</ph>View Certificate<ph name="END_VIEW_CERTIFICATE_LINK">&lt;/a&gt;</ph>
++        This server could not prove that it is <ph name="DOMAIN">&lt;strong&gt;$1<ex>paypal.com</ex>&lt;/strong&gt;</ph> because it is using a security certificate that is not trusted by Maho or your system configuration for web traffic encryption. This may be caused by a misconfiguration, or an attacker intercepting your connection. <ph name="BEGIN_VIEW_CERTIFICATE_LINK">&lt;a href="#" id="view-certificate-link"&gt;</ph>View Certificate<ph name="END_VIEW_CERTIFICATE_LINK">&lt;/a&gt;</ph>
+       </message>
+     </if>
+   </if>

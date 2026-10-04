@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.h b/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.h
+index b3ed90ba6dcd9de9e595f6eca5c77656a9666db3..40236506277b5e8044b8cdf242265d5c93180739 100644
+--- a/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.h
++++ b/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.h
+@@ -8,6 +8,7 @@
+ #include "base/callback_list.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
+ #include "chrome/browser/ui/side_panel/side_panel_entry_observer.h"
+ #include "chrome/browser/ui/side_panel/side_panel_enums.h"
+@@ -101,6 +102,8 @@ class SidePanelControllerViews : public SidePanelController,
+ 
+   // Subscription for the discard of the tab.
+   base::CallbackListSubscription will_discard_contents_callback_subscription_;
++
++  base::WeakPtrFactory<SidePanelControllerViews> weak_ptr_factory_{this};
+ };
+ 
+ }  // namespace customize_chrome

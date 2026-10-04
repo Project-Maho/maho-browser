@@ -1,0 +1,35 @@
+{
+  "name": "maho-web-ai",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && bun run copy:platforms",
+    "build:analyze": "ANALYZE=true vite build",
+    "copy:platforms": "bun scripts/copy-to-platforms.ts",
+    "check:bundle-size": "bun scripts/check-bundle-size.ts",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "esbuild": "^0.28.1",
+    "preact": "^10.25.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.9.3",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/preact": "^3.2.4",
+    "@types/node": "^22.15.29",
+    "jsdom": "^26.1.0",
+    "rollup-plugin-visualizer": "^7.1.1",
+    "typescript": "~5.8.3",
+    "vite": "^8.0.16",
+    "vitest": "^3.2.3"
+  },
+  "overrides": {
+    "esbuild": "^0.28.1"
+  }
+}

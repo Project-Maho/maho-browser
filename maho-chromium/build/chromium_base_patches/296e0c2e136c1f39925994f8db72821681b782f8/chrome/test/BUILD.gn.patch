@@ -1,0 +1,92 @@
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+index 6c8d52d2f8b56d37e4205b223c2402c92fe0388a..572d72a7d35786e04d1556c4a9e27f8177899815 100644
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -2930,6 +2930,9 @@ if (!is_android) {
+       "//chrome/browser/ui/views/tabs/projects",
+       "//chrome/browser/ui/views/tabs/projects:browser_tests",
+       "//chrome/browser/ui/views/tabs/vertical:browser_tests",
++      "//maho/browser/ui/views/sidebar:browser_tests",
++      "//maho/browser:maho_google_sign_in_browser_tests",
++      "//maho/browser/mcp:browser_tests",
+       "//chrome/browser/ui/views/toolbar:browser_tests",
+       "//chrome/browser/ui/views/user_education",
+       "//chrome/browser/ui/views/webid:test_support",
+@@ -7071,11 +7074,11 @@ test("unit_tests") {
+     "//chrome/browser/domain_reliability",
+     "//chrome/browser/download",
+     "//chrome/browser/download:status_text_builder_utils",
+-    "//chrome/browser/engagement",
+-    "//chrome/browser/engagement:unit_tests",
+-    "//chrome/browser/external_protocol",
+-    "//chrome/browser/favicon",
+-    "//chrome/browser/favicon:unit_tests",
++      "//chrome/browser/engagement",
++      "//chrome/browser/engagement:unit_tests",
++      "//chrome/browser/external_protocol",
++      "//chrome/browser/favicon",
++      "//chrome/browser/favicon:unit_tests",
+     "//chrome/browser/feedback",
+     "//chrome/browser/feedback:feedback_impl",
+     "//chrome/browser/feedback:unit_tests",
+@@ -8521,6 +8524,7 @@ test("unit_tests") {
+       "//chrome/browser/ui/desktop_to_mobile_promos:unit_tests",
+       "//chrome/browser/ui/extensions",
+       "//chrome/browser/ui/extensions:unit_tests",
++      "//maho/browser/ui/views/command:unit_tests",
+       "//chrome/browser/ui/passwords:test_support_ui",
+       "//chrome/browser/ui/passwords/bubble_controllers:unit_tests",
+       "//chrome/browser/ui/passwords/bubble_controllers/password_change",
+@@ -8558,6 +8562,18 @@ test("unit_tests") {
+       "//chrome/browser/ui/views/glic",
+       "//chrome/browser/ui/views/page_action:test_support",
+       "//chrome/browser/ui/views/page_action:unit_tests",
++      "//maho/browser/ui/views/sidebar:unit_tests",
++      "//maho/browser/ui/views/spaces_overlay:unit_tests",
++      "//maho/browser/ui/tabs:unit_tests",
++      "//maho/browser/ui/views/peek:unit_tests",
++      "//maho/browser:maho_theme_io_unittests",
++      "//maho/browser:maho_context_menus_unittests",
++      "//maho/browser:maho_location_bar_views_unittests",
++      "//maho/browser:maho_incognito_unittests",
++      "//maho/browser:maho_ai_runtime_router_unittests",
++      "//maho/browser:maho_ai_llm_client_unittests",
++      "//maho/browser/net:maho_ad_block_tab_helper_unittests",
++      "//maho/browser/ui/site_control:maho_site_control_unittests",
+       "//chrome/browser/ui/views/tabs/glic",
+       "//chrome/browser/ui/views/tabs/vertical:unit_tests",
+       "//chrome/browser/ui/views/toolbar:unit_tests",
+@@ -11121,8 +11137,8 @@ if (!is_android) {
+         "//ui/ozone",
+         "//ui/platform_window/common",
+         "//ui/resources:ui_test_pak",
+-        "//ui/web_dialogs:test_support",
+-      ]
++      "//ui/web_dialogs:test_support",
++    ]
+ 
+       if (enable_extensions) {
+         deps += [
+@@ -11320,6 +11336,7 @@ if (!is_android && !is_chromeos_device) {
+       "//chrome/browser/devtools",
+       "//chrome/browser/devtools:test_support",
+       "//chrome/browser/feedback:feedback_impl",
++      "//maho/browser/ui/views/command:interactive_tests",
+       "//chrome/browser/file_system_access",
+       "//chrome/browser/gcm",
+       "//chrome/browser/glic/browser_ui",
+@@ -11539,6 +11556,14 @@ if (!is_android && !is_chromeos_device) {
+       "//ui/strings:ui_strings_grit",
+       "//ui/views",
+       "//ui/web_dialogs:test_support",
++      "//maho/browser/ui/views/sidebar:interactive_tests",
++      "//maho/browser/ui/views/shields:interactive_tests",
++      "//maho/browser/ui/views/boost:interactive_tests",
++      "//maho/browser/ui/views/spaces_overlay:interactive_tests",
++      "//maho/browser/ui/views/peek:interactive_tests",
++      "//chrome/browser/ui/views/side_panel:interactive_tests",
++      "//maho/browser/ui/views/sidebar:interactive_tests",
++      "//maho/browser/ui/views/sidebar:interactive_tests",
+     ]
+ 
+     if (!is_android && !is_chromeos) {

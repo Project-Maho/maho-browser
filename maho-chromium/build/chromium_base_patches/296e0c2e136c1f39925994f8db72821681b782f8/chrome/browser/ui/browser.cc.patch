@@ -1,0 +1,403 @@
+diff --git a/chrome/browser/ui/browser.cc b/chrome/browser/ui/browser.cc
+index 6277b04593768d5de235b2176933cbea11613ec6..b7e7a6e85e25b4a2a49172d57259669c2f5f0476 100644
+--- a/chrome/browser/ui/browser.cc
++++ b/chrome/browser/ui/browser.cc
+@@ -3,6 +3,21 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/browser.h"
++#include "maho/browser/maho_browser_main_extra_parts.h"
++#include "maho/browser/net/maho_atc_state.h"
++#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++#include "components/prefs/pref_service.h"
++#include "maho/browser/maho_space_profile_bridge.h"
++#include "maho/browser/maho_browser_main_extra_parts.h"
++#include "maho/browser/net/maho_atc_state.h"
++#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
++#include "maho/browser/ui/views/peek/maho_peek_controller.h"
++#include "maho/browser/ui/views/peek/maho_peek_route.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++#include "components/prefs/pref_service.h"
++#include "maho/browser/maho_space_profile_bridge.h"
+ 
+ #include <stddef.h>
+ 
+@@ -582,6 +597,7 @@ std::unique_ptr<Browser> Browser::DeprecatedCreateOwnedForTesting(
+ Browser::Browser(const CreateParams& params)
+     : create_params_(params),
+       type_(params.type),
++      is_maho_mini_(params.is_maho_mini),
+       profile_(params.profile),
+       window_(nullptr),
+       tab_strip_model_delegate_(
+@@ -638,6 +654,10 @@ Browser::Browser(const CreateParams& params)
+     return;
+   }
+ 
++  if (auto* maho_parts = MahoBrowserMainExtraParts::GetInstance()) {
++    maho_parts->MaybeInitializeForBrowser(this);
++  }
++
+   // BrowserWindowFeatures need to be initialized before browser window
+   // creation, so that the features can be used in creating components
+   // in browser window.
+@@ -793,6 +813,18 @@ std::u16string Browser::GetWindowTitleForCurrentTab(
+ }
+ 
+ std::u16string Browser::GetWindowTitleForTab(int index) const {
++  // Maho: incognito windows show "Incognito" instead of the raw
++  // chrome://newtab URL in the Window menu and title bar.
++  if (profile_->IsOffTheRecord()) {
++    content::WebContents* otr_contents =
++        tab_strip_model_->GetWebContentsAt(index);
++    if (otr_contents) {
++      const GURL& otr_url = otr_contents->GetVisibleURL();
++      if (otr_url.SchemeIs("chrome") && otr_url.host() == "newtab") {
++        return u"Incognito";
++      }
++    }
++  }
+   std::u16string title = base::UTF8ToUTF16(user_title_);
+ 
+   if (title.empty()) {
+@@ -854,10 +886,16 @@ std::u16string Browser::GetWindowTitleForMaxWidth(int max_width) const {
+   // |contents| can be NULL if GetWindowTitleForMenu is called during the
+   // window's creation (before tabs have been added).
+   if (contents) {
+-    auto* const app_browser_controller = app_controller();
+-    title = FormatTitleForDisplay(app_browser_controller
+-                                      ? app_browser_controller->GetTitle()
+-                                      : contents->GetTitle());
++    const GURL& otr_url = contents->GetVisibleURL();
++    if (profile_->IsOffTheRecord() && otr_url.SchemeIs("chrome") &&
++        otr_url.host() == "newtab") {
++      title = u"Incognito";
++    } else {
++      auto* const app_browser_controller = app_controller();
++      title = FormatTitleForDisplay(app_browser_controller
++                                        ? app_browser_controller->GetTitle()
++                                        : contents->GetTitle());
++    }
+   }
+ 
+   // If there is no title, leave it empty for apps.
+@@ -883,6 +921,12 @@ std::u16string Browser::GetWindowTitleForMaxWidth(int max_width) const {
+ std::u16string Browser::GetWindowTitleFromWebContents(
+     bool include_app_name,
+     content::WebContents* contents) const {
++  if (profile_->IsOffTheRecord() && contents) {
++    const GURL& otr_url = contents->GetVisibleURL();
++    if (otr_url.SchemeIs("chrome") && otr_url.host() == "newtab") {
++      return u"Incognito";
++    }
++  }
+   std::u16string title = base::UTF8ToUTF16(user_title_);
+ 
+   // |contents| can be NULL because GetWindowTitleForCurrentTab is called by the
+@@ -1643,6 +1687,15 @@ void Browser::UpdateTabGroupSessionDataForTab(
+ }
+ 
+ void Browser::TabStripEmpty() {
++  // Maho: normal browser windows support zero-tab state.  Only close the
++  // window when we are already in an explicit close flow (i.e.
++  // UnloadController has already set is_attempting_to_close_browser_ via
++  // TryToCloseWindow / GetBrowserClosingStatus).  For every other browser
++  // type the original behaviour is preserved.
++  if (is_type_normal() &&
++      !unload_controller_.is_attempting_to_close_browser()) {
++    return;
++  }
+   // Note: even though the tab strip is empty, the call to Close() may not
+   // result in closing this Browser. This can happen in the case of closing
+   // the last Browser with ongoing downloads.
+@@ -1950,6 +2003,206 @@ WebContents* Browser::OpenURLFromTab(
+                                   std::move(navigation_handle_callback));
+   }
+ 
++#if BUILDFLAG(IS_MAC)
++  if (params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
++      !params.started_from_context_menu &&
++      ui::PageTransitionCoreTypeIs(params.transition, ui::PAGE_TRANSITION_LINK)) {
++    bool override_enabled = profile()->GetPrefs()->GetBoolean(
++        maho::sidebar_prefs::kMahoMiniClickOverrideEnabled);
++    if (override_enabled) {
++      maho::LaunchMahoMini(profile(), maho::MahoMiniRequest{params.url});
++      return nullptr;
++    }
++  }
++
++#endif
++
++  struct AtcBypassState {
++    static std::set<Browser*>& BypassedBrowsers() {
++      static std::set<Browser*>* bypassed_browsers = new std::set<Browser*>();
++      return *bypassed_browsers;
++    }
++    static bool ShouldBypass(Browser* browser) {
++      return BypassedBrowsers().count(browser) > 0;
++    }
++    static void SetBypass(Browser* browser, bool bypass) {
++      if (bypass) {
++        BypassedBrowsers().insert(browser);
++      } else {
++        BypassedBrowsers().erase(browser);
++      }
++    }
++  };
++
++  if (!AtcBypassState::ShouldBypass(this)) {
++    const bool is_top_level =
++        ui::PageTransitionIsMainFrame(params.transition) &&
++        !ui::PageTransitionIsRedirect(params.transition);
++    const bool is_user_initiated =
++        !params.is_renderer_initiated || params.user_gesture;
++    bool is_maho_mini_gesture = false;
++#if BUILDFLAG(IS_MAC)
++    is_maho_mini_gesture =
++        params.disposition == WindowOpenDisposition::NEW_SPLIT_VIEW &&
++        !params.started_from_context_menu &&
++        ui::PageTransitionCoreTypeIs(params.transition,
++                                     ui::PAGE_TRANSITION_LINK);
++#endif
++#if BUILDFLAG(IS_MAC)
++    if (is_top_level && is_user_initiated &&
++        !is_maho_mini_gesture &&
++        !params.started_from_context_menu &&
++        maho::MahoAtcState::HasEnabledRules()) {
++      std::string current_space_id;
++      maho::MahoSpaceProfileBridge* bridge =
++          maho::MahoSpaceProfileBridge::GetInstance();
++      if (bridge) {
++        current_space_id = bridge->GetActiveSpaceId(this);
++      }
++      base::WeakPtr<Browser> weak_browser = AsWeakPtr();
++      Profile* prof = profile();
++      base::WeakPtr<Profile> weak_profile =
++          prof ? prof->GetWeakPtr() : nullptr;
++      base::WeakPtr<content::WebContents> weak_source =
++          source ? source->GetWeakPtr() : nullptr;
++
++      maho::DecideLinkDestination(
++          params.url, /*is_external=*/false,
++          base::BindOnce(
++              [](base::WeakPtr<Browser> browser,
++                 base::WeakPtr<Profile> profile,
++                 base::WeakPtr<content::WebContents> source,
++                 std::string current_space_id,
++                 content::OpenURLParams params,
++                 base::OnceCallback<void(content::NavigationHandle&)>
++                     navigation_handle_callback,
++                 maho::LinkDestinationResult result) {
++                if (!browser || !profile) {
++                  return;
++                }
++
++                if (result.type ==
++                        maho::LinkDestinationType::kSpace &&
++                    !result.space_id.empty() &&
++                    result.space_id != current_space_id) {
++                  maho::MahoSpaceProfileBridge* bridge =
++                      maho::MahoSpaceProfileBridge::GetInstance();
++                  if (bridge && bridge->SwitchToSpace(
++                                    browser.get(), result.space_id)) {
++                    chrome::AddSelectedTabWithURL(
++                        browser.get(), params.url, params.transition);
++                    return;
++                  }
++                }
++
++                BrowserView* browser_view =
++                    BrowserView::GetBrowserViewForBrowser(browser.get());
++                maho::MahoPeekController* peek_controller =
++                    browser_view
++                        ? browser_view->GetOrCreateMahoPeekController()
++                        : nullptr;
++                const maho::PeekRoute route = maho::DecidePeekRoute({
++                    .master_enabled = profile->GetPrefs()->GetBoolean(
++                        maho::sidebar_prefs::kPeekEnabled),
++                    .popup_routing_enabled = false,
++                    .link_routing_enabled =
++                        profile->GetPrefs()->GetBoolean(
++                            maho::sidebar_prefs::kPeekLinkRoutingEnabled),
++                    .seam = maho::PeekSeam::kOpenUrlFromTab,
++                    .disposition = params.disposition,
++                    .source_role =
++                        maho::MahoSidebarContainerView::GetPeekSourceRole(
++                            browser.get(), source.get()),
++                    .is_user_initiated = true,
++                    .force_tab = params.is_renderer_initiated &&
++                        params.disposition ==
++                            WindowOpenDisposition::NEW_BACKGROUND_TAB,
++                    .force_peek = params.is_renderer_initiated &&
++                        params.disposition ==
++                            WindowOpenDisposition::NEW_WINDOW,
++                    .is_maho_mini_gesture = false,
++                    .atc_has_cross_space_target = false,
++                    .peek_slot_state =
++                        peek_controller && peek_controller->SlotBusy()
++                            ? maho::PeekSlotState::kBusy
++                            : maho::PeekSlotState::kClosed,
++                });
++                if (route == maho::PeekRoute::kOpenInPeek &&
++                    peek_controller &&
++                    peek_controller->ShowUrl(source.get(), params.url)) {
++                  return;
++                }
++                if (route ==
++                    maho::PeekRoute::kOpenInForegroundTab) {
++                  params.disposition =
++                      WindowOpenDisposition::NEW_FOREGROUND_TAB;
++                }
++                AtcBypassState::SetBypass(browser.get(), true);
++                browser->OpenURL(
++                    params, std::move(navigation_handle_callback));
++                AtcBypassState::SetBypass(browser.get(), false);
++              },
++              weak_browser, weak_profile, weak_source, current_space_id,
++              params, std::move(navigation_handle_callback)));
++      return nullptr;
++    }
++#endif
++
++    if (is_top_level && is_user_initiated &&
++        !is_maho_mini_gesture &&
++        !params.started_from_context_menu &&
++        !maho::MahoAtcState::HasEnabledRules()) {
++      BrowserView* browser_view =
++          BrowserView::GetBrowserViewForBrowser(this);
++      maho::MahoPeekController* peek_controller =
++          browser_view
++              ? browser_view->GetOrCreateMahoPeekController()
++              : nullptr;
++      const maho::PeekRoute route = maho::DecidePeekRoute({
++          .master_enabled = profile()->GetPrefs()->GetBoolean(
++              maho::sidebar_prefs::kPeekEnabled),
++          .popup_routing_enabled = false,
++          .link_routing_enabled = profile()->GetPrefs()->GetBoolean(
++              maho::sidebar_prefs::kPeekLinkRoutingEnabled),
++          .seam = maho::PeekSeam::kOpenUrlFromTab,
++          .disposition = params.disposition,
++          .source_role =
++              maho::MahoSidebarContainerView::GetPeekSourceRole(
++                  this, source),
++          .is_user_initiated = true,
++          .force_tab = params.is_renderer_initiated &&
++              params.disposition ==
++                  WindowOpenDisposition::NEW_BACKGROUND_TAB,
++          .force_peek = params.is_renderer_initiated &&
++              params.disposition ==
++                  WindowOpenDisposition::NEW_WINDOW,
++          .is_maho_mini_gesture = false,
++          .atc_has_cross_space_target = false,
++          .peek_slot_state =
++              peek_controller && peek_controller->SlotBusy()
++                  ? maho::PeekSlotState::kBusy
++                  : maho::PeekSlotState::kClosed,
++      });
++      if (route == maho::PeekRoute::kOpenInPeek &&
++          peek_controller &&
++          peek_controller->ShowUrl(source, params.url)) {
++        return nullptr;
++      }
++      if (route == maho::PeekRoute::kOpenInForegroundTab) {
++        content::OpenURLParams foreground_params = params;
++        foreground_params.disposition =
++            WindowOpenDisposition::NEW_FOREGROUND_TAB;
++        AtcBypassState::SetBypass(this, true);
++        content::WebContents* result = OpenURLFromTab(
++            source, foreground_params,
++            std::move(navigation_handle_callback));
++        AtcBypassState::SetBypass(this, false);
++        return result;
++      }
++    }
++  }
++
++
+   // If the source is already split, navigate the other pane instead of
+   // creating a new tab. Return |source| so that WebContentsImpl::OpenURL()
+   // sees new_contents == this and skips the DidOpenRequestedURL notification,
+@@ -2104,6 +2357,43 @@ content::WebContents* Browser::AddNewContents(
+                                                         source, disposition);
+   }
+ 
++  if (maho::IsPeekEligible(this) &&
++      profile()->GetPrefs()->GetBoolean(
++          maho::sidebar_prefs::kPeekEnabled) &&
++      profile()->GetPrefs()->GetBoolean(
++          maho::sidebar_prefs::kPeekPopupRoutingEnabled) &&
++      disposition == WindowOpenDisposition::NEW_POPUP) {
++    const maho::PeekRoute route = maho::DecidePeekRoute({
++        .master_enabled = true,
++        .popup_routing_enabled = true,
++        .link_routing_enabled = false,
++        .seam = maho::PeekSeam::kAddNewContents,
++        .disposition = disposition,
++        .source_role = maho::PeekSourceRole::kNormal,
++        .is_user_initiated = user_gesture,
++        .force_tab = false,
++        .is_maho_mini_gesture = false,
++        .atc_has_cross_space_target = false,
++        .peek_slot_state = maho::PeekSlotState::kClosed,
++    });
++    if (route == maho::PeekRoute::kOpenInPeek) {
++      content::WebContents* adopted_contents = new_contents.get();
++      BrowserView* browser_view =
++          BrowserView::GetBrowserViewForBrowser(this);
++      maho::MahoPeekController* peek_controller =
++          browser_view
++              ? browser_view->GetOrCreateMahoPeekController()
++              : nullptr;
++      if (peek_controller &&
++          peek_controller->TryAdoptContents(source, &new_contents)) {
++        return adopted_contents;
++      }
++      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    } else if (route == maho::PeekRoute::kOpenInForegroundTab) {
++      disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
++    }
++  }
++
+   // Postpone activating popups opened by content-fullscreen tabs. This permits
+   // popups on other screens and retains fullscreen focus for exit accelerators.
+   // Popups are activated when the opener exits fullscreen, which happens
+@@ -2507,10 +2797,27 @@ std::optional<gfx::Rect> Browser::GetWindowBoundsInScreen() {
+   return GetBrowserView().GetBounds();
+ }
+ 
++namespace maho {
++// Defined in maho/browser/maho_browser_main_extra_parts.cc.
++// Returns true when the chooser was consumed by automation
++// (native dialog suppressed; input.file_upload_select completes it).
++bool MahoBeginAutomationFileChooser(
++    content::RenderFrameHost* render_frame_host,
++    scoped_refptr<content::FileSelectListener> listener,
++    blink::mojom::FileChooserParams::Mode mode);
++}  // namespace maho
++
+ void Browser::RunFileChooser(
+     content::RenderFrameHost* render_frame_host,
+     scoped_refptr<content::FileSelectListener> listener,
+     const blink::mojom::FileChooserParams& params) {
++  // Maho: suppress the native file-selection dialog while an
++  // automation lease owns this tab; the MCP browser delegate
++  // completes the chooser via input.file_upload_select instead.
++  if (maho::MahoBeginAutomationFileChooser(
++          render_frame_host, listener, params.mode)) {
++    return;
++  }
+   FileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),
+                                    params);
+ }
+@@ -3657,6 +3964,9 @@ bool Browser::PictureInPictureBrowserSupportsWindowFeature(
+ 
+ bool Browser::SupportsWindowFeatureImpl(WindowFeature feature,
+                                         bool check_can_support) const {
++  if (is_maho_mini()) {
++    return false;
++  }
+   switch (type_) {
+     case TYPE_NORMAL:
+       return NormalBrowserSupportsWindowFeature(feature, check_can_support);

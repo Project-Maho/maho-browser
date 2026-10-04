@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/ui/views/frame/contents_container_outline.h w/chrome/browser/ui/views/frame/contents_container_outline.h
+index 3dd6c5cf3093b6ab68040a4b6d37395618f03730..5d53929e1ae1722d3aeeb50a4ef6047f11576b4d 100644
+--- c/chrome/browser/ui/views/frame/contents_container_outline.h
++++ w/chrome/browser/ui/views/frame/contents_container_outline.h
+@@ -21,7 +21,7 @@ class ContentsContainerOutline : public views::View,
+ 
+  public:
+   static constexpr int kCornerRadius = 8;
+-  static constexpr int kThickness = 1;
++  static constexpr int kThickness = 0;
+   static constexpr int kHighlightThickness = 3;
+ 
+   explicit ContentsContainerOutline(views::View* mini_toolbar);

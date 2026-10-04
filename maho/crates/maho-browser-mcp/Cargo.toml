@@ -1,0 +1,67 @@
+[package]
+name = "maho-browser-mcp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "maho_browser_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "maho-browser-mcp"
+path = "src/bin/maho-browser-mcp.rs"
+
+[dependencies]
+rmcp = { version = "1", features = ["server", "macros", "transport-io", "schemars"] }
+maho-types = { path = "../maho-types" }
+maho-storage = { path = "../maho-storage" }
+maho-core = { path = "../maho-core" }
+tokio = { workspace = true, features = ["net", "io-util", "rt-multi-thread", "macros", "signal", "sync", "time"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+schemars = "1"
+directories = "5"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "io-util", "rt-multi-thread", "macros", "sync", "time", "test-util"] }
+tempfile = "3"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+base64 = "0.22"
+
+# Integration tests — each requires a running browser, all tests are #[ignore]d.
+[[test]]
+name = "mcp_tools_test"
+path = "tests/integration/mcp_tools_test.rs"
+
+[[test]]
+name = "security_test"
+path = "tests/integration/security_test.rs"
+
+[[test]]
+name = "lease_test"
+path = "tests/integration/lease_test.rs"
+
+[[test]]
+name = "allowed_domains_test"
+path = "tests/integration/allowed_domains_test.rs"
+
+[[test]]
+name = "agent_actions_e2e"
+path = "tests/integration/agent_actions_e2e.rs"
+
+[[test]]
+name = "headless_test"
+path = "tests/integration/headless_test.rs"
+
+[[test]]
+name = "repl_test"
+path = "tests/integration/repl_test.rs"

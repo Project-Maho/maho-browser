@@ -1,0 +1,112 @@
+diff --git a/chrome/browser/ui/views/frame/multi_contents_view.h b/chrome/browser/ui/views/frame/multi_contents_view.h
+index e24b980a8fb42d0892ea4f52ffd00e1a21975d32..f33d4fb175ff4a40b5376509b0093e59eb72005c 100644
+--- a/chrome/browser/ui/views/frame/multi_contents_view.h
++++ b/chrome/browser/ui/views/frame/multi_contents_view.h
+@@ -5,6 +5,7 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_MULTI_CONTENTS_VIEW_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_MULTI_CONTENTS_VIEW_H_
+ 
++#include <cstddef>
+ #include <memory>
+ #include <optional>
+ 
+@@ -16,6 +17,7 @@
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/frame/contents_container_view.h"
+ #include "components/prefs/pref_change_registrar.h"
++#include "components/split_tabs/split_tab_visual_data.h"
+ #include "ui/base/interaction/element_identifier.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/views/controls/resize_area_delegate.h"
+@@ -44,8 +46,8 @@ namespace views {
+ class WebView;
+ }  // namespace views
+ 
+-// MultiContentsView shows up to two contents web views side by side, and
+-// manages their layout relative to each other.
++// MultiContentsView shows up to four contents web views and lays them out from
++// the split's binary visual topology.
+ class MultiContentsView
+     : public views::View,
+       public views::ResizeAreaDelegate,
+@@ -62,7 +64,7 @@ class MultiContentsView
+     double end_width = 0;
+   };
+ 
+-  static constexpr int kSplitViewContentInset = 8;
++  static constexpr int kSplitViewContentInset = 0;
+ 
+   MultiContentsView(BrowserView* browser_view,
+                     std::unique_ptr<MultiContentsViewDelegate> delegate);
+@@ -87,24 +89,26 @@ class MultiContentsView
+   // Returns true if more than one WebContents is displayed.
+   bool IsInSplitView() const;
+ 
+-  // Show the split view without set any WebContents and update the size of
+-  // contents views based on `ratio`, this is used to prepare the layout and
+-  // prevent a re-layout of WebContents.
+-  void ShowSplitView(double ratio);
++  // Shows `pane_count` panes using `visual_data` without binding WebContents.
++  // This prepares the complete layout before BrowserView attaches each pane.
++  void ShowSplitView(size_t pane_count,
++                     const split_tabs::SplitTabVisualData& visual_data);
++
++  // Updates the topology of the currently visible split.
++  void SetSplitVisualData(
++      const split_tabs::SplitTabVisualData& visual_data);
+ 
+   // Preserves the active WebContents and hides the second ContentsContainerView
+   // and resize handle.
+   void CloseSplitView();
+ 
+-  // Assigns the given |web_contents| to the ContentsContainerView's
+-  // ContentsWebView at |index| in contents_container_views_. |index| must be
+-  // either 0 or 1 as we currently only support two contents. If |index| is 1
+-  // and we are not currently in a split view, displays the split views.
++  // Assigns `web_contents` to the pane at `index`, which must be in [0, 4).
+   void SetWebContentsAtIndex(content::WebContents* web_contents, int index);
+ 
+   // Sets the index of the active contents view within contents_views_.
+   void SetActiveIndex(int index);
+   int GetActiveIndex() const { return active_index_; }
++  size_t visible_pane_count() const { return visible_pane_count_; }
+ 
+   // Updates the size of the contents views based on |ratio|.
+   void UpdateSplitRatio(double ratio);
+@@ -245,6 +249,13 @@ class MultiContentsView
+       std::vector<views::ChildLayout>& child_layouts) const;
+ 
+   int GetInactiveIndex() const;
++  void AddPaneContainer();
++  void EnsurePaneCount(size_t pane_count);
++  bool ShouldShowResizeArea() const;
++  void AppendSplitNodeLayouts(
++      const split_tabs::SplitLayoutNode& node,
++      const gfx::Rect& bounds,
++      std::vector<views::ChildLayout>& child_layouts) const;
+ 
+   void OnWebContentsFocused(views::WebView*);
+   void OnNtpFooterFocused(views::WebView*);
+@@ -275,8 +286,7 @@ class MultiContentsView
+   raw_ptr<MultiContentsBackgroundView> background_view_;
+   ContentsSeparators contents_separators_;
+ 
+-  // Holds ContentsContainerViews, when not in a split view the second
+-  // ContentsContainerView is not visible.
++  // Holds up to four ContentsContainerViews; unused panes are hidden.
+   std::vector<ContentsContainerView*> contents_container_views_;
+ 
+   // Holds subscriptions for when the attached contents to ContentsContainerView
+@@ -299,9 +309,10 @@ class MultiContentsView
+   // The index in contents_views_ of the active contents view.
+   int active_index_ = 0;
+ 
+-  // Current ratio of |contents_views_|'s first ContentsContainerView's width /
+-  // overall contents view width.
++  // Root ratio retained for the existing two-pane resize delegate.
+   double start_ratio_ = 0.5;
++  split_tabs::SplitTabVisualData split_visual_data_;
++  size_t visible_pane_count_ = 1;
+ 
+   // See `SetTargetContentBounds()`.
+   std::optional<TargetContentBounds> target_content_bounds_;

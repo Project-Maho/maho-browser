@@ -1,0 +1,25 @@
+diff --git c/chrome/browser/ui/views/frame/browser_widget.cc w/chrome/browser/ui/views/frame/browser_widget.cc
+index 7482e34aa43f98206b44355957b32e76104ffa51..bdaf95b67ca76605cad4f993a39a11736442942c 100644
+--- c/chrome/browser/ui/views/frame/browser_widget.cc
++++ w/chrome/browser/ui/views/frame/browser_widget.cc
+@@ -30,6 +30,7 @@
+ #include "chrome/browser/ui/views/frame/browser_root_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/glass_frame_service.h"
++#include "maho/browser/ui/theme/maho_color_mixer.h"
+ #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
+@@ -506,6 +507,12 @@ ui::ColorProviderKey BrowserWidget::GetColorProviderKey() const {
+   key.app_controller =
+       web_app::AppBrowserController::From(browser_view_->browser());
+ 
++  // Maho: tag Incognito windows for private semantic color recipes without
++  // changing the Chromium/ThemeService-controlled color mode.
++  if (IsIncognitoBrowser()) {
++    key.app_controller = GetMahoOtrSentinel();
++  }
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   // ChromeOS SystemWebApps use the OS theme all the time.
+   if (web_app::GetSystemWebAppType(browser_view_->browser()).has_value()) {

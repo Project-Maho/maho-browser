@@ -1,0 +1,166 @@
+=== cargo clippy -p maho-platform -- -D warnings ===
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s
+exit: 0
+=== cargo clippy -p maho-cli -- -D warnings ===
+    Checking maho-types v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-types)
+    Checking maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+    Checking maho-storage v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-storage)
+    Checking maho-browser-mcp v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-browser-mcp)
+error: returning the result of a `let` binding from a block
+   --> crates/maho-storage/src/sqlite.rs:791:13
+    |
+786 | /             let has_foreign_key = rows.filter_map(Result::ok).any(|(table, from, on_delete)| {
+787 | |                 table == "conversation_projects"
+788 | |                     && from == "project_id"
+789 | |                     && on_delete.eq_ignore_ascii_case("SET NULL")
+790 | |             });
+    | |_______________- unnecessary `let` binding
+791 |               has_foreign_key
+    |               ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#let_and_return
+    = note: `-D clippy::let-and-return` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::let_and_return)]`
+help: return the expression directly
+    |
+786 ~             
+787 ~             rows.filter_map(Result::ok).any(|(table, from, on_delete)| {
+788 +                 table == "conversation_projects"
+789 +                     && from == "project_id"
+790 +                     && on_delete.eq_ignore_ascii_case("SET NULL")
+791 +             })
+    |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/maho-storage/src/sqlite.rs:4303:10
+     |
+4303 |     ) -> Result<(i64, Vec<(String, Option<Vec<u8>>)>), StorageError> {
+     |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/maho-storage/src/sqlite.rs:5011:10
+     |
+5011 |       ) -> Result<
+     |  __________^
+5012 | |         Option<(
+5013 | |             maho_types::content_blocking::ContentBlockingMode,
+5014 | |             u64,
+...    |
+5019 | |         StorageError,
+5020 | |     > {
+     | |_____^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
+
+error: could not compile `maho-storage` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: this `if let` can be collapsed into the outer `if let`
+   --> crates/maho-browser-mcp/src/client.rs:221:29
+    |
+221 | / ...                   if let JsonRpcId::Num(n) = id {
+222 | | ...                       let mut map = pending.lock().await;
+223 | | ...                       if let Some(tx) = map.remove(n) {
+224 | | ...                           let _ = tx.send(PendingResponse {
+...   |
+229 | | ...                   }
+    | |_______________________^
+    |
+help: the outer pattern can be modified to include the inner pattern
+   --> crates/maho-browser-mcp/src/client.rs:220:37
+    |
+220 |                         if let Some(ref id) = resp.id {
+    |                                     ^^^^^^ replace this binding
+221 |                             if let JsonRpcId::Num(n) = id {
+    |                                    ^^^^^^^^^^^^^^^^^ with this pattern
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_match
+    = note: `-D clippy::collapsible-match` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_match)]`
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/client.rs:441:13
+    |
+441 |             serde_json::json!({ "name": name, "arguments": arguments }),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: `-D clippy::disallowed-methods` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::disallowed_methods)]`
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `serde_json::json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/client.rs:441:13
+    |
+441 |             serde_json::json!({ "name": name, "arguments": arguments }),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `serde_json::json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/client.rs:474:13
+    |
+474 |             serde_json::json!({ "name": capability_id, "arguments": arguments }),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `serde_json::json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/server.rs:128:22
+    |
+128 |                 Some(json!({"status": "denied_by_broker"})),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/server.rs:132:22
+    |
+132 |                 Some(json!({"status": ERR_BROKER_UNAVAILABLE})),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/server.rs:150:26
+    |
+150 |                     Some(json!({"status": "unknown_or_gated_tool"})),
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/server.rs:163:17
+    |
+163 |                 json!({"name": request.name, "arguments": arguments}),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: use of a disallowed method `core::result::Result::unwrap`
+   --> crates/maho-browser-mcp/src/server.rs:470:14
+    |
+470 |         Some(json!({"status": "invalid_browser_discovery"})),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: panics on Err; use unwrap_or_else / expect / ? — see maho-ffi AGENTS.md
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#disallowed_methods
+    = note: this error originates in the macro `$crate::json_internal` which comes from the expansion of the macro `json` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: could not compile `maho-browser-mcp` (lib) due to 11 previous errors
+exit: 101

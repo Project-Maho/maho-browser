@@ -1,0 +1,25 @@
+diff --git a/chrome/browser/ui/views/frame/browser_widget.cc b/chrome/browser/ui/views/frame/browser_widget.cc
+index fc67c7daee8d91d11f3ce3ccdfbbab19a0961aaa..3f025a6e7d620d613c14b327ded7c657fa48c308 100644
+--- a/chrome/browser/ui/views/frame/browser_widget.cc
++++ b/chrome/browser/ui/views/frame/browser_widget.cc
+@@ -27,6 +27,7 @@
+ #include "chrome/browser/ui/views/frame/browser_native_widget_factory.h"
+ #include "chrome/browser/ui/views/frame/browser_root_view.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "maho/browser/ui/theme/maho_color_mixer.h"
+ #include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+ #include "chrome/browser/ui/views/frame/system_menu_model_builder.h"
+ #include "chrome/browser/ui/views/frame/top_container_view.h"
+@@ -471,6 +472,12 @@ ui::ColorProviderKey BrowserWidget::GetColorProviderKey() const {
+     }
+   }();
+ 
++  // Maho: tag Incognito windows for private semantic color recipes without
++  // changing the Chromium/ThemeService-controlled color mode.
++  if (IsIncognitoBrowser()) {
++    key.app_controller = GetMahoOtrSentinel();
++  }
++
+   // user_color.
+   // Device theme retains the user_color from `Widget`.
+   if (!theme_service->UsingDeviceTheme()) {

@@ -1,0 +1,229 @@
+diff --git c/chrome/browser/chrome_content_browser_client.cc w/chrome/browser/chrome_content_browser_client.cc
+index 033f22b4146513c92f89eaa26bffc0366d7c9f19..d8d7eb66b4dcb2e0e248f0bd8c9dc42617ff114d 100644
+--- c/chrome/browser/chrome_content_browser_client.cc
++++ w/chrome/browser/chrome_content_browser_client.cc
+@@ -171,6 +171,9 @@
+ #include "chrome/browser/safe_browsing/url_checker_delegate_impl.h"
+ #include "chrome/browser/search/search.h"
+ #include "chrome/browser/sensor/chrome_sensor_delegate.h"
++#include "content/public/browser/browser_url_handler.h"
++#include "maho/browser/maho_url_scheme.h"
++#include "chrome/browser/search_engines/template_url_service_factory.h"
+ #include "chrome/browser/serial/chrome_serial_delegate.h"
+ #include "chrome/browser/service_worker/service_worker_prewarm.h"
+ #include "chrome/browser/service_worker/service_worker_synthetic_response.h"
+@@ -238,6 +241,8 @@
+ #include "chrome/common/url_constants.h"
+ #include "chrome/common/webui_url_constants.h"
+ #include "chrome/common/webui_url_utils.h"
++#include "chrome/grit/maho_common_resources_map.h"
++#include "chrome/grit/generated_resources.h"
+ #include "chrome/installer/util/google_update_settings.h"
+ #include "components/autofill/core/common/autofill_features.h"
+ #include "components/autofill/core/common/autofill_switches.h"
+@@ -803,6 +808,16 @@
+ 
+ #include "base/win/windows_h_disallowed.h"
+ 
++#include "maho/browser/maho_core_holder.h"
++#include "maho/browser/net/maho_ad_block_tab_helper.h"
++#include "maho/browser/net/maho_ad_block_request_util.h"
++#include "maho/browser/net/maho_ad_block_throttle.h"
++#include "maho/browser/net/maho_proxying_url_loader_factory.h"
++#include "maho/browser/net/maho_webstore_ua_throttle.h"
++#include "maho/browser/net/maho_atc_navigation_throttle.h"
++#include "maho/browser/net/maho_atc_state.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++
+ using blink::mojom::EffectiveConnectionType;
+ using blink::web_pref::WebPreferences;
+ using content::BrowserThread;
+@@ -847,6 +862,39 @@ constexpr char kSecurePaymentConfirmationKeychainAccessGroup[] =
+ // ShouldEnableStrictSiteIsolation().
+ bool g_disable_advanced_protection_caching_for_tests = false;
+ 
++// Rewrites stray chrome://newtab navigations (those that reach
++// BrowserURLHandlerCreated after policy and extra_parts handlers have
++// already had a chance to intercept) to about:blank so that Maho never
++// commits a chrome://newtab WebUI frame.
++bool MahoRewriteNewTabToBlank(GURL* url,
++                              content::BrowserContext* /*context*/) {
++  if (url->SchemeIs("chrome") && url->host() == "newtab") {
++    *url = GURL("about:blank");
++    return true;
++  }
++  return false;
++}
++
++// Maps only approved public Maho aliases to their existing Chrome WebUI
++// origins. Returning false leaves malformed, unlisted, and direct legacy
++// chrome://maho-* URLs untouched.
++bool MahoHandleUrlAlias(GURL* url,
++                        content::BrowserContext* /*context*/) {
++  return maho::MapMahoUrlAliasToActualUrl(*url, url);
++}
++
++// BrowserURLHandler calls this only after MahoHandleUrlAlias matched the
++// original public alias. Always claim that reverse rewrite: an approved
++// final WebUI destination becomes its alias, while any external or
++// unlisted final URL is intentionally retained to clear a stale alias.
++bool MahoHandleUrlAliasReverse(GURL* url,
++                               content::BrowserContext* /*context*/) {
++  GURL alias;
++  if (maho::ResolveActualUrlToMahoAlias(*url, &alias)) {
++    *url = alias;
++  }
++  return true;
++}
+ #if BUILDFLAG(ENABLE_REQUEST_HEADER_INTEGRITY)
+ // Kill-switch for the request integrity headers support for prefetches
+ // initiated by `content::PrefetchContainer`.
+@@ -2328,6 +2376,11 @@ bool ChromeContentBrowserClient::HasWebRequestAPIProxy(
+ #endif
+ }
+ 
++std::vector<base::span<const webui::ResourcePath>>
++ChromeContentBrowserClient::GetAdditionalWebUIResourcePaths() {
++  return {kMahoCommonResources};
++}
++
+ bool ChromeContentBrowserClient::CanCommitURL(
+     content::RenderProcessHost* process_host,
+     const GURL& url) {
+@@ -3995,20 +4048,23 @@ GetPreferredColorScheme(const WebPreferences& web_prefs,
+     preferred_color_scheme = ToBlinkPreferredColorScheme(
+         ui::NativeTheme::GetInstanceForWeb()->preferred_color_scheme());
+   } else {
+-    // WebUI and regular pages follow the browser theme color mode, provided by
+-    // the color provider.
+-    preferred_color_scheme =
+-        web_contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kLight
+-            ? blink::mojom::PreferredColorScheme::kLight
+-            : blink::mojom::PreferredColorScheme::kDark;
++    // Maho: web page rendering follows Browser theme, not Space theme.
++    Profile* maho_profile = Profile::FromBrowserContext(web_contents->GetBrowserContext());
++    auto* theme_service = ThemeServiceFactory::GetForProfile(maho_profile);
++    const auto scheme = theme_service ? theme_service->GetBrowserColorScheme()
++                                      : ThemeService::BrowserColorScheme::kSystem;
++    bool prefers_dark = false;
++    if (scheme == ThemeService::BrowserColorScheme::kSystem) {
++      prefers_dark = ui::NativeTheme::GetInstanceForNativeUi()->preferred_color_scheme() ==
++                     ui::NativeTheme::PreferredColorScheme::kDark;
++    } else {
++      prefers_dark = (scheme == ThemeService::BrowserColorScheme::kDark);
++    }
++    preferred_color_scheme = prefers_dark ? blink::mojom::PreferredColorScheme::kDark
++                                          : blink::mojom::PreferredColorScheme::kLight;
+   }
+-  // Update the preferred root scrollbar color based on the lightness level of
+-  // the toolbar's color.
+-  preferred_root_scrollbar_color_scheme =
+-      color_utils::IsDark(
+-          web_contents->GetColorProvider().GetColor(kColorToolbar))
+-          ? blink::mojom::PreferredColorScheme::kDark
+-          : blink::mojom::PreferredColorScheme::kLight;
++  // Maho: scrollbar matches the page color scheme.
++  preferred_root_scrollbar_color_scheme = preferred_color_scheme;
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_GUEST_VIEW)
+@@ -5001,6 +5057,14 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+   }
+ 
+   // Handler to rewrite chrome://about and chrome://sync URLs.
++  // Maho: rewrite stray chrome://newtab to about:blank before the
++  // upstream NTP rewriter runs, so Maho never commits a NTP WebUI frame.
++  handler->AddHandlerPair(&MahoRewriteNewTabToBlank,
++                          BrowserURLHandler::null_handler());
++  // Preserve maho:// aliases as virtual URLs while committing only the
++  // approved existing chrome://maho-* WebUI origins.
++  handler->AddHandlerPair(&MahoHandleUrlAlias,
++                          &MahoHandleUrlAliasReverse);
+   handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,
+                           BrowserURLHandler::null_handler());
+ 
+@@ -5512,6 +5576,26 @@ void ChromeContentBrowserClient::RemovePresentationObserver(
+ void ChromeContentBrowserClient::CreateThrottlesForNavigation(
+     content::NavigationThrottleRegistry& registry) {
+   CreateAndAddChromeThrottlesForNavigation(registry);
++
++  // Maho ATC + Peek: keep one throttle decision path for top-level
++  // navigations that bypass Browser::OpenURLFromTab. ATC keeps its existing
++  // eligibility; Peek additionally handles eligible same-tab renderer link
++  // clicks even when no ATC rules are enabled.
++  content::WebContents* web_contents =
++      registry.GetNavigationHandle().GetWebContents();
++  Profile* profile =
++      web_contents
++          ? Profile::FromBrowserContext(web_contents->GetBrowserContext())
++          : nullptr;
++  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
++  const bool peek_link_routing_enabled =
++      prefs && prefs->GetBoolean(maho::sidebar_prefs::kPeekEnabled) &&
++      prefs->GetBoolean(maho::sidebar_prefs::kPeekLinkRoutingEnabled);
++  if (maho::MahoAtcState::HasEnabledRules() ||
++      peek_link_routing_enabled) {
++    registry.AddThrottle(
++        std::make_unique<maho::MahoAtcNavigationThrottle>(registry));
++  }
+ }
+ 
+ void ChromeContentBrowserClient::CreateThrottlesForCommitWithoutUrlLoader(
+@@ -6031,6 +6115,41 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
+     result.push_back(std::move(contextual_tasks_throttle));
+   }
+ 
++  if (maho::GetCore()) {
++    base::RepeatingCallback<void(const network::ResourceRequest&)> on_blocked;
++    content::WebContents* wc = wc_getter ? wc_getter.Run() : nullptr;
++    if (wc) {
++      MahoAdBlockTabHelper::CreateForWebContents(wc);
++      MahoAdBlockTabHelper* helper =
++          MahoAdBlockTabHelper::FromWebContents(wc);
++      if (helper) {
++        content::GlobalRenderFrameHostId page_id;
++        // If no primary main frame is available, page_id stays invalid
++        // and RecordBlockedRequest ignores the callback conservatively.
++        if (content::RenderFrameHost* main_frame = wc->GetPrimaryMainFrame()) {
++          page_id = main_frame->GetGlobalId();
++        }
++        on_blocked = base::BindRepeating(
++            [](base::WeakPtr<MahoAdBlockTabHelper> weak,
++               content::GlobalRenderFrameHostId page_id,
++               const network::ResourceRequest& request) {
++              if (weak) {
++                MahoBlockedRequestInfo info;
++                info.page_id = page_id;
++                info.destination = request.destination;
++                info.is_outermost_main_frame = request.is_outermost_main_frame;
++                info.request_type = maho::MapRequestToFilterType(request);
++                weak->RecordBlockedRequest(info);
++              }
++            },
++            helper->GetWeakPtr(), page_id);
++      }
++    }
++    result.push_back(
++        std::make_unique<MahoAdBlockThrottle>(std::move(on_blocked)));
++  }
++  result.push_back(std::make_unique<MahoWebStoreUAThrottle>());
++
+   return result;
+ }
+ 
+@@ -6668,6 +6787,15 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
+ #endif  // BUILDFLAG (ENABLE_EXTENSIONS_CORE)
+ #endif  // BUILDFLAG(ENABLE_GUEST_VIEW)
+ 
++  if (type == URLLoaderFactoryType::kDocumentSubResource ||
++      type == URLLoaderFactoryType::kWorkerMainResource ||
++      type == URLLoaderFactoryType::kWorkerSubResource ||
++      type == URLLoaderFactoryType::kServiceWorkerScript ||
++      type == URLLoaderFactoryType::kServiceWorkerSubResource ||
++      type == URLLoaderFactoryType::kPrefetch) {
++    MahoProxyingURLLoaderFactory::MaybeProxyRequest(frame, factory_builder);
++  }
++
+   MaybeSetTargetNetwork(GetBoundNetworkFromRenderFrameHost(frame),
+                         factory_builder, is_for_network_service);
+ 

@@ -1,0 +1,150 @@
+import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
+
+assert(!is_android)
+
+import("//maho/build/templates/tailwind_css.gni")
+
+tailwind_css("build_tailwind") {
+  input = "react/theme/app.css"
+  output = "$target_gen_dir/app.generated.css"
+  sources = [
+    "../maho_common/react/theme/tokens.css",
+    "../maho_common/react/ui/alert.tsx",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/label.tsx",
+    "../maho_common/react/ui/plan-picker.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "react/app.tsx",
+    "react/pages/appearance.tsx",
+    "react/pages/completion.tsx",
+    "react/pages/essentials.tsx",
+    "react/pages/import-data.tsx",
+    "react/pages/password-setup.tsx",
+    "react/pages/password-setup-fields.tsx",
+    "react/pages/plan-select.tsx",
+    "react/pages/search-engine.tsx",
+    "react/pages/space-theme.tsx",
+    "react/pages/essentials-icons-helper.ts",
+    "react/pages/sync-key-backup.tsx",
+    "react/pages/welcome-splash.tsx",
+    "react/pages/ai-setup.tsx",
+    "react/theme/app.css",
+  ]
+}
+
+action("bundle_react") {
+  script = "//third_party/node/node.py"
+  inputs = [
+    "//third_party/node/node.py",
+    "../maho_common/react/icons/lucide.ts",
+    "../maho_common/react/lib/utils.ts",
+    "../maho_common/react/store_utils.ts",
+    "../maho_common/react/ui/alert.tsx",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/label.tsx",
+    "../maho_common/react/ui/plan-picker.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "maho_welcome.mojom-webui.js.d.ts",
+    "react/app.tsx",
+    "react/pages/welcome-splash.tsx",
+    "react/pages/ai-setup.tsx",
+    "react/pages/appearance.tsx",
+    "react/pages/import-data.tsx",
+    "react/pages/password-setup.tsx",
+    "react/pages/password-setup-fields.tsx",
+    "react/pages/plan-select.tsx",
+    "react/pages/search-engine.tsx",
+    "react/pages/essentials.tsx",
+    "react/pages/essentials-icons-helper.ts",
+    "react/pages/space-theme.tsx",
+    "react/pages/sync-key-backup.tsx",
+    "react/pages/completion.tsx",
+    "react/store.ts",
+    "react/tsconfig.json",
+    "react/types.ts",
+    "bundle_react.mjs",
+  ]
+  outputs = [ "$target_gen_dir/app_bundle.js" ]
+  args = [
+    rebase_path("//maho/browser/resources/maho_welcome/bundle_react.mjs", root_build_dir),
+    rebase_path(".", root_build_dir),
+    rebase_path("$target_gen_dir/app_bundle.js", root_build_dir),
+  ]
+}
+
+generate_grd("bundle_grdp") {
+  grd_prefix = "maho_welcome_bundle"
+  out_grd = "$target_gen_dir/maho_welcome_bundle.grdp"
+  input_files = [
+    "app_bundle.js",
+    "app.generated.css",
+  ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [
+    ":bundle_react",
+    ":build_tailwind",
+  ]
+}
+
+build_webui("build") {
+  grd_prefix = "maho_welcome"
+
+  static_files = [
+    "welcome.html",
+    "icons/essentials/obsidian.png",
+    "icons/essentials/discord.png",
+    "icons/essentials/trello.png",
+    "icons/essentials/slack.png",
+    "icons/essentials/github.png",
+    "icons/essentials/github.svg",
+    "icons/essentials/tuta.png",
+    "icons/essentials/notion.png",
+    "icons/essentials/calendar.png",
+    "icons/essentials/figma.png",
+    "icons/search-engines/google.svg",
+    "icons/search-engines/bing.svg",
+    "icons/search-engines/naver.svg",
+    "icons/search-engines/daum.svg",
+    "icons/search-engines/coccoc.svg",
+    "icons/search-engines/duckduckgo.png",
+    "icons/onboarding/browsers/arc.png",
+    "icons/onboarding/browsers/brave.png",
+    "icons/onboarding/browsers/chrome.png",
+    "icons/onboarding/browsers/edge.png",
+    "icons/onboarding/browsers/firefox.png",
+    "icons/onboarding/browsers/opera.png",
+    "icons/onboarding/browsers/safari.png",
+    "icons/onboarding/browsers/zen.png",
+    "icons/password-providers/onepassword.png",
+    "icons/password-providers/bitwarden.png",
+    "icons/onboarding/globe.svg",
+    "icons/onboarding/maho-logo.png",
+  ]
+
+  ts_files = [ "app.ts" ]
+
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+
+  webui_context_type = "trusted"
+
+  mojo_files_deps = [
+    "//maho/browser/ui/webui/maho_settings:mojo_bindings_ts__generator",
+    "//maho/browser/ui/webui/maho_welcome:mojo_bindings_ts__generator",
+  ]
+  mojo_files = [
+    "$root_gen_dir/maho/browser/ui/webui/maho_settings/maho_settings.mojom-webui.ts",
+    "$root_gen_dir/maho/browser/ui/webui/maho_welcome/maho_welcome.mojom-webui.ts",
+  ]
+
+  extra_grdp_deps = [ ":bundle_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_welcome_bundle.grdp" ]
+}

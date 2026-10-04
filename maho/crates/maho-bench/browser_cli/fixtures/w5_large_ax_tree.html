@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W5 Large Accessibility Tree Benchmark</title>
+  <style>
+    body { font-family: sans-serif; margin: 1rem; }
+    .sticky-header { position: sticky; top: 0; background: #fff; padding: 1rem; border-bottom: 2px solid #ccc; z-index: 10; }
+    .controls { display: flex; gap: 0.5rem; align-items: center; }
+    .grid-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.5rem; margin-top: 1rem; }
+    .card { border: 1px solid #ddd; padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+    .card-title { font-weight: bold; margin-bottom: 0.25rem; }
+  </style>
+</head>
+<body>
+  <header class="sticky-header">
+    <h1>W5: Large Accessibility Tree (3000+ Nodes)</h1>
+    <div class="controls">
+      <label for="large-tree-search">Search Documents:</label>
+      <input type="search" id="large-tree-search" placeholder="Type keyword..." />
+      <select id="large-tree-filter">
+        <option value="all">All Records</option>
+        <option value="critical">Critical Only</option>
+        <option value="archived">Archived</option>
+      </select>
+      <button id="large-tree-action-btn">Filter Archive</button>
+      <span id="large-tree-summary" role="status">Showing 500 documents (3500 tree nodes)</span>
+    </div>
+  </header>
+
+  <main id="large-tree-container" class="grid-container">
+    <!-- Generated static document nodes for ax tree benchmarking -->
+    <div id="doc-list-placeholder"></div>
+  </main>
+
+  <script>
+    // Build 500 cards (7 nodes each = 3500 nodes)
+    const container = document.getElementById('large-tree-container');
+    const fragment = document.createDocumentFragment();
+    for (let i = 1; i <= 500; i++) {
+      const section = document.createElement('section');
+      section.className = 'card';
+      section.id = 'entry-doc-' + i;
+      
+      const h3 = document.createElement('h3');
+      h3.className = 'card-title';
+      h3.textContent = 'Archive Record #' + i;
+      
+      const p1 = document.createElement('p');
+      p1.textContent = 'System log snapshot generated at timestamp ' + (1700000000 + i * 10);
+      
+      const p2 = document.createElement('p');
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = (i % 5 === 0) ? 'Critical' : 'Standard';
+      p2.appendChild(tag);
+      
+      const footer = document.createElement('footer');
+      const time = document.createElement('time');
+      time.textContent = '2026-08-25';
+      footer.appendChild(time);
+
+      section.appendChild(h3);
+      section.appendChild(p1);
+      section.appendChild(p2);
+      section.appendChild(footer);
+      fragment.appendChild(section);
+    }
+    container.appendChild(fragment);
+
+    document.getElementById('large-tree-action-btn').addEventListener('click', () => {
+      const query = document.getElementById('large-tree-search').value;
+      const filter = document.getElementById('large-tree-filter').value;
+      document.getElementById('large-tree-summary').textContent = 'Filter applied: "' + query + '" [' + filter + '] - 500 matches';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maho WebUI Dev</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #111113;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 80px 40px;
+    }
+    h1 {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+    .subtitle {
+      color: #888;
+      font-size: 15px;
+      margin-bottom: 48px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+      max-width: 1200px;
+    }
+    .card {
+      background: #1c1c1e;
+      border: 1px solid #2a2a2c;
+      border-radius: 12px;
+      padding: 24px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .card:hover {
+      border-color: #5B9CF6;
+      background: #1e1e22;
+    }
+    .card-name {
+      font-size: 17px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    .card-url {
+      font-size: 12px;
+      font-family: 'SF Mono', ui-monospace, monospace;
+      color: #5B9CF6;
+      margin-bottom: 12px;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: #888;
+      line-height: 1.5;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      background: #2a2a2c;
+      color: #666;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-top: 12px;
+    }
+    .badge.ready { background: #1a3a1a; color: #4ade80; }
+  </style>
+</head>
+<body>
+  <h1>Maho WebUI</h1>
+  <p class="subtitle">Standalone development environment for chrome://maho-* pages</p>
+  <div class="grid">
+    <a class="card" href="/sidebar/">
+      <div class="card-name">Sidebar</div>
+      <div class="card-url">chrome://maho-sidebar</div>
+      <div class="card-desc">Tab management sidebar panel with spaces, search, and tab grouping.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/ai/">
+      <div class="card-name">AI Panel</div>
+      <div class="card-url">chrome://maho-ai</div>
+      <div class="card-desc">AI chat assistant for page summarization, Q&amp;A, and content generation.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/settings/">
+      <div class="card-name">Settings</div>
+      <div class="card-url">chrome://maho-settings</div>
+      <div class="card-desc">Browser settings and preferences with sectioned navigation.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/notes/">
+      <div class="card-name">Notes</div>
+      <div class="card-url">chrome://maho-notes</div>
+      <div class="card-desc">Page-linked notes manager with tagging and rich text.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/boost/">
+      <div class="card-name">Boost</div>
+      <div class="card-url">chrome://maho-boost</div>
+      <div class="card-desc">Per-site CSS/JS customizations and user styles.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/easel/">
+      <div class="card-name">Easel</div>
+      <div class="card-url">chrome://maho-easel</div>
+      <div class="card-desc">Visual canvas for screenshot annotations and visual bookmarks.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/spaces/">
+      <div class="card-name">Spaces</div>
+      <div class="card-url">chrome://maho-spaces</div>
+      <div class="card-desc">Space management, creation, and customization.</div>
+      <span class="badge ready">ready</span>
+    </a>
+    <a class="card" href="/test/">
+      <div class="card-name">Test</div>
+      <div class="card-url">chrome://maho-test</div>
+      <div class="card-desc">Gate G1 verification page — minimal WebUI sanity check.</div>
+      <span class="badge ready">ready</span>
+    </a>
+
+  </div>
+</body>
+</html>

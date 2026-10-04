@@ -1,0 +1,32 @@
+diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+index 4e3655bf9bc90dde83e433d1c13c595474868be0..568f9062a4a23c08842cee4d674c537e53adbc59 100644
+--- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -275,6 +275,13 @@
+ #include "chrome/browser/webauthn/enclave_manager_factory.h"
+ #include "chrome/browser/webauthn/immediate_request_rate_limiter_factory.h"
+ #include "chrome/browser/webdata_services/web_data_service_factory.h"
++#include "maho/browser/mail_helper/maho_mail_service_factory.h"
++#include "maho/browser/extensions/maho_extension_state_bridge.h"
++#include "maho/browser/ai/maho_artifact_registry.h"
++#include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
++#include "maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h"
++#include "maho/browser/net/maho_content_blocker_update_service_factory.h"
++#include "maho/browser/net/maho_shield_site_state_factory.h"
+ #include "chrome/browser/webid/federated_identity_api_permission_context_factory.h"
+ #include "chrome/browser/webid/federated_identity_auto_reauthn_permission_context_factory.h"
+ #include "chrome/browser/webid/federated_identity_permission_context_factory.h"
+@@ -1503,6 +1510,13 @@ void ChromeBrowserMainExtraPartsProfiles::
+ #endif
+ 
+   WebDataServiceFactory::GetInstance();
++  maho::MahoMailServiceFactory::GetInstance();
++  maho::EnsureMahoExtensionStateBridgeFactoryBuilt();
++  maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();
++  maho::MahoDownloadBridgeServiceFactory::GetInstance();
++  maho::MahoNowPlayingCoordinatorFactory::GetInstance();
++  maho::MahoContentBlockerUpdateServiceFactory::GetInstance();
++  maho::MahoShieldSiteStateFactory::GetInstance();
+   webrtc_event_logging::WebRtcEventLogManagerKeyedServiceFactory::GetInstance();
+ }
+ 

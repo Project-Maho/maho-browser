@@ -1,0 +1,53 @@
+diff --git a/chrome/browser/ui/views/frame/contents_container_view.h b/chrome/browser/ui/views/frame/contents_container_view.h
+index 99587c21fcc803ef04815faa05ee1b99b38ed23a..4eadee04b89b082d586abf3e62897a0023598ce1 100644
+--- a/chrome/browser/ui/views/frame/contents_container_view.h
++++ b/chrome/browser/ui/views/frame/contents_container_view.h
+@@ -33,6 +33,10 @@ namespace glic {
+ class ContextSharingBorderView;
+ }  // namespace glic
+ 
++namespace maho {
++class MahoContentsHeaderView;
++}  // namespace maho
++
+ namespace new_tab_footer {
+ class NewTabFooterWebView;
+ }  // namespace new_tab_footer
+@@ -73,6 +77,9 @@ class ContentsContainerView : public views::View,
+ 
+   ContentsWebView* contents_view() { return contents_view_; }
+   MultiContentsViewMiniToolbar* mini_toolbar() { return mini_toolbar_; }
++  maho::MahoContentsHeaderView* maho_contents_header() {
++    return maho_contents_header_;
++  }
+   ScrimView* contents_scrim_view() { return contents_scrim_view_; }
+   views::WebView* devtools_web_view() { return devtools_web_view_; }
+   ScrimView* devtools_scrim_view() { return devtools_scrim_view_; }
+@@ -120,6 +127,8 @@ class ContentsContainerView : public views::View,
+                               bool is_active,
+                               bool is_highlighted);
+ 
++  void SetMahoAiPanelAdjacent(bool adjacent);
++
+   void ShowCaptureContentsBorder();
+   void HideCaptureContentsBorder();
+   void SetCaptureContentsBorderLocation(
+@@ -160,6 +169,7 @@ class ContentsContainerView : public views::View,
+       const views::SizeBounds& size_bounds) const override;
+ 
+   bool is_in_split_ = false;
++  bool maho_ai_panel_adjacent_ = false;
+ 
+   raw_ptr<BrowserView> browser_view_ = nullptr;
+   raw_ptr<ContentsWebView> contents_view_ = nullptr;
+@@ -209,6 +219,10 @@ class ContentsContainerView : public views::View,
+ 
+   raw_ptr<MultiContentsViewMiniToolbar> mini_toolbar_ = nullptr;
+ 
++  // Maho per-pane header (origin, navigation and page utilities) laid out
++  // as the top strip of this container.
++  raw_ptr<maho::MahoContentsHeaderView> maho_contents_header_ = nullptr;
++
+   raw_ptr<ContentsContainerOutline> container_outline_ = nullptr;
+ 
+   raw_ptr<ContentsCaptureBorderView> capture_contents_border_view_ = nullptr;

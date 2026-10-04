@@ -1,0 +1,21 @@
+diff --git c/ui/webui/resources/js/parse_html_subset.ts w/ui/webui/resources/js/parse_html_subset.ts
+index 504665e8cb1f8d19aaa9678eece4f00bb0845db5..87422a72b3a91ab1fb6adef68b1f8828d7e19b0d 100644
+--- c/ui/webui/resources/js/parse_html_subset.ts
++++ w/ui/webui/resources/js/parse_html_subset.ts
+@@ -99,6 +99,7 @@ const allowedOptionalAttributes: Map<string, AllowFunction> = new Map([
+     },
+   ],
+   ['tabindex', allowAttribute],
++  ['rel', allowAttribute],
+   ['aria-description', allowAttribute],
+   ['aria-hidden', allowAttribute],
+   ['aria-label', allowAttribute],
+@@ -110,7 +111,7 @@ const allowedTags: Set<string> = new Set(
+     ['A', 'B', 'I', 'BR', 'DIV', 'EM', 'KBD', 'P', 'PRE', 'SPAN', 'STRONG']);
+ 
+ /** Allow-list of optional tag names in parseHtmlSubset. */
+-const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL']);
++const allowedOptionalTags: Set<string> = new Set(['IMG', 'LI', 'UL', 'OL', 'CODE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'DEL']);
+ 
+ /**
+  * This policy maps a given string to a `TrustedHTML` object

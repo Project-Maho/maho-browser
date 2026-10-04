@@ -1,0 +1,38 @@
+diff --git a/components/autofill_strings.grdp b/components/autofill_strings.grdp
+index 383e9ff6dd7d9e7797bd75a7e8fdfbc61a9053ef..c230d3e05ed08dec55e1346a9e44210aaf28c2ea 100644
+--- a/components/autofill_strings.grdp
++++ b/components/autofill_strings.grdp
+@@ -67,13 +67,13 @@
+   </if>
+   <if expr="not _google_chrome">
+     <message name="IDS_AUTOFILL_DELETE_AUTOCOMPLETE_SUGGESTION_CONFIRMATION_BODY" desc="Text in a dialog to confirm that the user wants to delete an autocomplete form history suggestion.">
+-      Remove form suggestion from Chromium?
++      Remove form suggestion from Maho?
+     </message>
+     <message name="IDS_AUTOFILL_DELETE_CREDIT_CARD_SUGGESTION_CONFIRMATION_BODY" desc="Text in a dialog to confirm that the user wants to delete a credit card from Autofill.">
+-      Remove credit card from Chromium?
++      Remove credit card from Maho?
+     </message>
+     <message name="IDS_AUTOFILL_DELETE_PROFILE_SUGGESTION_CONFIRMATION_BODY" desc="Text in a dialog to confirm that the user wants to delete an address from Autofill.">
+-      Remove address from Chromium?
++      Remove address from Maho?
+     </message>
+   </if>
+   <message name="IDS_AUTOFILL_REMOVE_HOME_PROFILE_SUGGESTION_CONFIRMATION_TITLE" desc="Title in a dialog to confirm that the user wants to delete their Home address from Autofill." formatter_data="android_java">
+@@ -1516,13 +1516,13 @@
+   </if>
+   <if expr="not _google_chrome">
+     <message name="IDS_SETTINGS_AUTOFILL_AI_DESCRIPTION" desc="The description of the enhanced autofill button on chrome://settings/autofill." formatter_data="android_java">
+-      Chromium understands forms better and can autofill them faster for you
++      Maho understands forms better and can autofill them faster for you
+     </message>
+     <message name="IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL" desc="The description of the setting. By 'understand forms better', we mean that when a user submits a form on a website, and if they're using enhanced autofill, this feature can offer to save the user's submitted info. When Chromium saves that info, we save the submitted values and consider the page context.">
+-      Chromium understands forms better and can autofill them faster for you
++      Maho understands forms better and can autofill them faster for you
+     </message>
+     <message name="IDS_SETTINGS_AUTOFILL_AI_WHEN_ON_CAN_FILL_DIFFICULT_FIELDS" desc="Bullet point that appears beneath the 'When on' title when seeing the Enhanced Autofill description page. This string explains one of the advantages users will get from enabling the feature and serves as a way to incentivize the user to do so." formatter_data="android_java">
+-      Chromium can autofill difficult fields that standard autofill might miss
++      Maho can autofill difficult fields that standard autofill might miss
+     </message>
+   </if>
+ 

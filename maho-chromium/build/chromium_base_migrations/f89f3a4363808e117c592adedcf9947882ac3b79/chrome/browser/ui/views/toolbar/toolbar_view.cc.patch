@@ -1,0 +1,30 @@
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -281,9 +281,9 @@
+   // BrowserView::IsMahoArcLayoutActive()). Like upstream, the choice is
+   // made once per window; a later sidebar-layout pref flip only changes
+   // header visibility, never the registered provider.
+-  if (browser_->is_type_normal() &&
++  if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) &&
+       maho::sidebar_prefs::IsSidebarLayoutEnabled(
+-          browser_->profile()->GetPrefs())) {
++          browser_->GetProfile()->GetPrefs())) {
+     scoped_unowned_user_data_.reset();
+   }
+ #endif
+@@ -565,7 +565,6 @@
+   }
+ 
+   // Suppressed for Maho sidebar-bottom media controls
+-  }
+ 
+   if (glic::GlicEnabling::IsProfileEligible(browser_view_->GetProfile())) {
+     if (base::FeatureList::IsEnabled(features::kAiOverlayDialog) &&
+@@ -1440,7 +1439,6 @@
+       if (overflow_button_ &&
+           browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
+           !overflow_button_->GetVisible()) {
+-          !overflow_button_->GetVisible()) {
+         const int default_margin =
+             GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
+         size.Enlarge(

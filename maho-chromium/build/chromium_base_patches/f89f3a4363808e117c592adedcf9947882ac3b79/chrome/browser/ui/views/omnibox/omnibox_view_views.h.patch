@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/views/omnibox/omnibox_view_views.h w/chrome/browser/ui/views/omnibox/omnibox_view_views.h
+index 1063721351218438d3b219289db6d230c29920a0..91aab7150dcbd47ed622549ec3d11b02b34a357a 100644
+--- c/chrome/browser/ui/views/omnibox/omnibox_view_views.h
++++ w/chrome/browser/ui/views/omnibox/omnibox_view_views.h
+@@ -185,6 +185,7 @@ class OmniboxViewViews
+   bool OnMousePressed(const ui::MouseEvent& event) override;
+   bool OnMouseDragged(const ui::MouseEvent& event) override;
+   void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnPaint(gfx::Canvas* canvas) override;
+   void ExecuteCommand(int command_id, int event_flags) override;
+   void OnInputMethodChanged() override;

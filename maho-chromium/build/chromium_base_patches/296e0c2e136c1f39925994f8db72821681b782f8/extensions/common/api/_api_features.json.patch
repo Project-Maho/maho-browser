@@ -1,0 +1,46 @@
+diff --git a/extensions/common/api/_api_features.json b/extensions/common/api/_api_features.json
+index e76cdc4db8a03eae0db67d47181d8c97c7785533..6bf786ea1be69df7f6497759bf2435df5aea25e5 100644
+--- a/extensions/common/api/_api_features.json
++++ b/extensions/common/api/_api_features.json
+@@ -266,6 +266,7 @@
+         "chrome://glic-fre/*",
+         "chrome://graduation/*",
+         "chrome://home/*",
++        "chrome://maho-settings/*",
+         "chrome://chrome-signin/*",
+         "chrome://mobilesetup/*",
+         "chrome://oobe/*",
+@@ -904,15 +905,16 @@
+       "chrome://add-supervision/*",
+       "chrome://chrome-signin/*",
+       "chrome://contextual-tasks/*",
+-      "chrome://glic/*",
+-      "chrome://glic-fre/*",
+-      "chrome://graduation/*",
+-      "chrome://home/*",
+-      "chrome://mobilesetup/*",
+-      "chrome://oobe/*",
+-      "chrome://os-settings/*",
+-      "chrome://parent-access/*",
+-      "chrome://password-change/*",
++        "chrome://glic/*",
++        "chrome://glic-fre/*",
++        "chrome://graduation/*",
++        "chrome://home/*",
++        "chrome://maho-settings/*",
++        "chrome://mobilesetup/*",
++        "chrome://oobe/*",
++        "chrome://os-settings/*",
++        "chrome://parent-access/*",
++        "chrome://password-change/*",
+       "chrome://lock-reauth/*"
+     ]
+   }, {
+@@ -954,6 +956,7 @@
+       "chrome://glic-fre/*",
+       "chrome://graduation/*",
+       "chrome://home/*",
++      "chrome://maho-settings/*",
+       "chrome://mobilesetup/*",
+       "chrome://oobe/*",
+       "chrome://os-settings/*",

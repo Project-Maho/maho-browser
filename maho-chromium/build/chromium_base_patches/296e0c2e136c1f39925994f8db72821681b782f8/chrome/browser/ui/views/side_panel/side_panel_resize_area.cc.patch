@@ -1,0 +1,42 @@
+diff --git a/chrome/browser/ui/views/side_panel/side_panel_resize_area.cc b/chrome/browser/ui/views/side_panel/side_panel_resize_area.cc
+index b7663b7b03f9b2e7921117228fbf6162fb3a6bc4..6d86ab8e90cafad95100acc2f2e579821849671c 100644
+--- a/chrome/browser/ui/views/side_panel/side_panel_resize_area.cc
++++ b/chrome/browser/ui/views/side_panel/side_panel_resize_area.cc
+@@ -17,6 +17,7 @@
+ #include "ui/gfx/geometry/size.h"
+ #include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/background.h"
++#include "ui/views/border.h"
+ #include "ui/views/controls/focus_ring.h"
+ #include "ui/views/controls/image_view.h"
+ #include "ui/views/controls/resize_area.h"
+@@ -54,6 +55,8 @@ SidePanelResizeArea::SidePanelResizeArea(SidePanel* side_panel)
+   SetProperty(views::kElementIdentifierKey, kSidePanelResizeAreaElementId);
+   SetPaintToLayer();
+   layer()->SetFillsBoundsOpaquely(false);
++  SetBorder(CreateSolidSidedBorder(
++      gfx::Insets::TLBR(0, 1, 0, 0), kColorSidePanelContentAreaSeparator));
+ 
+   SetFocusBehavior(FocusBehavior::ALWAYS);
+ 
+@@ -147,13 +150,18 @@ void SidePanelResizeArea::Layout(PassKey) {
+   gfx::Rect contents_bounds = parent()->GetContentsBounds();
+ 
+   gfx::Rect resize_bounds;
++  const int maho_ai_resize_width = side_panel_->IsMahoAiPanelShowing() ? 5 : 0;
+   if ((side_panel_->IsRightAligned() && !base::i18n::IsRTL()) ||
+       (!side_panel_->IsRightAligned() && base::i18n::IsRTL())) {
+     resize_bounds = gfx::Rect(local_bounds.x(), local_bounds.y(),
+-                              contents_bounds.x(), local_bounds.height());
++                              std::max(contents_bounds.x(),
++                                       maho_ai_resize_width),
++                              local_bounds.height());
+   } else {
+     resize_bounds = gfx::Rect(contents_bounds.right(), local_bounds.y(),
+-                              local_bounds.right() - contents_bounds.right(),
++                              std::max(local_bounds.right() -
++                                           contents_bounds.right(),
++                                       maho_ai_resize_width),
+                               local_bounds.height());
+   }
+ 

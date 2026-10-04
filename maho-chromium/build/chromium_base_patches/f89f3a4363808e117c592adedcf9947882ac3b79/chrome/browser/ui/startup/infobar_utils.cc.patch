@@ -1,0 +1,34 @@
+diff --git c/chrome/browser/ui/startup/infobar_utils.cc w/chrome/browser/ui/startup/infobar_utils.cc
+index 598e361a2988674243dd6ace9cc63de2f74ed1e1..690d233aec10cfc154dbaf0186542f01b65566fa 100644
+--- c/chrome/browser/ui/startup/infobar_utils.cc
++++ w/chrome/browser/ui/startup/infobar_utils.cc
+@@ -213,7 +213,7 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+     return;
+   }
+ 
+-  // Web apps should not display the session restore bubble (crbug.com/40800614)
++  // Web apps should not display the session restore bubble (crbug.com/1264121)
+   const bool should_display_bubble =
+       !is_web_app && HasPendingUncleanExit(browser->GetProfile());
+   base::UmaHistogramBoolean("Startup.CrashBubbleShown", should_display_bubble);
+@@ -253,19 +253,7 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+   infobars::ContentInfoBarManager* infobar_manager =
+       infobars::ContentInfoBarManager::FromWebContents(web_contents);
+ 
+-  if (!google_apis::HasAPIKeyConfigured()) {
+-    if (infobars::IsInfoBarMigrated(
+-            infobars::InfoBarDelegate::GOOGLE_API_KEYS_INFOBAR_DELEGATE)) {
+-      if (auto* manager =
+-              infobars::BrowserInfoBarManager::From(g_browser_process)) {
+-        manager->Show(
+-            tabs::TabInterface::GetFromContents(web_contents),
+-            infobars::InfoBarDelegate::GOOGLE_API_KEYS_INFOBAR_DELEGATE);
+-      }
+-    } else {
+-      GoogleApiKeysInfoBarDelegate::Create(infobar_manager);
+-    }
+-  }
++  // Maho: Google API keys infobar is permanently suppressed regardless of configuration.
+ 
+   if (ObsoleteSystem::IsObsoleteNowOrSoon()) {
+     PrefService* local_state = g_browser_process->local_state();

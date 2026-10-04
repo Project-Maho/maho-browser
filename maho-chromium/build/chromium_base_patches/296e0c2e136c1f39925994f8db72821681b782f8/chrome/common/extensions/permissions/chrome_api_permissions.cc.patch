@@ -1,0 +1,12 @@
+diff --git a/chrome/common/extensions/permissions/chrome_api_permissions.cc b/chrome/common/extensions/permissions/chrome_api_permissions.cc
+index fba79cd292ec319ccf8a2b0982e758fe984a0526..7bda7834d3cfeb2b735f32ec5eed286001a4f414 100644
+--- a/chrome/common/extensions/permissions/chrome_api_permissions.cc
++++ b/chrome/common/extensions/permissions/chrome_api_permissions.cc
+@@ -104,6 +104,7 @@ constexpr APIPermissionInfo::InitInfo permissions_to_register[] = {
+     {APIPermissionID::kIdltest, "idltest"},
+     {APIPermissionID::kInput, "input"},
+     {APIPermissionID::kManagement, "management"},
++    {APIPermissionID::kMaho, "maho"},
+     {APIPermissionID::kMDns, "mdns",
+      APIPermissionInfo::kFlagCannotBeOptional |
+          APIPermissionInfo::kFlagDoesNotRequireManagedSessionFullLoginWarning},

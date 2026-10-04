@@ -1,0 +1,33 @@
+diff --git a/chrome/browser/file_select_helper.h b/chrome/browser/file_select_helper.h
+index 37c575db8a2c4a92f4b89691f4357ef7206b2710..ab19b6a3bc7110e7d3d0391baa16059bd32febeb 100644
+--- a/chrome/browser/file_select_helper.h
++++ b/chrome/browser/file_select_helper.h
+@@ -9,6 +9,7 @@
+ #include <vector>
+ 
+ #include "base/callback_list.h"
++#include "base/files/file_path.h"
+ #include "base/gtest_prod_util.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/ref_counted.h"
+@@ -71,6 +72,12 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
+       scoped_refptr<content::FileSelectListener> listener,
+       const blink::mojom::FileChooserParams& params);
+ 
++  // Selects one file for an active upload chooser without interacting with the
++  // native picker. The regular FileSelectHelper processing pipeline remains
++  // responsible for macOS package handling and content analysis.
++  static bool SelectFileForPendingChooser(content::WebContents* web_contents,
++                                          const base::FilePath& path);
++
+   // Enumerates all the files in directory.
+   static void EnumerateDirectory(
+       content::WebContents* tab,
+@@ -295,6 +302,7 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
+   // (may only be one such dialog).
+   raw_ptr<content::RenderFrameHost> render_frame_host_;
+   raw_ptr<content::WebContents> web_contents_;
++  bool programmatic_file_selection_started_ = false;
+ 
+   // |listener_| receives the result of the FileSelectHelper.
+   scoped_refptr<content::FileSelectListener> listener_;

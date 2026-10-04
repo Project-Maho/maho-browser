@@ -1,0 +1,5 @@
+{
+  "action": "desktop.input",
+  "code": "platform_typed_approval_required",
+  "message": "typed approval required for action 'desktop.input'"
+}

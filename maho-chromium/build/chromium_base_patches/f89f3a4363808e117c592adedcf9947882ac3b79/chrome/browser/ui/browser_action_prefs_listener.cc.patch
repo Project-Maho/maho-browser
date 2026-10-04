@@ -1,0 +1,41 @@
+diff --git c/chrome/browser/ui/browser_action_prefs_listener.cc w/chrome/browser/ui/browser_action_prefs_listener.cc
+index 40c5e669eb23129ce71f4b4ac7f516fdf4de6d89..0d0d71a2078287b7fb48c6d805385928da3154bf 100644
+--- c/chrome/browser/ui/browser_action_prefs_listener.cc
++++ w/chrome/browser/ui/browser_action_prefs_listener.cc
+@@ -9,6 +9,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/actions/chrome_action_id.h"
+ #include "chrome/browser/ui/browser_actions.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+ #include "chrome/common/pref_names.h"
+ #include "components/prefs/pref_service.h"
+ #include "ui/actions/action_id.h"
+@@ -21,6 +22,11 @@ BrowserActionPrefsListener::BrowserActionPrefsListener(
+       browser_actions_(CHECK_DEREF(browser_actions)) {
+   if (auto* profile_prefs = profile_->GetPrefs()) {
+     profile_pref_registrar_.Init(profile_prefs);
++    profile_pref_registrar_.Add(
++        maho::sidebar_prefs::kSidebarPanelExpanded,
++        base::BindRepeating(
++            &BrowserActionPrefsListener::UpdateMahoAiPanelActionCheckedState,
++            base::Unretained(this)));
+ #if !BUILDFLAG(IS_CHROMEOS)
+     profile_pref_registrar_.Add(
+         prefs::kDesktopSharingHubEnabled,
+@@ -65,6 +71,16 @@ void BrowserActionPrefsListener::UpdateActionsForSharingHubPolicy() {
+ #endif  // !BUILDFLAG(IS_CHROMEOS)
+ }
+ 
++void BrowserActionPrefsListener::UpdateMahoAiPanelActionCheckedState() {
++  const bool panel_expanded =
++      maho::sidebar_prefs::IsSidebarPanelExpanded(profile_->GetPrefs());
++  if (auto* action_item = actions::ActionManager::Get().FindAction(
++          kActionSidePanelShowMahoAiPanel,
++          browser_actions_->root_action_item())) {
++    action_item->SetChecked(panel_expanded);
++  }
++}
++
+ void BrowserActionPrefsListener::UpdateQRCodeGeneratorActionEnabledState() {
+   bool qr_code_generator_enabled = g_browser_process->local_state()->GetBoolean(
+       prefs::kQRCodeGeneratorEnabled);

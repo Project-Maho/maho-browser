@@ -1,0 +1,43 @@
+diff --git a/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc b/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc
+index dcb71d7d0f5570624cefccf1e80eb7ce466863fd..5a9ebd30291b55f857d8199a7abfcab34827b783 100644
+--- a/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc
++++ b/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
+ 
++#include "base/strings/string_number_conversions.h"
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/location_bar/location_bar.h"
+@@ -88,7 +89,7 @@ std::u16string GetAccessibleTabLabel(const TabInterface* tab, bool is_for_tab) {
+                                     : browser->GetWindowTitleForTab(index);
+ 
+   if (const std::optional<split_tabs::SplitTabId> split = tab->GetSplit()) {
+-    const split_tabs::SplitTabData* split_data =
++    split_tabs::SplitTabData* split_data =
+         tab_strip_model->GetSplitData(split.value());
+     const std::vector<tabs::TabInterface*> tabs_in_split =
+         split_data->ListTabs();
+@@ -96,10 +97,17 @@ std::u16string GetAccessibleTabLabel(const TabInterface* tab, bool is_for_tab) {
+     int tab_index_in_split = std::distance(
+         tabs_in_split.begin(),
+         std::find(tabs_in_split.begin(), tabs_in_split.end(), tab));
+-    title = l10n_util::GetStringFUTF16(
+-        GetAccessibleTabLabelFormatStringForSplit(
+-            split_tabs::SplitTabLayout::kVertical, tab_index_in_split),
+-        title);
++    if (tabs_in_split.size() == 2u &&
++        split_data->visual_data()->split_layout() ==
++            split_tabs::SplitTabLayout::kVertical) {
++      title = l10n_util::GetStringFUTF16(
++          GetAccessibleTabLabelFormatStringForSplit(
++              split_tabs::SplitTabLayout::kVertical, tab_index_in_split),
++          title);
++    } else {
++      title += u", Split pane " + base::NumberToString16(tab_index_in_split + 1) +
++               u" of " + base::NumberToString16(tabs_in_split.size());
++    }
+   }
+ 
+   if (const std::optional<tab_groups::TabGroupId> group = tab->GetGroup()) {

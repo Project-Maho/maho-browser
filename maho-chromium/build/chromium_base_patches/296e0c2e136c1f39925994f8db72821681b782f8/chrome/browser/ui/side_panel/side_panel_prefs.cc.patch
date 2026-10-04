@@ -1,0 +1,15 @@
+diff --git a/chrome/browser/ui/side_panel/side_panel_prefs.cc b/chrome/browser/ui/side_panel/side_panel_prefs.cc
+index 81d36a90837aa7f2cd146d0fe1dc950882190150..f8c00afc6b1b4ca163d2417a37d327ce6ee377e9 100644
+--- a/chrome/browser/ui/side_panel/side_panel_prefs.cc
++++ b/chrome/browser/ui/side_panel/side_panel_prefs.cc
+@@ -16,10 +16,6 @@ namespace side_panel_prefs {
+ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+ // TODO(crbug.com/489780965): Move policies over as features are implemented.
+ #if !BUILDFLAG(IS_ANDROID)
+-  // When in RTL mode, the side panel should default to the left of the screen.
+-  // Otherwise, the side panel should default to the right side of the screen.
+-  // TODO(dljames): Add enum values kAlternateSide / kDefaultSide that will
+-  // replace false and true respectively.
+   registry->RegisterBooleanPref(prefs::kSidePanelHorizontalAlignment,
+                                 !base::i18n::IsRTL());
+   registry->RegisterBooleanPref(prefs::kGoogleSearchSidePanelEnabled, true);

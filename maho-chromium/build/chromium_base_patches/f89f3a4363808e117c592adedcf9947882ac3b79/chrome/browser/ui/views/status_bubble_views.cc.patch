@@ -1,0 +1,67 @@
+diff --git c/chrome/browser/ui/views/status_bubble_views.cc w/chrome/browser/ui/views/status_bubble_views.cc
+index e85542cf2aec20c963c59b891d7a9caffd74b73d..cf32b7e5a73bf03d3cbbc44b9e336637492dd5b3 100644
+--- c/chrome/browser/ui/views/status_bubble_views.cc
++++ w/chrome/browser/ui/views/status_bubble_views.cc
+@@ -15,6 +15,7 @@
+ #include "base/i18n/rtl.h"
+ #include "base/location.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/no_destructor.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/bind_post_task.h"
+@@ -64,7 +65,7 @@
+ namespace {
+ 
+ // The roundedness of the edges of our bubble.
+-constexpr int kBubbleCornerRadius = 4;
++constexpr int kBubbleCornerRadius = 8;
+ 
+ // How close the mouse can get to the infobubble before it starts sliding
+ // off-screen.
+@@ -72,7 +73,7 @@ constexpr int kMousePadding = 20;
+ 
+ // The minimum horizontal space between the edges of the text and the edges of
+ // the status bubble, not including the outer shadow ring.
+-constexpr int kTextHorizPadding = 5;
++constexpr int kTextHorizPadding = 10;
+ 
+ // Delays before we start hiding or showing the bubble after we receive a
+ // show or hide request.
+@@ -92,8 +93,12 @@ constexpr auto kMaxExpansionStepDuration = base::Milliseconds(150);
+ constexpr auto kDestroyPopupDelay = base::Seconds(10);
+ 
+ const gfx::FontList& GetFont() {
+-  return views::TypographyProvider::Get().GetFont(views::style::CONTEXT_LABEL,
+-                                                  views::style::STYLE_PRIMARY);
++  // Maho: enlarge the hover-URL status-bar text by 2pt.
++  static const base::NoDestructor<gfx::FontList> kMahoStatusFont(
++      views::TypographyProvider::Get()
++          .GetFont(views::style::CONTEXT_LABEL, views::style::STYLE_PRIMARY)
++          .DeriveWithSizeDelta(3));
++  return *kMahoStatusFont;
+ }
+ 
+ }  // namespace
+@@ -249,6 +254,7 @@ StatusView::StatusView(StatusBubbleViews* status_bubble)
+   SetUseDefaultFillLayout(true);
+ 
+   std::unique_ptr<views::Label> text = std::make_unique<views::Label>();
++  text->SetFontList(GetFont());
+   // Don't move this after AddChildView() since this function would trigger
+   // repaint which should not happen in the constructor.
+   SetTextLabelColors(text.get());
+@@ -485,6 +491,13 @@ void StatusView::OnPaint(gfx::Canvas* canvas) {
+     rad[index] = {radius, radius};
+   };
+ 
++  // Maho: the bubble is inset from the window edge, so round all
++  // four corners for a floating pill look.
++  round_corner(gfx::RRectF::Corner::kUpperLeft);
++  round_corner(gfx::RRectF::Corner::kUpperRight);
++  round_corner(gfx::RRectF::Corner::kLowerLeft);
++  round_corner(gfx::RRectF::Corner::kLowerRight);
++
+   // Top Edges - if the bubble is in its bottom position (sticking downwards),
+   // then we square the top edges. Otherwise, we square the edges based on the
+   // position of the bubble within the window (the bubble is positioned in the

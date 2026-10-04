@@ -1,0 +1,13 @@
+diff --git a/ui/base/ui_base_features.cc b/ui/base/ui_base_features.cc
+index 12dbe9daa68a16240667960c1e35b2675892d391..53fd6016da3d512bcbc19b0d7f2c9168a2ddbd24 100644
+--- a/ui/base/ui_base_features.cc
++++ b/ui/base/ui_base_features.cc
+@@ -464,7 +464,7 @@ BASE_FEATURE_PARAM(int,
+                    "acceptable_latency_ms",
+                    50);
+ 
+-BASE_FEATURE(kSplitViewLinkOpen, base::FEATURE_DISABLED_BY_DEFAULT);
++BASE_FEATURE(kSplitViewLinkOpen, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kGlassFrame, base::FEATURE_DISABLED_BY_DEFAULT);
+ 

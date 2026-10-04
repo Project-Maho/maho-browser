@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- API 29+ delta over the base Theme.Maho.Browser in values/.
+         Carries the API 27 attributes as well, because a resource-qualifier match replaces
+         the style wholesale rather than merging with values-v27.
+         android:enforceStatusBarContrast and android:enforceNavigationBarContrast were
+         introduced in API 29. -->
+    <style name="Theme.Maho.Browser" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/shell_window_background</item>
+        <item name="android:colorBackground">@color/shell_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarDividerColor">@android:color/transparent</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>

@@ -1,0 +1,41 @@
+diff --git c/chrome/browser/ui/views/frame/contents_web_view.h w/chrome/browser/ui/views/frame/contents_web_view.h
+index dba4f324e7e9d3a8c60a5b0e807912b7051d03fb..caee6bb67dce2787b7704ed3b04ec4c1b95f8d25 100644
+--- c/chrome/browser/ui/views/frame/contents_web_view.h
++++ w/chrome/browser/ui/views/frame/contents_web_view.h
+@@ -6,6 +6,7 @@
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_CONTENTS_WEB_VIEW_H_
+ 
+ #include <memory>
++#include <optional>
+ 
+ #include "base/memory/raw_ptr.h"
+ #include "build/build_config.h"
+@@ -14,6 +15,7 @@
+ #include "ui/base/interaction/element_identifier.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/gfx/geometry/rounded_corners_f.h"
++#include "third_party/skia/include/core/SkColor.h"
+ #include "ui/views/controls/webview/webview.h"
+ 
+ class StatusBubbleViews;
+@@ -42,6 +44,11 @@ class ContentsWebView : public views::WebView,
+   // Toggles whether the background is visible.
+   void SetBackgroundVisible(bool background_visible);
+ 
++  // Maho: opaque content background sourced from the active Space's
++  // sidebar palette. std::nullopt clears it (falls back to the
++  // ColorProvider). Never applied to Incognito windows.
++  void SetMahoBackgroundOverride(std::optional<SkColor> color);
++
+   const gfx::RoundedCornersF& GetBackgroundRadii() const;
+   void SetBackgroundRadii(const gfx::RoundedCornersF& radii);
+ 
+@@ -88,6 +95,8 @@ class ContentsWebView : public views::WebView,
+   bool is_animating_bounds_ = false;
+   bool use_default_deadline_when_animating_ = false;
+ 
++  std::optional<SkColor> maho_background_override_;
++
+   std::unique_ptr<ui::LayerTreeOwner> cloned_layer_tree_;
+ };
+ 

@@ -1,0 +1,21 @@
+diff --git c/chrome/browser/ui/unload_controller.cc w/chrome/browser/ui/unload_controller.cc
+index 6ac2d32db9d0ba5775ba07deee644a210d3b1b68..48dcde3618ab81438d85380beb7f3ebb7f8d8be0 100644
+--- c/chrome/browser/ui/unload_controller.cc
++++ w/chrome/browser/ui/unload_controller.cc
+@@ -573,6 +573,16 @@ void UnloadController::OnTabStripModelChanged(
+ }
+ 
+ void UnloadController::TabStripEmpty() {
++  // Maho zero-tab: for normal browser windows the tab strip becoming empty
++  // does not mean the window is closing — the window survives with zero tabs
++  // so new tabs can be inserted again.  Skip marking the browser as
++  // attempting-to-close so that extensions and other callers can still open
++  // new tabs.  The flag is already set by TryToCloseWindow /
++  // GetBrowserClosingStatus when the user actually closes the window, so
++  // unload events are still fired correctly in that path.
++  if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) && !is_attempting_to_close_browser_) {
++    return;
++  }
+   // Set is_attempting_to_close_browser_ here, so that extensions, etc, do not
+   // attempt to add tabs to the browser before it closes.
+   is_attempting_to_close_browser_ = true;

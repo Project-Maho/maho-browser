@@ -1,0 +1,22 @@
+diff --git c/chrome/browser/prefs/session_startup_pref.cc w/chrome/browser/prefs/session_startup_pref.cc
+index 0159cee9db245937c4c38ac58baa1d08e97713c0..e0e8f5a8a7364233e23be9861c622eef1bc7a586 100644
+--- c/chrome/browser/prefs/session_startup_pref.cc
++++ w/chrome/browser/prefs/session_startup_pref.cc
+@@ -71,7 +71,7 @@ SessionStartupPref::Type SessionStartupPref::GetDefaultStartupType() {
+     return SessionStartupPref::LAST;
+   }
+ #endif
+-  return SessionStartupPref::DEFAULT;
++  return SessionStartupPref::LAST;
+ #endif
+ }
+ 
+@@ -175,7 +175,7 @@ SessionStartupPref::Type SessionStartupPref::PrefValueToType(int pref_value) {
+     case kPrefValueLastAndURLs:
+       return SessionStartupPref::LAST_AND_URLS;
+     default:
+-      return SessionStartupPref::DEFAULT;
++      return SessionStartupPref::LAST;
+   }
+ }
+ 

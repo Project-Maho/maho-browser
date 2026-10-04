@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/ui/browser.h b/chrome/browser/ui/browser.h
+index 78075410c13cda894ea5fa62c3a881637780dfad..c00483e88d7855ce55aa3a8c1e52f92c1583a660 100644
+--- a/chrome/browser/ui/browser.h
++++ b/chrome/browser/ui/browser.h
+@@ -306,6 +306,8 @@ class Browser : public TabStripModelObserver,
+     // Document Picture in Picture options, specific to TYPE_PICTURE_IN_PICTURE.
+     std::optional<blink::mojom::PictureInPictureWindowOptions> pip_options;
+ 
++    bool is_maho_mini = false;
++
+     // Specifies the collapsed state for the Vertical Tab Strip. True if the
+     // browser is collapsed.
+     std::optional<bool> vertical_tab_strip_collapsed;
+@@ -368,6 +370,8 @@ class Browser : public TabStripModelObserver,
+ 
+   ~Browser() override;
+ 
++  bool is_maho_mini() const { return is_maho_mini_; }
++
+   // Set overrides for the initial window bounds and maximized state.
+   void set_override_bounds(const gfx::Rect& bounds) {
+     override_bounds_ = bounds;
+@@ -1216,6 +1220,8 @@ class Browser : public TabStripModelObserver,
+   // This Browser's type.
+   const Type type_;
+ 
++  const bool is_maho_mini_;
++
+   // This Browser's profile.
+   const raw_ptr<Profile, AcrossTasksDanglingUntriaged> profile_;
+ 

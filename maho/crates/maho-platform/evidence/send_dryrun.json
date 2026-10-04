@@ -1,0 +1,5 @@
+{
+  "DryRun": {
+    "script": "tell application \"Messages\"\n    set targetService to 1st account whose service type = iMessage\n    set targetBuddy to participant \"+10000000001\" of targetService\n    send \"probe\" to targetBuddy\nend tell"
+  }
+}

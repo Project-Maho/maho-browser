@@ -1,0 +1,122 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_ai.mojom" ]
+  webui_module_path = "/"
+
+  deps = [ "//maho/browser/ui/webui/maho_routines:mojo_bindings" ]
+}
+
+source_set("maho_ai_prefs") {
+  sources = [
+    "maho_ai_prefs_registration.cc",
+    "maho_ai_prefs_registration.h",
+  ]
+
+  public_deps = [
+    "//components/prefs",
+  ]
+
+  deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_ai_runtime_event_persistence") {
+  sources = [
+    "maho_ai_runtime_event_persistence.cc",
+    "maho_ai_runtime_event_persistence.h",
+  ]
+  deps = [
+    ":mojo_bindings",
+    "//base",
+  ]
+}
+
+source_set("maho_ai") {
+  sources = [
+    "maho_ai_page_handler.cc",
+    "maho_ai_page_handler.h",
+    "maho_ai_pending_surface.cc",
+    "maho_ai_pending_surface.h",
+    "maho_ai_ui.cc",
+    "maho_ai_ui.h",
+    "maho_ai_voice_session.cc",
+    "maho_ai_voice_session.h",
+    "maho_artifact_export_untrusted_ui.cc",
+    "maho_artifact_export_untrusted_ui.h",
+    "maho_artifact_preview_untrusted_ui.cc",
+    "maho_artifact_preview_untrusted_ui.h",
+  ]
+
+  public_deps = [
+    ":maho_ai_prefs",
+    ":mojo_bindings",
+    "//base",
+    "//components/prefs",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_routines:routine_page_handler",
+    "//services/network/public/cpp",
+  ]
+
+  deps = [
+    ":maho_ai_runtime_event_persistence",
+    "//maho/browser:maho_ai_ingress_coordinator",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//crypto",
+    "//maho/browser:maho_ai_popup_lifetime_tracker",
+    "//maho/browser:maho_ai_runtime_adapter",
+    "//maho/browser:maho_artifact_html_sanitizer",
+    "//maho/browser:maho_artifact_pdf_processor",
+    "//maho/browser:maho_artifact_registry",
+    "//maho/browser:maho_artifact_xlsx_processor",
+    "//maho/browser:maho_browser_ai_tools",
+    "//maho/browser:maho_ai_provider_oauth",
+    "//maho/browser:maho_auth_utils",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser/resources/maho_ai:resources",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_stt_ffi",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//ui/webui",
+    "//url",
+  ]
+}
+
+test("maho_ai_egress_redaction_test") {
+  sources = [
+    "maho_ai_egress_redaction_test_main.cc",
+    "maho_ai_egress_redaction_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai_runtime_event_persistence",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser:maho_browser_ai_tools",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_ai_unittests") {
+  testonly = true
+  sources = [
+    "maho_ai_page_handler_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//maho/browser/ui/webui/maho_routines:routine_page_handler",
+    "//testing/gtest",
+  ]
+}

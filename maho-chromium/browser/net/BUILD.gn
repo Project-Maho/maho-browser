@@ -1,0 +1,76 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+# Future Mojo contract for boost content script ↔ browser IPC.
+# v1 transport uses JS injection + polling; this mojom defines the
+# type-safe interface for a future renderer-side Mojo migration.
+mojom("maho_boost_content_script_mojom") {
+  sources = [ "maho_boost_content_script.mojom" ]
+}
+
+source_set("net") {
+  sources = [
+    "maho_ad_block_request_util.cc",
+    "maho_ad_block_request_util.h",
+    "maho_ad_block_tab_helper.cc",
+    "maho_ad_block_tab_helper.h",
+    "maho_ad_block_throttle.cc",
+    "maho_ad_block_throttle.h",
+    "maho_atc_state.cc",
+    "maho_atc_state.h",
+    "maho_boost_injection_handler.cc",
+    "maho_boost_injection_handler.h",
+    "maho_translate_injection_handler.cc",
+    "maho_translate_injection_handler.h",
+    "maho_cosmetic_filters_handler.cc",
+    "maho_cosmetic_filters_handler.h",
+    "maho_proxying_url_loader_factory.cc",
+    "maho_proxying_url_loader_factory.h",
+    "maho_shield_site_state.cc",
+    "maho_shield_site_state.h",
+    "maho_shield_site_state_factory.cc",
+    "maho_shield_site_state_factory.h",
+    "maho_webstore_rebrand_handler.cc",
+    "maho_webstore_rebrand_handler.h",
+    "maho_webstore_ua_throttle.cc",
+    "maho_webstore_ua_throttle.h",
+  ]
+  deps = [
+    ":maho_boost_content_script_mojom",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser/resources/maho_boost_content_script:resources",
+    "//maho/browser/resources/maho_translate_content_script:resources",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//base",
+    "//chrome/browser/profiles",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//components/keyed_service/content",
+    "//components/keyed_service/core",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//third_party/blink/public/common",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("maho_ad_block_tab_helper_unittests") {
+  testonly = true
+  sources = [ "maho_ad_block_tab_helper_unittest.cc" ]
+  deps = [
+    ":net",
+    "//base",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//testing/gtest",
+    "//url",
+  ]
+}

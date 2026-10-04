@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Maho MCP Agent Guidance Preview</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #1a1a1a;
+      --foreground: #f5f5f5;
+      --card: #0f0f0f;
+      --secondary: #2a2a2a;
+      --muted: #2a2a2a;
+      --muted-foreground: #a0a0a0;
+      --border: rgba(255, 255, 255, 0.08);
+      --surface-hover: rgba(255, 255, 255, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: #151515;
+      color: var(--foreground);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    #preview-root {
+      width: min(100vw - 32px, 376px);
+    }
+
+    .maho-mcp-agent-guidance {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      max-width: 23.5rem;
+      min-height: 56px;
+      padding: 8px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 16px;
+      background: rgba(15, 15, 15, 0.96);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+    }
+
+    .maho-mcp-agent-guidance p {
+      min-width: 0;
+      margin: 0;
+      color: var(--foreground);
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 16px;
+    }
+
+    .maho-mcp-agent-guidance button {
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex-shrink: 0;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.24);
+      color: var(--foreground);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .maho-mcp-agent-guidance button:hover {
+      background: var(--surface-hover);
+    }
+
+    .maho-mcp-agent-guidance svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    .relative { position: relative; }
+    .absolute { position: absolute; }
+    .pointer-events-none { pointer-events: none; }
+    .flex { display: flex; }
+    .items-center { align-items: center; }
+    .justify-center { justify-content: center; }
+    .shrink-0 { flex-shrink: 0; }
+    .overflow-hidden { overflow: hidden; }
+    .h-10 { height: 40px; }
+    .w-14 { width: 56px; }
+    .size-8 { width: 32px; height: 32px; }
+    .inset-0 { inset: 0; }
+    .inset-px { inset: 1px; }
+    .left-0 { left: 0; }
+    .top-0 { top: 0; }
+    .rounded-xl { border-radius: 12px; }
+    .rounded-md { border-radius: 6px; }
+    .border { border-style: solid; border-width: 1px; }
+    .bg-card { background: var(--card); }
+    .bg-secondary { background: var(--secondary); }
+    .bg-background { background: var(--background); }
+    .bg-muted { background: var(--muted); }
+    .text-foreground { color: var(--foreground); }
+    .text-secondary-foreground { color: #d5d5d5; }
+    .text-muted-foreground { color: var(--muted-foreground); }
+    .shadow-sm { box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18); }
+    .ring-1 { outline: 1px solid rgba(26, 26, 26, 0.70); }
+  </style>
+</head>
+<body>
+  <div id="preview-root"></div>
+  <script type="module" src="/standalone/mcp_agent_guidance_preview.js"></script>
+</body>
+</html>

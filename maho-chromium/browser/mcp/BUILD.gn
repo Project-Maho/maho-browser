@@ -1,0 +1,287 @@
+# Copyright 2026 The Maho Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//build/config/features.gni")
+import("//testing/test.gni")
+
+source_set("maho_mcp") {
+  sources = [
+    "maho_mcp_accessibility_handler.cc",
+    "maho_mcp_accessibility_handler.h",
+    "maho_mcp_capability_registry.cc",
+    "maho_mcp_capability_registry.h",
+    "maho_mcp_firewall.cc",
+    "maho_mcp_firewall.h",
+    "maho_mcp_json_rpc.cc",
+    "maho_mcp_json_rpc.h",
+    "maho_mcp_lease_registry.cc",
+    "maho_mcp_lease_registry.h",
+    "maho_mcp_navigation_throttle.cc",
+    "maho_mcp_navigation_throttle.h",
+    "maho_mcp_network_observer.cc",
+    "maho_mcp_network_observer.h",
+    "maho_mcp_screenshot_handler.cc",
+    "maho_mcp_screenshot_handler.h",
+    "maho_mcp_session.cc",
+    "maho_mcp_session.h",
+  ]
+
+  if (!is_win) {
+    sources += [
+      "maho_mcp_socket_server.cc",
+      "maho_mcp_socket_server.h",
+    ]
+  }
+
+  if (is_win) {
+    sources += [
+      "maho_mcp_pipe_server_win.cc",
+      "maho_mcp_pipe_server_win.h",
+      "maho_mcp_session_token_win.cc",
+      "maho_mcp_session_token_win.h",
+    ]
+  }
+
+  deps = [
+    "//base",
+    "//content/public/browser",
+    "//crypto",
+    "//maho/browser:maho_browser_tool_registry",
+    "//net",
+    "//skia",
+    "//third_party/re2",
+    "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
+    "//url",
+  ]
+
+  if (is_win) {
+    libs = [
+      "advapi32.lib",
+      "bcrypt.lib",
+      "crypt32.lib",
+      "userenv.lib",
+    ]
+  }
+}
+
+source_set("unittests") {
+  testonly = true
+
+  sources = [
+    "maho_mcp_accessibility_handler_unittest.cc",
+    "maho_mcp_firewall_unittest.cc",
+    "maho_mcp_json_rpc_unittest.cc",
+    "maho_mcp_lease_registry_unittest.cc",
+    "maho_mcp_network_observer_unittest.cc",
+    "maho_mcp_screenshot_handler_unittest.cc",
+    "maho_mcp_session_unittest.cc",
+  ]
+
+  if (!is_win) {
+    sources += [ "maho_mcp_socket_server_unittest.cc" ]
+  }
+
+  if (is_win) {
+    sources += [
+      "maho_mcp_pipe_server_win_unittest.cc",
+      "maho_mcp_session_token_win_unittest.cc",
+    ]
+  }
+
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//crypto",
+    "//net",
+    "//net:test_support",
+    "//skia",
+    "//testing/gtest",
+    "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
+  ]
+}
+
+test("maho_mcp_firewall_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_firewall_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_mcp_session_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_session_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser:maho_mcp_integration",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_mcp_lease_registry_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_lease_registry_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_mcp_accessibility_handler_test") {
+  sources = [
+    "maho_mcp_accessibility_handler_unittest.cc",
+    "maho_mcp_firewall_test_main.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/accessibility",
+  ]
+}
+
+test("maho_mcp_screenshot_handler_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_screenshot_handler_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//skia",
+    "//testing/gtest",
+    "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
+  ]
+}
+
+test("maho_mcp_network_observer_test") {
+  sources = [
+    "maho_mcp_network_observer_unittest.cc",
+  ]
+  deps = [
+    ":maho_mcp",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//content/test:run_all_unittests",
+    "//content/test:test_support",
+    "//maho/browser:maho_mcp_integration",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//third_party/re2",
+    "//url",
+  ]
+}
+
+test("maho_mcp_console_capture_test") {
+  sources = [
+    "maho_mcp_console_capture_unittest.cc",
+    "maho_mcp_firewall_test_main.cc",
+  ]
+  deps = [
+    "//maho/browser:maho_mcp_integration",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui:ui",
+    "//testing/gtest",
+    "//third_party/blink/public/common",
+  ]
+}
+
+test("maho_mcp_input_synthesizer_test") {
+  sources = [
+    "maho_mcp_firewall_test_main.cc",
+    "maho_mcp_input_synthesizer_unittest.cc",
+  ]
+  deps = [
+    "//maho/browser:maho_mcp_integration",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+    "//third_party/blink/public/common",
+    "//ui/events",
+  ]
+}
+
+# POSIX-only: the UDS socket server (and its unittest) only compile on
+# non-Windows. Uses content test support because the server posts ProcessData
+# to content::GetUIThreadTaskRunner and the transport tests drive the real
+# deferred-response path with a content::BrowserTaskEnvironment{IO_MAINLOOP}.
+if (!is_win) {
+  test("maho_mcp_socket_server_test") {
+    sources = [ "maho_mcp_socket_server_unittest.cc" ]
+    deps = [
+      ":maho_mcp",
+      "//base",
+      "//base/test:test_support",
+      "//content/public/browser",
+      "//content/test:run_all_unittests",
+      "//content/test:test_support",
+      "//net",
+      "//net:test_support",
+      "//testing/gtest",
+      "//ui/accessibility",
+      "//url",
+    ]
+  }
+
+  # R-8: private-context isolation browser tests. POSIX-only, matching the
+  # same-UID Unix-domain-socket MCP transport premise.
+  source_set("browser_tests") {
+    testonly = true
+    sources = [ "maho_mcp_incognito_browser_test.cc" ]
+
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+    deps = [
+      ":maho_mcp",
+      "//base",
+      "//base/test:test_support",
+      "//chrome/browser",
+      "//chrome/browser/ui",
+      "//chrome/test:test_support",
+      "//chrome/test:test_support_ui",
+      "//components/sessions",
+      "//content/public/browser",
+      "//content/test:test_support",
+       "//testing/gtest",
+       "//url",
+     ]
+   }
+ }
+
+if (is_win) {
+  # R-8 browser_tests are POSIX-only (Unix-domain-socket MCP transport premise).
+  # Provide an empty target on Windows so cross-platform references in
+  # //chrome/test:browser_tests resolve without pulling in POSIX-only tests.
+  group("browser_tests") {
+    testonly = true
+  }
+}

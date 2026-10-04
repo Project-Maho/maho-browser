@@ -1,0 +1,20 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_test") {
+  sources = [
+    "maho_test_ui.cc",
+    "maho_test_ui.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//maho/browser:maho_tab_id_helper",
+    "//maho/components/constants",
+    "//url",
+  ]
+}

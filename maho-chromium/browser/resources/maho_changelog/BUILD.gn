@@ -1,0 +1,43 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
+
+assert(!is_android)
+
+action("generate_changelog_json") {
+  script = "//maho/build/scripts/generate_changelog_json.py"
+  depfile = "$target_gen_dir/changelog_json.d"
+  outputs = [ "$target_gen_dir/changelog.json" ]
+  args = [
+    "--mode",
+    "json",
+    "--out",
+    rebase_path("$target_gen_dir/changelog.json", root_build_dir),
+    "--depfile",
+    rebase_path(depfile, root_build_dir),
+  ]
+}
+
+generate_grd("build_grdp") {
+  grd_prefix = "maho_changelog_json"
+  out_grd = "$target_gen_dir/maho_changelog_json.grdp"
+  input_files = [ "changelog.json" ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [ ":generate_changelog_json" ]
+}
+
+build_webui("build") {
+  grd_prefix = "maho_changelog"
+
+  static_files = [ "index.html" ]
+
+  ts_files = [ "changelog.ts" ]
+
+  ts_deps = []
+
+  webui_context_type = "trusted"
+
+  extra_grdp_deps = [ ":build_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_changelog_json.grdp" ]
+}

@@ -1,0 +1,20 @@
+diff --git a/chrome/browser/profiles/profile_io_data.cc b/chrome/browser/profiles/profile_io_data.cc
+index 080e9b0e43c70913f84490ccafb068ab1e9fbc62..267f490e97f54326a93e73cb5531325ae739e885 100644
+--- a/chrome/browser/profiles/profile_io_data.cc
++++ b/chrome/browser/profiles/profile_io_data.cc
+@@ -11,6 +11,7 @@
+ #include "build/build_config.h"
+ #include "chrome/common/buildflags.h"
+ #include "chrome/common/url_constants.h"
++#include "maho/components/constants/url_constants.h"
+ #include "components/dom_distiller/core/url_constants.h"
+ #include "extensions/buildflags/buildflags.h"
+ #include "net/net_buildflags.h"
+@@ -56,6 +57,7 @@ bool ProfileIOData::IsHandledProtocol(std::string_view scheme) {
+       url::kBlobScheme,
+       url::kFileSystemScheme,
+       chrome::kChromeSearchScheme,
++      maho::kMahoUIScheme,
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+     BUILDFLAG(IS_CHROMEOS)
+       webapps::kIsolatedAppScheme,

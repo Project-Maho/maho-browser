@@ -1,0 +1,13 @@
+diff --git a/third_party/blink/renderer/core/loader/navigation_policy.cc b/third_party/blink/renderer/core/loader/navigation_policy.cc
+index a24144d2917fabcbe5f353cdc825b7e3ce735325..e5da51d950b6ca52fff211614da06b38f9dba303 100644
+--- a/third_party/blink/renderer/core/loader/navigation_policy.cc
++++ b/third_party/blink/renderer/core/loader/navigation_policy.cc
+@@ -60,7 +60,7 @@ NavigationPolicy NavigationPolicyFromEventModifiers(int16_t button,
+ #else
+   const bool new_tab_modifier = (button == 1) || ctrl;
+ #endif
+-  if (new_tab_modifier && alt && !shift &&
++  if (alt && !shift &&
+       base::FeatureList::IsEnabled(::features::kSplitViewLinkOpen)) {
+     return kNavigationPolicySplitView;
+   }

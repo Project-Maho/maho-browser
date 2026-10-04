@@ -1,0 +1,13 @@
+diff --git c/base/trace_event/builtin_categories.h w/base/trace_event/builtin_categories.h
+index 9377661e94e74ab6f74d67306c97713ef794d2ac..ec08f7199bec6a6354ad37c5970e4bedadd1735c 100644
+--- c/base/trace_event/builtin_categories.h
++++ w/base/trace_event/builtin_categories.h
+@@ -176,6 +176,8 @@ PERFETTO_DEFINE_CATEGORIES_IN_NAMESPACE_WITH_ATTRS(
+     perfetto::Category("loading").SetTags("navigation"),
+     perfetto::Category("log"),
+     perfetto::Category("login"),
++    perfetto::Category("maho").SetDescription(
++      "Traces for Maho-specific events (sidebar, ai, spaces, tab preview)."),
+     perfetto::Category("media").SetTags("video"),
+     perfetto::Category("mediastream").SetTags("audio"),
+     perfetto::Category("media_router"),

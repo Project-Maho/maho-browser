@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base shell theme, valid from minSdk 26.
+
+         The window is fully owned by Compose, so the platform parent supplies decor only:
+         no action bar, no title. `Theme.DeviceDefault.NoActionBar` matches the decor this
+         shell already renders. The previous declaration reused the Material Components name
+         `Theme.Material3.DynamicColors.DayNight` as its own parent, which is a resource
+         cycle: Material Components is not on this module's classpath, so that name resolved
+         back to this very style instead of to a library theme.
+
+         API-gated attributes live in values-v27 and values-v29, which extend this style. -->
+    <style name="Theme.Maho.Browser" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/shell_window_background</item>
+        <item name="android:colorBackground">@color/shell_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

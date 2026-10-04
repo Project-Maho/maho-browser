@@ -1,0 +1,127 @@
+diff --git c/chrome/browser/ui/views/frame/browser_frame_view_mac.mm w/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da864938b8f35c 100644
+--- c/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
++++ w/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+@@ -7,7 +7,10 @@
+ #include <algorithm>
+ #include <vector>
+ 
++#import <Cocoa/Cocoa.h>
++
+ #include "base/command_line.h"
++#include "base/apple/foundation_util.h"
+ #include "base/containers/fixed_flat_map.h"
+ #include "base/functional/bind.h"
+ #include "base/i18n/rtl.h"
+@@ -49,9 +52,12 @@
+ #include "chrome/common/pref_names.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
++#include "maho/browser/ui/theme/maho_color_id.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+ #include "ui/base/hit_test.h"
+ #include "ui/base/theme_provider.h"
+ #include "ui/base/ui_base_features.h"
++#include "ui/color/color_provider.h"
+ #include "ui/compositor/layer.h"
+ #include "ui/gfx/canvas.h"
+ #include "ui/gfx/color_utils.h"
+@@ -67,6 +73,10 @@
+ #include "ui/views/layout/layout_types.h"
+ #include "ui/views/widget/widget.h"
+ 
++@interface NSView (PrivateButtonRevealAPI)
++- (void)setButtonRevealAmount:(double)amount;
++@end
++
+ namespace {
+ 
+ FullscreenToolbarStyle GetUserPreferredToolbarStyle(bool always_show) {
+@@ -462,8 +472,9 @@ BrowserFrameViewMac::GetCaptionButtonBounds() const {
+ 
+   // In popups, the titlebar is system-drawn and the caption buttons aren't part
+   // of the client area.
+-  if (GetBrowserView()->browser()->GetType() ==
+-          BrowserWindowInterface::Type::TYPE_POPUP ||
++  if ((GetBrowserView()->browser()->GetType() ==
++           BrowserWindowInterface::Type::TYPE_POPUP &&
++       !GetBrowserView()->browser()->is_maho_mini()) ||
+       GetBrowserView()->browser()->GetType() ==
+           BrowserWindowInterface::Type::TYPE_DEVTOOLS) {
+     return result;
+@@ -500,10 +511,33 @@ void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {
+     return;
+   }
+ 
+-  if (is_glass_frame_eligible_) {
+-    // In glass mode, painting to frame color happens in the opaque background
+-    // view instead.
+-    return;
++  SkColor frame_color = GetFrameColor(BrowserFrameActiveState::kUseCurrent);
++  const ui::ColorProvider* const color_provider = GetColorProvider();
++  if (is_glass_frame_eligible_ || features::IsGlassFrameEnabled()) {
++    // Maho: under kGlassFrame the window is translucent and the
++    // NSVisualEffectView desktop blur shows through. Paint only a light
++    // Space-tinted wash (kMahoColorWindowBackground already carries the
++    // active theme hue) so the frame gaps around the sidebar/content
++    // pick up the theme color while the blur stays visible. A fully
++    // opaque fill (the upstream ~71% wash) would hide it.
++    if (color_provider) {
++      // Subtle alpha mirrors the sidebar's translucent glass base
++      // (kSidebarMinAlpha) so the frame gaps and the sidebar read as one
++      // continuous tinted-glass surface at zero theme opacity.
++      constexpr SkAlpha kGlassFrameTintAlpha = 24;
++      const SkColor window_bg =
++          color_provider->GetColor(kMahoColorWindowBackground);
++      canvas->DrawColor(SkColorSetA(window_bg, kGlassFrameTintAlpha));
++    }
++  } else {
++    // Maho: fill the frame with the Space-tinted window background so
++    // the rounded-corner gaps around the sidebar/content match the
++    // active theme instead of Chromium's default gray
++    // (kColorFrameActive).
++    if (color_provider) {
++      frame_color = color_provider->GetColor(kMahoColorWindowBackground);
++    }
++    canvas->DrawColor(frame_color);
+   }
+ 
+   const SkColor frame_color =
+@@ -522,6 +556,7 @@ void BrowserFrameViewMac::Layout(PassKey) {
+     LayoutWindowControlsOverlay();
+   }
+   LayoutSuperclass<BrowserFrameView>(this);
++  UpdateSidebarTrafficLightsVisibility();
+ }
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+@@ -590,6 +625,29 @@ void BrowserFrameViewMac::UpdateCaptionButtonPlaceholderContainerBackground() {
+   }
+ }
+ 
++void BrowserFrameViewMac::UpdateSidebarTrafficLightsVisibility() {
++  auto* const sidebar = static_cast<maho::MahoSidebarContainerView*>(
++      GetBrowserView()->maho_sidebar_container());
++  if (!sidebar) {
++    return;
++  }
++
++  NSWindow* const window = GetWidget()->GetNativeWindow().GetNativeNSWindow();
++  if (!window) {
++    return;
++  }
++
++  NSView* const theme_frame = window.contentView.superview;
++  if (!theme_frame ||
++      ![theme_frame respondsToSelector:@selector(setButtonRevealAmount:)]) {
++    return;
++  }
++
++  const bool should_show = !sidebar->IsAutoHideMode() ||
++                           sidebar->IsOverlayVisible();
++  [theme_frame setButtonRevealAmount:should_show ? 1.0 : 0.0];
++}
++
+ void BrowserFrameViewMac::EmitFullscreenSessionHistograms() {
+   if (!fullscreen_session_start_.has_value()) {
+     return;

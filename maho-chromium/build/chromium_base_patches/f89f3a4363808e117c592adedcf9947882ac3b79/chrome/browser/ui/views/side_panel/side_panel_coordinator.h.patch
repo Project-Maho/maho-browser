@@ -1,0 +1,21 @@
+diff --git c/chrome/browser/ui/views/side_panel/side_panel_coordinator.h w/chrome/browser/ui/views/side_panel/side_panel_coordinator.h
+index 73bad76d1e3f736cdcdc741afb304b9871a8fb77..0d1252ef0d4254bbd8ef067ad4cc76fa1a7d5785 100644
+--- c/chrome/browser/ui/views/side_panel/side_panel_coordinator.h
++++ w/chrome/browser/ui/views/side_panel/side_panel_coordinator.h
+@@ -10,6 +10,7 @@
+ 
+ #include "base/callback_list.h"
+ #include "base/memory/raw_ref.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/observer_list.h"
+ #include "base/scoped_observation.h"
+ #include "base/time/time.h"
+@@ -117,6 +118,8 @@ class SidePanelCoordinator final : public SidePanelUIBase,
+       side_panel_observation_{this};
+ 
+   ui::ScopedUnownedUserData<SidePanelCoordinator> scoped_unowned_user_data_;
++
++  base::WeakPtrFactory<SidePanelCoordinator> weak_ptr_factory_{this};
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_VIEWS_SIDE_PANEL_SIDE_PANEL_COORDINATOR_H_

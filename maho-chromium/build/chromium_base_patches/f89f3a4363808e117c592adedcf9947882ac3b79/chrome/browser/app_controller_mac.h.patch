@@ -1,0 +1,32 @@
+diff --git c/chrome/browser/app_controller_mac.h w/chrome/browser/app_controller_mac.h
+index 62f68487c9a3ebca32c4100ceceec7f74e90c586..0c4d4a199a6eca45fc757c32a20887cfd0ca888e 100644
+--- c/chrome/browser/app_controller_mac.h
++++ w/chrome/browser/app_controller_mac.h
+@@ -12,6 +12,10 @@
+ #include "components/sessions/core/tab_restore_service.h"
+ #include "components/sessions/core/tab_restore_service_observer.h"
+ 
++#include <vector>
++
++class GURL;
++
+ #if defined(__OBJC__)
+ 
+ #import <AuthenticationServices/AuthenticationServices.h>
+@@ -218,6 +222,16 @@ void RunInProfileSafely(const base::FilePath& profile_dir,
+ // is being terminated anyway.
+ void AllowApplicationToTerminate();
+ 
++// Retains validated native URLs for the original regular profile while
++// Maho's login gate is active. The queue is process-local.
++void QueueNativeUrlsWhileMahoLoginGated(Profile* profile,
++                                           std::vector<GURL> urls);
++void DrainQueuedNativeUrlsAfterMahoWelcome(Profile* profile);
++
++// Test-only queue observation.
++size_t GetQueuedNativeUrlCountForTesting(Profile* profile);
++std::vector<GURL> GetQueuedNativeUrlsForTesting(Profile* profile);
++
+ // Waits for the TabRestoreService to have loaded its entries, then calls
+ // OpenWindowWithRestoredTabs().
+ //

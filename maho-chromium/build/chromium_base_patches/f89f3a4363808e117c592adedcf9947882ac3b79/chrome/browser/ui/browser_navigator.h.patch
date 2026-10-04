@@ -1,0 +1,11 @@
+diff --git a/chrome/browser/ui/browser_navigator.h b/chrome/browser/ui/browser_navigator.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/browser_navigator.h
+@@ -0,0 +1,6 @@
++#ifndef CHROME_BROWSER_UI_BROWSER_NAVIGATOR_H_
++#define CHROME_BROWSER_UI_BROWSER_NAVIGATOR_H_
++
++#include "chrome/browser/ui/navigator/browser_navigator.h"
++
++#endif  // CHROME_BROWSER_UI_BROWSER_NAVIGATOR_H_

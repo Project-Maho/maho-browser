@@ -1,0 +1,44 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_sync.mojom;
+
+struct SyncStatus {
+  bool is_syncing;
+  string relay_url;
+  string room_id;
+  string status_label;  // "idle", "connecting", "syncing", "synced", "error", "offline"
+  string error_message;
+  int64 last_sync_timestamp;
+};
+
+struct DeviceInfo {
+  string id;
+  string name;
+  string device_type;
+  bool is_online;
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  ConfigureSyncEncryption(string recovery_phrase) => (SyncStatus status);
+
+  JoinSync(string room_id, string passphrase) => (SyncStatus status);
+
+  GetSyncStatus() => (SyncStatus status);
+
+  StopSync();
+
+  GetConnectedDevices() => (array<DeviceInfo> devices);
+
+  GenerateSyncKey() => (string sync_key, string room_id, string recovery_phrase);
+};
+
+interface Page {
+  OnSyncStatusChanged(SyncStatus status);
+
+  OnDevicesChanged(array<DeviceInfo> devices);
+};

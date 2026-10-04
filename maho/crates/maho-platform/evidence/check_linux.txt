@@ -1,0 +1,15 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling zmij v1.0.21
+   Compiling serde_json v1.0.150
+   Compiling serde v1.0.228
+   Compiling thiserror v1.0.69
+    Checking itoa v1.0.18
+    Checking memchr v2.8.2
+   Compiling syn v2.0.118
+   Compiling serde_derive v1.0.228
+   Compiling thiserror-impl v1.0.69
+    Checking maho-platform v0.1.0 (/Users/indo/code/project/maho-workspace/maho/crates/maho-platform)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.99s

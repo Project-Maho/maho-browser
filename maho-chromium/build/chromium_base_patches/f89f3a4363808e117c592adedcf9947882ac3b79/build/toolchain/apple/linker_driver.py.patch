@@ -1,0 +1,78 @@
+diff --git c/build/toolchain/apple/linker_driver.py w/build/toolchain/apple/linker_driver.py
+index 5b2edf92a47be38a327678db3a6968eedb971e63..8bc685a3c5c963af5ce1bf04bc5e7f8b9861e43e 100644
+--- c/build/toolchain/apple/linker_driver.py
++++ w/build/toolchain/apple/linker_driver.py
+@@ -86,6 +86,65 @@ LINKER_DRIVER_COMPILER_ARG_PREFIX = '-Wcrl,driver,'
+ #    in old module) and after the linker (to produce TOC if needed).
+ 
+ 
++def _ensure_symtab_string_pool_aligned(filepath, alignment=8):
++    """Keep the Mach-O LC_SYMTAB string pool 8-byte aligned.
++
++    llvm-strip -x -S can leave stroff unaligned when the indirect
++    symbol count is odd; Xcode 27 ld then rejects the binary.
++    """
++    import struct
++    if not os.path.exists(filepath):
++        return
++    try:
++        with open(filepath, "rb") as f:
++            data = bytearray(f.read())
++        if len(data) < 32:
++            return
++        magic = struct.unpack_from("<I", data, 0)[0]
++        if magic != 0xfeedfacf:
++            return
++        ncmds = struct.unpack_from("<I", data, 16)[0]
++        offset = 32
++        symtab_offset = None
++        linkedit_offset = None
++        for _ in range(ncmds):
++            if offset + 8 > len(data):
++                break
++            cmd, cmdsize = struct.unpack_from("<II", data, offset)
++            if cmd == 2:
++                symtab_offset = offset
++            elif cmd == 0x19:
++                segname = data[offset + 8:offset + 24].split(b"\x00")[0]
++                if segname == b"__LINKEDIT":
++                    linkedit_offset = offset
++            offset += cmdsize
++        if not symtab_offset:
++            return
++        symoff, nsyms, stroff, strsize = struct.unpack_from(
++            "<IIII", data, symtab_offset + 8)
++        rem = stroff % alignment
++        if rem == 0:
++            return
++        pad = alignment - rem
++        subprocess.run(["codesign", "--remove-signature", filepath],
++                       capture_output=True)
++        with open(filepath, "rb") as f:
++            data = bytearray(f.read())
++        data[stroff:stroff] = b"\x00" * pad
++        struct.pack_into("<I", data, symtab_offset + 16, stroff + pad)
++        if linkedit_offset:
++            vmaddr, vmsize, fileoff, filesize = struct.unpack_from(
++                "<QQQQ", data, linkedit_offset + 24)
++            struct.pack_into("<Q", data, linkedit_offset + 48,
++                             filesize + pad)
++        with open(filepath, "wb") as f:
++            f.write(data)
++        subprocess.run(["codesign", "-f", "-s", "-", filepath],
++                       capture_output=True, check=True)
++    except Exception:
++        pass
++
++
+ class LinkerDriver(object):
+     def __init__(self, args):
+         """Creates a new linker driver.
+@@ -431,6 +490,7 @@ class LinkerDriver(object):
+             strip_command += strip_args_string.split(',')
+         strip_command.append(self._get_linker_output())
+         subprocess.check_call(strip_command)
++        _ensure_symtab_string_pool_aligned(self._get_linker_output())
+         return []
+ 
+     def set_strip_path(self, strip_path):

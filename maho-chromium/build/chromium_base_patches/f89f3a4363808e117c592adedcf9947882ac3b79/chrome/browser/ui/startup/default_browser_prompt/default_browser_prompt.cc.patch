@@ -1,0 +1,18 @@
+diff --git c/chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc w/chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc
+index 8e37dc9050a7122cda39d91e4404ca9367da4041..0f46fb1cca9c18b395d93f28a11301dcdfbabe7f 100644
+--- c/chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc
++++ w/chrome/browser/ui/startup/default_browser_prompt/default_browser_prompt.cc
+@@ -62,11 +62,8 @@ void OnCheckIsDefaultBrowserFinished(
+   } else if (state == shell_integration::NOT_DEFAULT &&
+              shell_integration::CanSetAsDefaultBrowser() &&
+              ShouldShowDefaultBrowserPromptForCurrentVersion()) {
+-    // Only show the prompt if some other program is the user's default browser.
+-    // In particular, don't show it if another install mode is default (e.g.,
+-    // don't prompt for Chrome Beta if stable Chrome is the default).
+-    did_show_prompt =
+-        DefaultBrowserPromptManager::GetInstance()->MaybeShowPrompt();
++    // Maho: permanently suppress default browser startup prompts (infobars, modals, bubbles).
++    did_show_prompt = false;
+   }
+   std::move(done_callback).Run(did_show_prompt);
+ }

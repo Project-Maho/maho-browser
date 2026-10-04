@@ -1,0 +1,220 @@
+.ai-settings-screen {
+  min-height: 100dvh;
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+}
+
+.ai-settings-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  padding: max(var(--space-3), env(safe-area-inset-top)) max(var(--space-4), env(safe-area-inset-right)) var(--space-3) max(var(--space-4), env(safe-area-inset-left));
+}
+
+.ai-settings-header-inner,
+.ai-settings-content {
+  width: 100%;
+  max-width: var(--settings-content-max);
+  margin-inline: auto;
+}
+
+.ai-settings-header-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ai-settings-header h1,
+.ai-settings-section-heading h2,
+.ai-settings-header p,
+.ai-settings-section-heading p {
+  margin: 0;
+}
+
+.ai-settings-header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.ai-settings-header p,
+.ai-settings-section-heading p {
+  color: var(--color-on-surface-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.ai-settings-back {
+  appearance: none;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-on-surface-secondary);
+}
+
+.ai-settings-content {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-6) max(var(--space-4), env(safe-area-inset-right)) max(var(--space-8), env(safe-area-inset-bottom)) max(var(--space-4), env(safe-area-inset-left));
+}
+
+.ai-settings-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.ai-settings-section-heading {
+  display: grid;
+  gap: var(--space-1);
+  padding-inline: var(--space-1);
+}
+
+.ai-settings-section-heading h2 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.ai-settings-card {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.ai-settings-fields {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.ai-settings-select-label {
+  color: var(--color-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ai-settings-select,
+.ai-settings-input {
+  min-height: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-on-surface);
+  font: inherit;
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-control);
+}
+
+.ai-settings-select {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+}
+
+.ai-settings-input {
+  padding: var(--space-2) var(--space-3);
+}
+
+.ai-settings-select:focus-visible,
+.ai-settings-input:focus-visible,
+.ai-settings-back:focus-visible,
+.ai-settings-action:focus-visible {
+  outline: 2px solid var(--agent-focus-ring);
+  outline-offset: 2px;
+}
+
+.ai-settings-select:disabled,
+.ai-settings-input:disabled {
+  opacity: 0.4;
+}
+
+.ai-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ai-settings-action {
+  min-height: 44px;
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-4);
+  font-size: 14px;
+}
+
+.ai-settings-banner {
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.ai-settings-managed,
+.ai-settings-loading {
+  min-height: 72px;
+}
+
+@media (hover: hover) {
+  .ai-settings-back:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-on-surface);
+  }
+}
+
+.ai-settings-back:active {
+  transform: scale(0.95);
+}
+
+@media (max-width: 520px) {
+  .ai-settings-content {
+    gap: var(--space-5);
+    padding-top: var(--space-5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-settings-back:active {
+    transform: none;
+  }
+}
+
+.ai-settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.ai-settings-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.ai-settings-toggle-title {
+  color: var(--color-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ai-settings-toggle-desc {
+  color: var(--color-on-surface-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.ai-settings-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}

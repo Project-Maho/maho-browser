@@ -1,0 +1,69 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_boost_window") {
+  sources = [
+    "maho_boost_window_controller.cc",
+    "maho_boost_window_controller.h",
+    "maho_boost_window_controller_bridge.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_boost:mojo_bindings",
+    "//maho/components/constants",
+    "//net",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}
+
+group("maho_boost_bubble") {
+}
+
+source_set("interactive_tests") {
+  testonly = true
+  sources = [
+    "maho_boost_actions_interactive_uitest.cc",
+    "maho_boost_behavior_interactive_uitest.cc",
+    "maho_boost_codemirror_interactive_uitest.cc",
+    "maho_boost_dom_equivalence_interactive_uitest.cc",
+    "maho_boost_interactive_test_support.cc",
+    "maho_boost_lifecycle_interactive_uitest.cc",
+    "maho_boost_test_support_interactive_uitest.cc",
+    "maho_boost_visual_accessibility_interactive_uitest.cc",
+    "maho_boost_visual_capture_interactive_uitest.cc",
+    "maho_boost_visual_capture_test_support.cc",
+    "maho_boost_visual_capture_validation.cc",
+    "maho_boost_zap_picker_interactive_uitest.cc",
+  ]
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  deps = [
+    ":maho_boost_window",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//net:test_support",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/base:test_support",
+    "//ui/events:events_base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views:test_support",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}

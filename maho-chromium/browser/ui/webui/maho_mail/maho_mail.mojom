@@ -1,0 +1,222 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_mail.mojom;
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  ListAccounts() => (bool ok, string result_json);
+  AddAccount(string request_json) => (bool ok, string result_json);
+  TestConnection(string params_json) => (bool ok, string result_json);
+  DeleteAccount(string account_id) => (bool ok, string result_json);
+  OAuthStartUrl(string provider, string client_id, string redirect_uri) => (bool ok, string result_json);
+  // Begins a loopback OAuth sign-in and navigates the hosting WebContents
+  // in place to the provider consent page (browser-initiated). Used by the
+  // in-window mail overlay, where window.open cannot open a popup/tab.
+  // `reauthorize_account_id` is empty for new-account sign-in. When present,
+  // the helper replaces credentials for that Gmail account after consent.
+  BeginOAuth(string provider, string reauthorize_account_id) => (bool ok, string error_json, string state);
+  OAuthComplete(string state, string code) => (bool ok, string result_json);
+  ReconnectAccount(string account_id) => (bool ok, string result_json);
+  CancelOAuth(string state) => (bool accepted);
+  // Dismiss the hosting surface (mail overlay) when onboarding completes.
+  // Routes through the WebContents delegate's CloseContents so it works even
+  // when blink blocks window.close() (multi-entry history after the OAuth
+  // redirect round-trip).
+  CloseOnboarding();
+
+  MarkRead(string email_id) => (bool ok, string result_json);
+  MarkUnread(string email_id) => (bool ok, string result_json);
+  ToggleStar(string email_id) => (bool ok, string result_json);
+  DeleteEmail(string email_id) => (bool ok, string result_json);
+  MoveEmail(string email_id, string target_folder_id) => (bool ok, string result_json);
+  BatchMarkRead(string request_json) => (bool ok, string result_json);
+  BatchMarkUnread(string request_json) => (bool ok, string result_json);
+  BatchDelete(string request_json) => (bool ok, string result_json);
+  BatchMove(string request_json) => (bool ok, string result_json);
+  BatchToggleStar(string request_json) => (bool ok, string result_json);
+  SyncFolders(string account_id) => (bool ok, string result_json);
+  SyncFolder(string account_id, string folder_id) => (bool ok, string result_json);
+  CreateFolder(string account_id, string folder_name) => (bool ok, string result_json);
+  RenameFolder(string account_id, string folder_id, string new_name) => (bool ok, string result_json);
+  DeleteFolder(string account_id, string folder_id) => (bool ok, string result_json);
+  GetFolderCounts(string account_id) => (bool ok, string result_json);
+  FlushPendingMutations(string account_id) => (bool ok, string result_json);
+  GetPendingMutationCount() => (bool ok, string result_json);
+  ListPendingMutations(string account_id) => (bool ok, string result_json);
+  // === [W-A] Read API WebUI Exposure ===
+  ListFolders(string account_id) => (bool ok, string result_json);
+  ListEmails(string account_id, string folder_id, int64 limit, int64 offset) => (bool ok, string result_json);
+  GetEmail(string email_id) => (bool ok, string result_json);
+  SearchEmails(string query_json) => (bool ok, string result_json);
+  ListThread(string account_id, string message_id) => (bool ok, string result_json);
+  // === [W-C..W-K.Typed] ===
+  StartAllAccountSync() => (bool ok, string result_json);
+  SendEmail(string request_json) => (bool ok, string result_json);
+  SaveDraft(string request_json) => (bool ok, string result_json);
+  UpdateDraft(string draft_id, string request_json) => (bool ok, string result_json);
+  GetReplyContext(string email_id) => (bool ok, string result_json);
+  QueueEmail(string request_json) => (bool ok, string result_json);
+  ListOutbox(string account_id) => (bool ok, string result_json);
+  RetryOutboxItem(string item_id) => (bool ok, string result_json);
+  DeleteOutboxItem(string item_id) => (bool ok, string result_json);
+  FlushOutbox() => (bool ok, string result_json);
+  DownloadAttachment(string account_id, int64 email_uid, string folder_id, string part_id, string filename) => (bool ok, string result_json);
+  ExtractOtp(string account_id, string folder_id, string query, int64 max_age_seconds) => (bool ok, string result_json);
+  SnoozeEmail(string email_id, string snooze_until) => (bool ok, string result_json);
+  UnsnoozeEmail(string email_id) => (bool ok, string result_json);
+  ListSnoozedEmails(string account_id) => (bool ok, string result_json);
+  SetReminder(string email_id, string reminder_at) => (bool ok, string result_json);
+  ClearReminder(string email_id) => (bool ok, string result_json);
+  ListReminders(string account_id) => (bool ok, string result_json);
+  MuteThread(string account_id, string message_id) => (bool ok, string result_json);
+  UnmuteThread(string account_id, string message_id) => (bool ok, string result_json);
+  IsThreadMuted(string account_id, string message_id) => (bool ok, string result_json);
+  ListMutedThreads(string account_id) => (bool ok, string result_json);
+  FilterMutedMessageIds(string account_id, string message_ids_json) => (bool ok, string result_json);
+  PinEmail(string email_id) => (bool ok, string result_json);
+  UnpinEmail(string email_id) => (bool ok, string result_json);
+  ListPinnedEmails(string account_id) => (bool ok, string result_json);
+  CreateMailRule(string request_json) => (bool ok, string result_json);
+  UpdateMailRule(string request_json) => (bool ok, string result_json);
+  DeleteMailRule(string rule_id) => (bool ok, string result_json);
+  ListMailRules(string account_id) => (bool ok, string result_json);
+  ReorderMailRules(string account_id, string rule_ids_json) => (bool ok, string result_json);
+  ListLabels(string account_id) => (bool ok, string result_json);
+  CreateLabel(string request_json) => (bool ok, string result_json);
+  DeleteLabel(string id) => (bool ok, string result_json);
+  AddLabelToEmail(string email_id, string label_id) => (bool ok, string result_json);
+  RemoveLabelFromEmail(string email_id, string label_id) => (bool ok, string result_json);
+  ListEmailLabels(string email_id) => (bool ok, string result_json);
+  SaveSearch(string name, string query, string account_id) => (bool ok, string result_json);
+  ListSavedSearches(string account_id) => (bool ok, string result_json);
+  DeleteSavedSearch(string id) => (bool ok, string result_json);
+  ScheduleSend(string request_json) => (bool ok, string result_json);
+  CancelScheduledSend(string id) => (bool ok, string result_json);
+  ListScheduledSends(string account_id) => (bool ok, string result_json);
+  StartScheduler() => (bool ok, string result_json);
+  StopScheduler() => (bool ok, string result_json);
+  SearchContacts(string account_id, string query, int64 limit) => (bool ok, string result_json);
+  ToggleVip(string contact_id) => (bool ok, string result_json);
+  ListVipContacts(string account_id) => (bool ok, string result_json);
+  PopulateContactsFromHistory(string account_id) => (bool ok, string result_json);
+  ListContactGroups(string account_id) => (bool ok, string result_json);
+  SearchContactGroups(string account_id, string query) => (bool ok, string result_json);
+  CreateContactGroup(string account_id, string name, string member_emails_json) => (bool ok, string result_json);
+  UpdateContactGroup(string group_id, string name, string member_emails_json) => (bool ok, string result_json);
+  DeleteContactGroup(string group_id) => (bool ok, string result_json);
+  ListSignatures(string account_id) => (bool ok, string result_json);
+  CreateSignature(string request_json) => (bool ok, string result_json);
+  UpdateSignature(string id, string request_json) => (bool ok, string result_json);
+  DeleteSignature(string id) => (bool ok, string result_json);
+  ListTemplates() => (bool ok, string result_json);
+  CreateTemplate(string request_json) => (bool ok, string result_json);
+  UpdateTemplate(string id, string request_json) => (bool ok, string result_json);
+  DeleteTemplate(string id) => (bool ok, string result_json);
+  GetEmailSummary(string account_id, string request_json) => (bool ok, string result_json);
+  GetReplyDraft(string account_id, string request_json) => (bool ok, string result_json);
+  AdjustTone(string request_json) => (bool ok, string result_json);
+  ClassifyEmail(string account_id, string request_json) => (bool ok, string result_json);
+  NaturalLanguageSearch(string request_json) => (bool ok, string result_json);
+  GetAiActionHistory(string account_id, int64 limit) => (bool ok, string result_json);
+  SaveAiConfig(string config_json) => (bool ok, string result_json);
+  GetAiConfig(string feature) => (bool ok, string result_json);
+  DeleteAiConfig(string feature) => (bool ok, string result_json);
+  TestAiConnection(string config_json) => (bool ok, string result_json);
+  GetAutoDraftForEmail(string account_id, string email_id) => (bool ok, string result_json);
+  UpdateAutoDraftStatus(string draft_id, string status) => (bool ok, string result_json);
+  TranslateText(string text, string target_lang, string source_lang) => (bool ok, string result_json);
+  GeneratePgpKey(string request_json) => (bool ok, string result_json);
+  ImportPgpKey(string request_json) => (bool ok, string result_json);
+  ExportPgpKey(string key_id, bool include_private) => (bool ok, string result_json);
+  ListPgpKeys(string account_id) => (bool ok, string result_json);
+  DeletePgpKey(string key_id) => (bool ok, string result_json);
+  SetDefaultPgpKey(string account_id, string key_id) => (bool ok, string result_json);
+  EncryptEmailPgp(string request_json) => (bool ok, string result_json);
+  EncryptAttachmentPgp(string request_json) => (bool ok, string result_json);
+  DecryptEmailPgp(string request_json) => (bool ok, string result_json);
+  SignEmailPgp(string request_json) => (bool ok, string result_json);
+  VerifyEmailPgp(string request_json) => (bool ok, string result_json);
+  ImportSmimeIdentity(string request_json) => (bool ok, string result_json);
+  ListSmimeIdentities(string account_id) => (bool ok, string result_json);
+  DeleteSmimeIdentity(string id) => (bool ok, string result_json);
+  SetDefaultSmimeIdentity(string account_id, string identity_id) => (bool ok, string result_json);
+  ExportSmimeCert(string id) => (bool ok, string result_json);
+  SignEmailSmime(string request_json) => (bool ok, string result_json);
+  EncryptEmailSmime(string request_json) => (bool ok, string result_json);
+  DecryptEmailSmime(string request_json) => (bool ok, string result_json);
+  VerifyEmailSmime(string signed_body) => (bool ok, string result_json);
+  CleanupSmimeForAccount(string account_id) => (bool ok, string result_json);
+  ImportCalendarEvent(string account_id, string email_id, string ics_data) => (bool ok, string result_json);
+  ListCalendarEvents(string account_id, string from_date, string to_date) => (bool ok, string result_json);
+  GetCalendarEvent(string event_id) => (bool ok, string result_json);
+  UpdateRsvp(string event_id, string rsvp_status) => (bool ok, string result_json);
+  GenerateRsvpReply(string event_id, string rsvp_status, string account_email) => (bool ok, string result_json);
+  DeleteCalendarEvent(string event_id, string delete_scope) => (bool ok, string result_json);
+  AutoImportCalendarEvents(string account_id, string email_id, string body_html, string body_text) => (bool ok, string result_json);
+  CreateCalendarEvent(string request_json) => (bool ok, string result_json);
+  UpdateCalendarEvent(string request_json) => (bool ok, string result_json);
+  SearchCalendarEvents(string account_id, string query, int64 limit) => (bool ok, string result_json);
+  CheckEventConflict(string account_id, string dtstart, string dtend, string exclude_event_id) => (bool ok, string result_json);
+  DuplicateCalendarEvent(string event_id) => (bool ok, string result_json);
+  GoogleCalendarMoveEvent(string account_id, string calendar_id, string event_id, string destination_calendar_id) => (bool ok, string result_json);
+  ExportCalendarIcs(string request_json) => (bool ok, string result_json);
+  ListCalendarCategories(string account_id) => (bool ok, string result_json);
+  CreateCalendarCategory(string account_id, string name, string color) => (bool ok, string result_json);
+  UpdateCalendarCategory(string id, string name, string color) => (bool ok, string result_json);
+  DeleteCalendarCategory(string id) => (bool ok, string result_json);
+  SyncGoogleCalendar(string account_id, bool _full_sync) => (bool ok, string result_json);
+  ListAccountCalendars(string account_id) => (bool ok, string result_json);
+  SetCalendarVisibility(string calendar_row_id, bool visible) => (bool ok, string result_json);
+  SubscribeHolidayCalendar(string account_id, string locale_code) => (bool ok, string result_json);
+  GoogleCalendarFreeBusy(string request_json) => (bool ok, string result_json);
+  GetAppSetting(string key) => (bool ok, string result_json);
+  SetAppSetting(string key, string value) => (bool ok, string result_json);
+  Md5Hash(string input) => (bool ok, string result_json);
+
+  // === [W-C.Additional.Typed] ===
+  GetAccount(string account_id) => (bool ok, string result_json);
+  UpdateAccount(string request_json) => (bool ok, string result_json);
+
+  // Consumes an opaque, one-use capability returned by DownloadAttachment.
+  // Raw filesystem paths are never accepted from the renderer.
+  OpenAttachment(string capability_token) => (bool ok, string error_msg);
+  SaveAttachment(string capability_token) => (bool ok, string error_msg, string saved_path);
+  GetDownloadDir() => (string path);
+
+  // === [W-C.Additional.Refresh.Typed] ===
+  RefreshOAuthToken(string account_id) => (bool ok, string result_json);
+
+  CallBackend(string command, string args_json) => (bool ok, string result_json);
+
+  // === [Browser UI Prefs Bridge] ===
+  // Reads the browser's authoritative theme + density preferences.
+  // prefs_json shape: {"theme":"system"|"light"|"dark",
+  //                    "density":"comfortable"|"compact"}
+  GetBrowserUiPrefs() => (string prefs_json);
+};
+
+interface Page {
+  OnLifecycleChanged(string state, uint64 generation);
+  OnAccountsChanged();
+  OnAuthRequired(string account_id, string provider, string reason);
+  OnAuthRefreshSucceeded(string account_id);
+  // === [W-C..W-K.Events] ===
+  OnNewMail(string account_id);
+  OnMutation(string account_id, string payload);
+  OnOutbox(string account_id, string payload);
+  OnScheduler(string account_id, string payload);
+  OnAgentStream(string session_id, string chunk);
+  OnCalendar(string account_id, string payload);
+  OnImport(string payload);
+  OnSyncEvent(string event_type, string payload);
+  OnBackfillEvent(string event_type, string payload);
+  OnStatusChanged(string account_id, bool connected);
+  // === [Browser UI Prefs Bridge] ===
+  // Pushed when the browser's theme or density preference changes.
+  // prefs_json shape matches PageHandler.GetBrowserUiPrefs.
+  OnBrowserUiPrefsChanged(string prefs_json);
+};

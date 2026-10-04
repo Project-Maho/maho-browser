@@ -1,0 +1,14 @@
+=== RUNNING: target/debug/maho desktop click without --approve ===
+{
+  "action": "desktop.input",
+  "code": "platform_typed_approval_required",
+  "message": "typed approval required for action 'desktop.input'"
+}
+EXIT_CODE: 0
+=== RUNNING: target/debug/maho desktop move --x 10 --y 10 without --approve ===
+{
+  "action": "desktop.input",
+  "code": "platform_typed_approval_required",
+  "message": "typed approval required for action 'desktop.input'"
+}
+EXIT_CODE: 0

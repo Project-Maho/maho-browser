@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "bundleVersion": "0.1.0",
+  "buildTimestamp": 1788629566,
+  "files": {
+    "web-ai/index.html": {
+      "size": 432,
+      "sha256": "2dddcda400b720c72f6780597f2ccb02b030720f3a48fe706dd43f0f44d16f46",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/chunks/onboarding-screen-Cxv4NiY0.js": {
+      "size": 9534,
+      "sha256": "cfe1728724bf8b7d0beba57db7161f6e6fcc490d9a182ff24de00b938a8001c6",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/chunks/conversation-list-screen-D4LhtEPX.js": {
+      "size": 17139,
+      "sha256": "43c1c46db865e3239f91ba2da0efdaacd605f6d33812eb6b40820a784dba45e2",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/chunks/agent-screen-B8G8x65N.js": {
+      "size": 29855,
+      "sha256": "d201e541f0742272cd4a7089549f867296a3f69248eeb7bc6f868adb3dc9df12",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/chunks/byok-screen-BqvIsY2g.js": {
+      "size": 12230,
+      "sha256": "d4c72c574dc2467d0ca0caaaa6227119010ffd18b3feb5c3cc24a60880333b09",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/index-Cqfq2zWL.css": {
+      "size": 19015,
+      "sha256": "fb999b2056951742a75b6518abe3fd9723baba89e5924eb2520ac5e5db5a2554",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/maho-logo-BtD8zpUc.png": {
+      "size": 17462,
+      "sha256": "845a0e5195a9b8b5adc44dde22dc700da0c3cc91a2005b0ee1e378bbd4ecdf37",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/conversation-list-screen-BRhYgtxU.css": {
+      "size": 8758,
+      "sha256": "4d9dc53e600f60cd42c7a55e0ab28ebadf6328a125bf46e97ed4ad4053a84551",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/byok-screen-DAdoM5fb.css": {
+      "size": 3720,
+      "sha256": "01f3d441c61c57690227022c9cdc4923d1c35aaf347958dc40c0c222b771ad7b",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/agent-screen-DfMFQ6PA.css": {
+      "size": 16044,
+      "sha256": "4ba7cf7808c19027f1829514e7d42f88bb233d0ff3d4c9254a8934a073ebe845",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/maho-star-BKA5J-jZ.png": {
+      "size": 134423,
+      "sha256": "c050e88d1e6ebf39a060d7354cac306122481a0e3566f522d890461a2940f509",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/assets/onboarding-screen-Dbx8HB5B.css": {
+      "size": 8207,
+      "sha256": "a3691651edd9d3e69f132a883937be1fcf2447e70a1d25613f5d7423e07cc866",
+      "modifiedTimestamp": 1788629566
+    },
+    "web-ai/ai-bundle.js": {
+      "size": 75085,
+      "sha256": "0065e254c68924179501450e133aec72585653ea1b2ade94469096d638a43e48",
+      "modifiedTimestamp": 1788629566
+    }
+  }
+}

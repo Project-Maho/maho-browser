@@ -1,0 +1,17 @@
+diff --git a/tools/metrics/histograms/metadata/ui/histograms.xml b/tools/metrics/histograms/metadata/ui/histograms.xml
+index e0ad96cdfae360858a0be5b3f22076fdbfc26749..123be9c2c017db5708500d083f57030ef1da5609 100644
+--- a/tools/metrics/histograms/metadata/ui/histograms.xml
++++ b/tools/metrics/histograms/metadata/ui/histograms.xml
+@@ -119,7 +119,11 @@ chromium-metrics-reviews@google.com.
+   <variant name=".LensOverlayUntrusted"/>
+   <variant name=".LensSidePanelUntrusted"/>
+   <variant name=".MakoUntrusted"/>
+-  <variant name=".NewTabFooter"/>
++    <variant name=".MahoAi"/>
++    <variant name=".MahoBoost"/>
++    <variant name=".MahoEasel"/>
++    <variant name=".MahoNotes"/>
++    <variant name=".NewTabFooter"/>
+   <variant name=".OmniboxPopup"/>
+   <variant name=".PerformanceSidePanel"/>
+   <variant name=".ReadAnythingUntrusted"/>

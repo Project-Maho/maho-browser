@@ -1,0 +1,37 @@
+[package]
+name = "maho-storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+maho-types = { path = "../maho-types" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+heed = "0.20"
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Android cross-compile has no system OpenSSL, so vendor it (also satisfies
+# openssl-sys pulled by native-tls). MUST stay android-scoped: enabling vendored
+# OpenSSL globally would statically link it beside Chromium's BoringSSL on desktop,
+# causing EVP_*/SHA256_* symbol collisions.
+[target.'cfg(target_os = "android")'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# Windows: SQLCipher is compiled to OpenSSL's crypto ABI (HMAC_CTX /
+# PKCS5_PBKDF2_HMAC struct layouts). Under the plain `bundled-sqlcipher` feature
+# its EVP_*/SHA256_*/HMAC symbols are left undefined and bind to Chromium's
+# BoringSSL at link time — but BoringSSL's context structs differ in size/layout,
+# so key derivation memcpy's past its buffer and corrupts the heap at every
+# startup (open_with_key -> get_all_passwords -> PKCS5_PBKDF2_HMAC). Vendor
+# OpenSSL so SQLCipher binds its own matching crypto. The Windows build
+# (build_maho_core.py) then privatizes the vendored OpenSSL + Rust runtime
+# symbols to a per-lib private prefix so they no longer collide with BoringSSL
+# (or Chromium's Rust std) at the chrome.dll link.
+[target.'cfg(target_os = "windows")'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher-vendored-openssl"] }

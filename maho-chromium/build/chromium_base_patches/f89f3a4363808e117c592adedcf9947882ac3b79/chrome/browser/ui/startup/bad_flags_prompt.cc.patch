@@ -1,0 +1,15 @@
+diff --git c/chrome/browser/ui/startup/bad_flags_prompt.cc w/chrome/browser/ui/startup/bad_flags_prompt.cc
+index ec4de18dce2482604b684a33f4ebc9d6a03b667e..eb2e736d1c49f86b39149d3ed5e4854d1204ff90 100644
+--- c/chrome/browser/ui/startup/bad_flags_prompt.cc
++++ w/chrome/browser/ui/startup/bad_flags_prompt.cc
+@@ -262,6 +262,10 @@ void ShowBadFlagsInfoBarHelper(content::WebContents* web_contents,
+ }  // namespace
+ 
+ void ShowBadFlagsPrompt(content::WebContents* web_contents) {
++  // Maho: suppress unsupported command-line flags security warning infobars.
++  if (web_contents) {
++    return;
++  }
+ // On Android, ShowBadFlagsPrompt doesn't show the warning notification
+ // for flags which are not available in about:flags.
+ #if !BUILDFLAG(IS_ANDROID)

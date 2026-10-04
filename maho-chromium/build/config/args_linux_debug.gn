@@ -1,0 +1,15 @@
+# Debug settings for Linux builds.
+is_official_build = false
+is_debug = true
+symbol_level = 2
+
+target_os = "linux"
+target_cpu = "x64"
+maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true
+use_sysroot = true
+use_siso = true
+cc_wrapper = "sccache"

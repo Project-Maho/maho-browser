@@ -1,0 +1,113 @@
+diff --git c/chrome/browser/ui/views/frame/contents_container_view.cc w/chrome/browser/ui/views/frame/contents_container_view.cc
+index 099b89a24c04886a696793d7f9dd163982b8052f..68a0338d8f493e533960b407ef532e99ddadf87e 100644
+--- c/chrome/browser/ui/views/frame/contents_container_view.cc
++++ w/chrome/browser/ui/views/frame/contents_container_view.cc
+@@ -34,6 +34,7 @@
+ #include "chrome/common/chrome_features.h"
+ #include "components/search/ntp_features.h"
+ #include "content/public/browser/web_contents.h"
++#include "maho/browser/ui/views/frame/maho_contents_header_view.h"
+ #include "ui/accessibility/accessibility_features.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+ #include "ui/compositor/layer.h"
+@@ -54,7 +55,7 @@
+ #endif
+ 
+ namespace {
+-constexpr int kSplitViewContentPadding = 4;
++constexpr int kSplitViewContentPadding = 0;
+ constexpr int kNewTabFooterSeparatorHeight = 1;
+ constexpr int kNewTabFooterHeight = 56;
+ }  // namespace
+@@ -160,6 +161,10 @@
+   mini_toolbar_ = AddChildView(std::make_unique<MultiContentsViewMiniToolbar>(
+       browser_view, contents_view_));
+ 
++  maho_contents_header_ = AddChildView(
++      std::make_unique<maho::MahoContentsHeaderView>(browser_view,
++                                                     contents_view_));
++
+   container_outline_ =
+       AddChildView(std::make_unique<ContentsContainerOutline>(mini_toolbar_));
+ 
+@@ -182,6 +187,12 @@
+ 
+ std::vector<views::View*> ContentsContainerView::GetAccessiblePanes() {
+   std::vector<views::View*> accessible_panes;
++  // The per-pane Maho header is a keyboard pane (AccessiblePaneView) ahead
++  // of the WebContents pane, so F6 reaches back/forward/reload, security,
++  // host, translate, page tools and copy URL before the page itself.
++  if (maho_contents_header_ && maho_contents_header_->GetVisible()) {
++    accessible_panes.push_back(maho_contents_header_);
++  }
+   if (contents_view_->GetVisible()) {
+     accessible_panes.push_back(contents_view_);
+   }
+@@ -201,6 +212,9 @@
+   is_in_split_ = is_in_split;
+ 
+   if (!is_in_split) {
++    if (maho_contents_header_) {
++      maho_contents_header_->SetActive(!is_in_split || is_active);
++    }
+     if (split_changed) {
+       SetBorder(nullptr);
+       UpdateBorderRoundedCorners();
+@@ -218,10 +232,13 @@
+       UpdateBorderRoundedCorners();
+     }
+ 
+-    container_outline_->UpdateState(is_active, is_highlighted);
++    container_outline_->SetVisible(false);
+     // Mini toolbar should only be visible for the inactive contents
+     // container view or both depending on configuration.
+-    mini_toolbar_->UpdateState(is_active, is_highlighted);
++    mini_toolbar_->SetVisible(false);
++    if (maho_contents_header_) {
++      maho_contents_header_->SetActive(!is_in_split || is_active);
++    }
+     if (capture_contents_border_view_) {
+       capture_contents_border_view_->SetIsInSplit(true);
+     }
+@@ -234,6 +251,18 @@
+     GetWidget()->non_client_view()->frame_view()->UpdateWindowRoundedCorners();
+   }
+ #endif  //  BUILDFLAG(IS_CHROMEOS)
++}
++
++void ContentsContainerView::SetMahoAiPanelAdjacent(bool adjacent) {
++  if (maho_ai_panel_adjacent_ == adjacent) {
++    return;
++  }
++  maho_ai_panel_adjacent_ = adjacent;
++  if (adjacent) {
++    SetBorderRoundedCornersFrom(gfx::RoundedCornersF{0});
++  } else if (!is_in_split_) {
++    UpdateBorderRoundedCorners();
++  }
+ }
+ 
+ void ContentsContainerView::SetBorderRoundedCornersFrom(
+@@ -477,6 +506,22 @@
+   }
+ 
+   gfx::Rect full_contents_bounds = GetContentsBounds();
++  // Maho: the per-pane contents header is the top strip of the container;
++  // devtools, scrims and overlays are laid out below it.
++  if (maho_contents_header_) {
++    const bool header_visible = maho_contents_header_->GetVisible();
++    gfx::Rect header_bounds;
++    if (header_visible) {
++      const int header_height = maho::kMahoContentsHeaderHeightDp;
++      header_bounds =
++          gfx::Rect(full_contents_bounds.x(), full_contents_bounds.y(),
++                    full_contents_bounds.width(), header_height);
++      full_contents_bounds.Inset(gfx::Insets().set_top(header_height));
++    }
++    layouts.child_layouts.emplace_back(maho_contents_header_.get(),
++                                       header_visible,
++                                       GetMirroredRect(header_bounds));
++  }
+   gfx::Rect devtools_bounds;
+   // The area contents excluding devtools is drawn (ie |contents_view_|,
+   // |new_tab_footer_view_|, etc).

@@ -1,0 +1,111 @@
+diff --git a/chrome/common/extensions/api/maho_split_view.json b/chrome/common/extensions/api/maho_split_view.json
+new file mode 100644
+index 0000000000000..b14e312f208dc
+--- /dev/null
++++ b/chrome/common/extensions/api/maho_split_view.json
+@@ -0,0 +1,105 @@
++// Copyright 2026 Maho Browser. All rights reserved.
++
++[
++  {
++    "namespace": "maho.splitView",
++    "description": "Use the <code>chrome.maho.splitView</code> API to create, close, and query the split-view layout of the active Maho browser window.",
++    "compiler_options": {
++      "implemented_in": "maho/browser/extensions/api/maho_split_view_api.h"
++    },
++    "types": [
++      {
++        "id": "SplitViewInfo",
++        "type": "object",
++        "description": "Describes the current split-view state of a browser window.",
++        "properties": {
++          "active": {
++            "type": "boolean",
++            "description": "Whether a split is currently active for the active tab."
++          },
++          "splitViewId": {
++            "type": "string",
++            "optional": true,
++            "description": "A stable identifier for the window hosting the split. Present only when a split is active."
++          }
++        }
++      }
++    ],
++    "functions": [
++      {
++        "name": "create",
++        "type": "function",
++        "description": "Creates a split next to the active tab. If a split is already active this is a no-op. Optionally opens the given URL in the new split pane.",
++        "parameters": [
++          {
++            "name": "url",
++            "type": "string",
++            "optional": true,
++            "description": "URL to open in the newly created split pane. Defaults to about:blank when omitted."
++          },
++          {
++            "name": "windowId",
++            "type": "integer",
++            "optional": true,
++            "description": "Target Maho window id. Defaults to a current window for the calling profile."
++          }
++        ],
++        "returns_async": {
++          "name": "callback",
++          "optional": true,
++          "parameters": [
++            {
++              "name": "info",
++              "$ref": "SplitViewInfo"
++            }
++          ]
++        }
++      },
++      {
++        "name": "close",
++        "type": "function",
++        "description": "Closes the split for the active tab, if one is active.",
++        "parameters": [
++          {
++            "name": "windowId",
++            "type": "integer",
++            "optional": true,
++            "description": "Target Maho window id. Defaults to a current window for the calling profile."
++          }
++        ],
++        "returns_async": {
++          "name": "callback",
++          "optional": true,
++          "parameters": [
++            {
++              "name": "info",
++              "$ref": "SplitViewInfo"
++            }
++          ]
++        }
++      },
++      {
++        "name": "query",
++        "type": "function",
++        "description": "Returns the current split-view state of the active browser window.",
++        "parameters": [
++          {
++            "name": "windowId",
++            "type": "integer",
++            "optional": true,
++            "description": "Target Maho window id. Defaults to a current window for the calling profile."
++          }
++        ],
++        "returns_async": {
++          "name": "callback",
++          "parameters": [
++            {
++              "name": "info",
++              "$ref": "SplitViewInfo"
++            }
++          ]
++        }
++      }
++    ]
++  }
++]

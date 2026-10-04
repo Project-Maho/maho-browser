@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>What's New in Maho</title>
+  <style>
+    /* Tokens mirror the standalone release-notes sheet emitted by
+       build/scripts/generate_changelog_json.py so chrome://maho-changelog and
+       the Sparkle update dialog read as the same surface: near-black canvas,
+       a single violet accent, hairline cards. */
+    :root {
+      color-scheme: dark;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      --canvas: #0a0a0a;
+      --sheet: #101012;
+      --card: #151517;
+      --ink: #fafafa;
+      --ink-muted: #a1a1aa;
+      --ink-faint: #71717a;
+      --hairline: #27272a;
+      --accent: #8b7ff5;
+      --accent-soft: rgba(139, 127, 245, 0.12);
+      --wash: rgba(250, 250, 250, 0.04);
+      --wash-strong: rgba(250, 250, 250, 0.07);
+      --dot: rgba(250, 250, 250, 0.22);
+      --radius-sm: 8px;
+      --radius-md: 11px;
+      --radius-lg: 17px;
+      --space-xs: 6px;
+      --space-sm: 10px;
+      --space-md: 16px;
+      --space-lg: 24px;
+      --space-xl: 34px;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-display: ui-serif, 'New York', 'Iowan Old Style', Palatino, Georgia, serif;
+      --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+      --font-size-xs: 10.5px;
+      --font-size-sm: 12.5px;
+      --font-size-md: 13.5px;
+      --font-size-lg: 15px;
+      --transition-fast: 140ms ease;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        color-scheme: light;
+        --canvas: #fafaf9;
+        --sheet: #ffffff;
+        --card: #f7f7f6;
+        --ink: #18181b;
+        --ink-muted: #52525b;
+        --ink-faint: #8a8a93;
+        --hairline: #e4e4e7;
+        /* Same violet, one ramp step darker so small mono labels stay legible. */
+        --accent: #6355d8;
+        --accent-soft: rgba(139, 127, 245, 0.10);
+        --wash: rgba(24, 24, 27, 0.03);
+        --wash-strong: rgba(24, 24, 27, 0.06);
+        --dot: rgba(24, 24, 27, 0.24);
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      padding: var(--space-xl) var(--space-md) 56px;
+      background-color: var(--canvas);
+      background-image: radial-gradient(760px 340px at 10% -8%, var(--accent-soft), transparent 64%);
+      background-repeat: no-repeat;
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: var(--font-size-lg);
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .page-header {
+      margin-bottom: var(--space-lg);
+    }
+
+    .eyebrow {
+      display: block;
+      margin-bottom: var(--space-sm);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    h1 {
+      margin-bottom: var(--space-xs);
+      font-family: var(--font-display);
+      font-size: clamp(2rem, 5vw, 2.5rem);
+      font-weight: 400;
+      line-height: 1.04;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+
+    .page-subtitle {
+      max-width: 58ch;
+      color: var(--ink-muted);
+      font-size: var(--font-size-lg);
+      text-wrap: pretty;
+    }
+
+    .release-card {
+      margin-bottom: var(--space-lg);
+      padding: var(--space-lg) var(--space-lg) var(--space-lg);
+      background-color: var(--sheet);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+      box-shadow: inset 0 1px 0 var(--wash-strong);
+    }
+
+    .release-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-xs);
+    }
+
+    .release-title-group {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+    }
+
+    .release-version {
+      font-family: var(--font-display);
+      font-size: clamp(1.6rem, 4vw, 1.95rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+    }
+
+    .release-date {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border: 1px solid var(--hairline);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    /* One neutral chip treatment for every change type; the glyph carries the
+       meaning so the palette stays a single ink ramp plus the violet accent. */
+    .badge-channel,
+    .badge-added,
+    .badge-fixed,
+    .badge-changed,
+    .badge-removed,
+    .badge-general {
+      background-color: var(--wash-strong);
+      border-color: var(--hairline);
+      color: var(--ink-muted);
+    }
+
+    .badge-channel {
+      color: var(--accent);
+      border-color: var(--accent);
+      background-color: var(--accent-soft);
+    }
+
+    .section-label {
+      margin-bottom: var(--space-sm);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      font-weight: 400;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+
+    /* Shape-of-release row: how much was added, fixed, changed, removed, read
+       before any prose. */
+    ul.glance {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1px;
+      margin: var(--space-md) 0 0;
+      background-color: var(--hairline);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+
+    .tally {
+      flex: 1 1 0;
+      min-width: 104px;
+      display: flex;
+      align-items: baseline;
+      gap: 7px;
+      padding: 11px 14px;
+      background-color: var(--card);
+      list-style: none;
+    }
+
+    .tally-glyph {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--ink-faint);
+    }
+
+    .tally-count {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink);
+    }
+
+    .tally-label {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+
+    .highlights-box {
+      margin: var(--space-md) 0;
+      padding: var(--space-md) var(--space-md) var(--space-sm);
+      background-color: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+    }
+
+    .highlights-title {
+      margin-bottom: var(--space-sm);
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      font-weight: 400;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+    }
+
+    ol.item-list,
+    ul.item-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .highlights-box ol.item-list {
+      counter-reset: highlight;
+    }
+
+    .highlights-box ol.item-list li {
+      position: relative;
+      padding-left: 30px;
+      margin-bottom: var(--space-sm);
+      font-size: var(--font-size-lg);
+      color: var(--ink);
+    }
+
+    .highlights-box ol.item-list li:last-child {
+      margin-bottom: 0;
+    }
+
+    .highlights-box ol.item-list li::before {
+      counter-increment: highlight;
+      content: counter(highlight, decimal-leading-zero);
+      position: absolute;
+      left: 0;
+      top: 2px;
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      letter-spacing: 0.08em;
+      color: var(--ink-faint);
+    }
+
+    .changes-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-sm);
+      align-items: start;
+    }
+
+    @media (min-width: 700px) {
+      .changes-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    .change-group {
+      padding: 15px 17px 14px;
+      background-color: var(--card);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+    }
+
+    .change-header {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 11px;
+    }
+
+    .change-glyph {
+      margin-right: 5px;
+      color: var(--ink-faint);
+    }
+
+    .change-title {
+      font-size: 14.5px;
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      color: var(--ink);
+    }
+
+    .change-count {
+      margin-left: auto;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--ink-faint);
+    }
+
+    .change-group ul.item-list li {
+      position: relative;
+      padding-left: 13px;
+      margin-bottom: 7px;
+      font-size: var(--font-size-md);
+      color: var(--ink-muted);
+    }
+
+    .change-group ul.item-list li:last-child {
+      margin-bottom: 0;
+    }
+
+    .change-group ul.item-list li::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background-color: var(--dot);
+    }
+
+    .release-body {
+      margin-top: var(--space-md);
+      padding-top: var(--space-md);
+      border-top: 1px solid var(--hairline);
+      color: var(--ink-muted);
+      font-size: var(--font-size-lg);
+    }
+
+    .release-body h1,
+    .release-body h2,
+    .release-body h3,
+    .release-body h4 {
+      margin: var(--space-md) 0 var(--space-xs);
+      font-family: var(--font-display);
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: var(--ink);
+    }
+
+    .release-body p {
+      max-width: 66ch;
+      margin-bottom: var(--space-sm);
+    }
+
+    .release-body ul {
+      margin-bottom: var(--space-sm);
+      padding-left: 20px;
+    }
+
+    .release-body li {
+      margin-bottom: 5px;
+    }
+
+    .release-empty-notice {
+      padding: var(--space-xs) 0;
+      color: var(--ink-faint);
+      font-size: var(--font-size-md);
+    }
+
+    .empty-state {
+      padding: var(--space-xl) var(--space-md);
+      background-color: var(--sheet);
+      border: 1px dashed var(--hairline);
+      border-radius: var(--radius-lg);
+      color: var(--ink-faint);
+      font-size: var(--font-size-lg);
+      text-align: center;
+    }
+
+    code {
+      padding: 1px 5px;
+      background-color: var(--wash-strong);
+      border-radius: 5px;
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      color: var(--ink);
+    }
+
+    pre {
+      margin: var(--space-sm) 0;
+      padding: var(--space-md);
+      background-color: var(--canvas);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+    }
+
+    pre code {
+      padding: 0;
+      background-color: transparent;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      text-underline-offset: 3px;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+
+    @media (max-width: 560px) {
+      body {
+        padding: var(--space-lg) var(--space-md) 40px;
+      }
+
+      .release-card {
+        padding: var(--space-md);
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="page-header">
+      <span class="eyebrow">Maho changelog</span>
+      <h1>What's new in Maho</h1>
+      <p class="page-subtitle">Every shipped release, with the changes that came with it.</p>
+    </header>
+    <main id="app">
+      <div class="empty-state">Loading release notes...</div>
+    </main>
+  </div>
+  <script type="module" src="changelog.js"></script>
+</body>
+</html>

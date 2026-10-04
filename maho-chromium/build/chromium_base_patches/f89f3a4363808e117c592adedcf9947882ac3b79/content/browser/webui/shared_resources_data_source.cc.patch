@@ -1,0 +1,31 @@
+diff --git c/content/browser/webui/shared_resources_data_source.cc w/content/browser/webui/shared_resources_data_source.cc
+index ed876dcc31b96afb867c83d8a240c93123f9f3e2..c5768b0b18e581d02333b8491d817a0f7dc07590 100644
+--- c/content/browser/webui/shared_resources_data_source.cc
++++ w/content/browser/webui/shared_resources_data_source.cc
+@@ -5,7 +5,10 @@
+ #include "content/browser/webui/shared_resources_data_source.h"
+ 
+ #include <set>
++#include <vector>
+ 
++#include "content/public/browser/content_browser_client.h"
++#include "content/public/common/content_client.h"
+ #include "content/public/browser/web_ui_data_source.h"
+ #include "services/network/public/mojom/content_security_policy.mojom.h"
+ #include "ui/base/webui/web_ui_util.h"
+@@ -55,6 +58,15 @@ void PopulateSharedResourcesDataSource(WebUIDataSource* source) {
+   // they are only used by one UI) or in //ui/webui/resources/mojo:build_ts
+   // (if used by multiple UIs).
+   source->AddResourcePaths(kWebuiResources);
++
++  if (auto* content_client = GetContentClient()) {
++    if (auto* browser_client = content_client->browser()) {
++      for (base::span<const webui::ResourcePath> resource_paths :
++           browser_client->GetAdditionalWebUIResourcePaths()) {
++        source->AddResourcePaths(resource_paths);
++      }
++    }
++  }
+ #if BUILDFLAG(IS_CHROMEOS)
+   source->AddResourcePaths(kAshWebuiCommonResources);
+   // Deprecated -lite style mojo bindings.

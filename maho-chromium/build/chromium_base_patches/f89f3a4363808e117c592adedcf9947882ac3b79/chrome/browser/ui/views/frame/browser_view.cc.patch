@@ -1,0 +1,1114 @@
+diff --git c/chrome/browser/ui/views/frame/browser_view.cc w/chrome/browser/ui/views/frame/browser_view.cc
+index 32b047fd1ff48a6cf7a3a82c902b21e69ff3aa06..02d52dc3069b54614f5f56cb2c74552cfa8f88c1 100644
+--- c/chrome/browser/ui/views/frame/browser_view.cc
++++ w/chrome/browser/ui/views/frame/browser_view.cc
+@@ -3,6 +3,13 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/ui/views/frame/browser_view.h"
++#include "maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h"
++#include "maho/browser/ui/views/maho_content_gradient_view.h"
++#include "maho/browser/ui/views/peek/maho_peek_controller.h"
++#include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
++#include "maho/browser/ui/theme/maho_theme_helper.h"
+ 
+ #include <stdint.h>
+ 
+@@ -22,6 +29,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
++#include "base/logging.h"
+ #include "base/i18n/rtl.h"
+ #include "base/location.h"
+ #include "base/memory/raw_ptr.h"
+@@ -180,6 +188,26 @@
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_background_blur_backdrop.h"
+ #include "chrome/browser/ui/views/frame/vertical_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
++#include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h"
++#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
++#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"
++#include "maho/browser/maho_tab_id_session_helper.h"
++#include "maho/browser/maho_tab_preview_capture.h"
++#include "maho/third_party/maho/maho_ffi.h"
++#include "maho/browser/maho_core_holder.h"
++#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"
++#include "maho/browser/maho_tab_id_session_helper.h"
++#include "maho/browser/maho_tab_preview_capture.h"
++#include "maho/browser/ui/tabs/maho_mru_tab_tracker.h"
++#include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_controller.h"
++#include "maho/browser/maho_private_context_policy.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
++#include "maho/browser/ui/views/spaces_overlay/maho_spaces_overlay_controller.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++#include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
+ #include "chrome/browser/ui/views/fullscreen_control/fullscreen_control_host.h"
+ #include "chrome/browser/ui/views/glic/glic_button_interface.h"
+ #include "chrome/browser/ui/views/global_media_controls/media_toolbar_button_view.h"
+@@ -207,6 +235,16 @@
+ #include "chrome/browser/ui/views/side_panel/side_panel.h"
+ #include "chrome/browser/ui/views/side_panel/side_panel_animation_content_view.h"
+ #include "chrome/browser/ui/views/side_panel/side_panel_coordinator.h"
++#include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
++#include "maho/browser/ui/views/command/maho_command_action_handler.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
++#include "maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h"
++#include "maho/browser/ui/theme/maho_color_id.h"
++#include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
++#include "cc/paint/paint_flags.h"
++#include "cc/paint/paint_shader.h"
+ #include "chrome/browser/ui/views/status_bubble_views.h"
+ #include "chrome/browser/ui/views/tab_contents/chrome_web_contents_view_focus_helper.h"
+ #include "chrome/browser/ui/views/tab_search_bubble_host.h"
+@@ -344,6 +382,7 @@
+ #include "ui/views/accessibility/view_accessibility.h"
+ #include "ui/views/accessibility/view_accessibility_utils.h"
+ #include "ui/views/animation/compositor_animation_runner.h"
++#include "ui/views/background.h"
+ #include "ui/views/bubble/bubble_dialog_delegate_view.h"
+ #include "ui/views/controls/button/menu_button.h"
+ #include "ui/views/controls/textfield/textfield.h"
+@@ -418,6 +457,56 @@ using web_modal::WebContentsModalDialogHost;
+ 
+ namespace {
+ 
++class MahoCreateSpaceBlankView : public views::View {
++  METADATA_HEADER(MahoCreateSpaceBlankView, views::View)
++ public:
++  MahoCreateSpaceBlankView() {
++    SetPaintToLayer();
++    layer()->SetName("MahoCreateSpaceBlankView");
++    layer()->SetFillsBoundsOpaquely(true);
++  }
++  ~MahoCreateSpaceBlankView() override = default;
++
++  void OnThemeChanged() override {
++    views::View::OnThemeChanged();
++    SchedulePaint();
++  }
++
++  void OnPaint(gfx::Canvas* canvas) override {
++    const gfx::Rect bounds = GetContentsBounds();
++    if (bounds.IsEmpty()) {
++      return;
++    }
++
++    const ui::ColorProvider* color_provider = GetColorProvider();
++    if (!color_provider) {
++      return;
++    }
++
++    const SkColor color_top = color_provider->GetColor(kMahoColorContentGradientTop);
++    const SkColor color_bottom = color_provider->GetColor(kMahoColorContentGradientBottom);
++
++    const SkPoint points[2] = {
++        {0, 0},
++        {0, static_cast<float>(bounds.height())}};
++    const SkColor4f colors[2] = {
++        SkColor4f::FromColor(color_top),
++        SkColor4f::FromColor(color_bottom)};
++
++    cc::PaintFlags flags;
++    flags.setAntiAlias(true);
++    flags.setStyle(cc::PaintFlags::kFill_Style);
++    flags.setShader(cc::PaintShader::MakeLinearGradient(
++        points, colors, nullptr, 2, SkTileMode::kClamp));
++    canvas->DrawRect(bounds, flags);
++  }
++};
++
++BEGIN_METADATA(MahoCreateSpaceBlankView)
++END_METADATA
++
++
++
+ // The visible height of the shadow above the tabs. Clicks in this area are
+ // treated as clicks to the frame, rather than clicks to the tab.
+ const int kTabShadowSize = 2;
+@@ -929,6 +1018,11 @@ BrowserView::BrowserView(BrowserWindowInterface* browser)
+   top_container_ = AddChildView(std::make_unique<TopContainerView>(this));
+   top_container_insertion_index_ = GetIndexOf(top_container_.get());
+ 
++  if (GetIsNormalType()) {
++    maho_content_gradient_view_ = AddChildView(
++        std::make_unique<maho::MahoContentGradientView>());
++    maho_content_gradient_view_->SetVisible(false);
++  }
+   toolbar_ = top_container_->AddChildView(
+       std::make_unique<ToolbarView>(browser_.get(), this));
+ 
+@@ -941,8 +1035,50 @@ BrowserView::BrowserView(BrowserWindowInterface* browser)
+       this, std::make_unique<MultiContentsViewDelegateImpl>(*browser_));
+   multi_contents_view_ = AddChildView(std::move(multi_contents_view));
+ 
++  // Desktop Browser::Browser creates BrowserView through BrowserWindow factory.
++  // Keep concrete casts at Maho APIs that still require Browser.
++  if (static_cast<Browser*>(browser_.get())->is_maho_mini()) {
++    maho_mini_top_bar_ = AddChildView(
++        std::make_unique<maho::MahoMiniTopBarView>(static_cast<Browser*>(browser_.get()), this));
++  }
+   set_contents_view(multi_contents_view_);
+ 
++  if (GetIsNormalType()) {
++    maho_sidebar_container_ = AddChildView(
++        std::make_unique<maho::MahoSidebarContainerView>(static_cast<Browser*>(browser_.get())));
++
++    // Maho R-12: exact primary Incognito injects the decorative
++    // Glasses identity and fixed private semantic colors into the
++    // already-built sidebar. Regular/Guest/other-OTR are untouched.
++    if (Profile* maho_private_profile = browser_->GetProfile();
++        MahoIsCapabilityAllowed(
++            maho_private_profile,
++            MahoPrivateCapability::kPrivateVisuals)) {
++      if (auto* maho_private_container =
++              views::AsViewClass<maho::MahoSidebarContainerView>(
++                  maho_sidebar_container_)) {
++        maho_private_container->SetPrivateAppearance(
++            ui::ImageModel::FromVectorIcon(
++                maho_lucide_icons::kGlassesIcon,
++                kMahoColorPrivateIdentityIcon, /*icon_size=*/20),
++            kMahoColorPrivateSidebarBackground,
++            kMahoColorPrivateSidebarText);
++      }
++    }
++
++    maho_create_space_blank_view_ =
++        AddChildView(std::make_unique<MahoCreateSpaceBlankView>());
++    maho_create_space_blank_view_->SetVisible(false);
++
++    if (auto* strip = browser_->GetTabStripModel()) {
++      maho_mru_tab_tracker_ =
++          std::make_unique<maho::MahoMruTabTracker>(strip);
++      maho_ctrl_tab_switcher_controller_ =
++          std::make_unique<maho::MahoCtrlTabSwitcherController>(
++              this, maho_mru_tab_tracker_.get());
++    }
++  }
++
+   // InfoBarContainer needs to be added as a child here for drop-shadow, but
+   // needs to come after toolbar in focus order (see EnsureFocusOrder()).
+   infobar_container_ =
+@@ -1093,10 +1229,17 @@ BrowserView::BrowserView(BrowserWindowInterface* browser)
+ }
+ 
+ BrowserView::~BrowserView() {
++  browser_->GetTabStripModel()->RemoveObserver(this);
++  maho_sidebar_palette_subscription_ = {};
++
+   // Remove the layout manager to avoid dangling. This needs to be earlier than
+   // other cleanups that destroy views referenced in the layout manager.
+   SetLayoutManager(nullptr);
+ 
++  if (auto* core = maho::GetCore()) {
++    maho_core_window_closed(core, std::to_string(browser_->GetSessionID().id()).c_str());
++  }
++
+   tab_search_bubble_host_.reset();
+ 
+   // Destroy the top controls slide controller first as it depends on the
+@@ -1116,6 +1259,10 @@ BrowserView::~BrowserView() {
+   // child views and it is an observer for avatar toolbar button if any.
+   autofill_bubble_handler_.reset();
+ 
++  // Maho: the provider holds a raw_ptr to toolbar_, so drop it before
++  // RemoveAllChildViews() destroys the toolbar.
++  maho_toolbar_button_provider_.reset();
++
+   // These are raw pointers to child views, so they need to be set to null
+   // before `RemoveAllChildViews()` is called to avoid dangling.
+   browser_widget_ = nullptr;
+@@ -1132,6 +1279,7 @@ BrowserView::~BrowserView() {
+   multi_contents_view_ = nullptr;
+   main_shadow_overlay_ = nullptr;
+   window_scrim_view_ = nullptr;
++  maho_content_gradient_view_ = nullptr;
+   side_panel_content_transition_scrim_view_ = nullptr;
+   vertical_tab_strip_region_view_ = nullptr;
+   vertical_tab_strip_background_blur_backdrop_ = nullptr;
+@@ -1343,6 +1491,13 @@ BrowserView::GetExclusiveAccessBubbleViewsContextForTesting() {
+ }
+ 
+ bool BrowserView::GetTabStripVisible() const {
++  // Maho Arc layout provides its own tab presentation via the left rail;
++  // suppress both Chromium tab-strip modes so hit-testing, focus, and
++  // immersive-reveal logic treat the strip as absent.
++  if (IsMahoArcLayoutActive()) {
++    return false;
++  }
++
+   if (!ShouldDrawTabStrip()) {
+     return false;
+   }
+@@ -1521,6 +1676,17 @@ bool BrowserView::GetIsNormalType() const {
+   return browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL;
+ }
+ 
++bool BrowserView::IsMahoArcLayoutActive() const {
++  const bool is_normal_window = (browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
++  const bool sidebar_layout_enabled =
++      maho::sidebar_prefs::IsSidebarLayoutEnabled(
++          browser_->GetProfile()->GetPrefs());
++  LOG(WARNING) << "MahoPinnedDebug IsMahoArcLayoutActive: is_type_normal="
++            << is_normal_window
++            << " sidebar_layout_enabled=" << sidebar_layout_enabled;
++  return is_normal_window && sidebar_layout_enabled;
++}
++
+ bool BrowserView::GetIsWebAppType() const {
+   return web_app::AppBrowserController::IsWebApp(browser_.get());
+ }
+@@ -1959,12 +2125,21 @@ bool BrowserView::IsLoadingAnimationRunning() const {
+   return !loading_animation_start_.is_null();
+ }
+ 
++MahoSplitViewController* BrowserView::GetOrCreateMahoSplitViewController() {
++  if (!split_view_controller_) {
++    split_view_controller_ = std::make_unique<MahoSplitViewController>(static_cast<Browser*>(browser_.get()));
++  }
++  return split_view_controller_.get();
++}
++
+ void BrowserView::OnActiveTabChanged(content::WebContents* old_contents,
+                                      content::WebContents* new_contents,
+                                      int index,
+                                      int reason) {
+   DCHECK(new_contents);
+   TRACE_EVENT0("ui", "BrowserView::OnActiveTabChanged");
++  // Maho: refresh content surfaces for the newly active tab/split.
++  MaybeRefreshMahoContentSurfacesFromSidebar();
+   views::WebView* active_contents_view = GetActiveContentsWebView();
+   bool tab_change_in_split_view =
+       IsTabChangeInSplitView(old_contents, new_contents);
+@@ -2313,6 +2488,9 @@ void BrowserView::FullscreenStateChanged() {
+ }
+ 
+ ToolbarButtonProvider* BrowserView::toolbar_button_provider() {
++  if (maho_toolbar_button_provider_) {
++    return maho_toolbar_button_provider_.get();
++  }
+   return ToolbarButtonProvider::From(browser_);
+ }
+ 
+@@ -2320,11 +2498,160 @@ autofill::AutofillBubbleHandler* BrowserView::GetAutofillBubbleHandler() {
+   return autofill_bubble_handler_.get();
+ }
+ 
++bool BrowserView::MaybeHandleMruTabSwitch(bool forward) {
++  if (!maho_ctrl_tab_switcher_controller_) {
++    return false;
++  }
++  return maho_ctrl_tab_switcher_controller_->HandleAdvance(forward);
++}
++
++bool BrowserView::MaybeHandleMultiTabClose() {
++  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(
++      maho_sidebar_container());
++  if (!container) {
++    return false;
++  }
++  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(
++      container->sidebar_view());
++  if (!sidebar || !sidebar->tab_list_view() ||
++      !sidebar->tab_list_view()->HasMultiSelection()) {
++    return false;
++  }
++  sidebar->tab_list_view()->CloseSelected();
++  return true;
++}
++
++maho::MahoPeekController*
++BrowserView::GetOrCreateMahoPeekController() {
++  if (!maho::IsPeekEligible(static_cast<Browser*>(browser_.get()))) {
++    return nullptr;
++  }
++  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(
++      maho_sidebar_container());
++  if (!container) {
++    return nullptr;
++  }
++  auto* host = container->GetOrCreateOverlayHost();
++  return host ? host->peek_controller() : nullptr;
++}
++
++maho::MahoCommandOverlayController*
++BrowserView::GetOrCreateMahoCommandOverlayController() {
++  if (!maho_command_overlay_controller_) {
++    maho_command_overlay_controller_ =
++        std::make_unique<maho::MahoCommandOverlayController>(static_cast<Browser*>(browser_.get()));
++  }
++  return maho_command_overlay_controller_.get();
++}
++
++maho::MahoSpacesOverlayController*
++BrowserView::GetOrCreateMahoSpacesOverlayController() {
++  if (!maho_spaces_overlay_controller_) {
++    maho_spaces_overlay_controller_ =
++        std::make_unique<maho::MahoSpacesOverlayController>(static_cast<Browser*>(browser_.get()));
++  }
++  return maho_spaces_overlay_controller_.get();
++}
++
++void BrowserView::SetMahoCreateSpaceBlankVisible(bool visible) {
++  if (!maho_create_space_blank_view_) {
++    return;
++  }
++  if (maho_create_space_blank_view_->GetVisible() == visible) {
++    return;
++  }
++  maho_create_space_blank_view_->SetVisible(visible);
++  InvalidateLayout();
++}
++
++void BrowserView::ShowMahoCommandOverlayForCurrentTab() {
++  auto* controller = GetOrCreateMahoCommandOverlayController();
++  if (!controller) {
++    return;
++  }
++
++  std::string current_url;
++  if (auto* contents = browser_->GetTabStripModel()->GetActiveWebContents()) {
++    const GURL& visible = contents->GetVisibleURL();
++    const GURL& url =
++        visible.is_empty() ? contents->GetLastCommittedURL() : visible;
++    if (!url.is_empty() && !url.SchemeIs("javascript") &&
++        !url.SchemeIs("data") && url.spec() != "about:blank") {
++      current_url = url.spec();
++    }
++  }
++
++  controller->Show(this, maho::CommandOverlayMode::kCurrentTab, current_url,
++                   /*select_initial_text=*/true);
++}
++
++void BrowserView::ShowMahoCommandOverlayForNewTab() {
++  if (!GetIsNormalType()) {
++    chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
++    return;
++  }
++
++  if (!initialized_ || !GetWidget()) {
++    pending_maho_command_overlay_new_tab_ = true;
++    if (GetWidget()) {
++      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++          FROM_HERE,
++          base::BindOnce(
++              &BrowserView::MaybeShowPendingMahoCommandOverlayForNewTab,
++              weak_ptr_factory_.GetWeakPtr()));
++    }
++    return;
++  }
++
++  auto* controller = GetOrCreateMahoCommandOverlayController();
++  if (!controller) {
++    return;
++  }
++
++  controller->Show(this, maho::CommandOverlayMode::kNewTab);
++}
++
++void BrowserView::MaybeShowPendingMahoCommandOverlayForNewTab() {
++  if (!pending_maho_command_overlay_new_tab_ || !initialized_ || !GetWidget()) {
++    return;
++  }
++  pending_maho_command_overlay_new_tab_ = false;
++  ShowMahoCommandOverlayForNewTab();
++}
++
++void BrowserView::ShowMahoCommandOverlayForSearch(
++    const std::string& initial_text) {
++  auto* controller = GetOrCreateMahoCommandOverlayController();
++  if (!controller) {
++    return;
++  }
++
++  controller->Show(this, maho::CommandOverlayMode::kSearch, initial_text);
++}
++
++void BrowserView::ShowMahoSpacesOverlay() {
++  auto* controller = GetOrCreateMahoSpacesOverlayController();
++  if (!controller) {
++    return;
++  }
++
++  controller->Toggle(GetWidget());
++}
++
++bool BrowserView::maho_spaces_overlay_visible_for_testing() const {
++  return maho_spaces_overlay_controller_ &&
++         maho_spaces_overlay_controller_->IsVisible();
++}
+ LocationBar* BrowserView::GetLocationBar() const {
+   return toolbar_ ? toolbar_->location_bar() : nullptr;
+ }
+ 
+ void BrowserView::SetFocusToLocationBar(bool is_user_initiated) {
++  if (is_user_initiated && maho_sidebar_container_) {
++    ShowMahoCommandOverlayForCurrentTab();
++    return;
++  }
++
+   // On Windows, changing focus to the location bar causes the browser window to
+   // become active. This can steal focus if the user has another window open
+   // already. On Chrome OS, changing focus makes a view believe it has a focus
+@@ -2526,6 +2853,14 @@ void BrowserView::LinkOpeningFromGesture(WindowOpenDisposition disposition) {
+ }
+ 
+ bool BrowserView::AppUsesWindowControlsOverlay() const {
++#if BUILDFLAG(IS_WIN)
++  // Maho: the Arc main window uses Window Controls Overlay on Windows
++  // to overlay the native caption buttons on the frameless,
++  // edge-to-edge sidebar + contents layout.
++  if (IsMahoArcLayoutActive()) {
++    return true;
++  }
++#endif
+   auto* const app_controller = web_app::AppBrowserController::From(browser());
+   return app_controller && app_controller->AppUsesWindowControlsOverlay();
+ }
+@@ -2542,15 +2877,16 @@ bool BrowserView::IsWindowControlsOverlayEnabled() const {
+ void BrowserView::UpdateWindowControlsOverlayEnabled() {
+   UpdateWindowControlsOverlayAvailable();
+ 
+-  // Window Controls Overlay (WCO) is enabled when it is available in the window
+-  // and declared in the app manifest. Additionally, if the
+-  // `kDesktopPWAsWindowControlsOverlayWithNoToggle` feature flag is disabled,
+-  // the user must also enable WCO via the toggle; otherwise, no further user
+-  // action is required. See `UpdateWindowControlsOverlayAvailable()` for the
+-  // conditions under which WCO is available.
++#if BUILDFLAG(IS_WIN)
++  const bool maho_wco = IsMahoArcLayoutActive();
++#else
++  const bool maho_wco = false;
++#endif
+   auto* const app_controller = web_app::AppBrowserController::From(browser());
+-  bool enabled = is_window_controls_overlay_available_ && app_controller &&
+-                 app_controller->IsWindowControlsOverlayEnabled();
++  bool enabled = is_window_controls_overlay_available_ &&
++                 (maho_wco ||
++                  (app_controller &&
++                   app_controller->IsWindowControlsOverlayEnabled()));
+ 
+   if (enabled == window_controls_overlay_enabled_) {
+     return;
+@@ -2884,6 +3220,37 @@ void BrowserView::OnWidgetVisibilityChanged(views::Widget* widget,
+       widget->LayoutRootViewIfNecessary();
+     }
+   }
++
++  // [Maho fix] Defensive cleanup for the upstream "gray rect"
++  // / content-overflow race documented in ToolbarSizeChanged().
++  // A views::WebView can be left with stale fast_resize state
++  // after animation, infobar, or session-restore transitions,
++  // leaving the underlying WebContents rendered at its previous
++  // bounds while the View clips to the new bounds — producing
++  // a visible gray rect (when the View grew) or content
++  // overflowing its container (when the View shrank). On every
++  // visibility-true transition, walk the View tree, force
++  // fast_resize off on every views::WebView descendant, and
++  // request a layout so the WebContents tracks the View bounds.
++  if (visible) {
++    std::vector<views::View*> stack;
++    stack.push_back(this);
++    while (!stack.empty()) {
++      views::View* node = stack.back();
++      stack.pop_back();
++      if (auto* web_view =
++              views::AsViewClass<views::WebView>(node)) {
++        web_view->SetFastResize(false);
++        web_view->InvalidateLayout();
++      }
++      for (views::View* child : node->children()) {
++        stack.push_back(child);
++      }
++    }
++    if (multi_contents_view_) {
++      multi_contents_view_->DeprecatedLayoutImmediately();
++    }
++  }
+ }
+ 
+ std::optional<bool> BrowserView::GetWebApiWindowResizable() const {
+@@ -3043,6 +3410,10 @@ void BrowserView::DisableTabStripEditingForTesting() {
+ }
+ 
+ bool BrowserView::IsToolbarVisible() const {
++  if (IsMahoArcLayoutActive()) {
++    return false;
++  }
++
+ #if BUILDFLAG(IS_MAC)
+   // Immersive full screen makes it possible to display the toolbar when
+   // kShowFullscreenToolbar is not set.
+@@ -3133,21 +3504,10 @@ ShowTranslateBubbleResult BrowserView::ShowTranslateBubble(
+     return ShowTranslateBubbleResult::kBrowserWindowMinimized;
+   }
+ 
+-  std::optional<ui::ElementIdentifier> highlight_element =
+-      kTranslatePageActionElementId;
+-
+-  views::BubbleAnchor anchor =
+-      toolbar_button_provider()->GetBubbleAnchor(kActionShowTranslate);
+-  if (bubble_anchor_util::IsHighlightable(anchor)) {
+-    // No need for a separate highlight.
+-    highlight_element = std::nullopt;
+-  }
+-  CHECK_DEREF(TranslateBubbleController::From(browser_.get()))
+-      .ShowTranslateBubble(web_contents, anchor, highlight_element, step,
+-                           source_language, target_language, error_type,
+-                           is_user_gesture ? TranslateBubbleView::USER_GESTURE
+-                                           : TranslateBubbleView::AUTOMATIC);
+-
++  // Maho: in Maho's Arc-style layout, translation affordances are surfaced
++  // via the per-pane contents header (MahoContentsHeaderView) and on-device
++  // translation engine. The upstream TranslateBubbleView popup is suppressed
++  // so it does not duplicate or overlay the header interface.
+   return ShowTranslateBubbleResult::kSuccess;
+ }
+ 
+@@ -3186,6 +3546,16 @@ void BrowserView::UserChangedTheme(BrowserThemeChangeType theme_change_type) {
+ }
+ 
+ void BrowserView::ShowAppMenu() {
++#if BUILDFLAG(IS_WIN)
++  if (IsMahoArcLayoutActive()) {
++    if (auto* maho_sidebar_container =
++            views::AsViewClass<maho::MahoSidebarContainerView>(
++                maho_sidebar_container_);
++        maho_sidebar_container && maho_sidebar_container->ShowAppMenu()) {
++      return;
++    }
++  }
++#endif
+   auto* control = ToolbarButtonProvider::From(browser_)->GetAppMenuControl();
+   if (!control) {
+     return;
+@@ -3206,6 +3576,13 @@ content::KeyboardEventProcessingResult BrowserView::PreHandleKeyboardEvent(
+     return content::KeyboardEventProcessingResult::NOT_HANDLED;
+   }
+ 
++  if ((event.GetType() == blink::WebInputEvent::Type::kRawKeyDown ||
++       event.GetType() == blink::WebInputEvent::Type::kKeyDown) &&
++      maho::MahoShortcutInterceptor::MaybeHandleKeyEvent(static_cast<Browser*>(browser_.get()),
++                                                          event)) {
++    return content::KeyboardEventProcessingResult::HANDLED;
++  }
++
+   views::FocusManager* focus_manager = GetFocusManager();
+   DCHECK(focus_manager);
+ 
+@@ -3463,7 +3840,7 @@ void BrowserView::OnSplitTabChanged(const SplitTabChange& change) {
+           browser_->GetTabStripModel()->GetActiveTab();
+ 
+       if (active_tab->GetSplit() == change.split_id) {
+-        multi_contents_view_->UpdateSplitVisualData(
++        multi_contents_view_->SetSplitVisualData(
+             change.GetVisualsChange()->new_visual_data());
+       }
+ 
+@@ -3516,6 +3893,11 @@ void BrowserView::OnTabChangedAt(tabs::TabInterface* tab,
+                                  TabChangeType change_type) {
+   content::WebContents* contents = tab->GetContents();
+ 
++  if (change_type == TabChangeType::kLoadingOnly &&
++      contents == GetActiveWebContents()) {
++    MaybeRefreshMahoContentSurfacesFromSidebar();
++  }
++
+   if (change_type == TabChangeType::kBlockedOnly) {
+     if (auto* container =
+             multi_contents_view_->GetContentsContainerViewFor(contents)) {
+@@ -3538,6 +3920,9 @@ void BrowserView::OnTabStripModelChanged(
+     TabStripModel* tab_strip_model,
+     const TabStripModelChange& change,
+     const TabStripSelectionChange& selection) {
++  // Maho: refresh the active pane's shared-glass state when tabs change.
++  MaybeRefreshMahoContentSurfacesFromSidebar();
++
+   // When the active tab changes, elements in the omnibox can change, which
+   // can change its preferred size. Re-lay-out the toolbar to reflect the
+   // possible change.
+@@ -3875,7 +4260,9 @@ void BrowserView::ReparentTabStripAndWebAppViewsToBrowserView(
+ void BrowserView::EnsureFocusOrder() {
+   // We want the infobar to come before the content pane, but after the bookmark
+   // bar (if present) or top container (i.e. toolbar, again if present).
+-  if (bookmark_bar_view_ && bookmark_bar_view_->parent() == this) {
++  if (IsMahoArcLayoutActive() && maho_sidebar_container_->parent() == this) {
++    infobar_container_->InsertAfterInFocusList(maho_sidebar_container_);
++  } else if (bookmark_bar_view_ && bookmark_bar_view_->parent() == this) {
+     infobar_container_->InsertAfterInFocusList(bookmark_bar_view_.get());
+   } else if (top_container_->parent() == this) {
+     infobar_container_->InsertAfterInFocusList(top_container_);
+@@ -4305,16 +4692,21 @@ void BrowserView::ShowSplitView(bool focus_active_view) {
+       browser_->GetTabStripModel()->GetSplitData(split_tab_id.value());
+ 
+   std::vector<tabs::TabInterface*> split_tabs = split_data->ListTabs();
++  CHECK_GE(split_tabs.size(), 2u);
++  CHECK_LE(split_tabs.size(), 4u);
++  CHECK(split_data->visual_data()->ValidateForPaneCount(split_tabs.size()));
+ 
+-  for (size_t i = 0; tabs::TabInterface* tab : split_tabs) {
+-    multi_contents_view_->SetWebContentsAtIndex(tab->GetContents(), i++);
++  multi_contents_view_->ShowSplitView(split_tabs.size(),
++                                      *split_data->visual_data());
++  int active_pane = 0;
++  for (size_t i = 0; i < split_tabs.size(); ++i) {
++    multi_contents_view_->SetWebContentsAtIndex(split_tabs[i]->GetContents(),
++                                                static_cast<int>(i));
++    if (split_tabs[i]->IsActivated()) {
++      active_pane = static_cast<int>(i);
++    }
+   }
+-  const int first_split_tab_index =
+-      browser_->GetTabStripModel()->GetIndexOfTab(split_tabs[0]);
+-  const int relative_active_position = active_index - first_split_tab_index;
+-  multi_contents_view_->SetActiveIndex(relative_active_position);
+-
+-  multi_contents_view_->UpdateSplitVisualData(*split_data->visual_data());
++  multi_contents_view_->SetActiveIndex(active_pane);
+ 
+   // Set focus to the active contents avoid reentrency when setting the web
+   // contents within MultiContentsView. See crbug.com/458189541 and
+@@ -4330,6 +4722,17 @@ void BrowserView::ShowSplitView(bool focus_active_view) {
+   }
+ }
+ 
++void BrowserView::AddSplitView() {
++  GetOrCreateMahoSplitViewController()->AddSplit();
++}
++
++void BrowserView::RemoveSplitView() {
++  if (MahoSplitViewController* split_view_controller =
++          GetMahoSplitViewController()) {
++    split_view_controller->RemoveSplit();
++  }
++}
++
+ void BrowserView::HideSplitView() {
+   multi_contents_view_->CloseSplitView();
+ }
+@@ -4343,30 +4746,41 @@ void BrowserView::UpdateActiveTabInSplitView() {
+ 
+   CHECK(split_tab_id.has_value());
+ 
+-  tabs::TabInterface* first_tab = browser_->GetTabStripModel()
+-                                      ->GetSplitData(split_tab_id.value())
+-                                      ->ListTabs()[0];
+-  const int first_split_tab_index =
+-      browser_->GetTabStripModel()->GetIndexOfTab(first_tab);
+-  const int relative_active_position = active_index - first_split_tab_index;
+-  multi_contents_view_->SetActiveIndex(relative_active_position);
++  const std::vector<tabs::TabInterface*> split_tabs =
++      browser_->GetTabStripModel()
++          ->GetSplitData(split_tab_id.value())
++          ->ListTabs();
++  const auto active_it = std::ranges::find(
++      split_tabs, browser_->GetTabStripModel()->GetActiveTab());
++  CHECK(active_it != split_tabs.end());
++  const int active_pane = std::distance(split_tabs.begin(), active_it);
++  const bool another_pane_had_focus = std::ranges::any_of(
++      multi_contents_view_->contents_container_views(),
++      [this](ContentsContainerView* container) {
++        return container !=
++                   multi_contents_view_->GetActiveContentsContainerView() &&
++               container->GetVisible() &&
++               container->contents_view()->HasFocus();
++      });
++  multi_contents_view_->SetActiveIndex(active_pane);
+ 
+-  // When active tab changes inside a split, it's generally due to focus change.
+-  // However, there are cases where inactive tab can be activated without a
+-  // focus change e.g. using tab shortcuts and in these cases update focus.
+-  if (GetWidget()->IsActive() &&
+-      multi_contents_view_->GetInactiveContentsView()->HasFocus()) {
++  // When active tab changes inside a split, it is generally due to focus
++  // change. For activation without focus movement, preserve the focused pane.
++  if (GetWidget()->IsActive() && another_pane_had_focus) {
+     multi_contents_view_->GetActiveContentsView()->RequestFocus();
+   }
+ }
+ 
+ bool BrowserView::IsTabChangeInSplitView(content::WebContents* old_contents,
+                                          content::WebContents* new_contents) {
+-  return multi_contents_view_->IsInSplitView() &&
+-         multi_contents_view_->GetActiveContentsView()->web_contents() ==
+-             old_contents &&
+-         multi_contents_view_->GetInactiveContentsView()->web_contents() ==
+-             new_contents;
++  if (!multi_contents_view_->IsInSplitView()) {
++    return false;
++  }
++  const auto contains = [this](content::WebContents* contents) {
++    return contents &&
++           multi_contents_view_->GetContentsContainerViewFor(contents);
++  };
++  return contains(old_contents) && contains(new_contents);
+ }
+ 
+ void BrowserView::UpdateTabModalDialogHost() {
+@@ -4415,6 +4829,83 @@ void BrowserView::MaybeUpdateStoredFocusForWebContents(
+   }
+ }
+ 
++bool MahoShouldRevealSharedGlass(content::WebContents* contents) {
++  if (!contents) {
++    return true;
++  }
++  const GURL& url = contents->GetVisibleURL();
++  return url.is_empty() ||
++         (url.SchemeIs("about") && url.path() == "blank") ||
++         (url.SchemeIs("chrome") &&
++          url.host() == chrome::kChromeUINewTabHost);
++}
++
++void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(
++    const MahoSidebarPalette& palette) {
++
++  // Regular windows only; Incognito keeps its fixed private surface.
++  if (browser_->GetProfile()->IsOffTheRecord()) {
++    return;
++  }
++  // Empty (zero-tab) content shows the translucent themed gradient; the
++  // content web layer is made transparent so the window glass (desktop
++  // blur) shows through, matching the sidebar. Loaded tabs use an opaque
++  // themed base (web content must be opaque).
++  if (maho_content_gradient_view_) {
++    maho_content_gradient_view_->SetPalette(palette);
++  }
++  bool has_native_ntp_surface = false;
++  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {
++    if (!view) {
++      continue;
++    }
++    const bool view_shows_native_ntp =
++        MahoShouldRevealSharedGlass(view->web_contents());
++    has_native_ntp_surface |= view_shows_native_ntp;
++    view->SetVisible(!view_shows_native_ntp);
++    view->SetMahoBackgroundOverride(std::nullopt);
++    view->SetBackgroundVisible(true);
++  }
++  if (maho_content_gradient_view_) {
++    maho_content_gradient_view_->SetVisible(has_native_ntp_surface);
++  }
++#if !BUILDFLAG(IS_LINUX)
++  // On Linux there is no window vibrancy behind the translucent glass; a
++  // transparent page base would show the desktop wallpaper. Keep the default
++  // opaque page base on Linux.
++  TabStripModel* maho_tsm = browser_->GetTabStripModel();
++  for (int i = 0; i < maho_tsm->count(); ++i) {
++    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {
++      wc->SetPageBaseBackgroundColor(std::nullopt);
++    }
++  }
++#endif
++}
++
++void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar() {
++  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(
++      maho_sidebar_container_);
++  if (!container) {
++    return;
++  }
++  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(
++      container->sidebar_view());
++  if (!sidebar) {
++    return;
++  }
++  const bool shared_glass_active =
++      MahoShouldRevealSharedGlass(GetActiveWebContents());
++  sidebar->SetSharedBrowserGlassActive(shared_glass_active);
++  if (!maho_sidebar_palette_subscribed_) {
++    maho_sidebar_palette_subscription_ =
++        sidebar->AddSidebarPaletteChangedCallback(base::BindRepeating(
++            &BrowserView::ApplyMahoSidebarPaletteToContentSurfaces,
++            base::Unretained(this)));
++    maho_sidebar_palette_subscribed_ = true;
++  }
++  ApplyMahoSidebarPaletteToContentSurfaces(sidebar->sidebar_palette());
++}
++
+ std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {
+   std::vector<ContentsWebView*> contents_views;
+   contents_views.push_back(multi_contents_view_->GetActiveContentsView());
+@@ -4619,6 +5110,22 @@ int BrowserView::NonClientHitTest(const gfx::Point& point) {
+       return HTCLIENT;
+     }
+ 
++    // Maho: the vertical sidebar is not part of the overlay in immersive mode
++    // and must be tested separately.
++    if (maho_sidebar_container_ &&
++        maho_sidebar_container_->GetVisible()) {
++      gfx::Point test_point(point);
++      if (ConvertedHitTest(parent(), maho_sidebar_container_,
++                           &test_point)) {
++        if (static_cast<maho::MahoSidebarContainerView*>(
++                maho_sidebar_container_)
++                ->IsPositionInWindowCaption(test_point)) {
++          return HTCAPTION;
++        }
++        return HTCLIENT;
++      }
++    }
++
+     // The vertical tabstrip is not part of the overlay in immersive mode and
+     // must be tested separately.
+     if (vertical_tab_strip_region_view_ &&
+@@ -4646,6 +5153,38 @@ int BrowserView::NonClientHitTest(const gfx::Point& point) {
+   views::View::ConvertPointToTarget(parent(), this,
+                                     &point_in_browser_view_coords);
+ 
++  // Maho: the Maho Mini top bar sits inside the macOS full-size
++  // titlebar drag region. Consult its caption hit-test so the address
++  // field and action buttons register as client area instead of being
++  // swallowed as window-drag caption.
++  if (maho_mini_top_bar_ && maho_mini_top_bar_->GetVisible()) {
++    gfx::Point test_point(point);
++    if (ConvertedHitTest(parent(), maho_mini_top_bar_, &test_point)) {
++      if (static_cast<maho::MahoMiniTopBarView*>(
++              maho_mini_top_bar_)
++              ->IsPositionInWindowCaption(test_point)) {
++        return HTCAPTION;
++      }
++      return HTCLIENT;
++    }
++  }
++
++  // Maho: the Maho sidebar sits inside the full-size window frame.
++  // Consult its caption hit-test so top-bar drag regions (traffic-light
++  // spacer, button gaps, and library rail caption) return HTCAPTION for
++  // native window dragging, while interactive controls return HTCLIENT.
++  if (maho_sidebar_container_ && maho_sidebar_container_->GetVisible()) {
++    gfx::Point test_point(point);
++    if (ConvertedHitTest(parent(), maho_sidebar_container_, &test_point)) {
++      if (static_cast<maho::MahoSidebarContainerView*>(
++              maho_sidebar_container_)
++              ->IsPositionInWindowCaption(test_point)) {
++        return HTCAPTION;
++      }
++      return HTCLIENT;
++    }
++  }
++
+   // Check if the point is in the web_app_frame_toolbar_. Because this toolbar
+   // can entirely be within the window controls overlay area, this check needs
+   // to be done before the window controls overlay area check below.
+@@ -4678,6 +5217,18 @@ int BrowserView::NonClientHitTest(const gfx::Point& point) {
+     }
+   }
+ 
++  if (maho_sidebar_container_ && maho_sidebar_container_->GetVisible()) {
++    gfx::Point test_point(point);
++    if (ConvertedHitTest(parent(), maho_sidebar_container_, &test_point)) {
++      if (static_cast<maho::MahoSidebarContainerView*>(
++              maho_sidebar_container_)
++              ->IsPositionInWindowCaption(test_point)) {
++        return HTCAPTION;
++      }
++      return HTCLIENT;
++    }
++  }
++
+   // See if the mouse pointer is within the bounds of the
+   // OrganizerPanelView.
+   if (organizer_panel_container_ && organizer_panel_container_->GetVisible()) {
+@@ -4974,6 +5525,32 @@ void BrowserView::AddedToWidget() {
+   }
+ #endif
+ 
++  // Maho: Register all enabled Maho shortcuts as FocusManager accelerators so
++  // they fire regardless of which view has focus. This is the only shortcut
++  // path that survives when there is no active tab (no focused WebContents to
++  // drive PreHandleKeyboardEvent). Rust ShortcutManager remains the single
++  // source of truth; AcceleratorPressed resolves each accelerator back through
++  // it.
++  if (IsMahoArcLayoutActive()) {
++    views::FocusManager* fm = GetFocusManager();
++    if (fm) {
++      std::vector<ui::Accelerator> accelerators =
++          maho::MahoShortcutInterceptor::GetRegisteredAccelerators();
++      if (accelerators.empty()) {
++        // Core not ready yet: preserve space-switching (Ctrl+1..9) at minimum.
++        for (int i = 0; i < 9; ++i) {
++          accelerators.emplace_back(
++              static_cast<ui::KeyboardCode>(ui::VKEY_1 + i),
++              ui::EF_CONTROL_DOWN);
++        }
++      }
++      for (const ui::Accelerator& accelerator : accelerators) {
++        fm->RegisterAccelerator(
++            accelerator, ui::AcceleratorManager::kNormalPriority, this);
++      }
++    }
++  }
++
+   widget_observation_.Observe(GetWidget());
+ 
+   auto* browser_elements =
+@@ -5090,6 +5667,10 @@ void BrowserView::AddedToWidget() {
+   layout_views.multi_contents_view = multi_contents_view_;
+   layout_views.side_panel = side_panel_;
+   layout_views.top_container_separator = top_container_separator_;
++  layout_views.maho_sidebar_container = maho_sidebar_container_;
++  layout_views.maho_create_space_blank_view = maho_create_space_blank_view_;
++  layout_views.maho_mini_top_bar = maho_mini_top_bar_;
++  layout_views.maho_content_gradient_view = maho_content_gradient_view_;
+   // LINT.ThenChange(//chrome/browser/ui/views/frame/layout/browser_view_layout.h:BrowserViewLayoutViews)
+ 
+   SetLayoutManager(BrowserViewLayout::CreateLayout(
+@@ -5098,9 +5679,20 @@ void BrowserView::AddedToWidget() {
+ 
+   EnsureFocusOrder();
+ 
++  // Maho: the Arc layout anchors page bubbles to the active pane header.
++  // ToolbarView keeps the browser's ToolbarButtonProvider user-data slot, so
++  // BrowserView owns the Maho provider and returns it from
++  // toolbar_button_provider().
++  if (!maho_toolbar_button_provider_ && IsMahoArcLayoutActive()) {
++    maho_toolbar_button_provider_ =
++        std::make_unique<maho::MahoToolbarButtonProvider>(
++            browser_.get(), this);
++  }
++
+   // At this point a ToolbarButtonProvider must have been set. It is set only
+   // once per browser instance.
+-  auto* toolbar_button_provider = ToolbarButtonProvider::From(browser_);
++  auto* toolbar_button_provider =
++      BrowserView::toolbar_button_provider();
+   CHECK(toolbar_button_provider);
+ 
+   // `AutofillBubbleHandlerImpl` depends on the ToolbarButtonProvider so it must
+@@ -5150,6 +5742,13 @@ void BrowserView::AddedToWidget() {
+       kFallbackPopupAnchorElementId, *this);
+ 
+   initialized_ = true;
++  MaybeRefreshMahoContentSurfacesFromSidebar();
++  if (pending_maho_command_overlay_new_tab_) {
++    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(&BrowserView::MaybeShowPendingMahoCommandOverlayForNewTab,
++                       weak_ptr_factory_.GetWeakPtr()));
++  }
+ }
+ 
+ void BrowserView::RemovedFromWidget() {
+@@ -5161,6 +5760,19 @@ void BrowserView::RemovedFromWidget() {
+   focus_manager_observation_.Reset();
+ }
+ 
++void BrowserView::OnKeyEvent(ui::KeyEvent* event) {
++  if (event->type() == ui::EventType::kKeyPressed) {
++    std::string action_id =
++        maho::MahoShortcutInterceptor::ResolveActionForKeyEvent(*event);
++    if (!action_id.empty()) {
++      maho::ExecuteCommandAction(static_cast<Browser*>(browser()), action_id);
++      event->SetHandled();
++      return;
++    }
++  }
++  views::ClientView::OnKeyEvent(event);
++}
++
+ void BrowserView::PaintChildren(const views::PaintInfo& paint_info) {
+   if (GetWidget()) {
+     GetWidget()->GetCompositor()->RequestSuccessfulPresentationTimeForNextFrame(
+@@ -5183,6 +5795,7 @@ void BrowserView::OnThemeChanged() {
+   if (!initialized_) {
+     return;
+   }
++  MaybeRefreshMahoContentSurfacesFromSidebar();
+ 
+   FrameColorsChanged();
+ }
+@@ -5221,6 +5834,15 @@ const views::View* BrowserView::GetViewByElementId(
+ // BrowserView, ui::AcceleratorTarget overrides:
+ 
+ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
++  // Maho: Try to dispatch as a Maho shortcut first. This works from any
++  // focus state (unlike MaybeHandleKeyEvent which needs WebContents focus).
++  std::string maho_action =
++      maho::MahoShortcutInterceptor::ResolveActionForAccelerator(accelerator);
++  if (!maho_action.empty()) {
++    maho::ExecuteCommandAction(static_cast<Browser*>(browser_.get()), maho_action);
++    return true;
++  }
++
+   NativeWebKeyboardEvent native_event(accelerator.ToKeyEvent());
+   if (browser_->GetFeatures().exclusive_access_manager()->HandleUserKeyEvent(
+           native_event)) {
+@@ -5236,6 +5858,20 @@ bool BrowserView::AcceleratorPressed(const ui::Accelerator& accelerator) {
+ 
+   UpdateAcceleratorMetrics(accelerator, command_id);
+ 
++  if ((command_id == IDC_NEW_TAB || command_id == IDC_MAHO_AI_PANEL) &&
++      (accelerator.key_code() == ui::VKEY_T ||
++       accelerator.key_code() == ui::VKEY_E)) {
++    LOG(WARNING) << "[maho-shortcut-trace] AcceleratorPressed command_id="
++                 << command_id << " key_code=" << accelerator.key_code()
++                 << " modifiers=" << accelerator.modifiers();
++  }
++
++  if (command_id == IDC_NEW_TAB) {
++    LOG(WARNING) << "[maho-shortcut-trace] AcceleratorPressed action=show_command_overlay_for_new_tab";
++    ShowMahoCommandOverlayForNewTab();
++    return true;
++  }
++
+   if (command_id == IDC_CLEAR_BROWSING_DATA) {
+     views::ElementTrackerViews::GetInstance()->NotifyCustomEvent(
+         browsing_data_important_sites_util::
+@@ -5391,8 +6027,10 @@ bool BrowserView::MaybeUpdateSplitView(content::WebContents* contents) {
+ 
+   if (updated_state) {
+     split_tabs::SplitTabData* split_data =
+-        browser_->GetTabStripModel()->GetSplitData(new_tab->GetSplit().value());
+-    multi_contents_view_->ShowSplitView(*split_data->visual_data());
++        browser_->GetTabStripModel()->GetSplitData(new_tab->GetSplit().value());
++    const size_t pane_count = split_data->ListTabs().size();
++    multi_contents_view_->ShowSplitView(pane_count,
++                                        *split_data->visual_data());
+   } else if (current_state != updated_state) {
+     multi_contents_view_->CloseSplitView();
+   } else {
+@@ -5981,7 +6619,12 @@ void BrowserView::OnImmersiveFullscreenEntered() {
+     control->CloseMenu();
+   }
+ 
+-  ReparentTopContainerForStartOfImmersive();
++  // In Arc layout the top_container_ is already hidden with zero bounds;
++  // reparenting it into the immersive overlay would conflict and is
++  // unnecessary because the left rail replaces the top chrome entirely.
++  if (!IsMahoArcLayoutActive()) {
++    ReparentTopContainerForStartOfImmersive();
++  }
+ 
+   InvalidateLayout();
+   GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
+@@ -5998,7 +6641,9 @@ void BrowserView::OnImmersiveFullscreenExited() {
+   }
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
+-  ReparentTopContainerForEndOfImmersive();
++  if (!IsMahoArcLayoutActive()) {
++    ReparentTopContainerForEndOfImmersive();
++  }
+ 
+   InvalidateLayout();
+   GetWidget()->GetRootView()->DeprecatedLayoutImmediately();
+@@ -6007,7 +6652,9 @@ void BrowserView::OnImmersiveFullscreenExited() {
+ }
+ 
+ void BrowserView::OnImmersiveModeControllerDestroyed() {
+-  ReparentTopContainerForEndOfImmersive();
++  if (!IsMahoArcLayoutActive()) {
++    ReparentTopContainerForEndOfImmersive();
++  }
+ 
+   vertical_tabs_enable_state_lock_.reset();
+ }

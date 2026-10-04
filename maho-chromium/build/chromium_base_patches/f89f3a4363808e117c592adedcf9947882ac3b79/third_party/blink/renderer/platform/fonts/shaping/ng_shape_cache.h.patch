@@ -1,0 +1,22 @@
+diff --git c/third_party/blink/renderer/platform/fonts/shaping/ng_shape_cache.h w/third_party/blink/renderer/platform/fonts/shaping/ng_shape_cache.h
+index fe4c1ca98aedc3eba9df9c598f7b546703bef05e..19dd4d26d0a8de354b75d87460b40b86ca92efe1 100644
+--- c/third_party/blink/renderer/platform/fonts/shaping/ng_shape_cache.h
++++ w/third_party/blink/renderer/platform/fonts/shaping/ng_shape_cache.h
+@@ -225,6 +225,9 @@ class NGShapeCache : public GarbageCollected<NGShapeCache>,
+       FontPerformance::AddShapeCacheHit();
+       // Verify that the cache is consistent.
+ #if EXPENSIVE_DCHECKS_ARE_ON()
++      // Disabled cache consistency verification due to crbug.com/486945341
++      // (fallback fonts / minor float differences causing false-positive DCHECK crashes).
++#if 0
+       const auto [other_shape_result, can_cache_other] = shape_result_func();
+       const bool has_private_or_non_characters =
+           !key.GetText().Is8Bit() &&
+@@ -245,6 +248,7 @@ class NGShapeCache : public GarbageCollected<NGShapeCache>,
+       if (can_cache_other && !has_private_or_non_characters) {
+         DCHECK_EQ(*cached_result, *other_shape_result);
+       }
++#endif
+ #endif
+       return cached_result;
+     }

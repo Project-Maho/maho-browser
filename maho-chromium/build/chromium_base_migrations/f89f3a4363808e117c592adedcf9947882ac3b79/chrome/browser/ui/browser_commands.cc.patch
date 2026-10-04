@@ -1,0 +1,19 @@
+--- a/chrome/browser/ui/browser_commands.cc
++++ b/chrome/browser/ui/browser_commands.cc
+@@ -47,7 +47,6 @@
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/profiles/profile_destroyer.h"
+-#include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/reading_list/reading_list_model_factory.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/search/search.h"
+@@ -1369,7 +1368,7 @@
+   if (Profile* existing_otr =
+           original->GetPrimaryOTRProfile(/*create_if_needed=*/false);
+       existing_otr && existing_otr->ShutdownStarted() &&
+-      chrome::GetOffTheRecordBrowsersActiveForProfile(existing_otr) == 0) {
++      ProfileBrowserCollection::GetForProfile(existing_otr)->GetOffTheRecordBrowserCount() == 0) {
+     ProfileDestroyer::DestroyOTRProfileImmediately(existing_otr);
+   }
+   NewEmptyWindow(original->GetPrimaryOTRProfile(/*create_if_needed=*/true));

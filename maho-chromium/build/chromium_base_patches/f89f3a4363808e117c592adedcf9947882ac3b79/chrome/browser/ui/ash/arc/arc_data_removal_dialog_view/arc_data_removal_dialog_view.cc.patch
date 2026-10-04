@@ -1,0 +1,58 @@
+diff --git c/chrome/browser/ui/ash/arc/arc_data_removal_dialog_view/arc_data_removal_dialog_view.cc w/chrome/browser/ui/ash/arc/arc_data_removal_dialog_view/arc_data_removal_dialog_view.cc
+index d25bde32492302e0afbc57b36560053ec1323327..b2bd05bd44b93e797d89c3b3a34b740c0e1b4c2c 100644
+--- c/chrome/browser/ui/ash/arc/arc_data_removal_dialog_view/arc_data_removal_dialog_view.cc
++++ w/chrome/browser/ui/ash/arc/arc_data_removal_dialog_view/arc_data_removal_dialog_view.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "ash/strings/grit/ash_strings.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ash/app_list/app_service/app_service_app_icon_loader.h"
+ #include "chrome/browser/ash/app_list/arc/arc_data_removal_dialog.h"
+ #include "chrome/browser/ash/arc/session/arc_session_manager.h"
+@@ -65,6 +66,8 @@ class DataRemovalConfirmationDialog : public views::DialogDelegateView,
+   void OnArcPlayStoreEnabledChanged(bool enabled) override;
+ 
+  private:
++  void RunConfirmCallback(bool accept);
++
+   // UI hierarchy owned.
+   raw_ptr<views::ImageView> icon_view_ = nullptr;
+ 
+@@ -73,6 +76,8 @@ class DataRemovalConfirmationDialog : public views::DialogDelegateView,
+   const raw_ptr<Profile> profile_;
+ 
+   DataRemovalConfirmationCallback confirm_callback_;
++
++  base::WeakPtrFactory<DataRemovalConfirmationDialog> weak_ptr_factory_{this};
+ };
+ 
+ DataRemovalConfirmationDialog* g_current_data_removal_confirmation = nullptr;
+@@ -86,12 +91,10 @@ DataRemovalConfirmationDialog::DataRemovalConfirmationDialog(
+       ui::mojom::DialogButton::kOk,
+       l10n_util::GetStringUTF16(IDS_ARC_DATA_REMOVAL_CONFIRMATION_OK_BUTTON));
+ 
+-  auto run_callback = [](DataRemovalConfirmationDialog* dialog, bool accept) {
+-    std::move(dialog->confirm_callback_).Run(accept);
+-  };
+-  SetAcceptCallback(base::BindOnce(run_callback, base::Unretained(this), true));
+-  SetCancelCallback(
+-      base::BindOnce(run_callback, base::Unretained(this), false));
++  SetAcceptCallback(base::BindOnce(&DataRemovalConfirmationDialog::RunConfirmCallback,
++                                   weak_ptr_factory_.GetWeakPtr(), true));
++  SetCancelCallback(base::BindOnce(&DataRemovalConfirmationDialog::RunConfirmCallback,
++                                   weak_ptr_factory_.GetWeakPtr(), false));
+ 
+   SetModalType(ui::mojom::ModalType::kWindow);
+   set_fixed_width(views::LayoutProvider::Get()->GetDistanceMetric(
+@@ -157,6 +160,10 @@ void DataRemovalConfirmationDialog::OnArcPlayStoreEnabledChanged(bool enabled) {
+   CancelDialog();
+ }
+ 
++void DataRemovalConfirmationDialog::RunConfirmCallback(bool accept) {
++  std::move(confirm_callback_).Run(accept);
++}
++
+ BEGIN_METADATA(DataRemovalConfirmationDialog)
+ END_METADATA
+ 

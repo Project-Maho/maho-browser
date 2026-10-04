@@ -1,0 +1,78 @@
+import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_welcome.mojom" ]
+  webui_module_path = "/"
+  deps = [ "//maho/browser/ui/webui/maho_settings:mojo_bindings" ]
+}
+
+source_set("maho_welcome") {
+  sources = [
+    "maho_welcome_page_handler.cc",
+    "maho_welcome_page_handler.h",
+    "maho_welcome_prefs.cc",
+    "maho_welcome_prefs.h",
+    "maho_welcome_ui.cc",
+    "maho_welcome_ui.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/favicon",
+    "//chrome/browser/history",
+    "//chrome/browser/password_manager/factories",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/webdata_services",
+    "//components/autofill/core/browser",
+    "//components/autofill/core/common",
+    "//components/favicon/core",
+    "//components/favicon_base",
+    "//components/history/core/browser",
+    "//components/password_manager/core/browser:password_form",
+    "//components/password_manager/core/browser/password_store:password_store_interface",
+    "//components/prefs",
+    "//components/search_engines",
+    "//maho/browser/importer",
+    "//maho/browser/mail_helper:maho_mail_service",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
+    "//maho/browser:maho_theme_support",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_auth_utils",
+    "//maho/browser:maho_google_sign_in",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
+    "//maho/browser/ui/views/welcome:maho_welcome_window",
+    "//maho/browser/ui/webui/maho_settings:maho_settings_password_helpers",
+    "//maho/browser/resources/maho_welcome:resources",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//services/network/public/mojom",
+    "//ui/color",
+    "//ui/views",
+    "//ui/webui",
+    "//url",
+  ]
+}
+
+test("maho_welcome_completion_policy_test") {
+  sources = [
+    "maho_welcome_completion_policy_test_main.cc",
+    "maho_welcome_completion_policy_unittest.cc",
+    "maho_welcome_prefs.cc",
+  ]
+
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W1 Static Form Benchmark</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; max-width: 600px; }
+    .form-group { margin-bottom: 1rem; display: flex; flex-direction: column; }
+    .form-group label { margin-bottom: 0.25rem; font-weight: bold; }
+    .form-group input, .form-group select { padding: 0.5rem; font-size: 1rem; }
+    .checkbox-group { flex-direction: row; align-items: center; gap: 0.5rem; }
+    .message { margin-top: 1rem; padding: 0.75rem; border-radius: 4px; display: none; }
+    .message.success { display: block; background: #e6ffed; border: 1px solid #34d058; color: #22863a; }
+    .message.error { display: block; background: #ffeef0; border: 1px solid #d73a49; color: #cb2431; }
+  </style>
+</head>
+<body>
+  <h1>W1: Static Form Benchmark</h1>
+  <form id="static-registration-form" onsubmit="handleSubmit(event)">
+    <div class="form-group">
+      <label for="fullname">Full Name</label>
+      <input type="text" id="fullname" name="fullname" placeholder="Enter your full name" required />
+    </div>
+
+    <div class="form-group">
+      <label for="email">Email Address</label>
+      <input type="email" id="email" name="email" placeholder="user@example.com" required />
+    </div>
+
+    <div class="form-group">
+      <label for="phone">Phone Number</label>
+      <input type="tel" id="phone" name="phone" placeholder="555-0199" required />
+    </div>
+
+    <div class="form-group">
+      <label for="role">Primary Role</label>
+      <select id="role" name="role" required>
+        <option value="">-- Choose Role --</option>
+        <option value="developer">Software Engineer</option>
+        <option value="designer">Product Designer</option>
+        <option value="manager">Engineering Manager</option>
+      </select>
+    </div>
+
+    <div class="form-group checkbox-group">
+      <input type="checkbox" id="terms" name="terms" required />
+      <label for="terms">I accept the terms of service</label>
+    </div>
+
+    <button type="submit" id="submit-btn">Submit Application</button>
+  </form>
+
+  <div id="validation-message" role="alert" class="message"></div>
+
+  <script>
+    function handleSubmit(event) {
+      event.preventDefault();
+      const fullname = document.getElementById('fullname').value.trim();
+      const email = document.getElementById('email').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const role = document.getElementById('role').value;
+      const terms = document.getElementById('terms').checked;
+      const msgBox = document.getElementById('validation-message');
+
+      if (!fullname || !email || !phone || !role || !terms) {
+        msgBox.className = 'message error';
+        msgBox.textContent = 'Validation error: Please fill all required fields.';
+        return;
+      }
+
+      msgBox.className = 'message success';
+      msgBox.textContent = 'Form submitted successfully for ' + fullname + ' (' + role + ').';
+    }
+  </script>
+</body>
+</html>

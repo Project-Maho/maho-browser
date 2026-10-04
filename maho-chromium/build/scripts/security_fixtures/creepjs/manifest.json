@@ -1,0 +1,46 @@
+{
+  "name": "creepjs-offline-subset",
+  "upstream_repository": "https://github.com/abrahamjuliot/creepjs",
+  "upstream_revision": "10aa6724cd33a1015db1574211890518cd04f0cc",
+  "license": "MIT",
+  "description": "Pinned upstream CreepJS audit transformed for loopback-only execution, with separately labeled Maho observations",
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1070,
+      "sha256": "f6653ea45a373c2fed73f6a2a6b4b18d51b70b37d7fe110e4d579a61b1dba173",
+      "origin": "upstream",
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "f6653ea45a373c2fed73f6a2a6b4b18d51b70b37d7fe110e4d579a61b1dba173",
+      "transformations": []
+    },
+    {
+      "path": "index.html",
+      "bytes": 8331,
+      "sha256": "e59328901b58f9cd77776a282a9de8c01aa57e4ea36b3e94283050807ae28b59",
+      "origin": "upstream",
+      "upstream_path": "docs/index.html",
+      "upstream_sha256": "e59328901b58f9cd77776a282a9de8c01aa57e4ea36b3e94283050807ae28b59",
+      "transformations": []
+    },
+    {
+      "path": "creep.js",
+      "bytes": 550760,
+      "sha256": "d1581ac8a67dd625ac99ddf6674fb6d72be14ffbf373de70b5c87ed0523a8862",
+      "origin": "upstream",
+      "upstream_path": "docs/creep.js",
+      "upstream_sha256": "80f43f364bd973bc03cb5b82de033ce28b2bbb145cb04237632a46ef040a92be",
+      "transformations": [
+        "added assertMahoLocalURL and routed fetch, Worker, SharedWorker, and serviceWorker.register URL sinks through it",
+        "replaced public Google STUN iceServers with an empty array for host-only ICE gathering",
+        "dispatch maho-creepjs-complete after window.Fingerprint and window.Creep are exposed"
+      ]
+    },
+    {
+      "path": "README.md",
+      "bytes": 2088,
+      "sha256": "d12edffbac8874da14352b5943d69858b2765b5f78a7a7ea11bb6c3f2d6c29f9",
+      "origin": "maho"
+    }
+  ]
+}

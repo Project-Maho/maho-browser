@@ -1,0 +1,23 @@
+diff --git c/components/password_manager/core/browser/form_fetcher.h w/components/password_manager/core/browser/form_fetcher.h
+index ccfcd7759b884bcb2eba4b9fbbf7d02634c4b299..481613e5d96cf6b8b5ce9da59fca57f1d9bce2d1 100644
+--- c/components/password_manager/core/browser/form_fetcher.h
++++ w/components/password_manager/core/browser/form_fetcher.h
+@@ -11,6 +11,7 @@
+ 
+ #include "base/containers/span.h"
+ #include "base/observer_list_types.h"
++#include "components/password_manager/core/browser/password_form_digest.h"
+ #include "components/password_manager/core/browser/password_form_metrics_recorder.h"
+ #include "components/password_manager/core/browser/password_store/password_store_util.h"
+ #include "components/signin/public/base/gaia_id_hash.h"
+@@ -61,6 +62,10 @@ class FormFetcher {
+   // of the cached credentials.
+   virtual void Fetch() = 0;
+ 
++  // Captures the requesting document before the asynchronous store read.
++  virtual void SetPasswordFillRequestContext(
++      const PasswordFillRequestContext& context);
++
+   // Returns the current state of the FormFetcher
+   virtual State GetState() const = 0;
+ 

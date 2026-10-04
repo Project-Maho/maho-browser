@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/browser_action_prefs_listener.h w/chrome/browser/ui/browser_action_prefs_listener.h
+index 30909a8d9313dfb4c30ab53e5ffb77bdce83afe2..d7eae8ba1a1b097f25102806946f6317c20cce48 100644
+--- c/chrome/browser/ui/browser_action_prefs_listener.h
++++ w/chrome/browser/ui/browser_action_prefs_listener.h
+@@ -21,6 +21,7 @@ class BrowserActionPrefsListener final {
+ 
+  private:
+   void UpdateActionsForSharingHubPolicy();
++  void UpdateMahoAiPanelActionCheckedState();
+   void UpdateQRCodeGeneratorActionEnabledState();
+ 
+   const raw_ref<Profile> profile_;

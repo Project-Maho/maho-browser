@@ -1,0 +1,96 @@
+diff --git a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.cc b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.cc
+index 82590dfa2f1ff9733d66ca37e03b9f7910982b6a..189f73c1fd40f265a4811468e452a504a2ef3e2c 100644
+--- a/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.cc
++++ b/chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_page_handler.cc
+@@ -112,12 +112,6 @@ CustomizeChromePageHandler::CustomizeChromePageHandler(
+       template_url_service_(TemplateURLServiceFactory::GetForProfile(profile_)),
+       theme_service_(ThemeServiceFactory::GetForProfile(profile_)),
+       module_id_details_(module_id_details),
+-      browser_window_changed_subscription_(
+-          webui::RegisterBrowserWindowInterfaceChanged(
+-              web_contents_,
+-              base::BindRepeating(
+-                  &CustomizeChromePageHandler::OnBrowserWindowInterfaceChanged,
+-                  base::Unretained(this)))),
+       page_(std::move(pending_page)),
+       receiver_(this, std::move(pending_page_handler)),
+       open_url_callback_(open_url_callback.has_value()
+@@ -125,6 +119,13 @@ CustomizeChromePageHandler::CustomizeChromePageHandler(
+                              : base::BindRepeating(&OpenWebPage, profile_)) {
+   CHECK(IsSupported(ntp_custom_background_service_, profile_));
+ 
++  browser_window_changed_subscription_ =
++      webui::RegisterBrowserWindowInterfaceChanged(
++          web_contents_,
++          base::BindRepeating(
++              &CustomizeChromePageHandler::OnBrowserWindowInterfaceChanged,
++              weak_ptr_factory_.GetWeakPtr()));
++
+   ntp_background_service_->AddObserver(this);
+   native_theme_observation_.Observe(ui::NativeTheme::GetInstanceForNativeUi());
+   theme_service_observation_.Observe(theme_service_);
+@@ -135,44 +136,44 @@ CustomizeChromePageHandler::CustomizeChromePageHandler(
+   pref_change_registrar_.Add(
+       prefs::kNtpModulesVisible,
+       base::BindRepeating(&CustomizeChromePageHandler::UpdateModulesSettings,
+-                          base::Unretained(this)));
++                          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       prefs::kNtpDisabledModules,
+       base::BindRepeating(&CustomizeChromePageHandler::UpdateModulesSettings,
+-                          base::Unretained(this)));
++                          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       ntp_prefs::kNtpCustomLinksVisible,
+       base::BindRepeating(
+           &CustomizeChromePageHandler::UpdateMostVisitedSettings,
+-          base::Unretained(this)));
++          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       ntp_prefs::kNtpEnterpriseShortcutsVisible,
+       base::BindRepeating(
+           &CustomizeChromePageHandler::UpdateMostVisitedSettings,
+-          base::Unretained(this)));
++          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       ntp_prefs::kNtpPersonalShortcutsVisible,
+       base::BindRepeating(
+           &CustomizeChromePageHandler::UpdateMostVisitedSettings,
+-          base::Unretained(this)));
++          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       ntp_prefs::kNtpShortcutsVisible,
+       base::BindRepeating(
+           &CustomizeChromePageHandler::UpdateMostVisitedSettings,
+-          base::Unretained(this)));
++          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       ntp_tiles::prefs::kEnterpriseShortcutsPolicyList,
+       base::BindRepeating(
+           &CustomizeChromePageHandler::UpdateMostVisitedSettings,
+-          base::Unretained(this)));
++          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       prefs::kNtpHiddenModules,
+       base::BindRepeating(&CustomizeChromePageHandler::UpdateModulesSettings,
+-                          base::Unretained(this)));
++                          weak_ptr_factory_.GetWeakPtr()));
+   pref_change_registrar_.Add(
+       prefs::kNtpToolChipsVisible,
+       base::BindRepeating(&CustomizeChromePageHandler::UpdateToolChipsSettings,
+-                          base::Unretained(this)));
++                          weak_ptr_factory_.GetWeakPtr()));
+ 
+   ntp_custom_background_service_observation_.Observe(
+       ntp_custom_background_service_.get());
+@@ -565,6 +566,10 @@ void CustomizeChromePageHandler::SetFooterVisible(bool visible) {
+ }
+ 
+ void CustomizeChromePageHandler::UpdateFooterSettings() {
++  if (!page_) {
++    return;
++  }
++
+   auto management_notice_state =
+       side_panel::mojom::ManagementNoticeState::New();
+   management_notice_state->can_be_shown = false;

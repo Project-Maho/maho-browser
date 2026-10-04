@@ -1,0 +1,44 @@
+diff --git a/components/affiliations/core/browser/affiliation_service_impl_unittest.cc b/components/affiliations/core/browser/affiliation_service_impl_unittest.cc
+index 4c88cbd8157624a0e761f1e94a210d892f8b9235..d935e2d92169ad541fa9e4d41fc688b99d31e8ee 100644
+--- a/components/affiliations/core/browser/affiliation_service_impl_unittest.cc
++++ b/components/affiliations/core/browser/affiliation_service_impl_unittest.cc
+@@ -29,6 +29,7 @@
+ #include "components/affiliations/core/browser/mock_affiliation_consumer.h"
+ #include "components/affiliations/core/browser/mock_affiliation_fetcher.h"
+ #include "components/affiliations/core/browser/mock_affiliation_fetcher_factory.h"
++#include "components/affiliations/core/browser/mock_affiliation_source.h"
+ #include "net/http/http_status_code.h"
+ #include "services/network/public/cpp/shared_url_loader_factory.h"
+ #include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+@@ -154,6 +155,10 @@ class AffiliationServiceImplTest : public testing::Test {
+ 
+   void RunUntilIdle() { task_environment_.RunUntilIdle(); }
+ 
++  void FastForwardBy(base::TimeDelta delta) {
++    task_environment_.FastForwardBy(delta);
++  }
++
+   AffiliationServiceImpl* service() { return service_.get(); }
+   MockAffiliationConsumer* mock_consumer() { return &mock_consumer_; }
+ 
+@@ -595,6 +600,20 @@ TEST_F(AffiliationServiceImplTest, SupportForMultipleRequests) {
+             service()->GetChangePasswordURL(origin2));
+ }
+ 
++TEST_F(AffiliationServiceImplTest,
++       ShutdownCancelsDelayedSourceInitialization) {
++  auto source =
++      std::make_unique<testing::StrictMock<MockAffiliationSource>>(nullptr);
++  MockAffiliationSource* source_ptr = source.get();
++
++  EXPECT_CALL(*source_ptr, StartObserving(_)).Times(0);
++  service()->RegisterSource(std::move(source));
++
++  service()->Shutdown();
++  FastForwardBy(base::Seconds(31));
++  RunUntilIdle();
++}
++
+ // Test fixture to imitate a fetch factory for testing and not just mock it.
+ class AffiliationServiceImplTestWithFetcherFactory
+     : public AffiliationServiceImplTest {

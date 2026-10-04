@@ -1,0 +1,9 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Source: Lucide "pause" (ISC license)
+
+CANVAS_DIMENSIONS, 24,
+STROKE, 2,
+ROUND_RECT, 14, 3, 5, 18, 1,
+NEW_PATH,
+STROKE, 2,
+ROUND_RECT, 5, 3, 5, 18, 1,

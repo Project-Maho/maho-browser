@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="shell_window_background">#FF0D1116</color>
+    <color name="shell_browsing_background">#FF101319</color>
+    <color name="shell_home_background_start">#FF11161D</color>
+    <color name="shell_home_background_mid">#FF131920</color>
+    <color name="shell_home_background_end">#FF141920</color>
+    <color name="shell_overlay_background">#FF10151D</color>
+    <color name="shell_overlay_surface">#FF161D27</color>
+    <color name="shell_overlay_surface_high">#FF1A2230</color>
+    <color name="shell_bottom_bar">#FF141A23</color>
+    <color name="shell_tab_card">#FF151C25</color>
+    <color name="shell_tab_card_active">#FF1D293A</color>
+    <color name="shell_tab_card_border">#FF7EA3F9</color>
+    <color name="shell_accent">#FFA8C4FF</color>
+    <color name="shell_accent_muted">#FF1F2A3B</color>
+    <color name="shell_text_primary">#FFF5F7FC</color>
+    <color name="shell_text_secondary">#FFB3BDCD</color>
+    <color name="shell_divider">#FF273140</color>
+    <color name="shell_incognito_background">#FF1A2352</color>
+    <color name="shell_incognito_surface">#FF2C3560</color>
+    <color name="shell_incognito_accent">#FFFFFFFF</color>
+    <color name="shell_status_success">#FF30D158</color>
+    <color name="shell_status_warning">#FFFF9F0A</color>
+    <color name="shell_status_error">#FFFF453A</color>
+    <color name="widget_background">#FF1C1C1E</color>
+    <color name="widget_text">#FFFFFFFF</color>
+    <color name="ic_launcher_background">#FF1E1B4B</color>
+</resources>

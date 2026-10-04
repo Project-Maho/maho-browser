@@ -1,0 +1,38 @@
+diff --git c/components/autofill_strings.grdp w/components/autofill_strings.grdp
+index d6016910554adfd8fe499abd7f02acad9a6fd535..0e00a0ff5575e8e47f9cc550eb98e1af66d990af 100644
+--- c/components/autofill_strings.grdp
++++ w/components/autofill_strings.grdp
+@@ -62,13 +62,13 @@
+   </if>
+   <if expr="not _google_chrome">
+     <message name="IDS_AUTOFILL_DELETE_AUTOCOMPLETE_SUGGESTION_CONFIRMATION_BODY" desc="Text in a dialog to confirm that the user wants to delete an autocomplete form history suggestion.">
+-      Remove form suggestion from Chromium?
++      Remove form suggestion from Maho?
+     </message>
+     <message name="IDS_AUTOFILL_DELETE_CREDIT_CARD_SUGGESTION_CONFIRMATION_BODY" desc="Text in a dialog to confirm that the user wants to delete a credit card from Autofill.">
+-      Remove credit card from Chromium?
++      Remove credit card from Maho?
+     </message>
+     <message name="IDS_AUTOFILL_DELETE_PROFILE_SUGGESTION_CONFIRMATION_BODY" desc="Text in a dialog to confirm that the user wants to delete an address from Autofill.">
+-      Remove address from Chromium?
++      Remove address from Maho?
+     </message>
+   </if>
+   <message name="IDS_AUTOFILL_REMOVE_HOME_PROFILE_SUGGESTION_CONFIRMATION_TITLE" desc="Title in a dialog to confirm that the user wants to delete their Home address from Autofill." formatter_data="android_java">
+@@ -1915,13 +1915,13 @@
+   </if>
+   <if expr="not _google_chrome">
+     <message name="IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL" desc="The description of the setting. By 'understand forms better', we mean that when a user submits a form on a website, and if they're using smarter form understanding, this feature can offer to save the user's submitted info. When Chromium saves that info, we save the submitted values and consider the page context." formatter_data="android_java">
+-      Chromium understands forms better and can autofill them faster for you
++      Maho understands forms better and can autofill them faster for you
+     </message>
+     <message name="IDS_SETTINGS_AUTOFILL_AI_TOGGLE_SUB_LABEL_V2" desc="The description of the setting. This explains to users that Google can process page data in Google servers as a way to provide a better experience. Importantly, it mentions that this is done safely and cannot be viewed by anyone." formatter_data="android_java">
+-      Help Chromium better understand and fill complex forms by securely processing data on Google's servers. Your info remains private and isn't reviewed by anyone.
++      Help Maho better understand and fill complex forms by securely processing data on Google's servers. Your info remains private and isn't reviewed by anyone.
+     </message>
+     <message name="IDS_SETTINGS_AUTOFILL_AI_WHEN_ON_CAN_FILL_DIFFICULT_FIELDS" desc="Bullet point that appears beneath the 'When on' title when seeing the Smarter Form Understanding description page. This string explains one of the advantages users will get from enabling the feature and serves as a way to incentivize the user to do so." formatter_data="android_java">
+-      Chromium can autofill difficult fields that standard autofill might miss
++      Maho can autofill difficult fields that standard autofill might miss
+     </message>
+   </if>
+ 

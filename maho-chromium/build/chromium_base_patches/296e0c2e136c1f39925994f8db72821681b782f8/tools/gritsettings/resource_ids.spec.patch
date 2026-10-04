@@ -1,0 +1,95 @@
+diff --git a/tools/gritsettings/resource_ids.spec b/tools/gritsettings/resource_ids.spec
+index d0620514c19f330dac4e33cb19bccea063919236..4e968a27998834fecb07dedf51efe842012ccf63 100644
+--- a/tools/gritsettings/resource_ids.spec
++++ b/tools/gritsettings/resource_ids.spec
+@@ -1712,9 +1712,89 @@
+     "messages": [10120],
+   },
+ 
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_common/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [11850],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_space_config/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [11875],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_space_create/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [11890],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_command/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [11900],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_sidebar/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [11950],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_ai/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12000],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_settings/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12050],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_notes/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12100],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_boost/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12150],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_boost_content_script/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12175],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_translate_content_script/resources.grd": {
++    "META": {"sizes": {"includes": [10],}},
++    "includes": [12180],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_easel/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12200],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_welcome/resources.grd": {
++    "META": {"sizes": {"includes": [50],}},
++    "includes": [12225],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_routines/resources.grd": {
++    "META": {"sizes": {"includes": [20],}},
++    "includes": [12235],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_mail/resources.grd": {
++    "META": {"sizes": {"includes": [20],}},
++    "includes": [12245],
++  },
++
++  "<(SHARED_INTERMEDIATE_DIR)/maho/browser/resources/maho_changelog/resources.grd": {
++    "META": {"sizes": {"includes": [32],}},
++    "includes": [12246],
++  },
++
+   "<(SHARED_INTERMEDIATE_DIR)/THIS_IS_A_PLACEHOLDER.grd": {
+     "META": {"sizes": {"includes": [800]}},
+-    "includes": [12000],
++    "includes": [12250],
+   },
+ 
+   # END "everything else" section.

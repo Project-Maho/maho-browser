@@ -1,0 +1,329 @@
+diff --git c/chrome/browser/ui/BUILD.gn w/chrome/browser/ui/BUILD.gn
+index 0ab25c63c9f39dc0e96f154eedd3b03ad14fa638..f593028bdb1959c2936c7846d958db70b3f467bb 100644
+--- c/chrome/browser/ui/BUILD.gn
++++ w/chrome/browser/ui/BUILD.gn
+@@ -31,6 +31,16 @@
+ assert(enable_supervised_users)
+ assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
+ 
++# Preserve the Maho overlay's navigator header contract across the upstream move.
++source_set("browser_navigator_params_headers") {
++  public = [
++    "browser_navigator.h",
++    "browser_navigator_params.h",
++  ]
++  sources = public
++  public_deps = [ "//chrome/browser/ui/navigator" ]
++}
++
+ generate_allowlist_from_histograms_file("webui_name_variants") {
+   namespace = "views_metrics"
+   input_xml_file = "//tools/metrics/histograms/metadata/page/histograms.xml"
+@@ -521,6 +521,19 @@ source_set("managed_ui") {
+   ]
+   deps = [
+     ":ui_features",
++    "//maho/browser/net",
++    "//maho/browser:maho_core_holder",
++    "//maho/browser:maho_tab_id_helper",
++    "//maho/browser:maho_tab_tidy_orchestrator",
++    "//maho/browser/ui/tabs:maho_ctrl_tab_prefs",
++    "//maho/browser/ui/tabs:maho_ctrl_tab_switcher_controller",
++    "//maho/browser/ui/tabs:maho_mru_tab_tracker",
++    "//maho/browser/ui/views/peek:maho_peek_route",
++    "//maho/browser/ui/views/peek:maho_peek",
++    "//maho/browser:maho_password_save_update_view",
++    "//maho/browser/ui/views/boost:maho_boost_bubble",
++    "//maho/third_party/maho:maho_bridge",
++    "//maho/components/constants",
+     "//chrome:strings",
+     "//chrome/browser:browser_features",
+     "//chrome/browser/enterprise",
+@@ -603,9 +616,80 @@ source_set("tab_dialogs") {
+ # The two are already semantically a part of the same target as they allow
+ # circular includes from each other.
+ static_library("ui") {
++  # The password bubble wrapper includes its overlay explicitly.
++  # This parent root is only for its src/... Chromium fallback.
++  include_dirs = [ "../../../.." ]
++
+   sources = [
+     "tab_helpers.cc",
+     "tab_helpers.h",
++    "//maho/browser/ui/views/frame/maho_contents_header_view.cc",
++    "//maho/browser/ui/views/frame/maho_contents_header_view.h",
++    "//maho/browser/ui/views/sidebar/maho_sidebar_scroll_bar.cc",
++    "//maho/browser/ui/views/sidebar/maho_sidebar_scroll_bar.h",
++    "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.cc",
++    "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.h",
++    "//maho/browser/maho_browser_main_extra_parts.cc",
++    "//maho/browser/maho_browser_main_extra_parts.h",
++    "//maho/browser/maho_routines_scheduler.cc",
++    "//maho/browser/maho_routines_scheduler.h",
++    "//maho/browser/mail_helper/maho_mail_notification_coordinator.cc",
++    "//maho/browser/mail_helper/maho_mail_notification_coordinator.h",
++    "//maho/browser/mcp/maho_mcp_console_capture.cc",
++    "//maho/browser/mcp/maho_mcp_console_capture.h",
++    "//maho/browser/mcp/maho_mcp_input_synthesizer.cc",
++    "//maho/browser/mcp/maho_mcp_input_synthesizer.h",
++    "//maho/browser/mcp/maho_mcp_navigation_tracker.cc",
++    "//maho/browser/mcp/maho_mcp_navigation_tracker.h",
++    "//maho/browser/net/maho_content_blocker_update_service_factory.cc",
++    "//maho/browser/net/maho_content_blocker_update_service_factory.h",
++    "//maho/browser/sync/maho_sync_relay_client.cc",
++    "//maho/browser/sync/maho_sync_relay_client.h",
++    "//maho/browser/sync/maho_sync_relay_protocol.cc",
++    "//maho/browser/sync/maho_sync_relay_protocol.h",
++    "//maho/browser/updates/maho_config_manager.cc",
++    "//maho/browser/updates/maho_config_manager.h",
++    "//maho/browser/updates/maho_update_signature.cc",
++    "//maho/browser/updates/maho_update_signature.h",
++    "//maho/browser/updates/rollout_bucket.cc",
++    "//maho/browser/updates/rollout_bucket.h",
++    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.cc",
++    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_handler.h",
++    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
++    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
++    "//maho/browser/ui/views/location_bar/maho_full_page_capture_client.cc",
++    "//maho/browser/ui/views/location_bar/maho_full_page_capture_client.h",
++    "//maho/browser/ui/views/location_bar/maho_dom_screenshot_script_string.h",
++    "//maho/browser/ui/views/shields/maho_shield_bubble_coordinator.cc",
++    "//maho/browser/ui/views/shields/maho_shield_bubble_coordinator.h",
++    "//maho/browser/ui/views/shields/maho_shield_bubble_view.cc",
++    "//maho/browser/ui/views/shields/maho_shield_bubble_view.h",
++    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.cc",
++    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.h",
++    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_cache_warmer.cc",
++    "//maho/browser/ui/webui/maho_live_folders/maho_live_folder_cache_warmer.h",
++    "//maho/browser/ui/site_control/maho_page_info_ui.cc",
++    "//maho/browser/ui/site_control/maho_page_info_ui.h",
++    "//maho/browser/maho_private_context_policy.cc",
++    "//maho/browser/maho_private_context_policy.h",
++    "//maho/browser/ui/maho_settings_navigation.cc",
++    "//maho/browser/ui/maho_settings_navigation.h",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.cc",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.cc",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.cc",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.cc",
++    "//maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h",
++    "//maho/browser/ui/views/changelog/maho_changelog_auto_opener.cc",
++    "//maho/browser/ui/views/welcome/maho_welcome_window.cc",
++    "//maho/browser/ui/views/welcome/maho_welcome_window.h",
++    "//maho/browser/ui/webui/maho_webui_private_boundary.cc",
++    "//maho/browser/ui/webui/maho_webui_private_boundary.h",
++    "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.cc",
++    "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h",
++    "//maho/browser/ui/views/command/maho_command_overlay_controller.cc",
+   ]
+ 
+   defines = []
+@@ -1242,6 +1326,34 @@ static_library("ui") {
+   if (!is_android) {
+     deps += [
+       ":chrome_pages",
++      "//maho/browser/mail_helper:maho_mail_service",
++      "//maho/browser/ui/views/side_panel:side_panel",
++      "//components/split_tabs",
++      "//maho/browser/ui/webui/maho_mail:maho_mail",
++      "//maho/browser/ui/webui/maho_sync:maho_sync",
++      "//maho/browser/ui/webui/maho_settings:maho_settings",
++      "//maho/browser:maho_private_context_policy",
++      "//maho/browser:maho_settings_navigation",
++      "//maho/browser/ui/webui/maho_welcome:mojo_bindings",
++      "//maho/browser/ui/webui/maho_sync:mojo_bindings",
++      "//maho/browser/ui/webui/maho_space_create:mojo_bindings",
++      "//maho/browser/ui/webui/maho_space_config:mojo_bindings",
++      "//maho/browser/ui/webui/maho_settings:mojo_bindings",
++      "//maho/browser/ui/webui/maho_routines:mojo_bindings",
++      "//maho/browser/ui/webui/maho_live_folders:mojo_bindings",
++      "//maho/browser/ui/webui/maho_inline_edit:mojo_bindings",
++      "//maho/browser/ui/webui/maho_boost:mojo_bindings",
++      "//maho/browser/ui/webui/maho_ai:mojo_bindings",
++      "//maho/browser/ui/views/sidebar:maho_spaces_board_data",
++      "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
++      "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
++      "//maho/third_party/maho:maho_ffi_headers",
++      "//maho/browser/ui/webui/maho_ai:maho_ai",
++      "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
++      "//maho/browser/updates:maho_updates_prefs",
++      "//maho/browser/updates:maho_updates_lib",
++      "//maho/browser/mcp:maho_mcp",
++      "//maho/browser:maho_content_blocker_update_service",
+       ":chrome_web_modal_dialog_manager_delegate",
+       "//chrome/browser:certificate_viewer",
+       "//chrome/browser/accessibility/phrase_segmentation",
+@@ -2359,7 +2471,7 @@ static_library("ui") {
+       "//components/remote_cocoa/app_shim:features",
+       "//components/remote_cocoa/browser",
+     ]
+-    include_dirs = [ "$target_gen_dir" ]
++    include_dirs += [ "$target_gen_dir" ]
+     frameworks = [
+       "Carbon.framework",
+       "Quartz.framework",
+@@ -2493,7 +2605,8 @@ static_library("ui") {
+       "views/autofill/popup/popup_loading_view.h",
+       "views/autofill/popup/popup_row_factory_utils.cc",
+       "views/autofill/popup/popup_row_factory_utils.h",
+-      "views/autofill/popup/popup_row_view.cc",
++      "//maho/chromium_src/chrome/browser/ui/views/autofill/popup/popup_row_view.cc",
++      "//maho/chromium_src/chrome/browser/ui/views/autofill/popup/popup_row_view.h",
+       "views/autofill/popup/popup_view_utils.cc",
+       "views/autofill/popup/popup_view_views.cc",
+       "views/autofill/popup/popup_view_views.h",
+@@ -2639,6 +2752,113 @@ static_library("ui") {
+       "views/web_apps/web_app_update_review_dialog.cc",
+     ]
+ 
++    sources += [
++      "//maho/browser/maho_tab_id_session_helper.cc",
++      "//maho/browser/maho_tab_id_session_helper.h",
++      "//maho/browser/maho_tab_preview_capture.cc",
++      "//maho/browser/maho_tab_preview_capture.h",
++      "//maho/browser/ui/views/maho_mini/maho_mini_window.cc",
++      "//maho/browser/ui/views/maho_mini/maho_mini_window.h",
++      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.cc",
++      "//maho/browser/ui/views/maho_mini/maho_mini_top_bar_view.h",
++      "//maho/browser/net/maho_atc_navigation_throttle.cc",
++      "//maho/browser/net/maho_atc_navigation_throttle.h",
++      "//maho/browser/ui/views/maho_content_gradient_view.cc",
++      "//maho/browser/ui/views/maho_content_gradient_view.h",
++      "//maho/browser/ui/views/maho_action_marker_service.cc",
++      "//maho/browser/ui/views/maho_action_marker_service.h",
++      "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h",
++      "//maho/browser/ui/views/sidebar/maho_now_playing_card.cc",
++      "//maho/browser/ui/views/sidebar/maho_now_playing_card.h",
++      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.cc",
++      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator.h",
++      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.cc",
++      "//maho/browser/ui/views/sidebar/maho_now_playing_coordinator_factory.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_action_popover_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_action_popover_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_archive_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_dnd_events.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_download_visual_loader.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_download_visual_loader.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_drag_util.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_drop_planner.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_controller.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_folder_hover_popup_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_footer_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_library_tile_helpers.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_media_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_media_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_prefs.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_prefs.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_processing_placeholder_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_section_policy.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_section_policy.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_spaces_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_state_models.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_tab_list_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_themed_background.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_themed_background.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_controller.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_model.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_update_notification_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_view.h",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.cc",
++      "//maho/browser/ui/views/sidebar/maho_sidebar_visibility_manager.h",
++      "//maho/browser/ui/views/sidebar/maho_spaces_board_data.cc",
++      "//maho/browser/ui/views/sidebar/maho_spaces_board_data.h",
++      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.cc",
++      "//maho/browser/ui/views/sidebar/maho_toolbar_button_provider.h",
++      "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry.h",
++      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.cc",
++      "//maho/browser/ui/views/sidebar/maho_translate_popover_view.h",
++      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.cc",
++      "//maho/browser/ui/tab_preview/maho_tab_preview_controller.h",
++      "//maho/browser/ui/views/split_view/maho_split_view_controller.cc",
++      "//maho/browser/ui/views/split_view/maho_split_view_controller.h",
++      "//maho/browser/extensions/api/maho_split_view_api.cc",
++      "//maho/browser/extensions/api/maho_split_view_api.h",
++    ]
++
+     sources += get_target_outputs(":webui_name_variants")
+ 
+     public_deps += [ "//chrome/browser/ui/views/tabs/common:impl" ]
+@@ -2656,6 +2876,11 @@ static_library("ui") {
+       "//chrome/browser/collaboration",
+       "//chrome/browser/collaboration/messaging",
+       "//chrome/browser/desktop_to_mobile_promos:utils",
++      "//maho/browser/ui/views/command:maho_command_overlay",
++      "//maho/browser/ui/views/spaces_overlay:maho_spaces_overlay",
++      "//maho/browser/ui/views/sidebar:maho_sidebar_downloads",
++      "//maho/browser/ui/views/sidebar:maho_sidebar_library",
++      "//maho/browser:maho_location_bar_views",
+       "//chrome/browser/preloading/bookmarkbar_preload",
+       "//chrome/browser/preloading/new_tab_page_preload",
+       "//chrome/browser/preloading/prerender",
+@@ -3292,16 +3517,26 @@ static_library("ui") {
+     }
+ 
+     if (is_mac) {
++      sources += [
++        "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm",
++        "//maho/browser/mcp/maho_mcp_native_input_mac.mm",
++        "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_mac.mm",
++      ]
+       deps += [
+         "//chrome/browser/ui/webui/unexportable_keys_internals",
+         "//chrome/browser/ui/webui/unexportable_keys_internals:impl",
+         "//services/audio/public/cpp",
+       ]
+     } else {
++      sources += [
++        "//maho/browser/ui/views/location_bar/maho_utility_panel_vibrancy_stub.cc",
++        "//maho/browser/ui/views/sidebar/maho_traffic_light_geometry_stub.cc",
++      ]
+       deps += [ "//chrome/browser/ui/views:create_application_shortcut_view" ]
+     }
+ 
+     if (is_win) {
++      sources += [ "//maho/browser/mcp/maho_mcp_native_input_win.cc" ]
+       deps += [
+         ":accessibility_util",
+         "//chrome/browser/ui/views/frame:system_menu_insertion_delegate_win",

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W4 Iframe Page Benchmark</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; max-width: 800px; }
+    .main-section { border: 2px solid #0366d6; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; }
+    iframe { width: 100%; height: 260px; border: 2px dashed #28a745; border-radius: 6px; }
+    .status { margin-top: 0.5rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>W4: Iframe Page Benchmark</h1>
+  <p>Main frame with independent interactive controls and an embedded child iframe.</p>
+
+  <div class="main-section">
+    <h2>Main Frame Controls</h2>
+    <div style="margin-bottom: 0.5rem;">
+      <label for="main-input">Parent Query:</label>
+      <input type="text" id="main-input" placeholder="Search parent frame..." />
+    </div>
+    <div style="margin-bottom: 0.5rem;">
+      <button id="main-action-btn">Submit Parent Query</button>
+    </div>
+    <div id="main-status" class="status" role="status">Main frame waiting...</div>
+  </div>
+
+  <h2>Nested Child Frame</h2>
+  <iframe
+    id="nested-child-frame"
+    name="child-frame"
+    src="w4_child_iframe.html"
+    srcdoc="<!DOCTYPE html><html><head><meta charset='UTF-8'><style>body{font-family:sans-serif;margin:1rem;background:#f6f8fa;}.form-group{margin-bottom:0.5rem;}input,select,button{font-size:0.9rem;padding:0.3rem;}</style></head><body><h3>Embedded IFrame Workspace</h3><div class='form-group'><label for='iframe-username'>IFrame Username:</label> <input type='text' id='iframe-username' value='guest_operator' /></div><div class='form-group'><label for='iframe-scope'>Scope:</label> <select id='iframe-scope'><option value='read'>Read Only</option><option value='write'>Read &amp; Write</option><option value='admin'>Administrator</option></select></div><div class='form-group'><button id='iframe-submit-btn'>Execute Frame Action</button></div><div id='iframe-feedback' role='status' style='margin-top:0.5rem;font-weight:bold;color:#0366d6;'>Frame Idle</div><script>document.getElementById('iframe-submit-btn').addEventListener('click',()=>{const user=document.getElementById('iframe-username').value;const scope=document.getElementById('iframe-scope').value;document.getElementById('iframe-feedback').textContent='Action executed for '+user+' ['+scope+']';});</script></body></html>"
+  ></iframe>
+
+  <script>
+    document.getElementById('main-action-btn').addEventListener('click', () => {
+      const q = document.getElementById('main-input').value;
+      document.getElementById('main-status').textContent = 'Parent query received: ' + (q || '(empty)');
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+--- a/chrome/browser/sessions/session_restore.cc
++++ b/chrome/browser/sessions/session_restore.cc
+@@ -931,10 +931,10 @@
+       // remaining tab-oriented bookkeeping/invariants for this window.
+       const bool maho_zero_tab_browser =
+           browser != browser_ &&
+-          browser->tab_strip_model()->count() == 0;
++          browser->GetTabStripModel()->count() == 0;
+       if (maho_zero_tab_browser) {
+         if (!did_show_browser) {
+-          browser->window()->Show();
++          browser->GetWindow()->Show();
+         }
+         continue;
+       }
+@@ -1158,9 +1158,9 @@
+         if (url.spec() == "about:blank" ||
+             (url.SchemeIs("chrome") && url.host() == "newtab")) {
+           if (is_selected_tab && browser != browser_ &&
+-              browser && browser->window()) {
+-            browser->window()->Show();
+-            browser->set_is_session_restore(false);
++              browser && browser->GetWindow()) {
++            browser->GetWindow()->Show();
++            BrowserInitState::From(browser)->set_is_session_restore(false);
+             did_show_browser = true;
+           }
+           return;

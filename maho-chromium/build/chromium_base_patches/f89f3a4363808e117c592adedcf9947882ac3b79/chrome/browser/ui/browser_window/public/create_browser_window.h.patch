@@ -1,0 +1,14 @@
+diff --git c/chrome/browser/ui/browser_window/public/create_browser_window.h w/chrome/browser/ui/browser_window/public/create_browser_window.h
+index c6e44f9a4bc2653d58eff131d9692b98b88d43f1..cbc2c99473c27ca76445a6ad56bbe8ff0498cae6 100644
+--- c/chrome/browser/ui/browser_window/public/create_browser_window.h
++++ w/chrome/browser/ui/browser_window/public/create_browser_window.h
+@@ -99,6 +99,9 @@ struct BrowserWindowCreateParams {
+   // case some security UI may not be shown.
+   bool is_trusted_source = false;
+ 
++  // Maho: Whether this window is a Maho Mini popup window.
++  bool is_maho_mini = false;
++
+   // The app name associated with the browser window.
+   std::string app_name;
+ 

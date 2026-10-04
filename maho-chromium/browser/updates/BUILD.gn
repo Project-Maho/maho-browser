@@ -1,0 +1,159 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+if (is_mac) {
+  config("maho_sparkle_loader_paths") {
+    ldflags = [
+      "-Wl,-rpath,@loader_path/.",
+      "-Wl,-rpath,@loader_path/../../..",
+    ]
+  }
+
+  copy("stage_sparkle_framework") {
+    sources = [ "//maho/third_party/sparkle/Sparkle.framework" ]
+    outputs = [ "$root_out_dir/{{source_file_part}}" ]
+  }
+}
+
+source_set("maho_updates_prefs") {
+  sources = [
+    "maho_update_pref_names.h",
+    "maho_update_prefs.cc",
+    "maho_update_prefs.h",
+  ]
+  deps = [ "//components/prefs" ]
+}
+
+source_set("maho_update_crypto_util") {
+  sources = [
+    "maho_update_signature.cc",
+    "maho_update_signature.h",
+    "rollout_bucket.cc",
+    "rollout_bucket.h",
+    "manifest_pubkey.h",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+action("generate_maho_product_version") {
+  script = "//maho/build/scripts/generate_product_version.py"
+  depfile = "$target_gen_dir/maho_product_version.d"
+  inputs = [ "//../../maho/version.txt" ]
+  outputs = [ "$target_gen_dir/maho_product_version.h" ]
+  args = [
+    "--version-file",
+    rebase_path("//../../maho/version.txt", root_build_dir),
+    "--output",
+    rebase_path("$target_gen_dir/maho_product_version.h", root_build_dir),
+    "--depfile",
+    rebase_path(depfile, root_build_dir),
+  ]
+}
+
+source_set("maho_config_manager") {
+  sources = [
+    "maho_config_manager.cc",
+    "maho_config_manager.h",
+  ]
+  deps = [
+    ":maho_updates_prefs",
+    ":maho_update_crypto_util",
+    "//base",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//net",
+    "//services/network/public/cpp",
+  ]
+}
+
+component("maho_updates_lib") {
+  defines = [ "IS_MAHO_UPDATES_IMPL" ]
+  sources = [
+    "$target_gen_dir/maho_product_version.h",
+    "crash_loop_sentinel.cc",
+    "crash_loop_sentinel.h",
+    "linux_install_kind.cc",
+    "linux_install_kind.h",
+    "maho_update_manager.cc",
+    "maho_update_manager.h",
+    "platform_updater_error_mapping.h",
+    "maho_update_server_url.cc",
+    "maho_update_server_url.h",
+    "platform_updater_delegate.h",
+  ]
+  if (is_mac) {
+    sources += [ "maho_update_delegate_mac.mm" ]
+    frameworks = [ "Sparkle.framework" ]
+    framework_dirs = [ rebase_path("//maho/third_party/sparkle") ]
+    all_dependent_configs = [ ":maho_sparkle_loader_paths" ]
+    data_deps = [ ":stage_sparkle_framework" ]
+  }
+  if (is_win) {
+    sources += [
+      "maho_update_delegate_win.cc",
+      "maho_update_signature_win.cc",
+      "maho_update_signature_win.h",
+    ]
+  }
+  if (is_linux) {
+    sources += [
+      "maho_update_delegate_linux.cc",
+      "maho_update_delegate_linux.h",
+    ]
+  }
+  deps = [
+    ":generate_maho_product_version",
+    ":maho_updates_prefs",
+    ":maho_update_crypto_util",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//components/version_info",
+    "//content/public/browser",
+    "//crypto",
+    "//net",
+    "//services/network/public/cpp",
+    "//third_party/boringssl",
+  ]
+  if (is_win) {
+    deps += [ "//chrome/browser:browser_process" ]
+    libs = [ "runtimeobject.lib" ]
+  }
+  if (is_linux) {
+    deps += [ "//chrome/browser:browser_process" ]
+  }
+}
+
+source_set("maho_updates_unittests") {
+  testonly = true
+  sources = [
+    "linux_install_kind_unittest.cc",
+    "maho_config_manager_unittest.cc",
+    "maho_update_manager_unittest.cc",
+    "maho_update_signature_unittest.cc",
+  ]
+  if (is_linux) {
+    sources += [ "maho_update_delegate_linux_unittest.cc" ]
+  }
+  deps = [
+    ":generate_maho_product_version",
+    ":maho_config_manager",
+    ":maho_updates_lib",
+    ":maho_updates_prefs",
+    ":maho_update_crypto_util",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//components/version_info",
+    "//testing/gtest",
+  ]
+}

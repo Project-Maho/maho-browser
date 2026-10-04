@@ -1,0 +1,22 @@
+diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
+index 557eadb18229e4adb2f0092593877254e2f1fe7c..68cd2aa370996db7eaff06464c3b6963f9031bc2 100644
+--- a/components/embedder_support/user_agent_utils.cc
++++ b/components/embedder_support/user_agent_utils.cc
+@@ -439,11 +439,12 @@ std::string BuildOSCpuInfo(
+ }  // namespace
+ 
+ std::string GetProductAndVersion() {
+-  return base::FeatureList::IsEnabled(
+-             blink::features::kReduceUserAgentMinorVersion)
+-             ? version_info::GetProductNameAndVersionForReducedUserAgent()
+-             : std::string(
+-                   version_info::GetProductNameAndVersionForUserAgent());
++  return base::StrCat({base::FeatureList::IsEnabled(
++                           blink::features::kReduceUserAgentMinorVersion)
++                           ? version_info::GetProductNameAndVersionForReducedUserAgent()
++                           : std::string(
++                                 version_info::GetProductNameAndVersionForUserAgent()),
++                       " Maho/1.0"});
+ }
+ 
+ std::optional<std::string> GetUserAgentFromCommandLine() {

@@ -1,0 +1,12 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Source: Lucide "message-circle" (ISC license)
+
+CANVAS_DIMENSIONS, 24,
+STROKE, 2,
+MOVE_TO, 2.992f, 16.342f,
+R_ARC_TO, 2, 2, 0, 0, 1, 0.094f, 1.167f,
+R_LINE_TO, -1.065f, 3.29f,
+R_ARC_TO, 1, 1, 0, 0, 0, 1.236f, 1.168f,
+R_LINE_TO, 3.413f, -0.998f,
+R_ARC_TO, 2, 2, 0, 0, 1, 1.099f, 0.092f,
+R_ARC_TO, 10, 10, 0, 1, 0, -4.777f, -4.719f,

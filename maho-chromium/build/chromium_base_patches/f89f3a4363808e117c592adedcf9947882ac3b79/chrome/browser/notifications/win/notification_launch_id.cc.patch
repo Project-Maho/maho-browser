@@ -1,0 +1,15 @@
+diff --git a/chrome/browser/notifications/win/notification_launch_id.cc b/chrome/browser/notifications/win/notification_launch_id.cc
+--- a/chrome/browser/notifications/win/notification_launch_id.cc
++++ b/chrome/browser/notifications/win/notification_launch_id.cc
+@@ -140,6 +140,11 @@
+   incognito_ = tokens[4] == "1";
+   origin_url_ = GURL(tokens[5]);
+ 
++  if (type == 12 && origin_url_.is_valid() &&
++      origin_url_ == GURL("chrome://maho-mail/")) {
++    notification_type_ = NotificationHandler::Type::MAHO_MAIL;
++  }
++
+   notification_id_.clear();
+   // Notification IDs is the rest of the string (delimiters not stripped off).
+   const size_t kMinVectorSize = 6;

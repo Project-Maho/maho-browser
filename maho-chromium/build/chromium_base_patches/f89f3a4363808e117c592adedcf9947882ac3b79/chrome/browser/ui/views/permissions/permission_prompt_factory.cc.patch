@@ -1,0 +1,18 @@
+diff --git c/chrome/browser/ui/views/permissions/permission_prompt_factory.cc w/chrome/browser/ui/views/permissions/permission_prompt_factory.cc
+index 0c03be841cac2008e2ec8d0610337ca3e39e8d37..52bbd0c4fc24531370523da1dbb8978a10663601 100644
+--- c/chrome/browser/ui/views/permissions/permission_prompt_factory.cc
++++ w/chrome/browser/ui/views/permissions/permission_prompt_factory.cc
+@@ -91,9 +91,12 @@ bool ShouldIgnorePermissionRequest(
+   }
+ 
+   // Suppress permission prompts if the omnibox is being edited or is empty.
++  // Maho hides the toolbar, so an undrawn location bar is not an editing
++  // omnibox. Dropping the prompt here skips the bubble and the OS dialog.
+   LocationBar* location_bar =
+       location_bar::GetLocationBarForWebContents(web_contents);
+-  bool can_display_prompt = !(location_bar && location_bar->IsEditingOrEmpty());
++  bool can_display_prompt = !(location_bar && location_bar->IsDrawn() &&
++                              location_bar->IsEditingOrEmpty());
+ 
+   BrowserWindowInterface* browser = GetBrowser(web_contents);
+   if (browser) {

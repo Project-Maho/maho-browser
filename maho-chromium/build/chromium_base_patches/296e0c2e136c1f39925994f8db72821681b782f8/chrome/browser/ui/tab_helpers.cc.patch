@@ -1,0 +1,27 @@
+diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
+index fcb990ace062479a5b1055e86db45974e5348e5e..1bbc405f73db2329f7aad5ffa42d6ce4acdec221 100644
+--- a/chrome/browser/ui/tab_helpers.cc
++++ b/chrome/browser/ui/tab_helpers.cc
+@@ -12,6 +12,11 @@
+ #include "base/command_line.h"
+ #include "base/feature_list.h"
+ #include "base/logging.h"
++#include "maho/browser/maho_tab_id_helper.h"
++#include "maho/browser/net/maho_webstore_rebrand_handler.h"
++#include "maho/browser/maho_tab_id_helper.h"
++#include "maho/browser/net/maho_boost_injection_handler.h"
++#include "maho/browser/net/maho_cosmetic_filters_handler.h"
+ #include "base/time/default_tick_clock.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
+@@ -479,6 +484,10 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+   if (MediaEngagementService::IsEnabled()) {
+     MediaEngagementService::CreateWebContentsObserver(web_contents);
+   }
++  MahoBoostInjectionHandler::CreateForWebContents(web_contents);
++  MahoCosmeticFiltersHandler::CreateForWebContents(web_contents);
++  MahoTabIdHelper::CreateForWebContents(web_contents);
++  MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);
+   if (auto* metrics_services_manager =
+           g_browser_process->GetMetricsServicesManager()) {
+     metrics::MetricsServicesWebContentsObserver::CreateForWebContents(

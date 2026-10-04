@@ -1,0 +1,33 @@
+diff --git c/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc w/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc
+index a927a2317a8955d9303720d8fd91987a66a7caef..bb74df2cd9b67b8d597a0e08f1f44308b61b4255 100644
+--- c/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc
++++ w/chrome/browser/ui/views/tabs/tab/tab_accessibility.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/tabs/tab/tab_accessibility.h"
+ 
++#include "base/strings/string_number_conversions.h"
++#include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/location_bar/location_bar.h"
+ #include "chrome/browser/ui/performance_controls/tab_resource_usage_tab_helper.h"
+@@ -114,10 +116,15 @@ std::u16string GetAccessibleTabLabel(const TabInterface* tab, bool is_for_tab) {
+     int tab_index_in_split = std::distance(
+         tabs_in_split.begin(),
+         std::find(tabs_in_split.begin(), tabs_in_split.end(), tab));
+-    title = l10n_util::GetStringFUTF16(
+-        GetAccessibleTabLabelFormatStringForSplit(
+-            split_data->visual_data()->split_layout(), tab_index_in_split),
+-        title);
++    if (tabs_in_split.size() == 2u) {
++      title = l10n_util::GetStringFUTF16(
++          GetAccessibleTabLabelFormatStringForSplit(
++              split_data->visual_data()->split_layout(), tab_index_in_split),
++          title);
++    } else {
++      title += u", Split pane " + base::NumberToString16(tab_index_in_split + 1) +
++               u" of " + base::NumberToString16(tabs_in_split.size());
++    }
+   }
+ 
+   if (const std::optional<tab_groups::TabGroupId> group = tab->GetGroup()) {

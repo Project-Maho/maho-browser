@@ -1,0 +1,282 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_mail_helper.mojom" ]
+}
+
+# Reusable launcher: spawns the out-of-process helper, verifies the version
+# handshake, respawns with backoff on crash, and drains it on shutdown. Shared
+# by the profile-keyed browser service; kept separate so consumers link it
+# without recompiling the helper-main sources.
+source_set("maho_mail_launcher") {
+  sources = [
+    "maho_mail_helper_launcher.cc",
+    "maho_mail_helper_launcher.h",
+    "maho_mail_helper_version.h",
+  ]
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//mojo/public/cpp/bindings",
+  ]
+  deps = [
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
+  ]
+}
+
+# Profile-keyed broker (browser side). Owns the launcher and proxies the
+# helper's asynchronous JSON read methods for one regular profile.
+source_set("maho_mail_badge") {
+  sources = [
+    "maho_mail_badge.cc",
+    "maho_mail_badge.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
+source_set("maho_mail_service") {
+  sources = [
+    "maho_mail_attachment_registry.cc",
+    "maho_mail_attachment_registry.h",
+    "maho_mail_notification_permission.h",
+    "maho_mail_service.cc",
+    "maho_mail_service.h",
+  ]
+  public_deps = [
+    ":maho_mail_badge",
+    ":mojo_bindings",
+    "//base",
+    "//components/keyed_service/core",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
+    "//crypto",
+  ]
+  deps = [
+    ":maho_mail_launcher",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+  ]
+  if (is_mac) {
+    sources += [
+      "maho_mail_dock_badge_mac.h",
+      "maho_mail_dock_badge_mac.mm",
+      "maho_mail_notification_permission_mac.mm",
+    ]
+    frameworks = [
+      "AppKit.framework",
+      "UserNotifications.framework",
+    ]
+  } else if (is_win) {
+    sources += [ "maho_mail_notification_permission_win.cc" ]
+    deps += [ "//chrome/installer/util:with_no_strings" ]
+    libs = [
+      "ole32.lib",
+      "runtimeobject.lib",
+      "shell32.lib",
+    ]
+  } else {
+    sources += [ "maho_mail_notification_permission.cc" ]
+  }
+}
+
+source_set("maho_mail_integration_test_support") {
+  testonly = true
+  sources = [
+    "maho_mail_integration_test_support.cc",
+    "maho_mail_integration_test_support.h",
+  ]
+  deps = [ "//base" ]
+}
+
+test("maho_mail_attachment_registry_test") {
+  sources = [
+    "maho_mail_attachment_registry_unittest.cc",
+    "maho_mail_service_test_main.cc",
+  ]
+  deps = [
+    ":maho_mail_service",
+    "//base",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_mail_notification_coordinator") {
+  sources = [
+    "maho_mail_notification_coordinator.cc",
+    "maho_mail_notification_coordinator.h",
+  ]
+  public_deps = [
+    ":maho_mail_service",
+    "//base",
+    "//components/prefs",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+  ]
+}
+
+test("maho_mail_notification_coordinator_test") {
+  sources = [
+    "maho_mail_notification_coordinator_unittest.cc",
+    "maho_mail_service_test_main.cc",
+  ]
+  deps = [
+    ":maho_mail_notification_coordinator",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+  ]
+}
+
+# Profile-keyed factory: creates one MahoMailService per regular profile and
+# excludes off-the-record / unsupported contexts. Kept separate from the broker
+# so the broker stays cheaply unit-testable.
+source_set("maho_mail_service_factory") {
+  sources = [
+    "maho_mail_service_factory.cc",
+    "maho_mail_service_factory.h",
+  ]
+  public_deps = [
+    ":maho_mail_service",
+    "//base",
+    "//components/keyed_service/core",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/content",
+    "//content/public/browser",
+  ]
+}
+
+# Overlay-local focused unit test: exercises the broker's readiness gate and
+# dropped-Mojo-reply completion against a fake helper, plus non-blocking
+# shutdown. Links the broker + launcher only (no //chrome/browser), so it
+# builds and runs without the full chrome unit_tests target and without
+# editing upstream chrome/test/BUILD.gn.
+test("maho_mail_service_test") {
+  sources = [
+    "maho_mail_service_test_main.cc",
+    "maho_mail_service_unittest.cc",
+  ]
+  deps = [
+    ":maho_mail_integration_test_support",
+    ":maho_mail_launcher",
+    ":maho_mail_service",
+    ":mojo_bindings",
+    "//base",
+    "//base/test:test_support",
+
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//testing/gtest",
+  ]
+}
+
+# Helper-side FFI read bridge: adapts one asynchronous maho-mail-ffi read
+# callback into a single sequenced C++ reply. Reusable and independently
+# testable (see the read-bridge test target below).
+source_set("maho_mail_read_bridge") {
+  sources = [
+    "maho_mail_read_bridge.cc",
+    "maho_mail_read_bridge.h",
+  ]
+  public_deps = [
+    "//base",
+    "//maho/third_party/maho:maho_mail_ffi",
+  ]
+}
+
+# Overlay-local focused unit test for the helper-side read bridge: drives the
+# bridge with a fake FfiInvoker (no real Rust) to prove async-callback
+# ownership guarantees -- worker-thread reply posts back to the origin sequence
+# exactly once with a copied string, rejection resolves once without a
+# callback, exactly-once under a same-stack callback race, and a late callback
+# with a torn-down WeakPtr origin stays a safe no-op. Reuses the broker test's
+# Mojo-init gtest main and links only the bridge (no //chrome/browser), so it
+# builds without the full chrome unit_tests target or upstream BUILD.gn edits.
+test("maho_mail_read_bridge_test") {
+  sources = [
+    "maho_mail_read_bridge_unittest.cc",
+    "maho_mail_service_test_main.cc",
+  ]
+  deps = [
+    ":maho_mail_read_bridge",
+    "//base",
+    "//base/test:test_support",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//testing/gtest",
+  ]
+}
+
+executable("maho_mail_helper") {
+  sources = [
+    "maho_mail_helper_main.cc",
+  ]
+
+  deps = [
+    ":maho_mail_read_bridge",
+    ":mojo_bindings",
+    "//base",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
+    "//maho/third_party/maho:maho_mail_ffi",
+    "//third_party/crashpad/crashpad/client",
+  ]
+
+  if (is_mac) {
+    # Seatbelt: the helper sandboxes itself in Initialize() before opening the
+    # mail DB or touching the network.
+    deps += [ "//sandbox/mac:seatbelt" ]
+  }
+
+  if (is_linux) {
+    # Runtime credentials are injected by the browser before Mail work starts,
+    # so the sandboxed helper needs no session-bus transport.
+    sources += [
+      "maho_mail_helper_sandbox_linux.cc",
+      "maho_mail_helper_sandbox_linux.h",
+    ]
+    deps += [
+      "//sandbox/linux:sandbox_services",
+      "//sandbox/linux:seccomp_bpf",
+      "//sandbox/policy",
+      "//sandbox/policy/mojom",
+    ]
+
+  }
+}
+
+if (is_linux) {
+  test("maho_mail_helper_sandbox_test") {
+    sources = [
+      "maho_mail_helper_sandbox_linux.cc",
+      "maho_mail_helper_sandbox_linux.h",
+      "maho_mail_helper_sandbox_linux_unittest.cc",
+      "maho_mail_helper_sandbox_test_main.cc",
+    ]
+    deps = [
+      "//base",
+      "//base/test:test_support",
+      "//sandbox/linux:sandbox_services",
+      "//sandbox/linux:seccomp_bpf",
+      "//sandbox/policy",
+      "//sandbox/policy/mojom",
+      "//testing/gtest",
+    ]
+    libs = [ "dl" ]
+  }
+}

@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/ui/views/frame/contents_container_view.cc w/chrome/browser/ui/views/frame/contents_container_view.cc
+index 2ad9afd1ce7e515d93cd772949a75abfcc0babbf..68a0338d8f493e533960b407ef532e99ddadf87e 100644
+--- c/chrome/browser/ui/views/frame/contents_container_view.cc
++++ w/chrome/browser/ui/views/frame/contents_container_view.cc
+@@ -55,8 +55,6 @@
+ #endif
+ 
+ namespace {
+-constexpr float kContentCornerRadius = 0;
+-constexpr gfx::RoundedCornersF kContentRoundedCorners{kContentCornerRadius};
+ constexpr int kSplitViewContentPadding = 0;
+ constexpr int kNewTabFooterSeparatorHeight = 1;
+ constexpr int kNewTabFooterHeight = 56;

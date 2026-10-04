@@ -1,0 +1,18 @@
+diff --git c/chrome/browser/ui/page_action/page_action_properties_provider.cc w/chrome/browser/ui/page_action/page_action_properties_provider.cc
+index 5045b2b4742afd82e9f143dc4ea531ace2d04581..38591f874bc6d9af4a3929b4a0b96c2ac1c69252 100644
+--- c/chrome/browser/ui/page_action/page_action_properties_provider.cc
++++ w/chrome/browser/ui/page_action/page_action_properties_provider.cc
+@@ -72,7 +72,12 @@ constexpr auto kPageActionProperties = base::MakeFixedFlatMap<
+         {
+             .histogram_name = "Translate",
+             .type = PageActionIconType::kTranslate,
+-            .element_identifier = kTranslatePageActionElementId,
++            // Maho: kTranslatePageActionElementId is owned by the Maho
++            // sidebar's secondary_label_ in Arc layout. Suppressing
++            // identifier assignment here keeps ElementTracker lookups
++            // (BrowserView::ShowTranslateBubble's highlight_element)
++            // unambiguous and prevents the DCHECK_EQ(1U, ...) crash in
++            // GetUniqueElement when both views are visible.
+         },
+     },
+     {

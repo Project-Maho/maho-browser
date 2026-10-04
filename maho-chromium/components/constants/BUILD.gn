@@ -1,0 +1,21 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//testing/test.gni")
+
+source_set("constants") {
+  sources = [
+    "url_constants.h",
+    "webui_url_constants.h",
+  ]
+}
+
+test("maho_url_constants_test") {
+  sources = [
+    "webui_url_constants_unittest.cc",
+  ]
+  deps = [
+    ":constants",
+    "//base/test:run_all_unittests",
+    "//testing/gtest",
+  ]
+}

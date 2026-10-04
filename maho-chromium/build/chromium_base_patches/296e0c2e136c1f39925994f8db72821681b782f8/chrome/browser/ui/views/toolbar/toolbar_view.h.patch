@@ -1,0 +1,26 @@
+diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.h b/chrome/browser/ui/views/toolbar/toolbar_view.h
+index cb8defead92171b160f4acb49263c762996bffc2..2a73e813644132c10b1c32a3544aa32255937f3f 100644
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.h
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.h
+@@ -77,6 +77,10 @@ class ToolbarGlicActorTaskIcon;
+ class GlicButtonInterface;
+ }  // namespace glic
+ 
++namespace maho {
++class MahoToolbarButtonProvider;
++}  // namespace maho
++
+ class GlicAndActorButtonsContainer;
+ 
+ enum class ExpansionMode {
+@@ -97,6 +101,10 @@ class ToolbarView : public views::AccessiblePaneView,
+                     public BrowserRootView::DropTarget,
+                     public glic::GlicButtonControllerDelegate,
+                     public glic::GlicNudgeDelegate {
++  // Maho overlay: MahoToolbarButtonProvider wraps ToolbarView and forwards
++  // ToolbarButtonProvider override calls. Granted friend access so it can
++  // delegate to the private interface implementations.
++  friend class maho::MahoToolbarButtonProvider;
+   METADATA_HEADER(ToolbarView, views::AccessiblePaneView)
+ 
+  public:

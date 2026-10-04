@@ -1,0 +1,19 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Use of this source code is governed by the same license as the chromium-src
+// directory.
+
+module maho.mojom;
+
+// Import feature flags used across the essential-importer pipeline. Each
+// constant is a bit within the u32 mask passed from the shell to
+// EssentialImporter so it can selectively enable per-domain imports.
+const uint32 kImportBookmarks   = 0x01;
+const uint32 kImportPasswords   = 0x02;
+const uint32 kImportHistory     = 0x04;
+const uint32 kImportCookies     = 0x08;
+const uint32 kImportAutofill    = 0x10;
+const uint32 kImportWorkspaces  = 0x20;
+const uint32 kImportSidebar     = 0x40;
+const uint32 kImportExtensions  = 0x80;
+const uint32 kImportFavicons    = 0x100;
+const uint32 kImportEssential   = 0x200;

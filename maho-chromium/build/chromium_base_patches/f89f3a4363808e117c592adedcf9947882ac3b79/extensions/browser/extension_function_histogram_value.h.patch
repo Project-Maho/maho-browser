@@ -1,0 +1,15 @@
+diff --git c/extensions/browser/extension_function_histogram_value.h w/extensions/browser/extension_function_histogram_value.h
+index 4e2c0d6e50729713ad5739a36fa5476eb5e39245..16ee6f61d72453acc90c6858f9122cec179b93c0 100644
+--- c/extensions/browser/extension_function_histogram_value.h
++++ w/extensions/browser/extension_function_histogram_value.h
+@@ -2046,6 +2046,10 @@ enum HistogramValue {
+   AUTOFILLPRIVATE_FETCHUSERDATAPROCESSINGCONSENT = 1981,
+   DEVELOPERPRIVATE_OPENREVIEWPAGE = 1982,
+   TABS_CREATESPLIT = 1983,
++  MAHO_SPLITVIEW_CREATE = 1984,
++  MAHO_SPLITVIEW_CLOSE = 1985,
++  MAHO_SPLITVIEW_QUERY = 1986,
++  MAHO_SIDEPANEL_SETLAYOUT = 1987,
+   // Last entry: Add new entries above, then run:
+   // tools/metrics/histograms/update_extension_histograms.py
+   ENUM_BOUNDARY

@@ -1,0 +1,15 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho.mojom;
+
+struct SidePanelOptions {
+  string extension_id;
+  string url_spec;
+  string layout; // "left" | "right"
+  int32 default_width;
+};
+
+interface ExtensionSidePanelHost {
+  RegisterSidePanel(SidePanelOptions options);
+  UnregisterSidePanel(string extension_id);
+};

@@ -1,0 +1,142 @@
+diff --git c/chrome/browser/sessions/session_restore.cc w/chrome/browser/sessions/session_restore.cc
+index be7345cba4dd4e34c42f3926c806b20b34c39ce9..0d762a08f33833aad68301b432354e52f584aa7b 100644
+--- c/chrome/browser/sessions/session_restore.cc
++++ w/chrome/browser/sessions/session_restore.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/sessions/session_restore.h"
++#include "maho/browser/maho_tab_id_helper.h"
+ 
+ #include <stddef.h>
+ 
+@@ -465,6 +466,28 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+                              profile_, /* from_user_gesture = */ true))
+                        : browser_.get();
+     CHECK(browser);
++
++    // Maho zero-tab: skip chrome://newtab and about:blank restored tabs so
++    // legacy sessions do not resurrect these synthetic URLs. Real user tabs
++    // (youtube.com, etc.) restore normally.
++    {
++      const auto& navs = tab.navigations;
++      if (!navs.empty()) {
++        const int idx = std::clamp(tab.current_navigation_index, 0,
++                                   static_cast<int>(navs.size()) - 1);
++        const GURL& url = navs[idx].virtual_url();
++        if (url.spec() == "about:blank" ||
++            (url.SchemeIs("chrome") && url.host() == "newtab")) {
++          return nullptr;
++        }
++      }
++    }
++    {
++      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);
++      if (it != tab.extra_data.end() && !it->second.empty()) {
++        MahoTabIdHelper::SetPendingRestoredTabId(it->second);
++      }
++    }
+     RecordAppLaunchForTab(browser, tab, selected_index);
+ 
+     WebContents* web_contents;
+@@ -545,15 +568,20 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+         manager->SetWindowCreationInfo(
+             waap::NewWindowCreationSource::kBrowserInitiated, now);
+       }
+-      if (startup_tabs_.empty() ||
+-          (startup_tabs_.size() == 1 && whats_new::IsEnabled() &&
+-           startup_tabs_[0].url == whats_new::GetWebUIStartupURL())) {
+-        // No tab browsers were created and no URLs were supplied on the command
+-        // line, or only the What's New page is specified at startup and may or
+-        // may not add a tab. Open the new tab page.
+-        startup_tabs_.emplace_back(chrome::ChromeUINewTabURLAsGURL());
++      // Maho zero-tab: do not synthesise an NTP tab when the session restore
++      // produces no tabbed browser.  If |startup_tabs_| already contains real
++      // URLs (e.g. command-line URLs) append them; otherwise leave the window
++      // open with zero tabs so the Maho empty-window UX can take over.
++      startup_tabs_.erase(
++          std::remove_if(startup_tabs_.begin(), startup_tabs_.end(),
++              [](const StartupTab& t) {
++                return t.url.spec() == "about:blank" ||
++                       (t.url.SchemeIs("chrome") && t.url.host() == "newtab");
++              }),
++          startup_tabs_.end());
++      if (!startup_tabs_.empty()) {
++        AppendURLsToBrowser(browser, startup_tabs_);
+       }
+-      AppendURLsToBrowser(browser, startup_tabs_);
+       browser->GetWindow()->Show();
+     }
+ 
+@@ -896,6 +924,20 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+       RestoreTabsToBrowser(*window, browser, initial_tab_count,
+                            browser == browser_to_activate, restored_tabs,
+                            &new_group_ids, did_show_browser);
++      // Maho zero-tab window: if this window's tabs were all synthetic
++      // (about:blank / chrome://newtab) they were filtered out by the Maho
++      // patch in RestoreTab, so the browser has no tabs and was never Show()n.
++      // Show it manually to keep the empty window UX visible and skip the
++      // remaining tab-oriented bookkeeping/invariants for this window.
++      const bool maho_zero_tab_browser =
++          browser != browser_ &&
++          browser->GetTabStripModel()->count() == 0;
++      if (maho_zero_tab_browser) {
++        if (!did_show_browser) {
++          browser->GetWindow()->Show();
++        }
++        continue;
++      }
+       // Newly created browsers should be shown by RestoreTabsToBrowser. If they
+       // aren't shown, they are likely to be never shown.
+       if (browser != browser_) {
+@@ -940,7 +982,12 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+       // Sanity check: A restored browser should have an active tab.
+       // TODO(crbug.com/40662817): Change to DCHECK once we understand
+       // why some browsers don't have an active tab on startup.
+-      CHECK(browser->GetTabStripModel()->GetActiveWebContents());
++      // Maho: skip for empty browsers (all synthetic tabs got filtered by
++      // the Maho patch in RestoreTab); the zero-tab UX intentionally has no
++      // active tab, so this invariant does not apply.
++      if (browser->GetTabStripModel()->count() > 0) {
++        CHECK(browser->GetTabStripModel()->GetActiveWebContents());
++      }
+     }
+ 
+     if (browser_to_activate && browser_to_activate->GetType() ==
+@@ -1096,6 +1143,36 @@ class SessionRestoreImpl : public BrowserCollectionObserver {
+     SessionRestore::NotifySessionRestoreStartedLoadingTabs();
+     int selected_index = GetNavigationIndexToSelect(tab);
+ 
++    // Maho zero-tab: skip chrome://newtab and about:blank restored tabs so
++    // legacy sessions do not resurrect these synthetic URLs. Real user tabs
++    // (youtube.com, etc.) restore normally. If the filtered tab was the
++    // selected tab we still Show() the browser (with no active tab) so the
++    // post-loop DCHECK(did_show_browser) at session_restore.cc:~840 holds;
++    // Maho's Browser::TabStripEmpty patch keeps the empty window alive.
++    {
++      const auto& navs = tab.navigations;
++      if (!navs.empty()) {
++        const int idx = std::clamp(tab.current_navigation_index, 0,
++                                   static_cast<int>(navs.size()) - 1);
++        const GURL& url = navs[idx].virtual_url();
++        if (url.spec() == "about:blank" ||
++            (url.SchemeIs("chrome") && url.host() == "newtab")) {
++          if (is_selected_tab && browser != browser_ &&
++              browser && browser->GetWindow()) {
++            browser->GetWindow()->Show();
++            BrowserInitState::From(browser)->set_is_session_restore(false);
++            did_show_browser = true;
++          }
++          return;
++        }
++      }
++    }
++    {
++      auto it = tab.extra_data.find(MahoTabIdHelper::kExtraDataKey);
++      if (it != tab.extra_data.end() && !it->second.empty()) {
++        MahoTabIdHelper::SetPendingRestoredTabId(it->second);
++      }
++    }
+     RecordAppLaunchForTab(browser, tab, selected_index);
+ 
+     // Associate sessionStorage (if any) to the restored tab.

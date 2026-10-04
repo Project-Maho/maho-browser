@@ -1,0 +1,24 @@
+diff --git c/chrome/install_static/chromium_install_modes.h w/chrome/install_static/chromium_install_modes.h
+index ee62888f89705a08a95f130505ebfafb246f4bc2..7895bc5131391de6edfcb9d61f28205f566009cb 100644
+--- c/chrome/install_static/chromium_install_modes.h
++++ w/chrome/install_static/chromium_install_modes.h
+@@ -21,7 +21,7 @@ inline constexpr wchar_t kCompanyPathName[] = L"";
+ 
+ // The brand-specific product name to be included as a component of the install
+ // and user data directory paths.
+-inline constexpr wchar_t kProductPathName[] = L"Chromium";
++inline constexpr wchar_t kProductPathName[] = L"Maho";
+ 
+ // The brand-specific safe browsing client name.
+ inline constexpr char kSafeBrowsingName[] = "chromium";
+@@ -45,8 +45,8 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
+         .logo_suffix = L"",  // No logo suffix for the primary install mode.
+         .app_guid =
+             L"",  // Empty app_guid since no integration with Google Update.
+-        .base_app_name = L"Chromium",              // A distinct base_app_name.
+-        .base_app_id = L"Chromium",                // A distinct base_app_id.
++        .base_app_name = L"Maho",                  // A distinct base_app_name.
++        .base_app_id = L"Maho",                    // A distinct base_app_id.
+         .browser_prog_id_prefix = L"ChromiumHTM",  // Browser ProgID prefix.
+         .browser_prog_id_description =
+             L"Chromium HTML Document",  // Browser ProgID description.

@@ -1,0 +1,9 @@
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -2524,6 +2524,5 @@
+ 
+   const bool is_fullscreen = window() && window()->IsFullscreen();
+   const bool show_main_ui = IsShowingMainUI();
+-  const bool show_location_bar = IsShowingLocationBar();
+ 
+   const bool main_not_fullscreen = show_main_ui && !is_fullscreen;

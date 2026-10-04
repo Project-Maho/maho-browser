@@ -1,0 +1,39 @@
+diff --git a/chrome/browser/ui/views/location_bar/BUILD.gn b/chrome/browser/ui/views/location_bar/BUILD.gn
+index 216b6ed287d5aa8c7ea15948994ac8b8b14f1767..ba568689febc00930d2958f5e219aff7c516d31c 100644
+--- a/chrome/browser/ui/views/location_bar/BUILD.gn
++++ b/chrome/browser/ui/views/location_bar/BUILD.gn
+@@ -69,11 +69,12 @@ source_set("location_bar") {
+ 
+ source_set("impl") {
+   sources = []
+-  deps = [
+-    ":icon_label_bubble",
+-    ":location_bar",
+-    "//chrome/browser/ui/dialogs",
+-    "//chrome/browser/ui/select_file_policy",
++    deps = [
++      ":icon_label_bubble",
++      ":location_bar",
++      "//chrome/browser/ui/dialogs",
++      "//chrome/browser/ui/select_file_policy",
++    "//maho/browser:maho_location_bar_views",
+   ]
+ 
+   if (toolkit_views) {
+@@ -291,6 +292,7 @@ source_set("unit_tests") {
+   deps = [
+     ":icon_label_bubble",
+     ":location_bar",
++    "//maho/browser:maho_location_bar_views_unittests",
+     "//chrome/app:generated_resources",
+     "//chrome/test:test_support",
+     "//components/omnibox/browser",
+@@ -324,6 +326,8 @@ source_set("interactive_ui_tests") {
+     "//chrome/browser/ui/views/page_action",
+     "//chrome/browser/ui/views/page_info",
+     "//chrome/browser/ui/views/toolbar",
++    "//maho/browser:maho_location_bar_views",
++    "//maho/browser:maho_location_bar_views_interactive_tests",
+     "//chrome/browser/web_applications:web_applications_test_support",
+     "//chrome/test:test_support",
+     "//chrome/test:test_support_ui",

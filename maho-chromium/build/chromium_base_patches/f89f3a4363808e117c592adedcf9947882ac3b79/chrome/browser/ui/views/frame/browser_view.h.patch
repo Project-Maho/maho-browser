@@ -1,0 +1,192 @@
+diff --git c/chrome/browser/ui/views/frame/browser_view.h w/chrome/browser/ui/views/frame/browser_view.h
+index ba923f58ce59cc1f6b62c0e8a3501cf1b2ac973b..63b649f2bf86cbdc75f16edc4c4a70e9f3dddcf6 100644
+--- c/chrome/browser/ui/views/frame/browser_view.h
++++ w/chrome/browser/ui/views/frame/browser_view.h
+@@ -76,6 +76,7 @@ class BookmarkBarView;
+ class BrowserWindowInterface;
+ class BrowserViewLayout;
+ class ContentsContainerView;
++class MahoSplitViewController;
+ struct DropData;
+ class ExclusiveAccessBubbleViews;
+ class ExclusiveAccessBubbleViewsContext;
+@@ -119,6 +120,22 @@ class LabelButton;
+ class WebView;
+ }  // namespace views
+ 
++struct MahoSidebarPalette;
++
++namespace maho {
++class MahoCommandOverlayController;
++class MahoPeekController;
++class MahoContentGradientView;
++class MahoCtrlTabSwitcherController;
++class MahoMruTabTracker;
++class MahoSpacesOverlayController;
++class MahoToolbarButtonProvider;
++}  // namespace maho
++
++namespace webapps {
++enum class InstallableWebAppCheckResult;
++struct WebAppBannerData;
++}  // namespace webapps
+ class CustomFloatingCorner;
+ 
+ ///////////////////////////////////////////////////////////////////////////////
+@@ -220,6 +237,43 @@ class BrowserView : public BrowserWindow,
+   // Returns the ContentsContainerView for the active tab.
+   ContentsContainerView* GetActiveContentsContainerView();
+ 
++  // Maho: left sidebar host container.
++  views::View* maho_sidebar_container() const { return maho_sidebar_container_; }
++
++  // Maho: shows/hides themed opaque overlay covering the contents area.
++  // Used by the sidebar inline create-space form to hide active space content.
++  void SetMahoCreateSpaceBlankVisible(bool visible);
++
++  void ShowMahoCommandOverlayForCurrentTab();
++  void ShowMahoCommandOverlayForNewTab();
++  void ShowMahoCommandOverlayForSearch(const std::string& initial_text);
++
++  // Returns the overlay-host-owned Peek controller for eligible
++  // normal BrowserViews, attaching the host synchronously if needed.
++  maho::MahoPeekController* GetOrCreateMahoPeekController();
++
++  // Routes Ctrl+Tab / Ctrl+Shift+Tab through the Maho MRU tab
++  // switcher when the pref is enabled and at least two tabs
++  // exist. Returns true when the MRU switcher handled the
++  // command; the caller must skip the upstream positional
++  // SelectNextTab/SelectPreviousTab in that case.
++  bool MaybeHandleMruTabSwitch(bool forward);
++
++  // Closes all sidebar multi-selected tabs when two or more are
++  // selected. Returns true when it handled the close so the
++  // caller skips the upstream single-tab CloseTab.
++  bool MaybeHandleMultiTabClose();
++  void ShowMahoSpacesOverlay();
++  bool maho_spaces_overlay_visible_for_testing() const;
++  maho::MahoCommandOverlayController*
++  GetMahoCommandOverlayControllerForTesting() const {
++    return maho_command_overlay_controller_.get();
++  }
++  MahoSplitViewController* GetOrCreateMahoSplitViewController();
++  MahoSplitViewController* GetMahoSplitViewController() const {
++    return split_view_controller_.get();
++  }
++
+   // Returns the ContentsContainerView that corresponds to `web_contents`.
+   // Returns nullptr if there isn't a corresponding ContentsContainerView.
+   ContentsContainerView* GetContentsContainerViewFor(
+@@ -381,6 +435,10 @@ class BrowserView : public BrowserWindow,
+   // normal window (i.e. a browser window, not an app or popup).
+   bool GetIsNormalType() const;
+ 
++  // Returns true when the Maho Arc-style left-rail layout is active for this
++  // window.  Only possible for normal-type browser windows.
++  bool IsMahoArcLayoutActive() const;
++
+   // Returns true if the Browser object associated with this BrowserView is a
+   // for an installed web app.
+   bool GetIsWebAppType() const;
+@@ -496,6 +554,12 @@ class BrowserView : public BrowserWindow,
+   // Returns true if the browser is currently showing tabs in a split view.
+   bool IsInSplitView() const;
+ 
++  // Adds a new split to the current split view.
++  void AddSplitView();
++
++  // Removes the active split from the current split view.
++  void RemoveSplitView();
++
+   // Convenience method for fetching the element context for the window.
+   ui::ElementContext GetElementContext();
+ 
+@@ -720,6 +784,7 @@ class BrowserView : public BrowserWindow,
+       const views::ViewHierarchyChangedDetails& details) override;
+   void AddedToWidget() override;
+   void RemovedFromWidget() override;
++  void OnKeyEvent(ui::KeyEvent* event) override;
+   void PaintChildren(const views::PaintInfo& paint_info) override;
+   void OnThemeChanged() override;
+   bool GetDropFormats(int* formats,
+@@ -967,6 +1032,8 @@ class BrowserView : public BrowserWindow,
+   // use.
+   void LoadAccelerators();
+ 
++  void MaybeShowPendingMahoCommandOverlayForNewTab();
++
+   // Retrieves the command id for the specified Windows app command.
+   int GetCommandIDForAppCommandID(int app_command_id) const;
+ 
+@@ -1218,6 +1285,10 @@ class BrowserView : public BrowserWindow,
+   // The view that contains all visible WebContents.
+   raw_ptr<MultiContentsView> multi_contents_view_ = nullptr;
+ 
++  std::unique_ptr<MahoSplitViewController> split_view_controller_;
++
++  maho::MahoCommandOverlayController* GetOrCreateMahoCommandOverlayController();
++  maho::MahoSpacesOverlayController* GetOrCreateMahoSpacesOverlayController();
+   // The view responsible for housing the contents of the vertical tab strip.
+   raw_ptr<VerticalTabStripRegionView> vertical_tab_strip_region_view_ = nullptr;
+   raw_ptr<VerticalTabStripBackgroundBlurBackdrop>
+@@ -1236,6 +1307,60 @@ class BrowserView : public BrowserWindow,
+   // should exist if and only if the side_panel_coordinator is created.
+   raw_ptr<SidePanel> side_panel_ = nullptr;
+ 
++  // Maho: left sidebar host container.
++  raw_ptr<views::View> maho_sidebar_container_ = nullptr;
++
++  raw_ptr<views::View> maho_mini_top_bar_ = nullptr;
++
++  raw_ptr<maho::MahoContentGradientView>
++      maho_content_gradient_view_ = nullptr;
++
++  // Maho: mirror the active Space's sidebar palette onto the content
++  // gradient + WebContents background so both panes read as one
++  // themed surface (light/dark, opacity and stops all follow the
++  // sidebar's browser-local resolution).
++  void ApplyMahoSidebarPaletteToContentSurfaces(
++      const MahoSidebarPalette& palette);
++  void MaybeRefreshMahoContentSurfacesFromSidebar();
++  bool maho_sidebar_palette_subscribed_ = false;
++  base::CallbackListSubscription maho_sidebar_palette_subscription_;
++
++  // Maho: keeps the core-ready retry that re-registers Maho shortcut
++  // accelerators with the FocusManager. AddedToWidget() runs before the
++  // Rust core is guaranteed to be up, and GetRegisteredAccelerators()
++  // returns an empty list until then; without this retry the window
++  // keeps zero Maho accelerators and Cmd+Shift+C falls through to
++  // Chromium's hidden table (DevTools Inspect). Destroyed with the
++  // BrowserView, and the callback holds only a WeakPtr.
++  base::CallbackListSubscription
++      maho_core_ready_accelerators_subscription_;
++
++#if BUILDFLAG(IS_MAC)
++  // Maho: true once the Maho shortcut accelerators have actually been
++  // registered with this window's FocusManager. AddedToWidget() and the
++  // core-ready retry share one registration path, and registering the
++  // same target twice at kHighPriority trips AcceleratorManager DCHECKs,
++  // so the second caller must be able to tell the work is already done.
++  // Gated with the registration it guards: off-mac nothing reads it, and
++  // -Wunused-private-field is an error under Chromium's -Werror.
++  bool maho_accelerators_registered_ = false;
++#endif  // BUILDFLAG(IS_MAC)
++
++  raw_ptr<views::View> maho_create_space_blank_view_ = nullptr;
++
++  // Maho Arc layout: owns the ToolbarButtonProvider registration for Arc mode.
++  std::unique_ptr<maho::MahoToolbarButtonProvider>
++      maho_toolbar_button_provider_;
++
++  std::unique_ptr<maho::MahoCommandOverlayController>
++      maho_command_overlay_controller_;
++  std::unique_ptr<maho::MahoSpacesOverlayController>
++      maho_spaces_overlay_controller_;
++  bool pending_maho_command_overlay_new_tab_ = false;
++  std::unique_ptr<maho::MahoMruTabTracker> maho_mru_tab_tracker_;
++  std::unique_ptr<maho::MahoCtrlTabSwitcherController>
++      maho_ctrl_tab_switcher_controller_;
++
+   // The handler responsible for showing autofill bubbles.
+   std::unique_ptr<autofill::AutofillBubbleHandler> autofill_bubble_handler_;
+ 

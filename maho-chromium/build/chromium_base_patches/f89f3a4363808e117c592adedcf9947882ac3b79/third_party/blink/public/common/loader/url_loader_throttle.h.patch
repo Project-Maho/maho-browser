@@ -1,0 +1,13 @@
+diff --git c/third_party/blink/public/common/loader/url_loader_throttle.h w/third_party/blink/public/common/loader/url_loader_throttle.h
+index 4dae1e07a0cc72267a48577a18e761592e9c5438..214d39ef16928cee22548eb6a462f25d287abc2d 100644
+--- c/third_party/blink/public/common/loader/url_loader_throttle.h
++++ w/third_party/blink/public/common/loader/url_loader_throttle.h
+@@ -101,6 +101,8 @@ class BLINK_COMMON_EXPORT URLLoaderThrottle {
+   // Will* methods below and may only be called once.
+   virtual void DetachFromCurrentSequence();
+ 
++  virtual const GURL* TakeDeferredStartRedirectUrl() { return nullptr; }
++
+   // Called exactly once before the resource request is started.
+   //
+   // |request| needs to be modified before the callback returns (i.e.

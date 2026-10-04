@@ -1,0 +1,83 @@
+diff --git a/components/privacy_sandbox_strings.grd b/components/privacy_sandbox_strings.grd
+index 342b9dc65cf8acadc97e2f971951f7bd27d58257..07444ae3574678127ed537dc8610fffdf03d3390 100644
+--- a/components/privacy_sandbox_strings.grd
++++ b/components/privacy_sandbox_strings.grd
+@@ -280,7 +280,7 @@
+     <file path="strings/privacy_sandbox_strings_zu.xtb" lang="zu" />
+   </translations>
+   <release seq="1">
+-    <!--For strings used exclusively within the Privacy Sandbox Dialogs, those containing the word "Chrome" do not require a "Chromium" conditional variant, as these dialogs only appear in Chrome-branded builds-->
++    <!--For strings used exclusively within the Privacy Sandbox Dialogs, those containing the word "Chrome" do not require a "Maho" conditional variant, as these dialogs only appear in Chrome-branded builds-->
+     <messages fallback_to_english="true">
+       <!-- Ad Topics Page disclaimer -->
+       <message name="IDS_SETTINGS_TOPICS_PAGE_DISCLAIMER_CLANK" desc="Disclaimer of the new Ad topics setting. This text appears beneath the sublabel." formatter_data="android_java">
+@@ -308,7 +308,7 @@
+         </then>
+         <else>
+           <message name="IDS_MODE_B_ROLLBACK_DESCRIPTION" desc="Description text on the 3PCD rollback notice. Explains to the user that their settings state has been updated to allow third-party cookies and that this can be changed in settings." formatter_data="android_java">
+-            Your current Chromium settings have been updated to allow websites to access third-party cookies. You can change this setting any time.
++            Your current Maho settings have been updated to allow websites to access third-party cookies. You can change this setting any time.
+           </message>
+         </else>
+       </if>
+@@ -336,13 +336,13 @@
+         </then>
+         <else>
+           <message name="IDS_SETTINGS_SITE_SUGGESTED_ADS_CURRENT_SITES_DESCRIPTION_V2" desc="This string signals to users that they have the ability to block any website they don’t want using their activity. “Auto-deletes” means “automatically deletes”." formatter_data="android_java">
+-            You can block sites you don't want. Chromium also auto-deletes sites from the list that are older than 30 days.
++            You can block sites you don't want. Maho also auto-deletes sites from the list that are older than 30 days.
+           </message>
+           <message name="IDS_SETTINGS_SITE_SUGGESTED_ADS_PAGE_LEARN_MORE_BULLET_3_V2" desc="This string appears in the “More about site-suggested ads” dialog. “Activity data” refers to information about a user's actions or behaviors on the internet.">
+-            Chromium deletes any activity data that you've shared with sites after 30 days. If you visit a site again it may reappear on the list. Learn more about <ph name="BEGIN_LINK1">&lt;a href="$1" aria-description="$2" target="_blank"&gt;</ph>managing your ad privacy in Chromium<ph name="LINK_END1">&lt;/a&gt;</ph>.
++            Maho deletes any activity data that you've shared with sites after 30 days. If you visit a site again it may reappear on the list. Learn more about <ph name="BEGIN_LINK1">&lt;a href="$1" aria-description="$2" target="_blank"&gt;</ph>managing your ad privacy in Maho<ph name="LINK_END1">&lt;/a&gt;</ph>.
+           </message>
+           <message name="IDS_SETTINGS_SITE_SUGGESTED_ADS_PAGE_LEARN_MORE_BULLET_3_V2_CLANK" desc="This string appears in the “More about site-suggested ads” dialog. “Activity data” refers to information about a user's actions or behaviors on the internet." formatter_data="android_java">
+-            Chromium deletes any activity data that you've shared with sites after 30 days. If you visit a site again it may reappear on the list. Learn more about <ph name="BEGIN_LINK">&lt;link&gt;</ph>managing your ad privacy in Chromium<ph name="END_LINK">&lt;/link&gt;</ph>.
++            Maho deletes any activity data that you've shared with sites after 30 days. If you visit a site again it may reappear on the list. Learn more about <ph name="BEGIN_LINK">&lt;link&gt;</ph>managing your ad privacy in Maho<ph name="END_LINK">&lt;/link&gt;</ph>.
+           </message>
+         </else>
+       </if>
+@@ -426,13 +426,13 @@
+         </then>
+         <else>
+           <message name="IDS_SETTINGS_PRIVACY_GUIDE_AD_TOPICS_WHEN_ON_BULLET1" desc="A part of the feature description of Ad Topics card in the Privacy Guide." formatter_data="android_java">
+-            Chromium notes topics of interest based on your recent browsing history. For example, things like Sports, Apparel, and more
++            Maho notes topics of interest based on your recent browsing history. For example, things like Sports, Apparel, and more
+           </message>
+           <message name="IDS_SETTINGS_PRIVACY_GUIDE_AD_TOPICS_WHEN_ON_BULLET3" desc="A part of the feature description of Ad Topics card in the Privacy Guide." formatter_data="android_java">
+-            Chromium auto-deletes ad topics that are older than 4 weeks
++            Maho auto-deletes ad topics that are older than 4 weeks
+           </message>
+           <message name="IDS_SETTINGS_PRIVACY_GUIDE_AD_TOPICS_THINGS_TO_CONSIDER_BULLET1" desc="A part of the things to consider section of the Ad Topics card in the Privacy Guide." formatter_data="android_java">
+-            You can see your ad topics in Chromium settings and block the ones you don't want shared with sites
++            You can see your ad topics in Maho settings and block the ones you don't want shared with sites
+           </message>
+         </else>
+       </if>
+@@ -460,7 +460,7 @@
+         </then>
+         <else>
+           <message name="IDS_SETTINGS_AD_TOPICS_PAGE_ACTIVE_TOPICS_DESCRIPTION" desc="A description that appears beneath the 'Active topics' label." formatter_data="android_java">
+-            Chromium auto-deletes ad topics that are older than 4 weeks
++            Maho auto-deletes ad topics that are older than 4 weeks
+           </message>
+         </else>
+       </if>
+@@ -486,7 +486,7 @@
+         </then>
+         <else>
+           <message name="IDS_SETTINGS_COOKIES_BLOCK_THIRD_PARTY_SETTINGS_ALLOW_BULLET_THREE" desc="This text is for a bullet that provides detail about the first setting option. It describes the key new detail that now applies to this setting option." formatter_data="android_java">
+-            When you're in Incognito mode, Chromium blocks sites from using third-party cookies
++            When you're in Incognito mode, Maho blocks sites from using third-party cookies
+           </message>
+         </else>
+       </if>
+@@ -524,7 +524,7 @@
+         </then>
+         <else>
+           <message name="IDS_PRIVACY_GUIDE_COOKIE_SETTINGS_ALLOW_THINGS_TO_CONSIDER_BULLET_TWO" desc="This text is for a bullet that provides key considerations about the first setting option. It describes the key new detail that now applies to this setting option.">
+-            When you're in Incognito mode, Chromium blocks sites from using third-party cookies
++            When you're in Incognito mode, Maho blocks sites from using third-party cookies
+           </message>
+         </else>
+       </if>

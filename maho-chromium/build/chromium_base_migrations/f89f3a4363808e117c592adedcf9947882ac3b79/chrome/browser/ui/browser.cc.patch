@@ -1,0 +1,13 @@
+--- a/chrome/browser/ui/browser.cc
++++ b/chrome/browser/ui/browser.cc
+@@ -616,8 +616,8 @@
+   // UnloadController has already set is_attempting_to_close_browser_ via
+   // TryToCloseWindow / GetBrowserClosingStatus).  For every other browser
+   // type the original behaviour is preserved.
+-  if (is_type_normal() &&
+-      !unload_controller_.is_attempting_to_close_browser()) {
++  if (GetType() == BrowserWindowInterface::Type::TYPE_NORMAL &&
++      !UnloadController::From(this)->is_attempting_to_close_browser()) {
+     return;
+   }
+   // Note: even though the tab strip is empty, the call to Close() may not

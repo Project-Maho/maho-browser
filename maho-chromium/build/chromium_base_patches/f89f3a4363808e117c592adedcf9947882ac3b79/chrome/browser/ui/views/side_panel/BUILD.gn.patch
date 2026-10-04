@@ -1,0 +1,56 @@
+diff --git c/chrome/browser/ui/views/side_panel/BUILD.gn w/chrome/browser/ui/views/side_panel/BUILD.gn
+index eedffc77fbb88fbfdaf7a819da060ecfefb8f8f8..d1c59fe97dec245601b479a19544bf17b83e4a3b 100644
+--- c/chrome/browser/ui/views/side_panel/BUILD.gn
++++ w/chrome/browser/ui/views/side_panel/BUILD.gn
+@@ -53,6 +53,13 @@ source_set("side_panel") {
+     "tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h",
+     "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics.cc",
+     "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics.h",
++
++    "//maho/browser/ui/views/side_panel/maho_ai_side_panel_coordinator.h",
++    "//maho/browser/ui/views/side_panel/maho_ai_side_panel_web_view.h",
++    "//maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.cc",
++    "//maho/browser/ui/views/side_panel/maho_extension_side_panel_coordinator.h",
++    "//maho/browser/extensions/api/maho_side_panel_api.cc",
++    "//maho/browser/extensions/api/maho_side_panel_api.h",
+   ]
+   public_deps = [
+     "//base",
+@@ -138,6 +145,9 @@ source_set("side_panel") {
+     "//chrome/browser/ui/webui_browser:headers",
+     "//chrome/common",
+     "//chrome/common:constants",
++    "//maho/components/constants",
++    "//maho/components:extensions_side_panel_mojom",
++    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+     "//components/accessibility:reading",
+     "//components/download/content/factory",
+     "//components/download/content/public",
+@@ -186,3 +196,27 @@ source_set("side_panel") {
+ 
+   allow_circular_includes_from = [ "//chrome/browser/glic" ]
+ }
++
++source_set("interactive_tests") {
++  testonly = true
++
++  sources = [ "//maho/browser/ui/views/side_panel/maho_ai_side_panel_interactive_uitest.cc" ]
++
++  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
++
++  deps = [
++    ":side_panel",
++    "//base",
++    "//base/test:test_support",
++    "//chrome/browser:browser",
++    "//chrome/browser/ui:ui",
++    "//chrome/test:test_support",
++    "//chrome/test:test_support_ui",
++    "//content/public/browser:browser",
++    "//content/test:test_support",
++    "//net:test_support",
++    "//testing/gtest:gtest",
++    "//ui/views:views",
++    "//ui/views:test_support",
++  ]
++}

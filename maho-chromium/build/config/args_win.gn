@@ -1,0 +1,13 @@
+# Common release settings for Windows builds.
+# Generated/edited by hand for local GN setup.
+is_official_build = false
+is_debug = false
+symbol_level = 0
+
+target_os = "win"
+target_cpu = "x64"
+maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true

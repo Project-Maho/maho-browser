@@ -1,0 +1,87 @@
+[package]
+name = "maho-mail-ffi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Real mail backend FFI static lib for the Maho Mail helper process. Isolated Cargo workspace (own libsqlite3-sys) — NOT a member of maho/Cargo.toml."
+
+# Standalone workspace root. Intentionally NOT a member of maho/Cargo.toml
+# (libsqlite3-sys / bundled-sqlcipher conflict). Mirrors maho/relay/.
+[workspace]
+members = ["vendor/maho-core"]
+resolver = "2"
+
+# Vendored from the former mail/ workspace (now discarded). These mirror the
+# versions that vendor/maho-core's `{ workspace = true }` deps resolved against.
+[workspace.dependencies]
+# Plain SQLite, deliberately not SQLCipher. Whole-file encryption made every
+# helper start depend on a key derivation performed inside the Chromium binary,
+# which supplies BoringSSL under OpenSSL's symbol names: the helper could create
+# a database and use it through its own page cache, yet could not decrypt any
+# database read back from disk - not even one a standalone process had written
+# with the same key. The mail database now sits in the profile directory like
+# Chromium's own History and Cookies stores, and secrets stay protected by the
+# credential store's per-field AES-256-GCM, which is pure Rust and binds to no
+# ambient crypto library.
+rusqlite = { version = "0.33", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.26"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+
+[lib]
+# staticlib -> libmaho_mail_ffi.a consumed by third_party/maho/BUILD.gn
+# rlib      -> lets the in-crate test suite link against the library.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Reuse the Tauri-free domain library: db (SQLCipher + migrations), models,
+# services (account/email/folder), imap_client, folder_normalize, error.
+maho-core = { path = "vendor/maho-core" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-util = "0.7"
+rusqlite = { version = "0.33", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+log = "0.4"
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+rustls = { version = "0.23", features = ["ring"] }
+regex = "1"
+mail-parser = "0.9"
+md-5 = "0.10"
+
+# AES-256-GCM credential decryption (mirrors maho-core credential_store scheme),
+# keyed by the INJECTED credential_key rather than the OS keyring.
+aes-gcm = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+pgp = "0.14"
+smallvec = "1"
+rand = "0.8"
+
+[target.'cfg(not(windows))'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }
+
+[build-dependencies]
+cbindgen = "0.27"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

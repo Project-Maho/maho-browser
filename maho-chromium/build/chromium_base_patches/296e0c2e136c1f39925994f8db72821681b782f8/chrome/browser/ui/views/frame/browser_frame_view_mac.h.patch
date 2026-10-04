@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/views/frame/browser_frame_view_mac.h b/chrome/browser/ui/views/frame/browser_frame_view_mac.h
+index e7789651b6cea9c6b8bd445a4dddbfd27d0c0c20..eb7d170c93c6d329a09760a57f73e5f65b554a4e 100644
+--- a/chrome/browser/ui/views/frame/browser_frame_view_mac.h
++++ b/chrome/browser/ui/views/frame/browser_frame_view_mac.h
+@@ -93,6 +93,7 @@ class BrowserFrameViewMac : public BrowserFrameView,
+   void LayoutWindowControlsOverlay();
+ 
+   void UpdateCaptionButtonPlaceholderContainerBackground();
++  void UpdateSidebarTrafficLightsVisibility();
+ 
+   // Toggle the visibility of the web_app_frame_toolbar_view() for PWAs with
+   // window controls overlay display override when entering full screen or when

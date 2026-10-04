@@ -1,0 +1,63 @@
+diff --git c/chrome/browser/ui/browser_commands.cc w/chrome/browser/ui/browser_commands.cc
+index 54e747d468a5fb2c7441641e03f85e11acd0eaeb..cf339aac07ed31c38d9832cbf4e8abd2ceeeae83 100644
+--- c/chrome/browser/ui/browser_commands.cc
++++ w/chrome/browser/ui/browser_commands.cc
+@@ -46,6 +46,7 @@
+ #include "chrome/browser/media/router/media_router_feature.h"
+ #include "chrome/browser/prefs/incognito_mode_prefs.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/profiles/profile_destroyer.h"
+ #include "chrome/browser/reading_list/reading_list_model_factory.h"
+ #include "chrome/browser/resource_coordinator/tab_lifecycle_unit_external.h"
+ #include "chrome/browser/search/search.h"
+@@ -72,6 +74,7 @@
+ #include "chrome/browser/ui/bookmarks/bookmark_utils.h"
+ #include "chrome/browser/ui/bookmarks/bookmark_utils_desktop.h"
+ #include "chrome/browser/ui/browser.h"
++#include "maho/browser/ui/views/welcome/maho_welcome_window.h"
+ #include "chrome/browser/ui/browser_command_controller.h"
+ #include "chrome/browser/ui/browser_init_state.h"
+ #include "chrome/browser/ui/browser_live_tab_context.h"
+@@ -920,6 +923,17 @@ int GetContentRestrictions(const BrowserWindowInterface* browser) {
+ }
+ 
+ void NewEmptyWindow(Profile* profile, bool should_trigger_session_restore) {
++  // Maho login gate: while active, route New Window / dock-reopen to the
++  // onboarding gate instead of opening a browser behind it. Covers Cmd+N,
++  // the New Window menu, and the macOS dock-reopen path (which funnels
++  // through NewEmptyWindow via CreateBrowser in app_controller_mac.mm).
++  if (Profile* gate_profile =
++          profile ? profile->GetOriginalProfile() : nullptr;
++      gate_profile && !profile->IsOffTheRecord() &&
++      gate_profile->GetPrefs()->GetBoolean("maho.auth.login_gate_active")) {
++    maho::MahoWelcomeWindow::Show(gate_profile);
++    return;
++  }
+   bool off_the_record = profile->IsOffTheRecord();
+   PrefService* prefs = profile->GetPrefs();
+   if (off_the_record) {
+@@ -1342,7 +1356,23 @@ void NewWindow(BrowserWindowInterface* browser) {
+ }
+ 
+ void NewIncognitoWindow(Profile* profile) {
+-  NewEmptyWindow(profile->GetPrimaryOTRProfile(/*create_if_needed=*/true));
++  Profile* original = profile->GetOriginalProfile();
++  if (original->ShutdownStarted()) {
++    return;
++  }
++  // Maho: a primary OTR profile left in ShutdownStarted() (pending
++  // ProfileDestroyer after its last incognito window closed) would be reused
++  // by GetPrimaryOTRProfile() and make OpenEmptyWindow() abort, so the new
++  // incognito window never appears. Finish destroying the stale OTR first
++  // (only when no incognito browser still references it) so a fresh primary
++  // OTR is created for the new window.
++  if (Profile* existing_otr =
++          original->GetPrimaryOTRProfile(/*create_if_needed=*/false);
++      existing_otr && existing_otr->ShutdownStarted() &&
++      ProfileBrowserCollection::GetForProfile(existing_otr)->GetOffTheRecordBrowserCount() == 0) {
++    ProfileDestroyer::DestroyOTRProfileImmediately(existing_otr);
++  }
++  NewEmptyWindow(original->GetPrimaryOTRProfile(/*create_if_needed=*/true));
+ }
+ 
+ void CloseWindow(BrowserWindowInterface* browser) {

@@ -1,0 +1,31 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_space_create.mojom;
+
+// Theme selection state passed between WebUI and native parent.
+struct ThemeSelection {
+  string theme_json;  // Serialized SpaceThemeData JSON
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  // Live preview while user is picking. Page handler calls
+  // MahoSpaceThemeState::SetPreviewOverride and flushes color cache.
+  PreviewTheme(ThemeSelection selection);
+
+  // User clicked Done. Notify dialog wrapper to close + apply selection.
+  CommitTheme(ThemeSelection selection);
+
+  // User clicked Cancel. Notify dialog wrapper to close + discard.
+  CancelTheme();
+};
+
+interface Page {
+  // Handler -> page on dialog open: deliver initial selection so React can
+  // hydrate the picker state.
+  Initialize(ThemeSelection initial);
+};

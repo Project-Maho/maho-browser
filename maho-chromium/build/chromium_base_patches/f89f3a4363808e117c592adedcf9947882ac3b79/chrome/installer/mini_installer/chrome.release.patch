@@ -1,0 +1,13 @@
+diff --git c/chrome/installer/mini_installer/chrome.release w/chrome/installer/mini_installer/chrome.release
+index b0008cc7bb75f1779680c5035ba0a053dd010dcc..7dc8159adc0e58fd7e4c61280e9898423a6a4ecf 100644
+--- c/chrome/installer/mini_installer/chrome.release
++++ w/chrome/installer/mini_installer/chrome.release
+@@ -8,6 +8,8 @@
+ #
+ chrome.exe: %(ChromeDir)s\
+ chrome_proxy.exe: %(ChromeDir)s\
++maho.exe: %(ChromeDir)s\
++maho_mail_helper.exe: %(ChromeDir)s\
+ #
+ # Chrome version dir assembly manifest.
+ # The name of this file must match the name of the version dir, so we cannot

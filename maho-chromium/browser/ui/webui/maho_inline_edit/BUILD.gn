@@ -1,0 +1,38 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_inline_edit.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("maho_inline_edit") {
+  sources = [
+    "inline_edit_script_string.h",
+    "maho_inline_edit_handler.cc",
+    "maho_inline_edit_handler.h",
+    "maho_inline_edit_ui.cc",
+    "maho_inline_edit_ui.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//components/prefs",
+    "//content/public/browser",
+    "//services/network/public/cpp",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//maho/browser:maho_ai_client",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_prompt_utils",
+    "//maho/third_party/maho:maho_bridge",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//url",
+  ]
+}

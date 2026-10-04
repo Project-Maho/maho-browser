@@ -1,0 +1,5 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+# Reference documentation for upstream chrome/browser/profiles/BUILD.gn overrides.
+#
+# Maho adds "//maho/components/constants" to profile_io_data deps
+# so profile_io_data.cc can reference maho::kMahoUIScheme.

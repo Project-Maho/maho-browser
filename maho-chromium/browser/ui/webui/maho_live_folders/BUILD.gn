@@ -1,0 +1,39 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_live_folders.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("maho_live_folders") {
+  sources = [
+    "maho_live_folder_cache_warmer.cc",
+    "maho_live_folder_cache_warmer.h",
+    "maho_live_folder_item_cache.cc",
+    "maho_live_folder_item_cache.h",
+    "maho_live_folders_page_handler.cc",
+    "maho_live_folders_page_handler.h",
+    "maho_live_folders_ui.cc",
+    "maho_live_folders_ui.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//maho/components/constants",
+    "//mojo/public/cpp/bindings",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//ui/webui",
+    "//url",
+  ]
+}

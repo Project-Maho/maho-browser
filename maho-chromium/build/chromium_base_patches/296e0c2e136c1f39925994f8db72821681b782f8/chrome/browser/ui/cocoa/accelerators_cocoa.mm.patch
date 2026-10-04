@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/cocoa/accelerators_cocoa.mm b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+index 3c40f982b3ca168777df74b3f5305339c3465ebb..141933f204513d172ad939522935358fb241edeb 100644
+--- a/chrome/browser/ui/cocoa/accelerators_cocoa.mm
++++ b/chrome/browser/ui/cocoa/accelerators_cocoa.mm
+@@ -89,6 +89,7 @@ const struct AcceleratorMapping {
+      ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_V},
+     {IDC_CONTENT_CONTEXT_SELECTALL, ui::EF_COMMAND_DOWN, ui::VKEY_A},
+     {IDC_FOCUS_SEARCH, ui::EF_COMMAND_DOWN | ui::EF_ALT_DOWN, ui::VKEY_F},
++    {IDC_MAHO_AI_PANEL, ui::EF_COMMAND_DOWN, ui::VKEY_E},
+     {IDC_FIND_NEXT, ui::EF_COMMAND_DOWN, ui::VKEY_G},
+     {IDC_FIND_PREVIOUS, ui::EF_COMMAND_DOWN | ui::EF_SHIFT_DOWN, ui::VKEY_G},
+     {IDC_STOP, ui::EF_COMMAND_DOWN, ui::VKEY_OEM_PERIOD},

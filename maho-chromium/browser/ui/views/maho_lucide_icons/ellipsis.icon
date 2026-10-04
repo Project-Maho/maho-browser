@@ -1,0 +1,12 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Source: Lucide "ellipsis" (ISC license)
+
+CANVAS_DIMENSIONS, 24,
+STROKE, 2,
+CIRCLE, 12, 12, 1,
+NEW_PATH,
+STROKE, 2,
+CIRCLE, 19, 12, 1,
+NEW_PATH,
+STROKE, 2,
+CIRCLE, 5, 12, 1,

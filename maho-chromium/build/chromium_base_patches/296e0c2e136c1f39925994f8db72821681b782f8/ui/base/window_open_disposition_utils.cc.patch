@@ -1,0 +1,14 @@
+diff --git a/ui/base/window_open_disposition_utils.cc b/ui/base/window_open_disposition_utils.cc
+index e585e4e7f4afcf032c5bdd903f833b678a0188d7..98eb8741c62a0ddc23645f5c492f4d33e459451e 100644
+--- a/ui/base/window_open_disposition_utils.cc
++++ b/ui/base/window_open_disposition_utils.cc
+@@ -26,7 +26,8 @@ WindowOpenDisposition DispositionFromClick(
+   const bool new_tab_modifier = middle_button || ctrl_key;
+   const bool split_view_modifier = ctrl_key;
+ #endif
+-  if (split_view_modifier && alt_key && !shift_key &&
++  (void)split_view_modifier;
++  if (alt_key && !shift_key &&
+       base::FeatureList::IsEnabled(features::kSplitViewLinkOpen)) {
+     return WindowOpenDisposition::NEW_SPLIT_VIEW;
+   }

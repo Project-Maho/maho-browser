@@ -1,0 +1,39 @@
+# Debug settings for macOS builds (Siso component build).
+is_official_build = false
+is_debug = true
+is_component_build = true
+symbol_level = 2
+dcheck_always_on = true
+is_chrome_branded = false
+
+target_os = "mac"
+target_cpu = "arm64"
+maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true
+enable_traffic_annotation_auditor = true
+use_siso = true
+cc_wrapper = "/opt/homebrew/bin/sccache"
+
+# Match official release build enforcement: disable raw_ptr and raw_ref plugin checks
+enable_check_raw_ptr_fields = false
+enable_check_raw_ref_fields = false
+
+# Demote warnings to non-fatal in debug
+treat_warnings_as_errors = false
+
+# macOS SDK/toolchain compatibility, verified 2026-09-23:
+# * The bundled ld64.lld cannot parse modern SDK TAPI stubs ("unknown
+#   architecture arm64e.x1-macos"), which leaves libc symbols undefined, so
+#   link with Apple's system linker instead of lld.
+# * Apple's ld cannot consume LLVM ThinLTO bitcode, so LTO is disabled.
+# * This Chromium revision's macOS clang-module maps predate Xcode 27's SDK
+#   (the sysroot module map cannot satisfy SDK 27's math.h / std_float_h), so
+#   clang modules are disabled and mac_sdk_path points at the staged SDK that
+#   `build/scripts/stage_macos_sdk.py` produces; its math.h patch is what lets
+#   SDK 27 compile with modules off. Verified 2026-09-24.
+use_lld = false
+use_thin_lto = false
+use_clang_modules = false

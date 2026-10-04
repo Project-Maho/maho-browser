@@ -1,0 +1,127 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "typeRoots": [
+      "../../../../../website/node_modules/@types"
+    ],
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "react": [
+        "../../../../../website/node_modules/@types/react/index.d.ts"
+      ],
+      "react/jsx-runtime": [
+        "../../../../../website/node_modules/@types/react/jsx-runtime.d.ts"
+      ],
+      "react-dom/client": [
+        "../../../../../website/node_modules/@types/react-dom/client.d.ts"
+      ],
+      "class-variance-authority": [
+        "../../../../../website/node_modules/class-variance-authority/dist/index.d.ts"
+      ],
+      "clsx": [
+        "../../../../../website/node_modules/clsx/clsx.d.ts"
+      ],
+      "@radix-ui/react-popover": [
+        "../../../../../website/node_modules/@radix-ui/react-popover/dist/index.d.ts"
+      ],
+      "@radix-ui/react-slot": [
+        "../../../../../website/node_modules/@radix-ui/react-slot/dist/index.d.ts"
+      ],
+      "@radix-ui/react-dropdown-menu": [
+        "../../../../../website/node_modules/@radix-ui/react-dropdown-menu/dist/index.d.ts"
+      ],
+      "@radix-ui/react-context-menu": [
+        "../../../../../website/node_modules/@radix-ui/react-context-menu/dist/index.d.ts"
+      ],
+      "@radix-ui/react-tooltip": [
+        "../../../../../website/node_modules/@radix-ui/react-tooltip/dist/index.d.ts"
+      ],
+      "@radix-ui/react-checkbox": [
+        "../../../../../website/node_modules/@radix-ui/react-checkbox/dist/index.d.ts"
+      ],
+      "@radix-ui/react-dialog": [
+        "../../../../../website/node_modules/@radix-ui/react-dialog/dist/index.d.ts"
+      ],
+      "@radix-ui/react-tabs": [
+        "../../../../../website/node_modules/@radix-ui/react-tabs/dist/index.d.ts"
+      ],
+      "@radix-ui/react-select": [
+        "../../../../../website/node_modules/@radix-ui/react-select/dist/index.d.ts"
+      ],
+      "@radix-ui/react-toggle-group": [
+        "../../../../../website/node_modules/@radix-ui/react-toggle-group/dist/index.d.ts"
+      ],
+      "@radix-ui/react-switch": [
+        "../../../../../website/node_modules/@radix-ui/react-switch/dist/index.d.ts"
+      ],
+      "@radix-ui/react-separator": [
+        "../../../../../website/node_modules/@radix-ui/react-separator/dist/index.d.ts"
+      ],
+      "@radix-ui/react-slider": [
+        "../../../../../website/node_modules/@radix-ui/react-slider/dist/index.d.ts"
+      ],
+      "lucide-react": [
+        "../../../../../website/node_modules/lucide-react/dist/lucide-react.d.ts"
+      ],
+      "marked": [
+        "../../../../../website/node_modules/marked/lib/marked.d.ts"
+      ],
+      "tailwind-merge": [
+        "../../../../../website/node_modules/tailwind-merge/dist/types.d.ts"
+      ],
+      "sonner": [
+        "../../../../../website/node_modules/sonner/dist/index.d.ts"
+      ],
+      "@features/*": [
+        "./features/*"
+      ],
+      "@hooks/*": [
+        "./hooks/*"
+      ],
+      "@lib/*": [
+        "../../maho_common/react/lib/*",
+        "./lib/*"
+      ],
+      "@ui/*": [
+        "../../maho_common/react/ui/*"
+      ],
+      "@theme/*": [
+        "../../maho_common/react/theme/*"
+      ],
+      "@icons/*": [
+        "../../maho_common/react/icons/*"
+      ],
+      "//resources/maho_common/*": [
+        "../../maho_common/*"
+      ]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx",
+    "../app.ts",
+    "../store.ts",
+    "../types.ts",
+    "../views/cards.ts",
+    "../views/conversation_thread.ts",
+    "../views/icons.ts",
+    "../styles/*.css",
+    "../maho_ai.mojom-webui.js.d.ts",
+    "../../maho_common/chrome_resources.d.ts"
+  ]
+}

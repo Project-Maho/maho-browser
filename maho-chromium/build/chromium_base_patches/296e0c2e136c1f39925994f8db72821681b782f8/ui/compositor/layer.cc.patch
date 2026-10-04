@@ -1,0 +1,19 @@
+diff --git a/ui/compositor/layer.cc b/ui/compositor/layer.cc
+index dfa207f57bedf374f9a3e18d5f66dbb5971921f2..226f6ae1aefb7a265bc9b4b8227e6c7b053fd7ac 100644
+--- a/ui/compositor/layer.cc
++++ b/ui/compositor/layer.cc
+@@ -952,7 +952,13 @@ void Layer::ConvertPointToLayer(const Layer* source,
+ }
+ 
+ void Layer::SetFillsBoundsOpaquely(bool fills_bounds_opaquely) {
+-  CHECK_NE(type_, LayerType::LAYER_SOLID_COLOR);
++  // Maho: solid-color layers derive opacity from their color's alpha,
++  // so this setter is a no-op for them; upstream CHECK_NEs and aborts.
++  // kGlassFrame makes LayerBasedSolidBackground force LAYER_SOLID_COLOR
++  // on views that also call SetFillsBoundsOpaquely, so no-op instead.
++  if (type_ == LayerType::LAYER_SOLID_COLOR) {
++    return;
++  }
+   SetFillsBoundsOpaquelyWithReason(fills_bounds_opaquely,
+                                    PropertyChangeReason::NOT_FROM_ANIMATION);
+ }

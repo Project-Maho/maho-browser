@@ -1,0 +1,232 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+# Prebuilt maho-core Rust static library.
+
+import("//build/config/compiler/compiler.gni")
+
+config("maho_include_config") {
+  include_dirs = [ "." ]
+}
+
+source_set("maho_ffi_headers") {
+  sources = [ "maho_ffi.h" ]
+  public_configs = [ ":maho_include_config" ]
+}
+
+# C ABI header for the standalone maho-stt-ffi speech-to-text static lib.
+source_set("maho_stt_ffi_headers") {
+  sources = [ "maho_stt_ffi.h" ]
+  public_configs = [ ":maho_include_config" ]
+}
+
+# Prebuilt maho-stt-ffi Rust static library (standalone crate; NOT part of
+# maho-ffi/maho-core). Its extern "C" whisper calls are resolved by the
+# vendored whisper static_library, pulled in as a public_dep below.
+config("maho_stt_ffi_prebuilt_config") {
+  if (target_cpu == "arm64") {
+    lib_dirs = [ "prebuilt/arm64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/arm64/maho_stt_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/arm64/libmaho_stt_ffi.a" ]
+    }
+  } else if (target_cpu == "x64") {
+    lib_dirs = [ "prebuilt/x64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/x64/maho_stt_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/x64/libmaho_stt_ffi.a" ]
+    }
+  }
+
+  if (is_win) {
+    libs = [ "maho_stt_ffi.lib" ]
+  } else {
+    libs = [ "maho_stt_ffi" ]
+    if (is_mac) {
+      frameworks = [
+        "CoreFoundation.framework",
+        "Security.framework",
+        "SystemConfiguration.framework",
+      ]
+      libs += [
+        "resolv",
+        "c++",
+      ]
+    } else if (is_linux) {
+      libs += [
+        "dl",
+        "rt",
+        "pthread",
+        "m",
+      ]
+    }
+  }
+}
+
+source_set("maho_stt_ffi") {
+  public_configs = [ ":maho_stt_ffi_prebuilt_config" ]
+  public_deps = [
+    ":maho_stt_ffi_headers",
+    "//maho/third_party/whisper:whisper",
+  ]
+}
+
+# C++ wrapper that calls into maho-core via extern "C" FFI
+source_set("maho_bridge") {
+  sources = [
+    "maho_bridge.cc",
+    "maho_bridge.h",
+  ]
+  public_deps = [
+    ":maho_core_prebuilt",
+    ":maho_ffi_headers",
+  ]
+  deps = [
+    "//base",
+    "//url",
+  ]
+}
+
+# Prebuilt Rust static library
+config("maho_core_prebuilt_config") {
+  if (target_cpu == "arm64") {
+    lib_dirs = [ "prebuilt/arm64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/arm64/maho_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/arm64/libmaho_ffi.a" ]
+    }
+  } else if (target_cpu == "x64") {
+    lib_dirs = [ "prebuilt/x64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/x64/maho_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/x64/libmaho_ffi.a" ]
+    }
+  }
+
+  if (is_win) {
+    ldflags = [ "/ignore:4099" ]
+    libs = [
+      "maho_ffi.lib",
+      "ws2_32.lib",
+      "userenv.lib",
+      "ntdll.lib",
+      "iphlpapi.lib",
+      "bcrypt.lib",
+    ]
+  } else {
+    libs = [
+      "maho_ffi",
+    ]
+    # Rust std dependencies needed when linking a Rust static lib
+    if (is_mac) {
+      frameworks = [
+        "CoreFoundation.framework",
+        "Security.framework",
+        "SystemConfiguration.framework",
+      ]
+      libs += [
+        "resolv",
+        "c++",
+      ]
+    } else if (is_linux) {
+      libs += [
+        "dl",
+        "rt",
+        "pthread",
+        "m",
+      ]
+    }
+  }
+}
+
+source_set("maho_core_prebuilt") {
+  public_configs = [ ":maho_core_prebuilt_config" ]
+  if (is_linux) {
+    deps = [ ":maho_glibc_compat" ]
+  }
+}
+
+# C ABI header for the standalone maho-mail-ffi mail backend static lib.
+source_set("maho_mail_ffi_headers") {
+  sources = [ "maho_mail_ffi.h" ]
+  public_configs = [ ":maho_include_config" ]
+}
+
+# Prebuilt maho-mail-ffi Rust static library. Standalone crate at
+# //maho/mail-core with its OWN Cargo workspace (avoids the libsqlite3-sys /
+# bundled-sqlcipher conflict with the main maho workspace). Built via
+# `cargo build --release` in maho/mail-core and copied into prebuilt/<cpu>/.
+# Owns its own SQLCipher DB and drives real IMAP sync/IDLE/backfill.
+config("maho_mail_ffi_prebuilt_config") {
+  if (target_cpu == "arm64") {
+    lib_dirs = [ "prebuilt/arm64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/arm64/maho_mail_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/arm64/libmaho_mail_ffi.a" ]
+    }
+  } else if (target_cpu == "x64") {
+    lib_dirs = [ "prebuilt/x64" ]
+    if (is_win) {
+      inputs = [ "prebuilt/x64/maho_mail_ffi.lib" ]
+    } else {
+      inputs = [ "prebuilt/x64/libmaho_mail_ffi.a" ]
+    }
+  }
+
+  if (is_win) {
+    libs = [
+      "maho_mail_ffi.lib",
+      "ws2_32.lib",
+      "userenv.lib",
+      "ntdll.lib",
+      "iphlpapi.lib",
+      "bcrypt.lib",
+      "crypt32.lib",
+      "secur32.lib",
+    ]
+  } else {
+    libs = [ "maho_mail_ffi" ]
+    if (is_mac) {
+      frameworks = [
+        "CoreFoundation.framework",
+        "Security.framework",
+        "SystemConfiguration.framework",
+      ]
+      libs += [
+        "resolv",
+        "c++",
+      ]
+    } else if (is_linux) {
+      libs += [
+        "dl",
+        "rt",
+        "pthread",
+        "m",
+
+      ]
+    }
+  }
+}
+
+# Real mail backend. Replaces the former maho_mail_ffi_dummy.cc no-op stub;
+# the target name is unchanged so the mail helper's BUILD.gn dep still resolves.
+source_set("maho_mail_ffi") {
+  public_configs = [ ":maho_mail_ffi_prebuilt_config" ]
+  public_deps = [ ":maho_mail_ffi_headers" ]
+  if (is_linux) {
+    deps = [ ":maho_glibc_compat" ]
+  }
+}
+
+# Linux-only glibc symbol-version compatibility shim for the prebuilt FFI libs.
+# See maho_glibc_compat.c for why this is required (host glibc 2.38 vs Bullseye
+# sysroot glibc 2.31).
+if (is_linux) {
+  source_set("maho_glibc_compat") {
+    sources = [ "maho_glibc_compat.c" ]
+  }
+}
+

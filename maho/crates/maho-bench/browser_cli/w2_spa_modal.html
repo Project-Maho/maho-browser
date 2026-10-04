@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W2 SPA Modal Benchmark</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    #banner-container { margin-bottom: 1rem; }
+    .banner { padding: 1rem; margin-bottom: 0.5rem; background: #fff8c5; border: 1px solid #d4a72c; border-radius: 4px; }
+    dialog { padding: 1.5rem; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    dialog::backdrop { background: rgba(0,0,0,0.4); }
+    .main-content { padding: 1rem; border: 1px solid #eee; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="banner-container"></div>
+
+  <main id="app-root" class="main-content">
+    <h1>W2: SPA Modal Benchmark</h1>
+    <p id="main-text">Click the button below to configure application banners.</p>
+    <button id="open-modal-btn">Open Dialog</button>
+    <div id="status-display" style="margin-top: 1rem;">Modal closed.</div>
+  </main>
+
+  <dialog id="settings-dialog">
+    <h2>Update Announcement</h2>
+    <p>Configure banner content to be inserted at the top of the tree.</p>
+    <div style="margin: 1rem 0;">
+      <label for="banner-input">Banner Message:</label>
+      <input type="text" id="banner-input" value="Critical Update: Maintenance in 10 minutes" />
+    </div>
+    <div style="display: flex; gap: 0.5rem;">
+      <button id="dialog-confirm-btn">Prepend Banner & Update</button>
+      <button id="dialog-close-btn">Close</button>
+    </div>
+  </dialog>
+
+  <script>
+    const dialog = document.getElementById('settings-dialog');
+    const openBtn = document.getElementById('open-modal-btn');
+    const closeBtn = document.getElementById('dialog-close-btn');
+    const confirmBtn = document.getElementById('dialog-confirm-btn');
+    const bannerContainer = document.getElementById('banner-container');
+    const statusDisplay = document.getElementById('status-display');
+    let bannerIndex = 0;
+
+    openBtn.addEventListener('click', () => {
+      dialog.showModal();
+      statusDisplay.textContent = 'Modal opened.';
+    });
+
+    closeBtn.addEventListener('click', () => {
+      dialog.close();
+      statusDisplay.textContent = 'Modal dismissed.';
+    });
+
+    confirmBtn.addEventListener('click', () => {
+      const bannerText = document.getElementById('banner-input').value;
+      bannerIndex += 1;
+      
+      // Front-of-tree insertion: prepending new DOM nodes changes node indexes/refs
+      const banner = document.createElement('div');
+      banner.className = 'banner';
+      banner.id = 'banner-notice-' + bannerIndex;
+      banner.setAttribute('role', 'alert');
+      banner.innerHTML = '<strong>Announcement #' + bannerIndex + ':</strong> <span>' + bannerText + '</span>';
+      
+      document.body.insertBefore(banner, document.body.firstChild);
+      
+      dialog.close();
+      statusDisplay.textContent = 'Banner prepended to tree: ' + bannerText;
+    });
+  </script>
+</body>
+</html>

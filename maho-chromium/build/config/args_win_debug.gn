@@ -1,0 +1,14 @@
+# Debug settings for Windows builds.
+is_official_build = false
+is_debug = true
+is_component_build = false
+symbol_level = 2
+use_siso = false
+
+target_os = "win"
+target_cpu = "x64"
+maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true

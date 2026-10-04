@@ -1,0 +1,113 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_ctrl_tab_prefs") {
+  sources = [
+    "maho_ctrl_tab_prefs.cc",
+    "maho_ctrl_tab_prefs.h",
+  ]
+
+  deps = [ "//components/prefs" ]
+}
+
+source_set("maho_mru_tab_tracker") {
+  sources = [
+    "maho_mru_tab_tracker.cc",
+    "maho_mru_tab_tracker.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/tabs:tab_strip_model_observer",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_tab_id_helper",
+    "//maho/third_party/maho:maho_ffi_headers",
+  ]
+}
+
+source_set("maho_ctrl_tab_switcher_views") {
+  sources = [
+    "maho_ctrl_tab_switcher_card_view.cc",
+    "maho_ctrl_tab_switcher_card_view.h",
+    "maho_ctrl_tab_switcher_view.cc",
+    "maho_ctrl_tab_switcher_view.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/app:generated_resources",
+    "//chrome/browser/ui/thumbnails",
+    "//content/public/browser",
+    "//maho/browser:maho_theme_support",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+source_set("maho_ctrl_tab_switcher_controller") {
+  sources = [
+    "maho_ctrl_tab_switcher_controller.cc",
+    "maho_ctrl_tab_switcher_controller.h",
+  ]
+
+  deps = [
+    ":maho_ctrl_tab_prefs",
+    ":maho_ctrl_tab_switcher_views",
+    ":maho_mru_tab_tracker",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/tabs:tab_strip_model_observer",
+    "//components/prefs",
+    "//content/public/browser",
+    "//maho/browser:maho_space_profile_bridge",
+    "//ui/base",
+    "//ui/events",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+
+  sources = [
+    "maho_ctrl_tab_switcher_controller_unittest.cc",
+    "maho_mru_tab_tracker_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_ctrl_tab_prefs",
+    ":maho_mru_tab_tracker",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/test:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+# Minimal test target that avoids the chrome/browser/ui dep chain so it can
+# be built even when unrelated targets in that tree have unrelated compile
+# errors.  Contains only the pref-registration test.
+source_set("pref_unit_tests") {
+  testonly = true
+
+  sources = [ "maho_ctrl_tab_switcher_controller_unittest.cc" ]
+
+  deps = [
+    ":maho_ctrl_tab_prefs",
+    "//base",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}

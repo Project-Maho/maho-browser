@@ -1,0 +1,35 @@
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_space_create.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("maho_space_create") {
+  sources = [
+    "maho_space_create_page_handler.cc",
+    "maho_space_create_page_handler.h",
+    "maho_space_create_ui.cc",
+    "maho_space_create_ui.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/browser_window",
+    "//maho/browser:maho_theme_support",
+    "//maho/browser/resources/maho_space_create:resources",
+    "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
+    "//maho/components/constants",
+    "//mojo/public/cpp/bindings",
+    "//ui/color",
+    "//ui/webui",
+    "//url",
+  ]
+}

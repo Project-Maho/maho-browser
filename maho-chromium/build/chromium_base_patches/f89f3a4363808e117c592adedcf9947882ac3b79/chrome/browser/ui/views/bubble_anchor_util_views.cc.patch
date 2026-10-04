@@ -1,0 +1,23 @@
+diff --git c/chrome/browser/ui/views/bubble_anchor_util_views.cc w/chrome/browser/ui/views/bubble_anchor_util_views.cc
+index 21c7c5368575036ed8297e199441ef420d40b506..65063e8396403d3e86c291dd44a5d1995d10cec5 100644
+--- c/chrome/browser/ui/views/bubble_anchor_util_views.cc
++++ w/chrome/browser/ui/views/bubble_anchor_util_views.cc
+@@ -181,6 +181,18 @@ gfx::Rect GetPageInfoAnchorRect(BrowserWindowInterface* browser) {
+   DCHECK(GetPageInfoAnchorConfiguration(browser).anchor.IsNull());
+ 
+   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
++  // Maho hides the toolbar. The window-origin fallback lands in the sidebar
++  // rail, so anchor at the top of the visible page when it is drawn.
++  if (auto* contents = browser_view->contents_container()) {
++    if (contents->IsDrawn()) {
++      const gfx::Rect contents_bounds = contents->GetBoundsInScreen();
++      if (!contents_bounds.IsEmpty()) {
++        return gfx::Rect(
++            contents_bounds.x() + bubble_anchor_util::kNoToolbarLeftOffset,
++            contents_bounds.y(), 0, 0);
++      }
++    }
++  }
+   // Get position in view (taking RTL UI into account).
+   int x_within_browser_view = browser_view->GetMirroredXInView(
+       bubble_anchor_util::kNoToolbarLeftOffset);

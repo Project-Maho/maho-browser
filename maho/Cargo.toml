@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/maho-types",
+    "crates/maho-core",
+    "crates/maho-ffi",
+    "crates/maho-storage",
+    "crates/maho-bench",
+    "crates/maho-import", "crates/maho-agent", "crates/maho-jni",
+    "crates/maho-cli",
+    "crates/maho-platform",
+    "crates/maho-browser-mcp",
+    # maho-stt / maho-stt-ffi must share this workspace: as separate workspaces
+    # each staticlib embedded its own copy of the Rust runtime, so linking both
+    # maho_ffi and maho_stt_ffi into chrome.dll produced duplicate std symbols
+    # (Arc::drop_slow, thread-local shims, __rust_no_alloc_shim_is_unstable).
+    "crates/maho-stt",
+    "crates/maho-stt-ffi",
+]
+exclude = ["billing-proxy"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+psl = "2"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+
+[profile.release]
+panic = "abort"

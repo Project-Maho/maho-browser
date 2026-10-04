@@ -1,0 +1,14 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Source: Lucide "rotate-cw" (ISC license)
+
+CANVAS_DIMENSIONS, 24,
+STROKE, 2,
+MOVE_TO, 21, 12,
+R_ARC_TO, 9, 9, 0, 1, 1, -9, -9,
+R_CUBIC_TO, 2.52f, 0, 4.93f, 1, 6.74f, 2.74f,
+LINE_TO, 21, 8,
+NEW_PATH,
+STROKE, 2,
+MOVE_TO, 21, 3,
+R_V_LINE_TO, 5,
+R_H_LINE_TO, -5,

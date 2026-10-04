@@ -1,0 +1,35 @@
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+index 124994cc22f2923247b831e30c3241751c7b4c92..288d19a4b8f695a6f9bbce4a47e2b8d90ab57920 100644
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -16,6 +16,7 @@
+ #include <variant>
+ #include <vector>
+ 
++#include "base/containers/span.h"
+ #include "base/byte_size.h"
+ #include "base/containers/flat_map.h"
+ #include "base/containers/flat_set.h"
+@@ -227,6 +228,10 @@ namespace url {
+ class Origin;
+ }  // namespace url
+ 
++namespace webui {
++struct ResourcePath;
++}  // namespace webui
++
+ namespace storage {
+ class FileSystemBackend;
+ }  // namespace storage
+@@ -761,6 +766,11 @@ class CONTENT_EXPORT ContentBrowserClient {
+   // opted into --isolate-origins mode of Site Isolation.
+   virtual std::vector<url::Origin> GetOriginsRequiringDedicatedProcess();
+ 
++  // Returns any extra shared WebUI resource maps that should be added to the
++  // shared resources data source.
++  virtual std::vector<base::span<const ::webui::ResourcePath>>
++  GetAdditionalWebUIResourcePaths();
++
+   // Allows the embedder to programmatically take action before the site is
+   // computed. |url| should be the full URL that is being navigated to.
+   virtual void WillComputeSiteForNavigation(BrowserContext* browser_context,

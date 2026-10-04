@@ -1,0 +1,21 @@
+diff --git c/chrome/browser/ui/webui/BUILD.gn w/chrome/browser/ui/webui/BUILD.gn
+index 914c97f1a4bc49bf3913cce34499d37785066220..58c0aa94ab8fe96b2308ac7a0ce33c5a78bad150 100644
+--- c/chrome/browser/ui/webui/BUILD.gn
++++ w/chrome/browser/ui/webui/BUILD.gn
+@@ -58,6 +58,16 @@ source_set("configs") {
+     "//chrome/browser/glic:impl",
+     "//chrome/browser/ui",
+     "//chrome/browser/ui/webui/about",
++    "//maho/browser/ui/webui/maho_ai",
++    "//maho/browser/ui/webui/maho_inline_edit",
++    "//maho/browser/ui/webui/maho_boost",
++    "//maho/browser/ui/webui/maho_routines",
++    "//maho/browser/ui/webui/maho_mail",
++    "//maho/browser/ui/webui/maho_routines",
++    "//maho/browser/ui/webui/maho_settings",
++    "//maho/browser/ui/webui/maho_space_config",
++    "//maho/browser/ui/webui/maho_sync",
++    "//maho/browser/ui/webui/maho_test",
+     "//chrome/browser/ui/webui/accessibility",
+     "//chrome/browser/ui/webui/actor_internals",
+     "//chrome/browser/ui/webui/autofill_and_password_manager_internals",

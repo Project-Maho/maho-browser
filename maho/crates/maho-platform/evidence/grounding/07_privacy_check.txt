@@ -1,0 +1,68 @@
+=== Privacy Check: Live Screen Capture Temp Path ===
+{
+  "path": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/maho-capture-1787913164.png",
+  "width": 3840,
+  "height": 1600
+}
+CAPTURE_EXIT: 0
+=== Privacy Check: Check temp directory files ===
+-rw-r--r--@ 1 indo  staff  1470289 Aug 28 19:31 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/maho-capture-1787913107.png
+-rw-r--r--@ 1 indo  staff  1732979 Aug 28 19:32 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/maho-capture-1787913158.png
+-rw-r--r--@ 1 indo  staff  1758594 Aug 28 19:32 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/maho-capture-1787913164.png
+-rw-r--r--@ 1 indo  wheel  1426831 Aug 28 19:31 /tmp/maho-gv-capture.png
+=== Privacy Check: Region-filtered OCR (only exposes requested region 600,600,200,200) ===
+[
+  {
+    "text": "중기부/ 중진공",
+    "x": 608,
+    "y": 613,
+    "w": 128,
+    "h": 17,
+    "confidence": 0.5
+  },
+  {
+    "text": "KOTRA",
+    "x": 608,
+    "y": 647,
+    "w": 50,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "서울 경제진흐워",
+    "x": 614,
+    "y": 680,
+    "w": 112,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "한 국 무역 협회",
+    "x": 608,
+    "y": 741,
+    "w": 100,
+    "h": 17,
+    "confidence": 0.3
+  }
+]
+OCR_REGION_EXIT: 0
+=== Privacy Check: find-text (only exposes matching items for query 'KOTRA') ===
+[
+  {
+    "text": "KOTRA 글로벌점프 300",
+    "x": 257,
+    "y": 647,
+    "w": 167,
+    "h": 17,
+    "source": "ocr"
+  },
+  {
+    "text": "KOTRA",
+    "x": 608,
+    "y": 647,
+    "w": 50,
+    "h": 17,
+    "source": "ocr"
+  }
+]
+FIND_TEXT_EXIT: 0

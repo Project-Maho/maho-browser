@@ -1,0 +1,23 @@
+diff --git a/ui/views/controls/textfield/textfield.h b/ui/views/controls/textfield/textfield.h
+--- a/ui/views/controls/textfield/textfield.h
++++ b/ui/views/controls/textfield/textfield.h
+@@ -215,6 +215,10 @@
+   SkColor GetTextColor() const;
+   std::optional<ui::ColorId> text_color_id() const { return text_color_id_; }
+   void SetTextColorId(std::optional<ui::ColorId> color_id);
++  // Resolved per-space colors cannot be represented by shared ColorIds.
++  // The caller supplies the authoritative palette, including forced colors.
++  void SetMahoResolvedTextColor(SkColor color);
++  void SetMahoResolvedPlaceholderTextColor(SkColor color);
+ 
+   std::optional<ui::ColorId> disabled_text_color_id() const {
+     return disabled_text_color_id_;
+@@ -838,6 +842,8 @@
+ 
+   // Colors which override default system colors.
+   std::optional<ui::ColorId> text_color_id_;
++  std::optional<SkColor> maho_resolved_text_color_;
++  std::optional<SkColor> maho_resolved_placeholder_text_color_;
+   std::optional<ui::ColorId> disabled_text_color_id_;
+   std::optional<ui::ColorVariant> background_color_;
+   std::optional<ui::ColorId> selection_text_color_id_;

@@ -1,0 +1,19 @@
+diff --git a/components/affiliations/core/browser/affiliation_prefetcher.cc b/components/affiliations/core/browser/affiliation_prefetcher.cc
+index 4b8afe8ed70c7561a4b77e336fce6551c7b83efa..d72ee0e13f2c4e08b9a950ebbd8be52665b635af 100644
+--- a/components/affiliations/core/browser/affiliation_prefetcher.cc
++++ b/components/affiliations/core/browser/affiliation_prefetcher.cc
+@@ -38,6 +38,14 @@ AffiliationPrefetcher::AffiliationPrefetcher(
+ 
+ AffiliationPrefetcher::~AffiliationPrefetcher() = default;
+ 
++void AffiliationPrefetcher::Shutdown() {
++  weak_ptr_factory_.InvalidateWeakPtrs();
++  on_facets_received_barrier_callback_.Reset();
++  pending_initializations_.clear();
++  initialized_sources_.clear();
++  is_ready_ = false;
++}
++
+ void AffiliationPrefetcher::RegisterSource(
+     std::unique_ptr<AffiliationSource> source) {
+   CHECK(source);

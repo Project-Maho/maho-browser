@@ -1,0 +1,98 @@
+diff --git c/chrome/app/generated_resources.grd w/chrome/app/generated_resources.grd
+index d718a56fe4ed91dad2956eb8680e856865fa2dc0..024664c4fb991b449e52034b0434604a4841b9bf 100644
+--- c/chrome/app/generated_resources.grd
++++ w/chrome/app/generated_resources.grd
+@@ -19238,6 +19238,93 @@ Please help our engineers fix this problem. Tell us what happened right before y
+       <message name="IDS_LINK_COPIED_TOAST_BODY" desc="Text on a toast notification that is shown when a link is successfully copied.">
+         Link copied
+       </message>
++      <message name="IDS_MAHO_TOAST_LINK_COPIED" desc="Maho: Text shown when a link is successfully copied to the clipboard.">
++        Link copied
++      </message>
++      <message name="IDS_MAHO_TOAST_EXPORTED" desc="Maho: Text shown when an export operation succeeds.">
++        Exported
++      </message>
++      <message name="IDS_MAHO_TOAST_CLOSED_TABS" desc="Maho: Text shown when one or more tabs are closed. [ICU Syntax]">
++        {NUM_TABS, plural, =1 {Closed 1 tab} other {Closed # tabs}}
++      </message>
++      <message name="IDS_MAHO_EXPORT_THEME_FAILED_TITLE" desc="Maho: Title for theme export failure dialog.">
++        Export Failed
++      </message>
++      <message name="IDS_MAHO_EXPORT_THEME_FAILED_MESSAGE" desc="Maho: Message for theme export failure dialog.">
++        Could not export space theme to the selected file.
++      </message>
++      <message name="IDS_MAHO_CTRL_TAB_MORE_AFFORDANCE_COUNT" desc="Maho: Label shown in the Ctrl+Tab overlay for the +N more affordance card. [ICU Syntax]">
++        {NUM_MORE, plural, =1 {+1 more} other {+# more}}
++      </message>
++      <message name="IDS_MAHO_CTRL_TAB_MORE_AFFORDANCE_HINT" desc="Maho: Hint text under the +N more affordance in the Ctrl+Tab overlay describing what activating it does.">
++        Search all
++      </message>
++      <message name="IDS_MAHO_TOAST_WELCOME_FINISHED" desc="Toast shown after welcome onboarding completes.">
++        Welcome to Maho!
++      </message>
++      <message name="IDS_MAHO_TOAST_WELCOME_FINISHED_BODY" desc="Body of welcome toast shown after onboarding completion">
++        Your browser is set up and ready to go.
++      </message>
++      <message name="IDS_MAHO_MIGRATION_TITLE" desc="Migration dialog title.">
++        Import from another browser
++      </message>
++      <message name="IDS_MAHO_MIGRATION_IMPORT" desc="Migration dialog import button.">
++        Import
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CANCEL" desc="Migration dialog cancel button.">
++        Cancel
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CLOSE" desc="Migration dialog close button.">
++        Close
++      </message>
++      <message name="IDS_MAHO_MIGRATION_BROWSER_SELECTION" desc="Migration dialog browser selector label.">
++        Source browser
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_BOOKMARKS" desc="Migration dialog Bookmarks checkbox.">
++        Bookmarks
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_HISTORY" desc="Migration dialog History checkbox.">
++        History
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_PASSWORDS" desc="Migration dialog Passwords checkbox.">
++        Passwords
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_COOKIES" desc="Migration dialog Cookies checkbox.">
++        Cookies
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_AUTOFILL" desc="Migration dialog Autofill checkbox.">
++        Autofill form data
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_FAVICONS" desc="Migration dialog Favicons checkbox.">
++        Favicons
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_WORKSPACES" desc="Migration dialog Spaces and Tabs checkbox.">
++        Spaces &amp; Tabs
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CHECKBOX_SIDEBAR" desc="Migration dialog Sidebar items checkbox.">
++        Sidebar items
++      </message>
++      <message name="IDS_MAHO_MIGRATION_STATUS_IMPORTING" desc="Migration dialog status importing.">
++        Importing...
++      </message>
++      <message name="IDS_MAHO_MIGRATION_STATUS_CANCELLING" desc="Migration dialog status cancelling.">
++        Cancelling...
++      </message>
++      <message name="IDS_MAHO_MIGRATION_STATUS_SUCCESS" desc="Migration dialog status success.">
++        Import completed successfully.
++      </message>
++      <message name="IDS_MAHO_MIGRATION_STATUS_ERROR" desc="Migration dialog status error.">
++        Import failed.
++      </message>
++      <message name="IDS_MAHO_MIGRATION_STATUS_PARTIAL_FAIL" desc="Migration dialog status partial failure.">
++        Some items failed to import.
++      </message>
++      <message name="IDS_MAHO_MIGRATION_CONTINUE" desc="Migration dialog continue button after partial success.">
++        Continue
++      </message>
++      <message name="IDS_MAHO_MIGRATION_RETRY" desc="Migration dialog retry button after failure.">
++        Retry
++      </message>
+       <message name="IDS_IMAGE_COPIED_TOAST_BODY" desc="Text on a toast notification that is shown when an image is successfully copied.">
+         Image copied
+       </message>

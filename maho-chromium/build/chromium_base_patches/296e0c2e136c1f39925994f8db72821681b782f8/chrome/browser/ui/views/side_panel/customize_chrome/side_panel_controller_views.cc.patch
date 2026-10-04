@@ -1,0 +1,35 @@
+diff --git a/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.cc b/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.cc
+index c4252ddffc36628bb5a20186703cbaf366a61d2b..e462e206372432df16b2757695e8ab816d44c273 100644
+--- a/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.cc
++++ b/chrome/browser/ui/views/side_panel/customize_chrome/side_panel_controller_views.cc
+@@ -51,10 +51,9 @@ namespace customize_chrome {
+ SidePanelControllerViews::SidePanelControllerViews(tabs::TabInterface& tab)
+     : tab_(tab) {
+   content::WebContentsObserver::Observe(tab_->GetContents());
+-  will_discard_contents_callback_subscription_ =
+-      tab_->RegisterWillDiscardContents(
+-          base::BindRepeating(&SidePanelControllerViews::WillDiscardContents,
+-                              base::Unretained(this)));
++  will_discard_contents_callback_subscription_ = tab_->RegisterWillDiscardContents(
++      base::BindRepeating(&SidePanelControllerViews::WillDiscardContents,
++                          weak_ptr_factory_.GetWeakPtr()));
+ }
+ 
+ SidePanelControllerViews::~SidePanelControllerViews() = default;
+@@ -161,8 +160,14 @@ void SidePanelControllerViews::CreateAndRegisterEntry() {
+   auto entry = std::make_unique<SidePanelEntry>(
+       SidePanelEntry::Key(kSidePanelEntryId),
+       base::BindRepeating(
+-          &SidePanelControllerViews::CreateCustomizeChromeWebView,
+-          base::Unretained(this)),
++          [](base::WeakPtr<SidePanelControllerViews> controller,
++             SidePanelEntryScope& scope) -> std::unique_ptr<views::View> {
++            if (!controller) {
++              return nullptr;
++            }
++            return controller->CreateCustomizeChromeWebView(scope);
++          },
++          weak_ptr_factory_.GetWeakPtr()),
+       /*default_content_width_callback=*/base::NullCallback());
+   entry->AddObserver(this);
+   registry->Register(std::move(entry));

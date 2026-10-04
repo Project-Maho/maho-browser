@@ -1,0 +1,33 @@
+[package]
+name = "maho-platform"
+version = "0.1.0"
+edition = "2021"
+description = "Platform integrations for Maho (macOS contacts, iMessage, disk status)"
+
+[dependencies]
+enigo = "0.6"
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Shared entries must stay above every [target.*] table: a TOML table absorbs all
+# bare keys that follow it, so these deps would vanish from other platforms.
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The default linux backend is x11-only (enigo default = ["x11rb"]); on Wayland
+# sessions its absolute pointer moves are silently dropped by the compositor.
+# Enable enigo's wayland (zwlr_virtual_pointer) backend on Linux; enigo tries
+# the Wayland connection first and falls back to X11 when absent.
+enigo = { version = "0.6", features = ["wayland"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
+windows = { version = "0.59", features = ["Foundation", "Foundation_Collections", "Globalization", "Graphics_Imaging", "Media_Ocr", "Storage_Streams", "Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility"] }
+png = "0.17"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+objc2 = "0.6"
+objc2-contacts = "0.3"
+objc2-foundation = "0.3"
+objc2-vision = "0.3"

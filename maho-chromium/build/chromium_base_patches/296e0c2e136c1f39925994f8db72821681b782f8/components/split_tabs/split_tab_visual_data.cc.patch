@@ -1,0 +1,307 @@
+diff --git a/components/split_tabs/split_tab_visual_data.cc b/components/split_tabs/split_tab_visual_data.cc
+index 57552ef7d1abc82ffc50fc02aea3cca8bf5dfeb1..3b3613b4ecbd62883b4b0d9f53cc11de87b9ff52 100644
+--- a/components/split_tabs/split_tab_visual_data.cc
++++ b/components/split_tabs/split_tab_visual_data.cc
+@@ -4,7 +4,217 @@
+ 
+ #include "components/split_tabs/split_tab_visual_data.h"
+ 
++#include <algorithm>
++#include <cmath>
++#include <utility>
++
+ namespace split_tabs {
++namespace {
++
++void CollectLeaves(const SplitLayoutNode& node, std::vector<size_t>& leaves) {
++  if (node.is_pane()) {
++    leaves.push_back(node.pane_index());
++    return;
++  }
++  CollectLeaves(*node.first(), leaves);
++  CollectLeaves(*node.second(), leaves);
++}
++
++bool ValidateNode(const SplitLayoutNode& node,
++                  size_t pane_count,
++                  std::vector<bool>& seen) {
++  if (node.is_pane()) {
++    if (node.pane_index() >= pane_count || seen[node.pane_index()]) {
++      return false;
++    }
++    seen[node.pane_index()] = true;
++    return true;
++  }
++
++  return node.first() && node.second() && std::isfinite(node.ratio()) &&
++         node.ratio() > 0.0 && node.ratio() < 1.0 &&
++         ValidateNode(*node.first(), pane_count, seen) &&
++         ValidateNode(*node.second(), pane_count, seen);
++}
++
++void RenumberLeaves(SplitLayoutNode& node, size_t& next_index) {
++  if (node.is_pane()) {
++    node = SplitLayoutNode::Pane(next_index++);
++    return;
++  }
++
++  SplitLayoutNode first = *node.first();
++  SplitLayoutNode second = *node.second();
++  RenumberLeaves(first, next_index);
++  RenumberLeaves(second, next_index);
++  node = SplitLayoutNode::Split(node.layout(), node.ratio(), std::move(first),
++                                std::move(second));
++}
++
++bool InsertAtLeaf(SplitLayoutNode& node,
++                  size_t target_leaf,
++                  SplitTabLayout layout,
++                  double ratio,
++                  SplitPaneInsertionSide side) {
++  if (node.is_pane()) {
++    if (node.pane_index() != target_leaf) {
++      return false;
++    }
++
++    SplitLayoutNode existing = node;
++    SplitLayoutNode inserted = SplitLayoutNode::Pane(target_leaf);
++    if (side == SplitPaneInsertionSide::kBefore) {
++      node = SplitLayoutNode::Split(layout, ratio, std::move(inserted),
++                                    std::move(existing));
++    } else {
++      node = SplitLayoutNode::Split(layout, ratio, std::move(existing),
++                                    std::move(inserted));
++    }
++    return true;
++  }
++
++  SplitLayoutNode first = *node.first();
++  SplitLayoutNode second = *node.second();
++  if (!InsertAtLeaf(first, target_leaf, layout, ratio, side) &&
++      !InsertAtLeaf(second, target_leaf, layout, ratio, side)) {
++    return false;
++  }
++  node = SplitLayoutNode::Split(node.layout(), node.ratio(), std::move(first),
++                                std::move(second));
++  return true;
++}
++
++bool RemoveLeaf(SplitLayoutNode& node, size_t leaf, bool& removed) {
++  if (node.is_pane()) {
++    return node.pane_index() == leaf;
++  }
++
++  SplitLayoutNode first = *node.first();
++  SplitLayoutNode second = *node.second();
++  if (RemoveLeaf(first, leaf, removed)) {
++    node = std::move(second);
++    removed = true;
++    return false;
++  }
++  if (RemoveLeaf(second, leaf, removed)) {
++    node = std::move(first);
++    removed = true;
++    return false;
++  }
++
++  if (removed) {
++    node = SplitLayoutNode::Split(node.layout(), node.ratio(), std::move(first),
++                                  std::move(second));
++  }
++  return false;
++}
++
++}  // namespace
++
++SplitLayoutNode SplitLayoutNode::Pane(size_t pane_index) {
++  return SplitLayoutNode(pane_index);
++}
++
++SplitLayoutNode SplitLayoutNode::Split(SplitTabLayout layout,
++                                       double ratio,
++                                       SplitLayoutNode first,
++                                       SplitLayoutNode second) {
++  return SplitLayoutNode(layout, ratio, std::move(first), std::move(second));
++}
++
++SplitLayoutNode::SplitLayoutNode(size_t pane_index) : pane_index_(pane_index) {}
++
++SplitLayoutNode::SplitLayoutNode(SplitTabLayout layout,
++                                 double ratio,
++                                 SplitLayoutNode first,
++                                 SplitLayoutNode second)
++    : is_pane_(false),
++      layout_(layout),
++      ratio_(ratio),
++      first_(std::make_unique<SplitLayoutNode>(std::move(first))),
++      second_(std::make_unique<SplitLayoutNode>(std::move(second))) {}
++
++SplitLayoutNode::SplitLayoutNode(const SplitLayoutNode& other)
++    : is_pane_(other.is_pane_),
++      pane_index_(other.pane_index_),
++      layout_(other.layout_),
++      ratio_(other.ratio_),
++      first_(other.first_ ? std::make_unique<SplitLayoutNode>(*other.first_)
++                          : nullptr),
++      second_(other.second_ ? std::make_unique<SplitLayoutNode>(*other.second_)
++                            : nullptr) {}
++
++SplitLayoutNode::SplitLayoutNode(SplitLayoutNode&& other) noexcept = default;
++SplitLayoutNode::~SplitLayoutNode() = default;
++
++SplitLayoutNode& SplitLayoutNode::operator=(const SplitLayoutNode& other) {
++  if (this != &other) {
++    SplitLayoutNode copy(other);
++    *this = std::move(copy);
++  }
++  return *this;
++}
++
++SplitLayoutNode& SplitLayoutNode::operator=(SplitLayoutNode&& other) noexcept =
++    default;
++
++bool SplitLayoutNode::ValidateForPaneCount(size_t pane_count) const {
++  if (pane_count < 2 || pane_count > 4) {
++    return false;
++  }
++  std::vector<bool> seen(pane_count, false);
++  return ValidateNode(*this, pane_count, seen) &&
++         std::all_of(seen.begin(), seen.end(), [](bool value) { return value; });
++}
++
++std::vector<size_t> SplitLayoutNode::LeafOrder() const {
++  std::vector<size_t> leaves;
++  CollectLeaves(*this, leaves);
++  return leaves;
++}
++
++bool SplitLayoutNode::InsertPaneAtLeaf(size_t target_leaf,
++                                       SplitTabLayout layout,
++                                       double ratio,
++                                       SplitPaneInsertionSide side) {
++  const size_t pane_count = LeafOrder().size();
++  if (pane_count >= 4 || !std::isfinite(ratio) || ratio <= 0.0 ||
++      ratio >= 1.0 ||
++      !InsertAtLeaf(*this, target_leaf, layout, ratio, side)) {
++    return false;
++  }
++  size_t next_index = 0;
++  RenumberLeaves(*this, next_index);
++  return ValidateForPaneCount(pane_count + 1);
++}
++
++bool SplitLayoutNode::RemovePane(size_t leaf) {
++  const size_t pane_count = LeafOrder().size();
++  if (pane_count <= 2) {
++    return false;
++  }
++  bool removed = false;
++  RemoveLeaf(*this, leaf, removed);
++  if (!removed) {
++    return false;
++  }
++  size_t next_index = 0;
++  RenumberLeaves(*this, next_index);
++  return ValidateForPaneCount(pane_count - 1);
++}
++
++bool operator==(const SplitLayoutNode& lhs, const SplitLayoutNode& rhs) {
++  if (lhs.is_pane_ != rhs.is_pane_ || lhs.pane_index_ != rhs.pane_index_ ||
++      lhs.layout_ != rhs.layout_ || lhs.ratio_ != rhs.ratio_) {
++    return false;
++  }
++  if (static_cast<bool>(lhs.first_) != static_cast<bool>(rhs.first_) ||
++      static_cast<bool>(lhs.second_) != static_cast<bool>(rhs.second_)) {
++    return false;
++  }
++  return (!lhs.first_ || *lhs.first_ == *rhs.first_) &&
++         (!lhs.second_ || *lhs.second_ == *rhs.second_);
++}
+ 
+ SplitTabVisualData::SplitTabVisualData()
+     : split_layout_(SplitTabLayout::kVertical) {}
+@@ -18,4 +228,84 @@ SplitTabVisualData::SplitTabVisualData(SplitTabLayout split_layout,
+ 
+ SplitTabVisualData::~SplitTabVisualData() = default;
+ 
++SplitTabVisualData::SplitTabVisualData(const SplitTabVisualData& other) = default;
++SplitTabVisualData::SplitTabVisualData(SplitTabVisualData&& other) = default;
++
++void SplitTabVisualData::set_split_layout(SplitTabLayout split_layout) {
++  split_layout_ = split_layout;
++  if (layout_tree_ && !layout_tree_->is_pane()) {
++    layout_tree_ = SplitLayoutNode::Split(
++        split_layout_, layout_tree_->ratio(), *layout_tree_->first(),
++        *layout_tree_->second());
++  }
++}
++
++void SplitTabVisualData::set_split_ratio(double split_ratio) {
++  split_ratio_ = split_ratio;
++  if (layout_tree_ && !layout_tree_->is_pane()) {
++    layout_tree_ = SplitLayoutNode::Split(
++        layout_tree_->layout(), split_ratio_, *layout_tree_->first(),
++        *layout_tree_->second());
++  }
++}
++
++void SplitTabVisualData::set_layout_tree(
++    std::optional<SplitLayoutNode> layout_tree) {
++  layout_tree_ = std::move(layout_tree);
++  MirrorTreeRootToLegacyFields();
++}
++
++bool SplitTabVisualData::ValidateForPaneCount(size_t pane_count) const {
++  if (pane_count < 2 || pane_count > 4 || !std::isfinite(split_ratio_) ||
++      split_ratio_ <= 0.0 || split_ratio_ >= 1.0) {
++    return false;
++  }
++  if (!layout_tree_) {
++    return pane_count == 2;
++  }
++  return layout_tree_->ValidateForPaneCount(pane_count) &&
++         !layout_tree_->is_pane() &&
++         layout_tree_->layout() == split_layout_ &&
++         layout_tree_->ratio() == split_ratio_;
++}
++
++SplitTabVisualData SplitTabVisualData::CreateTwoPane(SplitTabLayout layout,
++                                                      double ratio) {
++  SplitTabVisualData data(layout, ratio);
++  data.layout_tree_ = SplitLayoutNode::Split(
++      layout, ratio, SplitLayoutNode::Pane(0), SplitLayoutNode::Pane(1));
++  return data;
++}
++
++bool SplitTabVisualData::InsertPaneAtLeaf(size_t target_leaf,
++                                          SplitTabLayout layout,
++                                          double ratio,
++                                          SplitPaneInsertionSide side) {
++  if (!layout_tree_) {
++    layout_tree_ = SplitLayoutNode::Split(
++        split_layout_, split_ratio_, SplitLayoutNode::Pane(0),
++        SplitLayoutNode::Pane(1));
++  }
++  if (!layout_tree_->InsertPaneAtLeaf(target_leaf, layout, ratio, side)) {
++    return false;
++  }
++  MirrorTreeRootToLegacyFields();
++  return true;
++}
++
++bool SplitTabVisualData::RemovePane(size_t leaf) {
++  if (!layout_tree_ || !layout_tree_->RemovePane(leaf)) {
++    return false;
++  }
++  MirrorTreeRootToLegacyFields();
++  return true;
++}
++
++void SplitTabVisualData::MirrorTreeRootToLegacyFields() {
++  if (layout_tree_ && !layout_tree_->is_pane()) {
++    split_layout_ = layout_tree_->layout();
++    split_ratio_ = layout_tree_->ratio();
++  }
++}
++
+ }  // namespace split_tabs

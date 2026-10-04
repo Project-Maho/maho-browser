@@ -1,0 +1,21 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_welcome_window") {
+  sources = [
+    "maho_welcome_window.cc",
+    "maho_welcome_window.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/keep_alive_registry",
+    "//content/public/browser",
+    "//maho/components/constants",
+    "//ui/base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}

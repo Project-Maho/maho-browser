@@ -1,0 +1,128 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_routines.mojom;
+
+struct RoutineInfo {
+  string id;
+  string name;
+  string cron;
+  string description;
+  // True for user-defined custom routines (deletable). False for built-ins.
+  bool is_custom;
+  // Cron schedule string, when this routine is cron-triggered.
+  string? schedule;
+  // Event trigger string (e.g. "on_startup" / "on_many_tabs:20"), when
+  // this routine is event-triggered.
+  string? trigger;
+  // Whether the routine is enabled (built-ins are always enabled).
+  bool enabled;
+};
+
+struct RoutineRunResult {
+  string id;
+  int64 ran_at;
+  string content;
+  bool success;
+};
+
+// One persisted routine execution from the durable routine inbox
+// (`routine_results` table, surfaced by `maho_routines_history` /
+// `maho_routines_latest`).
+//
+// Field naming note: `RoutineRunResult.id` above is the *routine* id carried by
+// the live run-completion callback, which historically conflated identifiers.
+// This struct deliberately uses distinct `result_id` (row identity) and
+// `routine_id` (which routine ran) fields so the two can never be confused.
+struct RoutineRunRecord {
+  // Auto-assigned row id of this recorded run.
+  int64 result_id;
+  // Id of the routine that produced this run.
+  string routine_id;
+  // Unix timestamp (seconds) when the run finished.
+  int64 ran_at;
+  // False for a failed run, whose `content` holds the error text.
+  bool success;
+  // Run output, or the error text when `success` is false.
+  string content;
+  // How the run was triggered: "scheduled", "manual", or "event".
+  string source;
+};
+
+enum RoutineRunState {
+  kQueued,
+  kRunning,
+  kAwaitingApproval,
+  kSucceeded,
+  kFailed,
+};
+
+// Emitted while a run is paused in kAwaitingApproval: the run's agent hit a
+// sensitive tool call and waits for the user's decision via
+// RespondToRoutineApproval.
+struct RoutineRunApproval {
+  string approval_id;
+  string tool_name;
+  string sensitivity;
+};
+
+struct RoutineRunStatus {
+  string run_id;
+  string routine_id;
+  string source;
+  RoutineRunState state;
+  uint64 revision;
+  int64 started_at;
+  int64 updated_at;
+  int64? finished_at;
+  string? result;
+  string? error;
+  RoutineRunApproval? approval;
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  ListRoutines() => (array<RoutineInfo> routines);
+  // Returns ALL routines (built-in + user-defined custom).
+  ListAllRoutines() => (array<RoutineInfo> routines);
+  // Create a user-defined routine. Exactly one of `schedule` (cron) or
+  // `trigger` (event) should be supplied; both null = manual-run only.
+  CreateRoutine(string name, string prompt,
+                string? schedule, string? trigger) => (bool ok);
+  // Delete a user-defined routine by id.
+  DeleteRoutine(string id) => (bool ok);
+  RunRoutine(string id) => (RoutineRunResult? result, string? error);
+  // Starts a manual run and returns as soon as the queued state exists.
+  StartRoutine(string id) => (string? run_id, string? error);
+  // Process-lifetime snapshot. Includes terminal runs so a freshly opened page
+  // can reconstruct the board before consuming subsequent push events.
+  GetRoutineRunStatuses() => (array<RoutineRunStatus> statuses);
+  // Resolves exactly the currently pending approval for a run. Stale or
+  // mismatched ids return false and leave the run unchanged.
+  RespondToRoutineApproval(string run_id, string approval_id, bool approved)
+      => (bool ok);
+  GetUserTier() => (int32 tier);
+  // Recorded run history, newest first. Pass null `routine_id` for all
+  // routines. `limit` of 0 means "use the backend default".
+  ListRunHistory(string? routine_id, uint32 limit)
+      => (array<RoutineRunRecord> records);
+  // The single most recent recorded run for `routine_id`, or null if the
+  // routine has never run.
+  GetLatestRun(string routine_id) => (RoutineRunRecord? record);
+
+  // Trace v3 Recording & Creation APIs
+  StartTraceRecording(int64 tab_id) => (bool ok);
+  StopTraceRecording() => (string? trace_json, string? error);
+  CreateRoutineFromTrace(string name, string description, string trace_json,
+                         string? schedule, string? trigger) => (bool ok);
+  IsTraceRecording() => (bool is_recording, int64 active_tab_id);
+};
+
+interface Page {
+  OnRoutineComplete(RoutineRunResult result);
+  OnRoutineError(string id, string error);
+  OnRoutineRunStatusChanged(RoutineRunStatus status);
+};

@@ -1,0 +1,21 @@
+diff --git c/chrome/browser/ui/customize_chrome/side_panel_controller_base.h w/chrome/browser/ui/customize_chrome/side_panel_controller_base.h
+index 9498f718e9e91d1c1808ff72a9c0fb43d58c1938..88655b20075b0113cfdfd103bc5de7b393ed27f5 100644
+--- c/chrome/browser/ui/customize_chrome/side_panel_controller_base.h
++++ w/chrome/browser/ui/customize_chrome/side_panel_controller_base.h
+@@ -8,6 +8,7 @@
+ #include "base/callback_list.h"
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ref.h"
++#include "base/memory/weak_ptr.h"
+ #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
+ #include "chrome/browser/ui/side_panel/side_panel_native_view.h"
+ #include "content/public/browser/web_contents_observer.h"
+@@ -89,6 +90,8 @@ class SidePanelControllerBase : public SidePanelController,
+   base::CallbackListSubscription will_discard_contents_callback_subscription_;
+   StateChangedCallBack entry_state_changed_callback_;
+   ui::ScopedUnownedUserData<SidePanelController> scoped_unowned_user_data_;
++
++  base::WeakPtrFactory<SidePanelControllerBase> weak_ptr_factory_{this};
+ };
+ 
+ }  // namespace customize_chrome

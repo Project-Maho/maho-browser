@@ -1,0 +1,30 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 7216aee734414a8763dd95cf2b41fb20eea0bac3..05b3d28cf2af508b76fa829fd76fb83f44368510 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1058,6 +1058,25 @@ std::optional<int> ChromeMainDelegate::BasicStartupComplete() {
+   ash::BootTimesRecorder::Get()->SaveChromeMainStats();
+ #endif
+ 
++  // Maho: enable kGlassFrame by default on macOS.
++  // Must run before base::FeatureList::InitializeInstance to take
++  // effect. Users can still opt out with --disable-features=GlassFrame.
++#if BUILDFLAG(IS_MAC)
++  {
++    auto* cmd = base::CommandLine::ForCurrentProcess();
++    const std::string disabled =
++        cmd->GetSwitchValueASCII("disable-features");
++    if (disabled.find("GlassFrame") == std::string::npos) {
++      const std::string existing =
++          cmd->GetSwitchValueASCII("enable-features");
++      cmd->AppendSwitchASCII(
++          "enable-features",
++          existing.empty() ? std::string("GlassFrame")
++                           : existing + ",GlassFrame");
++    }
++  }
++#endif
++
+   const base::CommandLine& command_line =
+       *base::CommandLine::ForCurrentProcess();
+ 

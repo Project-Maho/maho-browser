@@ -1,0 +1,44 @@
+diff --git a/chrome/app/app-Info.plist b/chrome/app/app-Info.plist
+index 6fada0a2b1a1f4b5675fc657a3a7b2337e43c4a1..66fc41e2e7e6bd998fd429925451e084f2b5275e 100644
+--- a/chrome/app/app-Info.plist
++++ b/chrome/app/app-Info.plist
+@@ -4,6 +4,8 @@
+ <dict>
+ 	<key>CFBundleDevelopmentRegion</key>
+ 	<string>en</string>
++	<key>NSBluetoothAlwaysUsageDescription</key>
++	<string>Maho uses Bluetooth to connect to a nearby phone when you sign in with a passkey.</string>
+ 	<key>CFBundleDisplayName</key>
+ 	<string>${EXECUTABLE_NAME}</string>
+ 	<key>CFBundleDocumentTypes</key>
+@@ -145,6 +147,8 @@
+ 			</array>
+ 		</dict>
+ 	</array>
++	<key>CrProductDirName</key>
++	<string>Maho</string>
+ 	<key>CFBundleExecutable</key>
+ 	<string>${EXECUTABLE_NAME}</string>
+ 	<key>CFBundleIconFile</key>
+@@ -208,11 +212,19 @@
+ 		<string>0</string>
+ 	</dict>
+ 	<key>LSFileQuarantineEnabled</key>
+-	<true/>
++	<false/>
++	<key>SUFeedURL</key>
++	<string>https://github.com/Project-Maho/release/releases/latest/download/appcast.xml</string>
++	<key>SUPublicEDKey</key>
++	<string>iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=</string>
++	<key>SUEnableAutomaticChecks</key>
++	<false/>
++	<key>SUScheduledCheckInterval</key>
++	<integer>86400</integer>
+ 	<key>LSHasLocalizedDisplayName</key>
+ 	<string>1</string>
+ 	<key>LSMinimumSystemVersion</key>
+-	<string>${CHROMIUM_MIN_SYSTEM_VERSION}</string>
++	<string>14.0</string>
+ 	<key>LSRequiresNativeExecution</key>
+ 	<true/>
+ 	<key>NSCameraReactionEffectGesturesEnabledDefault</key>

@@ -1,0 +1,38 @@
+diff --git c/components/autofill_payments_strings.grdp w/components/autofill_payments_strings.grdp
+index 274691cf8953d892bd0ecb00def582aa26b0ce44..e259c89e4175e1144be9e69a2a8af33b46ae2099 100644
+--- c/components/autofill_payments_strings.grdp
++++ w/components/autofill_payments_strings.grdp
+@@ -287,13 +287,13 @@
+     </if>
+     <if expr="not _google_chrome">
+       <message name="IDS_AUTOFILL_SAVE_AND_FILL_DIALOG_EXPLANATION_LOCAL" desc="Explanation text for the Autofill Save and Fill dialog for cards that will be saved locally.">
+-        Autofill this card for purchases made in Chromium when it's saved on this device
++        Autofill this card for purchases made in Maho when it's saved on this device
+       </message>
+       <message name="IDS_AUTOFILL_SAVE_AND_FILL_DIALOG_EXPLANATION_UPLOAD" desc="Explanation text for the Autofill Save and Fill dialog for cards that will be saved to the GPay server.">
+-        Autofill this card for purchases made in Chromium when it's saved to use with Google Pay
++        Autofill this card for purchases made in Maho when it's saved to use with Google Pay
+       </message>
+       <message name="IDS_AUTOFILL_SAVE_AND_FILL_TO_WALLET_DIALOG_EXPLANATION_UPLOAD" desc="Explanation text for the Autofill Save and Fill dialog for cards that will be saved to Google Wallet.">
+-        Autofill this card for purchases made in Chromium when it's saved in Google Wallet
++        Autofill this card for purchases made in Maho when it's saved in Google Wallet
+       </message>
+     </if>
+     <message name="IDS_AUTOFILL_SAVE_AND_FILL_DIALOG_CARD_NUMBER_LABEL" desc="The label text for the card number textfield.">
+@@ -609,13 +609,13 @@
+     </if>
+     <if expr="not _google_chrome">
+       <message name="IDS_PAYMENTS_AUTOFILL_FILLING_MANDATORY_REAUTH" desc="Text that appears in the payments autofill mandatory re-authentication popup as the sublabel, asking the user to authenticate using biometric or device unlock before filling.">
+-        Verify it's you so Chromium can fill in your payment info.
++        Verify it's you so Maho can fill in your payment info.
+       </message>
+       <message name="IDS_PAYMENTS_AUTOFILL_SETTINGS_TOGGLE_MANDATORY_REAUTH" desc="Text that appears in the payments autofill mandatory re-authentication popup as the sublabel when users try to switch the mandatory reauth settings page toggle, asking the user to authenticate using biometric or device unlock before the toggle is switched.">
+-        Chromium is trying to modify settings for filling payment methods.
++        Maho is trying to modify settings for filling payment methods.
+       </message>
+       <message name="IDS_PAYMENTS_AUTOFILL_SETTINGS_EDIT_MANDATORY_REAUTH" desc="Text that appears in the payments autofill mandatory re-authentication popup as the sublabel when users try to edit cards in the settings page, asking the user to authenticate using biometric or device unlock first.">
+-        Chromium is trying to edit payment methods.
++        Maho is trying to edit payment methods.
+       </message>
+     </if>
+   </if>

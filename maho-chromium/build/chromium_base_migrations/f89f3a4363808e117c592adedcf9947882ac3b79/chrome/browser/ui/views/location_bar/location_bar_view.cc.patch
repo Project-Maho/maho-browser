@@ -1,0 +1,17 @@
+--- a/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ b/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -1666,9 +1666,11 @@
+ }
+ 
+ bool LocationBarView::OnMousePressed(const ui::MouseEvent& event) {
+-  if (event.IsOnlyLeftMouseButton() && browser_ && browser_->window()) {
+-    browser_->window()->SetFocusToLocationBar(true);
+-    return true;
++  if (event.IsOnlyLeftMouseButton() && browser_) {
++    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
++      browser_view->SetFocusToLocationBar(true);
++      return true;
++    }
+   }
+ 
+   return omnibox_view_->OnMousePressed(

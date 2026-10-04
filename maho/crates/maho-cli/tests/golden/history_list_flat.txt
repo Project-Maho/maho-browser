@@ -1,0 +1,6 @@
+2026-07-01T10:00:00Z  Example Domain
+  https://example.com/page1
+2026-07-01T09:00:00Z  Example Other
+  https://example.com/page2
+2026-07-01T08:00:00Z  Rust Lang
+  https://rust-lang.org/learn

@@ -1,0 +1,31 @@
+diff --git c/chrome/browser/ui/browser.h w/chrome/browser/ui/browser.h
+index a80862e7642648370b91c2c0962fd3538f5fa366..d384308e32bd8d05ab0f3837929908de978f4b50 100644
+--- c/chrome/browser/ui/browser.h
++++ w/chrome/browser/ui/browser.h
+@@ -112,6 +112,8 @@ class Browser : public TabStripModelObserver,
+ 
+   ~Browser() override;
+ 
++  bool is_maho_mini() const { return is_maho_mini_; }
++
+   // Interface implementations ////////////////////////////////////////////////
+ 
+   // Overridden from TabStripModelObserver:
+@@ -201,6 +203,8 @@ class Browser : public TabStripModelObserver,
+   //
+   // If |params.window| is set, the caller is expected to take the ownership
+   // of the created Browser instance.
++  using CreateParams = BrowserWindowCreateParams;
++
+   static Browser* Create(BrowserWindowCreateParams params);
+ 
+   // WARNING: Use of this is DEPRECATED and exists only to support pre-existing
+@@ -265,6 +269,8 @@ class Browser : public TabStripModelObserver,
+   // This Browser's type.
+   const Type type_;
+ 
++  const bool is_maho_mini_;
++
+   // This Browser's profile.
+   const raw_ptr<Profile, AcrossTasksDanglingUntriaged> profile_;
+ 

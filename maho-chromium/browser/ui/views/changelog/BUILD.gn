@@ -1,0 +1,32 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+# The opener production sources are compiled directly into chrome/browser/ui
+# (same pattern as every other maho/browser/ui/views/** file). This target
+# exists only to run the unit tests inside the maho_theme_io_test binary.
+source_set("unit_tests") {
+  testonly = true
+  sources = [
+    "maho_changelog_auto_opener.cc",
+    "maho_changelog_auto_opener.h",
+    "maho_changelog_auto_opener_unittest.cc",
+  ]
+
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//components/prefs:test_support",
+    "//components/version_info",
+    "//content/test:test_support",
+    "//maho/browser/ui/webui/maho_welcome:maho_welcome",
+    "//maho/browser/updates:maho_updates_lib",
+    "//maho/browser/updates:maho_updates_prefs",
+    "//maho/components/constants",
+    "//testing/gtest",
+    "//ui/base",
+    "//url",
+  ]
+}

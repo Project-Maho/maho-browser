@@ -1,0 +1,676 @@
+=== RUNNING: target/debug/maho desktop ocr --output /tmp/maho-gv-capture.png ===
+[
+  {
+    "text": "Kakaolalk",
+    "x": 50,
+    "y": 11,
+    "w": 67,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "•Fntu",
+    "x": 50,
+    "y": 39,
+    "w": 134,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "s m",
+    "x": 3047,
+    "y": 6,
+    "w": 100,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "⑧ 100",
+    "x": 3287,
+    "y": 6,
+    "w": 45,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "•95",
+    "x": 3533,
+    "y": 11,
+    "w": 112,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "FrI AUg 28 /-31PN",
+    "x": 3689,
+    "y": 11,
+    "w": 128,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "스Bl=",
+    "x": 3762,
+    "y": 67,
+    "w": 73,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "2027.02~0",
+    "x": 290,
+    "y": 134,
+    "w": 78,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "공함 야 (쌀지 : 상팥 의무 없음)•",
+    "x": 597,
+    "y": 290,
+    "w": 285,
+    "h": 39,
+    "confidence": 0.3
+  },
+  {
+    "text": "7.%글로벌 수출 마케팅 &해외 실증(POC) 무상 바우처",
+    "x": 246,
+    "y": 502,
+    "w": 424,
+    "h": 17,
+    "confidence": 0.5
+  },
+  {
+    "text": "Noveling의 글로벌 영문 서비스(noveling.dev)와 USD 신용카드 결제 인프라를 활용하는 무상 해외진출",
+    "x": 246,
+    "y": 535,
+    "w": 770,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "주관기관",
+    "x": 608,
+    "y": 585,
+    "w": 78,
+    "h": 12,
+    "confidence": 0.3
+  },
+  {
+    "text": "무상 지원 내용",
+    "x": 753,
+    "y": 585,
+    "w": 117,
+    "h": 12,
+    "confidence": 0.5
+  },
+  {
+    "text": "중기부 수출바우처<br>(내수/수출초보트랙",
+    "x": 262,
+    "y": 613,
+    "w": 324,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "중기부/ 중진공",
+    "x": 608,
+    "y": 613,
+    "w": 128,
+    "h": 17,
+    "confidence": 0.5
+  },
+  {
+    "text": "최대 3,000만 ~ 5,000만 원 <Dr(성무기",
+    "x": 753,
+    "y": 619,
+    "w": 279,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "KOTRA 글로벌점프 300",
+    "x": 257,
+    "y": 647,
+    "w": 167,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "KOTRA",
+    "x": 608,
+    "y": 647,
+    "w": 50,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "129개 해외무역관 1:1 전담 매칭 및",
+    "x": 753,
+    "y": 647,
+    "w": 285,
+    "h": 17,
+    "confidence": 0.5
+  },
+  {
+    "text": "SBA 해외 식증(Poc)",
+    "x": 262,
+    "y": 680,
+    "w": 145,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "서울 경제진흐워",
+    "x": 614,
+    "y": 680,
+    "w": 112,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "기업당 3.000만 ~ 1억원 (100% 무삭",
+    "x": 753,
+    "y": 680,
+    "w": 268,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "CES 2027 서울통합관",
+    "x": 262,
+    "y": 714,
+    "w": 151,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "부스 임차 장치비 100% 지원 + 역수",
+    "x": 759,
+    "y": 714,
+    "w": 257,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "KITA 서비스수출 실적공인",
+    "x": 262,
+    "y": 741,
+    "w": 195,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "한 국 무역 협회",
+    "x": 608,
+    "y": 741,
+    "w": 100,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "•~ 즉시 실행 체크리스트 (Action Plan)",
+    "x": 257,
+    "y": 825,
+    "w": 313,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "근카스와 AI 포모단",
+    "x": 1105,
+    "y": 295,
+    "w": 112,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "웃기너",
+    "x": 1094,
+    "y": 413,
+    "w": 39,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "7:29 PM",
+    "x": 1250,
+    "y": 446,
+    "w": 56,
+    "h": 22,
+    "confidence": 0.3
+  },
+  {
+    "text": "Bookmarked here for unread messaaes",
+    "x": 1194,
+    "y": 485,
+    "w": 229,
+    "h": 11,
+    "confidence": 1.0
+  },
+  {
+    "text": "이 채팅방은 저의 일기장 입니다",
+    "x": 1088,
+    "y": 518,
+    "w": 162,
+    "h": 12,
+    "confidence": 1.0
+  },
+  {
+    "text": "탁구야 나똥마려 7:30 PN",
+    "x": 1094,
+    "y": 546,
+    "w": 145,
+    "h": 23,
+    "confidence": 0.3
+  },
+  {
+    "text": "이 채팅방은 저의 일기장 입니다",
+    "x": 1094,
+    "y": 714,
+    "w": 156,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "탁구야 gta6 크랙 하는법알려줘 7:31pN",
+    "x": 1094,
+    "y": 741,
+    "w": 223,
+    "h": 23,
+    "confidence": 0.5
+  },
+  {
+    "text": "그 주제는 답 안 해요",
+    "x": 1094,
+    "y": 859,
+    "w": 112,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "7:31PM",
+    "x": 1312,
+    "y": 859,
+    "w": 45,
+    "h": 22,
+    "confidence": 0.5
+  },
+  {
+    "text": "n",
+    "x": 1077,
+    "y": 981,
+    "w": 50,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "auy=",
+    "x": 1479,
+    "y": 306,
+    "w": 112,
+    "h": 18,
+    "confidence": 0.3
+  },
+  {
+    "text": "K현지와, 글로벌 이용약관/Strl0e 법률 섬보",
+    "x": 1596,
+    "y": 619,
+    "w": 335,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "너사발굴",
+    "x": 1602,
+    "y": 647,
+    "w": 67,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "프한 거 미사 #의",
+    "x": 698,
+    "y": 1104,
+    "w": 145,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "스BIn • omo-proiect × • Omo - Make Money Autonom",
+    "x": 1959,
+    "y": 67,
+    "w": 391,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "The gateway's own stored token returns 200 through Python. Token, host, and body are all ldentical - so the dltterence must be a header my shared HITP Cllent injects",
+    "x": 2048,
+    "y": 234,
+    "w": 1323,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "Chatni",
+    "x": 2221,
+    "y": 273,
+    "w": 61,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "$ cd /user",
+    "x": 2043,
+    "y": 279,
+    "w": 84,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "... (17 a",
+    "x": 2048,
+    "y": 312,
+    "w": 73,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "No detauL1",
+    "x": 2043,
+    "y": 474,
+    "w": 84,
+    "h": 11,
+    "confidence": 1.0
+  },
+  {
+    "text": "~ eval0",
+    "x": 2048,
+    "y": 524,
+    "w": 78,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "15 gan",
+    "x": 2060,
+    "y": 546,
+    "w": 67,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "Now Pythd",
+    "x": 2043,
+    "y": 758,
+    "w": 78,
+    "h": 17,
+    "confidence": 0.3
+  },
+  {
+    "text": "st:11 403",
+    "x": 2043,
+    "y": 1031,
+    "w": 78,
+    "h": 12,
+    "confidence": 0.5
+  },
+  {
+    "text": "5 earlie",
+    "x": 2060,
+    "y": 1109,
+    "w": 67,
+    "h": 23,
+    "confidence": 0.3
+  },
+  {
+    "text": "edit ..",
+    "x": 2043,
+    "y": 1321,
+    "w": 67,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "… Unrea",
+    "x": 2277,
+    "y": 323,
+    "w": 61,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "Aug 25",
+    "x": 2913,
+    "y": 368,
+    "w": 50,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "안녕하세요 관리회사에 확인하니 우면 발송해주셔야 한다고 하네요. 해악신청일은 우편이 관리회사에 도착한 날이 기준으로 되기 때손",
+    "x": 2272,
+    "y": 379,
+    "w": 625,
+    "h": 28,
+    "confidence": 0.5
+  },
+  {
+    "text": "여신님④ 후",
+    "x": 2272,
+    "y": 440,
+    "w": 84,
+    "h": 23,
+    "confidence": 0.3
+  },
+  {
+    "text": "* 근카스와 AI 포모단 34 /",
+    "x": 2283,
+    "y": 518,
+    "w": 156,
+    "h": 12,
+    "confidence": 0.3
+  },
+  {
+    "text": "• 한일 IT 한국인 커뮤니티 460 %",
+    "x": 2272,
+    "y": 591,
+    "w": 207,
+    "h": 17,
+    "confidence": 0.5
+  },
+  {
+    "text": "의메름에스단 189 g",
+    "x": 2272,
+    "y": 658,
+    "w": 145,
+    "h": 45,
+    "confidence": 0.3
+  },
+  {
+    "text": "\" pT 이분어느려 시험",
+    "x": 2272,
+    "y": 803,
+    "w": 128,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "사절품(인도사람)",
+    "x": 2272,
+    "y": 881,
+    "w": 117,
+    "h": 39,
+    "confidence": 0.3
+  },
+  {
+    "text": "과한 사품된 추근나액을 통해 확인할 수 있습니다.",
+    "x": 2294,
+    "y": 970,
+    "w": 234,
+    "h": 33,
+    "confidence": 0.3
+  },
+  {
+    "text": "영 오모드용",
+    "x": 2277,
+    "y": 1026,
+    "w": 78,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "c Emotico",
+    "x": 2277,
+    "y": 1048,
+    "w": 84,
+    "h": 22,
+    "confidence": 0.3
+  },
+  {
+    "text": "[인증방] 세림 재건축 811세대 소유주방 136",
+    "x": 2294,
+    "y": 1109,
+    "w": 246,
+    "h": 12,
+    "confidence": 0.5
+  },
+  {
+    "text": "익 루레 도려서 도 무0기! 다 무며 현그ㅇ로 교하",
+    "x": 2288,
+    "y": 1126,
+    "w": 246,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "하나은한",
+    "x": 2272,
+    "y": 1176,
+    "w": 56,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "[하나오해1 대충 그리가며 혀화 체크 아내",
+    "x": 2272,
+    "y": 1193,
+    "w": 201,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "6:40 PM",
+    "x": 2908,
+    "y": 440,
+    "w": 50,
+    "h": 12,
+    "confidence": 0.5
+  },
+  {
+    "text": "7:29 PM",
+    "x": 2908,
+    "y": 591,
+    "w": 50,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "3:41pN",
+    "x": 2908,
+    "y": 736,
+    "w": 50,
+    "h": 11,
+    "confidence": 0.3
+  },
+  {
+    "text": "st shape. My \"not throttling\" conclusion was wrong:",
+    "x": 2992,
+    "y": 758,
+    "w": 407,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "5:54 PM",
+    "x": 2908,
+    "y": 886,
+    "w": 50,
+    "h": 12,
+    "confidence": 1.0
+  },
+  {
+    "text": "12:5/ pN",
+    "x": 2902,
+    "y": 1031,
+    "w": 56,
+    "h": 12,
+    "confidence": 0.3
+  },
+  {
+    "text": "s workina and failina calls _ token freshness.",
+    "x": 2992,
+    "y": 1031,
+    "w": 368,
+    "h": 12,
+    "confidence": 1.0
+  },
+  {
+    "text": "10:33 AM",
+    "x": 2902,
+    "y": 1182,
+    "w": 56,
+    "h": 11,
+    "confidence": 1.0
+  },
+  {
+    "text": "### Closina Briefina",
+    "x": 251,
+    "y": 1288,
+    "w": 184,
+    "h": 11,
+    "confidence": 0.5
+  },
+  {
+    "text": "곱식 공고서 ¼개)고육개 동에0L(5 20.kh vontet• at testoa xir y dpeon. g.",
+    "x": 452,
+    "y": 1316,
+    "w": 586,
+    "h": 33,
+    "confidence": 0.3
+  },
+  {
+    "text": "foundershub.startups.microsott.com, kocca.kr, kpipa.or.kr, sntech.go.kr, 11tp.kr 등 1차 출처 전수 검증",
+    "x": 1033,
+    "y": 1321,
+    "w": 826,
+    "h": 17,
+    "confidence": 1.0
+  },
+  {
+    "text": "2. 네이버클라우드 그린하우스 Track 1 (1,000만원 크레딧) 신청]",
+    "x": 246,
+    "y": 1444,
+    "w": 502,
+    "h": 17,
+    "confidence": 0.5
+  },
+  {
+    "text": "Vcode/pralect • 기급, 절 수, 자격 확인 1,CH98.3%7,291K/IM (27.88) (auto)",
+    "x": 240,
+    "y": 1477,
+    "w": 569,
+    "h": 28,
+    "confidence": 0.3
+  },
+  {
+    "text": "28",
+    "x": 1446,
+    "y": 1544,
+    "w": 39,
+    "h": 34,
+    "confidence": 0.3
+  }
+]
+EXIT_CODE: 0

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="maho_db_keys.xml"/>
+        <exclude domain="file" path="MahoData/maho.db"/>
+        <exclude domain="file" path="MahoData/maho.db-wal"/>
+        <exclude domain="file" path="MahoData/maho.db-shm"/>
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="maho_db_keys.xml"/>
+        <exclude domain="file" path="MahoData/maho.db"/>
+        <exclude domain="file" path="MahoData/maho.db-wal"/>
+        <exclude domain="file" path="MahoData/maho.db-shm"/>
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,11 @@
+--- a/chrome/browser/ui/views/side_panel/side_panel.cc
++++ b/chrome/browser/ui/views/side_panel/side_panel.cc
+@@ -376,7 +376,7 @@
+   const SidePanelUI* side_panel_ui =
+       browser_view_->browser()->GetFeatures().side_panel_ui();
+   if (side_panel_ui &&
+-      side_panel_ui->GetCurrentEntryId(type_) ==
++      side_panel_ui->GetCurrentEntryId() ==
+           SidePanelEntryId::kMahoAiPanel) {
+     return true;
+   }

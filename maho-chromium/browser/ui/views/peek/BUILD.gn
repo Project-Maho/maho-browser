@@ -1,0 +1,79 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("interactive_tests") {
+  testonly = true
+
+  sources = [
+    "maho_peek_interactive_uitest.cc",
+    "maho_peek_link_routing_interactive_uitest.cc",
+  ]
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  deps = [
+    ":maho_peek",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//net:test_support",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/base:test_support",
+    "//ui/events:events_base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("maho_peek") {
+  sources = [
+    "maho_peek_controller.cc",
+    "maho_peek_controller.h",
+    "maho_peek_view.cc",
+    "maho_peek_view.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser/profiles:profile",
+    "//components/web_modal",
+    "//content/public/browser",
+    "//printing/buildflags",
+    "//third_party/blink/public:blink",
+    "//ui/base",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+source_set("maho_peek_route") {
+  sources = [
+    "maho_peek_route.cc",
+    "maho_peek_route.h",
+  ]
+  deps = [
+    "//base",
+    "//content/public/browser",
+    "//ui/base",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [ "maho_peek_route_unittest.cc" ]
+  deps = [
+    ":maho_peek_route",
+    "//base",
+    "//content/public/browser",
+    "//testing/gtest",
+    "//ui/base",
+  ]
+}

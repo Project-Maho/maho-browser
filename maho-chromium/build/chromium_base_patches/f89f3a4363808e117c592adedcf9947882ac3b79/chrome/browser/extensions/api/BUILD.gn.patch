@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/extensions/api/BUILD.gn b/chrome/browser/extensions/api/BUILD.gn
+--- a/chrome/browser/extensions/api/BUILD.gn
++++ b/chrome/browser/extensions/api/BUILD.gn
+@@ -133,6 +133,8 @@ function_registration("api_registration") {
+   custom_impl_schemas = [
++    "maho_split_view",
++    "maho_side_panel",
+     "accessibility_private",
+     "accessibility_service_private",
+     "action",
+     "autotest_private",
+     "browser_action",
+@@ -175,6 +177,8 @@ function_registration("api_registration") {
+   ]
+ 
+   inputs = [
++    "//maho/browser/extensions/api/maho_split_view_api.h",
++    "//maho/browser/extensions/api/maho_side_panel_api.h",
+     "//chrome/browser/accessibility/accessibility_extension_api_ash.h",
+     "//chrome/browser/chromeos/extensions/accessibility_service_private/accessibility_service_private.h",
+     "//chrome/browser/chromeos/extensions/echo_private/echo_private_api.h",

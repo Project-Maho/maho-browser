@@ -1,0 +1,87 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("interactive_tests") {
+  testonly = true
+
+  sources = [ "maho_spaces_overlay_interactive_uitest.cc" ]
+
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+
+  deps = [
+    ":maho_spaces_overlay",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/base:test_support",
+    "//ui/events:events_base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [
+    "maho_spaces_overlay_controller_unittest.cc",
+    "maho_spaces_overlay_view_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_spaces_overlay",
+    "//base",
+    "//base/test:test_support",
+    "//maho/browser/ui/views/sidebar:maho_spaces_board_data",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
+    "//skia",
+    "//testing/gtest",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("maho_spaces_overlay") {
+  sources = [
+    "maho_browser_frame_overlay_host.cc",
+    "maho_browser_frame_overlay_host.h",
+    "maho_spaces_overlay_board_view.cc",
+    "maho_spaces_overlay_board_view.h",
+    "maho_spaces_overlay_column_view.cc",
+    "maho_spaces_overlay_column_view.h",
+    "maho_spaces_overlay_controller.cc",
+    "maho_spaces_overlay_controller.h",
+    "maho_spaces_overlay_tab_row_view.cc",
+    "maho_spaces_overlay_tab_row_view.h",
+    "maho_spaces_overlay_view.cc",
+    "maho_spaces_overlay_view.h",
+  ]
+
+  deps = [
+    "//base",
+    "//components/vector_icons",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser/ui/views/sidebar:maho_spaces_board_data",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_themed_background",
+    "//ui/base",
+    "//ui/color",
+    "//ui/compositor",
+    "//ui/events",
+    "//ui/gfx",
+    "//ui/views",
+    "//skia",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//chrome/browser/favicon",
+    "//components/favicon/core",
+    "//components/favicon_base",
+    "//maho/browser/ui/views/library_overlay:maho_library_overlay",
+    "//maho/browser/ui/views/peek:maho_peek",
+  ]
+}

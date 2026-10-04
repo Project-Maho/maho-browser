@@ -1,0 +1,288 @@
+/*
+ * Copyright 2026 Maho Browser. All rights reserved.
+ *
+ * Maho Boost content script styles — injected into the active tab's
+ * Shadow DOM when zap or picker mode is active.
+ *
+ * Ported from Zen Browser zen-selector.css (200 lines) and zen-zap.css
+ * (158 lines). Mozilla-specific @media(-moz-platform:*) queries replaced
+ * with standard CSS; macOS values used as defaults since Maho is
+ * macOS-first.
+ */
+
+/* ===== Selector component (from zen-selector.css) ===== */
+
+@keyframes select-component-in {
+  0% {
+    scale: 0;
+    opacity: 0;
+  }
+  100% {
+    scale: 1;
+    opacity: 1;
+  }
+}
+
+#select-component {
+  width: min-content;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
+  height: 98px;
+  pointer-events: auto;
+  transform-origin: top;
+  overflow: hidden;
+  position: fixed;
+  z-index: 2147483645;
+  background-color: #f5f7fb;
+  margin: 4px;
+  border-radius: 24px;
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.31);
+  scale: 1;
+  opacity: 1;
+}
+
+#select-component[data-is-appearing='true'] {
+  scale: 0;
+  opacity: 0;
+  animation: 0.4s select-component-in cubic-bezier(0.14, 1.43, 0.56, 1.01) forwards;
+}
+
+#select-component input {
+  width: fit-content;
+  min-width: 75px;
+  height: 40px;
+  border-radius: 12px;
+  padding-left: 10px;
+  padding-right: 10px;
+  font-size: 11pt;
+  cursor: pointer;
+  transition:
+    0.15s filter ease,
+    0.1s box-shadow ease-out,
+    scale 0.35s cubic-bezier(0.11, 1.6, 0.63, 1);
+}
+
+#select-component input:hover {
+  filter: brightness(1.3);
+}
+
+#select-component input:active {
+  scale: 0.95;
+}
+
+#highlight-shadow {
+  z-index: 2147483643;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.27);
+  pointer-events: none;
+}
+
+#highlight-container {
+  z-index: 2147483644;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#highlight-container .highlight {
+  position: fixed;
+  border: 1px solid #e9dd38;
+  background-color: rgba(194, 183, 32, 0.27);
+  border-radius: 6px;
+}
+
+#select-controls {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+}
+
+#select-related {
+  appearance: none;
+  text-align: left;
+  width: 250px !important;
+  --related-elements-value: 100%;
+  background: linear-gradient(to top, rgb(247, 66, 0), rgb(245, 134, 86));
+  border: none;
+  color: #dadada;
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.32);
+}
+
+#select-related:hover {
+  box-shadow: 0 0 20px rgba(0, 0, 0, 0.47);
+  background:
+    linear-gradient(to right, transparent var(--related-elements-value), gray var(--related-elements-value)),
+    linear-gradient(to top, rgb(247, 66, 0), rgb(245, 134, 86));
+}
+
+#select-this {
+  appearance: none;
+  background: linear-gradient(0deg, rgba(246, 27, 25, 1) 0%, rgba(254, 67, 59, 1) 100%);
+  border: none;
+  color: #dadada;
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.32);
+}
+
+#select-cancel {
+  appearance: none;
+  background: linear-gradient(0deg, rgba(81, 83, 85, 1) 0%, rgba(108, 110, 112, 1) 100%);
+  border: none;
+  color: #dadada;
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.32);
+}
+
+#selector-preview {
+  background-color: rgba(224, 226, 230, 0.24);
+  outline: 1px solid rgba(224, 226, 230, 0.68);
+  width: 100%;
+  height: 34px;
+  text-indent: 18px;
+  display: flex;
+  align-items: center;
+}
+
+#selector-element-preview-text {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 9pt;
+  color: rgb(76, 78, 80);
+}
+
+#hover-div {
+  position: fixed;
+  z-index: 2147483645;
+  outline: 1px solid #e9dd38;
+  border-radius: 6px;
+  background-color: rgba(194, 183, 32, 0.27);
+  transition: 0.1s all ease-out;
+  will-change: left, top, width, height;
+  pointer-events: none;
+}
+
+/* ===== Zap overlay (from zen-zap.css) ===== */
+
+@keyframes select-controls-container-in {
+  0% {
+    bottom: -54px;
+  }
+  100% {
+    bottom: 8px;
+  }
+}
+
+@keyframes zap-border-in {
+  0% {
+    left: 0;
+    top: 0;
+    bottom: 0;
+    right: 0;
+  }
+  100% {
+    left: 2px;
+    top: 2px;
+    bottom: 2px;
+    right: 2px;
+  }
+}
+
+#zap-border {
+  z-index: 2147483645;
+  position: fixed;
+  left: 2px;
+  top: 2px;
+  bottom: 2px;
+  right: 2px;
+  pointer-events: none;
+  background-color: transparent;
+  outline: 4px solid #dfd43a;
+  animation: 0.15s zap-border-in ease-out;
+  border-radius: 8px;
+}
+
+#zap-controls-container {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'kern', 'liga';
+  display: flex;
+  pointer-events: auto;
+  z-index: 2147483646;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  margin: 0;
+  padding: 0 10px;
+  height: 54px;
+  position: fixed;
+  border-radius: 12px;
+  align-items: center;
+  gap: 8px;
+  color: #d6d6d6;
+  background-color: #1d1b1b;
+  border: 1px solid #2f2b2b;
+  animation: 0.15s select-controls-container-in cubic-bezier(0.07, 1.32, 0.41, 1);
+}
+
+#zap-controls-container input {
+  width: min-content;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(0deg, #afafaf 0%, #e5e5e5 100%);
+  color: #1d1b1b;
+  font-weight: bold;
+  cursor: pointer;
+  transition:
+    0.1s filter ease-in-out,
+    scale 0.35s cubic-bezier(0.11, 1.6, 0.63, 1);
+}
+
+#zap-controls-container input:hover {
+  filter: brightness(0.9);
+}
+
+#zap-controls-container input:active {
+  filter: brightness(0.8);
+  scale: 0.95;
+}
+
+#zap-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  align-items: center;
+  vertical-align: middle;
+  gap: 8px;
+}
+
+#zap-list input {
+  width: 36px;
+  flex: 0 0 auto;
+}
+
+#zap-list p {
+  padding-left: 12px;
+  font-size: 10pt;
+  user-select: none;
+}
+
+#zap-list .pcenter {
+  width: 100%;
+  text-align: center;
+}
+
+#zap-done {
+  flex: 0 0 auto;
+  padding: 0 12px;
+}

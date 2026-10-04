@@ -1,0 +1,119 @@
+diff --git c/chrome/browser/ui/views/side_panel/side_panel.cc w/chrome/browser/ui/views/side_panel/side_panel.cc
+index a58147d1997a9353b6b8f2164147a99723ed2146..d2e857e7f33e3791300972407ba255dc3482ee4e 100644
+--- c/chrome/browser/ui/views/side_panel/side_panel.cc
++++ w/chrome/browser/ui/views/side_panel/side_panel.cc
+@@ -12,6 +12,7 @@
+ #include "base/i18n/number_formatting.h"
+ #include "base/i18n/rtl.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
+ #include "base/values.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -160,14 +161,37 @@ class ContentParentView : public views::View, public views::ViewObserver {
+ 
+  private:
+   void AddedToWidget() override {
+-    SetBackground(std::make_unique<ContentParentBackground>(
+-        browser_view_,
+-        base::BindRepeating(&ContentParentView::GetRoundedCorners,
+-                            base::Unretained(this))));
++    const bool hosts_maho_ai =
++        !children().empty() && children().front()->GetClassName() ==
++                                   std::string_view("MahoAiSidePanelWebView");
++    SetBackground(hosts_maho_ai
++                      ? nullptr
++                      : std::make_unique<ContentParentBackground>(
++                            browser_view_,
++                            base::BindRepeating(
++                                [](base::WeakPtr<ContentParentView> view) {
++                                  return view ? view->GetRoundedCorners()
++                                              : gfx::RoundedCornersF();
++                                },
++                                weak_ptr_factory_.GetWeakPtr())));
+   }
+ 
+   void OnChildViewAdded(views::View* observed_view,
+                         views::View* child) override {
++    if (child && child->GetClassName() ==
++                     std::string_view("MahoAiSidePanelWebView")) {
++      SetBackground(nullptr);
++      if (views::IsViewClass<views::WebView>(child)) {
++        views::AsViewClass<views::WebView>(child)
++            ->holder()
++            ->SetNativeViewCornerRadii(gfx::RoundedCornersF());
++      }
++      if (child->layer()) {
++        child->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF());
++      }
++      browser_view_->InvalidateLayout();
++      return;
++    }
+     // Setting rounded corners on a WebView's holder requires the
+     // NativeViewHost's native_wrapper_ to be set. For a WebView, this is set in
+     // View::ViewHierarchyChanged, specifically after
+@@ -198,9 +222,13 @@ class ContentParentView : public views::View, public views::ViewObserver {
+     CHECK(web_view);
+     CHECK(web_view->holder());
+ 
+-    // Native View Host doesn't always get reused, so ensure a nested Native
+-    // View's corners are always rounded.
+-    web_view->holder()->SetNativeViewCornerRadii(GetRoundedCorners());
++    // Native View Host doesn't always get reused. Maho AI is the
++    // borderless toolbar panel, so keep its native holder square.
++    web_view->holder()->SetNativeViewCornerRadii(
++        web_view->GetClassName() ==
++                std::string_view("MahoAiSidePanelWebView")
++            ? gfx::RoundedCornersF()
++            : GetRoundedCorners());
+     // Temporary subscription. We only need to round the corners once.
+     web_contents_attached_callback_ = {};
+   }
+@@ -220,7 +248,7 @@ class ContentParentView : public views::View, public views::ViewObserver {
+         views::AsViewClass<views::WebView>(details.child)
+             ->AddWebContentsAttachedCallback(
+                 base::BindRepeating(&ContentParentView::OnWebContentsAttached,
+-                                    base::Unretained(this)));
++                                    weak_ptr_factory_.GetWeakPtr()));
+   }
+ 
+   gfx::RoundedCornersF GetRoundedCorners() {
+@@ -236,6 +264,7 @@ class ContentParentView : public views::View, public views::ViewObserver {
+   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{
+       this};
+   base::CallbackListSubscription web_contents_attached_callback_;
++  base::WeakPtrFactory<ContentParentView> weak_ptr_factory_{this};
+ };
+ 
+ BEGIN_METADATA(ContentParentView)
+@@ -343,6 +372,19 @@ void SidePanel::SetPanelWidth(int width) {
+   SetPreferredSize(gfx::Size(width, 1));
+ }
+ 
++bool SidePanel::IsMahoAiPanelShowing() const {
++  const SidePanelUI* side_panel_ui =
++      browser_view_->browser()->GetFeatures().side_panel_ui();
++  if (side_panel_ui &&
++      side_panel_ui->GetCurrentEntryId() ==
++          SidePanelEntryId::kMahoAiPanel) {
++    return true;
++  }
++  return content_parent_view_ && !content_parent_view_->children().empty() &&
++         content_parent_view_->children().front()->GetClassName() ==
++             std::string_view("MahoAiSidePanelWebView");
++}
++
+ bool SidePanel::ShouldRestrictMaxWidth() const {
+   // TODO(crbug.com/394339052): Only restricting width for only non-read
+   // anything content is a temporary solution and UX will investigate a better
+@@ -442,7 +484,9 @@ void SidePanel::AddHeaderView(std::unique_ptr<views::View> view) {
+ }
+ 
+ void SidePanel::RemoveHeaderView() {
+-  SetBorder(views::CreateEmptyBorder(GetBorderInsets().set_top(0)));
++  SetBorder(IsMahoAiPanelShowing()
++                ? nullptr
++                : views::CreateEmptyBorder(GetBorderInsets().set_top(0)));
+   if (header_view_) {
+     auto header_view = RemoveChildViewT(header_view_);
+     header_view_ = nullptr;

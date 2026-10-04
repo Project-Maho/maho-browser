@@ -1,0 +1,125 @@
+diff --git c/chrome/browser/ui/views/location_bar/location_bar_view.cc w/chrome/browser/ui/views/location_bar/location_bar_view.cc
+index b9988028f46205d0c5cb21c19c1c72143eba8adc..f8ad14aa7e8e8ac68f4c66dea0ba84152deaa046 100644
+--- c/chrome/browser/ui/views/location_bar/location_bar_view.cc
++++ w/chrome/browser/ui/views/location_bar/location_bar_view.cc
+@@ -4,6 +4,11 @@
+ 
+ #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+ 
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h"
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_view.h"
++
+ #include <algorithm>
+ #include <memory>
+ #include <ranges>
+@@ -217,6 +222,7 @@ LocationBarView::LocationBarView(BrowserWindowInterface* browser,
+       });
+   set_suppress_default_focus_handling();
+   if (!is_popup_mode_) {
++    SetNotifyEnterExitOnChild(true);
+     views::FocusRing::Install(this);
+     views::FocusRing::Get(this)->SetHasFocusPredicate(
+         base::BindRepeating([](const View* view) {
+@@ -501,6 +507,9 @@ void LocationBarView::Init() {
+ 
+   RegisterOmniboxActions(browser_);
+ 
++  // Maho: the address-bar utility panel is sidebar-only; the standard-layout
++  // location-bar icon injection is intentionally disabled.
++
+   is_initialized_ = true;
+ }
+ 
+@@ -897,6 +906,13 @@ void LocationBarView::Layout(PassKey) {
+   add_trailing_decoration(clear_all_button_, /*intra_item_padding=*/0,
+                           /*edge_padding=*/trailing_decorations_edge_padding);
+ 
++  // Maho: add utility icon to trailing decorations so it participates in
++  // LocationBarLayout and receives real bounds during Layout().
++  if (utility_icon_view_) {
++    add_trailing_decoration(utility_icon_view_, /*intra_item_padding=*/0,
++                            /*edge_padding=*/trailing_decorations_edge_padding);
++  }
++
+   // Perform layout.
+   int entry_width = width();
+ 
+@@ -1018,6 +1034,11 @@ void LocationBarView::ChildPreferredSizeChanged(views::View* child) {
+   SchedulePaint();
+ }
+ 
++void LocationBarView::ChildVisibilityChanged(views::View* child) {
++  InvalidateLayout();
++  SchedulePaint();
++}
++
+ bool LocationBarView::HasSecurityStateChanged() {
+   return location_icon_view_->HasSecurityStateChanged();
+ }
+@@ -1328,7 +1349,10 @@ int LocationBarView::GetMinimumLeadingWidth() const {
+ }
+ 
+ int LocationBarView::GetMinimumTrailingWidth() const {
+-  int trailing_width = IncrementalMinimumWidth(page_action_container_);
++  // Maho: include utility icon in minimum trailing width so the icon is
++  // never squeezed out of layout when it is visible.
++  int trailing_width = IncrementalMinimumWidth(page_action_container_) +
++                       IncrementalMinimumWidth(utility_icon_view_);
+ 
+   for (ContentSettingImageView* content_setting_view : content_setting_views_) {
+     trailing_width += IncrementalMinimumWidth(content_setting_view);
+@@ -1642,6 +1666,13 @@ void LocationBarView::OnPaintBorder(gfx::Canvas* canvas) {
+ }
+ 
+ bool LocationBarView::OnMousePressed(const ui::MouseEvent& event) {
++  if (event.IsOnlyLeftMouseButton() && browser_) {
++    if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
++      browser_view->SetFocusToLocationBar(true);
++      return true;
++    }
++  }
++
+   return omnibox_view_->OnMousePressed(
+       AdjustMouseEventLocationForOmniboxView(event));
+ }
+@@ -1655,6 +1686,10 @@ void LocationBarView::OnMouseReleased(const ui::MouseEvent& event) {
+   omnibox_view_->OnMouseReleased(AdjustMouseEventLocationForOmniboxView(event));
+ }
+ 
++void LocationBarView::OnMouseEntered(const ui::MouseEvent& event) {
++  OnOmniboxHovered(true);
++}
++
+ void LocationBarView::OnMouseMoved(const ui::MouseEvent& event) {
+   OnOmniboxHovered(true);
+ }
+@@ -1965,6 +2000,10 @@ void LocationBarView::OnOmniboxHovered(bool is_hovering) {
+   } else {
+     hover_animation_.Hide();
+   }
++  // Maho: forward hover state to the utility icon so it auto-shows/hides.
++  if (utility_icon_view_) {
++    utility_icon_view_->SetHoverVisible(is_hovering);
++  }
+ }
+ 
+ void LocationBarView::OnTouchUiChanged() {
+@@ -2283,6 +2322,16 @@ void LocationBarView::OnAppShimChanged(const webapps::AppId& app_id) {
+ }
+ #endif
+ 
++views::Widget* LocationBarView::ShowUtilityPanel() {
++  if (!utility_bubble_coordinator_ || !utility_icon_view_) {
++    return nullptr;
++  }
++  auto model = maho::BuildMahoLocationBarUtilityPanelModel(this);
++  utility_bubble_coordinator_->ShowBubble(utility_icon_view_, std::move(model));
++  maho::MahoLocationBarUtilityPanelView* bubble =
++      utility_bubble_coordinator_->GetBubble();
++  return bubble ? bubble->GetWidget() : nullptr;
++}
+ 
+ BEGIN_METADATA(LocationBarView)
+ ADD_READONLY_PROPERTY_METADATA(int, BorderRadius)

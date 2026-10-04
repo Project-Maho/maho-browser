@@ -1,0 +1,45 @@
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -81,8 +81,6 @@
+ #endif
+ #include "ui/display/screen.h"
+ #endif
+-#include "ui/display/screen.h"
+-#endif
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "base/mac/mac_util.h"
+@@ -134,7 +132,7 @@
+ // window()->Show(), so a single attempt is dropped and no palette appears.
+ // Give up without creating a tab once the attempt budget is exhausted so
+ // the zero-tab themed gradient window remains.
+-void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<Browser> browser,
++void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<BrowserWindowInterface> browser,
+                                        int remaining_attempts) {
+   if (!browser) {
+     return;
+@@ -162,13 +160,13 @@
+ // app launch, whichever startup path created it (session restore, empty
+ // cold-start, or opened tabs). The process-global guard fires it exactly once
+ // per launch, so only the first window gets it.
+-void MahoMaybeAutoOpenPaletteOnFirstWindow(Browser* browser) {
+-  if (!browser || !browser->is_type_normal()) {
++void MahoMaybeAutoOpenPaletteOnFirstWindow(BrowserWindowInterface* browser) {
++  if (!browser || browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
+     return;
+   }
+   static std::atomic<bool> g_maho_first_window_palette_shown{false};
+   if (!g_maho_first_window_palette_shown.exchange(true)) {
+-    ShowMahoColdStartPaletteWhenReady(browser->AsWeakPtr(), 200);
++    ShowMahoColdStartPaletteWhenReady(browser->GetWeakPtr(), 200);
+   }
+ }
+ 
+@@ -520,7 +518,6 @@
+       if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
+         chrome::AddTabAt(browser, GURL(), -1, true);
+       }
+-    }
+     } else {
+       browser->GetTabStripModel()->ActivateTabAt(0);
+     }

@@ -1,0 +1,78 @@
+diff --git c/chrome/browser/ui/views/frame/browser_caption_button_container_win.h w/chrome/browser/ui/views/frame/browser_caption_button_container_win.h
+index bda5b2b0ab02d4d4b254bf3ed64e1ccbfbf51b83..c608117bd65208315475e7d9058676bd672c7e88 100644
+--- c/chrome/browser/ui/views/frame/browser_caption_button_container_win.h
++++ w/chrome/browser/ui/views/frame/browser_caption_button_container_win.h
+@@ -5,10 +5,14 @@
+ #ifndef CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_CAPTION_BUTTON_CONTAINER_WIN_H_
+ #define CHROME_BROWSER_UI_VIEWS_FRAME_BROWSER_CAPTION_BUTTON_CONTAINER_WIN_H_
+ 
++#include <memory>
++
+ #include "base/memory/raw_ptr.h"
+ #include "base/scoped_observation.h"
++#include "base/timer/timer.h"
+ #include "ui/base/metadata/metadata_header_macros.h"
+ #include "ui/base/pointer/touch_ui_controller.h"
++#include "ui/events/event_observer.h"
+ #include "ui/views/controls/button/button.h"
+ #include "ui/views/view.h"
+ #include "ui/views/widget/widget.h"
+@@ -17,11 +21,16 @@
+ class BrowserFrameViewWin;
+ class WindowsCaptionButton;
+ 
++namespace views {
++class EventMonitor;
++}  // namespace views
++
+ // Provides a container for Windows caption buttons that can be moved between
+ // frame and browser window as needed. When extended horizontally, becomes a
+ // grab bar for moving the window.
+ class BrowserCaptionButtonContainer : public views::View,
+-                                      public views::WidgetObserver {
++                                      public views::WidgetObserver,
++                                      public ui::EventObserver {
+   METADATA_HEADER(BrowserCaptionButtonContainer, views::View)
+ 
+  public:
+@@ -49,6 +58,11 @@ class BrowserCaptionButtonContainer : public views::View,
+   // views::WidgetObserver:
+   void OnWidgetBoundsChanged(views::Widget* widget,
+                              const gfx::Rect& new_bounds) override;
++  void OnWidgetShowStateChanged(views::Widget* widget) override;
++  void OnWidgetDestroying(views::Widget* widget) override;
++
++  // ui::EventObserver:
++  void OnEvent(const ui::Event& event) override;
+ 
+   void ResetWindowControls();
+ 
+@@ -62,6 +76,17 @@ class BrowserCaptionButtonContainer : public views::View,
+   // this mode, the web contents covers the frame view and so does it's legacy
+   // hwnd which prevent tooltips being shown for the caption buttons.
+   void UpdateButtonToolTipsForWindowControlsOverlay();
++  bool IsMahoArcCaptionMode() const;
++  bool IsMahoArcCaptionTriggerPoint(const gfx::Point& screen_point) const;
++  bool IsMahoArcCaptionKeepAlivePoint(const gfx::Point& screen_point) const;
++  int GetMahoArcCaptionPreferredWidth() const;
++  void RevealMahoArcCaptionButtons();
++  void PollMahoArcCaptionHide();
++  void MaybeRevealMahoArcCaption();
++  void ScheduleHideMahoArcCaptionButtons();
++  void HideMahoArcCaptionButtons();
++  void ApplyMahoArcCaptionButtonVisibility();
++  void UpdateMahoArcCaptionEventMonitor();
+ 
+   const raw_ptr<BrowserFrameViewWin> frame_view_;
+   const raw_ptr<WindowsCaptionButton> minimize_button_;
+@@ -69,6 +94,10 @@ class BrowserCaptionButtonContainer : public views::View,
+   const raw_ptr<WindowsCaptionButton> restore_button_;
+   const raw_ptr<WindowsCaptionButton> close_button_;
+ 
++  bool maho_arc_caption_revealed_ = false;
++  base::OneShotTimer maho_arc_caption_hide_timer_;
++  std::unique_ptr<views::EventMonitor> maho_arc_caption_event_monitor_;
++
+   base::ScopedObservation<views::Widget, views::WidgetObserver>
+       widget_observation_{this};
+ 

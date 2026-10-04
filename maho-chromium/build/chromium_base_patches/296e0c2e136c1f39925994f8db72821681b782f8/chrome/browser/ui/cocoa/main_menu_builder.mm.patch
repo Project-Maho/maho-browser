@@ -1,0 +1,48 @@
+diff --git a/chrome/browser/ui/cocoa/main_menu_builder.mm b/chrome/browser/ui/cocoa/main_menu_builder.mm
+index b0dcd2691b6117dee64707c1a5a37cb432809fcf..8c3e0822675b63449652a58f62249384951864b8 100644
+--- a/chrome/browser/ui/cocoa/main_menu_builder.mm
++++ b/chrome/browser/ui/cocoa/main_menu_builder.mm
+@@ -228,8 +228,7 @@ NSMenuItem* BuildEditMenu(NSApplication* nsapp,
+                       Item(IDS_EDIT_FIND_PREVIOUS_MAC)
+                           .command_id(IDC_FIND_PREVIOUS),
+                       Item(IDS_EDIT_USE_SELECTION_MAC)
+-                          .action(@selector(copyToFindPboard:))
+-                          .key_equivalent(@"e", NSEventModifierFlagCommand),
++                          .action(@selector(copyToFindPboard:)),
+                       Item(IDS_EDIT_JUMP_TO_SELECTION_MAC)
+                           .action(@selector(centerSelectionInVisibleArea:))
+                           .key_equivalent(@"j", NSEventModifierFlagCommand),
+@@ -412,29 +411,10 @@ NSMenuItem* BuildBookmarksMenu(NSApplication* nsapp,
+                                const std::u16string& product_name,
+                                bool is_pwa,
+                                bool is_rtl) {
+-  if (is_pwa) {
+-    return nil;
+-  }
+-
+-  // clang-format off
+-  NSMenuItem* item =
+-      Item(IDS_BOOKMARKS_MENU)
+-          .tag(IDC_BOOKMARKS_MENU)
+-          .submenu({
+-              Item(IDS_BOOKMARK_MANAGER)
+-                  .command_id(IDC_SHOW_BOOKMARK_MANAGER),
+-              Item().is_separator()
+-                  .tag(IDC_BOOKMARK_THIS_TAB),
+-              Item(IDS_BOOKMARK_THIS_TAB)
+-                  .command_id(IDC_BOOKMARK_THIS_TAB),
+-              Item(IDS_BOOKMARK_ALL_TABS)
+-                  .command_id(IDC_BOOKMARK_ALL_TABS),
+-              Item().is_separator()
+-                  .tag(IDC_BOOKMARK_THIS_TAB),
+-          })
+-          .Build();
+-  // clang-format on
+-  return item;
++  // Maho: the browser exposes no bookmark surface (sidebar favorites and
++  // spaces replace it), so the macOS Bookmarks menu is never built. The main
++  // menu loop skips nil builders, so the menu bar entry disappears with it.
++  return nil;
+ }
+ 
+ NSMenuItem* BuildGroupsMenu(NSApplication* nsapp,

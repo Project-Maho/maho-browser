@@ -1,0 +1,31 @@
+diff --git c/components/privacy_sandbox_strings.grd w/components/privacy_sandbox_strings.grd
+index c5c4f5959bfe7a9ead7e0e246f05d624a65122bb..bfbdca30975e71a62db01ee427d698f1a73c109c 100644
+--- c/components/privacy_sandbox_strings.grd
++++ w/components/privacy_sandbox_strings.grd
+@@ -280,7 +280,7 @@
+     <file path="strings/privacy_sandbox_strings_zu.xtb" lang="zu" />
+   </translations>
+   <release seq="1">
+-    <!--For strings used exclusively within the Privacy Sandbox Dialogs, those containing the word "Chrome" do not require a "Chromium" conditional variant, as these dialogs only appear in Chrome-branded builds-->
++    <!--For strings used exclusively within the Privacy Sandbox Dialogs, those containing the word "Chrome" do not require a "Maho" conditional variant, as these dialogs only appear in Chrome-branded builds-->
+     <messages fallback_to_english="true">
+       <!-- User Bypass -->
+       <message name="IDS_TRACKING_PROTECTION_BUBBLE_3PC_ALLOWED_SUBTITLE" desc="The subtitle label for the third-party cookies item in User Bypass when 3PC are allowed.">
+@@ -305,7 +305,7 @@
+         </then>
+         <else>
+           <message name="IDS_SETTINGS_COOKIES_BLOCK_THIRD_PARTY_SETTINGS_ALLOW_BULLET_THREE" desc="This text is for a bullet that provides detail about the first setting option. It describes the key new detail that now applies to this setting option." formatter_data="android_java">
+-            When you're in Incognito mode, Chromium blocks sites from using third-party cookies
++            When you're in Incognito mode, Maho blocks sites from using third-party cookies
+           </message>
+         </else>
+       </if>
+@@ -343,7 +343,7 @@
+         </then>
+         <else>
+           <message name="IDS_PRIVACY_GUIDE_COOKIE_SETTINGS_ALLOW_THINGS_TO_CONSIDER_BULLET_TWO" desc="This text is for a bullet that provides key considerations about the first setting option. It describes the key new detail that now applies to this setting option.">
+-            When you're in Incognito mode, Chromium blocks sites from using third-party cookies
++            When you're in Incognito mode, Maho blocks sites from using third-party cookies
+           </message>
+         </else>
+       </if>

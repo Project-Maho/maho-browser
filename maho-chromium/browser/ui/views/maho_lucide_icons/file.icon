@@ -1,0 +1,22 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Source: Lucide "file" (ISC license)
+
+CANVAS_DIMENSIONS, 24,
+STROKE, 2,
+MOVE_TO, 6, 22,
+R_ARC_TO, 2, 2, 0, 0, 1, -2, -2,
+V_LINE_TO, 4,
+R_ARC_TO, 2, 2, 0, 0, 1, 2, -2,
+R_H_LINE_TO, 8,
+R_ARC_TO, 2.4f, 2.4f, 0, 0, 1, 1.704f, 0.706f,
+R_LINE_TO, 3.588f, 3.588f,
+ARC_TO, 2.4f, 2.4f, 0, 0, 1, 20, 8,
+R_V_LINE_TO, 12,
+R_ARC_TO, 2, 2, 0, 0, 1, -2, 2,
+CLOSE,
+NEW_PATH,
+STROKE, 2,
+MOVE_TO, 14, 2,
+R_V_LINE_TO, 5,
+R_ARC_TO, 1, 1, 0, 0, 0, 1, 1,
+R_H_LINE_TO, 5,

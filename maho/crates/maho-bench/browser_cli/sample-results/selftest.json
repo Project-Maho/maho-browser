@@ -1,0 +1,15 @@
+{
+  "workload": "w1_static_form",
+  "driver": "raw_mcp",
+  "goal_completion_wall_ms": 0,
+  "agent_decision_turns": 11,
+  "browser_rpc_count": 11,
+  "ax_snapshot_count": 3,
+  "ax_snapshot_wall_ms": [
+    14.5,
+    14.5,
+    14.5
+  ],
+  "observation_wire_bytes": 4308,
+  "retries": 0
+}

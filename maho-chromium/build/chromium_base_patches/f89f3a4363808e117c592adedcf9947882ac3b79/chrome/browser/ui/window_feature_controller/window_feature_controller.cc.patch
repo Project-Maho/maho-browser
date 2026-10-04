@@ -1,0 +1,36 @@
+diff --git c/chrome/browser/ui/window_feature_controller/window_feature_controller.cc w/chrome/browser/ui/window_feature_controller/window_feature_controller.cc
+index ec7bd3ea6cd00a5093b9bac2cfca9fe1a0bc4bfb..79a8c0e105e754fd560925e0f8f7374ca059ea92 100644
+--- c/chrome/browser/ui/window_feature_controller/window_feature_controller.cc
++++ w/chrome/browser/ui/window_feature_controller/window_feature_controller.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/window_feature_controller/window_feature_controller.h"
+ 
++#include "chrome/browser/ui/browser_init_state.h"
++
+ #include "base/check.h"
+ #include "base/check_deref.h"
+ #include "build/build_config.h"
+@@ -22,7 +24,11 @@ WindowFeatureController::WindowFeatureController(
+       app_controller_(app_controller),
+       browser_type_(browser_type),
+       is_trusted_source_(is_trusted_source),
+-      scoped_unowned_user_data_(host, *this) {}
++      scoped_unowned_user_data_(host, *this) {
++  if (auto* init_state = ui::ScopedUnownedUserData<BrowserInitState>::Get(host)) {
++    is_maho_mini_ = init_state->create_params().is_maho_mini;
++  }
++}
+ 
+ WindowFeatureController::~WindowFeatureController() = default;
+ 
+@@ -166,6 +172,9 @@ bool WindowFeatureController::PictureInPictureBrowserSupportsWindowFeature(
+ bool WindowFeatureController::SupportsWindowFeatureImpl(
+     WindowFeature feature,
+     bool check_can_support) const {
++  if (is_maho_mini_) {
++    return false;
++  }
+   switch (browser_type_) {
+     case BrowserWindowInterface::Type::TYPE_NORMAL:
+       return NormalBrowserSupportsWindowFeature(feature, check_can_support);

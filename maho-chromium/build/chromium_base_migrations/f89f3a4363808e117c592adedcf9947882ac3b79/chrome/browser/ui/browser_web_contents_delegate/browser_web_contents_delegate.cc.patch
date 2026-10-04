@@ -1,0 +1,85 @@
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
+ 
+ #include "chrome/browser/ui/browser.h"
++#include "components/prefs/pref_service.h"
+ #include "maho/browser/maho_browser_main_extra_parts.h"
+ #include "maho/browser/maho_space_profile_bridge.h"
+ #include "maho/browser/net/maho_atc_state.h"
+@@ -584,7 +585,9 @@
+     }
+   };
+ 
+-  Browser* const current_browser = browser_->GetBrowserForMigrationOnly();
++  // Non-Android CreateBrowserWindow returns Browser::Create; its features
++  // construct this delegate. Maho space/peek APIs still require Browser.
++  Browser* const current_browser = static_cast<Browser*>(&*browser_);
+ 
+   if (!AtcBypassState::ShouldBypass(current_browser)) {
+     const bool is_top_level =
+@@ -611,8 +614,8 @@
+       if (bridge && current_browser) {
+         current_space_id = bridge->GetActiveSpaceId(current_browser);
+       }
+-      base::WeakPtr<Browser> weak_browser =
+-          current_browser ? current_browser->AsWeakPtr() : nullptr;
++      base::WeakPtr<BrowserWindowInterface> weak_browser =
++          current_browser ? current_browser->GetWeakPtr() : nullptr;
+       Profile* prof = browser_->GetProfile();
+       base::WeakPtr<Profile> weak_profile =
+           prof ? prof->GetWeakPtr() : nullptr;
+@@ -622,7 +625,7 @@
+       maho::DecideLinkDestination(
+           params.url, /*is_external=*/false,
+           base::BindOnce(
+-              [](base::WeakPtr<Browser> browser,
++              [](base::WeakPtr<BrowserWindowInterface> browser,
+                  base::WeakPtr<Profile> profile,
+                  base::WeakPtr<content::WebContents> source,
+                  std::string current_space_id,
+@@ -641,7 +644,8 @@
+                   maho::MahoSpaceProfileBridge* bridge =
+                       maho::MahoSpaceProfileBridge::GetInstance();
+                   if (bridge && bridge->SwitchToSpace(
+-                                    browser.get(), result.space_id)) {
++                                    static_cast<Browser*>(browser.get()),
++                                    result.space_id)) {
+                     chrome::AddSelectedTabWithURL(
+                         browser.get(), params.url, params.transition);
+                     return;
+@@ -665,7 +669,7 @@
+                     .disposition = params.disposition,
+                     .source_role =
+                         maho::MahoSidebarContainerView::GetPeekSourceRole(
+-                            browser.get(), source.get()),
++                            static_cast<Browser*>(browser.get()), source.get()),
+                     .is_user_initiated = true,
+                     .force_tab = params.is_renderer_initiated &&
+                         params.disposition ==
+@@ -690,10 +694,11 @@
+                   params.disposition =
+                       WindowOpenDisposition::NEW_FOREGROUND_TAB;
+                 }
+-                AtcBypassState::SetBypass(browser.get(), true);
+-                browser->OpenURL(
+-                    params, std::move(navigation_handle_callback));
+-                AtcBypassState::SetBypass(browser.get(), false);
++                Browser* concrete_browser = static_cast<Browser*>(browser.get());
++                AtcBypassState::SetBypass(concrete_browser, true);
++                BrowserWebContentsDelegate::From(browser.get())->OpenURLFromTab(
++                    nullptr, params, std::move(navigation_handle_callback));
++                AtcBypassState::SetBypass(concrete_browser, false);
+               },
+               weak_browser, weak_profile, weak_source, current_space_id,
+               params, std::move(navigation_handle_callback)));
+@@ -908,7 +913,7 @@
+                                                         source, disposition);
+   }
+ 
+-  if (maho::IsPeekEligible(browser_->GetBrowserForMigrationOnly()) &&
++  if (maho::IsPeekEligible(static_cast<Browser*>(&*browser_)) &&
+       browser_->GetProfile()->GetPrefs()->GetBoolean(
+           maho::sidebar_prefs::kPeekEnabled) &&
+       browser_->GetProfile()->GetPrefs()->GetBoolean(

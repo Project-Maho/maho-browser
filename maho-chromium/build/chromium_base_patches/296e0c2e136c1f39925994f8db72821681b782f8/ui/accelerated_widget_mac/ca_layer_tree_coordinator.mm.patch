@@ -1,0 +1,15 @@
+diff --git a/ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm b/ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm
+index 3195cdaa3ff8310d01b37ceaedff9118cf8dbf22..3a2af7001a9d82fd2e9ce317ce2fdd3c050949b9 100644
+--- a/ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm
++++ b/ui/accelerated_widget_mac/ca_layer_tree_coordinator.mm
+@@ -49,7 +49,9 @@ CALayerTreeCoordinator::CALayerTreeCoordinator(
+     // way we want it to be.
+     root_ca_layer_.geometryFlipped = YES;
+ #endif
+-    root_ca_layer_.opaque = YES;
++    // Maho: transparent embedded WebContents must preserve alpha so the
++    // browser window's shared vibrancy and gradient remain visible.
++    root_ca_layer_.opaque = NO;
+ 
+     // Create the CAContext to send this to the GPU process, and the layer for
+     // the context.

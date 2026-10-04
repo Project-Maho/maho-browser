@@ -1,0 +1,254 @@
+{
+  "schema": "maho.sidebar-theme-color-ledger.v2",
+  "version": 2,
+  "entries": [
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_now_playing_card.cc",
+      "symbol": "function NotePulseOverlay::OnPaint(gfx::Canvas* canvas)",
+      "anchor": "SK_ColorWHITE",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "The animated music-note pulse is media feedback artwork."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+      "symbol": "function FavoritesGlyphColor(const MahoSidebarPalette& palette)",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "Private windows carry no resolved Space palette (transparent roles); this platform ColorId is reached only on that path."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+      "symbol": "function EmptyFavoritesPlaceholderView::UpdateAppearance()",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 3,
+      "classification": "retain_platform_private",
+      "rationale": "Private windows carry no resolved Space palette (transparent roles); this platform ColorId is reached only on that path."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+      "symbol": "function EmptyFavoritesPlaceholderView::UpdateAppearance()",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 2,
+      "classification": "retain_platform_private",
+      "rationale": "Private windows carry no resolved Space palette (transparent roles); this platform ColorId is reached only on that path."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+      "symbol": "function AddPlaceholderLabel(views::View* parent, std::u16string text, const MahoSidebarPalette& palette)",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "Private windows carry no resolved Space palette (transparent roles); this platform ColorId is reached only on that path."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+      "symbol": "function MahoSidebarFavoritesGridView::OnSidebarPaletteChanged(const MahoSidebarPalette& palette)",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "Private windows carry no resolved Space palette (transparent roles); this platform ColorId is reached only on that path."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.cc",
+      "symbol": "function MahoSidebarFavoritesGridView::OnSidebarPaletteChanged(const MahoSidebarPalette& palette)",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "Private windows carry no resolved Space palette (transparent roles); this platform ColorId is reached only on that path."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_footer_view.cc",
+      "symbol": "function MahoSidebarFooterView::RebuildDots(int space_count, int active_index, const std::vector<std::string>& space_ids, const std::vector<std::string>& space_icons, const std::vector<std::string>& space_names, const std::vector<std::string>& space_colors)",
+      "anchor": "SK_ColorGRAY",
+      "expected": 2,
+      "classification": "retain_semantic_artwork",
+      "rationale": "Missing-data defaults are Space marker colors."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_library_tile_helpers.h",
+      "symbol": "member MahoSidebarTilePalette::foreground",
+      "anchor": "SK_ColorWHITE",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "Only tile foreground defaults are retained artwork; tile accent backgrounds are not scanned."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_library_tile_helpers.h",
+      "symbol": "function MahoSidebarTilePaletteForAccent(MahoSidebarTileAccent accent, MahoSidebarTilePaletteStyle style)",
+      "anchor": "SK_ColorWHITE",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "Only tile foreground defaults are retained artwork; tile accent backgrounds are not scanned."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_space_dot_view.cc",
+      "symbol": "function MahoSidebarSpaceDotView::OnPaint(gfx::Canvas* canvas)",
+      "anchor": "SK_ColorWHITE",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "The low-alpha halo is Space marker artwork."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_space_dot_view.h",
+      "symbol": "member MahoSidebarSpaceDotView::dot_color_",
+      "anchor": "SK_ColorGRAY",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "The default is a Space marker fallback."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SplitGroupContainerView::UpdateBackground()",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::UpdateAudioState(bool audible, bool muted)",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::UpdateAudioState(bool audible, bool muted)",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::OnThemeChanged()",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::SetSidebarPalette(const MahoSidebarPalette& palette)",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::WriteDragDataForView(views::View* sender, const gfx::Point& press_pt, ui::OSExchangeData* data)",
+      "anchor": "SK_ColorWHITE",
+      "expected": 2,
+      "classification": "retain_semantic_artwork",
+      "rationale": "Drag-count badge text and stroke are semantic drag artwork."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::UpdateAppearance()",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarTabRowView::UpdateAppearance()",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarFolderRowView::OnThemeChanged()",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarFolderRowView::SetSidebarPalette(const MahoSidebarPalette& palette)",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarFolderRowView::UpdateAppearance()",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 5,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function SidebarSpaceHeaderRow::ApplyPalette()",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function MahoSidebarTabListView::CreateTabRowView(const SidebarTreeNode& node, MahoSidebarTabSection section, Browser* browser)",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_tab_list_view.cc",
+      "symbol": "function MahoSidebarTabListView::ApplyActionRowPalette()",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 2,
+      "classification": "retain_platform_private",
+      "rationale": "ResolveSidebarPaletteColor fallback: the ColorId is used only when no Space palette is resolved (private windows)."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_view.cc",
+      "symbol": "function GetTopBarButtonColor(bool enabled)",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "Private-window top bar images: GetTopBarButtonColor is used only while the Space palette is transparent."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_top_bar_view.cc",
+      "symbol": "function GetTopBarButtonColor(bool enabled)",
+      "anchor": "ui::kColorSysOnSurfaceSubtle",
+      "expected": 1,
+      "classification": "retain_platform_private",
+      "rationale": "Private-window top bar images: GetTopBarButtonColor is used only while the Space palette is transparent."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_update_notification_view.cc",
+      "symbol": "function MahoSidebarUpdateNotificationView::SetSidebarPalette(const MahoSidebarPalette& palette)",
+      "anchor": "SK_ColorWHITE",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "White text belongs to the semantic update-gradient action."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_sidebar_update_notification_view.cc",
+      "symbol": "function MahoSidebarUpdateNotificationView::RebuildBody(const MahoSidebarUpdateNotificationModel &model)",
+      "anchor": "SK_ColorWHITE",
+      "expected": 1,
+      "classification": "retain_semantic_artwork",
+      "rationale": "White text belongs to the semantic update-gradient action."
+    },
+    {
+      "path": "maho-chromium/browser/ui/views/sidebar/maho_translate_popover_view.cc",
+      "symbol": "function MahoTranslatePopoverView::MahoTranslatePopoverView(const std::u16string& target_language_name, base::RepeatingClosure translate_callback, OptionsCallback options_callback)",
+      "anchor": "ui::kColorSysOnSurface",
+      "expected": 2,
+      "classification": "retain_platform_private",
+      "rationale": "The translate popover is an anchored OS bubble on the platform bubble surface, not a Space-palette sidebar surface."
+    }
+  ]
+}

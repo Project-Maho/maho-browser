@@ -1,0 +1,42 @@
+diff --git c/ui/base/cocoa/command_dispatcher.mm w/ui/base/cocoa/command_dispatcher.mm
+index d930a93350d843f4a15616619b9337ad56b47972..5b23683beddb5ebd9c42dcaa0c22a3f93ab625b1 100644
+--- c/ui/base/cocoa/command_dispatcher.mm
++++ w/ui/base/cocoa/command_dispatcher.mm
+@@ -251,18 +251,33 @@ NSEvent* KeyEventForWindow(NSWindow* window, NSEvent* event) {
+ 
+ - (void)dispatch:(id)sender
+       forHandler:(id<UserInterfaceItemCommandHandler>)handler {
+-  if (handler)
++  if (handler) {
+     [handler commandDispatch:sender window:_owner];
+-  else
++  } else if (_owner.commandDispatchParent) {
+     [_owner.commandDispatchParent commandDispatch:sender];
++  } else {
++    // Maho: mirror -validateUserInterfaceItem:'s AppController fallback so a
++    // command the app delegate enabled (e.g. New Incognito Window while a
++    // non-Browser window such as the login gate is key, with no
++    // commandDispatchParent) actually runs instead of no-oping against nil.
++    id appController = [NSApp delegate];
++    if ([appController respondsToSelector:@selector(commandDispatch:)])
++      [appController commandDispatch:sender];
++  }
+ }
+ 
+ - (void)dispatchUsingKeyModifiers:(id)sender
+                        forHandler:(id<UserInterfaceItemCommandHandler>)handler {
+-  if (handler)
++  if (handler) {
+     [handler commandDispatchUsingKeyModifiers:sender window:_owner];
+-  else
++  } else if (_owner.commandDispatchParent) {
+     [_owner.commandDispatchParent commandDispatchUsingKeyModifiers:sender];
++  } else {
++    id appController = [NSApp delegate];
++    if ([appController
++            respondsToSelector:@selector(commandDispatchUsingKeyModifiers:)])
++      [appController commandDispatchUsingKeyModifiers:sender];
++  }
+ }
+ 
+ @end

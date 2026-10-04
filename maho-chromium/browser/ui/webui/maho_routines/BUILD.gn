@@ -1,0 +1,51 @@
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_routines.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("routine_page_handler") {
+  sources = [
+    "maho_routines_page_handler.cc",
+    "maho_routines_page_handler.h",
+    "maho_trace_recorder_client.cc",
+    "maho_trace_recorder_client.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+    "//mojo/public/cpp/bindings",
+  ]
+
+  deps = [
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//maho/browser:maho_control_activity_service",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_ffi_headers",
+  ]
+}
+
+source_set("maho_routines") {
+  sources = [
+    "maho_routines_ui.cc",
+    "maho_routines_ui.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/side_panel",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//maho/browser/ui/webui/maho_ai",
+    "//maho/components/constants",
+    "//ui/webui",
+  ]
+}

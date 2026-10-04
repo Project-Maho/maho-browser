@@ -1,0 +1,32 @@
+diff --git c/ui/views/cocoa/drag_drop_client_mac.h w/ui/views/cocoa/drag_drop_client_mac.h
+index 293196eeb08f45de1e99cb8bd164f9c8c337936e..327ae16f95936ffe4c0c2eb6625b28bab54e36c6 100644
+--- c/ui/views/cocoa/drag_drop_client_mac.h
++++ w/ui/views/cocoa/drag_drop_client_mac.h
+@@ -19,6 +19,8 @@
+ 
+ namespace gfx {
+ class Point;
++class ImageSkia;
++class Vector2d;
+ }  // namespace gfx
+ 
+ namespace remote_cocoa {
+@@ -52,6 +54,9 @@ class VIEWS_EXPORT DragDropClientMac : public remote_cocoa::DragDropClient {
+ 
+   DropHelper* drop_helper() { return &drop_helper_; }
+ 
++  void UpdateDragImage(const gfx::ImageSkia& image,
++                       const gfx::Vector2d& offset);
++
+   // remote_cocoa::DragDropClient:
+   NSDragOperation DragUpdate(id<NSDraggingInfo>) override;
+   NSDragOperation Drop(id<NSDraggingInfo> sender) override;
+@@ -84,6 +89,8 @@ class VIEWS_EXPORT DragDropClientMac : public remote_cocoa::DragDropClient {
+ 
+   // Whether |this| is the source of current dragging session.
+   bool is_drag_source_ = false;
++
++  NSDraggingSession* __weak dragging_session_ = nil;
+ };
+ 
+ }  // namespace views

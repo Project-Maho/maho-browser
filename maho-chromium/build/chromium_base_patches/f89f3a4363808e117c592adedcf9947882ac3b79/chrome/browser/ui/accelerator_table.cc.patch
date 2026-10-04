@@ -1,0 +1,24 @@
+diff --git c/chrome/browser/ui/accelerator_table.cc w/chrome/browser/ui/accelerator_table.cc
+index 532ec4748b88583654ef9a79771de9b6ebebdbe5..84f2766c76aec117999d05a76440a5e6c52b6dcd 100644
+--- c/chrome/browser/ui/accelerator_table.cc
++++ w/chrome/browser/ui/accelerator_table.cc
+@@ -63,8 +63,6 @@ const AcceleratorMapping kAcceleratorMap[] = {
+     {ui::VKEY_W, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_CLOSE_WINDOW},
+     {ui::VKEY_F, ui::EF_PLATFORM_ACCELERATOR, IDC_FIND},
+-    {ui::VKEY_A, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+-     IDC_TAB_SEARCH},
+     {ui::VKEY_G, ui::EF_PLATFORM_ACCELERATOR, IDC_FIND_NEXT},
+     {ui::VKEY_G, ui::EF_SHIFT_DOWN | ui::EF_PLATFORM_ACCELERATOR,
+      IDC_FIND_PREVIOUS},
+@@ -239,9 +237,8 @@ const AcceleratorMapping kAcceleratorMap[] = {
+      IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY},
+     {ui::VKEY_D, ui::EF_ALT_DOWN, IDC_FOCUS_LOCATION},
+     {ui::VKEY_E, ui::EF_CONTROL_DOWN, IDC_FOCUS_SEARCH},
+-    {ui::VKEY_K, ui::EF_CONTROL_DOWN, IDC_FOCUS_SEARCH},
+     {ui::VKEY_R, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN,
+-     IDC_SHOW_READING_MODE_KEYBOARD},
++      IDC_SHOW_READING_MODE_KEYBOARD},
+     {ui::VKEY_T, ui::EF_SHIFT_DOWN | ui::EF_ALT_DOWN, IDC_FOCUS_TOOLBAR},
+     {ui::VKEY_RIGHT, ui::EF_ALT_DOWN, IDC_FORWARD},
+     {ui::VKEY_RIGHT, ui::EF_ALTGR_DOWN, IDC_FORWARD},

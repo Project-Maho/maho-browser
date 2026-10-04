@@ -1,0 +1,25 @@
+diff --git a/extensions/browser/webstore_install_helper.cc b/extensions/browser/webstore_install_helper.cc
+index b0baf424dc4212b4129c2ba19c99488fd93e892e..a47652bd1418cab94f945de1316117ddb0e26b21 100644
+--- a/extensions/browser/webstore_install_helper.cc
++++ b/extensions/browser/webstore_install_helper.cc
+@@ -7,6 +7,7 @@
+ #include <memory>
+ 
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/values.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "extensions/browser/extensions_browser_client.h"
+@@ -110,7 +111,11 @@ void WebstoreInstallHelper::OnFetchComplete(
+   if (metadata.http_response_code ==
+           image_fetcher::RequestMetadata::ResponseCode::RESPONSE_CODE_INVALID ||
+       fetched_image.IsEmpty()) {
+-    error_ = kImageDecodeError;
++    LOG(ERROR) << "[maho-diag] WebstoreInstallHelper::OnFetchComplete"
++             << " icon_url=" << icon_url_.spec()
++             << " http_code=" << metadata.http_response_code
++             << " image_empty=" << fetched_image.IsEmpty();
++  error_ = kImageDecodeError;
+     parse_error_ = Delegate::ICON_ERROR;
+   } else {
+     icon_ = fetched_image.AsBitmap();

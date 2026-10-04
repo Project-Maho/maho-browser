@@ -1,0 +1,31 @@
+diff --git c/chrome/browser/ui/browser_tabrestore.cc w/chrome/browser/ui/browser_tabrestore.cc
+index fa43dd782cdb8c9f01e4c8f448e51f99e3e24d35..5ae35da8948eabffc27a84876c30748fa6e16f61 100644
+--- c/chrome/browser/ui/browser_tabrestore.cc
++++ w/chrome/browser/ui/browser_tabrestore.cc
+@@ -12,6 +12,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/apps/app_service/web_contents_app_id_utils.h"
+ #include "chrome/browser/glic/glic_tab_restore_helper.h"
++#include "maho/browser/maho_tab_id_helper.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_restore.h"
+ #include "chrome/browser/sessions/session_service_base.h"
+@@ -86,6 +87,18 @@ std::unique_ptr<WebContents> CreateRestoredTab(
+   send_tab_to_self::SendTabToSelfActivationTracker::RestoreFromExtraData(
+       web_contents.get(), extra_data);
+ 
++  {
++    auto it = extra_data.find(MahoTabIdHelper::kExtraDataKey);
++    if (it != extra_data.end() && !it->second.empty()) {
++      MahoTabIdHelper::CreateForWebContents(web_contents.get());
++      auto* helper =
++          MahoTabIdHelper::FromWebContents(web_contents.get());
++      if (helper) {
++        helper->SetRestoredTabId(it->second);
++      }
++    }
++  }
++
+   std::vector<std::unique_ptr<NavigationEntry>> entries =
+       ContentSerializedNavigationBuilder::ToNavigationEntries(
+           navigations, browser->GetProfile());

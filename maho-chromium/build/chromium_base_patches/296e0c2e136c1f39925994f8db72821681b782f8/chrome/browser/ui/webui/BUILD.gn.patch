@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
+index afde514dfb8bdba0a7e262ad71708a29e752fc13..63c276cb22fe4cd03faf92ec29061ecfa2d1e87a 100644
+--- a/chrome/browser/ui/webui/BUILD.gn
++++ b/chrome/browser/ui/webui/BUILD.gn
+@@ -53,6 +53,16 @@ source_set("configs") {
+     "//chrome/browser/optimization_guide",
+     "//chrome/browser/ui",
+     "//chrome/browser/ui/webui/about",
++    "//maho/browser/ui/webui/maho_ai",
++    "//maho/browser/ui/webui/maho_inline_edit",
++    "//maho/browser/ui/webui/maho_boost",
++    "//maho/browser/ui/webui/maho_routines",
++    "//maho/browser/ui/webui/maho_mail",
++    "//maho/browser/ui/webui/maho_routines",
++    "//maho/browser/ui/webui/maho_settings",
++    "//maho/browser/ui/webui/maho_space_config",
++    "//maho/browser/ui/webui/maho_sync",
++    "//maho/browser/ui/webui/maho_test",
+     "//chrome/browser/ui/webui/accessibility",
+     "//chrome/browser/ui/webui/accessibility_annotator_internals",
+     "//chrome/browser/ui/webui/actor_internals",

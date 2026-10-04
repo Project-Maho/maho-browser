@@ -1,0 +1,74 @@
+diff --git c/chrome/browser/ui/views/location_bar/location_bar_view.h w/chrome/browser/ui/views/location_bar/location_bar_view.h
+index 2796ee6d49b16faa75d0f8959f5452dad5587393..9ba171e45b8d6f20718d2f875d0089a406e5f5da 100644
+--- c/chrome/browser/ui/views/location_bar/location_bar_view.h
++++ w/chrome/browser/ui/views/location_bar/location_bar_view.h
+@@ -43,6 +43,9 @@
+ #include "ui/views/animation/animation_delegate_views.h"
+ #include "ui/views/controls/focus_ring.h"
+ #include "ui/views/drag_controller.h"
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h"
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
++#include "maho/browser/ui/views/location_bar/maho_location_bar_utility_panel_provider.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "components/webapps/common/web_app_id.h"
+@@ -77,6 +80,7 @@ class PageActionController;
+ namespace views {
+ class ImageButton;
+ class Label;
++class Widget;
+ }  // namespace views
+ 
+ /////////////////////////////////////////////////////////////////////////////
+@@ -239,6 +243,7 @@ class LocationBarView
+       const views::SizeBounds& available_size) const override;
+   void Layout(PassKey) override;
+   void OnThemeChanged() override;
++  void ChildVisibilityChanged(views::View* child) override;
+   void ChildPreferredSizeChanged(views::View* child) override;
+ 
+   // views::FocusChangeListener:
+@@ -283,6 +288,7 @@ class LocationBarView
+   // Called when omnibox view receives mouse notifications relevant to hover.
+   // |is_hovering| should be true when mouse is in omnibox; false when exited.
+   void OnOmniboxHovered(bool is_hovering);
++  views::Widget* ShowUtilityPanel();
+ 
+   // LocationBar:
+   void SetPermissionPromptShowing(bool showing) override;
+@@ -317,6 +323,16 @@ class LocationBarView
+ 
+   OmniboxPopupUI* GetOmniboxPopupUI();
+ 
++  // Test-only: directly invoke the existing OnOmniboxHovered path without
++  // relying on OS-level mouse injection.  Does not change production behavior.
++  void SimulateOmniboxHoveredForTesting(bool is_hovering) {
++    OnOmniboxHovered(is_hovering);
++  }
++
++  maho::MahoLocationBarUtilityIconView* GetUtilityIconViewForTesting() const {
++    return utility_icon_view_;
++  }
++
+  private:
+   FRIEND_TEST_ALL_PREFIXES(SecurityIndicatorTest, CheckIndicatorText);
+   FRIEND_TEST_ALL_PREFIXES(TouchLocationBarViewBrowserTest,
+@@ -422,6 +438,7 @@ class LocationBarView
+   bool OnMousePressed(const ui::MouseEvent& event) override;
+   bool OnMouseDragged(const ui::MouseEvent& event) override;
+   void OnMouseReleased(const ui::MouseEvent& event) override;
++  void OnMouseEntered(const ui::MouseEvent& event) override;
+   void OnMouseMoved(const ui::MouseEvent& event) override;
+   void OnMouseExited(const ui::MouseEvent& event) override;
+   void ShowContextMenu(const gfx::Point& p,
+@@ -588,6 +605,10 @@ class LocationBarView
+   // A label to show the AI Mode hint text.
+   raw_ptr<views::Label> ai_mode_hint_label_ = nullptr;
+ 
++  std::unique_ptr<maho::MahoLocationBarUtilityBubbleCoordinator>
++      utility_bubble_coordinator_;
++  raw_ptr<maho::MahoLocationBarUtilityIconView> utility_icon_view_ = nullptr;
++
+   // Animation to change whole location bar background color on hover.
+   gfx::SlideAnimation hover_animation_{this};
+ 

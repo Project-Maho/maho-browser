@@ -1,0 +1,147 @@
+diff --git c/components/split_tabs/split_tab_visual_data.h w/components/split_tabs/split_tab_visual_data.h
+index 5d14b4e38373ead928a469e954d60c10678ea472..4f041dcd93fa6fb16ed73e18f781e4e94d0c3b66 100644
+--- c/components/split_tabs/split_tab_visual_data.h
++++ w/components/split_tabs/split_tab_visual_data.h
+@@ -5,6 +5,11 @@
+ #ifndef COMPONENTS_SPLIT_TABS_SPLIT_TAB_VISUAL_DATA_H_
+ #define COMPONENTS_SPLIT_TABS_SPLIT_TAB_VISUAL_DATA_H_
+ 
++#include <cstddef>
++#include <memory>
++#include <optional>
++#include <vector>
++
+ namespace split_tabs {
+ 
+ // Orientation of a split view. Needs to be kept in sync with
+@@ -20,8 +25,74 @@ enum class SplitTabLayout {
+ };
+ // LINT.ThenChange(//tools/metrics/histograms/metadata/tab/enums.xml:SplitTabLayout)
+ 
+-// Represents the visual state of a split tab, including its layout type and the
+-// proportional size of the webcontents.
++enum class SplitPaneInsertionSide {
++  kBefore,
++  kAfter,
++};
++
++// A binary split topology. Pane nodes reference the corresponding split member
++// by its zero-based leaf index. Split nodes divide their available bounds
++// between `first` and `second` according to `layout` and `ratio`.
++class SplitLayoutNode {
++ public:
++  static SplitLayoutNode Pane(size_t pane_index);
++  static SplitLayoutNode Split(SplitTabLayout layout,
++                               double ratio,
++                               SplitLayoutNode first,
++                               SplitLayoutNode second);
++
++  SplitLayoutNode(const SplitLayoutNode& other);
++  SplitLayoutNode(SplitLayoutNode&& other) noexcept;
++  ~SplitLayoutNode();
++
++  SplitLayoutNode& operator=(const SplitLayoutNode& other);
++  SplitLayoutNode& operator=(SplitLayoutNode&& other) noexcept;
++
++  bool is_pane() const { return is_pane_; }
++  size_t pane_index() const { return pane_index_; }
++  SplitTabLayout layout() const { return layout_; }
++  double ratio() const { return ratio_; }
++  const SplitLayoutNode* first() const { return first_.get(); }
++  const SplitLayoutNode* second() const { return second_.get(); }
++
++  // Valid trees have 2..4 leaves, finite ratios strictly between zero and one,
++  // and each pane index in [0, pane_count) exactly once.
++  bool ValidateForPaneCount(size_t pane_count) const;
++  std::vector<size_t> LeafOrder() const;
++
++  // Replaces a leaf with a new split and renumbers all leaves in visual order.
++  // Returns false if the target does not exist or the tree already has 4 panes.
++  bool InsertPaneAtLeaf(size_t target_leaf,
++                        SplitTabLayout layout,
++                        double ratio,
++                        SplitPaneInsertionSide side);
++
++  // Removes a leaf, collapses its parent, and renumbers the remaining leaves.
++  // Returns false if the target does not exist or removal would leave no tree.
++  bool RemovePane(size_t leaf);
++
++  friend bool operator==(const SplitLayoutNode& lhs,
++                         const SplitLayoutNode& rhs);
++
++ private:
++  explicit SplitLayoutNode(size_t pane_index);
++  SplitLayoutNode(SplitTabLayout layout,
++                  double ratio,
++                  SplitLayoutNode first,
++                  SplitLayoutNode second);
++
++  bool is_pane_ = true;
++  size_t pane_index_ = 0;
++  SplitTabLayout layout_ = SplitTabLayout::kSideBySide;
++  double ratio_ = 0.5;
++  std::unique_ptr<SplitLayoutNode> first_;
++  std::unique_ptr<SplitLayoutNode> second_;
++};
++
++// Represents the visual state of a split tab. The legacy layout and ratio are
++// retained as the root split for two-pane callers and old session data. When a
++// layout tree is present it is the authoritative topology, with its root values
++// mirrored into the legacy fields.
+ class SplitTabVisualData {
+  public:
+   SplitTabVisualData();
+@@ -29,30 +100,44 @@ class SplitTabVisualData {
+   SplitTabVisualData(SplitTabLayout split_layout, double split_ratio);
+   ~SplitTabVisualData();
+ 
+-  SplitTabVisualData(const SplitTabVisualData& other) = default;
+-  SplitTabVisualData(SplitTabVisualData&& other) = default;
++  SplitTabVisualData(const SplitTabVisualData& other);
++  SplitTabVisualData(SplitTabVisualData&& other);
+ 
+   SplitTabVisualData& operator=(const SplitTabVisualData& other) = default;
+   SplitTabVisualData& operator=(SplitTabVisualData&& other) = default;
+ 
+-  void set_split_layout(SplitTabLayout split_layout) {
+-    split_layout_ = split_layout;
+-  }
+-
+-  void set_split_ratio(double split_ratio) { split_ratio_ = split_ratio; }
++  void set_split_layout(SplitTabLayout split_layout);
++  void set_split_ratio(double split_ratio);
+ 
+   SplitTabLayout split_layout() const { return split_layout_; }
+-
+   double split_ratio() const { return split_ratio_; }
+ 
++  const std::optional<SplitLayoutNode>& layout_tree() const {
++    return layout_tree_;
++  }
++  void set_layout_tree(std::optional<SplitLayoutNode> layout_tree);
++
++  bool ValidateForPaneCount(size_t pane_count) const;
++
++  static SplitTabVisualData CreateTwoPane(SplitTabLayout layout, double ratio);
++
++  bool InsertPaneAtLeaf(size_t target_leaf,
++                        SplitTabLayout layout,
++                        double ratio,
++                        SplitPaneInsertionSide side);
++  bool RemovePane(size_t leaf);
++
+   // Checks whether two instances are visually equivalent.
+   friend bool operator==(const SplitTabVisualData&,
+                          const SplitTabVisualData&) = default;
+ 
+  private:
++  void MirrorTreeRootToLegacyFields();
++
+   SplitTabLayout split_layout_;
+-  // ratio of the first split tab's width to the available width.
++  // Ratio of the root node's first child to the available extent.
+   double split_ratio_ = 0.5;
++  std::optional<SplitLayoutNode> layout_tree_;
+ };
+ 
+ }  // namespace split_tabs

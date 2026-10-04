@@ -1,0 +1,13 @@
+diff --git a/chrome/browser/ui/webui_browser/webui_browser_ui.cc b/chrome/browser/ui/webui_browser/webui_browser_ui.cc
+index 4fef018f0dd29e3f1bacff40b5e337c7de8e5de1..c1735ab7efe4f64cf70e0545b670a59e85891124 100644
+--- a/chrome/browser/ui/webui_browser/webui_browser_ui.cc
++++ b/chrome/browser/ui/webui_browser/webui_browser_ui.cc
+@@ -67,6 +67,8 @@ std::string SidePanelEntryIdToTitle(SidePanelEntryId id) {
+       return l10n_util::GetStringUTF8(IDS_READ_LATER_TITLE);
+     case SidePanelEntryId::kBookmarks:
+       return l10n_util::GetStringUTF8(IDS_BOOKMARK_MANAGER_TITLE);
++    case SidePanelEntryId::kMahoAiPanel:
++      return "Maho AI";
+     default:
+       NOTREACHED();
+   }

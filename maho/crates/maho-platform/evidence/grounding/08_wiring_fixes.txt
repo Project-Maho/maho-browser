@@ -1,0 +1,7 @@
+# Post-verifier wiring fixes (2026-08-28)
+- ocr default live-capture redacted: text_redacted=true, coords only
+- ocr --full: text included
+- ocr --output FILE: file source, text included
+- elements --role AXButton: 65 filtered, persisted via --output
+- find-text fixture: MAHO GROUNDING 2026 @ (42,52)
+- click w/o approve: typed approval gate intact

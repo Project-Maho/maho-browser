@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/ui/tabs/tab_strip_model.cc w/chrome/browser/ui/tabs/tab_strip_model.cc
+index e2801496b56eccc306d13ab042d75a4d59b4d36d..db6997431894ca9cab0e47ceae90633f51666d17 100644
+--- c/chrome/browser/ui/tabs/tab_strip_model.cc
++++ w/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -2129,7 +2129,7 @@
+     return false;
+   }
+ 
+-  split_tabs::RecordSplitTabCreated(source);
++  split_tabs::RecordSplitTabCreated(source, visual_data.split_layout());
+   const bool source_was_active = source_tab == GetActiveTab();
+   const std::optional<tab_groups::TabGroupId> split_group =
+       existing_tabs.front()->GetGroup();

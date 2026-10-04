@@ -1,0 +1,4 @@
+[test]
+# React tests under react/ run with vitest (jsdom + the WebUI aliases);
+# bun test owns the harness/contract suites in testing/.
+root = "testing"

@@ -1,0 +1,27 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_inline_edit.mojom;
+
+// Browser-side handler for inline edit operations.
+interface InlineEditPageHandler {
+  // Returns the currently selected text from the active page.
+  GetSelectedText() => (string text);
+
+  // Sends selected text + instruction to LLM, returns edited result.
+  RequestEdit(string text, string instruction) => (string result);
+
+  // Applies the edited text back into the page DOM.
+  ApplyEdit(string edited_text);
+};
+
+// Page-side interface for browser-to-toolbar push updates.
+interface InlineEditPage {
+  // Show the toolbar near the selection at (x, y) with the selected text.
+  ShowToolbar(int32 x, int32 y, string selected_text);
+
+  // Hide the toolbar.
+  HideToolbar();
+
+  // Push an edit result to the toolbar UI.
+  OnEditResult(string result);
+};

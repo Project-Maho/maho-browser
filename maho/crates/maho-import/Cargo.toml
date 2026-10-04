@@ -1,0 +1,47 @@
+[package]
+name = "maho-import"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MPL-2.0"
+
+[features]
+decrypt = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+plist = "1.7"
+url = "2.5"
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+dirs = "5"
+lz4_flex = "0.11"
+tempfile = "3"
+base64 = "0.22"
+aes = "0.8"
+aes-gcm = "0.10"
+cbc = "0.1"
+des = "0.8"
+pbkdf2 = "0.12"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+secret-service = { version = "3.0", features = ["rt-async-io-crypto-rust"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Win32_System_Com", "Win32_Security_Cryptography", "Win32_Foundation"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lib]
+name = "maho_import"
+path = "src/lib.rs"

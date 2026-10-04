@@ -1,0 +1,133 @@
+diff --git a/chrome/browser/ui/views/side_panel/side_panel.cc b/chrome/browser/ui/views/side_panel/side_panel.cc
+index 11eb2b0ec39383a6e7e34f0a0907b4c3f76f28a7..da3330b14cb57b7e955eb02400addd22dc365cb6 100644
+--- a/chrome/browser/ui/views/side_panel/side_panel.cc
++++ b/chrome/browser/ui/views/side_panel/side_panel.cc
+@@ -11,6 +11,7 @@
+ #include "base/i18n/number_formatting.h"
+ #include "base/i18n/rtl.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+@@ -298,14 +299,37 @@ class ContentParentView : public views::View, public views::ViewObserver {
+ 
+  private:
+   void AddedToWidget() override {
+-    SetBackground(std::make_unique<ContentParentBackground>(
+-        browser_view_, type_,
+-        base::BindRepeating(&ContentParentView::GetRoundedCorners,
+-                            base::Unretained(this))));
++    const bool hosts_maho_ai =
++        !children().empty() && children().front()->GetClassName() ==
++                                   std::string_view("MahoAiSidePanelWebView");
++    SetBackground(hosts_maho_ai
++                      ? nullptr
++                      : std::make_unique<ContentParentBackground>(
++                            browser_view_, type_,
++                            base::BindRepeating(
++                                [](base::WeakPtr<ContentParentView> view) {
++                                  return view ? view->GetRoundedCorners()
++                                              : gfx::RoundedCornersF();
++                                },
++                                weak_ptr_factory_.GetWeakPtr())));
+   }
+ 
+   void OnChildViewAdded(views::View* observed_view,
+                         views::View* child) override {
++    if (child && child->GetClassName() ==
++                     std::string_view("MahoAiSidePanelWebView")) {
++      SetBackground(nullptr);
++      if (views::IsViewClass<views::WebView>(child)) {
++        views::AsViewClass<views::WebView>(child)
++            ->holder()
++            ->SetCornerRadii(gfx::RoundedCornersF());
++      }
++      if (child->layer()) {
++        child->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF());
++      }
++      browser_view_->InvalidateLayout();
++      return;
++    }
+     // Setting rounded corners on a WebView's holder requires the
+     // NativeViewHost's native_wrapper_ to be set. For a WebView, this is set in
+     // View::ViewHierarchyChanged, specifically after
+@@ -335,9 +359,13 @@ class ContentParentView : public views::View, public views::ViewObserver {
+     CHECK(web_view);
+     CHECK(web_view->holder());
+ 
+-    // Native View Host doesn't always get reused, so ensure a nested Native
+-    // View's corners are always rounded.
+-    web_view->holder()->SetCornerRadii(GetRoundedCorners());
++    // Native View Host doesn't always get reused. Maho AI is the
++    // borderless toolbar panel, so keep its native holder square.
++    web_view->holder()->SetCornerRadii(
++        web_view->GetClassName() ==
++                std::string_view("MahoAiSidePanelWebView")
++            ? gfx::RoundedCornersF()
++            : GetRoundedCorners());
+     // Temporary subscription. We only need to round the corners once.
+     web_contents_attached_callback_ = {};
+   }
+@@ -357,7 +385,7 @@ class ContentParentView : public views::View, public views::ViewObserver {
+         views::AsViewClass<views::WebView>(details.child)
+             ->AddWebContentsAttachedCallback(
+                 base::BindRepeating(&ContentParentView::OnWebContentsAttached,
+-                                    base::Unretained(this)));
++                                    weak_ptr_factory_.GetWeakPtr()));
+   }
+ 
+   gfx::RoundedCornersF GetRoundedCorners() {
+@@ -379,6 +407,7 @@ class ContentParentView : public views::View, public views::ViewObserver {
+   base::ScopedObservation<views::View, views::ViewObserver> view_observation_{
+       this};
+   base::CallbackListSubscription web_contents_attached_callback_;
++  base::WeakPtrFactory<ContentParentView> weak_ptr_factory_{this};
+ };
+ 
+ BEGIN_METADATA(ContentParentView)
+@@ -555,6 +584,19 @@ void SidePanel::SetPanelWidth(int width) {
+   SetPreferredSize(gfx::Size(width, 1));
+ }
+ 
++bool SidePanel::IsMahoAiPanelShowing() const {
++  const SidePanelUI* side_panel_ui =
++      browser_view_->browser()->GetFeatures().side_panel_ui();
++  if (side_panel_ui &&
++      side_panel_ui->GetCurrentEntryId(type_) ==
++          SidePanelEntryId::kMahoAiPanel) {
++    return true;
++  }
++  return content_parent_view_ && !content_parent_view_->children().empty() &&
++         content_parent_view_->children().front()->GetClassName() ==
++             std::string_view("MahoAiSidePanelWebView");
++}
++
+ bool SidePanel::ShouldRestrictMaxWidth() const {
+   // TODO(crbug.com/394339052): Only restricting width for only non-read
+   // anything content is a temporary solution and UX will investigate a better
+@@ -686,7 +728,9 @@ void SidePanel::AddHeaderView(std::unique_ptr<views::View> view) {
+ }
+ 
+ void SidePanel::RemoveHeaderView() {
+-  SetBorder(views::CreateEmptyBorder(GetBorderInsets().set_top(0)));
++  SetBorder(IsMahoAiPanelShowing() || !border_view_
++                ? nullptr
++                : views::CreateEmptyBorder(GetBorderInsets().set_top(0)));
+   if (border_view_) {
+     border_view_->HeaderViewChanged(nullptr);
+   }
+@@ -925,9 +969,11 @@ void SidePanel::UpdateVisibility(bool should_be_open, bool animate_transition) {
+   // TODO(pbos): Should layer visibility/painting be automatically tied to
+   // parent visibility? I.e. the difference between GetVisible() and IsDrawn().
+   bool side_panel_open_or_closing = GetVisible() || should_be_open;
++  const bool border_should_be_visible =
++      side_panel_open_or_closing && !IsMahoAiPanelShowing();
+   if (border_view_ &&
+-      side_panel_open_or_closing != border_view_->GetVisible()) {
+-    border_view_->SetVisible(side_panel_open_or_closing);
++      border_should_be_visible != border_view_->GetVisible()) {
++    border_view_->SetVisible(border_should_be_visible);
+     if (side_panel_open_or_closing) {
+       border_view_->SetPaintToLayer();
+       border_view_->layer()->SetFillsBoundsOpaquely(false);

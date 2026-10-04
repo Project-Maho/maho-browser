@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc b/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
+index 54328f86e6d69d0ef85907d7dbb008c5a529463c..30d8d7d8d0e7ce9183e84123afc7ae075cbaf8e7 100644
+--- a/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
++++ b/chrome/browser/ui/views/side_panel/side_panel_coordinator.cc
+@@ -206,8 +206,8 @@ void SidePanelCoordinator::Show(
+   waiter(entry->type())
+       ->WaitForEntry(entry,
+                      base::BindOnce(&SidePanelCoordinator::PopulateSidePanel,
+-                                    base::Unretained(this), suppress_animations,
+-                                    input, open_trigger));
++                                    weak_ptr_factory_.GetWeakPtr(),
++                                    suppress_animations, input, open_trigger));
+ }
+ 
+ // There are 3 different contexts in which the side panel can be closed. All go
+@@ -330,6 +330,15 @@ void SidePanelCoordinator::PopulateSidePanel(
+   auto* content = content_wrapper->AddChildView(
+       content_view.has_value() ? std::move(content_view.value())
+                                : entry->GetContent());
++  content->SetVisible(true);
++  // Reapply after insertion so borderless entries can identify their content.
++  if (!entry->should_show_header()) {
++    side_panel->RemoveHeaderView();
++  }
++  // Reapply after insertion so borderless entries can identify their content.
++  if (!entry->should_show_header()) {
++    side_panel->RemoveHeaderView();
++  }
+   if (auto* contextual_registry = GetActiveContextualRegistry()) {
+     contextual_registry->ResetActiveEntryFor(entry->type());
+   }

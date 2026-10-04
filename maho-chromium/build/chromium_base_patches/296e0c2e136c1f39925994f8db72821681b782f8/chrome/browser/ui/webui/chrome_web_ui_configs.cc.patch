@@ -1,0 +1,38 @@
+diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+index 26cd499ca7913c4bb87b95affba6c3b07a502110..def8995a076c2a2975610fcb9a7228f42bf01a1f 100644
+--- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
++++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
+@@ -11,6 +11,16 @@
+ #include "chrome/browser/glic/host/glic_ui.h"
+ #include "chrome/browser/optimization_guide/optimization_guide_internals_ui.h"
+ #include "chrome/browser/ui/webui/about/about_ui.h"
++#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"
++#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_ui.h"
++#include "maho/browser/ui/webui/maho_routines/maho_routines_ui.h"
++#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"
++#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"
++#include "maho/browser/ui/webui/maho_space_config/maho_space_config_ui.h"
++#include "maho/browser/ui/webui/maho_space_create/maho_space_create_ui.h"
++#include "maho/browser/ui/webui/maho_sync/maho_sync_ui.h"
++#include "maho/browser/ui/webui/maho_welcome/maho_welcome_ui.h"
++#include "maho/browser/ui/webui/maho_test/maho_test_ui.h"
+ #include "chrome/browser/ui/webui/accessibility/accessibility_ui.h"
+ #include "chrome/browser/ui/webui/accessibility_annotator_internals/accessibility_annotator_internals_ui.h"
+ #include "chrome/browser/ui/webui/actor_internals/actor_internals_ui.h"
+@@ -260,6 +270,16 @@ void RegisterChromeWebUIConfigs() {
+   map.AddWebUIConfig(
+       std::make_unique<enterprise_connectors::ConnectorsInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<ConstrainedWebDialogUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoAIUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoLiveFoldersUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoRoutinesUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoMailUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoSettingsUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoSpaceConfigUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoSpaceCreateUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoSyncUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoWelcomeUIConfig>());
++  map.AddWebUIConfig(std::make_unique<MahoTestUIConfig>());
+   map.AddWebUIConfig(std::make_unique<CreditsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<DataSharingInternalsUIConfig>());
+   map.AddWebUIConfig(std::make_unique<DownloadInternalsUIConfig>());

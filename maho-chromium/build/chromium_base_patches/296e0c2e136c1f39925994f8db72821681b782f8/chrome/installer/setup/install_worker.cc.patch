@@ -1,0 +1,24 @@
+diff --git c/chrome/installer/setup/install_worker.cc w/chrome/installer/setup/install_worker.cc
+index f59161d5c79a90bb189f1614f0f7bfa4fb342f40..59d57620b50aab43b86763b459ed765ebbb9e3fb 100644
+--- c/chrome/installer/setup/install_worker.cc
++++ w/chrome/installer/setup/install_worker.cc
+@@ -237,6 +237,19 @@ void AddChromeWorkItems(const InstallParams& install_params,
+       target_path.Append(installer::kChromeExe), temp_path,
+       WorkItem::MoveTreeOptions{.lenient_deletion = true});
+ 
++  // Maho: relocate the bundled CLI and Mail helper out of Chrome-bin
++  // into the install root. Setup only moves chrome.exe and the
++  // version dir, so any other root executable would otherwise be
++  // discarded together with the temporary directory.
++  install_list->AddMoveTreeWorkItem(
++      src_path.Append(L"maho.exe"),
++      target_path.Append(L"maho.exe"), temp_path,
++      WorkItem::MoveTreeOptions{.lenient_deletion = true});
++  install_list->AddMoveTreeWorkItem(
++      src_path.Append(L"maho_mail_helper.exe"),
++      target_path.Append(L"maho_mail_helper.exe"), temp_path,
++      WorkItem::MoveTreeOptions{.lenient_deletion = true});
++
+   install_list->AddWorkItem(WorkItem::CreateConditionalWorkItem(
+       std::make_unique<ConditionFileInUse>(
+           target_path.Append(installer::kChromeExe)),

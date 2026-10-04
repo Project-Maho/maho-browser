@@ -1,0 +1,10 @@
+--- a/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
++++ b/chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
+ 
+ #include "chrome/browser/ui/browser.h"
++#include "components/prefs/pref_service.h"
+ #include "maho/browser/maho_browser_main_extra_parts.h"
+ #include "maho/browser/maho_space_profile_bridge.h"
+ #include "maho/browser/net/maho_atc_state.h"

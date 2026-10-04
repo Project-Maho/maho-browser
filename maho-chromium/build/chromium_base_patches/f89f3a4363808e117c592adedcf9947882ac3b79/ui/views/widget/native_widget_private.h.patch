@@ -1,0 +1,21 @@
+diff --git c/ui/views/widget/native_widget_private.h w/ui/views/widget/native_widget_private.h
+index b1399404ce695a5fd5e3d72cd0db1ef5b9750108..de75256bbcfa79d72ca868591c9c06fda9e6290b 100644
+--- c/ui/views/widget/native_widget_private.h
++++ w/ui/views/widget/native_widget_private.h
+@@ -21,6 +21,7 @@
+ namespace gfx {
+ class ImageSkia;
+ class Rect;
++class Vector2d;
+ }  // namespace gfx
+ 
+ namespace ui {
+@@ -248,6 +249,8 @@ class VIEWS_EXPORT NativeWidgetPrivate : public NativeWidget {
+                                int operation,
+                                ui::mojom::DragEventSource source) = 0;
+   virtual void CancelDragDropLoop(View* view) = 0;
++  virtual void UpdateDragImage(const gfx::ImageSkia& image,
++                               const gfx::Vector2d& offset) {}
+   virtual void SchedulePaintInRect(const gfx::Rect& rect) = 0;
+   virtual void ScheduleLayout() = 0;
+   virtual void SetCursor(const ui::Cursor& cursor) = 0;

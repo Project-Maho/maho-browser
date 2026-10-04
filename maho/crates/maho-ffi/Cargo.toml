@@ -1,0 +1,30 @@
+[package]
+name = "maho-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+maho-core = { path = "../maho-core" }
+maho-types = { path = "../maho-types" }
+maho-import = { path = "../maho-import" }
+maho-agent = { path = "../maho-agent" }
+maho-storage = { path = "../maho-storage" }
+async-trait = "0.1"
+tracing = "0.1"
+serde = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+zeroize = "1.8"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+
+[[bench]]
+name = "ffi_bench"
+harness = false

@@ -1,0 +1,29 @@
+diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
+index 608b71368160a6b89099229d6f0a536a3fda910e..e15ddf99456f4ad03a460e7dbdf8a35e18f1089b 100644
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -283,7 +283,7 @@ void OnLocalStatePrefsLoaded();
+ #endif
+ 
+ #if BUILDFLAG(IS_MAC)
+-#include "components/os_crypt/async/browser/keychain_key_provider.h"
++#include "maho/browser/os_crypt/maho_file_key_provider_mac.h"
+ #endif
+ 
+ #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+@@ -1584,10 +1584,12 @@ void BrowserProcessImpl::PreMainMessageLoopRun() {
+ #endif  // BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC) && !BUILDFLAG(IS_LINUX)
+ 
+ #if BUILDFLAG(IS_MAC)
+-  if (base::FeatureList::IsEnabled(features::kUseKeychainKeyProvider)) {
++  {
++    base::FilePath user_data_dir;
++    base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+     providers.emplace_back(std::make_pair(
+-        /*precedence=*/10u,
+-        std::make_unique<os_crypt_async::KeychainKeyProvider>()));
++        /*precedence=*/15u,
++        std::make_unique<maho::MahoFileKeyProvider>(user_data_dir)));
+   }
+ #endif  // BUILDFLAG(IS_MAC)
+ 

@@ -1,0 +1,12 @@
+=== RUNNING: target/debug/maho desktop capture --output /tmp/maho-gv-capture.png ===
+{
+  "path": "/tmp/maho-gv-capture.png",
+  "width": 3840,
+  "height": 1600
+}
+EXIT_CODE: 0
+FILE_EXISTS: true
+-rw-r--r--@ 1 indo  wheel  1426831 Aug 28 19:31 /tmp/maho-gv-capture.png
+/private/tmp/maho-gv-capture.png
+  pixelWidth: 3840
+  pixelHeight: 1600

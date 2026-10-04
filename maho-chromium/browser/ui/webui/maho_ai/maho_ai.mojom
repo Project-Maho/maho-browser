@@ -1,0 +1,866 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_ai.mojom;
+
+import "maho/browser/ui/webui/maho_routines/maho_routines.mojom";
+
+// ==========================================================================
+// Context attachment types — Phase B: context picker backend.
+// These are intentionally minimal and additive; future sources (history,
+// bookmarks, files) will extend ContextSourceKind without touching callers
+// that already handle the existing variants.
+// ==========================================================================
+
+// Identifies the source category of a context attachment.
+enum ContextSourceKind {
+  // The currently-active tab (legacy path — maps 1:1 to attach_browser_context).
+  kCurrentPage,
+  // A specific open tab selected from the tab picker.
+  kOpenTab,
+  // Reserved for future sources — never sent by the backend today.
+  kHistory,
+  kBookmark,
+  kFile,
+};
+
+// A single browser history item returned by SearchHistory.
+// Carries the URL, page title, and the visit timestamp (seconds since Unix
+// epoch, fractional) so the picker can show recency information.
+struct HistoryItem {
+  // Page URL. Never empty (items with no URL are filtered by the backend).
+  string url;
+  // Page title at visit time. May be empty for untitled pages.
+  string title;
+  // Timestamp of the most-recent visit (seconds since Unix epoch).
+  double visited_at;
+};
+
+// A single bookmark item returned by SearchBookmarks.
+struct BookmarkItem {
+  // Unique bookmark identifier.
+  string id;
+  // Page URL.
+  string url;
+  // Bookmark title.
+  string title;
+};
+
+// A single open browser tab visible to the context picker.
+// Returned by GetOpenTabs; the frontend uses this to populate the picker.
+struct TabItem {
+  // Opaque browser-assigned tab ID (matches TabStripModel index-stable ID).
+  int32 tab_id;
+  // Page URL. May be empty for tabs that have not yet committed a navigation.
+  string url;
+  // Page title. Empty until the document has a title.
+  string title;
+  // Whether this is the currently-active tab in the browser window.
+  bool is_active;
+  // 0-based index in the tab strip (for display ordering only).
+  int32 index;
+};
+
+// ==========================================================================
+// Tab Tidy types — LLM-driven tab grouping into named folders.
+// Default-ON; no pref or A/B gate.
+// ==========================================================================
+
+// A single tab descriptor sent to the LLM for tidy analysis.
+struct TabInfo {
+  // Maho-internal tab ID string (matches the core's persisted tab IDs).
+  string tab_id;
+  // Page title at the time of the request.
+  string title;
+  // Committed URL.
+  string url;
+};
+
+// A suggested folder returned by the LLM tidy pass.
+struct TidyFolder {
+  // Human-readable folder name suggested by the LLM.
+  string name;
+  // Ordered list of tab IDs to place in this folder.
+  array<string> tab_ids;
+};
+
+// A structured context attachment chosen by the user in the picker.
+// Sent with SubmitPrompt in the optional |attachments| array.  When the
+// array is null (absent), the legacy bool-based current-page path applies.
+struct ContextAttachment {
+  ContextSourceKind kind;
+  // For kCurrentPage / kOpenTab: the tab_id returned by GetOpenTabs.
+  // -1 means "active tab at submit time" (used by the legacy path).
+  int32 tab_id;
+  // Human-readable label shown in the composer chip (e.g. page title).
+  string label;
+  // URL associated with this attachment. May be empty for non-tab sources.
+  string url;
+};
+
+enum ChatIntent {
+  kFreeform,
+  kSummarizeCurrentPage,
+  kQuizCurrentPage,
+};
+
+// Per-prompt interaction mode. Controls persona injection and response
+// shaping behavior. Sent with each SubmitPrompt call, not persisted.
+enum InteractionMode {
+  // Conversational assistant: concise, helpful, non-technical by default.
+  kAssistant,
+  // Developer/power-user mode: raw agent output, no persona prefix.
+  kDeveloper,
+};
+
+enum AskMahoSource {
+  kCommandPalette,
+};
+
+enum AskMahoContextIntent {
+  kNone,
+  kCurrentPage,
+};
+
+struct AskMahoDispatch {
+  string request_id;
+  string query;
+  AskMahoSource source;
+  bool submit;
+  InteractionMode mode;
+  AskMahoContextIntent context_intent;
+  string? target_session_id;
+};
+
+enum ViewMode {
+  kSidebar,
+  kFloating,
+};
+
+// The compact panel body selected independently from the active AI profile.
+enum CompactSurface {
+  kChat,
+  kRoutines,
+};
+
+// One-shot profile-scoped request. Generations increase monotonically so the
+// renderer can reject delayed notifications after a newer request is applied.
+struct SurfaceRequest {
+  CompactSurface surface;
+  uint64 generation;
+};
+
+// ==========================================================================
+// Browser-context payload — typed contract for the actual page context
+// injected (or denied) by the adapter at submit time. This lets WebUI
+// inspect exactly what the runtime received without owning extraction.
+// ==========================================================================
+
+// Extraction outcome reported by the adapter after attempting page-context
+// injection.
+enum BrowserContextStatus {
+  // Context was successfully extracted and injected into the prompt.
+  kInjected,
+  // Context extraction was attempted but the page is an internal/privileged
+  // scheme (chrome://, devtools://, etc.) that the privacy deny-list blocks.
+  kDeniedInternalPage,
+  // No active tab was available at extraction time.
+  kNoActiveTab,
+  // The page could not be accessed (e.g. still loading, cross-origin).
+  kCannotAccess,
+  // Extraction ran but produced no usable content.
+  kExtractionFailed,
+  // The caller did not request context attachment (attach_browser_context
+  // was false).
+  kNotRequested,
+};
+
+// The actual browser context that was injected (or attempted) by the
+// adapter. Emitted as part of a kBrowserContextInjected RuntimeEvent so
+// WebUI can display truthful context metadata without owning extraction.
+struct BrowserContextPayload {
+  BrowserContextStatus status;
+  // Page URL at extraction time. Empty when status is kNotRequested or
+  // kNoActiveTab.
+  string url;
+  // Page title at extraction time.
+  string title;
+  // Truncated content snippet (first ~200 chars) for inspector display.
+  // The full content is only in the augmented prompt sent to the runtime.
+  string content_snippet;
+  // Number of characters of page content that were injected.
+  uint32 content_length;
+  // Human-readable warnings (e.g. "content was truncated", "partial
+  // extraction").
+  array<string> warnings;
+  // Human-readable label identifying this attachment in the inspector
+  // (e.g. "Current page", "Tab: My Page Title"). Set by the page handler
+  // at injection time so multi-attachment sessions are distinguishable.
+  string label;
+};
+
+// ==========================================================================
+// Session/event-oriented types — the new contract for the OpenCode console.
+// ==========================================================================
+
+// Connection state between the browser proxy and the runtime backend.
+enum RuntimeConnectionState {
+  kDisconnected,
+  kConnecting,
+  kConnected,
+  kReconnecting,
+  kError,
+  // The runtime is connected but paused awaiting user approval for a tool call.
+  kPausedForApproval,
+  // The runtime resumed after an approval decision.
+  kResumed,
+};
+
+// The kind of runtime event delivered through the session event stream.
+enum RuntimeEventKind {
+  // Incremental text token from the assistant.
+  kAssistantToken,
+  // Incremental thinking/reasoning content from the model (separate from
+  // visible assistant reply).
+  kAssistantThinking,
+  // The assistant turn completed successfully.
+  kTurnComplete,
+  // An error occurred during the turn.
+  kError,
+  // The runtime is requesting a browser-local tool invocation.
+  kToolRequest,
+  // A tool invocation completed; result is flowing back.
+  kToolResult,
+  // The runtime is requesting user approval before proceeding.
+  kApprovalRequest,
+  // An approval decision was recorded (for history replay).
+  kApprovalResult,
+  // A user prompt was submitted (persisted for history replay).
+  kUserPrompt,
+  // Session-level status change (started, resumed, completed, cancelled).
+  kSessionStatus,
+  // Connection state changed (for UI indicators).
+  kConnectionStateChanged,
+  // Browser context was injected (or denied) into the prompt. Carries a
+  // BrowserContextPayload with the truthful extraction outcome.
+  kBrowserContextInjected,
+  // Emitted when tools availability changed.
+  kToolAvailabilityChanged,
+  // An output artifact was created by the agent (fs_write).
+  kArtifactCreated,
+  // The agent is requesting interactive input: a multiple-choice question
+  // (ask_user_question) or an action confirmation (request_action_confirmation).
+  // Mirrors FFI MahoAgentEventKindV2::kInteractionRequest (kind 8) and carries
+  // an InteractionRequestInfo in |interaction_request|.
+  kInteractionRequest,
+};
+
+// A closed, non-secret category for a credential failure produced by the
+// runtime. kGeneric is used when replaying a persisted value newer than this
+// client understands. This deliberately excludes provider input, endpoints,
+// keys, ciphertext, platform details, and diagnostic text.
+enum CredentialErrorCode {
+  kGeneric,
+  kProviderNotConfigured,
+  kCredentialUnusable,
+  kSecureStoreUnavailable,
+  kCredentialDecryptFailed,
+  kManagedAuthUnavailable,
+  kUnsupportedProvider,
+};
+
+// Status of a tool invocation.
+enum ToolCallStatus {
+  kPending,
+  kRunning,
+  kCompleted,
+  kFailed,
+  kCancelled,
+};
+
+// Describes a tool the runtime wants the browser to execute.
+struct ToolCallInfo {
+  // Unique ID for this tool call within the session, used for result routing.
+  string call_id;
+  // Tool name (e.g. "get_page_content", "read_file").
+  string tool_name;
+  // JSON-encoded arguments from the runtime.
+  string arguments_json;
+  // Current status.
+  ToolCallStatus status;
+};
+
+// Result of a completed tool invocation.
+struct ToolResultInfo {
+  // Matches the call_id from the corresponding ToolCallInfo.
+  string call_id;
+  // Whether the tool succeeded.
+  bool success;
+  // The tool output (text or JSON-encoded structured data).
+  string output;
+  // Optional error message if success is false.
+  string? error_message;
+};
+
+// Metadata for an output artifact produced by the agent. Paths never cross
+// this interface; artifact_id is an opaque handle resolved server-side.
+struct ArtifactInfo {
+  string artifact_id;
+  string session_id;
+  string display_name;
+  string mime_type;
+  uint64 size_bytes;
+  double created_at;
+};
+
+enum ApprovalPolicy {
+  kPrompt,
+  kAllowAll,
+  kAllowMcp,
+  kDenySensitive,
+  kDenyAll,
+};
+
+enum ApprovalSensitivity {
+  kReadOnly,
+  kSensitive,
+};
+
+enum ApprovalState {
+  kPending,
+  kApproved,
+  kDenied,
+  kCancelled,
+};
+
+enum ApprovalDecision {
+  kNone,
+  kAllow,
+  kAllowOnce,
+  kDeny,
+};
+
+// Describes an approval request from the runtime.
+struct ApprovalRequestInfo {
+  // Unique ID for this approval within the session.
+  string approval_id;
+  // Human-readable description of what needs approval.
+  string description;
+  ApprovalPolicy approval_policy;
+  ApprovalSensitivity sensitivity;
+  ApprovalState state;
+  bool page_derived_justification;
+  // The tool call that triggered the approval, if any.
+  ToolCallInfo? related_tool_call;
+};
+
+// One selectable option of an interaction request question. Mirrors
+// maho-agent interaction::InteractionOption.
+struct InteractionRequestOption {
+  string id;
+  string label;
+  string? description;
+};
+
+// How the agent requests user interaction (interaction::InteractionKind).
+enum InteractionRequestKind {
+  // ask_user_question — a question with selectable options.
+  kQuestion,
+  // request_action_confirmation — confirm or deny a described side effect.
+  kConfirmation,
+};
+
+// A structured interaction request from the agent. Mirrors maho-agent
+// interaction::InteractionRequest plus the FFI kind-8 wire payload.
+// |request_id| is the reply key for resolve/timeout/cancel.
+struct InteractionRequestInfo {
+  string request_id;
+  InteractionRequestKind kind;
+  // Question prompt (kQuestion) or effect description (kConfirmation).
+  string question;
+  array<InteractionRequestOption> options;
+  // Opaque review artifact reference, when the request carries one.
+  string? artifact_ref;
+  // Kernel-side lifecycle state ("pending" for live requests).
+  string? state;
+};
+
+// A single runtime event in the session event stream.
+struct ReplayWindowInfo {
+  uint64 omitted_turns;
+  uint64 omitted_through_sequence;
+};
+
+struct RuntimeEvent {
+  // What kind of event this is.
+  RuntimeEventKind kind;
+
+  string session_id;
+  string? request_id;
+
+  // Monotonically increasing sequence number within the session.
+  uint64 sequence;
+
+  // Timestamp (seconds since Unix epoch, with fractional).
+  double timestamp;
+
+  // Text payload — meaning depends on kind:
+  //   kAssistantToken: the token text
+  //   kTurnComplete: the full accumulated text
+  //   kError: the error message
+  //   kSessionStatus: status string (e.g. "started", "completed")
+  //   kConnectionStateChanged: state name
+  string? text;
+
+  // Structured payloads for specific event kinds.
+  ToolCallInfo? tool_call;
+  ToolResultInfo? tool_result;
+  ApprovalRequestInfo? approval_request;
+  ApprovalResultInfo? approval_result;
+  // Set for kInteractionRequest: the structured request payload.
+  InteractionRequestInfo? interaction_request;
+  BrowserContextPayload? browser_context;
+  // Set for kArtifactCreated: metadata for the created artifact.
+  ArtifactInfo? artifact;
+
+  // Optional typed metadata for kError credential failures. The associated
+  // text is always a generic safe message; raw credential diagnostics never
+  // cross this interface.
+  CredentialErrorCode? credential_error_code;
+  [MinVersion=1] uint64 sequence_start;
+  [MinVersion=1] ReplayWindowInfo? replay_window;
+};
+
+// Lifecycle status of a session.
+enum SessionStatus {
+  kCreated,
+  kActive,
+  // The current turn finished but the session is still live and accepts
+  // further prompts. Distinct from kCompleted which means the session ended.
+  kIdle,
+  kPausedForApproval,
+  kCompleted,
+  kCancelled,
+  kError,
+};
+
+// Result of an approval decision (for history replay / timeline cards).
+struct ApprovalResultInfo {
+  // Matches the approval_id from the corresponding ApprovalRequestInfo.
+  string approval_id;
+  // Whether the user approved.
+  bool approved;
+  // Optional explanation from the user.
+  string? reason;
+  ApprovalPolicy approval_policy;
+  ApprovalSensitivity sensitivity;
+  ApprovalState state;
+  ApprovalDecision decision;
+  bool page_derived_justification;
+};
+
+// Lightweight session metadata for the session list.
+struct SessionInfo {
+  string session_id;
+  string? title;
+  // One-line summary of what the session accomplished (set on completion).
+  string? summary;
+  double created_at;
+  double? updated_at;
+  string adapter_name;
+  bool is_active;
+  // Whether this session is read-only (historical, not the active session).
+  // When true, SubmitPrompt/CancelTurn/RespondToApproval will be rejected.
+  bool is_read_only;
+  // Structured session lifecycle status.
+  SessionStatus status;
+  // Total number of events in this session (for progress indication).
+  uint32 event_count;
+  // Number of tool calls executed in this session.
+  uint32 tool_call_count;
+  // The runtime-owned session ID (e.g. OpenCode server session ID).
+  // Null for legacy sessions or if not yet assigned.
+  string? runtime_session_id;
+  // Last known runtime connection state for this session.
+  // "connected", "disconnected", "paused_for_approval", etc.
+  string? last_runtime_state;
+};
+
+// ==========================================================================
+// PAYG credit balance types
+// ==========================================================================
+
+// Current PAYG credit balance for the active user.
+struct CreditBalanceInfo {
+  // Credit balance in USD. 0.0 if anonymous or relay unreachable.
+  float balance_usd;
+  // Unix timestamp (seconds) of last credit purchase. 0 if never purchased.
+  int64 last_purchase_at;
+  // Unix timestamp (seconds) of last credit consumption. 0 if never consumed.
+  int64 last_consumption_at;
+  // True only when a stored access token was rejected by the relay (401/403),
+  // i.e. the session expired and re-login is required. Distinct from the
+  // anonymous case (no token) where this is false and balance is a real 0.
+  bool session_expired;
+};
+
+// A selectable model for a provider in the AI composer.
+struct AIModelOption {
+  string id;
+  string label;
+};
+
+// A selectable provider and its locally available model options. Dynamic
+// providers expose their persisted model when one is available.
+struct AIProviderOption {
+  string id;
+  string label;
+  array<AIModelOption> model_options;
+};
+
+enum ReasoningEffort {
+  kLow,
+  kMedium,
+  kHigh,
+};
+
+struct ReasoningOption {
+  ReasoningEffort effort;
+  string label;
+};
+
+// Snapshot of AI settings and locally available selector options. Used by the
+// AI panel to display and update the provider, model, and reasoning choices.
+struct AISettingsInfo {
+  // Provider id selected in chrome://maho-settings?pane=maho-ai
+  // (e.g., "openai", "anthropic", "openai-compat"). Empty if not configured.
+  string active_provider_id;
+  // Active model id (e.g., "gpt-4o-mini"). Empty if not configured.
+  string active_model_id;
+  // Active reasoning effort. Defaults to kMedium for missing or invalid prefs.
+  ReasoningEffort active_reasoning_effort;
+  array<AIProviderOption> provider_options;
+  array<ReasoningOption> reasoning_options;
+};
+
+// ==========================================================================
+// Session runtime configuration — permission tier and autonomy flags
+// (plan row 4). Display/change surface only: the CapabilityBroker remains
+// the sole enforcement point (plan rows 1/3/5).
+// ==========================================================================
+
+// Per-session agent runtime configuration. Mirrors the broker's
+// CapabilityRequestContext triple. |permission_tier| is one of
+// "read_only", "guard", "full_access"; unknown values fail closed to
+// "guard" broker-side.
+struct RuntimeConfigInfo {
+  string permission_tier;
+  bool final_confirm;
+  bool proactive_mode;
+  // Mail read consent, mirroring the maho.ai.mail_read_allowed pref. Carried
+  // here so the panel and chrome://maho-settings resolve Mail access from one
+  // source of truth. Mail writes are never granted by this flag; they keep
+  // their per-call typed approval in the Mail authorization table.
+  bool mail_read_allowed;
+};
+
+// ==========================================================================
+// Interfaces
+// ==========================================================================
+
+// Used by the WebUI page to bootstrap bidirectional communication.
+enum ControlActivityState {
+  kIdle,
+  kReading,
+  kActing,
+  kWaitingApproval,
+  kPaused,
+  kDisconnected,
+  kFailed,
+};
+
+struct ControlActivitySnapshot {
+  string controller_name;
+  ControlActivityState state;
+  string target_title;
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+// Browser-side handler for requests from WebUI page.
+interface PageHandler {
+  // --- Session-oriented methods (new contract) ---
+
+  // Atomically consume the profile-scoped request used during cold panel init.
+  // Returns kChat when no new request is pending or the generation is stale.
+  ConsumePendingSurface(uint64 last_seen_generation)
+      => (SurfaceRequest request);
+  ListAllRoutines()
+      => (array<maho_routines.mojom.RoutineInfo> routines);
+  CreateRoutine(string name, string prompt, string? schedule, string? trigger)
+      => (bool ok);
+  StartRoutine(string id) => (string? run_id, string? error);
+  GetRoutineRunStatuses()
+      => (array<maho_routines.mojom.RoutineRunStatus> statuses);
+  GetRoutineUserTier() => (int32 tier);
+  RespondToRoutineApproval(string run_id, string approval_id, bool approved)
+      => (bool ok);
+  ListRunHistory(string? routine_id, uint32 limit)
+      => (array<maho_routines.mojom.RoutineRunRecord> records);
+
+  // Get the current runtime connection state.
+  GetConnectionState() => (RuntimeConnectionState state,
+                           string active_adapter_name);
+
+  // List available sessions.
+  GetSessionList() => (array<SessionInfo> sessions);
+
+  // Start a new session. Returns the session info and begins streaming
+  // events to the Page interface via OnRuntimeEvent.
+  // |mode| controls the interaction persona for the initial prompt only;
+  // subsequent prompts supply their own mode via SubmitPrompt.
+  StartSession(string? initial_prompt, InteractionMode mode) => (SessionInfo session);
+
+  // Resume/reconnect to an existing session. For the currently active session,
+  // returns live state and replay events. For historical sessions, returns
+  // read-only metadata (is_read_only=true) and persisted events; no runtime
+  // reconnection occurs and mutation methods will be silently rejected.
+  ResumeSession(string session_id) => (SessionInfo? session,
+                                        array<RuntimeEvent> replay_events);
+
+  // Fetch the event history for a session without resuming/reconnecting it.
+  // Use this for read-only history display (e.g. viewing a past session).
+  GetSessionHistory(string session_id, uint32 offset, uint32 limit)
+      => (array<RuntimeEvent> events, uint32 total_count);
+
+  // Artifact operations. All reject unknown/deleted ids. Preview/export URLs
+  // are capability-gated chrome-untrusted URLs (null until the untrusted hosts
+  // are registered).
+  ListArtifacts(string session_id) => (array<ArtifactInfo> artifacts);
+  RenameArtifact(string artifact_id, string display_name)
+      => (bool success, string? error);
+  DeleteArtifact(string artifact_id) => (bool success);
+  GetArtifactPreviewUrl(string artifact_id) => (string? url);
+  GetArtifactExportUrl(string artifact_id) => (string? url);
+
+  // Return the list of open tabs in the browser window associated with this
+  // panel.  Used by the context picker to populate the tab source list.
+  // Tabs are returned in tab-strip order; the active tab has is_active=true.
+  // Returns an empty array if no browser or tab strip is available (e.g. the
+  // panel is running in a popup window without a tab strip).
+  GetOpenTabs() => (array<TabItem> tabs);
+
+  // Search browser history for pages matching |query|.
+  // Returns up to |max_results| items ordered by relevance/recency.
+  // |query| may be empty, in which case the most recently visited pages are
+  // returned.  Returns an empty array if the core is not available or the
+  // search produces no results.
+  SearchHistory(string query, uint32 max_results) => (array<HistoryItem> items);
+
+  // Search bookmarks for pages matching |query|.
+  // Returns up to |max_results| items.
+  // Returns an empty array if the core is not available or the search produces no results.
+  SearchBookmarks(string query, uint32 max_results) => (array<BookmarkItem> items);
+
+
+  // Submit a user prompt into the active session.
+  // Legacy path (Phase A and earlier): pass |attach_browser_context|=true and
+  // leave |attachments| null — the adapter injects the active tab's page
+  // context at submit time as before.
+  //
+  // Phase B picker path: pass |attachments| as a non-null array of
+  // ContextAttachment items chosen by the user.  The handler resolves each
+  // attachment at submit time (fetching content for kOpenTab entries) and
+  // builds the augmented prompt.  |attach_browser_context| is ignored when
+  // |attachments| is non-null so callers need not clear it.
+  //
+  // Invariant: exactly one of the two mechanisms should be active per call —
+  // either |attach_browser_context|=true + null |attachments|, or non-null
+  // |attachments| (possibly empty, meaning no context attached).
+  SubmitPrompt(string session_id, string prompt, bool attach_browser_context,
+               InteractionMode mode, array<ContextAttachment>? attachments,
+               ChatIntent chat_intent) => (bool accepted);
+
+  // Device/profile-local composer drafts backed by maho-core settings.
+  ComposerDraftGet(string scope_json) => (string? draft_json);
+  ComposerDraftSet(string scope_json, string text) => (bool ok);
+  ComposerDraftDelete(string scope_json) => (bool ok);
+
+  // Cancel the current turn in a session.
+  CancelTurn(string session_id);
+
+  // Respond to a tool approval request.
+  RespondToApproval(string session_id, string approval_id, bool approved);
+
+  // Close the AI side panel hosting this WebUI.
+  ClosePanel();
+
+  // Subscribe to external control activity (Maho CLI / remote MCP client
+  // driving a tab). The response carries the live session timeline (one entry
+  // per action, chronological); subsequent changes arrive via
+  // Page::OnControlActivityChanged.
+  WatchControlActivity() => (array<ControlActivitySnapshot> entries);
+
+  // Open the settings page chrome://maho-settings/
+  OpenSettings();
+
+  // Open the settings page to a specific safe Maho AI pane.
+  OpenSettingsPane(string pane_key);
+
+  // Get the current AI selector settings and local option lists from prefs.
+  // Called on mount and on visibility change to reflect changes saved in
+  // chrome://maho-settings?pane=maho-ai.
+  GetAISettings() => (AISettingsInfo info);
+
+  // Persist the global Default provider, model, and reasoning selection.
+  // Writes the maho.ai.provider + maho.ai.model pair directly: this is the
+  // same Default route that the Settings Models page's Chat & Agent — Default
+  // row and every task without an explicit override resolve through. Returns
+  // false without changing prefs when any supplied option is invalid.
+  SetDefaultAISelection(string provider_id, string model_id,
+                        ReasoningEffort reasoning_effort) => (bool accepted);
+
+  // Get the active session's runtime configuration (permission tier and
+  // autonomy flags). Returns broker defaults (guard/true/false) when no
+  // session is active.
+  GetRuntimeConfig() => (RuntimeConfigInfo config);
+
+  // Apply a runtime configuration change to the active session. Returns
+  // accepted=false when the handler or runtime is unavailable; the caller
+  // keeps its previous displayed state in that case.
+  SetRuntimeConfig(RuntimeConfigInfo config) => (bool accepted);
+
+  // Get the current view mode (sidebar or floating)
+  GetViewMode() => (ViewMode mode);
+
+  // Set the view mode
+  SetViewMode(ViewMode mode);
+
+  // ==========================================================================
+  // Tab Tidy methods — default-ON, no pref gate, no A/B flag.
+  // ==========================================================================
+
+  // Request an LLM-driven tidy pass for the tabs in the active space.
+  // |tabs| is the current list of non-pinned tabs. Returns suggested folder
+  // groupings; an empty array means no groupings were produced (too few tabs
+  // or LLM returned nothing usable).
+  RequestTabTidy(array<TabInfo> tabs) => (array<TidyFolder> folders);
+
+  // Apply a confirmed set of folder suggestions to the active space.
+  // Creates one folder per entry in |folders| and moves the specified tabs
+  // into each folder via the core shell event dispatcher.
+  ApplyTabTidyFolders(array<TidyFolder> folders);
+
+  // ==========================================================================
+  // PAYG credit balance methods
+  // ==========================================================================
+
+  // Returns current PAYG credit balance for the active user.
+  // Returns 0 balance if user is anonymous or relay unreachable.
+  GetCreditBalance() => (CreditBalanceInfo info);
+
+  // Returns the LemonSqueezy checkout URL for buying a credit pack.
+  // pack_size_usd MUST be one of 10, 50, 100 - otherwise empty URL returned.
+  GetBuyCreditsUrl(int32 pack_size_usd) => (string checkout_url);
+
+  // ==========================================================================
+  // AI Extensibility methods
+  // ==========================================================================
+
+  // Profile CRUD
+  CreateAiProfile(string name, string system_prompt, string? model) => (string? profile_id);
+  GetAiProfiles() => (string profiles_json);
+  UpdateAiProfile(string id, string profile_json) => (bool success);
+  DeleteAiProfile(string id) => (bool success);
+  ImportProfileFromToml(string workspace_id, string toml_path) => (string? profile_id_or_error);
+
+  // Workspace CRUD & Info
+  CreateAiWorkspace(string name, string? space_id) => (string? workspace_json);
+  GetActiveAiWorkspace(string space_id) => (string? workspace_json);
+  GetAiWorkspaces() => (string workspaces_json);
+  SwitchWorkspaceProfile(string workspace_id, string profile_id) => (bool success);
+
+  // MCP Server management
+  RegisterMcpServer(string workspace_id, string config_json) => (bool success);
+  RemoveMcpServer(string workspace_id, string server_name) => (bool success);
+  GetMcpServers(string workspace_id) => (string servers_json);
+  ApproveMcpServerTrust(string workspace_id, string server_name, array<string> tools) => (bool success);
+
+  // CLI Tool management
+  RegisterCliTool(string workspace_id, string tool_json) => (bool success);
+  RemoveCliTool(string workspace_id, string tool_name) => (bool success);
+  GetCliTools(string workspace_id) => (string tools_json);
+
+  // Active resolved tools
+  GetWorkspaceEffectiveTools(string workspace_id) => (string tools_json);
+
+  // ==========================================================================
+  // Voice input methods (desktop on-device STT via whisper.cpp / maho-stt).
+  // Push-to-talk: StartVoiceSession loads the model + opens a worker session,
+  // PushAudioChunk streams 16 kHz mono f32 PCM captured by the renderer's
+  // AudioWorklet, StopVoiceSession finalizes and transcribes. Transcript
+  // results are pushed back via Page.OnVoicePartial/OnVoiceFinal/OnVoiceError.
+  // ==========================================================================
+
+  // Begin a voice capture session. Returns |accepted|=false if voice is
+  // unavailable (model missing/downloading, another session active, or the
+  // engine failed to initialize).
+  StartVoiceSession() => (bool accepted);
+
+  // Feed a chunk of 16 kHz mono f32 PCM into the active voice session.
+  // No-op if no session is active.
+  PushAudioChunk(array<float> pcm16k);
+
+  // Stop the active voice session; triggers a final transcription pass.
+  StopVoiceSession();
+};
+
+// WebUI-side interface for browser-to-page push updates.
+interface Page {
+  // --- Session event push (new contract) ---
+
+  // A warm-panel surface request. The browser clears the pending state before
+  // emitting this notification; the renderer rejects stale generations.
+  OnSurfaceRequested(SurfaceRequest request);
+
+  // A Routine run changed. The AI panel forwards the established Routine DTO
+  // through its existing callback router so one panel owns one backend status
+  // subscription.
+  OnRoutineRunStatusChanged(maho_routines.mojom.RoutineRunStatus status);
+
+  // A runtime event occurred in the active session.
+  OnRuntimeEvent(RuntimeEvent event);
+
+  // The runtime connection state changed.
+  OnConnectionStateChanged(RuntimeConnectionState state);
+
+  // A session's metadata was updated (title, status, etc.).
+  OnSessionUpdated(SessionInfo session);
+
+  // The AI provider/model selection changed in profile prefs (e.g., user
+  // saved a new provider in chrome://maho-settings?pane=maho-ai).
+  OnAISettingsChanged(AISettingsInfo info);
+
+  // The durable runtime permissions changed in profile prefs.
+  OnRuntimeConfigChanged(RuntimeConfigInfo config);
+
+  // --- Voice input push (desktop on-device STT) ---
+
+  // An interim transcript for the in-progress utterance (may be revised).
+  OnVoicePartial(string transcript);
+
+  // The final transcript for the completed utterance.
+  OnVoiceFinal(string transcript);
+
+  // A voice session error (model load failure, transcription error, etc.).
+  OnVoiceError(string message);
+
+  // Emitted when C++ accepts an Ask Maho request and creates a session for it.
+  OnAskMahoSessionAccepted(string request_id, SessionInfo session);
+
+  // An external controller (Maho CLI / remote MCP client) activity changed.
+  // The array is the chronological action timeline of the live session.
+  OnControlActivityChanged(array<ControlActivitySnapshot> entries);
+};

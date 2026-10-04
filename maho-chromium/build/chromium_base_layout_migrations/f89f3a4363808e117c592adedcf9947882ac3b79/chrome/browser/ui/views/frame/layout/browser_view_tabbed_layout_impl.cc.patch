@@ -1,0 +1,206 @@
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -22,6 +22,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/immersive/immersive_mode_controller.h"
++#include "chrome/browser/ui/side_panel/side_panel_enums.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/animations/side_panel_animations.h"
+@@ -1459,33 +1460,33 @@
+   int contents_left = contents_x;
+   int contents_right = contents_x + contents_width;
+ 
+-  if (IsParentedToAndVisible(views().projects_panel_container,
++  if (IsParentedToAndVisible(views().organizer_panel_container,
+                              views().browser_view)) {
+-    int target_width = projects_panel::kProjectsPanelMinWidth;
+-    bool projects_panel_should_appear_elevated = true;
++    int target_width = organizer_panel::kOrganizerPanelMinWidth;
++    bool organizer_panel_should_appear_elevated = true;
+     if (views().vertical_tab_strip_region_view &&
+         views().vertical_tab_strip_region_view->GetVisible()) {
+       const int vertical_tab_strip_width =
+           views().vertical_tab_strip_region_view->GetPreferredSize().width();
+-      projects_panel_should_appear_elevated =
+-          vertical_tab_strip_width < projects_panel::kProjectsPanelMinWidth;
+-      if (!projects_panel_should_appear_elevated) {
++      organizer_panel_should_appear_elevated =
++          vertical_tab_strip_width < organizer_panel::kOrganizerPanelMinWidth;
++      if (!organizer_panel_should_appear_elevated) {
+         target_width = std::max(target_width - views::Separator::kThickness,
+                                 vertical_tab_strip_width -
+                                     views::Separator::kThickness);
+       }
+     }
+-    views().projects_panel_container->SetTargetWidth(target_width);
+-    views().projects_panel_container->SetIsElevated(
+-        projects_panel_should_appear_elevated);
++    views().organizer_panel_container->SetTargetWidth(target_width);
++    views().organizer_panel_container->SetIsElevated(
++        organizer_panel_should_appear_elevated);
+ 
+     const double reveal_amount =
+-        views().projects_panel_container->GetResizeAnimationValue();
++        views().organizer_panel_container->GetResizeAnimationValue();
+     const int visible_width = base::ClampFloor(target_width * reveal_amount);
+ 
+-    gfx::Rect projects_panel_bounds(contents_x, client_area.y(), visible_width,
++    gfx::Rect organizer_panel_bounds(contents_x, client_area.y(), visible_width,
+                                     client_area.height());
+-    layout.AddChild(views().projects_panel_container, projects_panel_bounds);
++    layout.AddChild(views().organizer_panel_container, organizer_panel_bounds);
+   }
+ 
+   // Infobar sits at the top of the contents column; contents start below it.
+@@ -1533,9 +1534,6 @@
+     if (IsParentedTo(views().bookmark_bar, views().top_container)) {
+       top_container_layout.AddChild(views().bookmark_bar, gfx::Rect(), false);
+     }
+-    if (IsParentedTo(views().loading_bar, views().top_container)) {
+-      top_container_layout.AddChild(views().loading_bar, gfx::Rect(), false);
+-    }
+     if (IsParentedTo(views().top_container_separator, views().top_container)) {
+       top_container_layout.AddChild(views().top_container_separator,
+                                     gfx::Rect(), false);
+@@ -1550,9 +1548,6 @@
+   }
+   if (IsParentedTo(views().bookmark_bar, views().browser_view)) {
+     layout.AddChild(views().bookmark_bar, gfx::Rect(), false);
+-  }
+-  if (IsParentedTo(views().loading_bar, views().browser_view)) {
+-    layout.AddChild(views().loading_bar, gfx::Rect(), false);
+   }
+ 
+   if (IsParentedTo(views().infobar_container, views().browser_view)) {
+@@ -1564,72 +1559,48 @@
+     layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
+   }
+ 
+-  if (IsParentedToAndVisible(views().toolbar_height_side_panel,
++  if (IsParentedToAndVisible(views().side_panel,
+                              views().browser_view)) {
+-    SidePanel* const toolbar_height_side_panel =
+-        views().toolbar_height_side_panel;
+-    const bool toolbar_height_side_panel_leading =
+-        toolbar_height_side_panel->IsRightAligned() == base::i18n::IsRTL();
+-    const double toolbar_height_side_panel_reveal_amount =
+-        toolbar_height_side_panel->GetAnimationValue();
++    SidePanel* const side_panel =
++        views().side_panel;
++    const bool side_panel_leading =
++        side_panel->IsRightAligned() == base::i18n::IsRTL();
++    const double side_panel_reveal_amount =
++        side_panel->GetAnimationValue();
+     const int target_width =
+-        toolbar_height_side_panel->GetPreferredSize().width();
++        side_panel->GetPreferredSize().width();
+     const int visible_width = base::ClampFloor(
+-        target_width * toolbar_height_side_panel_reveal_amount);
++        target_width * side_panel_reveal_amount);
+     if (visible_width > 0) {
+-      if (toolbar_height_side_panel_leading) {
++      if (side_panel_leading) {
+         contents_left += visible_width;
+       } else {
+         contents_right -= visible_width;
+       }
+     }
+-    const int top = client_area.y();
+-    gfx::Rect toolbar_height_bounds(
+-        toolbar_height_side_panel_leading
++    const int top =
++        side_panel->GetCurrentEntryType() == SidePanelType::kContent
++            ? contents_top
++            : client_area.y();
++    gfx::Rect side_panel_bounds(
++        side_panel_leading
+             ? contents_x - (target_width - visible_width)
+             : client_area.right() - visible_width,
+         top, target_width, client_area.bottom() - top);
+-    layout.AddChild(views().toolbar_height_side_panel, toolbar_height_bounds);
++    layout.AddChild(views().side_panel, side_panel_bounds);
+ 
+     if (IsParentedToAndVisible(views().side_panel_animation_content,
+                                views().browser_view)) {
+-      gfx::Rect toolbar_height_side_panel_final_bounds(
+-          toolbar_height_side_panel_leading ? contents_x
++      gfx::Rect side_panel_final_bounds(
++          side_panel_leading ? contents_x
+                                             : client_area.right() - target_width,
+-          toolbar_height_bounds.y(), target_width,
+-          toolbar_height_bounds.height());
++          side_panel_bounds.y(), target_width,
++          side_panel_bounds.height());
+       gfx::Rect side_panel_animation_content_bounds =
+-          toolbar_height_side_panel->GetContentAnimationBounds(
+-              toolbar_height_side_panel_final_bounds);
++          side_panel->GetContentAnimationBounds(
++              side_panel_final_bounds);
+       layout.AddChild(views().side_panel_animation_content,
+                       side_panel_animation_content_bounds);
+-    }
+-  }
+-
+-  // Side panels: zero-out toolbar-height, allow contents-height if visible.
+-  if (IsParentedTo(views().contents_height_side_panel, views().browser_view)) {
+-    const bool panel_visible =
+-        views().contents_height_side_panel->GetVisible();
+-    if (panel_visible) {
+-      const int panel_width =
+-          views().contents_height_side_panel->GetPreferredSize().width();
+-      const bool is_right =
+-          views().contents_height_side_panel->IsRightAligned();
+-      const int panel_top = infobar_visible ? client_area.y() + infobar_height
+-                                             : client_area.y();
+-      const gfx::Rect panel_bounds(
+-          is_right ? contents_right - panel_width : contents_left, panel_top,
+-          panel_width, client_area.height() - infobar_height);
+-      layout.AddChild(views().contents_height_side_panel, panel_bounds);
+-      if (panel_width > 0) {
+-        if (is_right) {
+-          contents_right -= panel_width;
+-        } else {
+-          contents_left += panel_width;
+-        }
+-      }
+-    } else {
+-      layout.AddChild(views().contents_height_side_panel, gfx::Rect(), false);
+     }
+   }
+ 
+@@ -1650,10 +1621,10 @@
+ 
+   if (views().maho_content_gradient_view) {
+     gfx::Rect shared_glass_bounds = contents_bounds;
+-    if (views().contents_height_side_panel &&
+-        views().contents_height_side_panel->GetVisible()) {
++    if (views().side_panel &&
++        views().side_panel->GetVisible()) {
+       const auto panel_bounds = layout.GetBoundsFor(
+-          views().contents_height_side_panel, views().browser_view);
++          views().side_panel, views().browser_view);
+       if (panel_bounds) {
+         shared_glass_bounds.Union(*panel_bounds);
+       }
+@@ -1669,8 +1640,6 @@
+     layout.AddChild(views().maho_create_space_blank_view, contents_bounds);
+   }
+ 
+-  views().multi_contents_view->SetShouldShowLeadingSeparator(false);
+-  views().multi_contents_view->SetShouldShowTrailingSeparator(false);
+   views().multi_contents_view->SetShouldShowTopSeparator(false);
+ 
+   return layout;
+@@ -1828,8 +1797,8 @@
+ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
+     const BrowserLayoutParams& params) {
+   const bool maho_ai_panel_showing =
+-      views().toolbar_height_side_panel &&
+-      views().toolbar_height_side_panel->IsMahoAiPanelShowing();
++      views().side_panel &&
++      views().side_panel->IsMahoAiPanelShowing();
+   views::View* contents = views().multi_contents_view;
+   if (contents) {
+     if (IsMahoArcLayoutActive()) {

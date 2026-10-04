@@ -1,0 +1,25 @@
+diff --git c/chrome/browser/ui/ash/arc/arc_open_url_delegate_impl.cc w/chrome/browser/ui/ash/arc/arc_open_url_delegate_impl.cc
+index 967191ed632c11877cbcbb8ef7057fbf7631eac3..0e43ae03607b9f23756bd0ae8c99c671bf19f43d 100644
+--- c/chrome/browser/ui/ash/arc/arc_open_url_delegate_impl.cc
++++ w/chrome/browser/ui/ash/arc/arc_open_url_delegate_impl.cc
+@@ -40,6 +40,8 @@
+ #include "chrome/browser/ui/ash/shelf/app_service/app_service_app_window_arc_tracker.h"
+ #include "chrome/browser/ui/ash/shelf/app_service/app_service_app_window_shelf_controller.h"
+ #include "chrome/browser/ui/ash/shelf/chrome_shelf_controller.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/web_applications/web_app_helpers.h"
+ #include "chrome/browser/web_applications/web_app_utils.h"
+ #include "chrome/browser/webshare/prepare_directory_task.h"
+@@ -383,8 +385,9 @@ void ArcOpenUrlDelegateImpl::OpenChromePageFromArc(ChromePage page) {
+ 
+   if (auto it = kBrowserSettingsMap.find(page);
+       it != kBrowserSettingsMap.end()) {
+-    OpenUrlFromArc(
+-        GURL(ash::chrome_urls::kChromeUISettingsURL).Resolve(it->second));
++    if (auto* browser = GetLastActiveBrowserWindowInterfaceWithAnyProfile()) {
++      chrome::ShowSettingsSubPage(browser, it->second);
++    }
+     return;
+   }
+ 

@@ -1,0 +1,27 @@
+template("tailwind_css") {
+  action(target_name) {
+    forward_variables_from(invoker, [ "deps", "visibility", "depfile" ])
+
+    script = "//maho/build/scripts/run_tailwind.py"
+
+    _input = invoker.input
+    _output = invoker.output
+
+    inputs = [ _input ] + invoker.sources
+
+    outputs = [ _output ]
+
+    args = [
+      "--input", rebase_path(_input, root_build_dir),
+      "--output", rebase_path(_output, root_build_dir),
+      "--cwd", rebase_path("//website", root_build_dir),
+      "--minify",
+    ]
+
+    if (defined(depfile)) {
+      args += [
+        "--depfile", rebase_path(depfile, root_build_dir),
+      ]
+    }
+  }
+}

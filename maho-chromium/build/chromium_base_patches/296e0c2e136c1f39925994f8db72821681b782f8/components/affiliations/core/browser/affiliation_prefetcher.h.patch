@@ -1,0 +1,16 @@
+diff --git a/components/affiliations/core/browser/affiliation_prefetcher.h b/components/affiliations/core/browser/affiliation_prefetcher.h
+index 49358a314bbc9a82d7e6f626709b53d7d15f2079..01d1ee955029b6b65ac8055e7b9e81d34646f796 100644
+--- a/components/affiliations/core/browser/affiliation_prefetcher.h
++++ b/components/affiliations/core/browser/affiliation_prefetcher.h
+@@ -29,6 +29,11 @@ class AffiliationPrefetcher : public AffiliationSource::Observer {
+   // Registers an affiliation source.
+   void RegisterSource(std::unique_ptr<AffiliationSource> source);
+ 
++  // Stops delayed initialization and releases all sources. This must run during
++  // affiliation service shutdown, before dependent sources such as password
++  // stores are destroyed.
++  void Shutdown();
++
+  private:
+   void OnResultFromSingleSourceReceived(std::vector<FacetURI> results);
+ 

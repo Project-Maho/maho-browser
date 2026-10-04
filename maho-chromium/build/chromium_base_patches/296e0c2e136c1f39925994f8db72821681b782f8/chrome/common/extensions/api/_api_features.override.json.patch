@@ -1,0 +1,18 @@
+diff --git a/chrome/common/extensions/api/_api_features.override.json b/chrome/common/extensions/api/_api_features.override.json
+index 6696064d0c7c98d8fbb9d7f627f8f2a985390cf9..2da8f026f560b2529d4611529ba901d18b5e6eca 100644
+--- a/chrome/common/extensions/api/_api_features.override.json
++++ b/chrome/common/extensions/api/_api_features.override.json
+@@ -47,5 +47,12 @@
+ //   }
+ 
+ {
+-  // Entries go here.
++  "maho.splitView": {
++    "dependencies": ["permission:maho"],
++    "contexts": ["privileged_extension"]
++  },
++  "maho.sidePanel": {
++    "dependencies": ["permission:maho"],
++    "contexts": ["privileged_extension"]
++  }
+ }

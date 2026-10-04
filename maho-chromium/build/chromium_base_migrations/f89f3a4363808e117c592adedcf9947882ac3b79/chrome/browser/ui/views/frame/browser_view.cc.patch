@@ -1,0 +1,566 @@
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -1035,20 +1035,22 @@
+       this, std::make_unique<MultiContentsViewDelegateImpl>(*browser_));
+   multi_contents_view_ = AddChildView(std::move(multi_contents_view));
+ 
+-  if (browser_->is_maho_mini()) {
++  // Desktop Browser::Browser creates BrowserView through BrowserWindow factory.
++  // Keep concrete casts at Maho APIs that still require Browser.
++  if (static_cast<Browser*>(browser_.get())->is_maho_mini()) {
+     maho_mini_top_bar_ = AddChildView(
+-        std::make_unique<maho::MahoMiniTopBarView>(browser_.get(), this));
++        std::make_unique<maho::MahoMiniTopBarView>(static_cast<Browser*>(browser_.get()), this));
+   }
+   set_contents_view(multi_contents_view_);
+ 
+   if (GetIsNormalType()) {
+     maho_sidebar_container_ = AddChildView(
+-        std::make_unique<maho::MahoSidebarContainerView>(browser_.get()));
++        std::make_unique<maho::MahoSidebarContainerView>(static_cast<Browser*>(browser_.get())));
+ 
+     // Maho R-12: exact primary Incognito injects the decorative
+     // Glasses identity and fixed private semantic colors into the
+     // already-built sidebar. Regular/Guest/other-OTR are untouched.
+-    if (Profile* maho_private_profile = browser_->profile();
++    if (Profile* maho_private_profile = browser_->GetProfile();
+         MahoIsCapabilityAllowed(
+             maho_private_profile,
+             MahoPrivateCapability::kPrivateVisuals)) {
+@@ -1068,7 +1070,7 @@
+         AddChildView(std::make_unique<MahoCreateSpaceBlankView>());
+     maho_create_space_blank_view_->SetVisible(false);
+ 
+-    if (auto* strip = browser_->tab_strip_model()) {
++    if (auto* strip = browser_->GetTabStripModel()) {
+       maho_mru_tab_tracker_ =
+           std::make_unique<maho::MahoMruTabTracker>(strip);
+       maho_ctrl_tab_switcher_controller_ =
+@@ -1227,7 +1229,7 @@
+ }
+ 
+ BrowserView::~BrowserView() {
+-  browser_->tab_strip_model()->RemoveObserver(this);
++  browser_->GetTabStripModel()->RemoveObserver(this);
+   maho_sidebar_palette_subscription_ = {};
+ 
+   // Remove the layout manager to avoid dangling. This needs to be earlier than
+@@ -1235,7 +1237,7 @@
+   SetLayoutManager(nullptr);
+ 
+   if (auto* core = maho::GetCore()) {
+-    maho_core_window_closed(core, std::to_string(browser_->session_id().id()).c_str());
++    maho_core_window_closed(core, std::to_string(browser_->GetSessionID().id()).c_str());
+   }
+ 
+   tab_search_bubble_host_.reset();
+@@ -1675,10 +1677,10 @@
+ }
+ 
+ bool BrowserView::IsMahoArcLayoutActive() const {
+-  const bool is_normal_window = browser_->is_type_normal();
++  const bool is_normal_window = (browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL);
+   const bool sidebar_layout_enabled =
+       maho::sidebar_prefs::IsSidebarLayoutEnabled(
+-          browser_->profile()->GetPrefs());
++          browser_->GetProfile()->GetPrefs());
+   LOG(WARNING) << "MahoPinnedDebug IsMahoArcLayoutActive: is_type_normal="
+             << is_normal_window
+             << " sidebar_layout_enabled=" << sidebar_layout_enabled;
+@@ -2125,7 +2127,7 @@
+ 
+ MahoSplitViewController* BrowserView::GetOrCreateMahoSplitViewController() {
+   if (!split_view_controller_) {
+-    split_view_controller_ = std::make_unique<MahoSplitViewController>(browser_);
++    split_view_controller_ = std::make_unique<MahoSplitViewController>(static_cast<Browser*>(browser_.get()));
+   }
+   return split_view_controller_.get();
+ }
+@@ -2496,12 +2498,6 @@
+   return autofill_bubble_handler_.get();
+ }
+ 
+-void BrowserView::ExecutePageActionIconForTesting(PageActionIconType type) {
+-  ToolbarButtonProvider::From(browser_)
+-      ->GetPageActionIconView(type)
+-      ->ExecuteForTesting();
+-}
+-
+ bool BrowserView::MaybeHandleMruTabSwitch(bool forward) {
+   if (!maho_ctrl_tab_switcher_controller_) {
+     return false;
+@@ -2527,7 +2523,7 @@
+ 
+ maho::MahoPeekController*
+ BrowserView::GetOrCreateMahoPeekController() {
+-  if (!maho::IsPeekEligible(browser_.get())) {
++  if (!maho::IsPeekEligible(static_cast<Browser*>(browser_.get()))) {
+     return nullptr;
+   }
+   auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(
+@@ -2543,7 +2539,7 @@
+ BrowserView::GetOrCreateMahoCommandOverlayController() {
+   if (!maho_command_overlay_controller_) {
+     maho_command_overlay_controller_ =
+-        std::make_unique<maho::MahoCommandOverlayController>(browser_.get());
++        std::make_unique<maho::MahoCommandOverlayController>(static_cast<Browser*>(browser_.get()));
+   }
+   return maho_command_overlay_controller_.get();
+ }
+@@ -2552,7 +2548,7 @@
+ BrowserView::GetOrCreateMahoSpacesOverlayController() {
+   if (!maho_spaces_overlay_controller_) {
+     maho_spaces_overlay_controller_ =
+-        std::make_unique<maho::MahoSpacesOverlayController>(browser_.get());
++        std::make_unique<maho::MahoSpacesOverlayController>(static_cast<Browser*>(browser_.get()));
+   }
+   return maho_spaces_overlay_controller_.get();
+ }
+@@ -2575,7 +2571,7 @@
+   }
+ 
+   std::string current_url;
+-  if (auto* contents = browser_->tab_strip_model()->GetActiveWebContents()) {
++  if (auto* contents = browser_->GetTabStripModel()->GetActiveWebContents()) {
+     const GURL& visible = contents->GetVisibleURL();
+     const GURL& url =
+         visible.is_empty() ? contents->GetLastCommittedURL() : visible;
+@@ -2591,7 +2587,7 @@
+ 
+ void BrowserView::ShowMahoCommandOverlayForNewTab() {
+   if (!GetIsNormalType()) {
+-    chrome::NewTab(browser_);
++    chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
+     return;
+   }
+ 
+@@ -3255,8 +3251,6 @@
+       multi_contents_view_->DeprecatedLayoutImmediately();
+     }
+   }
+-    }
+-  }
+ }
+ 
+ std::optional<bool> BrowserView::GetWebApiWindowResizable() const {
+@@ -3584,7 +3578,7 @@
+ 
+   if ((event.GetType() == blink::WebInputEvent::Type::kRawKeyDown ||
+        event.GetType() == blink::WebInputEvent::Type::kKeyDown) &&
+-      maho::MahoShortcutInterceptor::MaybeHandleKeyEvent(browser_.get(),
++      maho::MahoShortcutInterceptor::MaybeHandleKeyEvent(static_cast<Browser*>(browser_.get()),
+                                                           event)) {
+     return content::KeyboardEventProcessingResult::HANDLED;
+   }
+@@ -3860,7 +3854,6 @@
+           UpdateAccessibleNameForTabAt(i);
+         }
+       }
+-      }
+       break;
+     }
+ 
+@@ -4754,11 +4747,11 @@
+   CHECK(split_tab_id.has_value());
+ 
+   const std::vector<tabs::TabInterface*> split_tabs =
+-      browser_->tab_strip_model()
++      browser_->GetTabStripModel()
+           ->GetSplitData(split_tab_id.value())
+           ->ListTabs();
+   const auto active_it = std::ranges::find(
+-      split_tabs, browser_->tab_strip_model()->GetActiveTab());
++      split_tabs, browser_->GetTabStripModel()->GetActiveTab());
+   CHECK(active_it != split_tabs.end());
+   const int active_pane = std::distance(split_tabs.begin(), active_it);
+   const bool another_pane_had_focus = std::ranges::any_of(
+@@ -4778,225 +4771,178 @@
+   }
+ }
+ 
+-void BrowserView::UpdateContentsInSplitView(
+-    const std::vector<std::pair<tabs::TabInterface*, int>>& prev_tabs,
+-    const std::vector<std::pair<tabs::TabInterface*, int>>& new_tabs) {
+-  CHECK(multi_contents_view_->IsInSplitView());
++bool BrowserView::IsTabChangeInSplitView(content::WebContents* old_contents,
++                                         content::WebContents* new_contents) {
++  if (!multi_contents_view_->IsInSplitView()) {
++    return false;
++  }
++  const auto contains = [this](content::WebContents* contents) {
++    return contents &&
++           multi_contents_view_->GetContentsContainerViewFor(contents);
++  };
++  return contains(old_contents) && contains(new_contents);
++}
+ 
+-  std::optional<split_tabs::SplitTabId> split_id =
+-      browser_->GetActiveTabInterface()->GetSplit();
+-  CHECK(split_id.has_value());
++void BrowserView::UpdateTabModalDialogHost() {
++  multi_contents_view_->ExecuteOnEachVisibleContentsView(
++      base::BindRepeating([](ContentsWebView* contents_view) {
++        if (contents_view->web_contents()) {
++          tabs::TabFeatures* tab_features =
++              tabs::TabInterface::GetFromContents(contents_view->web_contents())
++                  ->GetTabFeatures();
++          // When the browser is closing, TabFeatures may be destroyed.
++          if (tab_features) {
++            tab_features->tab_dialog_manager()->UpdateModalDialogHost();
++          }
++        }
++      }));
++}
+ 
+-  split_tabs::SplitTabData* split_data =
+-      browser_->tab_strip_model()->GetSplitData(split_id.value());
+-  const std::vector<tabs::TabInterface*> split_tabs = split_data->ListTabs();
+-  CHECK_GE(split_tabs.size(), 2u);
+-  CHECK_LE(split_tabs.size(), 4u);
+-  multi_contents_view_->ShowSplitView(split_tabs.size(),
+-                                      *split_data->visual_data());
++void BrowserView::MaybeUpdateStoredFocusForWebContents(
++    content::WebContents* web_contents) {
++  ChromeWebContentsViewFocusHelper* focus_helper =
++      ChromeWebContentsViewFocusHelper::FromWebContents(web_contents);
++  if (!focus_helper) {
++    return;
++  }
+ 
+-  const bool active_view_has_focus =
+-      multi_contents_view_->GetActiveContentsView()->HasFocus();
++  views::View* stored_focus = focus_helper->GetStoredFocus();
++  if (!stored_focus) {
++    return;
++  }
+ 
+-  // Clear every pane before rebinding the collection's current leaf order.
+-  for (auto* container : multi_contents_view_->contents_container_views()) {
+-    container->contents_view()->SetWebContents(nullptr);
+-  }
++  ContentsContainerView* container = GetActiveContentsContainerView();
+ 
+-  // Clear focus to avoid reentrency when setting the web contents within
+-  // MultiContentsView. See crbug.com/458189541 and crbug.com/447369458
+-  if (!GetWidget()->IsActive()) {
+-    GetFocusManager()->ClearFocus();
+-  }
++  const MultiContentsView::FocusableViewMap* view_map =
++      multi_contents_view_->GetFocusableViewsMapFor(container);
+ 
+-  // Set web contents in multi_contents_view_ to match new_tabs and update the
+-  // active multi_contents_view_ index.
+-  for (size_t pane = 0; pane < split_tabs.size(); ++pane) {
+-    tabs::TabInterface* tab = split_tabs[pane];
+-    CHECK(split_id == tab->GetSplit());
+-    multi_contents_view_->SetWebContentsAtIndex(tab->GetContents(),
+-                                                static_cast<int>(pane));
+-    if (tab->IsActivated()) {
+-      multi_contents_view_->SetActiveIndex(static_cast<int>(pane));
++  // In the case that the last focused view of the WebContents is a
++  // focusable in the content container view, but not corresponding to the right
++  // webcontents itself, we must reset the stored focus to prevent incorrect tab
++  // activation behavior when the split view is swapped in during a tab switch.
++  auto it = view_map->find(stored_focus->GetClassName());
++  if (it != view_map->end()) {
++    views::View* current_instance = it->second;
++    if (stored_focus != current_instance) {
++      focus_helper->SetStoredFocusView(current_instance);
+     }
+   }
+-  // Focus the active contents view if it previously had focus prior to swap.
+-  if (active_view_has_focus) {
+-    multi_contents_view_->GetActiveContentsView()->RequestFocus();
+-  }
+ }
+-bool BrowserView::IsTabChangeInSplitView(content::WebContents* old_contents,
+-                                         content::WebContents* new_contents) {
+-  if (!multi_contents_view_->IsInSplitView()) {
+-    return false;
++
++bool MahoShouldRevealSharedGlass(content::WebContents* contents) {
++  if (!contents) {
++    return true;
+   }
+-  const auto contains = [this](content::WebContents* contents) {
+-    return contents &&
+-           multi_contents_view_->GetContentsContainerViewFor(contents);
+-  };
+-  return contains(old_contents) && contains(new_contents);
++  const GURL& url = contents->GetVisibleURL();
++  return url.is_empty() ||
++         (url.SchemeIs("about") && url.path() == "blank") ||
++         (url.SchemeIs("chrome") &&
++          url.host() == chrome::kChromeUINewTabHost);
+ }
+ 
+-void BrowserView::UpdateTabModalDialogHost() {
+-  multi_contents_view_->ExecuteOnEachVisibleContentsView(
+-      base::BindRepeating([](ContentsWebView* contents_view) {
+-        if (contents_view->web_contents()) {
+-          tabs::TabFeatures* tab_features =
+-              tabs::TabInterface::GetFromContents(contents_view->web_contents())
+-                  ->GetTabFeatures();
+-          // When the browser is closing, TabFeatures may be destroyed.
+-          if (tab_features) {
+-            tab_features->tab_dialog_manager()->UpdateModalDialogHost();
+-          }
+-        }
+-      }));
+-}
++void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(
++    const MahoSidebarPalette& palette) {
+ 
+-void BrowserView::MaybeUpdateStoredFocusForWebContents(
+-    content::WebContents* web_contents) {
+-  ChromeWebContentsViewFocusHelper* focus_helper =
+-      ChromeWebContentsViewFocusHelper::FromWebContents(web_contents);
+-  if (!focus_helper) {
++  // Regular windows only; Incognito keeps its fixed private surface.
++  if (browser_->GetProfile()->IsOffTheRecord()) {
+     return;
+   }
+-
+-  views::View* stored_focus = focus_helper->GetStoredFocus();
+-  if (!stored_focus) {
+-    return;
++  // Empty (zero-tab) content shows the translucent themed gradient; the
++  // content web layer is made transparent so the window glass (desktop
++  // blur) shows through, matching the sidebar. Loaded tabs use an opaque
++  // themed base (web content must be opaque).
++  if (maho_content_gradient_view_) {
++    maho_content_gradient_view_->SetPalette(palette);
+   }
+-
+-  ContentsContainerView* container = GetActiveContentsContainerView();
+-
+-  const MultiContentsView::FocusableViewMap* view_map =
+-      multi_contents_view_->GetFocusableViewsMapFor(container);
+-
+-  // In the case that the last focused view of the WebContents is a
+-  // focusable in the content container view, but not corresponding to the right
+-  // webcontents itself, we must reset the stored focus to prevent incorrect tab
+-  // activation behavior when the split view is swapped in during a tab switch.
+-  auto it = view_map->find(stored_focus->GetClassName());
+-  if (it != view_map->end()) {
+-    views::View* current_instance = it->second;
+-    if (stored_focus != current_instance) {
+-      focus_helper->SetStoredFocusView(current_instance);
++  bool has_native_ntp_surface = false;
++  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {
++    if (!view) {
++      continue;
+     }
++    const bool view_shows_native_ntp =
++        MahoShouldRevealSharedGlass(view->web_contents());
++    has_native_ntp_surface |= view_shows_native_ntp;
++    view->SetVisible(!view_shows_native_ntp);
++    view->SetMahoBackgroundOverride(std::nullopt);
++    view->SetBackgroundVisible(true);
+   }
+-}
+-
+-bool MahoShouldRevealSharedGlass(content::WebContents* contents) {
+-  if (!contents) {
+-    return true;
++  if (maho_content_gradient_view_) {
++    maho_content_gradient_view_->SetVisible(has_native_ntp_surface);
+   }
+-  const GURL& url = contents->GetVisibleURL();
+-  return url.is_empty() ||
+-         (url.SchemeIs("about") && url.path() == "blank") ||
+-         (url.SchemeIs("chrome") &&
+-          url.host() == chrome::kChromeUINewTabHost);
++#if !BUILDFLAG(IS_LINUX)
++  // On Linux there is no window vibrancy behind the translucent glass; a
++  // transparent page base would show the desktop wallpaper. Keep the default
++  // opaque page base on Linux.
++  TabStripModel* maho_tsm = browser_->GetTabStripModel();
++  for (int i = 0; i < maho_tsm->count(); ++i) {
++    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {
++      wc->SetPageBaseBackgroundColor(std::nullopt);
++    }
++  }
++#endif
+ }
+ 
+-void BrowserView::ApplyMahoSidebarPaletteToContentSurfaces(
+-    const MahoSidebarPalette& palette) {
+-
+-  // Regular windows only; Incognito keeps its fixed private surface.
+-  if (browser_->profile()->IsOffTheRecord()) {
++void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar() {
++  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(
++      maho_sidebar_container_);
++  if (!container) {
+     return;
+   }
+-  // Empty (zero-tab) content shows the translucent themed gradient; the
+-  // content web layer is made transparent so the window glass (desktop
+-  // blur) shows through, matching the sidebar. Loaded tabs use an opaque
+-  // themed base (web content must be opaque).
+-  if (maho_content_gradient_view_) {
+-    maho_content_gradient_view_->SetPalette(palette);
++  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(
++      container->sidebar_view());
++  if (!sidebar) {
++    return;
+   }
+-  bool has_native_ntp_surface = false;
+-  for (ContentsWebView* view : GetAllVisibleContentsWebViews()) {
+-    if (!view) {
+-      continue;
+-    }
+-    const bool view_shows_native_ntp =
+-        MahoShouldRevealSharedGlass(view->web_contents());
+-    has_native_ntp_surface |= view_shows_native_ntp;
+-    view->SetVisible(!view_shows_native_ntp);
+-    view->SetMahoBackgroundOverride(std::nullopt);
+-    view->SetBackgroundVisible(true);
++  const bool shared_glass_active =
++      MahoShouldRevealSharedGlass(GetActiveWebContents());
++  sidebar->SetSharedBrowserGlassActive(shared_glass_active);
++  if (!maho_sidebar_palette_subscribed_) {
++    maho_sidebar_palette_subscription_ =
++        sidebar->AddSidebarPaletteChangedCallback(base::BindRepeating(
++            &BrowserView::ApplyMahoSidebarPaletteToContentSurfaces,
++            base::Unretained(this)));
++    maho_sidebar_palette_subscribed_ = true;
+   }
+-  if (maho_content_gradient_view_) {
+-    maho_content_gradient_view_->SetVisible(has_native_ntp_surface);
++  ApplyMahoSidebarPaletteToContentSurfaces(sidebar->sidebar_palette());
++}
++
++std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {
++  std::vector<ContentsWebView*> contents_views;
++  contents_views.push_back(multi_contents_view_->GetActiveContentsView());
++  ContentsWebView* inactive_contents_view =
++      multi_contents_view_->GetInactiveContentsView();
++  if (multi_contents_view_->IsInSplitView()) {
++    contents_views.push_back(inactive_contents_view);
+   }
+-#if !BUILDFLAG(IS_LINUX)
+-  // On Linux there is no window vibrancy behind the translucent glass; a
+-  // transparent page base would show the desktop wallpaper. Keep the default
+-  // opaque page base on Linux.
+-  TabStripModel* maho_tsm = browser_->tab_strip_model();
+-  for (int i = 0; i < maho_tsm->count(); ++i) {
+-    if (content::WebContents* wc = maho_tsm->GetWebContentsAt(i)) {
+-      wc->SetPageBaseBackgroundColor(std::nullopt);
+-    }
+-  }
+-#endif
++  return contents_views;
+ }
+ 
+-void BrowserView::MaybeRefreshMahoContentSurfacesFromSidebar() {
+-  auto* container = views::AsViewClass<maho::MahoSidebarContainerView>(
+-      maho_sidebar_container_);
+-  if (!container) {
++void BrowserView::RevealTopContainerIfNeeded() {
++  auto* const immersive_mode_controller =
++      ImmersiveModeController::From(browser());
++  if (!immersive_mode_controller->IsEnabled()) {
+     return;
+   }
+-  auto* sidebar = views::AsViewClass<maho::MahoSidebarView>(
+-      container->sidebar_view());
+-  if (!sidebar) {
++
++  // With vertical tab strip, the tab strip isn't in the immersive bar so it
++  // only needs to be shown if the toolbar or location bar had focus.
++  if (auto* vertical_tab_strip_state_controller =
++          tabs::VerticalTabStripStateController::From(browser());
++      vertical_tab_strip_state_controller &&
++      vertical_tab_strip_state_controller->ShouldDisplayVerticalTabs()) {
+     return;
+   }
+-  const bool shared_glass_active =
+-      MahoShouldRevealSharedGlass(GetActiveWebContents());
+-  sidebar->SetSharedBrowserGlassActive(shared_glass_active);
+-  if (!maho_sidebar_palette_subscribed_) {
+-    maho_sidebar_palette_subscription_ =
+-        sidebar->AddSidebarPaletteChangedCallback(base::BindRepeating(
+-            &BrowserView::ApplyMahoSidebarPaletteToContentSurfaces,
+-            base::Unretained(this)));
+-    maho_sidebar_palette_subscribed_ = true;
+-  }
+-  ApplyMahoSidebarPaletteToContentSurfaces(sidebar->sidebar_palette());
+-}
+ 
+-std::vector<ContentsWebView*> BrowserView::GetAllVisibleContentsWebViews() {
+-  std::vector<ContentsWebView*> contents_views;
+-  contents_views.push_back(multi_contents_view_->GetActiveContentsView());
+-  ContentsWebView* inactive_contents_view =
+-      multi_contents_view_->GetInactiveContentsView();
+-  if (multi_contents_view_->IsInSplitView()) {
+-    contents_views.push_back(inactive_contents_view);
+-  }
+-  return contents_views;
++  std::unique_ptr<ImmersiveRevealedLock> revealer =
++      immersive_mode_controller->GetRevealedLock(
++          ImmersiveModeController::ANIMATE_REVEAL_YES);
++  constexpr auto kDefaultDelay = base::Seconds(1);
++  constexpr auto kZeroDelay = base::Seconds(0);
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE, base::DoNothingWithBoundArgs(std::move(revealer)),
++      g_disable_revealer_delay_for_testing ? kZeroDelay : kDefaultDelay);
+ }
+ 
+-void BrowserView::RevealTopContainerIfNeeded() {
+-  auto* const immersive_mode_controller =
+-      ImmersiveModeController::From(browser());
+-  if (!immersive_mode_controller->IsEnabled()) {
+-    return;
+-  }
+-
+-  // With vertical tab strip, the tab strip isn't in the immersive bar so it
+-  // only needs to be shown if the toolbar or location bar had focus.
+-  if (auto* vertical_tab_strip_state_controller =
+-          tabs::VerticalTabStripStateController::From(browser());
+-      vertical_tab_strip_state_controller &&
+-      vertical_tab_strip_state_controller->ShouldDisplayVerticalTabs()) {
+-    return;
+-  }
+-
+-  std::unique_ptr<ImmersiveRevealedLock> revealer =
+-      immersive_mode_controller->GetRevealedLock(
+-          ImmersiveModeController::ANIMATE_REVEAL_YES);
+-  constexpr auto kDefaultDelay = base::Seconds(1);
+-  constexpr auto kZeroDelay = base::Seconds(0);
+-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+-      FROM_HERE, base::DoNothingWithBoundArgs(std::move(revealer)),
+-      g_disable_revealer_delay_for_testing ? kZeroDelay : kDefaultDelay);
+-}
+-
+ void BrowserView::GetAccessiblePanes(std::vector<views::View*>* panes) {
+   // This should be in the order of pane traversal of the panes using F6
+   // (Windows) or Ctrl+Back/Forward (Chrome OS).  If one of these is
+@@ -5819,7 +5765,7 @@
+     std::string action_id =
+         maho::MahoShortcutInterceptor::ResolveActionForKeyEvent(*event);
+     if (!action_id.empty()) {
+-      maho::ExecuteCommandAction(browser(), action_id);
++      maho::ExecuteCommandAction(static_cast<Browser*>(browser()), action_id);
+       event->SetHandled();
+       return;
+     }
+@@ -5893,7 +5839,7 @@
+   std::string maho_action =
+       maho::MahoShortcutInterceptor::ResolveActionForAccelerator(accelerator);
+   if (!maho_action.empty()) {
+-    maho::ExecuteCommandAction(browser_.get(), maho_action);
++    maho::ExecuteCommandAction(static_cast<Browser*>(browser_.get()), maho_action);
+     return true;
+   }
+ 
+@@ -6081,7 +6027,7 @@
+ 
+   if (updated_state) {
+     split_tabs::SplitTabData* split_data =
+-        browser_->tab_strip_model()->GetSplitData(new_tab->GetSplit().value());
++        browser_->GetTabStripModel()->GetSplitData(new_tab->GetSplit().value());
+     const size_t pane_count = split_data->ListTabs().size();
+     multi_contents_view_->ShowSplitView(pane_count,
+                                         *split_data->visual_data());

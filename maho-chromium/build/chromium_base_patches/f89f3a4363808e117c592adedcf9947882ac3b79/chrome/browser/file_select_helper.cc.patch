@@ -1,0 +1,86 @@
+diff --git c/chrome/browser/file_select_helper.cc w/chrome/browser/file_select_helper.cc
+index 9b7c30c3b2f7c3489d32a0e82a3ce0288d249f98..37ac798df72467b4b35811c196b4c308d21a3ad1 100644
+--- c/chrome/browser/file_select_helper.cc
++++ w/chrome/browser/file_select_helper.cc
+@@ -7,6 +7,7 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <map>
+ #include <memory>
+ #include <string>
+ #include <utility>
+@@ -15,6 +16,7 @@
+ #include "base/files/file_util.h"
+ #include "base/functional/bind.h"
+ #include "base/memory/ptr_util.h"
++#include "base/no_destructor.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -72,6 +74,13 @@ DEFINE_LOCAL_ELEMENT_IDENTIFIER_VALUE(kCancelButtonId);
+ 
+ namespace {
+ 
++using ActiveChooserMap = std::map<WebContents*, FileSelectHelper*>;
++
++ActiveChooserMap& ActiveChoosers() {
++  static base::NoDestructor<ActiveChooserMap> choosers;
++  return *choosers;
++}
++
+ void DeleteFiles(std::vector<base::FilePath> paths) {
+   for (auto& file_path : paths)
+     base::DeleteFile(file_path);
+@@ -592,6 +601,26 @@ void FileSelectHelper::RunFileChooser(
+                                      params.Clone());
+ }
+ 
++bool FileSelectHelper::SelectFileForPendingChooser(
++    content::WebContents* web_contents,
++    const base::FilePath& path) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  auto it = ActiveChoosers().find(web_contents);
++  if (it == ActiveChoosers().end()) {
++    return false;
++  }
++  FileSelectHelper* helper = it->second;
++  if (!helper || helper->web_contents_ != web_contents || !helper->listener_ ||
++      helper->programmatic_file_selection_started_ ||
++      (helper->dialog_mode_ != FileChooserParams::Mode::kOpen &&
++       helper->dialog_mode_ != FileChooserParams::Mode::kOpenMultiple)) {
++    return false;
++  }
++  helper->programmatic_file_selection_started_ = true;
++  helper->FileSelected(ui::SelectedFileInfo(path), 0);
++  return true;
++}
++
+ // static
+ void FileSelectHelper::EnumerateDirectory(
+     content::WebContents* tab,
+@@ -623,6 +652,7 @@ void FileSelectHelper::RunFileChooser(
+   render_frame_host_ = render_frame_host;
+   web_contents_ = WebContents::FromRenderFrameHost(render_frame_host);
+   listener_ = std::move(listener);
++  ActiveChoosers()[web_contents_] = this;
+   InitLifecycleObserver(web_contents_);
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+@@ -664,6 +694,8 @@ void FileSelectHelper::GetFileTypesInThreadPool(FileChooserParamsPtr params) {
+ 
+ void FileSelectHelper::GetSanitizedFilenameOnUIThread(
+     FileChooserParamsPtr params) {
++  if (programmatic_file_selection_started_)
++    return;
+   if (AbortIfWebContentsDestroyed())
+     return;
+ 
+@@ -745,6 +777,7 @@ void FileSelectHelper::RunFileChooserEnd() {
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+   tab_deactivated_subscription_ = {};
++  ActiveChoosers().erase(web_contents_);
+   directory_enumeration_.reset();
+ 
+   // If there are temporary files, then this instance needs to stick around

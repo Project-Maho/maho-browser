@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W3 Dynamic List Benchmark</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; max-width: 700px; }
+    .controls { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+    .badge { background: #0366d6; color: white; border-radius: 12px; padding: 0.2rem 0.5rem; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>W3: Dynamic List Benchmark</h1>
+  <p>This page dynamically adds and removes rows in the background to simulate changing tree shape.</p>
+
+  <div class="controls">
+    <input type="text" id="new-item-name" placeholder="Item label" value="User Task" />
+    <button id="add-item-btn">Add Row</button>
+    <button id="remove-item-btn">Remove Top Row</button>
+    <button id="toggle-ticker-btn">Pause Background Ticker</button>
+  </div>
+
+  <div id="ticker-status" style="margin-bottom: 0.5rem; color: #555;">Ticker: Running (Interval 300ms)</div>
+  <div id="row-count-badge" class="badge">Total items: 4</div>
+
+  <ul id="dynamic-list">
+    <li id="item-row-1"><span class="item-title">Item 1: Initialize Database</span> <button class="delete-btn" onclick="deleteRow('item-row-1')">Delete</button></li>
+    <li id="item-row-2"><span class="item-title">Item 2: Warm Caches</span> <button class="delete-btn" onclick="deleteRow('item-row-2')">Delete</button></li>
+    <li id="item-row-3"><span class="item-title">Item 3: Sync Metadata</span> <button class="delete-btn" onclick="deleteRow('item-row-3')">Delete</button></li>
+    <li id="item-row-4"><span class="item-title">Item 4: Health Check</span> <button class="delete-btn" onclick="deleteRow('item-row-4')">Delete</button></li>
+  </ul>
+
+  <script>
+    let counter = 4;
+    let tickerActive = true;
+    const list = document.getElementById('dynamic-list');
+    const badge = document.getElementById('row-count-badge');
+    const tickerStatus = document.getElementById('ticker-status');
+
+    function updateCount() {
+      badge.textContent = 'Total items: ' + list.children.length;
+    }
+
+    function addRow(name) {
+      counter += 1;
+      const li = document.createElement('li');
+      li.id = 'item-row-' + counter;
+      const title = name || ('Dynamic Row #' + counter);
+      li.innerHTML = '<span class="item-title">' + title + '</span> <button class="delete-btn" onclick="deleteRow(\'' + li.id + '\')">Delete</button>';
+      list.appendChild(li);
+      updateCount();
+    }
+
+    function removeTopRow() {
+      if (list.firstChild) {
+        list.removeChild(list.firstChild);
+        updateCount();
+      }
+    }
+
+    function deleteRow(id) {
+      const el = document.getElementById(id);
+      if (el) {
+        el.remove();
+        updateCount();
+      }
+    }
+
+    document.getElementById('add-item-btn').addEventListener('click', () => {
+      const val = document.getElementById('new-item-name').value.trim();
+      addRow(val);
+    });
+
+    document.getElementById('remove-item-btn').addEventListener('click', () => {
+      removeTopRow();
+    });
+
+    const ticker = setInterval(() => {
+      if (!tickerActive) return;
+      if (list.children.length > 12) {
+        removeTopRow();
+      } else {
+        addRow('Auto Item ' + (counter + 1));
+      }
+    }, 500);
+
+    document.getElementById('toggle-ticker-btn').addEventListener('click', () => {
+      tickerActive = !tickerActive;
+      tickerStatus.textContent = tickerActive ? 'Ticker: Running (Interval 500ms)' : 'Ticker: Paused';
+      document.getElementById('toggle-ticker-btn').textContent = tickerActive ? 'Pause Background Ticker' : 'Resume Background Ticker';
+    });
+  </script>
+</body>
+</html>

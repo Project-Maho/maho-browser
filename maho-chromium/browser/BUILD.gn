@@ -1,0 +1,1973 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//testing/test.gni")
+
+source_set("maho_core_holder") {
+  sources = [
+    "maho_core_holder.cc",
+    "maho_core_holder.h",
+  ]
+  # The launcher (and its version header) live in the reusable
+  # :maho_mail_launcher source_set rather than being compiled here directly,
+  # so the browser service and this holder share one copy. Exposed publicly
+  # because consumers of this target use the launcher + version header.
+  # maho_core_holder.h exposes Profile* in its public API
+  # (SetCoreForProfile / GetCoreOwnerProfile / IsPasswordManagerAllowedForProfile)
+  # and the .cc calls Profile methods, so profiles:profile is a public_dep.
+  public_deps = [
+    "//chrome/browser/profiles:profile",
+    "//maho/browser/mail_helper:maho_mail_launcher",
+  ]
+  deps = [
+    "//maho/browser/mail_helper:mojo_bindings",
+    "//base",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_bridge",
+    "//mojo/public/cpp/bindings",
+    "//mojo/public/cpp/platform",
+    "//mojo/public/cpp/system",
+  ]
+
+  # Keep the out-of-process helper in the browser build graph on every desktop
+  # platform. Windows uses the native Crypt32/NCrypt S/MIME backend, so the
+  # mail static library no longer brings OpenSSL into this executable's link.
+  deps += [ "//maho/browser/mail_helper:maho_mail_helper" ]
+}
+
+
+
+source_set("maho_routines_scheduler") {
+  sources = [
+    "maho_routines_scheduler.cc",
+    "maho_routines_scheduler.h",
+  ]
+  deps = [
+    # The scheduler drives the core tick that evaluates Vault auto-lock and
+    # publishes the resulting lock state through the holder's broadcast.
+    ":maho_core_holder",
+    "//base",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+source_set("maho_content_blocker_update_service") {
+  sources = [
+    "net/maho_content_blocker_update_service.cc",
+    "net/maho_content_blocker_update_service.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//components/keyed_service/core",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_content_blocker_update_service_factory") {
+  sources = [
+    "net/maho_content_blocker_update_service_factory.cc",
+    "net/maho_content_blocker_update_service_factory.h",
+  ]
+  deps = [
+    ":maho_content_blocker_update_service",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/content",
+    "//content/public/browser",
+  ]
+}
+
+source_set("maho_password_provider") {
+  sources = [
+    "passwords/maho_password_provider_utils.cc",
+    "passwords/maho_password_provider_utils.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+source_set("maho_password_authorization") {
+  sources = [
+    "passwords/maho_password_authorization_service.cc",
+    "passwords/maho_password_authorization_service.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/device_reauth",
+    "//ui/base/clipboard",
+    "//url",
+  ]
+}
+
+source_set("maho_password_save_update_view") {
+  # The upstream password bubble factory will link this target from
+  # //chrome/browser/ui:ui, while this view derives from an upstream UI class.
+  # Suppress include-cycle checking without adding the reverse :ui edge.
+  check_includes = false
+
+  sources = [
+    "ui/views/passwords/maho_password_save_update_view.cc",
+    "ui/views/passwords/maho_password_save_update_view.h",
+  ]
+  deps = [
+    ":maho_password_provider",
+    "//base",
+    "//chrome/app:generated_resources",
+    "//components/password_manager/core/browser",
+    "//components/url_formatter",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+source_set("maho_password_store_backend") {
+  sources = [
+    "passwords/maho_password_store_backend.cc",
+    "passwords/maho_password_store_backend.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_password_authorization",
+    ":maho_password_provider",
+    "//components/prefs",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+source_set("maho_ai_client") {
+  sources = [
+    "ai/maho_ai_llm_client.cc",
+    "ai/maho_ai_llm_client.h",
+    "ai/maho_ai_settings_migration.cc",
+    "ai/maho_ai_settings_migration.h",
+  ]
+  deps = [
+    "//maho/browser/ui/webui/maho_settings:mojo_bindings",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/prefs",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_artifact_registry") {
+  sources = [
+    "ai/maho_artifact_registry.cc",
+    "ai/maho_artifact_registry.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
+    "//content/public/browser",
+    "//net",
+  ]
+}
+
+source_set("maho_tab_tidy_orchestrator") {
+  sources = [
+    "ai/maho_tab_tidy_orchestrator.cc",
+    "ai/maho_tab_tidy_orchestrator.h",
+  ]
+  deps = [
+    ":maho_ai_client",
+    ":maho_core_holder",
+    ":maho_prompt_utils",
+    ":maho_space_profile_bridge",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//services/network/public/cpp",
+  ]
+}
+
+source_set("maho_ffi_callback_handle") {
+  sources = [
+    "ai/maho_ffi_callback_handle.cc",
+    "ai/maho_ffi_callback_handle.h",
+    "ai/maho_ffi_callback_handle_inl.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_ffi_callback_handle_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ffi_callback_handle_unittest.cc",
+  ]
+  deps = [
+    ":maho_ffi_callback_handle",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_agent_abi_integration_test") {
+  testonly = true
+  sources = [ "ai/maho_agent_abi_integration_test.cc" ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//net:test_support",
+    "//testing/gtest",
+  ]
+}
+
+# Interface-only target: just the abstract adapter header. Concrete adapter
+# implementors (HTTP, ACP) depend on this rather than the full router target,
+# which avoids a dependency cycle.
+source_set("maho_ai_runtime_adapter_interface") {
+  sources = [
+    "ai/maho_ai_runtime_adapter.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/prefs",
+  ]
+}
+
+source_set("maho_ai_runtime_adapter") {
+  sources = [
+    "ai/maho_ai_runtime_adapter.cc",
+    "ai/maho_ai_runtime_adapter.h",
+    "ai/maho_ai_runtime_router.cc",
+    "ai/maho_ai_runtime_router.h",
+    "ai/maho_omnibox_agent_router.cc",
+    "ai/maho_omnibox_agent_router.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/prefs",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter_interface",
+    ":maho_browser_ai_tools",
+    ":maho_unified_agent_adapter",
+    "//chrome/browser:browser_public_dependencies",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_prompt_utils") {
+  sources = [
+    "ai/maho_extract_prompt_messages.cc",
+    "ai/maho_extract_prompt_messages.h",
+  ]
+  deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_artifact_html_sanitizer") {
+  sources = [
+    "ai/maho_artifact_html_sanitizer.cc",
+    "ai/maho_artifact_html_sanitizer.h",
+  ]
+}
+
+source_set("maho_artifact_xlsx_processor") {
+  sources = [
+    "ai/maho_artifact_xlsx_processor.cc",
+    "ai/maho_artifact_xlsx_processor.h",
+  ]
+  deps = [
+    "//base",
+    "//third_party/zlib",
+  ]
+}
+
+source_set("maho_artifact_pdf_processor") {
+  sources = [
+    "ai/maho_artifact_pdf_processor.cc",
+    "ai/maho_artifact_pdf_processor.h",
+  ]
+  deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_ai_ingress_coordinator") {
+  sources = [
+    "ui/maho_ai_ingress_coordinator.cc",
+    "ui/maho_ai_ingress_coordinator.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser/ui/browser_window",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//ui/views",
+  ]
+}
+
+
+source_set("maho_browser_tool_registry") {
+  sources = [
+    "ai/maho_browser_tool_registry.cc",
+    "ai/maho_browser_tool_registry.h",
+  ]
+  deps = [
+    "//base",
+    "//crypto",
+  ]
+}
+
+source_set("maho_browser_ai_tools") {
+  sources = [
+    "ai/maho_ai_page_context_extractor.cc",
+    "ai/maho_ai_page_context_extractor.h",
+    "ai/maho_browser_tool_executor.cc",
+    "ai/maho_browser_tool_executor.h",
+    "ai/maho_capability_broker.cc",
+    "ai/maho_capability_broker.h",
+    "ai/maho_capability_principal.cc",
+    "ai/maho_capability_principal.h",
+    "ai/maho_capability_types.cc",
+    "ai/maho_capability_types.h",
+    "ai/maho_mail_tool_authorization.h",
+    "ai/maho_vom_extractor.cc",
+    "ai/maho_vom_extractor.h",
+  ]
+  deps = [
+    ":maho_browser_tool_registry",
+    ":maho_page_adapter_registry",
+    "//base",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//crypto",
+    "//maho/browser/mcp:maho_mcp",
+    "//ui/accessibility",
+    "//url",
+  ]
+}
+
+source_set("maho_control_activity_service") {
+  sources = [
+    "ai/maho_control_activity_service.cc",
+    "ai/maho_control_activity_service.h",
+  ]
+  public_deps = [ "//base" ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
+    "//url",
+  ]
+}
+
+source_set("maho_browser_tool_executor_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browser_tool_executor_unittest.cc",
+    "ai/maho_browser_tool_registry_unittest.cc",
+    "ai/maho_capability_broker_unittest.cc",
+    "ai/maho_vom_extractor_unittest.cc",
+  ]
+  deps = [
+    ":maho_browser_ai_tools",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/tabs:tab_strip_impl",
+    "//maho/browser/mcp:maho_mcp",
+    "//testing/gtest",
+    "//ui/accessibility",
+    "//url",
+  ]
+}
+
+test("maho_browser_tool_executor_test") {
+  sources = [
+    "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browser_tool_executor_unittest.cc",
+    "ai/maho_browser_tool_registry_unittest.cc",
+    "ai/maho_capability_broker_unittest.cc",
+    "ai/maho_vom_extractor_unittest.cc",
+    "ai/maho_browser_tool_test_main.cc",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter",
+    ":maho_browser_ai_tools",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/tabs:tab_strip_impl",
+
+    # tab_strip_impl's objects reference TabStripModel/tabs::TabModel/
+    # TabStripModelObserver plus BrowserUserEducationInterface and
+    # ResourceCoordinatorTabHelper, which are defined in sibling browser impl
+    # targets. Those targets are not self-contained, so link the full browser
+    # test closure like the other maho test() targets do.
+    "//chrome/test:test_support",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
+    "//maho/browser/mcp:maho_mcp",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//testing/gtest",
+    "//ui/accessibility",
+    "//url",
+  ]
+}
+
+test("maho_control_activity_service_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ai/maho_control_activity_service_unittest.cc",
+  ]
+  deps = [
+    ":maho_control_activity_service",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//components/keyed_service/core",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//url",
+  ]
+}
+
+source_set("maho_action_marker_headers") {
+  sources = [
+    "ui/views/maho_action_marker_service.cc",
+    "ui/views/maho_action_marker_service.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+source_set("maho_agent_views") {
+  sources = [
+    "ui/views/agent/maho_agent_help_bar.cc",
+    "ui/views/agent/maho_agent_help_bar.h",
+    "ui/views/agent/maho_tab_borrow_chip.cc",
+    "ui/views/agent/maho_tab_borrow_chip.h",
+  ]
+  deps = [
+    "//base",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+test("maho_action_marker_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ui/views/maho_action_marker_service_unittest.cc",
+  ]
+  deps = [
+    ":maho_action_marker_headers",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui",
+    "//testing/gtest",
+    "//ui/gfx",
+  ]
+}
+
+test("maho_agent_help_bar_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ui/views/agent/maho_agent_help_bar_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_views",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/views",
+  ]
+}
+
+test("maho_tab_borrow_chip_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "ui/views/agent/maho_tab_borrow_chip_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_views",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/views",
+  ]
+}
+
+test("maho_sync_relay_client_test") {
+  sources = [
+    "ai/maho_browser_tool_test_main.cc",
+    "sync/maho_sync_relay_client_unittest.cc",
+  ]
+  deps = [
+    ":maho_sync_relay_protocol",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_sync_relay_protocol") {
+  sources = [
+    "sync/maho_sync_relay_protocol.cc",
+    "sync/maho_sync_relay_protocol.h",
+  ]
+  deps = [ "//base" ]
+}
+
+source_set("maho_tool_execution_graph") {
+  sources = [
+    "ai/maho_tool_execution_graph.cc",
+    "ai/maho_tool_execution_graph.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_browser_ai_tools",
+  ]
+}
+
+source_set("maho_tool_execution_graph_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_tool_execution_graph_unittest.cc",
+  ]
+  deps = [
+    ":maho_browser_ai_tools",
+    ":maho_tool_execution_graph",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_context_menus") {
+  sources = [
+    "ui/context_menu/maho_context_menu_ids.h",
+    "ui/context_menu/maho_tab_context_menu.cc",
+    "ui/context_menu/maho_tab_context_menu.h",
+    "ui/context_menu/maho_address_bar_context_menu.cc",
+    "ui/context_menu/maho_address_bar_context_menu.h",
+    "ui/context_menu/maho_space_context_menu.cc",
+    "ui/context_menu/maho_space_context_menu.h",
+    "ui/context_menu/maho_favorites_context_menu.cc",
+    "ui/context_menu/maho_favorites_context_menu.h",
+    "ui/context_menu/maho_folder_context_menu.cc",
+    "ui/context_menu/maho_folder_context_menu.h",
+    "ui/views/sidebar/maho_sidebar_drag_util.cc",
+    "ui/views/sidebar/maho_sidebar_drag_util.h",
+    "ui/views/sidebar/maho_sidebar_action_popover_view.cc",
+    "ui/views/sidebar/maho_sidebar_action_popover_view.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_enums",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/browser:maho_tab_id_helper",
+    "//maho/browser/ui/views/boost:maho_boost_window",
+    # TODO(nicolo): Re-enable when split_view is wired up.
+    # "//maho/browser/ui/views/split_view:maho_split_view",
+
+
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/browser:maho_theme_support",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_library",
+    "//maho/browser/ui/views/space_config:maho_space_config_dialog",
+    "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
+    "//net",
+    "//ui/base",
+    "//ui/compositor",
+    "//ui/color",
+    "//ui/display",
+    "//ui/gfx",
+    "//ui/menus",
+    "//ui/shell_dialogs",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+source_set("maho_location_bar_views") {
+  # check_includes = false avoids the cycle:
+  #   ui -> internal -> location_bar:impl -> maho_location_bar_views -> ui
+  # Browser/BrowserWindow includes are still reachable at compile time via
+  # the transitive graph; only the GN dependency edge is narrowed here.
+  check_includes = false
+
+  sources = [
+    "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.cc",
+    "ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h",
+    "ui/views/location_bar/maho_dom_screenshot_handler.cc",
+    "ui/views/location_bar/maho_dom_screenshot_handler.h",
+    "ui/views/location_bar/maho_dom_screenshot_script_string.h",
+    "ui/views/location_bar/maho_full_page_capture_client.cc",
+    "ui/views/location_bar/maho_full_page_capture_client.h",
+    "ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.cc",
+    "ui/views/location_bar/maho_location_bar_utility_bubble_coordinator.h",
+    "ui/views/location_bar/maho_location_bar_utility_icon_view.cc",
+    "ui/views/location_bar/maho_location_bar_utility_icon_view.h",
+    "ui/views/location_bar/maho_location_bar_utility_panel_provider.cc",
+    "ui/views/location_bar/maho_location_bar_utility_panel_provider.h",
+    "ui/views/location_bar/maho_location_bar_utility_panel_view.cc",
+    "ui/views/location_bar/maho_location_bar_utility_panel_view.h",
+    "ui/views/location_bar/maho_utility_panel_vibrancy.h",
+  ]
+  if (is_mac) {
+    sources += [ "ui/views/location_bar/maho_utility_panel_vibrancy_mac.mm" ]
+    frameworks = [ "AppKit.framework" ]
+  } else {
+    sources += [ "ui/views/location_bar/maho_utility_panel_vibrancy_stub.cc" ]
+  }
+  deps = [
+    ":maho_core_holder",
+    ":maho_extension_state_bridge",
+    "//base",
+    "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/extensions",
+    "//chrome/browser/image_editor",
+    "//chrome/browser/page_info",
+    "//chrome/browser/permissions",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//extensions/browser",
+    "//extensions/common",
+    "//chrome/browser/ui/location_bar",
+    "//chrome/browser/ui/sharing_hub:sharing_hub",
+    "//chrome/browser/ui/sharing_hub:impl",
+    "//chrome/browser/ui/toolbar",
+    "//components/content_settings/core/browser",
+    "//components/content_settings/core/common",
+    "//components/omnibox/browser",
+    "//components/permissions",
+    "//components/security_state/core",
+    "//components/vector_icons",
+    "//content/public/browser",
+    "//content/public/common",
+    "//maho/browser/net",
+    "//maho/browser/ui/site_control:maho_site_control",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//net",
+    "//ui/base",
+    "//ui/color",
+    "//ui/display",
+    "//ui/gfx",
+    "//ui/views",
+  ]
+}
+
+source_set("maho_location_bar_views_unittests") {
+  testonly = true
+  sources = [
+    # "ui/views/location_bar/maho_dom_screenshot_action_dialog_view_unittest.cc",
+    "ui/views/location_bar/maho_location_bar_utility_panel_provider_unittest.cc",
+  ]
+  deps = [
+    ":maho_location_bar_views",
+    ":maho_extension_state_bridge",
+    "//base",
+    "//chrome/browser/content_settings:content_settings_factory",
+    "//chrome/browser/permissions",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/location_bar",
+    "//chrome/test:test_support",
+    "//components/content_settings/core/common",
+    "//components/permissions",
+    "//components/security_state/core",
+    "//content/public/browser",
+    "//extensions/browser:test_support",
+    "//maho/browser/net",
+    "//testing/gtest",
+    "//ui/views:test_support",
+    "//url",
+  ]
+}
+
+source_set("maho_location_bar_views_interactive_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [
+    "ui/views/location_bar/maho_location_bar_utility_icon_view_interactive_uitest.cc",
+  ]
+  deps = [
+    ":maho_location_bar_views",
+    "//base/test:test_support",
+    "//chrome/browser/ui/views/frame",
+    "//chrome/browser/ui/views/location_bar",
+    "//chrome/browser/ui/views/page_info",
+    "//chrome/browser/ui/views/toolbar",
+    "//chrome/test:test_support",
+    "//chrome/test:test_support_ui",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/base:test_support",
+    "//ui/views:test_support",
+  ]
+}
+
+if (is_mac) {
+  source_set("maho_mini") {
+    sources = [
+      "ui/views/maho_mini/maho_mini_window.cc",
+      "ui/views/maho_mini/maho_mini_window.h",
+      "ui/views/maho_mini/maho_mini_top_bar_view.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.h",
+    ]
+    deps = [
+      "//base",
+      "//chrome/browser:browser",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/views/frame:frame",
+      "//ui/base",
+      "//ui/gfx",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
+if (is_win) {
+  source_set("maho_mini") {
+    sources = [
+      "ui/views/maho_mini/maho_mini_window.cc",
+      "ui/views/maho_mini/maho_mini_window.h",
+      "ui/views/maho_mini/maho_mini_top_bar_view.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.h",
+    ]
+    deps = [
+      "//base",
+      "//chrome/browser:browser",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/views/frame:frame",
+      "//ui/base",
+      "//ui/base/accelerators/global_accelerator_listener",
+      "//ui/gfx",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
+if (is_linux) {
+  source_set("maho_mini") {
+    sources = [
+      "ui/views/maho_mini/maho_mini_window.cc",
+      "ui/views/maho_mini/maho_mini_window.h",
+      "ui/views/maho_mini/maho_mini_top_bar_view.cc",
+      "ui/views/maho_mini/maho_mini_top_bar_view.h",
+    ]
+    deps = [
+      "//base",
+      "//chrome/browser:browser",
+      "//chrome/browser/ui:ui",
+      "//chrome/browser/ui/views/frame:frame",
+      "//ui/base",
+      "//ui/base/accelerators/global_accelerator_listener",
+      "//ui/gfx",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
+if (is_mac) {
+  # The macOS share picker owns the MahoSharePickerDelegate ObjC class. It is
+  # split into its own component() so the class has a single link identity
+  # (its own dylib in component builds). If it stayed a plain source_set,
+  # GN would fold its objects into every terminal linkable that reaches it
+  # (the views component dylib AND the interactive_ui_tests executable),
+  # producing duplicate ObjC class registration and a runtime segfault.
+  component("maho_notification_share_mac") {
+    sources = [
+      "ui/notifications/maho_notification_share_mac.h",
+      "ui/notifications/maho_notification_share_mac.mm",
+    ]
+    frameworks = [ "AppKit.framework" ]
+    deps = [
+      "//base",
+      "//net",
+      "//ui/gfx",
+      "//ui/gfx/geometry",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
+if (is_linux) {
+  source_set("maho_notification_share_linux") {
+    sources = [
+      "ui/notifications/maho_notification_share_linux_stub.cc",
+      "ui/notifications/maho_notification_share_mac.h",
+    ]
+    deps = [
+      "//base",
+      "//ui/views",
+      "//url",
+    ]
+  }
+}
+
+source_set("maho_theme_support") {
+  sources = [
+    "ui/theme/maho_color_mixer.cc",
+    "ui/theme/maho_color_mixer.h",
+    "ui/theme/maho_space_theme_state.cc",
+    "ui/theme/maho_space_theme_state.h",
+    "ui/theme/maho_space_theme_io.cc",
+    "ui/theme/maho_space_theme_io.h",
+    "ui/theme/maho_theme_helper.cc",
+    "ui/theme/maho_theme_helper.h",
+    "ui/downloads/maho_download_theme.cc",
+    "ui/downloads/maho_download_theme.h",
+    "ui/find_bar/maho_find_bar_theme.cc",
+    "ui/find_bar/maho_find_bar_theme.h",
+    "ui/reader/maho_reader_theme.cc",
+    "ui/reader/maho_reader_theme.h",
+    "ui/permissions/maho_permission_theme.cc",
+    "ui/permissions/maho_permission_theme.h",
+    "ui/notifications/maho_notification_overlay.cc",
+    "ui/notifications/maho_notification_overlay.h",
+    "ui/notifications/maho_toast_view.cc",
+    "ui/notifications/maho_toast_view.h",
+    "ui/notifications/maho_toast_vibrancy.h",
+    "ui/tab_preview/maho_tab_preview_controller.cc",
+    "ui/tab_preview/maho_tab_preview_controller.h",
+    "ui/views/frame/maho_tab_controlled_banner_view.cc",
+    "ui/views/frame/maho_tab_controlled_banner_view.h",
+    "ui/views/frame/maho_tab_controlled_banner_overlay.cc",
+    "ui/views/frame/maho_tab_controlled_banner_overlay.h",
+  ]
+  if (is_mac) {
+    sources += [ "ui/notifications/maho_toast_vibrancy_mac.mm" ]
+    frameworks = [ "AppKit.framework" ]
+  } else {
+    sources += [ "ui/notifications/maho_toast_vibrancy_stub.cc" ]
+  }
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/ui/color:color_headers",
+    "//content/public/browser",
+    "//maho/browser/net",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//maho/third_party/maho:maho_bridge",
+    "//net",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/native_theme",
+    "//ui/views",
+    "//url",
+  ]
+  if (is_mac) {
+    deps += [ ":maho_notification_share_mac" ]
+  } else if (is_linux) {
+    deps += [ ":maho_notification_share_linux" ]
+  }
+}
+
+source_set("maho_ui_stubs") {
+  deps = [
+    ":maho_theme_support",
+  ]
+}
+
+source_set("maho_space_profile_bridge") {
+  sources = [
+    "maho_space_profile_bridge.cc",
+    "maho_space_profile_bridge.h",
+    "maho_space_profile_hydration.cc",
+  ]
+  deps = [
+    ":maho_space_profile_hydration_state",
+    "//base",
+    "//chrome/browser:browser_process",
+    "//chrome/browser/profiles:profile",
+  ]
+}
+
+source_set("maho_space_profile_hydration_state") {
+  sources = [
+    "maho_space_profile_hydration.h",
+    "maho_space_profile_hydration_state.cc",
+  ]
+  public_deps = [ "//base" ]
+}
+
+source_set("maho_space_profile_hydration_unittests") {
+  testonly = true
+  sources = [ "maho_space_profile_hydration_unittest.cc" ]
+  deps = [
+    ":maho_space_profile_hydration_state",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_space_profile_hydration_test") {
+  sources = [ "ai/maho_browser_tool_test_main.cc" ]
+  deps = [
+    ":maho_space_profile_hydration_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_extension_state_bridge") {
+  sources = [
+    "extensions/maho_extension_state_bridge.cc",
+    "extensions/maho_extension_state_bridge.h",
+  ]
+  public_deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
+    "//extensions/browser",
+    "//extensions/common",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+source_set("maho_extension_state_bridge_unittests") {
+  testonly = true
+  sources = [
+    "extensions/maho_extension_state_bridge_unittest.cc",
+    "ui/views/side_panel/maho_extension_side_panel_coordinator_unittest.cc",
+    "extensions/api/maho_extension_api_unittest.cc",
+    "net/maho_webstore_ua_throttle_unittest.cc",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/browser:test_support",
+    "//extensions/common",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//testing/gtest",
+    "//maho/browser/ui/webui/maho_settings",
+    "//maho/browser/net",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/views/frame",
+  ]
+}
+
+test("maho_extension_state_bridge_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_extension_state_bridge_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_browser_main_extra_parts") {
+  sources = [
+    "maho_browser_main_extra_parts.cc",
+    "maho_browser_main_extra_parts.h",
+    "maho_private_context_policy.cc",
+    "maho_private_context_policy.h",
+    "ui/webui/maho_webui_private_boundary.cc",
+    "ui/webui/maho_webui_private_boundary.h",
+    "sync/maho_sync_relay_client.cc",
+    "sync/maho_sync_relay_client.h",
+  ]
+
+
+
+  deps = [
+    ":maho_core_holder",
+    ":maho_content_blocker_update_service",
+    ":maho_content_blocker_update_service_factory",
+    ":maho_extension_state_bridge",
+    ":maho_ai_provider_oauth",
+    ":maho_auth_utils",
+    ":maho_routines_scheduler",
+    ":maho_tab_id_helper",
+    ":maho_tab_registry",
+    ":maho_theme_support",
+    ":maho_mcp_integration",
+    ":maho_sync_relay_protocol",
+    ":maho_control_activity_service",
+    "//base",
+    "//chrome/browser:main_extra_parts",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/sessions:sessions",
+    "//maho/browser/net",
+    "//services/network/public/mojom",
+
+    "//maho/browser/importer",
+    "//maho/browser/mail_helper:maho_mail_notification_coordinator",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
+    ":maho_download_bridge",
+    "//maho/browser/mcp:maho_mcp",
+    "//maho/browser/updates:maho_config_manager",
+    "//maho/browser/updates:maho_updates_lib",
+    "//maho/third_party/maho:maho_bridge",
+    "//skia",
+    "//ui/accessibility",
+    "//ui/color",
+  ]
+}
+
+source_set("maho_private_context_policy") {
+  sources = [
+    "maho_private_context_policy.cc",
+    "maho_private_context_policy.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+  ]
+}
+
+source_set("maho_settings_navigation") {
+  sources = [
+    "ui/maho_settings_navigation.cc",
+    "ui/maho_settings_navigation.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//content/public/browser",
+    "//maho/components/constants",
+    "//net",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("maho_ai_popup_lifetime_tracker") {
+  sources = [
+    "maho_ai_popup_lifetime_tracker.cc",
+    "maho_ai_popup_lifetime_tracker.h",
+  ]
+  deps = [
+    "//base",
+    "//chrome/browser/ui/browser_window:browser_window",
+    "//ui/base",
+  ]
+}
+
+source_set("maho_tab_id_helper") {
+  sources = [
+    "maho_tab_id_helper.cc",
+    "maho_tab_id_helper.h",
+  ]
+  public_deps = [
+    "//base",
+    "//content/public/browser",
+  ]
+}
+
+source_set("maho_tab_registry") {
+  sources = [
+    "maho_tab_registry.cc",
+    "maho_tab_registry.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_space_profile_bridge",
+    ":maho_tab_id_helper",
+    "//base",
+    # browser_shutdown.h compiles into //chrome/browser at this upstream pin
+    # (the :lifetime target only carries termination_notification).
+    "//chrome/browser",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/tab_list:tab_list",
+    "//chrome/browser/ui/browser_window:browser_window",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/browser/ui/tabs:tab_strip_model_observer",
+    "//content/public/browser",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//url",
+  ]
+}
+
+source_set("maho_mcp_integration") {
+  sources = [
+    "mcp/maho_mcp_console_capture.cc",
+    "mcp/maho_mcp_console_capture.h",
+    "mcp/maho_mcp_input_synthesizer.cc",
+    "mcp/maho_mcp_input_synthesizer.h",
+    "mcp/maho_mcp_navigation_tracker.cc",
+    "mcp/maho_mcp_navigation_tracker.h",
+  ]
+  deps = [
+    ":maho_action_marker_headers",
+    "//maho/browser/mcp:maho_mcp",
+    "//base",
+    "//content/public/browser",
+    "//third_party/blink/public/common",
+    "//ui/accessibility",
+    "//ui/events",
+  ]
+}
+
+source_set("maho_os_crypt_key_provider") {
+  sources = [
+    "os_crypt/maho_file_key_provider_mac.h",
+  ]
+  if (is_mac) {
+    sources += [
+      "os_crypt/maho_file_key_provider_mac.mm",
+    ]
+  }
+  deps = [
+    "//base",
+    "//components/os_crypt/async/browser:browser",
+    "//components/os_crypt/async/common:common",
+    "//crypto",
+    "//third_party/boringssl",
+  ]
+}
+
+source_set("maho_conversation_task") {
+  sources = [
+    "ai/maho_conversation_task.cc",
+    "ai/maho_conversation_task.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_conversation_task_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_conversation_task_unittest.cc",
+  ]
+  deps = [
+    ":maho_conversation_task",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_unified_agent_adapter") {
+  sources = [
+    "ai/maho_unified_agent_adapter.cc",
+    "ai/maho_unified_agent_adapter.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    ":maho_agent_channel_gateway",
+    ":maho_ai_runtime_adapter_interface",
+    ":maho_artifact_registry",
+    ":maho_authenticated_service_api_broker",
+    ":maho_browser_ai_tools",
+    ":maho_conversation_task",
+    ":maho_control_activity_service",
+    ":maho_core_holder",
+    ":maho_ffi_callback_handle",
+    ":maho_page_adapter_registry",
+    ":maho_tool_execution_graph",
+    "//maho/browser/mcp:maho_mcp",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//services/network/public/cpp",
+    "//third_party/crashpad/crashpad/client",
+  ]
+}
+
+source_set("maho_agent_event_replay_buffer") {
+  sources = [
+    "ai/maho_agent_event_replay_buffer.cc",
+    "ai/maho_agent_event_replay_buffer.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_page_adapter_registry") {
+  sources = [
+    "ai/maho_page_adapter_registry.cc",
+    "ai/maho_page_adapter_registry.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+}
+
+source_set("maho_authenticated_service_api_broker") {
+  sources = [
+    "ai/maho_authenticated_service_api_broker.cc",
+    "ai/maho_authenticated_service_api_broker.h",
+  ]
+  public_deps = [
+    "//base",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
+  ]
+}
+
+source_set("maho_agent_channel_gateway") {
+  sources = [
+    "ai/maho_agent_channel_gateway.cc",
+    "ai/maho_agent_channel_gateway.h",
+  ]
+  public_deps = [
+    ":maho_authenticated_service_api_broker",
+    "//base",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter_interface",
+    "//components/prefs",
+  ]
+}
+
+source_set("maho_ai_provider_oauth") {
+  sources = [
+    "ui/webui/maho_ai_provider_oauth.cc",
+    "ui/webui/maho_ai_provider_oauth.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/browser",
+  ]
+
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//content/public/browser",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("maho_google_sign_in") {
+  sources = [
+    "ui/webui/maho_google_sign_in.cc",
+    "ui/webui/maho_google_sign_in.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/browser",
+  ]
+
+  deps = [
+    ":maho_auth_utils",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui:browser_navigator_params_headers",
+    "//content/public/browser",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
+    "//url",
+  ]
+}
+
+source_set("maho_google_sign_in_browser_tests") {
+  testonly = true
+  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+  sources = [ "ui/webui/maho_google_sign_in_peek_browsertest.cc" ]
+  deps = [
+    ":maho_google_sign_in",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//maho/browser/ui/views/peek:maho_peek",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_prefs",
+    "//net:test_support",
+  ]
+}
+
+source_set("maho_auth_utils_unittests") {
+  testonly = true
+  sources = [
+    "ui/webui/maho_auth_utils_unittest.cc",
+  ]
+  deps = [
+    ":maho_auth_utils",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_ai_llm_client_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ai_llm_client_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai_client",
+    ":maho_auth_utils",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_ai_runtime_router_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_ai_runtime_router_unittest.cc",
+    "ai/maho_omnibox_agent_router_unittest.cc",
+  ]
+  deps = [
+    ":maho_ai_runtime_adapter",
+    ":maho_unified_agent_adapter",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_agent_event_replay_buffer_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_agent_event_replay_buffer_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_event_replay_buffer",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_page_adapter_registry_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_page_adapter_registry_unittest.cc",
+  ]
+  deps = [
+    ":maho_page_adapter_registry",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_authenticated_service_api_broker_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_authenticated_service_api_broker_unittest.cc",
+  ]
+  deps = [
+    ":maho_authenticated_service_api_broker",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_agent_channel_gateway_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_agent_channel_gateway_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_channel_gateway",
+    ":maho_authenticated_service_api_broker",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_context_menus_unittests") {
+  testonly = true
+  sources = [
+    "ui/context_menu/maho_address_bar_context_menu_unittest.cc",
+    "ui/context_menu/maho_favorites_context_menu_unittest.cc",
+    "ui/context_menu/maho_folder_context_menu_unittest.cc",
+    "ui/context_menu/maho_space_context_menu_unittest.cc",
+    "ui/context_menu/maho_tab_context_menu_unittest.cc",
+  ]
+  deps = [
+    ":maho_context_menus",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/menus",
+  ]
+}
+
+source_set("maho_contents_header_unittests") {
+  testonly = true
+  sources = [
+    "ui/views/frame/maho_contents_header_view_unittest.cc",
+    "ui/views/sidebar/maho_toolbar_button_provider_unittest.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//testing/gtest",
+    "//ui/events:test_support",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("maho_theme_io_unittests") {
+  testonly = true
+  sources = [
+    "ai/maho_agent_channel_gateway_unittest.cc",
+    "ai/maho_artifact_html_sanitizer_unittest.cc",
+    "ai/maho_artifact_pdf_processor_unittest.cc",
+    "ai/maho_artifact_registry_unittest.cc",
+    "ai/maho_artifact_xlsx_processor_unittest.cc",
+    "ai/maho_unified_agent_adapter_lifecycle_unittest.cc",
+    "maho_vault_runtime_bridge_unittest.cc",
+    "ui/theme/maho_sidebar_palette_unittest.cc",
+    "ui/theme/maho_space_theme_io_unittest.cc",
+    "ui/notifications/maho_notification_overlay_unittest.cc",
+    "maho_tab_id_helper_unittest.cc",
+    "ui/maho_ai_ingress_coordinator_unittest.cc",
+    "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
+  ]
+  deps = [
+    ":maho_agent_channel_gateway",
+    ":maho_artifact_html_sanitizer",
+    ":maho_artifact_pdf_processor",
+    ":maho_artifact_registry",
+    ":maho_artifact_xlsx_processor",
+    ":maho_tab_id_helper",
+    ":maho_theme_support",
+    ":maho_unified_agent_adapter",
+    ":maho_ai_ingress_coordinator",
+    ":maho_browser_tool_executor_unittests",
+    ":maho_core_holder",
+    "//maho/browser/ui/webui/maho_ai:maho_ai_unittests",
+    "//maho/browser/ui/webui/maho_space_config:maho_space_config",
+    "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
+    "//maho/browser/mcp:unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_bridge",
+    "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
+test("maho_context_menus_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_context_menus_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/menus",
+    "//ui/views:test_support",
+  ]
+}
+
+test("maho_contents_header_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_contents_header_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/menus",
+    "//ui/views:test_support",
+  ]
+}
+
+test("maho_theme_io_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_ffi_callback_handle_unittests",
+    ":maho_theme_io_unittests",
+    "//maho/browser/updates:maho_updates_unittests",
+    "//maho/browser/ui/views/changelog:unit_tests",
+    "//maho/browser/ui/views/sidebar:unit_tests",
+    "//maho/browser/ui/views/spaces_overlay:unit_tests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/views/frame:frame",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
+test("maho_password_native_views_test") {
+  # Match //chrome/browser/ui:ui: canonical chrome/... includes select the
+  # overlay, and explicit src/... includes select the original implementation.
+  include_dirs = [
+    "../chromium_src",
+    "../../../",
+  ]
+  sources = [
+    "run_all_maho_unittests_main.cc",
+    "ui/views/passwords/maho_password_autofill_row_unittest.cc",
+    "ui/views/passwords/maho_password_save_update_view_unittest.cc",
+    "//chrome/browser/ui/views/autofill/popup/mock_accessibility_selection_delegate.cc",
+    "//chrome/browser/ui/views/autofill/popup/mock_accessibility_selection_delegate.h",
+    "//chrome/browser/ui/views/autofill/popup/mock_selection_delegate.cc",
+    "//chrome/browser/ui/views/autofill/popup/mock_selection_delegate.h",
+    "../chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.cc",
+    "../chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.h",
+    "//chrome/browser/ui/views/passwords/password_bubble_view_test_base.cc",
+    "//chrome/browser/ui/views/passwords/password_bubble_view_test_base.h",
+  ]
+  deps = [
+    ":maho_password_provider",
+    ":maho_password_save_update_view",
+    "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/app:generated_resources",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/test:test_support",
+    "//components/password_manager/core/browser",
+    "//components/password_manager/core/browser:test_support",
+    "//components/prefs:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
+test("maho_password_store_backend_test") {
+  sources = [
+    "run_all_maho_unittests_main.cc",
+    "passwords/maho_password_authorization_service_unittest.cc",
+    "passwords/maho_password_store_backend_test.cc",
+  ]
+  deps = [
+    ":maho_password_store_backend",
+    ":maho_password_authorization",
+    ":maho_core_holder",
+    ":maho_password_provider",
+    "//base",
+    "//base/test:test_support",
+    "//components/prefs",
+    "//components/prefs:test_support",
+    "//components/device_reauth:test_support",
+    "//chrome/browser:browser",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//maho/browser/net",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//testing/gmock",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//maho/third_party/maho:maho_core_prebuilt",
+  ]
+}
+
+# Automated coverage for previously-manual QA items across three surfaces:
+#   A) chrome.maho.splitView / chrome.maho.sidePanel ExtensionFunctions
+#   B) migration dialog Safari passwords-CSV picker flow
+#   C) chrome://maho-routines page handler (create/list/delete)
+# Uses the shared Chrome unit-test main so a single light binary covers all
+# three without pulling in the full chrome unit_tests target.
+test("maho_qa_automation_test") {
+  sources = [
+    "run_all_maho_unittests_main.cc",
+    "ui/views/importer/maho_migration_dialog_safari_csv_unittest.cc",
+    "ui/webui/maho_routines/maho_routines_page_handler_unittest.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/views/frame:frame",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//extensions/browser",
+    "//extensions/browser:test_support",
+    "//extensions/common",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser/importer:importer",
+    "//maho/browser/ui/views/side_panel:side_panel",
+    "//maho/browser/ui/webui/maho_routines:maho_routines",
+    "//maho/browser/ui/webui/maho_routines:mojo_bindings",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//mojo/core/embedder",
+    "//mojo/public/cpp/bindings",
+    "//testing/gtest",
+    "//ui/shell_dialogs",
+    "//ui/views:test_support",
+    "//url",
+  ]
+}
+
+test("maho_atc_navigation_throttle_test") {
+  sources = [
+    "net/maho_atc_navigation_throttle_unittest.cc",
+    "run_all_maho_unittests_main.cc",
+  ]
+  deps = [
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/views/frame:frame",
+    "//chrome/test:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/views:test_support",
+    "//url",
+  ]
+}
+
+test("maho_content_blocker_update_service_test") {
+  sources = [
+    "net/maho_content_blocker_update_service_unittest.cc",
+    "net/maho_content_blocker_update_service_test_main.cc",
+  ]
+  deps = [
+    ":maho_content_blocker_update_service",
+    "//base",
+    "//base/test:test_support",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//net",
+    "//services/network:test_support",
+    "//services/network/public/cpp",
+    "//testing/gtest",
+    "//url",
+  ]
+}
+
+source_set("maho_download_bridge") {
+  sources = [
+    "ui/downloads/maho_download_bridge_service.cc",
+    "ui/downloads/maho_download_bridge_service.h",
+    "ui/downloads/maho_download_bridge_service_factory.cc",
+    "ui/downloads/maho_download_bridge_service_factory.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/download/content/public",
+    "//components/keyed_service/core",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    ":maho_core_holder",
+    "//components/download/public/common:public",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+  ]
+}
+
+source_set("maho_download_bridge_unittests") {
+  testonly = true
+  sources = [ "ui/downloads/maho_download_bridge_service_unittest.cc" ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_download_bridge",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser/profiles:profile",
+    "//chrome/test:test_support",
+    "//components/download/public/common:public",
+    "//components/download/public/common:test_support",
+    "//content/test:test_support",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//url",
+  ]
+}
+
+source_set("maho_auth_utils") {
+  sources = [
+    "ui/webui/maho_auth_utils.cc",
+    "ui/webui/maho_auth_utils.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//components/os_crypt/async/browser",
+    "//components/prefs",
+    "//services/network/public/cpp",
+  ]
+
+  deps = [
+    "//net",
+    "//services/network/public/mojom",
+    "//url",
+  ]
+}
+
+source_set("maho_incognito_unittests") {
+  testonly = true
+  sources = [
+    "maho_private_context_policy_unittest.cc",
+    "ui/webui/maho_webui_private_boundary_unittest.cc",
+    "maho_preview_ffi_abi_unittest.cc",
+    "net/maho_shield_site_state_unittest.cc",
+    "ai/maho_ai_private_boundary_unittest.cc",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//chrome/test:test_support",
+    "//components/profile_metrics:profile_metrics",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//maho/browser/net",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+  ]
+}
+
+
+source_set("maho_url_scheme") {
+  sources = [
+    "maho_url_scheme.cc",
+    "maho_url_scheme.h",
+  ]
+  deps = [
+    "//base",
+    "//maho/components/constants",
+    "//url",
+  ]
+}
+
+test("maho_url_scheme_test") {
+  sources = [
+    "maho_url_scheme_unittest.cc",
+    "run_all_maho_unittests_main.cc",
+  ]
+  deps = [
+    ":maho_url_scheme",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/autocomplete:impl",
+    "//chrome/browser/profiles:profile_io_data",
+    "//chrome/common",
+    "//chrome/test:test_support",
+    "//content/public/browser",
+    "//content/public/common",
+    "//content/test:test_support",
+    "//mojo/core/embedder",
+    "//testing/gtest",
+    "//third_party/blink/public/common",
+    "//url",
+  ]
+}
+
+if (!is_android) {
+  test("maho_password_fill_browsertest") {
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+    sources = [ "passwords/maho_password_fill_browsertest.cc" ]
+    deps = [
+      ":maho_core_holder",
+      ":maho_password_authorization",
+      ":maho_password_provider",
+      ":maho_password_store_backend",
+      "//base",
+      "//base/test:test_support",
+      "//chrome:packed_resources",
+      "//chrome/browser",
+      "//chrome/browser:browser_process",
+      "//chrome/browser/password_manager/factories",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/profiles:profile_manager",
+      "//chrome/browser/ui",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//chrome/test:browser_tests_runner",
+      "//chrome/test:test_support",
+      "//chrome/test:test_support_ui",
+      "//components/autofill/content/browser:test_support",
+      "//components/autofill/core/browser",
+      "//components/autofill/core/browser:test_support",
+      "//components/keyed_service/core",
+      "//components/password_manager/content/browser",
+      "//components/password_manager/core/browser",
+      "//components/prefs",
+      "//content/public/browser",
+      "//content/test:test_support",
+      "//maho/third_party/maho:maho_core_prebuilt",
+      "//maho/third_party/maho:maho_ffi_headers",
+      "//testing/gmock",
+      "//testing/gtest",
+      "//third_party/blink/public/common",
+      "//ui/gfx",
+      "//url",
+    ]
+  }
+
+  if (is_mac) {
+    test("maho_login_gate_native_url_browsertest") {
+      defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+      sources = [ "maho_login_gate_native_url_browsertest.mm" ]
+      deps = [
+        "//base",
+        "//base/test:test_support",
+        "//chrome:packed_resources",
+        "//chrome/browser:browser",
+        "//chrome/browser/profiles:profile",
+        "//chrome/browser/ui",
+        "//chrome/test:browser_tests_runner",
+        "//chrome/test:test_support",
+        "//chrome/test:test_support_ui",
+        "//content/test:test_support",
+        "//maho/browser/ui/webui/maho_welcome:maho_welcome",
+        "//net",
+        "//testing/gtest",
+        "//url",
+      ]
+    }
+  }
+
+  test("maho_url_scheme_browsertest") {
+    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+    sources = [
+      "maho_url_scheme_browsertest.cc",
+      "maho_url_scheme_security_browsertest.cc",
+    ]
+    deps = [
+      "//chrome/test:browser_tests_runner",
+      "//chrome/test:test_support",
+      "//chrome/test:test_support_ui",
+      "//chrome:packed_resources",
+      "//base",
+      "//base/test:test_support",
+      "//chrome/browser:browser",
+      "//chrome/browser/profiles:profile",
+      "//chrome/browser/ui",
+      "//chrome/browser/ui/tabs:tab_strip",
+      "//chrome/browser/external_protocol",
+      "//content/public/browser",
+      "//content/test:test_support",
+      "//net",
+      "//net:test_support",
+      "//testing/gtest",
+      "//url",
+      ":maho_url_scheme",
+      ":maho_settings_navigation",
+      "//maho/components/constants",
+      "//maho/browser/ui/webui/maho_ai:maho_ai",
+      "//maho/browser/ui/views/command:maho_command_overlay",
+      "//maho/browser/ui/views/peek:maho_peek",
+      "//maho/browser/ui/webui/maho_settings:maho_settings",
+      "//maho/browser/ui/webui/maho_space_config:maho_space_config",
+      "//maho/browser/ui/webui/maho_space_create:maho_space_create",
+      "//maho/browser/ui/webui/maho_sync:maho_sync",
+      "//maho/browser/ui/webui/maho_live_folders:maho_live_folders",
+      "//maho/browser/ui/webui/maho_welcome:maho_welcome",
+      "//maho/browser/ui/webui/maho_routines:maho_routines",
+      "//maho/browser/ui/webui/maho_mail:maho_mail",
+    ]
+  }
+}

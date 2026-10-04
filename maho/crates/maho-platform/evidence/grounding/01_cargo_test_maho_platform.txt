@@ -1,0 +1,62 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running unittests src/lib.rs (target/debug/deps/maho_platform-0b8ef3a087ca1aea)
+
+running 49 tests
+test contacts::tests::filter_empty_query_returns_all ... ok
+test contacts::tests::filter_matches_email ... ok
+test contacts::tests::filter_matches_phone_substring ... ok
+test contacts::tests::filter_matches_name_case_insensitive ... ok
+test contacts::tests::filter_no_match_returns_empty ... ok
+test desktop::tests::describe_never_echoes_typed_text ... ok
+test contacts::tests::serialization_round_trip ... ok
+test ax_tree::tests::test_filter_by_role_synthetic ... ok
+test contacts::tests::resolve_from_email_case_insensitive ... ok
+test desktop::tests::backend_failure_maps_to_io_error ... ok
+test contacts::tests::resolve_from_exact_handle_match ... ok
+test desktop::tests::button_parse_is_case_insensitive_and_strict ... ok
+test contacts::tests::resolve_from_no_match_returns_empty ... ok
+test contacts::tests::resolve_from_short_numeric_handle_no_overmatch ... ok
+test desktop::tests::dry_run_composes_description_without_touching_backend ... ok
+test contacts::tests::resolve_from_formatted_phone_matches_digits_only ... ok
+test desktop::tests::unapproved_input_returns_typed_error_and_never_calls_backend ... ok
+test desktop::tests::approved_input_dispatches_to_backend ... ok
+test desktop::tests::untrusted_macos_returns_permission_required_and_never_calls_backend ... ok
+test find_text::tests::test_find_text_empty_query ... ok
+test find_text::tests::test_find_text_nonexistent_file ... ok
+test imessage::tests::test_classify_sqlite_error_table ... ok
+test ocr::tests::test_ocr_image_nonexistent_file ... ok
+test grounding::tests::test_png_dimensions_fixture ... ok
+test grounding::tests::test_parse_region_invalid ... ok
+test grounding::tests::test_parse_region_valid ... ok
+test ocr::tests::test_vision_bbox_to_pixels_full ... ok
+test ocr::tests::test_vision_bbox_to_pixels_quadrants_and_offsets ... ok
+test send::tests::test_compose_send_applescript_chat_guid ... ok
+test send::tests::test_compose_send_applescript_fallback_to ... ok
+test send::tests::test_send_approved_calls_runner_once ... ok
+test send::tests::test_escape_applescript_table ... ok
+test send::tests::test_send_approved_runner_error ... ok
+test send::tests::test_send_dry_run_never_calls_runner ... ok
+test send::tests::test_send_unapproved_never_calls_runner ... ok
+test tests::test_error_code_mapping ... ok
+test grounding::tests::test_png_dimensions_invalid ... ok
+test grounding::tests::test_png_dimensions_synthetic_header ... ok
+test imessage::tests::test_imessage_fixture_queries ... ok
+test capture::tests::test_preflight_screen_capture_smoke ... ok
+test capture::tests::test_capture_screen_with_custom_output_path ... ok
+test capture::tests::test_capture_screen_error_paths ... ok
+test capture::tests::test_capture_screen_integration ... ok
+test ax_tree::tests::test_read_elements_live_or_permission_gate ... ok
+test find_text::tests::test_find_text_fixture_grounding ... ok
+test find_text::tests::test_find_text_no_match ... ok
+test ocr::tests::test_ocr_image_fixture_macos ... ok
+test find_text::tests::test_find_text_case_insensitive ... ok
+test ocr::tests::test_ocr_image_with_region_filter ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.95s
+
+   Doc-tests maho_platform
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

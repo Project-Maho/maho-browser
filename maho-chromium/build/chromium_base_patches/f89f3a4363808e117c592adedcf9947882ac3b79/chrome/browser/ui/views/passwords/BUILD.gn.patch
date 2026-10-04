@@ -1,0 +1,22 @@
+diff --git c/chrome/browser/ui/views/passwords/BUILD.gn w/chrome/browser/ui/views/passwords/BUILD.gn
+index 884f61b78c33b1c317728db049b9234af72bf05c..5706c7d186576a679d85ebc3b0c0ac9ef94ca935 100644
+--- c/chrome/browser/ui/views/passwords/BUILD.gn
++++ w/chrome/browser/ui/views/passwords/BUILD.gn
+@@ -7,7 +7,7 @@ import("//build/config/ui.gni")
+ assert(toolkit_views)
+ 
+ source_set("password_bubble_view_base") {
+-  public = [ "password_bubble_view_base.h" ]
++  public = [ "//maho/chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.h" ]
+   public_deps = [
+     "//base",
+     "//chrome/browser/ui/views/location_bar",
+@@ -90,7 +90,7 @@ source_set("impl") {
+     "move_to_account_store_bubble_view.cc",
+     "password_add_username_view.cc",
+     "password_auto_sign_in_view.cc",
+-    "password_bubble_view_base.cc",
++    "//maho/chromium_src/chrome/browser/ui/views/passwords/password_bubble_view_base.cc",
+     "password_combined_selector_view.cc",
+     "password_cross_domain_confirmation_popup_view_views.cc",
+     "password_generation_popup_view_views.cc",

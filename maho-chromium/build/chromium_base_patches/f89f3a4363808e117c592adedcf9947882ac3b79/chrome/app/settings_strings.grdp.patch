@@ -1,0 +1,13 @@
+diff --git c/chrome/app/settings_strings.grdp w/chrome/app/settings_strings.grdp
+index 884e32a5f21f43321c467e656f428d9b64423351..3f58500c0651684a6b4865b5fc357da20e45a770 100644
+--- c/chrome/app/settings_strings.grdp
++++ w/chrome/app/settings_strings.grdp
+@@ -387,7 +387,7 @@
+       Settings
+     </message>
+     <message name="IDS_SETTINGS_ALT_PAGE_TITLE" desc="The settings page title for the about page.">
+-      Settings - <ph name="SECTION_TITLE">$1<ex>About Chromium</ex></ph>
++      Settings - <ph name="SECTION_TITLE">$1<ex>About Maho</ex></ph>
+     </message>
+     <message name="IDS_SETTINGS_SUBPAGE_BUTTON" desc="Accessibility description for a button navigating the user from a settings page to one of the settings subpages.">
+       Subpage button

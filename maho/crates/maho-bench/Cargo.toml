@@ -1,0 +1,60 @@
+[package]
+name = "maho-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+maho-core = { path = "../maho-core" }
+maho-types = { path = "../maho-types" }
+yrs = "0.21"
+automerge = "0.5"
+diamond-types-extended = { version = "0.2.0", default-features = false }
+uuid = { version = "1", features = ["v4"] }
+postcard = { version = "1", features = ["alloc"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+diamond-types = "1.0"
+tempfile = "3"
+maho-storage = { path = "../maho-storage" }
+instant-distance = "0.6.1"
+rusqlite = { version = "0.33", features = ["bundled-sqlcipher"] }
+
+[[bin]]
+name = "crdt-comparison"
+path = "src/main.rs"
+
+[[bench]]
+name = "crdt_bench"
+harness = false
+
+[[bench]]
+name = "tab_switch"
+harness = false
+
+[[bench]]
+name = "command_search"
+harness = false
+
+[[bench]]
+name = "tab_snapshot_lookup"
+harness = false
+
+[[bench]]
+name = "persistence_bench"
+harness = false
+
+[[bench]]
+name = "core_startup_bench"
+harness = false
+
+[[bench]]
+name = "memory_hnsw_bench"
+harness = false
+
+[[bench]]
+name = "sqlite_concurrency_bench"
+harness = false

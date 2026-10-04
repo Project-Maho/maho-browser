@@ -1,0 +1,101 @@
+diff --git a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+index f45be88706afc7c6ad4ecbdd9f4c621137bc065d..39ff0b6d91af6937d09687e35297bca163092926 100644
+--- a/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_native_widget_mac.mm
+@@ -5,6 +5,7 @@
+ #import "chrome/browser/ui/views/frame/browser_native_widget_mac.h"
+ 
+ #import "base/apple/foundation_util.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/metrics/user_metrics.h"
+ #include "base/metrics/user_metrics_action.h"
+@@ -161,12 +162,24 @@ int32_t BrowserNativeWidgetMac::SheetOffsetY() {
+   // practice, this ends up being the widget's content view.
+   web_modal::WebContentsModalDialogHost* dialog_host =
+       browser_view_->GetWebContentsModalDialogHost();
++  if (!dialog_host) {
++    return 0;
++  }
+   return dialog_host->GetDialogPosition(gfx::Size()).y();
+ }
+ 
+ void BrowserNativeWidgetMac::GetWindowFrameTitlebarHeight(
+     bool* override_titlebar_height,
+     float* titlebar_height) {
++  if (browser_view_ && browser_view_->browser() &&
++      browser_view_->browser()->is_maho_mini()) {
++    // Maho: macOS centers the traffic lights within the titlebar
++    // height reported here; report the 46dip Maho Mini top bar
++    // height so they center on its midline, not near the top edge.
++    *override_titlebar_height = true;
++    *titlebar_height = 46;
++    return;
++  }
+   if (browser_view_ && browser_view_->browser_widget() &&
+       browser_view_->browser_widget()->GetFrameView()) {
+     *override_titlebar_height = true;
+@@ -446,8 +459,19 @@ bool BrowserNativeWidgetMac::ExecuteCommand(
+     int32_t command,
+     WindowOpenDisposition window_open_disposition,
+     bool is_before_first_responder) {
++  if (command == IDC_MAHO_AI_PANEL || command == IDC_NEW_TAB) {
++    LOG(WARNING) << "[maho-shortcut-trace] BrowserNativeWidgetMac::ExecuteCommand command_id="
++                 << command << " disposition="
++                 << static_cast<int>(window_open_disposition)
++                 << " is_before_first_responder="
++                 << is_before_first_responder;
++  }
+   if (!WillExecuteCommand(command, window_open_disposition,
+                           is_before_first_responder)) {
++    if (command == IDC_MAHO_AI_PANEL || command == IDC_NEW_TAB) {
++      LOG(WARNING) << "[maho-shortcut-trace] BrowserNativeWidgetMac::ExecuteCommand blocked command_id="
++                   << command;
++    }
+     return false;
+   }
+ 
+@@ -469,6 +493,10 @@ bool BrowserNativeWidgetMac::ExecuteCommand(
+ 
+   chrome::ExecuteCommandWithDisposition(browser, command,
+                                         window_open_disposition);
++  if (command == IDC_MAHO_AI_PANEL || command == IDC_NEW_TAB) {
++    LOG(WARNING) << "[maho-shortcut-trace] BrowserNativeWidgetMac::ExecuteCommand dispatched command_id="
++                 << command;
++  }
+   return true;
+ }
+ 
+@@ -488,15 +516,17 @@ void BrowserNativeWidgetMac::PopulateCreateWindowParams(
+                          NSWindowStyleMaskTitled | NSWindowStyleMaskResizable;
+     params->window_title_hidden = true;
+   } else if (browser_view_->GetIsNormalType() ||
+-             browser_view_->GetIsWebAppType()) {
++             browser_view_->GetIsWebAppType() ||
++             browser_view_->browser()->is_maho_mini()) {
+     params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;
+     params->style_mask |= NSWindowStyleMaskFullSizeContentView;
+ 
+     // Ensure tabstrip/profile button are visible.
+     params->titlebar_appears_transparent = true;
+ 
+-    // Hosted apps draw their own window title.
+-    if (browser_view_->GetIsWebAppType()) {
++    if (browser_view_->browser()->is_maho_mini()) {
++      params->window_title_hidden = true;
++    } else if (browser_view_->GetIsWebAppType()) {
+       params->window_title_hidden = true;
+     }
+   } else {
+@@ -552,7 +582,10 @@ void BrowserNativeWidgetMac::OnWidgetInitDone() {
+       NSVisualEffectView* effect_view =
+           [[NSVisualEffectView alloc] initWithFrame:content_view.bounds];
+       effect_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+-      effect_view.material = NSVisualEffectMaterialUnderWindowBackground;
++      // Maho: use a high-transmittance material so the window
++      // vibrancy clearly reveals the desktop behind it. The
++      // default UnderWindowBackground is nearly opaque frosted.
++      effect_view.material = NSVisualEffectMaterialHUDWindow;
+       effect_view.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+       effect_view.state = NSVisualEffectStateActive;
+       [content_view addSubview:effect_view

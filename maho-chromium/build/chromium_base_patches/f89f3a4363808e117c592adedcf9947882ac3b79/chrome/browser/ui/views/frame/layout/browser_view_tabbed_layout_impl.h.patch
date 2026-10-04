@@ -1,0 +1,17 @@
+diff --git c/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h w/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+index 1a91845e3ee530cf37d16e68ceee8e3fe96f47bd..91f7d5e8f6fa64925059d8fc2afab2f06a854dce 100644
+--- c/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
++++ w/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+@@ -85,6 +85,12 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
+   // Returns the type of tabstrip present.
+   TabStripType GetTabStripType() const;
+ 
++  // Maho: true when Arc-style left-rail layout is active for this window.
++  bool IsMahoArcLayoutActive() const;
++
++  // Maho: produces the Arc two-pane layout (left rail + contents only).
++  ProposedLayout CalculateMahoArcLayout(
++      const BrowserLayoutParams& params) const;
+   // Returns the current state of the vertical tabstrip.
+   VerticalTabStripCollapsedState GetVerticalTabStripCollapsedState() const;
+ 

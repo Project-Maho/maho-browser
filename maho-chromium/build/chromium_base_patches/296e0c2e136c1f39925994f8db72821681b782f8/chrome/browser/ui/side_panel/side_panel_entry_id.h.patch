@@ -1,0 +1,13 @@
+diff --git a/chrome/browser/ui/side_panel/side_panel_entry_id.h b/chrome/browser/ui/side_panel/side_panel_entry_id.h
+index ac0e2c2d6aac4e3f597810d2b00ce63bd0a3a8c1..13031100c96965d38524ba62c9395d7f0b04690f 100644
+--- a/chrome/browser/ui/side_panel/side_panel_entry_id.h
++++ b/chrome/browser/ui/side_panel/side_panel_entry_id.h
+@@ -43,6 +43,8 @@
+   V(kTabsFromOtherDevices, kActionSidePanelShowTabsFromOtherDevices,          \
+     "TabsFromOtherDevices")                                                   \
+   V(kSidePanelDev, std::nullopt, "SidePanelDev")                              \
++  V(kMahoAiPanel, kActionSidePanelShowMahoAiPanel, "MahoAiPanel")            \
++  V(kMahoSettings, kActionSidePanelShowMahoSettings, "MahoSettings")          \
+   /* Extensions (nothing more should be added below here) */                  \
+   V(kExtension, std::nullopt, "Extension")
+ 

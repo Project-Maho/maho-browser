@@ -1,0 +1,111 @@
+import("//mojo/public/tools/bindings/mojom.gni")
+import("//testing/test.gni")
+
+mojom("mojo_bindings") {
+  sources = [ "maho_settings.mojom" ]
+  webui_module_path = "/"
+}
+
+source_set("maho_settings_password_helpers") {
+  sources = [
+    "maho_settings_password_helpers.cc",
+    "maho_settings_password_helpers.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+  ]
+
+  deps = [
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_password_authorization",
+    "//maho/browser:maho_password_provider",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base/clipboard",
+  ]
+}
+
+source_set("maho_settings") {
+  sources = [
+    "maho_settings_page_handler.cc",
+    "maho_settings_page_handler.h",
+    "maho_settings_ui.cc",
+    "maho_settings_ui.h",
+    "../../../ai/maho_managed_connection_test.cc",
+    "../../../ai/maho_managed_connection_test.h",
+    "../../../ai/maho_model_list_fetcher.cc",
+    "../../../ai/maho_model_list_fetcher.h",
+  ]
+
+  public_deps = [
+    ":mojo_bindings",
+    "//base",
+    "//content/public/browser",
+  ]
+
+  deps = [
+    ":maho_settings_password_helpers",
+    "//maho/browser:maho_ai_provider_oauth",
+    "//maho/browser:maho_auth_utils",
+    "//maho/browser:maho_google_sign_in",
+    "//maho/browser:maho_extension_state_bridge",
+    "//maho/browser:maho_password_authorization",
+    "//maho/browser:maho_password_provider",
+    "//chrome/browser/extensions",
+    "//chrome/browser/profiles:profile",
+    "//chrome/common:channel_info",
+    "//components/content_settings/core/browser",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
+    "//components/prefs",
+
+
+    "//components/safe_browsing/core/common",
+    "//components/translate/core/browser:translate_pref_names",
+    "//extensions/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_content_blocker_update_service",
+    "//maho/browser/net",
+    "//maho/browser/mail_helper:maho_mail_service",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
+    "//maho/browser/resources/maho_settings:resources",
+    "//maho/browser/updates:maho_updates_lib",
+    "//maho/components/constants",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//mojo/public/cpp/bindings",
+    "//components/version_info",
+    "//services/network/public/mojom",
+    "//ui/shell_dialogs",
+    "//ui/webui",
+    "//url",
+  ]
+}
+
+test("maho_settings_vault_handler_test") {
+  sources = [
+    "maho_settings_provider_availability_unittest.cc",
+    "maho_settings_vault_handler_test_main.cc",
+    "maho_settings_vault_handler_unittest.cc",
+  ]
+
+  deps = [
+    ":maho_settings_password_helpers",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/browser/ui:ui",
+    "//chrome/test:test_support",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_routines_scheduler",
+    "//maho/browser:maho_space_profile_hydration_state",
+    "//maho/browser:maho_theme_support",
+    "//maho/browser/updates:maho_updates_lib",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//testing/gtest",
+  ]
+}

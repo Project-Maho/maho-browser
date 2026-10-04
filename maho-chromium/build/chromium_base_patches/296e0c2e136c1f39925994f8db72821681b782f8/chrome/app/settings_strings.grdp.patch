@@ -1,0 +1,22 @@
+diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
+index aae688f787f30baf8ef7474c76e45bb26a204eb6..22136722a745404ff875c04cafe75a63e169365b 100644
+--- a/chrome/app/settings_strings.grdp
++++ b/chrome/app/settings_strings.grdp
+@@ -353,7 +353,7 @@
+       Settings
+     </message>
+     <message name="IDS_SETTINGS_ALT_PAGE_TITLE" desc="The settings page title for the about page.">
+-      Settings - <ph name="SECTION_TITLE">$1<ex>About Chromium</ex></ph>
++      Settings - <ph name="SECTION_TITLE">$1<ex>About Maho</ex></ph>
+     </message>
+     <message name="IDS_SETTINGS_SUBPAGE_BUTTON" desc="Accessibility description for a button navigating the user from a settings page to one of the settings subpages.">
+       Subpage button
+@@ -1754,7 +1754,7 @@
+       Passwords
+     </message>
+     <message name="IDS_SETTINGS_SAFETY_CHECK_PASSWORDS_FEATURE_UNAVAILABLE" desc="Explains that the password check feature is not available in this version of the browser.">
+-      Password check is not available in Chromium
++      Password check is not available in Maho
+     </message>
+     <message name="IDS_SETTINGS_SAFETY_CHECK_SAFE_BROWSING_ENABLED" desc="This text points out that Safe Browsing is enabled and that the user is protected.">
+       Safe Browsing is on and protecting you from harmful sites and downloads

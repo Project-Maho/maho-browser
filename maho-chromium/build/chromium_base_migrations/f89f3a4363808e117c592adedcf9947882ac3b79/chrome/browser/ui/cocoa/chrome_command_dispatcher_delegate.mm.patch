@@ -1,0 +1,14 @@
+--- a/chrome/browser/ui/cocoa/chrome_command_dispatcher_delegate.mm
++++ b/chrome/browser/ui/cocoa/chrome_command_dispatcher_delegate.mm
+@@ -106,10 +106,8 @@
+         GlobalBrowserCollection::GetInstance()->FindBrowserWithWindow(
+             gfx::NativeWindow(window));
+     DCHECK(browser_window);
+-    Browser* browser = browser_window->GetBrowserForMigrationOnly();
+-    DCHECK(browser);
+     maho::sidebar_prefs::ToggleSidebarPanelExpanded(
+-        browser->profile()->GetPrefs());
++        browser_window->GetProfile()->GetPrefs());
+     return ui::PerformKeyEquivalentResult::kHandled;
+   }
+ 

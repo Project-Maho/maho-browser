@@ -1,0 +1,13 @@
+diff --git a/chrome/browser/ui/browser_command_controller.h b/chrome/browser/ui/browser_command_controller.h
+index 33f72914bab2c42d70f41a94b5cfae0ad864a2c7..95f257e97163c50904debdc575aab659fa4a7047 100644
+--- a/chrome/browser/ui/browser_command_controller.h
++++ b/chrome/browser/ui/browser_command_controller.h
+@@ -5,6 +5,8 @@
+ #ifndef CHROME_BROWSER_UI_BROWSER_COMMAND_CONTROLLER_H_
+ #define CHROME_BROWSER_UI_BROWSER_COMMAND_CONTROLLER_H_
+ 
++#include <memory>
++
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "build/build_config.h"

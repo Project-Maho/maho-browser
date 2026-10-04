@@ -1,0 +1,10 @@
+--- a/chrome/browser/ui/views/frame/browser_view.cc
++++ b/chrome/browser/ui/views/frame/browser_view.cc
+@@ -2587,6 +2587,6 @@
+ 
+ void BrowserView::ShowMahoCommandOverlayForNewTab() {
+   if (!GetIsNormalType()) {
+-    chrome::NewTab(browser_);
++    chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
+     return;
+   }

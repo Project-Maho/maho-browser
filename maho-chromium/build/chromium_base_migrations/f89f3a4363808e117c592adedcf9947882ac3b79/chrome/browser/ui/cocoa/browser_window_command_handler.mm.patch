@@ -1,0 +1,40 @@
+--- a/chrome/browser/ui/cocoa/browser_window_command_handler.mm
++++ b/chrome/browser/ui/cocoa/browser_window_command_handler.mm
+@@ -64,7 +64,7 @@
+   return bridge;
+ }
+ 
+-Browser* FindBrowserForSender(id sender, NSWindow* window) {
++BrowserWindowInterface* FindBrowserWindowForSender(id sender, NSWindow* window) {
+   NSWindow* targetWindow = window;
+   if ([sender respondsToSelector:@selector(window)]) {
+     targetWindow = [sender window];
+@@ -73,9 +73,7 @@
+       GlobalBrowserCollection::GetInstance()->FindBrowserWithWindow(
+           gfx::NativeWindow(targetWindow));
+   DCHECK(browser_window);
+-  Browser* browser = browser_window->GetBrowserForMigrationOnly();
+-  DCHECK(browser);
+-  return browser;
++  return browser_window;
+ }
+ 
+ }  // namespace
+@@ -127,7 +125,7 @@
+   int command = [sender tag];
+   if (command == IDC_SAVE_PAGE) {
+     maho::sidebar_prefs::ToggleSidebarPanelExpanded(
+-        FindBrowserForSender(sender, window)->profile()->GetPrefs());
++        FindBrowserWindowForSender(sender, window)->GetProfile()->GetPrefs());
+     return;
+   }
+   bool was_executed = false;
+@@ -165,7 +163,7 @@
+ 
+   if (command == IDC_SAVE_PAGE) {
+     maho::sidebar_prefs::ToggleSidebarPanelExpanded(
+-        FindBrowserForSender(sender, window)->profile()->GetPrefs());
++        FindBrowserWindowForSender(sender, window)->GetProfile()->GetPrefs());
+     return;
+   }
+ 

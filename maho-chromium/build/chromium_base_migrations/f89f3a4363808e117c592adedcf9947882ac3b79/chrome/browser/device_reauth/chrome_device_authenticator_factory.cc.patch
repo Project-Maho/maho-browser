@@ -1,0 +1,18 @@
+diff --git c/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc w/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
+index 45f68eff111c3c51efc11d1eb08ae338cdeaf7c2..6b65ad958adc8bcdc2512b7956aed883e504e5d0 100644
+--- c/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
++++ w/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
+@@ -99,11 +99,11 @@
+   // Maho Linux: upstream Chromium ships no Linux-desktop DeviceAuthenticator.
+   // Return null so reauth-gated operations fail closed; every caller in
+   // maho_settings_page_handler.cc checks for null and declines gracefully.
+-  return nullptr;
++  std::unique_ptr<DeviceAuthenticator> device_authenticator;
+ #else
+   static_assert(false);
+ #endif
+-  return std::move(device_authenticator);
++  return device_authenticator;
+ }
+ #endif
+ 

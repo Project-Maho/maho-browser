@@ -1,0 +1,30 @@
+diff --git c/chrome/browser/ui/views/frame/browser_frame_view_win.cc w/chrome/browser/ui/views/frame/browser_frame_view_win.cc
+index 207ea26540d4d90e9f8398d6185179ed175fc03e..8f0dd38a213d3b51563d7c24c04dfd548278eb11 100644
+--- c/chrome/browser/ui/views/frame/browser_frame_view_win.cc
++++ w/chrome/browser/ui/views/frame/browser_frame_view_win.cc
+@@ -165,6 +165,12 @@ bool BrowserFrameViewWin::CaptionButtonsOnLeadingEdge() const {
+ }
+ 
+ int BrowserFrameViewWin::GetTopInset(bool restored) const {
++  // Maho(win): the Arc edge-to-edge layout reserves no titlebar strip;
++  // the sidebar + contents fill to the very top of the window and the
++  // caption handle bar is revealed on hover as a layer-backed overlay.
++  if (GetBrowserView()->IsMahoArcLayoutActive()) {
++    return 0;
++  }
+   if (GetBrowserView()->GetTabStripVisible()) {
+     return TopAreaHeight(restored);
+   }
+@@ -611,6 +617,12 @@ SkColor BrowserFrameViewWin::GetTitlebarColor() const {
+ 
+ void BrowserFrameViewWin::PaintTitlebar(gfx::Canvas* canvas) const {
+   TRACE_EVENT0("views.frame", "BrowserFrameViewWin::PaintTitlebar");
++  // Maho(win): do not paint the titlebar strip in the Arc edge-to-edge
++  // layout. The handle bar is hidden by default and revealed on hover
++  // purely through the layer-backed caption button container.
++  if (GetBrowserView()->IsMahoArcLayoutActive()) {
++    return;
++  }
+ 
+   // This is the pixel-accurate version of WindowTopY(). Scaling the DIP values
+   // here compounds precision error, which exposes unpainted client area. When

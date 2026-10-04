@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/window_feature_controller/window_feature_controller.h w/chrome/browser/ui/window_feature_controller/window_feature_controller.h
+index 7c203d12c129f2a7b949c5ccb5144d04b175d58b..ed4cbe518292677609c1d3c0fe977592e34d9a28 100644
+--- c/chrome/browser/ui/window_feature_controller/window_feature_controller.h
++++ w/chrome/browser/ui/window_feature_controller/window_feature_controller.h
+@@ -92,6 +92,7 @@ class WindowFeatureController {
+ 
+   const BrowserWindowInterface::Type browser_type_;
+   const bool is_trusted_source_;
++  bool is_maho_mini_ = false;
+ 
+   ui::ScopedUnownedUserData<WindowFeatureController> scoped_unowned_user_data_;
+ };

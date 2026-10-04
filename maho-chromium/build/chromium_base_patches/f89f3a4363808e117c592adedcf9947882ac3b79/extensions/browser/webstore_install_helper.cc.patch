@@ -1,0 +1,31 @@
+diff --git c/extensions/browser/webstore_install_helper.cc w/extensions/browser/webstore_install_helper.cc
+index 915811f8f00d48b5442ac057e18b662ec00dcad2..f5852ce3d7d602f16510e6874a1c18a85cabaf2f 100644
+--- c/extensions/browser/webstore_install_helper.cc
++++ w/extensions/browser/webstore_install_helper.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/json/json_reader.h"
++#include "base/logging.h"
+ #include "base/memory/ref_counted.h"
+ #include "base/types/expected.h"
+ #include "base/values.h"
+@@ -129,6 +130,7 @@ class WebstoreInstallHelper : public base::RefCounted<WebstoreInstallHelper> {
+         std::move(params));
+   }
+ 
++
+  private:
+   friend class base::RefCounted<WebstoreInstallHelper>;
+   ~WebstoreInstallHelper() = default;
+@@ -149,6 +151,10 @@ class WebstoreInstallHelper : public base::RefCounted<WebstoreInstallHelper> {
+             image_fetcher::RequestMetadata::ResponseCode::
+                 RESPONSE_CODE_INVALID ||
+         fetched_image.IsEmpty()) {
++      LOG(ERROR) << "[maho-diag] WebstoreInstallHelper::OnFetchComplete"
++                 << " icon_url=" << icon_url_.spec()
++                 << " http_code=" << metadata.http_response_code
++                 << " image_empty=" << fetched_image.IsEmpty();
+       std::move(callback_).Run(base::unexpected(WebstoreParseError{
+           .error_code = WebstoreInstallHelperResultCode::kIconError,
+           .error_message = kImageDecodeError,

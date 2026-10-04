@@ -1,0 +1,147 @@
+name: Maho
+packages:
+  LucideIcons:
+    url: https://github.com/JakubMazur/lucide-icons-swift
+    from: "1.0.0"
+options:
+  bundleIdPrefix: dev.maho
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Maho-Bridging-Header.h"
+    HEADER_SEARCH_PATHS: ["$(SRCROOT)/vendor/maho-ffi/include"]
+    LIBRARY_SEARCH_PATHS: ["$(SRCROOT)/vendor/maho-ffi/lib/sim"]
+    "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": "$(SRCROOT)/vendor/maho-ffi/lib/ios"
+    "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": "$(SRCROOT)/vendor/maho-ffi/lib/sim"
+    OTHER_LDFLAGS: ["-lmaho_ffi", "-framework", "WebKit", "-framework", "Security", "-framework", "SystemConfiguration", "-framework", "Speech", "-framework", "AVFoundation"]
+    SWIFT_VERSION: "5.9"
+    GENERATE_INFOPLIST_FILE: false
+    CODE_SIGN_IDENTITY: "Apple Distribution"
+    CODE_SIGNING_REQUIRED: "YES"
+    CODE_SIGNING_ALLOWED: "YES"
+    # DEVELOPMENT_TEAM is provided by Signing.xcconfig (gitignored, per-developer)
+    # or by the CI environment. Do NOT hardcode a placeholder here — a missing
+    # team ID should fail the build loudly with "requires a development team".
+
+
+targets:
+  Maho:
+    type: application
+    platform: iOS
+    preBuildScripts:
+      - script: '"$SRCROOT/scripts/check-ffi-pin.sh"'
+        name: Check vendored FFI pin
+        basedOnDependencyAnalysis: false
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: MahoApp.swift
+      - path: Models
+      - path: Bridge
+      - path: Support
+      - path: Views
+      - path: Integration
+      - path: Extensions
+        excludes:
+          - "ShareExtension/**"
+      - path: Sources
+      - path: Assets.xcassets
+      - path: web-ai
+        type: folder
+        buildPhase: resources
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleVersion: "20260822"
+        CFBundleShortVersionString: "1.0.0"
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations: {}
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.maho.browser.sync.refresh
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: true
+        NSSpeechRecognitionUsageDescription: "Maho uses speech recognition to let you search by voice."
+        NSMicrophoneUsageDescription: "Maho uses the microphone for voice search."
+        NSCameraUsageDescription: "Maho uses the camera to allow photo uploads and visual search."
+        NSPhotoLibraryUsageDescription: "Maho accesses your photo library to allow uploading images in web forms."
+        NSLocationWhenInUseUsageDescription: "Maho uses your location to provide local search results and allow websites to access location when permitted."
+        MahoGoogleClientID: "650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq.apps.googleusercontent.com"
+        MahoGoogleRedirectScheme: "com.googleusercontent.apps.650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq"
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLSchemes:
+              - "com.googleusercontent.apps.650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.maho.browser
+        INFOPLIST_FILE: Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - package: LucideIcons
+
+  MahoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Maho
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Maho.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Maho"
+
+  MahoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Maho
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        TEST_TARGET_NAME: Maho
+
+  MahoShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ShareExtension
+    info:
+      path: ShareExtension/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.maho.browser.share-extension
+        INFOPLIST_FILE: ShareExtension/Info.plist
+    dependencies:
+      - target: Maho
+
+  MahoWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: MahoWidget
+    info:
+      path: MahoWidget/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.maho.browser.widget
+        INFOPLIST_FILE: MahoWidget/Info.plist
+    dependencies:
+      - target: Maho

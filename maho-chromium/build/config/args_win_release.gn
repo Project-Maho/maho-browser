@@ -1,0 +1,23 @@
+# Release settings for Windows builds.
+is_official_build = true
+is_debug = false
+# Match macOS release policy: preserve function-level crash backtraces while
+# dropping the largest Blink debug-info payload from the local build tree.
+symbol_level = 1
+blink_symbol_level = 0
+strip_debug_info = true
+treat_warnings_as_errors = false
+fatal_linker_warnings = false
+enable_resource_allowlist_generation = false
+use_siso = false
+dcheck_always_on = false
+is_chrome_branded = false
+enable_google_update = false
+
+target_os = "win"
+target_cpu = "x64"
+maho_root = "//maho"
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+enable_widevine = true
+ignore_missing_widevine_signing_cert = true

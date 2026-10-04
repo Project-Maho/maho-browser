@@ -1,0 +1,28 @@
+diff --git c/chrome/browser/resources/settings/settings_ui/settings_ui.html w/chrome/browser/resources/settings/settings_ui/settings_ui.html
+index 193e7ff92522100c1827b5ce68a3bce18533a343..39cdc6241c2ccf24b69c31d2e26237ae76756895 100644
+--- c/chrome/browser/resources/settings/settings_ui/settings_ui.html
++++ w/chrome/browser/resources/settings/settings_ui/settings_ui.html
+@@ -58,10 +58,10 @@
+         flex-basis: var(--settings-main-basis);
+       }
+ 
+-      /* The breakpoint of 980px was decided on by the rounded sum of
+-       * var(--settings-main-basis), var(--settings-menu-width), and
+-       * var(--cr-section-padding). */
+-      @media (max-width: 980px) {
++      /* The breakpoint of 680px keeps the left nav expanded inside Maho's
++       * embedded shell, which removes roughly 80px of horizontal space via
++       * outer content padding and card chrome before the inner Settings UI. */
++      @media (max-width: 680px) {
+         #main {
+           min-width: auto;
+           /* Add some padding to make room for borders and to prevent focus
+@@ -82,7 +82,7 @@
+         on-search-changed="onSearchChanged_"
+         role="banner"
+         narrow="{{narrow_}}"
+-        narrow-threshold="980"
++        narrow-threshold="680"
+         show-menu="[[narrow_]]">
+     </cr-toolbar>
+     <cr-drawer id="drawer" on-close="onMenuClose_" heading="$i18n{settings}"

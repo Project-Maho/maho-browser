@@ -1,0 +1,23 @@
+# Copyright 2026 The Maho Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//ui/webui/resources/tools/build_webui.gni")
+
+assert(!is_android)
+
+build_webui("build") {
+  grd_prefix = "dom_adapters"
+
+  ts_files = [
+    "types.ts",
+    "page_adapter_registry.ts",
+    "google_docs_adapter.ts",
+    "react_fiber_inspector.ts",
+    "index.ts",
+  ]
+
+  ts_deps = []
+
+  webui_context_type = "untrusted"
+}

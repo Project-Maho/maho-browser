@@ -1,0 +1,8 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//mojo/public/tools/bindings/mojom.gni")
+
+mojom("extensions_side_panel_mojom") {
+  sources = [ "extensions_side_panel.mojom" ]
+  cpp_only = true
+}

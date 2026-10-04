@@ -1,0 +1,70 @@
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -6,7 +6,6 @@
+ #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
+ #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+ #include "components/prefs/pref_service.h"
+-#include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
+ #include "maho/browser/maho_space_profile_bridge.h"
+ #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
+@@ -1759,29 +1758,12 @@
+     case IDC_NEW_TAB:
+       if (BrowserWindowInterface* browser_window =
+               ActivateBrowser(profile)) {
+-        if (Browser* browser =
+-                browser_window->GetBrowserForMigrationOnly()) {
+-          chrome::ExecuteCommand(browser, IDC_NEW_TAB);
+-          break;
+-        }
+-      }
+-      if (BrowserWindowInterface* browser_window =
+-              CreateBrowser(profile->GetOriginalProfile())) {
+-        if (Browser* browser =
+-                browser_window->GetBrowserForMigrationOnly()) {
+-          chrome::ExecuteCommand(browser, IDC_NEW_TAB);
+-        }
+-      }
+-      break;
+-        chrome::ExecuteCommand(browser, IDC_NEW_TAB);
++        chrome::ExecuteCommand(browser_window, IDC_NEW_TAB);
+         break;
+       }
+       if (BrowserWindowInterface* browser_window =
+               CreateBrowser(profile->GetOriginalProfile())) {
+-        if (Browser* browser =
+-                browser_window->GetBrowserForMigrationOnly()) {
+-          chrome::ExecuteCommand(browser, IDC_NEW_TAB);
+-        }
++        chrome::ExecuteCommand(browser_window, IDC_NEW_TAB);
+       }
+       break;
+     case IDC_NEW_WINDOW:
+@@ -2798,20 +2780,20 @@
+               }
+               if (result.type == maho::LinkDestinationType::kSpace &&
+                   !result.space_id.empty()) {
+-                Browser* browser =
+-                    chrome::FindTabbedBrowser(profile.get(), false);
++                BrowserWindowInterface* browser =
++                    ProfileBrowserCollection::GetForProfile(profile.get())->FindTabbedBrowser(false);
+                 if (!browser) {
+-                  BrowserWindowCreateParams params(profile.get(), true);
+-                  browser = Browser::Create(std::move(params));
+-                  if (browser && browser->window()) {
+-                    browser->window()->Show();
++                  browser = CreateBrowserWindow(
++                      BrowserWindowCreateParams(profile.get(), true));
++                  if (browser && browser->GetWindow()) {
++                    browser->GetWindow()->Show();
+                   }
+                 }
+                 if (browser) {
+                   maho::MahoSpaceProfileBridge* bridge =
+                       maho::MahoSpaceProfileBridge::GetInstance();
+                   if (bridge &&
+-                      bridge->SwitchToSpace(browser, result.space_id)) {
++                      bridge->SwitchToSpace(static_cast<Browser*>(browser), result.space_id)) {
+                     chrome::AddSelectedTabWithURL(
+                         browser, single_tab.url, ui::PAGE_TRANSITION_LINK);
+                     return;

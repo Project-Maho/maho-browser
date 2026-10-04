@@ -1,0 +1,30 @@
+diff --git c/ui/views/widget/native_widget_mac.mm w/ui/views/widget/native_widget_mac.mm
+index 4b50e1882176b4e5e0a077c0f96a6a405ddf1826..9aecb383ed3aadf32e154b26e4cc7d2fc2fb32a8 100644
+--- c/ui/views/widget/native_widget_mac.mm
++++ w/ui/views/widget/native_widget_mac.mm
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "ui/views/widget/native_widget_mac.h"
++#include "ui/gfx/geometry/vector2d.h"
+ 
+ #include <ApplicationServices/ApplicationServices.h>
+ #import <Cocoa/Cocoa.h>
+@@ -957,6 +958,17 @@ void NativeWidgetMac::CancelDragDropLoop(View* view) {
+   ns_window_host_->drag_drop_client()->EndDrag();
+ }
+ 
++void NativeWidgetMac::UpdateDragImage(const gfx::ImageSkia& image,
++                                      const gfx::Vector2d& offset) {
++  if (!ns_window_host_) {
++    return;
++  }
++  DragDropClientMac* client = ns_window_host_->drag_drop_client();
++  if (client) {
++    client->UpdateDragImage(image, offset);
++  }
++}
++
+ void NativeWidgetMac::SchedulePaintInRect(const gfx::Rect& rect) {
+   // |rect| is relative to client area of the window.
+   NSWindow* window = GetNativeWindow().GetNativeNSWindow();

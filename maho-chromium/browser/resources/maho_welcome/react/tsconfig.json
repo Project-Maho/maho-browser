@@ -1,0 +1,92 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "typeRoots": [
+      "../../../../../website/node_modules/@types"
+    ],
+    "types": [],
+    "paths": {
+      "react": [
+        "../../../../../website/node_modules/@types/react/index.d.ts"
+      ],
+      "react/jsx-runtime": [
+        "../../../../../website/node_modules/@types/react/jsx-runtime.d.ts"
+      ],
+      "react-dom/client": [
+        "../../../../../website/node_modules/@types/react-dom/client.d.ts"
+      ],
+      "react-dom/server": [
+        "../../../../../website/node_modules/@types/react-dom/server.d.ts"
+      ],
+      "class-variance-authority": [
+        "../../../../../website/node_modules/class-variance-authority/dist/index.d.ts"
+      ],
+      "clsx": [
+        "../../../../../website/node_modules/clsx/clsx.d.ts"
+      ],
+      "motion": [
+        "../../../../../website/node_modules/motion/dist/index.d.ts"
+      ],
+      "@radix-ui/react-label": [
+        "../../../../../website/node_modules/@radix-ui/react-label/dist/index.d.ts"
+      ],
+      "@radix-ui/react-slot": [
+        "../../../../../website/node_modules/@radix-ui/react-slot/dist/index.d.ts"
+      ],
+      "@radix-ui/react-checkbox": [
+        "../../../../../website/node_modules/@radix-ui/react-checkbox/dist/index.d.ts"
+      ],
+      "@radix-ui/react-select": [
+        "../../../../../website/node_modules/@radix-ui/react-select/dist/index.d.ts"
+      ],
+      "@radix-ui/react-tabs": [
+        "../../../../../website/node_modules/@radix-ui/react-tabs/dist/index.d.ts"
+      ],
+      "lucide-react": [
+        "../../../../../website/node_modules/lucide-react/dist/lucide-react.d.ts"
+      ],
+      "tailwind-merge": [
+        "../../../../../website/node_modules/tailwind-merge/dist/types.d.ts"
+      ],
+      "@lib/*": [
+        "../../maho_common/react/lib/*",
+        "./lib/*"
+      ],
+      "@ui/*": [
+        "../../maho_common/react/ui/*"
+      ],
+      "@theme/*": [
+        "../../maho_common/react/theme/*"
+      ],
+      "@icons/*": [
+        "../../maho_common/react/icons/*"
+      ],
+      "//resources/maho_common/*": [
+        "../../maho_common/*"
+      ]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx",
+    "../../maho_common/chrome_resources.d.ts"
+  ],
+  "exclude": [
+    "./pages/mail-setup.tsx",
+    "./navigation.ts",
+    "./__tests__/mail_onboarding_lifecycle.test.ts"
+  ]
+}

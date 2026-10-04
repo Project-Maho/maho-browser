@@ -1,0 +1,83 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//components/vector_icons/vector_icons.gni")
+
+aggregate_vector_icons("maho_lucide_icons") {
+  icon_directory = "."
+
+  sources = [
+    "archive.icon",
+    "arrow_down_to_line.icon",
+    "camera.icon",
+    "chevron_left.icon",
+    "chevron_right.icon",
+    "copy.icon",
+    "ellipsis.icon",
+    "folder.icon",
+    "folder_open.icon",
+    "hammer.icon",
+    "images.icon",
+    "inbox.icon",
+    "link.icon",
+    "message_circle.icon",
+    "message_square.icon",
+    "minus.icon",
+    "notebook_text.icon",
+    "panel_left.icon",
+    "pencil_line.icon",
+    "pin.icon",
+    "picture_in_picture_2.icon",
+    "plus.icon",
+    "puzzle.icon",
+    "rotate_cw.icon",
+    "scan.icon",
+    "search.icon",
+    "share.icon",
+    "shield_check.icon",
+    "shield_half.icon",
+    "shield_question.icon",
+    "shield_x.icon",
+    "sliders_horizontal.icon",
+    "wand_sparkles.icon",
+    "x.icon",
+    "zoom_in.icon",
+    "zoom_out.icon",
+    "play.icon",
+    "pause.icon",
+    "skip_back.icon",
+    "skip_forward.icon",
+    "volume_2.icon",
+    "volume_x.icon",
+    "grip_vertical.icon",
+    "move.icon",
+    "arrow_up.icon",
+    "arrow_left.icon",
+    "gift.icon",
+    "glasses.icon",
+    "cookie.icon",
+    "settings.icon",
+    "arrow_up_right.icon",
+    "trash_2.icon",
+    "globe.icon",
+    "file.icon",
+    "lock.icon",
+    "lock_open.icon",
+    "shield_alert.icon",
+  ]
+}
+
+source_set("maho_lucide_icon_library") {
+  sources = [
+    "$target_gen_dir/vector_icons.cc",
+    "$target_gen_dir/vector_icons.h",
+  ]
+
+  deps = [
+    ":maho_lucide_icons",
+    "//ui/gfx",
+  ]
+
+  public_deps = [
+    "//ui/gfx",
+  ]
+}

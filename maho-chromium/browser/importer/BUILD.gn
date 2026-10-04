@@ -1,0 +1,106 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+import("//testing/test.gni")
+
+source_set("importer") {
+  sources = [
+    "importers/essential_importer.cc",
+    "importers/essential_importer.h",
+    "maho_browser_detector.cc",
+    "maho_browser_detector.h",
+    "maho_import_session_bridge.cc",
+    "maho_import_session_bridge.h",
+    "maho_space_ffi_client.cc",
+    "maho_space_ffi_client.h",
+    "../ui/views/importer/maho_migration_dialog_view.cc",
+    "../ui/views/importer/maho_migration_dialog_view.h",
+  ]
+
+  public_deps = [
+    "//base",
+    "//maho/components/maho_importer:maho_importer_mojo_bindings",
+    "//url",
+  ]
+
+  deps = [
+    ":maho_import_session_completion",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/favicon",
+    "//chrome/browser/webdata_services",
+    "//components/autofill/core/browser",
+    "//components/autofill/core/common",
+    "//components/favicon/core",
+    "//components/favicon_base",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_space_profile_bridge",
+    "//maho/third_party/maho:maho_bridge",
+    "//maho/third_party/maho:maho_ffi_headers",
+    "//net",
+    "//ui/views",
+    "//ui/base",
+    "//ui/gfx/codec",
+  ]
+}
+
+source_set("maho_import_session_completion") {
+  sources = [
+    "maho_import_session_completion.cc",
+    "maho_import_session_completion.h",
+  ]
+}
+
+source_set("unit_tests") {
+  testonly = true
+  sources = [
+    "../ui/views/importer/maho_migration_dialog_unittest.cc",
+  ]
+
+  deps = [
+    ":importer",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+    "//ui/views:test_support",
+  ]
+}
+
+source_set("maho_import_session_completion_unittests") {
+  testonly = true
+  sources = [ "maho_import_session_completion_unittest.cc" ]
+  deps = [
+    ":maho_import_session_completion",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_import_session_bridge_test") {
+  sources = [ "../ai/maho_browser_tool_test_main.cc" ]
+  deps = [
+    ":maho_import_session_completion_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("browser_tests") {
+  testonly = true
+  sources = []
+
+  deps = [
+    ":importer",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui",
+    "//chrome/test:test_support",
+    "//content/public/browser",
+    "//content/test:test_support",
+    "//testing/gmock",
+    "//testing/gtest",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}

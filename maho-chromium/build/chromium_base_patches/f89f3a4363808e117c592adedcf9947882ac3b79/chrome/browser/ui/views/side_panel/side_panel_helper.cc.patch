@@ -1,0 +1,51 @@
+diff --git c/chrome/browser/ui/views/side_panel/side_panel_helper.cc w/chrome/browser/ui/views/side_panel/side_panel_helper.cc
+index e1e7ccb48cdf3e0baaee33fad31ebcb669110435..e7fb4766252b93583732189732bd8bd763453ea9 100644
+--- c/chrome/browser/ui/views/side_panel/side_panel_helper.cc
++++ w/chrome/browser/ui/views/side_panel/side_panel_helper.cc
+@@ -4,7 +4,12 @@
+ 
+ #include "chrome/browser/ui/views/side_panel/side_panel_helper.h"
+ 
++#include <memory>
++
++#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
+ #include "chrome/browser/history_clusters/history_clusters_service_factory.h"
++#include "chrome/browser/ui/side_panel/side_panel_entry_scope.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_actions.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+@@ -20,13 +25,14 @@
+ #include "chrome/browser/ui/views/side_panel/tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h"
+ #include "chrome/browser/ui/webui_browser/webui_browser.h"
+ #include "components/history_clusters/core/features.h"
++#include "maho/browser/ui/views/side_panel/maho_ai_side_panel_coordinator.h"
+ #include "components/history_clusters/core/history_clusters_service.h"
+-#include "ui/actions/actions.h"
+ 
+ // static
+ void SidePanelHelper::PopulateGlobalEntries(
+     BrowserWindowInterface* browser,
+     SidePanelRegistry* window_registry) {
++  maho::RegisterMahoAiSidePanel(browser, window_registry);
+   // Add reading list.
+   ReadingListSidePanelCoordinator::From(browser)->CreateAndRegisterEntry(
+       window_registry);
+@@ -38,6 +44,7 @@ void SidePanelHelper::PopulateGlobalEntries(
+   if (webui_browser::IsWebUIBrowserEnabled()) {
+     // TODO(webium): Consider supporting additional side panels beyond reading
+     // list and bookmarks.
++    maho::RegisterMahoAiSidePanel(browser, window_registry);
+     return;
+   }
+ 
+@@ -66,6 +73,9 @@ void SidePanelHelper::PopulateGlobalEntries(
+     CommentsSidePanelCoordinator::From(browser)->CreateAndRegisterEntry(
+         window_registry);
+   }
++
++  // Add Maho AI panel.
++  maho::RegisterMahoAiSidePanel(browser, window_registry);
+ }
+ 
+ // static

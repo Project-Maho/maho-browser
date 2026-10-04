@@ -1,0 +1,21 @@
+diff --git a/components/password_manager/core/browser/form_fetcher_impl.h b/components/password_manager/core/browser/form_fetcher_impl.h
+index 700b065e72bb96234af4af7189598fe04bb6b8b9..9ad142bbc21b9a196f523fa99a81259e76f9a537 100644
+--- a/components/password_manager/core/browser/form_fetcher_impl.h
++++ b/components/password_manager/core/browser/form_fetcher_impl.h
+@@ -47,6 +47,8 @@ class FormFetcherImpl : public FormFetcher,
+   void AddConsumer(FormFetcher::Consumer* consumer) override;
+   void RemoveConsumer(FormFetcher::Consumer* consumer) override;
+   void Fetch() override;
++  void SetPasswordFillRequestContext(
++      const PasswordFillRequestContext& context) override;
+   State GetState() const override;
+   const std::vector<InteractionsStats>& GetInteractionsStats() const override;
+   base::span<const PasswordForm> GetInsecureCredentials() const override;
+@@ -104,6 +106,7 @@ class FormFetcherImpl : public FormFetcher,
+ 
+   // PasswordStore results will be fetched for this description.
+   const PasswordFormDigest form_digest_;
++  std::optional<PasswordFillRequestContext> fill_request_context_;
+ 
+   // Client used to obtain a CredentialFilter.
+   const raw_ptr<PasswordManagerClient> client_;

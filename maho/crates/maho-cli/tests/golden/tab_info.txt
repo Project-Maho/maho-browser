@@ -1,0 +1,4 @@
+id: 1
+title: Example Domain
+url: https://example.com
+active: true

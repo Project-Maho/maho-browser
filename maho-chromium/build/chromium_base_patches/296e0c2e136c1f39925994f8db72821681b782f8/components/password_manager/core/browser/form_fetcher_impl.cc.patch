@@ -1,0 +1,55 @@
+diff --git a/components/password_manager/core/browser/form_fetcher_impl.cc b/components/password_manager/core/browser/form_fetcher_impl.cc
+index 604bbdfc3bb72ae887cc37e245653744049190c9..6ad30b9d3ea2eabe865a4b39d0c6c905d1b95efe 100644
+--- a/components/password_manager/core/browser/form_fetcher_impl.cc
++++ b/components/password_manager/core/browser/form_fetcher_impl.cc
+@@ -94,6 +94,14 @@ void FormFetcherImpl::RemoveConsumer(FormFetcher::Consumer* consumer) {
+   consumers_.RemoveObserver(consumer);
+ }
+ 
++void FormFetcher::SetPasswordFillRequestContext(
++    const PasswordFillRequestContext& context) {}
++
++void FormFetcherImpl::SetPasswordFillRequestContext(
++    const PasswordFillRequestContext& context) {
++  fill_request_context_ = context;
++}
++
+ void FormFetcherImpl::Fetch() {
+   std::unique_ptr<BrowserSavePasswordProgressLogger> logger;
+   if (password_manager_util::IsLoggingActive(client_)) {
+@@ -139,11 +147,22 @@ void FormFetcherImpl::Fetch() {
+     wait_counter_++;
+   }
+ 
+-  profile_password_store->GetLogins(form_digest_,
+-                                    weak_ptr_factory_.GetWeakPtr());
+-  if (account_password_store) {
+-    account_password_store->GetLogins(form_digest_,
+-                                      weak_ptr_factory_.GetWeakPtr());
++  if (fill_request_context_) {
++    profile_password_store->GetLogins(
++        form_digest_, *fill_request_context_,
++        weak_ptr_factory_.GetWeakPtr());
++    if (account_password_store) {
++      account_password_store->GetLogins(
++          form_digest_, *fill_request_context_,
++          weak_ptr_factory_.GetWeakPtr());
++    }
++  } else {
++    profile_password_store->GetLogins(
++        form_digest_, weak_ptr_factory_.GetWeakPtr());
++    if (account_password_store) {
++      account_password_store->GetLogins(
++          form_digest_, weak_ptr_factory_.GetWeakPtr());
++    }
+   }
+ 
+ // The statistics isn't needed on mobile, only on desktop. Let's save some
+@@ -284,6 +303,7 @@ std::unique_ptr<FormFetcher> FormFetcherImpl::Clone() {
+   result->need_to_refetch_ = need_to_refetch_;
+   result->profile_store_backend_error_ = profile_store_backend_error_;
+   result->account_store_backend_error_ = account_store_backend_error_;
++  result->fill_request_context_ = fill_request_context_;
+ 
+   return result;
+ }

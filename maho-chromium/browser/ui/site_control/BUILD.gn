@@ -1,0 +1,35 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_site_control") {
+  sources = [
+    "maho_page_info_ui.cc",
+    "maho_page_info_ui.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser:browser_public_dependencies",
+    "//chrome/browser/ui/location_bar",
+    "//chrome/browser/ui/tabs:tab_strip",
+    "//components/content_settings/core/common",
+    "//content/public/browser",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser/net",
+    "//maho/browser/ui/views/shields",
+    "//maho/third_party/maho:maho_bridge",
+    "//ui/views",
+    "//url",
+  ]
+}
+
+source_set("maho_site_control_unittests") {
+  testonly = true
+  sources = [
+    "maho_page_info_ui_unittest.cc",
+  ]
+  deps = [
+    ":maho_site_control",
+    "//content/test:test_support",
+    "//testing/gtest",
+  ]
+}

@@ -1,0 +1,351 @@
+diff --git i/chrome/browser/app_controller_mac.mm w/chrome/browser/app_controller_mac.mm
+index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17edb33dca8b 100644
+--- i/chrome/browser/app_controller_mac.mm
++++ w/chrome/browser/app_controller_mac.mm
+@@ -3,12 +3,20 @@
+ // found in the LICENSE file.
+ 
+ #import "chrome/browser/app_controller_mac.h"
++#include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++#include "components/prefs/pref_service.h"
++#include "chrome/browser/ui/browser_tabstrip.h"
++#include "maho/browser/maho_space_profile_bridge.h"
++#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
++#include "maho/browser/ui/views/welcome/maho_welcome_window.h"
+ 
+ #include <AppKit/AppKit.h>
+ #include <dispatch/dispatch.h>
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <map>
+ #include <memory>
+ #include <vector>
+ 
+@@ -167,6 +176,7 @@ GetPendingWebAuthRequests() {
+   return g_pending_requests;
+ }
+ 
++
+ // Returns true if the profile requires signin before being used.
+ bool IsProfileSignedOut(const base::FilePath& profile_path);
+ 
+@@ -256,7 +266,12 @@ BrowserWindowInterface* CreateBrowser(Profile* profile) {
+ 
+   BrowserWindowInterface* browser =
+       GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
+-  CHECK(browser);
++  // Maho login gate: NewEmptyWindow() can intentionally show the onboarding
++  // gate instead of creating a browser (see browser_commands.cc override), so a
++  // null result is legitimate. Tolerate it instead of crashing on CHECK.
++  if (!browser) {
++    return nullptr;
++  }
+   return browser;
+ }
+ 
+@@ -710,8 +725,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ 
+   // If we're told to open URLs (in particular, via |-application:openURLs:| by
+   // Launch Services) before we've launched the browser, we queue them up in
+-  // |_startupTabs| so that they can go in the first browser window/tab.
+   StartupTabs _startupTabs;
++  std::map<base::FilePath, std::vector<GURL>>
++      _mahoNativeUrlsQueuedWhileLoginGated;
+   BOOL _startupComplete;
+ 
+   // Outlets for testing close tab/window menu items.
+@@ -1741,13 +1756,16 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+ 
+   switch (tag) {
+     case IDC_NEW_TAB:
+-      // Create a new tab in an existing browser window (which we activate) if
+-      // possible.
+-      if (BrowserWindowInterface* browser = ActivateBrowser(profile)) {
+-        chrome::ExecuteCommand(browser, IDC_NEW_TAB);
+-        break;
+-      }
+-      [[fallthrough]];  // To create new window.
++      if (BrowserWindowInterface* browser_window =
++              ActivateBrowser(profile)) {
++        chrome::ExecuteCommand(browser_window, IDC_NEW_TAB);
++        break;
++      }
++      if (BrowserWindowInterface* browser_window =
++              CreateBrowser(profile->GetOriginalProfile())) {
++        chrome::ExecuteCommand(browser_window, IDC_NEW_TAB);
++      }
++      break;
+     case IDC_NEW_WINDOW:
+       CreateBrowser(profile->GetOriginalProfile());
+       break;
+@@ -1876,6 +1894,14 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+     }
+   }
+ 
++  // Maho onboarding is a top-level product window, but it is not a
++  // BrowserWindowInterface and therefore is absent from GetBrowserWindows().
++  // Reactivate it before Chromium interprets the empty browser list as a
++  // request to create a regular browser window.
++  if (maho::MahoWelcomeWindow::ActivateIfOpen()) {
++    return NO;
++  }
++
+   base::FilePath lastProfilePath = GetStartupProfilePathMac();
+   DCHECK_NE(lastProfilePath, ProfileManager::GetSystemProfilePath());
+ 
+@@ -2094,12 +2120,7 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+     // Failed to load profile, show Profile Picker instead.
+     return;
+   }
+-  // Re-use an existing browser, or create a new one.
+-  if (BrowserWindowInterface* browser = ActivateBrowser(profile)) {
+-    chrome::ShowSettings(browser);
+-  } else {
+-    chrome::OpenOptionsWindow(profile);
+-  }
++  chrome::ShowMahoSettingsForProfile(profile);
+ }
+ 
+ - (IBAction)orderFrontStandardAboutPanel:(id)sender {
+@@ -2295,27 +2316,35 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   if (_lastProfile == nullptr)
+     return;
+ 
+-  auto& entry = _profileBookmarkMenuBridgeMap[profile->GetPath()];
+-  if (!entry || !entry->GetProfile()) {
+-    // This creates a deep copy, but only the first 3 items in the root menu
+-    // are really wanted. This can probably be optimized, but lazy-loading of
+-    // the menu should reduce the impact in most flows.
+-    NSMenu* submenu = [bookmarkItem.submenu copy];
+-    submenu.delegate = nil;  // The delegate is also copied. Remove it.
++  // Maho: the macOS Bookmarks menu is never built (BuildBookmarksMenu
++  // returns nil), so |bookmarkItem| is nil. AppKit tolerates messaging nil,
++  // but building a BookmarkMenuBridge without a root menu trips its
++  // CHECK(menu_root_) and kills the browser at startup, so skip the whole
++  // bridging step when the menu item is absent.
++  if (bookmarkItem) {
++    auto& entry = _profileBookmarkMenuBridgeMap[profile->GetPath()];
++    if (!entry || !entry->GetProfile()) {
++      // This creates a deep copy, but only the first 3 items in the root
++      // menu are really wanted. This can probably be optimized, but
++      // lazy-loading of the menu should reduce the impact in most flows.
++      NSMenu* submenu = [bookmarkItem.submenu copy];
++      submenu.delegate = nil;  // The delegate is also copied. Remove it.
+ 
+-    // The original profile outlives the OTR profile. Always create the bridge
+-    // on the original profile, to prevent bugs WRT profile lifetime.
+-    entry = std::make_unique<BookmarkMenuBridge>(profile->GetOriginalProfile(),
+-                                                 submenu);
++      // The original profile outlives the OTR profile. Always create the
++      // bridge on the original profile, to prevent bugs WRT profile
++      // lifetime.
++      entry = std::make_unique<BookmarkMenuBridge>(
++          profile->GetOriginalProfile(), submenu);
+ 
+-    // Clear bookmarks from the old profile.
+-    entry->ClearBookmarkMenu();
++      // Clear bookmarks from the old profile.
++      entry->ClearBookmarkMenu();
++    }
++    _bookmarkMenuBridge = entry.get();
++
++    // No need to |BuildMenu| here.  It is done lazily upon menu access.
++    bookmarkItem.submenu = _bookmarkMenuBridge->BookmarkMenu();
++    bookmarkItem.hidden = hidden;
+   }
+-  _bookmarkMenuBridge = entry.get();
+-
+-  // No need to |BuildMenu| here.  It is done lazily upon menu access.
+-  bookmarkItem.submenu = _bookmarkMenuBridge->BookmarkMenu();
+-  bookmarkItem.hidden = hidden;
+ 
+   _historyMenuBridge = std::make_unique<HistoryMenuBridge>(_lastProfile);
+   _historyMenuBridge->BuildMenu();
+@@ -2619,8 +2648,88 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+   _lastActiveBrowser = collection->GetLastActiveBrowser()->GetWeakPtr();
+ }
+ 
++- (void)queueNativeUrlsWhileMahoLoginGatedForProfile:(Profile*)profile
++                                                urls:(std::vector<GURL>)urls {
++  if (!profile || urls.empty()) {
++    return;
++  }
++  Profile* regular_profile = profile->GetOriginalProfile();
++  std::vector<GURL>& queued_urls =
++      _mahoNativeUrlsQueuedWhileLoginGated[regular_profile->GetPath()];
++  queued_urls.insert(queued_urls.end(), urls.begin(), urls.end());
++}
++
++- (void)drainQueuedNativeUrlsAfterMahoWelcomeForProfile:(Profile*)profile {
++  if (!profile) {
++    return;
++  }
++  Profile* regular_profile = profile->GetOriginalProfile();
++  if (regular_profile->GetPrefs()->GetBoolean(
++          maho::welcome::kLoginGateActive)) {
++    return;
++  }
++  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(
++      regular_profile->GetPath());
++  if (it == _mahoNativeUrlsQueuedWhileLoginGated.end()) {
++    return;
++  }
++  std::vector<GURL> urls = std::move(it->second);
++  _mahoNativeUrlsQueuedWhileLoginGated.erase(it);
++  OpenUrlsInBrowserWithProfile(urls, profile);
++}
++
++- (size_t)queuedNativeUrlCountForTestingForProfile:(Profile*)profile {
++  if (!profile) {
++    return 0;
++  }
++  Profile* regular_profile = profile->GetOriginalProfile();
++  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(
++      regular_profile->GetPath());
++  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()
++             ? 0
++             : it->second.size();
++}
++
++- (std::vector<GURL>)queuedNativeUrlsForTestingForProfile:(Profile*)profile {
++  if (!profile) {
++    return {};
++  }
++  Profile* regular_profile = profile->GetOriginalProfile();
++  auto it = _mahoNativeUrlsQueuedWhileLoginGated.find(
++      regular_profile->GetPath());
++  return it == _mahoNativeUrlsQueuedWhileLoginGated.end()
++             ? std::vector<GURL>()
++             : it->second;
++}
++
+ @end  // @implementation AppController
+ 
++namespace app_controller_mac {
++
++void QueueNativeUrlsWhileMahoLoginGated(Profile* profile,
++                                           std::vector<GURL> urls) {
++  [AppController.sharedController
++      queueNativeUrlsWhileMahoLoginGatedForProfile:profile
++                                                urls:std::move(urls)];
++}
++
++void DrainQueuedNativeUrlsAfterMahoWelcome(Profile* profile) {
++  [AppController.sharedController
++      drainQueuedNativeUrlsAfterMahoWelcomeForProfile:profile];
++}
++
++size_t GetQueuedNativeUrlCountForTesting(Profile* profile) {
++  return [AppController.sharedController
++      queuedNativeUrlCountForTestingForProfile:profile];
++}
++
++std::vector<GURL> GetQueuedNativeUrlsForTesting(Profile* profile) {
++  return [AppController.sharedController
++      queuedNativeUrlsForTestingForProfile:profile];
++}
++
++}  // namespace app_controller_mac
++
+ //---------------------------------------------------------------------------
+ 
+ namespace {
+@@ -2632,10 +2741,96 @@ void UpdateProfileInUse(Profile* profile) {
+   [AppController.sharedController setLastProfile:profile];
+ }
+ 
++void OpenStartupTabsInBrowserWithProfileNormal(const StartupTabs& tabs,
++                                                Profile* profile);
++
++void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,
++                                  Profile* profile);
++
++}  // namespace
++
+ void OpenStartupTabsInBrowserWithProfile(const StartupTabs& tabs,
+                                          Profile* profile) {
+   if (!profile)
+     return;  // No suitable profile to open the URLs, do nothing.
++
++  Profile* regular_profile = profile->GetOriginalProfile();
++  if (regular_profile->GetPrefs()->GetBoolean(
++          maho::welcome::kLoginGateActive)) {
++    std::vector<GURL> urls;
++    urls.reserve(tabs.size());
++    for (const auto& tab : tabs) {
++      urls.push_back(tab.url);
++    }
++    app_controller_mac::QueueNativeUrlsWhileMahoLoginGated(profile, urls);
++    maho::MahoWelcomeWindow::Show(profile);
++    return;
++  }
++
++  if (tabs.size() == 1) {
++    StartupTab single_tab = tabs[0];
++    base::WeakPtr<Profile> weak_profile = profile->GetWeakPtr();
++    maho::DecideLinkDestination(
++        single_tab.url, /*is_external=*/true,
++        base::BindOnce(
++            [](base::WeakPtr<Profile> profile, StartupTab single_tab,
++               maho::LinkDestinationResult result) {
++              if (!profile) {
++                return;
++              }
++              if (result.type == maho::LinkDestinationType::kSpace &&
++                  !result.space_id.empty()) {
++                BrowserWindowInterface* browser =
++                    ProfileBrowserCollection::GetForProfile(profile.get())->FindTabbedBrowser(false);
++                if (!browser) {
++                  browser = CreateBrowserWindow(
++                      BrowserWindowCreateParams(profile.get(), true));
++                  if (browser && browser->GetWindow()) {
++                    browser->GetWindow()->Show();
++                  }
++                }
++                if (browser) {
++                  maho::MahoSpaceProfileBridge* bridge =
++                      maho::MahoSpaceProfileBridge::GetInstance();
++                  if (bridge &&
++                      bridge->SwitchToSpace(static_cast<Browser*>(browser), result.space_id)) {
++                    chrome::AddSelectedTabWithURL(
++                        browser, single_tab.url, ui::PAGE_TRANSITION_LINK);
++                    return;
++                  }
++                }
++              } else if (result.type == maho::LinkDestinationType::kMahoMini) {
++                maho::LaunchMahoMini(
++                    profile.get(), maho::MahoMiniRequest{single_tab.url});
++                return;
++              }
++              StartupTabs tabs_fallback;
++              tabs_fallback.push_back(std::move(single_tab));
++              OpenStartupTabsInBrowserWithProfileNormal(tabs_fallback,
++                                                       profile.get());
++            },
++            weak_profile, std::move(single_tab)));
++    return;
++  }
++  OpenStartupTabsInBrowserWithProfileNormal(tabs, profile);
++}
++
++void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,
++                                  Profile* profile) {
++  StartupTabs tabs;
++  tabs.reserve(urls.size());
++  for (const auto& url : urls) {
++    tabs.emplace_back(url, /*is_untrusted_launch=*/false);
++  }
++  OpenStartupTabsInBrowserWithProfile(tabs, profile);
++}
++
++namespace {
++
++void OpenStartupTabsInBrowserWithProfileNormal(const StartupTabs& tabs,
++                                                Profile* profile) {
++  if (!profile)
++    return;  // No suitable profile to open the URLs, do nothing.
+   // Prefer a regular (non-incognito) profile
+   if (profile->IsIncognitoProfile()) {
+     profile = ProfileManager::MaybeForceOffTheRecordMode(

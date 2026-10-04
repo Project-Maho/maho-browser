@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/views/side_panel/side_panel.h w/chrome/browser/ui/views/side_panel/side_panel.h
+index b3779fb63a4b6f0f1b9983c019ce0c8233da1f4d..2747169344342c99c78a064f536aabebd856bed4 100644
+--- c/chrome/browser/ui/views/side_panel/side_panel.h
++++ w/chrome/browser/ui/views/side_panel/side_panel.h
+@@ -44,6 +44,7 @@ class SidePanel : public views::AccessiblePaneView,
+   DECLARE_CLASS_CUSTOM_ELEMENT_EVENT_TYPE(kCloseAnimationCompletedEvent);
+ 
+   void SetPanelWidth(int width);
++  bool IsMahoAiPanelShowing() const;
+   bool ShouldRestrictMaxWidth() const;
+   void UpdateWidthOnEntryChanged();
+   void UpdateSidePanelWidthPref(const std::string& panel_id, int width);

@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc w/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
+index e7a1860c046432bd4f33ec9b4c6c383eaabbdb55..6b65ad958adc8bcdc2512b7956aed883e504e5d0 100644
+--- c/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
++++ w/chrome/browser/device_reauth/chrome_device_authenticator_factory.cc
+@@ -103,7 +103,7 @@
+ #else
+   static_assert(false);
+ #endif
+-  return std::move(device_authenticator);
++  return device_authenticator;
+ }
+ #endif
+ 

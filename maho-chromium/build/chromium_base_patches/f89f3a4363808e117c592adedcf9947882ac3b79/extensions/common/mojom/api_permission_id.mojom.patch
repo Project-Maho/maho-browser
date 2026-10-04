@@ -1,0 +1,12 @@
+diff --git c/extensions/common/mojom/api_permission_id.mojom w/extensions/common/mojom/api_permission_id.mojom
+index 262221ecd852507cd136254725e16c53a155fc99..b87c2893ebc2e8bf17f20fd8661d8a826aee317a 100644
+--- c/extensions/common/mojom/api_permission_id.mojom
++++ w/extensions/common/mojom/api_permission_id.mojom
+@@ -298,6 +298,7 @@ enum APIPermissionID {
+   kBluetoothLowEnergy = 271,
+   kBluetoothPeripheral = 272,
+   kPublicSuffix = 273,
++  kMaho = 274,
+ 
+   // Add new entries at the end of the enum and be sure to update the
+   // "ExtensionPermission3" enum in

@@ -1,0 +1,406 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Required: Tailwind runs with cwd=website, so auto source-detection never sees
+   these files and purges every mail-specific utility. Do not remove. */
+@source "../**/*.{ts,tsx}";
+@source "../../../maho_common/react/**/*.{ts,tsx}";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+.mail-navigation {
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  box-shadow: inset -1px 0 color-mix(in srgb, var(--border) 58%, transparent);
+}
+
+.mail-list-pane {
+  background: color-mix(in srgb, var(--card) 66%, var(--background));
+  box-shadow: inset -1px 0 color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.mail-reader-pane {
+  background: var(--background);
+}
+
+/* Ergonomic interaction layer — see ../../DESIGN.md §4-5. */
+:root {
+  --mail-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --mail-dur-fast: 120ms;
+  --mail-dur-base: 180ms;
+}
+
+/* 8px grab area, 1px hairline that fades in on hover and stays while dragging. */
+.mail-resize-handle {
+  position: relative;
+  z-index: 20;
+  background: transparent;
+  touch-action: none;
+}
+
+.mail-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%) scaleX(1);
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--mail-dur-base) var(--mail-ease-out),
+              transform var(--mail-dur-base) var(--mail-ease-out);
+}
+
+.mail-resize-handle:hover::after,
+.mail-resize-handle:focus-visible::after {
+  opacity: 0.45;
+}
+
+.mail-resize-handle.is-resizing::after {
+  opacity: 0.8;
+  transform: translateX(-50%) scaleX(2);
+}
+
+/* List rows: calm background wash, no layout-affecting transitions. */
+.mail-row {
+  transition: background-color var(--mail-dur-fast) var(--mail-ease-out);
+}
+
+.mail-row-actions {
+  transform: translateX(4px);
+  transition: opacity var(--mail-dur-fast) var(--mail-ease-out),
+              transform var(--mail-dur-base) var(--mail-ease-out);
+}
+
+.mail-row:hover .mail-row-actions,
+.mail-row:focus-within .mail-row-actions {
+  transform: translateX(0);
+}
+
+.mail-row-date {
+  transition: opacity var(--mail-dur-fast) var(--mail-ease-out);
+}
+
+/* Physical press feedback on action buttons. */
+.mail-pressable {
+  transition: background-color var(--mail-dur-fast) var(--mail-ease-out),
+              color var(--mail-dur-fast) var(--mail-ease-out),
+              transform var(--mail-dur-fast) var(--mail-ease-out);
+}
+
+.mail-pressable:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+/* Disclosure chevrons rotate instead of swapping glyphs. */
+.mail-disclosure {
+  transition: transform var(--mail-dur-base) var(--mail-ease-out);
+}
+
+.mail-list-pane,
+.mail-reader-pane {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 1100px) {
+  .mail-navigation {
+    width: 56px !important;
+  }
+
+  .mail-list-pane {
+    width: min(360px, 42vw) !important;
+  }
+}
+
+.mail-navigation-trigger { display: none; }
+
+@media (max-width: 850px) {
+  .mail-navigation-trigger { display: flex; }
+  .mail-navigation-drawer > div { display: block; }
+  .mail-navigation,
+  .mail-resize-handle {
+    display: none !important;
+  }
+
+  .mail-list-pane {
+    width: min(380px, 46vw) !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .mail-list-pane { width: 100% !important; }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+
+  /* Preserved custom semantic tokens — migrating consumers will use shadcn tokens directly */
+  --color-surface: var(--background);
+  --color-surface-secondary: var(--card);
+  --color-surface-tertiary: var(--muted);
+  --color-surface-elevated: var(--popover);
+  --color-success: #22c55e;
+  --color-warning: #f59e0b;
+  --color-danger: var(--destructive);
+  --color-danger-hover: #dc2626;
+  --color-info: var(--primary);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-selected: var(--surface-selected);
+}
+
+/* Dark theme (default) — zinc palette */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --radius: 0.5rem;
+  --background: #18181b;
+  --foreground: #fafafa;
+  --card: #27272a;
+  --card-foreground: #fafafa;
+  --popover: #27272a;
+  --popover-foreground: #fafafa;
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #3f3f46;
+  --muted-foreground: #a1a1aa;
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #3f3f46;
+  --input: #3f3f46;
+  --ring: #3b82f6;
+  --chart-1: #3b82f6;
+  --chart-2: #22c55e;
+  --chart-3: #f59e0b;
+  --chart-4: #a855f7;
+  --chart-5: #ef4444;
+  --surface-hover: rgba(255, 255, 255, 0.05);
+  --surface-selected: rgba(255, 255, 255, 0.09);
+}
+
+/* Light theme */
+[data-theme="light"] {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #18181b;
+  --card: #f4f4f5;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #e4e4e7;
+  --muted-foreground: #71717a;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #2563eb;
+  --chart-1: #2563eb;
+  --chart-2: #16a34a;
+  --chart-3: #d97706;
+  --chart-4: #9333ea;
+  --chart-5: #dc2626;
+  --surface-hover: rgba(24, 24, 27, 0.045);
+  --surface-selected: rgba(24, 24, 27, 0.07);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.skip-to-content {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 0.875rem;
+  border-radius: 0 0 0.375rem 0;
+}
+
+.skip-to-content:focus {
+  left: 0;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted-foreground);
+}
+
+/* Keyframes */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(12px) translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateX(0) translateY(0) scale(1); }
+}
+
+@keyframes dialog-in {
+  from { opacity: 0; transform: scale(0.96) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(1rem); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes progress {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(200%); }
+  100% { transform: translateX(-100%); }
+}
+
+@keyframes bounce-gentle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.toast-enter { animation: toast-in 160ms ease-out; }
+.dialog-enter { animation: dialog-in 160ms ease-out; }
+.animate-fade-in { animation: fade-in 200ms ease-out; }
+.animate-scale-in { animation: scale-in 200ms ease-out; }
+.animate-slide-in-right { animation: slide-in-right 200ms ease-out; }
+.animate-slide-down { animation: slide-down var(--mail-dur-base) var(--mail-ease-out); }
+.animate-bounce-gentle { animation: bounce-gentle 2s ease-in-out infinite; }
+
+/* ProseMirror (rich text editor) */
+.ProseMirror {
+  outline: none;
+  min-height: 200px;
+}
+
+.ProseMirror p { margin: 0.25em 0; }
+.ProseMirror blockquote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--muted-foreground); }
+.ProseMirror ul, .ProseMirror ol { padding-left: 1.5em; }
+.ProseMirror a { color: var(--primary); text-decoration: underline; }
+
+/* Tauri window drag region */
+*[data-tauri-drag-region] { app-region: drag; }
+*[data-tauri-drag-region] button,
+*[data-tauri-drag-region] a,
+*[data-tauri-drag-region] input,
+*[data-tauri-drag-region] textarea,
+*[data-tauri-drag-region] select,
+*[data-tauri-drag-region] [role="button"],
+*[data-tauri-drag-region] [tabindex] { app-region: no-drag; }
+
+/* Desktop-native: disable text selection on UI chrome, opt-in on content */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: var(--maho-base-font-size, 14px);
+}
+
+/* Context menu */
+.context-menu-item {
+  display: block;
+  width: 100%;
+  min-height: 2rem;
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  text-align: left;
+  font-size: 0.8125rem;
+  color: var(--foreground);
+  transition: background-color 0.1s, color 0.1s;
+}
+
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background-color: var(--surface-hover);
+  color: var(--foreground);
+}

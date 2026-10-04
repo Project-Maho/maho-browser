@@ -1,0 +1,12 @@
+diff --git c/chrome/browser/ui/startup/BUILD.gn w/chrome/browser/ui/startup/BUILD.gn
+index 8b593031e4160c7c8a26943abe46b7f442b6d263..8ad26963fcb7a7a3c304604b5b609ee07b40ed12 100644
+--- c/chrome/browser/ui/startup/BUILD.gn
++++ w/chrome/browser/ui/startup/BUILD.gn
+@@ -266,6 +266,7 @@ source_set("impl") {
+       "//components/strings:components_strings",
+       "//components/url_formatter",
+       "//extensions/browser",
++      "//maho/browser/ui/views/welcome:maho_welcome_window",
+       "//net",
+       "//printing/buildflags",
+     ]

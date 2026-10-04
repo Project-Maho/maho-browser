@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W4 Child IFrame Frame</title>
+  <style>
+    body { font-family: sans-serif; margin: 1rem; background: #f6f8fa; }
+    .form-group { margin-bottom: 0.5rem; }
+    input, select, button { font-size: 0.9rem; padding: 0.3rem; }
+  </style>
+</head>
+<body>
+  <h3>Embedded IFrame Workspace</h3>
+  <div class="form-group">
+    <label for="iframe-username">IFrame Username:</label>
+    <input type="text" id="iframe-username" value="guest_operator" />
+  </div>
+  <div class="form-group">
+    <label for="iframe-scope">Scope:</label>
+    <select id="iframe-scope">
+      <option value="read">Read Only</option>
+      <option value="write">Read & Write</option>
+      <option value="admin">Administrator</option>
+    </select>
+  </div>
+  <div class="form-group">
+    <button id="iframe-submit-btn">Execute Frame Action</button>
+  </div>
+  <div id="iframe-feedback" role="status" style="margin-top: 0.5rem; font-weight: bold; color: #0366d6;">
+    Frame Idle
+  </div>
+
+  <script>
+    document.getElementById('iframe-submit-btn').addEventListener('click', () => {
+      const user = document.getElementById('iframe-username').value;
+      const scope = document.getElementById('iframe-scope').value;
+      document.getElementById('iframe-feedback').textContent = 'Action executed for ' + user + ' [' + scope + ']';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+--- a/chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc
+@@ -43,7 +43,7 @@
+           ? views::Separator::kThickness
+           : 0;
+ 
+-  if (browser()->is_maho_mini()) {
++  if (views().maho_mini_top_bar) {
+     return gfx::Size(400, 46 + 1);
+   }
+ 
+@@ -125,7 +125,7 @@
+     bool needs_exclusion) const {
+   const int original_top = params.visual_client_area.y();
+ 
+-  if (browser()->is_maho_mini()) {
++  if (views().maho_mini_top_bar) {
+     return gfx::Rect(params.visual_client_area.x(), original_top,
+                      params.visual_client_area.width(), 0);
+   }

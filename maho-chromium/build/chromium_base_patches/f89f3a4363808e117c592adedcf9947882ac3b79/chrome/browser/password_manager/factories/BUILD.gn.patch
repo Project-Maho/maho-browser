@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/password_manager/factories/BUILD.gn w/chrome/browser/password_manager/factories/BUILD.gn
+index 920bdcc11ec467d5d66a20e1288ef57117b837fa..e311d4b270c6964a46ebe3abdaead59dab444e17 100644
+--- c/chrome/browser/password_manager/factories/BUILD.gn
++++ w/chrome/browser/password_manager/factories/BUILD.gn
+@@ -81,6 +81,8 @@ source_set("backend_factory") {
+   ]
+ 
+   deps = [
++    "//maho/browser:maho_core_holder",
++    "//maho/browser:maho_password_store_backend",
+     "//components/password_manager/core/browser",
+     "//components/password_manager/core/browser:password_manager_buildflags",
+     "//components/password_manager/core/browser/affiliation:affiliation_fetching",

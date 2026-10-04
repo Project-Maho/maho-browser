@@ -1,0 +1,5 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+# Reference documentation for upstream chrome/common/BUILD.gn overrides.
+#
+# Maho adds "//maho/components/constants" to common_lib deps
+# so chrome_content_client.cc can reference maho::kMahoUIScheme.

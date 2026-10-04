@@ -1,0 +1,68 @@
+diff --git c/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc w/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc
+index 6da26cc50c07084b0f27c6a3cdd8d49d9c7c56c1..83c44c4bc73b68aa6ac2f25ce0e83a3a11ec9243 100644
+--- c/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc
++++ w/chrome/browser/chrome_browser_interface_binders_webui_parts_desktop.cc
+@@ -76,6 +76,23 @@
+ #include "chrome/browser/ui/webui/side_panel/bookmarks/bookmarks_side_panel_ui.h"
+ #include "chrome/browser/ui/webui/side_panel/comments/comments.mojom.h"
+ #include "chrome/browser/ui/webui/side_panel/comments/comments_side_panel_ui.h"
++#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
++#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"
++#include "maho/browser/ui/webui/maho_boost/maho_boost.mojom.h"
++#include "maho/browser/ui/webui/maho_boost/maho_boost_ui.h"
++#include "maho/browser/ui/webui/maho_settings/maho_settings.mojom.h"
++#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"
++#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"
++#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders.mojom.h"
++#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_ui.h"
++#include "maho/browser/ui/webui/maho_sync/maho_sync.mojom.h"
++#include "maho/browser/ui/webui/maho_sync/maho_sync_ui.h"
++#include "maho/browser/ui/webui/maho_space_create/maho_space_create.mojom.h"
++#include "maho/browser/ui/webui/maho_space_create/maho_space_create_ui.h"
++#include "maho/browser/ui/webui/maho_space_config/maho_space_config.mojom.h"
++#include "maho/browser/ui/webui/maho_space_config/maho_space_config_ui.h"
++#include "maho/browser/ui/webui/maho_welcome/maho_welcome.mojom.h"
++#include "maho/browser/ui/webui/maho_welcome/maho_welcome_ui.h"
+ #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome.mojom.h"
+ #include "chrome/browser/ui/webui/side_panel/customize_chrome/customize_chrome_ui.h"
+ #include "chrome/browser/ui/webui/side_panel/customize_chrome/wallpaper_search/wallpaper_search.mojom.h"
+@@ -481,6 +498,24 @@ void PopulateChromeWebUIFrameBindersPartsDesktop(
+                                          BookmarksUI>(map);
+   RegisterWebUIControllerInterfaceBinder<comments::mojom::PageHandlerFactory,
+                                          CommentsSidePanelUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_ai::mojom::PageHandlerFactory, MahoAIUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_boost::mojom::PageHandlerFactory, MahoBoostUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_settings::mojom::PageHandlerFactory, MahoSettingsUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_mail::mojom::PageHandlerFactory, MahoMailUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_live_folders::mojom::PageHandlerFactory, MahoLiveFoldersUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_sync::mojom::PageHandlerFactory, MahoSyncUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_space_create::mojom::PageHandlerFactory, MahoSpaceCreateUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_space_config::mojom::PageHandlerFactory, MahoSpaceConfigUI>(map);
++  RegisterWebUIControllerInterfaceBinder<
++      maho_welcome::mojom::PageHandlerFactory, MahoWelcomeUI>(map);
+ 
+   RegisterWebUIControllerInterfaceBinder<
+       shopping_service::mojom::ShoppingServiceHandlerFactory,
+@@ -659,6 +694,14 @@ void PopulateChromeWebUIFrameInterfaceBrokersTrustedPartsDesktop(
+       .Add<tab_search::mojom::SearchHandler>();
+   registry.ForWebUI<OrganizerPanelUI>()
+       .Add<tab_search::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoAIUI>().Add<maho_ai::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoLiveFoldersUI>().Add<maho_live_folders::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoMailUI>().Add<maho_mail::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoSettingsUI>().Add<maho_settings::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoSpaceConfigUI>().Add<maho_space_config::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoSpaceCreateUI>().Add<maho_space_create::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoSyncUI>().Add<maho_sync::mojom::PageHandlerFactory>();
++  registry.ForWebUI<MahoWelcomeUI>().Add<maho_welcome::mojom::PageHandlerFactory>();
+ 
+   if (base::FeatureList::IsEnabled(ntp_features::kNtpFooter)) {
+     registry.ForWebUI<NewTabFooterUI>()

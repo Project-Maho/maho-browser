@@ -1,0 +1,21 @@
+// Signing.xcconfig
+// -----------------------------------------------------------------------------
+// Committed with an EMPTY DEVELOPMENT_TEAM. This is intentional. A missing
+// team ID triggers xcodebuild "requires a development team" — a loud, clear
+// signal that signing is not configured yet. Never commit a real team ID.
+//
+// Local overrides (checked into `.gitignore`):
+//   1) Create `Signing.local.xcconfig` next to this file with:
+//        DEVELOPMENT_TEAM = ABCD123XYZ
+//   2) OR pass the ID on the xcodebuild command line:
+//        xcodebuild ... DEVELOPMENT_TEAM=ABCD123XYZ
+//
+// CI: set DEVELOPMENT_TEAM as a repository secret and pass it via
+// the second option in the release job.
+// -----------------------------------------------------------------------------
+
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Manual
+PROVISIONING_PROFILE_SPECIFIER =
+
+#include? "Signing.local.xcconfig"

@@ -1,0 +1,14 @@
+diff --git a/chrome/common/extensions/api/_permission_features.override.json b/chrome/common/extensions/api/_permission_features.override.json
+index d71534ae0125cf3006008a9afe7db6e747470dd8..0167876a42f2a97eb2d4ff44be602b3768ac18d4 100644
+--- a/chrome/common/extensions/api/_permission_features.override.json
++++ b/chrome/common/extensions/api/_permission_features.override.json
+@@ -13,5 +13,8 @@
+ // See chrome/common/extensions/api/_api_features.override.json for examples.
+ 
+ {
+-  // Entries go here.
++  "maho": {
++    "channel": "stable",
++    "extension_types": ["extension"]
++  }
+ }

@@ -1,0 +1,6 @@
+{
+  "code": "platform_permission_required",
+  "deep_link": "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Contacts",
+  "message": "permission required for scope 'contacts'",
+  "scope": "contacts"
+}

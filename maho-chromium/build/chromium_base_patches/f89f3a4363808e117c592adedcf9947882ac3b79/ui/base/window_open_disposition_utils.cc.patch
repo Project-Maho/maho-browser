@@ -1,0 +1,14 @@
+diff --git c/ui/base/window_open_disposition_utils.cc w/ui/base/window_open_disposition_utils.cc
+index 4f10a62808d425916744a4e860d51350ef66e932..4e93e3405fd7895be6418a65dfa5f81c77b4bf0b 100644
+--- c/ui/base/window_open_disposition_utils.cc
++++ w/ui/base/window_open_disposition_utils.cc
+@@ -24,7 +24,8 @@ WindowOpenDisposition DispositionFromClick(
+   const bool new_tab_modifier = middle_button || ctrl_key;
+   const bool split_view_modifier = ctrl_key;
+ #endif
+-  if (split_view_modifier && alt_key && !shift_key) {
++  (void)split_view_modifier;
++  if (alt_key && !shift_key) {
+     return WindowOpenDisposition::NEW_SPLIT_VIEW;
+   }
+   if (new_tab_modifier) {

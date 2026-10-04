@@ -1,0 +1,10 @@
+Tab Info
+─────────────────────────────────
+  ID:      1
+  Title:   Example Domain
+  URL:     https://example.com/
+  Status:  complete
+  Active:  ✓
+  Pinned:  no
+  Muted:   no
+  Space:   Default

@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/ui/views/status_bubble_views.h w/chrome/browser/ui/views/status_bubble_views.h
+index 5168c9112656d3944d6fa2155f160e9eefe73c49..9b39622cb7589e0fa1b38f97f938150b6ee21098 100644
+--- c/chrome/browser/ui/views/status_bubble_views.h
++++ w/chrome/browser/ui/views/status_bubble_views.h
+@@ -38,7 +38,7 @@ class StatusBubbleViews : public StatusBubble {
+   static const int kShadowThickness;
+ 
+   // The combined vertical padding above and below the text.
+-  static const int kTotalVerticalPadding = 7;
++  static const int kTotalVerticalPadding = 14;
+ 
+   // |base_view| is the view that this bubble is positioned relative to.
+   explicit StatusBubbleViews(views::View* base_view);

@@ -1,0 +1,52 @@
+diff --git a/chrome/browser/ui/views/frame/contents_web_view.cc b/chrome/browser/ui/views/frame/contents_web_view.cc
+index f5e8ba18cbe808665e7d88501b240866c7184e5b..0a1b679ab71388a2c1af5316f333b48cb71dcdd9 100644
+--- a/chrome/browser/ui/views/frame/contents_web_view.cc
++++ b/chrome/browser/ui/views/frame/contents_web_view.cc
+@@ -6,6 +6,8 @@
+ 
+ #include "base/debug/dump_without_crashing.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
++#include "chrome/browser/profiles/profile.h"
++#include "maho/browser/ui/theme/maho_color_id.h"
+ #include "chrome/browser/ui/views/frame/web_contents_close_handler.h"
+ #include "chrome/browser/ui/views/status_bubble_views.h"
+ #include "components/search/ntp_features.h"
+@@ -118,10 +120,36 @@ void ContentsWebView::SetWebContents(content::WebContents* web_contents) {
+   }
+ }
+ 
++void ContentsWebView::SetMahoBackgroundOverride(
++    std::optional<SkColor> color) {
++  if (color.has_value()) {
++    color = SkColorSetA(color.value(), SK_AlphaOPAQUE);
++  }
++  if (maho_background_override_ == color) {
++    return;
++  }
++  maho_background_override_ = color;
++  UpdateBackgroundColor();
++}
++
+ void ContentsWebView::UpdateBackgroundColor() {
+-  const SkColor color = GetColorProvider()->GetColor(
++  ui::ColorId maho_content_bg =
+       is_letterboxing() ? kColorWebContentsBackgroundLetterboxing
+-                        : kColorWebContentsBackground);
++                        : kColorWebContentsBackground;
++  bool maho_is_private = false;
++  if (web_contents()) {
++    Profile* maho_profile =
++        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
++    if (maho_profile && maho_profile->IsIncognitoProfile() &&
++        maho_profile->IsPrimaryOTRProfile()) {
++      maho_content_bg = kMahoColorPrivateSidebarBackground;
++      maho_is_private = true;
++    }
++  }
++  SkColor color = GetColorProvider()->GetColor(maho_content_bg);
++  if (!maho_is_private && maho_background_override_.has_value()) {
++    color = SkColorSetA(maho_background_override_.value(), SK_AlphaOPAQUE);
++  }
+   // `color` must be opaque, see RenderWidgetHostView::SetBackgroundColor() for
+   // details.
+   // TODO(crbug.com/456309057): Update this to be a CHECK.

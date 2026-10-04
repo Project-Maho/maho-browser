@@ -1,0 +1,58 @@
+diff --git a/chrome/browser/notifications/win/notification_launch_id_unittest.cc b/chrome/browser/notifications/win/notification_launch_id_unittest.cc
+--- a/chrome/browser/notifications/win/notification_launch_id_unittest.cc
++++ b/chrome/browser/notifications/win/notification_launch_id_unittest.cc
+@@ -5,6 +5,54 @@
+ #include "chrome/browser/notifications/win/notification_launch_id.h"
+ 
+ #include "testing/gtest/include/gtest/gtest.h"
++
++TEST(NotificationLaunchIdTest, LegacyMahoMailUsesCurrentHandler) {
++  for (const char* prefix : {"0|", "1|2|", "2|", "3|"}) {
++    SCOPED_TRACE(prefix);
++    NotificationLaunchId id(std::string(prefix) +
++        "12|Default|aumi|0|chrome://maho-mail/|mail-id");
++    ASSERT_TRUE(id.is_valid());
++    EXPECT_EQ(NotificationHandler::Type::MAHO_MAIL, id.notification_type());
++    EXPECT_EQ("Default", id.profile_id());
++    EXPECT_EQ(L"aumi", id.app_user_model_id());
++    EXPECT_EQ("mail-id", id.notification_id());
++    NotificationLaunchId roundtrip(id.Serialize());
++    EXPECT_EQ(NotificationHandler::Type::MAHO_MAIL,
++              roundtrip.notification_type());
++  }
++}
++
++TEST(NotificationLaunchIdTest, CurrentMahoMailRoundTrips) {
++  NotificationLaunchId original(NotificationHandler::Type::MAHO_MAIL,
++      "mail-id", "Default", L"aumi", false, GURL("chrome://maho-mail"));
++  NotificationLaunchId decoded(original.Serialize());
++  ASSERT_TRUE(decoded.is_valid());
++  EXPECT_EQ(NotificationHandler::Type::MAHO_MAIL, decoded.notification_type());
++  EXPECT_EQ(original.Serialize(), decoded.Serialize());
++}
++
++TEST(NotificationLaunchIdTest, LegacyTypeWithOtherOriginIsNotMail) {
++  for (const char* origin : {"https://example.com/", "chrome-extension://abc/",
++       "https://maho-mail/", "chrome://maho-mail.evil/",
++       "chrome://maho-mail/other", "chrome://maho-mail/?q=1",
++       "chrome://maho-mail/#fragment", "not a URL", ""}) {
++    SCOPED_TRACE(origin);
++    NotificationLaunchId id(std::string("0|12|Default|aumi|0|") +
++                           origin + "|extension-id");
++    ASSERT_TRUE(id.is_valid());
++    EXPECT_EQ(NotificationHandler::Type::EXTENSION_REQUEST,
++              id.notification_type());
++  }
++  NotificationLaunchId extension(NotificationHandler::Type::EXTENSION_REQUEST,
++      "extension-id", "Default", L"aumi", false, GURL("https://example.com"));
++  EXPECT_EQ(NotificationHandler::Type::EXTENSION_REQUEST,
++            NotificationLaunchId(extension.Serialize()).notification_type());
++  NotificationLaunchId unrelated("0|0|Default|aumi|0|chrome://maho-mail/|id");
++  EXPECT_EQ(NotificationHandler::Type::WEB_PERSISTENT,
++            unrelated.notification_type());
++  EXPECT_FALSE(NotificationLaunchId(
++      "0|-1|Default|aumi|0|chrome://maho-mail/|id").is_valid());
++}
+ 
+ TEST(NotificationLaunchIdTest, SerializationTests) {
+   {

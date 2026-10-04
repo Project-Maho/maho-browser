@@ -1,0 +1,50 @@
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc
+index 206b3e83c1ea119c69c684020ee6805c9d52f513..462244d782330b1dc8bc90d2fd19e042ffe63f3d 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "chrome/browser/ui/views/frame/layout/browser_view_popup_layout_impl.h"
+ 
++#include "chrome/browser/ui/browser.h"
++
+ #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+ #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
+ #include "ui/views/controls/separator.h"
+@@ -42,6 +44,10 @@ gfx::Size BrowserViewPopupLayoutImpl::GetMinimumSize(
+           ? views::Separator::kThickness
+           : 0;
+ 
++  if (browser()->is_maho_mini()) {
++    return gfx::Size(400, 46 + 1);
++  }
++
+   constexpr gfx::Size kMinContentsSize(1, 1);
+ 
+   return gfx::Size(std::max({kMinContentsSize.width(), caption_size.width(),
+@@ -62,6 +68,13 @@ BrowserViewPopupLayoutImpl::CalculateProposedLayout(
+ 
+   BrowserLayoutParams params = browser_params;
+ 
++  if (views().maho_mini_top_bar && views().maho_mini_top_bar->GetVisible()) {
++    gfx::Rect top_bar_bounds = params.visual_client_area;
++    top_bar_bounds.set_height(46);
++    layout.AddChild(views().maho_mini_top_bar, top_bar_bounds);
++    params.SetTop(top_bar_bounds.bottom());
++  }
++
+   // Lay out the top container if it's in the browser (even if it's empty).
+   // This is required for certain things like hit-testing.
+   if (IsParentedTo(views().top_container, views().browser_view)) {
+@@ -113,6 +126,11 @@ gfx::Rect BrowserViewPopupLayoutImpl::CalculateTopContainerLayout(
+     bool needs_exclusion) const {
+   const int original_top = params.visual_client_area.y();
+ 
++  if (browser()->is_maho_mini()) {
++    return gfx::Rect(params.visual_client_area.x(), original_top,
++                     params.visual_client_area.width(), 0);
++  }
++
+   // Layout starts beneath the caption buttons because title is laid out by the
+   // OS in popup mode.
+   params.SetTop(base::ClampCeil(

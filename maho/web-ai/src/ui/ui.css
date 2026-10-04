@@ -1,0 +1,276 @@
+/*
+ * Maho Web AI — Shared UI primitive styles
+ *
+ * Hand-authored, token-based CSS for the src/ui/ primitives (Button, Input,
+ * StatusBanner, ListItem). This project has NO Tailwind/Uno/utility pipeline,
+ * so primitives must ship real CSS backed by the --color-*, --space-*, and
+ * --radius-* tokens defined in styles.css.
+ *
+ * Import order matters: this file is loaded before any screen-level CSS
+ * (via main.tsx) so screen overrides (e.g. .ai-settings-input) still win on
+ * shared properties. Focus rings use `outline` to match the agent.css /
+ * byok.css convention and avoid double focus indicators when a screen layers
+ * its own :focus-visible outline on top of a primitive.
+ */
+
+/* ── Button ──────────────────────────────────────────────────────────────── */
+
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background-color var(--motion-agent-toggle),
+    color var(--motion-agent-toggle),
+    border-color var(--motion-agent-toggle),
+    opacity var(--motion-agent-toggle);
+}
+
+.ui-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.ui-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Variants */
+.ui-btn--primary {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.ui-btn--secondary {
+  background: var(--color-surface-raised);
+  color: var(--color-on-surface);
+  border-color: var(--color-border);
+}
+
+.ui-btn--ghost {
+  background: transparent;
+  color: var(--color-on-surface-secondary);
+}
+
+.ui-btn--destructive {
+  background: transparent;
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+/* Sizes */
+.ui-btn--sm {
+  padding: 6px var(--space-3);
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+}
+
+.ui-btn--md {
+  padding: var(--space-2) var(--space-4);
+  font-size: 14px;
+}
+
+.ui-btn--lg {
+  padding: 10px var(--space-5);
+  font-size: 16px;
+}
+
+.ui-btn__spinner {
+  flex: 0 0 auto;
+}
+
+@media (hover: hover) {
+  .ui-btn--primary:hover {
+    opacity: 0.9;
+  }
+
+  .ui-btn--secondary:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .ui-btn--ghost:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .ui-btn--destructive:hover {
+    background: var(--color-error-subtle);
+  }
+}
+
+.ui-btn--primary:active {
+  opacity: 0.8;
+}
+
+/* ── Input ───────────────────────────────────────────────────────────────── */
+
+.ui-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ui-field__label {
+  color: var(--color-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ui-field__input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-on-surface);
+  font-family: inherit;
+  /* 16px control font size prevents iOS Safari from zooming on focus. */
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-control);
+  padding: var(--space-2) var(--space-3);
+}
+
+.ui-field__input::placeholder {
+  color: var(--color-on-surface-tertiary);
+}
+
+.ui-field__input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-color: transparent;
+}
+
+.ui-field__input:disabled {
+  opacity: 0.4;
+}
+
+.ui-field__input--error {
+  border-color: var(--color-error);
+}
+
+.ui-field__input--error:focus-visible {
+  outline-color: var(--color-error);
+}
+
+.ui-field__hint {
+  margin: 0;
+  color: var(--color-on-surface-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.ui-field__error {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* ── StatusBanner ────────────────────────────────────────────────────────── */
+
+.ui-banner {
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.ui-banner--info {
+  background: var(--color-info-subtle);
+  color: var(--color-info);
+}
+
+.ui-banner--success {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+.ui-banner--warning {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+.ui-banner--error {
+  background: var(--color-error-subtle);
+  color: var(--color-error);
+}
+
+/* ── ListItem ────────────────────────────────────────────────────────────── */
+
+.ui-list-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+  color: inherit;
+}
+
+.ui-list-item--interactive {
+  cursor: pointer;
+  transition:
+    background-color var(--motion-agent-toggle),
+    color var(--motion-agent-toggle);
+}
+
+@media (hover: hover) {
+  .ui-list-item--interactive:hover {
+    background: var(--color-surface-hover);
+  }
+}
+
+.ui-list-item--interactive:active {
+  background: var(--color-surface-active);
+}
+
+.ui-list-item__leading {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  color: var(--color-on-surface-secondary);
+}
+
+.ui-list-item__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ui-list-item__headline {
+  display: block;
+  color: var(--color-on-surface);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.ui-list-item__supporting {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-on-surface-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.ui-list-item__trailing {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-on-surface-secondary);
+}

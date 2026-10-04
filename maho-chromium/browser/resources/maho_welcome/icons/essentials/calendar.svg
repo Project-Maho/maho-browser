@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <rect width="24" height="24" rx="5" fill="#1A73E8"/>
+  <rect x="5" y="6" width="14" height="13" rx="3" fill="#FFF"/>
+  <path d="M8.9 4.5C8.4 4.5 8 4.9 8 5.4V7.3H9.8V5.4C9.8 4.9 9.4 4.5 8.9 4.5Z" fill="#FFF"/>
+  <path d="M15.1 4.5C14.6 4.5 14.2 4.9 14.2 5.4V7.3H16V5.4C16 4.9 15.6 4.5 15.1 4.5Z" fill="#FFF"/>
+  <rect x="5" y="6" width="14" height="4" rx="3" fill="#5AA2FF"/>
+  <text x="12" y="17" text-anchor="middle" font-family="SF Pro Display, Helvetica Neue, sans-serif" font-size="6.5" font-weight="700" fill="#1A73E8">31</text>
+</svg>

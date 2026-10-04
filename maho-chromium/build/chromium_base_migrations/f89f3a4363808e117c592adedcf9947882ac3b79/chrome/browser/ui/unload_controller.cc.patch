@@ -1,0 +1,11 @@
+--- a/chrome/browser/ui/unload_controller.cc
++++ b/chrome/browser/ui/unload_controller.cc
+@@ -580,7 +580,7 @@
+   // new tabs.  The flag is already set by TryToCloseWindow /
+   // GetBrowserClosingStatus when the user actually closes the window, so
+   // unload events are still fired correctly in that path.
+-  if (browser_->is_type_normal() && !is_attempting_to_close_browser_) {
++  if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) && !is_attempting_to_close_browser_) {
+     return;
+   }
+   // Set is_attempting_to_close_browser_ here, so that extensions, etc, do not

@@ -1,0 +1,134 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2022"
+    ],
+    "typeRoots": [
+      "../../../../../website/node_modules/@types",
+      "../../../../../website/node_modules/@types"
+    ],
+    "types": [],
+    "paths": {
+      "../maho_mail.mojom-webui.js": [
+        "../maho_mail.mojom-webui.js.d.ts"
+      ],
+      "@/*": [
+        "./*"
+      ],
+      "@dnd-kit/core": [
+        "../../../../../website/node_modules/@dnd-kit/core"
+      ],
+      "@dnd-kit/sortable": [
+        "../../../../../website/node_modules/@dnd-kit/sortable"
+      ],
+      "@dnd-kit/utilities": [
+        "../../../../../website/node_modules/@dnd-kit/utilities"
+      ],
+      "@sentry/browser": [
+        "../../../../../website/node_modules/@sentry/browser"
+      ],
+      "@radix-ui/*": [
+        "../../../../../website/node_modules/@radix-ui/*"
+      ],
+      "cmdk": [
+        "../../../../../website/node_modules/cmdk"
+      ],
+      "vaul": [
+        "../../../../../website/node_modules/vaul"
+      ],
+      "react-i18next": [
+        "../../../../../website/node_modules/react-i18next"
+      ],
+      "i18next": [
+        "../../../../../website/node_modules/i18next"
+      ],
+      "chrono-node": [
+        "../../../../../website/node_modules/chrono-node"
+      ],
+      "dompurify": [
+        "../../../../../website/node_modules/@types/dompurify",
+        "../../../../../website/node_modules/dompurify"
+      ],
+      "sonner": [
+        "../../../../../website/node_modules/sonner"
+      ],
+      "date-fns": [
+        "../../../../../website/node_modules/date-fns"
+      ],
+      "date-fns/locale": [
+        "../../../../../website/node_modules/date-fns/locale"
+      ],
+      "date-fns-tz": [
+        "../../../../../website/node_modules/date-fns-tz"
+      ],
+      "@tiptap/*": [
+        "../../../../../website/node_modules/@tiptap/*"
+      ],
+      "@tanstack/react-virtual": [
+        "../../../../../website/node_modules/@tanstack/react-virtual"
+      ],
+      "react": [
+        "../../../../../website/node_modules/@types/react/index.d.ts"
+      ],
+      "react/jsx-runtime": [
+        "../../../../../website/node_modules/@types/react/jsx-runtime.d.ts"
+      ],
+      "react-dom/client": [
+        "../../../../../website/node_modules/@types/react-dom/client.d.ts"
+      ],
+      "class-variance-authority": [
+        "../../../../../website/node_modules/class-variance-authority/dist/index.d.ts"
+      ],
+      "clsx": [
+        "../../../../../website/node_modules/clsx/clsx.d.ts"
+      ],
+      "motion": [
+        "../../../../../website/node_modules/motion/dist/index.d.ts"
+      ],
+      "lucide-react": [
+        "../../../../../website/node_modules/lucide-react/dist/lucide-react.d.ts"
+      ],
+      "tailwind-merge": [
+        "../../../../../website/node_modules/tailwind-merge/dist/types.d.ts"
+      ],
+      "@lib/*": [
+        "../../maho_common/react/lib/*",
+        "./lib/*"
+      ],
+      "@ui/*": [
+        "../../maho_common/react/ui/*"
+      ],
+      "@theme/*": [
+        "../../maho_common/react/theme/*"
+      ],
+      "@icons/*": [
+        "../../maho_common/react/icons/*"
+      ],
+      "//resources/maho_common/*": [
+        "../../maho_common/*"
+      ]
+    }
+  },
+  "include": [
+    "./**/*.ts",
+    "./**/*.tsx",
+    "./**/*.d.ts",
+    "../*.d.ts",
+    "../../maho_common/chrome_resources.d.ts"
+  ],
+  "exclude": [
+    "**/__tests__/**/*",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
+}

@@ -1,0 +1,19 @@
+diff --git c/tools/metrics/histograms/metadata/sql/histograms.xml w/tools/metrics/histograms/metadata/sql/histograms.xml
+index 55f07550ca9011f1fd20339b9e7e8d1a7487c368..8e5470be18e03fe0f1ca45f4c505e97ceffcfae3 100644
+--- c/tools/metrics/histograms/metadata/sql/histograms.xml
++++ w/tools/metrics/histograms/metadata/sql/histograms.xml
+@@ -79,6 +79,14 @@ chromium-metrics-reviews@google.com.
+   <variant name="OptOutBlacklist" summary="OptOutBlacklist"/>
+   <variant name="PageContentStore" summary="Page Content Store"/>
+   <variant name="Passwords" summary="Passwords"/>
++  <variant name="MahoImporterChromiumPasswords" summary="MahoImporterChromiumPasswords"/>
++  <variant name="MahoImporterChromiumAutofill" summary="MahoImporterChromiumAutofill"/>
++  <variant name="MahoImporterChromiumCookies" summary="MahoImporterChromiumCookies"/>
++  <variant name="MahoImporterFirefoxCookies" summary="MahoImporterFirefoxCookies"/>
++  <variant name="MahoImporterFavicons" summary="MahoImporterFavicons"/>
++  <variant name="MahoImporterFirefoxFavicons" summary="MahoImporterFirefoxFavicons"/>
++  <variant name="MahoImporterChromiumHistory" summary="MahoImporterChromiumHistory"/>
++  <variant name="MahoImporterFirefoxHistory" summary="MahoImporterFirefoxHistory"/>
+   <variant name="PermissionAuditingLogs" summary="PermissionAuditingLogs"/>
+   <variant name="PowerBookmarks" summary="PowerBookmarks"/>
+   <variant name="Predictor" summary="Predictor"/>

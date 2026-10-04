@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+index 3af70c2834b56a32349ee8db221a68083d9360b0..ac77df51c494aaef276bd2edb6db420ebfa9b75a 100644
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -27,6 +27,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/startup_data.h"
+ #include "chrome/common/renderer_configuration.mojom.h"
++#include "ui/base/webui/resource_path.h"
+ #include "components/file_access/scoped_file_access.h"
+ #include "components/guest_view/buildflags/buildflags.h"
+ #include "components/on_device_translation/buildflags/buildflags.h"
+@@ -281,6 +282,8 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+       const GURL& destination_effective_url) override;
+   bool ShouldIsolateErrorPage(bool in_main_frame) override;
+   std::vector<url::Origin> GetOriginsRequiringDedicatedProcess() override;
++  std::vector<base::span<const webui::ResourcePath>>
++  GetAdditionalWebUIResourcePaths() override;
+   void WillComputeSiteForNavigation(content::BrowserContext* browser_context,
+                                     const GURL& url) override;
+   bool IsAndroidAdvancedProtectionEnabled() override;

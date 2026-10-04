@@ -1,0 +1,12 @@
+diff --git c/chrome/common/BUILD.gn w/chrome/common/BUILD.gn
+index 8f287e23533cbcdd4885e3b2396faee679e7b039..224efc49119665e15a08b8617f7b9a36ccdbfb0a 100644
+--- c/chrome/common/BUILD.gn
++++ w/chrome/common/BUILD.gn
+@@ -201,6 +201,7 @@ static_library("common_lib") {
+     "//chrome/common/net",
+     "//chrome/common/platform_runtime",
+     "//chrome/common/profiler",
++    "//maho/components/constants",
+     "//chrome/common/search:mojo_bindings",
+     "//chrome/installer/util:with_no_strings",
+     "//components/actor/core:task_id",

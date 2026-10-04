@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/ui/browser_live_tab_context.cc b/chrome/browser/ui/browser_live_tab_context.cc
+index a669a623c4ae25cefb5c1b4504044fa9ba357848..820d7ca5aea8f5f8eb9fad5603342102740e3aef 100644
+--- a/chrome/browser/ui/browser_live_tab_context.cc
++++ b/chrome/browser/ui/browser_live_tab_context.cc
+@@ -17,6 +17,9 @@
+ #include "base/values.h"
+ #include "chrome/browser/apps/app_service/web_contents_app_id_utils.h"
+ #include "chrome/browser/glic/glic_tab_restore_helper.h"
++#include "maho/browser/maho_tab_id_helper.h"
++#include "maho/browser/maho_tab_id_helper.h"
++#include "maho/browser/maho_tab_id_helper.h"
+ #include "chrome/browser/performance_manager/public/background_tab_loading_policy.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/sessions/session_service_utils.h"
+@@ -158,6 +161,16 @@ std::map<std::string, std::string> BrowserLiveTabContext::GetExtraDataForTab(
+   glic::PopulateGlicExtraData(tab_strip_model_->GetTabAtIndex(index),
+                               &extra_data);
+ 
++  content::WebContents* contents =
++      tab_strip_model_->GetWebContentsAt(index);
++  if (contents) {
++    auto* tab_id_helper = MahoTabIdHelper::FromWebContents(contents);
++    if (tab_id_helper) {
++      extra_data[MahoTabIdHelper::kExtraDataKey] =
++          tab_id_helper->stable_tab_id();
++    }
++  }
++
+   return extra_data;
+ }
+ 

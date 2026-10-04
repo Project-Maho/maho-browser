@@ -1,0 +1,90 @@
+diff --git a/chrome/browser/ui/chrome_pages.cc b/chrome/browser/ui/chrome_pages.cc
+index ebf93b1f6e7be4ecfcb9902b8d169febdd711a0c..613b9de403f1bb9b5b12c1742ae1715068b3b74c 100644
+--- a/chrome/browser/ui/chrome_pages.cc
++++ b/chrome/browser/ui/chrome_pages.cc
+@@ -33,6 +33,8 @@
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_navigator.h"
+ #include "chrome/browser/ui/browser_navigator_params.h"
++#include "maho/browser/ui/maho_settings_navigation.h"
++#include "chrome/browser/ui/browser_navigator_params_utils.h"
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
+@@ -50,6 +52,7 @@
+ #include "chrome/common/url_constants.h"
+ #include "chrome/common/webui_url_constants.h"
+ #include "chrome/grit/generated_resources.h"
++#include "maho/components/constants/webui_url_constants.h"
+ #include "components/autofill/core/common/autofill_features.h"
+ #include "components/bookmarks/browser/bookmark_model.h"
+ #include "components/bookmarks/browser/bookmark_node.h"
+@@ -454,9 +457,37 @@ bool IsTrustedPopupWindowWithScheme(const BrowserWindowInterface* browser,
+ }
+ 
+ void ShowSettings(BrowserWindowInterface* browser) {
++  // Maho: open Maho's own settings surface instead of
++  // chrome://settings. This is the single choke point for the macOS
++  // app menu Settings item, Cmd+comma, IDC_OPTIONS and
++  // chrome::OpenOptionsWindow.
++  Browser* maho_browser =
++      browser ? browser->GetBrowserForMigrationOnly() : nullptr;
++  if (maho_browser) {
++    maho::OpenMahoSettingsPane(maho_browser, std::string());
++    return;
++  }
+   ShowSettingsSubPage(browser, std::string());
+ }
+ 
++void ShowMahoSettings(BrowserWindowInterface* browser) {
++  if (!browser) {
++    return;
++  }
++
++  if (ActivateMahoSettingsTabIfOpen(browser)) {
++    return;
++  }
++
++  ShowSingletonTabIgnorePathOverwriteNTP(
++      browser, GURL(maho::kMahoSettingsURL));
++}
++
++void ShowMahoSettingsForProfile(Profile* profile) {
++  BrowserWindowInterface* browser = GetOrCreateBrowserForProfile(profile);
++  ShowMahoSettings(browser);
++}
++
+ void ShowSettingsSubPage(BrowserWindowInterface* browser,
+                          std::string_view sub_page) {
+ #if BUILDFLAG(IS_CHROMEOS)
+@@ -488,6 +519,30 @@ void ShowSettingsSubPageInTabbedBrowser(BrowserWindowInterface* browser,
+   ShowSingletonTabIgnorePathOverwriteNTP(browser, GetSettingsUrl(sub_page));
+ }
+ 
++bool ActivateMahoSettingsTabIfOpen(BrowserWindowInterface* browser) {
++  if (!browser) {
++    return false;
++  }
++
++  NavigateParams params(browser, GURL(maho::kMahoSettingsURL),
++                        ui::PAGE_TRANSITION_AUTO_BOOKMARK);
++  params.disposition = WindowOpenDisposition::SINGLETON_TAB;
++
++  auto [existing_browser, tab_index] =
++      GetIndexAndBrowserOfMatchingTab(browser->GetProfile(), params);
++  if (!existing_browser) {
++    return false;
++  }
++
++  existing_browser->GetWindow()->Activate();
++  existing_browser->GetTabStripModel()->ActivateTabAt(tab_index);
++  if (content::WebContents* contents =
++          existing_browser->GetTabStripModel()->GetActiveWebContents()) {
++    contents->Focus();
++  }
++  return true;
++}
++
+ void ShowPageWithPromoForProfile(Profile* profile,
+                                  ShowPromoInPage::Params promo_params) {
+   BrowserWindowInterface* browser = GetOrCreateBrowserForProfile(profile);

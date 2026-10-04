@@ -1,0 +1,56 @@
+diff --git a/ui/views/controls/textfield/textfield.cc b/ui/views/controls/textfield/textfield.cc
+--- a/ui/views/controls/textfield/textfield.cc
++++ b/ui/views/controls/textfield/textfield.cc
+@@ -432,6 +432,10 @@
+     return GetColorProvider()->GetColor(disabled_text_color_id_.value());
+   }
+ 
++  if (maho_resolved_text_color_) {
++    return *maho_resolved_text_color_;
++  }
++
+   if (text_color_id_.has_value()) {
+     return GetColorProvider()->GetColor(text_color_id_.value());
+   }
+@@ -441,7 +445,23 @@
+ }
+ 
++void Textfield::SetMahoResolvedTextColor(SkColor color) {
++  maho_resolved_text_color_ = color;
++  text_color_id_.reset();
++  if (GetWidget()) {
++    SetColor(GetTextColor());
++  }
++}
++
++void Textfield::SetMahoResolvedPlaceholderTextColor(SkColor color) {
++  maho_resolved_placeholder_text_color_ = color;
++  placeholder_text_color_id_.reset();
++  OnPropertyChanged(&maho_resolved_placeholder_text_color_,
++                    PropertyEffects::kPaint);
++}
++
+ void Textfield::SetTextColorId(std::optional<ui::ColorId> color_id) {
++  maho_resolved_text_color_.reset();
+   text_color_id_ = color_id;
+   if (GetWidget()) {
+     SetColor(GetTextColor());
+   }
+@@ -556,6 +576,9 @@
+ }
+ 
+ SkColor Textfield::GetPlaceholderTextColor() const {
++  if (maho_resolved_placeholder_text_color_) {
++    return *maho_resolved_placeholder_text_color_;
++  }
+   if (placeholder_text_color_id_.has_value()) {
+     return GetColorProvider()->GetColor(placeholder_text_color_id_.value());
+   }
+@@ -565,6 +588,7 @@
+ }
+ 
+ void Textfield::SetPlaceholderTextColorId(std::optional<ui::ColorId> color_id) {
++  maho_resolved_placeholder_text_color_.reset();
+   placeholder_text_color_id_ = color_id;
+   OnPropertyChanged(&placeholder_text_color_id_, PropertyEffects::kPaint);
+ }

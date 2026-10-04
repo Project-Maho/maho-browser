@@ -1,0 +1,18 @@
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+index a4e0f06044120143cc1f2a0a9dfd1c649ad58e4b..26626fb68156cd45f54eeb5fcf21e075219a7b16 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.h
+@@ -114,6 +114,13 @@ class BrowserViewTabbedLayoutImpl : public BrowserViewLayoutImpl {
+   enum class TabStripType { kNone, kVertical, kHorizontal };
+   TabStripType GetTabStripType() const;
+ 
++  // Maho: true when Arc-style left-rail layout is active for this window.
++  bool IsMahoArcLayoutActive() const;
++
++  // Maho: produces the Arc two-pane layout (left rail + contents only).
++  ProposedLayout CalculateMahoArcLayout(
++      const BrowserLayoutParams& params) const;
++
+   // Returns whether the shadow overlay (with its attendant margin) around the
+   // main area is visible. This is usually tied to the presence of the
+   // toolbar-height side panel, but may not be in some browser states.

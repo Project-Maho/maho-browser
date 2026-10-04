@@ -1,0 +1,51 @@
+diff --git a/chrome/browser/ui/views/toolbar/toolbar_view.cc b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+index 020502629f4ad432d21fbcfd9083b0d95cc54c04..a8c5e9f6d085bf58143e6752f8843bd64ec315d6 100644
+--- a/chrome/browser/ui/views/toolbar/toolbar_view.cc
++++ b/chrome/browser/ui/views/toolbar/toolbar_view.cc
+@@ -111,6 +111,8 @@
+ #include "chrome/browser/ui/views/zoom/zoom_view_controller.h"
+ #include "chrome/browser/ui/waap/initial_webui_window_metrics_manager.h"
+ #include "chrome/browser/ui/web_applications/app_browser_controller.h"
++#include "chrome/common/chrome_version.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+ #include "chrome/browser/web_applications/link_capturing_features.h"
+ #include "chrome/common/chrome_features.h"
+ #include "chrome/common/pref_names.h"
+@@ -260,6 +262,18 @@ ToolbarView::ToolbarView(Browser* browser, BrowserView* browser_view)
+                                       *this);
+   }
+ 
++#if CHROME_VERSION_BUILD > 7795
++  // Maho: in the Arc layout BrowserView's MahoToolbarButtonProvider takes
++  // the browser's ToolbarButtonProvider slot (same predicate as
++  // BrowserView::IsMahoArcLayoutActive()). Like upstream, the choice is
++  // made once per window; a later sidebar-layout pref flip only changes
++  // header visibility, never the registered provider.
++  if (browser_->is_type_normal() &&
++      maho::sidebar_prefs::IsSidebarLayoutEnabled(
++          browser_->profile()->GetPrefs())) {
++    scoped_unowned_user_data_.reset();
++  }
++#endif
+   SetID(VIEW_ID_TOOLBAR);
+   SetProperty(views::kElementIdentifierKey, kToolbarElementId);
+ 
+@@ -551,7 +565,7 @@ void ToolbarView::Init() {
+       std::make_unique<PerformanceInterventionButton>(browser_view_));
+ 
+   if (media_button) {
+-    media_button_ = AddChildView(std::move(media_button));
++    // Suppressed for Maho sidebar-bottom media controls
+   }
+ 
+   if (glic::GlicEnabling::IsProfileEligible(browser_view_->GetProfile())) {
+@@ -1365,7 +1379,8 @@ gfx::Size ToolbarView::GetMinimumSize() const {
+         size.SetToMin({size.width(), max_height});
+       }
+       // Overflow button must be part of minimum size calculation.
+-      if (browser_->is_type_normal() && !overflow_button_->GetVisible()) {
++      if (browser_->is_type_normal() && overflow_button_ &&
++          !overflow_button_->GetVisible()) {
+         const int default_margin =
+             GetLayoutConstant(LayoutConstant::kToolbarIconDefaultMargin);
+         size.Enlarge(

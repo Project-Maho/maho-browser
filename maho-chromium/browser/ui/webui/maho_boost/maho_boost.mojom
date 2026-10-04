@@ -1,0 +1,163 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_boost.mojom;
+
+struct Point {
+  float x;
+  float y;
+};
+
+enum CaseMode {
+  kNone,
+  kUpper,
+  kLower,
+  kCapitalize,
+};
+
+enum SizeMode {
+  k90,
+  k100,
+  k110,
+  k125,
+  k150,
+};
+
+// Mirrors maho_types::ColorBoost (boost.rs).
+struct ColorBoost {
+  Point dot_pos;                          // default {0.76, 0.66}
+  float dot_distance;                     // default 0
+  float dot_angle_deg;                    // default 0
+  Point secondary_dot_pos;                // default {0.5, 0.81}
+  float secondary_dot_angle_deg_delta;    // default 55
+  bool magic_theme;                       // default false (was auto_theme)
+  bool color_boost_enabled;               // default false (was enable_color_boost)
+  bool smart_invert;                      // default false
+  float contrast;                         // default 0.75
+  float brightness;                       // default 0.5
+  float saturation;                       // default 0.5
+};
+
+// Mirrors maho_types::TypographyBoost (boost.rs).
+struct TypographyBoost {
+  string font_family;                     // "" = no override
+  CaseMode case_mode;                     // default kNone
+  SizeMode size_mode;                     // default k100
+};
+
+// Full Boost record returned from the browser. Mirrors maho_types::Boost.
+struct BoostInfo {
+  string id;
+  string name;                            // default "My Boost"
+  string domain;
+  ColorBoost color;
+  TypographyBoost typography;
+  array<string> zap_selectors;
+  // TRUST BOUNDARY: Values may remain raw; boost_css_sanitizer.rs enforces final ComposeCss injection and filters imports secondarily.
+  string custom_css;
+  bool change_was_made;
+};
+
+enum WindowMode {
+  kBoost,
+  kCode,
+};
+
+// Partial update payload for ColorBoost fields.
+// All fields are optional; absent means "no change".
+struct ColorBoostUpdate {
+  bool? color_boost_enabled;
+  float? dot_angle_deg;
+  float? secondary_dot_angle_deg_delta;
+  float? brightness;
+  float? saturation;
+  float? contrast;
+  bool? magic_theme;
+  bool? smart_invert;
+  Point? dot_pos;
+  float? dot_distance;
+  Point? secondary_dot_pos;
+};
+
+// Partial update payload for TypographyBoost fields.
+struct TypographyBoostUpdate {
+  // Sentinel: true → apply font_family value.
+  bool set_font_family;
+  string font_family;
+  CaseMode? case_mode;
+  bool set_size_mode;
+  SizeMode size_mode;
+};
+
+// Typed patch payload; replaces the former `string changes_json` argument.
+// Only present fields are applied by the handler.
+struct BoostUpdate {
+  string? name;
+  ColorBoostUpdate? color;
+  TypographyBoostUpdate? typography;
+  array<string>? zap_selectors;
+  // TRUST BOUNDARY: Values may remain raw; boost_css_sanitizer.rs enforces final ComposeCss injection and filters imports secondarily.
+  string? custom_css;
+};
+
+// Used by the WebUI page to bootstrap bidirectional communication.
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<PageObserver> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+// Browser-side handler for requests from WebUI page.
+interface PageHandler {
+  // Returns the domain this dialog was opened for.
+  GetDomain() => (string domain);
+
+  // CRUD
+  ListBoosts() => (array<BoostInfo> boosts);
+  GetBoost(string boost_id) => (BoostInfo? boost);
+  GetActiveBoost() => (BoostInfo? boost);
+
+  // Temp-boost lifecycle (Zen pattern)
+  CreateTempBoost() => (BoostInfo? boost);
+  CommitBoost(string boost_id) => ();
+  DiscardBoost(string boost_id) => ();
+
+  UpdateBoost(string boost_id, BoostUpdate changes) => (BoostInfo? boost);
+  DeleteBoost(string boost_id) => (bool success);
+  SetActiveBoost(string? boost_id) => ();
+  ComposeCss(string boost_id) => (string css);
+
+  ShuffleBoost(string boost_id) => (BoostInfo? boost);
+  ResetBoost(string boost_id) => (BoostInfo? boost);
+  ExportBoost(string boost_id) => (string json);
+  ImportBoost(string json) => (BoostInfo? boost);
+  CloseDialog() => ();
+  // Acknowledges that renderer-side flush/commit/discard and edit-mode cleanup
+  // requested by OnEditorKilled has completed. The native widget stays alive
+  // until this call returns to the controller.
+  HostCloseFinished() => ();
+  SetHostCloseState(string? boost_id, bool dirty) => ();
+  RequestModeResize(WindowMode mode) => ();
+
+  // Zap and Picker (W3.Z)
+  EnterZapMode(string boost_id) => ();
+  ExitZapMode() => ();
+  EnterPickerMode(string boost_id) => ();
+  ExitPickerMode() => ();
+  AppendZapSelector(string boost_id, string selector) => ();
+  RemoveZapSelector(string boost_id, string selector) => ();
+  OpenInspector() => ();
+
+  // System font enumeration (W3.F)
+  GetSystemFonts() => (array<string> fonts);
+};
+
+// WebUI-side interface for browser-to-page push updates.
+interface PageObserver {
+  OnBoostsChanged();
+  // Fired when the active boost for the current tab changes.
+  OnActiveChanged(string? boost_id);
+  OnZapStateUpdate(bool is_on, bool any_zapped);
+  OnZapListUpdate();
+  OnPickerStateUpdate(bool is_on);
+  OnPickerSelectorPicked(string selector);
+  OnEditorKilled();
+};

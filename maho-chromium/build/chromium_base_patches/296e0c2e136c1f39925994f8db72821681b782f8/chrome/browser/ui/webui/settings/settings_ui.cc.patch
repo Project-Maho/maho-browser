@@ -1,0 +1,13 @@
+diff --git a/chrome/browser/ui/webui/settings/settings_ui.cc b/chrome/browser/ui/webui/settings/settings_ui.cc
+index 17a00488bc2d64b39a05f7e08588770ed646fa50..2b834f005084020f60974d3365465fea7e039902 100644
+--- a/chrome/browser/ui/webui/settings/settings_ui.cc
++++ b/chrome/browser/ui/webui/settings/settings_ui.cc
+@@ -228,6 +228,8 @@ SettingsUI::SettingsUI(content::WebUI* web_ui)
+       content::WebUIDataSource::CreateAndAdd(
+           web_ui->GetWebContents()->GetBrowserContext(),
+           chrome::kChromeUISettingsHost);
++  html_source->DisableDenyXFrameOptions();
++  html_source->AddFrameAncestor(GURL("chrome://maho-settings/"));
+   html_source->OverrideContentSecurityPolicy(
+       network::mojom::CSPDirectiveName::WorkerSrc,
+       "worker-src blob: chrome://resources 'self';");

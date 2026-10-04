@@ -1,0 +1,27 @@
+diff --git c/ui/views/widget/widget.h w/ui/views/widget/widget.h
+index 4b71f0122b45668b0e3c0be11c1b0ef909273e4d..6f0b37c8c03ffe8c208d564c6cd12349f08cea59 100644
+--- c/ui/views/widget/widget.h
++++ w/ui/views/widget/widget.h
+@@ -58,6 +58,8 @@ namespace gfx {
+ class Insets;
+ class Point;
+ class Rect;
++class ImageSkia;
++class Vector2d;
+ }  // namespace gfx
+ 
+ namespace ui {
+@@ -1148,6 +1150,13 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
+   // can be NULL.
+   void CancelDragDropLoop(View* view);
+ 
++  // Updates the drag image during an active drag-drop loop.
++  void UpdateDragImage(const gfx::ImageSkia& image,
++                       const gfx::Vector2d& offset);
++
++  // Returns true if a drag-drop loop is currently active.
++  bool HasActiveDrag() const;
++
+   // Returns the view that requested the current drag operation via
+   // RunDragDropLoop(), or NULL if there is no such view or drag operation.
+   View* dragged_view() {

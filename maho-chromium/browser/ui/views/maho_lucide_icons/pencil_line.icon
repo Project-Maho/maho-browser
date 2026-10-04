@@ -1,0 +1,22 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Source: Lucide "pencil-line" (ISC license)
+
+CANVAS_DIMENSIONS, 24,
+STROKE, 2,
+MOVE_TO, 13, 21,
+R_H_LINE_TO, 8,
+NEW_PATH,
+STROKE, 2,
+MOVE_TO, 15, 5,
+R_LINE_TO, 4, 4,
+NEW_PATH,
+STROKE, 2,
+MOVE_TO, 21.174f, 6.812f,
+R_ARC_TO, 1, 1, 0, 0, 0, -3.986f, -3.987f,
+LINE_TO, 3.842f, 16.174f,
+R_ARC_TO, 2, 2, 0, 0, 0, -0.5f, 0.83f,
+R_LINE_TO, -1.321f, 4.352f,
+R_ARC_TO, 0.5f, 0.5f, 0, 0, 0, 0.623f, 0.622f,
+R_LINE_TO, 4.353f, -1.32f,
+R_ARC_TO, 2, 2, 0, 0, 0, 0.83f, -0.497f,
+CLOSE,

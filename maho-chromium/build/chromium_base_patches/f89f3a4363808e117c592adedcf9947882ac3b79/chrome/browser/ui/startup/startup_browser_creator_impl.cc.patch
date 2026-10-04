@@ -1,0 +1,233 @@
+diff --git c/chrome/browser/ui/startup/startup_browser_creator_impl.cc w/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+index c7b0a43fd05c881c7556fb35a64b2954746317cc..5c2ec8d55d367745ce92f72a92ab0e250b20e13c 100644
+--- c/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ w/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+@@ -7,6 +7,7 @@
+ #include <stddef.h>
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <iterator>
+ #include <memory>
+ #include <utility>
+@@ -16,6 +17,8 @@
+ #include "base/command_line.h"
+ #include "base/debug/dump_without_crashing.h"
+ #include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
+ #include "base/notreached.h"
+ #include "base/supports_user_data.h"
+ #include "base/version.h"
+@@ -37,7 +40,9 @@
+ #include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_tabstrip.h"
++#include "maho/browser/ui/views/welcome/maho_welcome_window.h"
+ #include "chrome/browser/ui/browser_window.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+@@ -70,8 +75,10 @@
+ #include "content/public/common/content_switches.h"
+ #include "url/origin.h"
+ 
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
+ #if BUILDFLAG(IS_LINUX)
+ #include "base/nix/xdg_util.h"
++#endif
+ #include "ui/display/screen.h"
+ #endif
+ 
+@@ -118,6 +125,51 @@ bool ShouldRestoreApps(bool is_post_restart, Profile* profile) {
+ #endif
+ }
+ 
++// Maho cold-start: retry opening the new-tab command palette until the
++// BrowserView and its sidebar container are constructed. On the zero-tab
++// startup path BrowserView::GetBrowserViewForBrowser() can briefly return
++// null (or the sidebar container is not built yet) right after
++// window()->Show(), so a single attempt is dropped and no palette appears.
++// Give up without creating a tab once the attempt budget is exhausted so
++// the zero-tab themed gradient window remains.
++void ShowMahoColdStartPaletteWhenReady(base::WeakPtr<BrowserWindowInterface> browser,
++                                       int remaining_attempts) {
++  if (!browser) {
++    return;
++  }
++  if (auto* browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser.get())) {
++    // BrowserView queues the new-tab overlay until its widget and views
++    // are initialized. Do not wait for sidebar construction here: in slow
++    // cold starts that unnecessarily exhausts this helper's retry budget
++    // and leaves the zero-tab browser with no palette.
++    browser_view->ShowMahoCommandOverlayForNewTab();
++    return;
++  }
++  if (remaining_attempts <= 0) {
++    return;
++  }
++  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
++      FROM_HERE,
++      base::BindOnce(&ShowMahoColdStartPaletteWhenReady, browser,
++                     remaining_attempts - 1),
++      base::Milliseconds(25));
++}
++
++// Maho: open the command palette on the FIRST normal browser window of each
++// app launch, whichever startup path created it (session restore, empty
++// cold-start, or opened tabs). The process-global guard fires it exactly once
++// per launch, so only the first window gets it.
++void MahoMaybeAutoOpenPaletteOnFirstWindow(BrowserWindowInterface* browser) {
++  if (!browser || browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
++    return;
++  }
++  static std::atomic<bool> g_maho_first_window_palette_shown{false};
++  if (!g_maho_first_window_palette_shown.exchange(true)) {
++    ShowMahoColdStartPaletteWhenReady(browser->GetWeakPtr(), 200);
++  }
++}
++
+ void UrlsToTabs(const std::vector<GURL>& urls, StartupTabs* tabs) {
+   for (const GURL& url : urls) {
+     tabs->emplace_back(url);
+@@ -461,7 +513,11 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::OpenTabsInBrowser(
+       !process_headless_commands) {
+     // TODO(sky): this is a work around for 110909. Figure out why it's needed.
+     if (!browser->GetTabStripModel()->count()) {
+-      chrome::AddTabAt(browser, GURL(), -1, true);
++      // Maho zero-tab: normal browser windows are allowed to start with zero
++      // tabs; do not synthesise a blank/NTP fallback tab for them.
++      if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
++        chrome::AddTabAt(browser, GURL(), -1, true);
++      }
+     } else {
+       browser->GetTabStripModel()->ActivateTabAt(0);
+     }
+@@ -639,6 +695,10 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
+       return {std::move(tabs), launch_result};
+     }
+ 
++    if (is_post_crash_launch) {
++      // Maho zero-tab: crash recovery should NOT inject a synthetic NTP.
++      return {StartupTabs(), launch_result};
++    }
+     return {StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())}),
+             launch_result};
+   }
+@@ -692,7 +752,7 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
+     StartupTabs prefs_tabs =
+         provider.GetPreferencesTabs(*command_line_, profile_);
+ 
+-    bool prefs_tabs_originally_empty = prefs_tabs.empty();
++    [[maybe_unused]] bool prefs_tabs_originally_empty = prefs_tabs.empty();
+ 
+     // Filter out tabs from preferences that are already pinned.
+     std::erase_if(prefs_tabs, [&pinned_tabs](const StartupTab& pref_tab) {
+@@ -704,12 +764,10 @@ StartupBrowserCreatorImpl::DetermineStartupTabs(
+ 
+     AppendTabs(prefs_tabs, &tabs);
+ 
+-    // Potentially add the New Tab Page.
+-    // Note that URLs from preferences are explicitly meant to override showing
+-    // the NTP.
+-    if (prefs_tabs_originally_empty) {
+-      AppendTabs(provider.GetNewTabPageTabs(*command_line_, profile_), &tabs);
+-    }
++    // Maho zero-tab: suppress the default NTP tab that upstream appends when
++    // the prefs tab list is empty.  Leaving |tabs| empty here lets the caller
++    // (RestoreOrCreateBrowser) open a zero-tab window instead of navigating
++    // to chrome://newtab.
+   }
+ 
+   // Maybe add any tabs which the user has previously pinned.
+@@ -749,6 +807,17 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
+     SessionRestore::BehaviorBitmask restore_options,
+     chrome::startup::IsProcessStartup process_startup,
+     bool is_post_crash_launch) {
++  // Maho login gate: while active (no valid relay session) suppress ALL
++  // startup browser creation AND session restore so onboarding shows alone.
++  // FinishOnboarding restores-or-creates the browser afterwards. Placed
++  // before the SYNCHRONOUS_RESTORE block and DeleteStaleSessionData() so the
++  // on-disk session survives for the deferred restore.
++  if (PrefService* gate_prefs = profile_->GetPrefs();
++      gate_prefs && gate_prefs->GetBoolean("maho.auth.login_gate_active")) {
++    maho::MahoWelcomeWindow::Show(profile_);
++    return nullptr;
++  }
++
+   BrowserWindowInterface* browser = nullptr;
+   if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
+     // It's worth noting that this codepath is not hit by crash restore
+@@ -773,17 +842,59 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
+   base::AutoReset<bool> synchronous_launch_resetter(
+       &StartupBrowserCreator::in_synchronous_profile_launch_, true);
+ 
++  // Maho zero-tab: when the tab list is empty and we are targeting a normal
++  // browser window, create/show the browser without synthesising an NTP tab.
++  // OpenTabsInBrowser DCHECKs on an empty tab list, so we must not call it
++  // in this path.
++  if (tabs.empty()) {
++    // Ensure we have a browser to show.  Reuse the existing one if
++    // USE_EXISTING selected one above, otherwise create a fresh normal window.
++    // But skip this if login gate is active.
++    bool gate_active = false;
++    if (profile_ && profile_->GetPrefs()) {
++      gate_active = profile_->GetPrefs()->GetBoolean("maho.auth.login_gate_active");
++    }
++    if (!gate_active) {
++      if (!browser || browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
++        CHECK(profile_);
++        if (GetBrowserWindowCreationStatusForProfile(*profile_) ==
++            Browser::CreationStatus::kOk) {
++          BrowserWindowCreateParams params(profile_, false);
++          params.creation_source =
++              BrowserWindowCreateParams::CreationSource::kStartupCreator;
++          browser = CreateBrowserWindow(std::move(params));
++        }
++      }
++      if (browser) {
++        browser->GetWindow()->Show();
++        // Maho cold-start: auto-open the command palette exactly once on the
++        // zero-tab (cold empty) startup path. This empty-|tabs| branch is the
++        // ONLY cold empty-start path (Ctrl+N windows and
++        // session-restore-with-tabs do not reach it), so the process-global
++        // once-guard is belt-and-suspenders. ShowMahoCommandOverlayForNewTab()
++        // self-defers until the BrowserView widget is ready and shows recent
++        // tabs on the empty query; pressing Esc merely Dismiss()es the overlay
++        // (no tab created), leaving the zero-tab themed gradient window.
++        static std::atomic<bool> g_maho_cold_start_palette_shown{false};
++        if (!g_maho_cold_start_palette_shown.exchange(true)) {
++          if (auto* maho_browser_view =
++                  BrowserView::GetBrowserViewForBrowser(browser)) {
++            maho_browser_view->ShowMahoCommandOverlayForNewTab();
++          }
++        }
++      }
++    }
++  } else {
+   // OpenTabsInBrowser requires at least one tab be passed. As a fallback to
+   // prevent a crash, use the NTP if |tabs| is empty. This could happen if
+   // we expected a session restore to happen but it did not occur/succeed.
+   browser = OpenTabsInBrowser(
+       browser, process_startup,
+-      (tabs.empty()
+-           ? StartupTabs({StartupTab(chrome::ChromeUINewTabURLAsGURL())})
+-           : tabs),
++      tabs,
+       (behavior == BrowserOpenBehavior::USE_EXISTING_AND_OVERWRITE_ACTIVE_TAB
+            ? (TabOverWrite::kYes)
+            : (TabOverWrite::kNo)));
++  }
+ 
+   // Now that a restore is no longer possible, it is safe to clear session
+   // cookie/storage, unless this is a crash recovery.
+@@ -791,6 +902,7 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
+     profile_->GetDefaultStoragePartition()->DeleteStaleSessionData();
+   }
+ 
++  MahoMaybeAutoOpenPaletteOnFirstWindow(browser);
+   return browser;
+ }
+ 

@@ -1,0 +1,42 @@
+diff --git a/ui/webui/resources/tools/build_webui.gni b/ui/webui/resources/tools/build_webui.gni
+index dc93e6525d54e270d5e9e1141e31d8359f24378f..fe7e31885f81324d61f6390a72734df0f9b8ae45 100644
+--- a/ui/webui/resources/tools/build_webui.gni
++++ b/ui/webui/resources/tools/build_webui.gni
+@@ -439,6 +439,14 @@ template("build_webui") {
+       }
+     }
+ 
++    if (defined(invoker.ts_visibility)) {
++      if (defined(visibility)) {
++        visibility += invoker.ts_visibility
++      } else {
++        visibility = invoker.ts_visibility
++      }
++    }
++
+     if (defined(invoker.ts_tsconfig_base)) {
+       tsconfig_base = invoker.ts_tsconfig_base
+     } else if (defined(invoker.ts_deps)) {
+@@ -742,6 +750,12 @@ template("build_webui") {
+       if (defined(invoker.grd_resource_path_prefix)) {
+         resource_path_prefix = invoker.grd_resource_path_prefix
+       }
++      if (defined(invoker.resource_path_rewrites)) {
++        resource_path_rewrites = invoker.resource_path_rewrites
++      }
++      if (defined(invoker.resource_path_rewrites)) {
++        resource_path_rewrites = invoker.resource_path_rewrites
++      }
+       grd_prefix = generate_code_cache_grd_prefix
+       out_grd = "$target_gen_dir/code_cache_resources.grd"
+       if (generate_grdp) {
+@@ -840,6 +854,9 @@ template("build_webui") {
+     if (defined(invoker.grd_resource_path_prefix)) {
+       resource_path_prefix = invoker.grd_resource_path_prefix
+     }
++    if (defined(invoker.resource_path_rewrites)) {
++      resource_path_rewrites = invoker.resource_path_rewrites
++    }
+   }
+ 
+   # Groups together targets that run additional build time checks.

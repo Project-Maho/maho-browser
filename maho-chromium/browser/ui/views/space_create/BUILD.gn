@@ -1,0 +1,22 @@
+# Copyright 2026 Maho Browser. All rights reserved.
+
+source_set("maho_space_theme_picker_dialog") {
+  sources = [
+    "maho_space_theme_picker_dialog.cc",
+    "maho_space_theme_picker_dialog.h",
+  ]
+
+  deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
+    "//maho/browser:maho_theme_support",
+    "//maho/components/constants",
+    "//ui/base",
+    "//ui/color",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views/controls/webview",
+    "//url",
+  ]
+}

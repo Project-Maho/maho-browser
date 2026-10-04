@@ -1,0 +1,50 @@
+@import "../../../maho_common/react/theme/tokens.css";
+
+/* maho_ai-specific token overrides if needed (e.g., panel padding) */
+:root {
+  --shadow-raised: 0 8px 24px -12px rgba(0,0,0,0.45);
+  --shadow-overlay: 0 20px 60px -40px rgba(0,0,0,0.65);
+}
+
+@layer utilities {
+  @container (max-width: 330px) {
+    [aria-label^="Select profile:"] {
+      max-width: 5.5rem;
+    }
+  }
+
+  @keyframes voice-fade-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes voice-fade-out {
+    from {
+      opacity: 1;
+    }
+
+    to {
+      opacity: 0;
+    }
+  }
+
+  .animate-voice-fade-in {
+    animation: voice-fade-in 180ms ease-out both;
+  }
+
+  .animate-voice-fade-out {
+    animation: voice-fade-out 140ms ease-in both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-voice-fade-in,
+  .animate-voice-fade-out {
+    animation: none;
+  }
+}

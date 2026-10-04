@@ -1,0 +1,12 @@
+diff --git a/chrome/common/extensions/api/_api_features.json b/chrome/common/extensions/api/_api_features.json
+index 37388f86f844f97e4ea2603ce93ddede4e84f294..449da00feed9f37507371c98fa4e46fae2d3607d 100644
+--- a/chrome/common/extensions/api/_api_features.json
++++ b/chrome/common/extensions/api/_api_features.json
+@@ -237,6 +237,7 @@
+       "chrome://glic/*",
+       "chrome://glic-fre/*",
+       "chrome://graduation/*",
++      "chrome://maho-settings/*",
+       "chrome://mobilesetup/*",
+       "chrome://oobe/*",
+       "chrome://os-settings/*",

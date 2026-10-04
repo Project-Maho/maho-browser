@@ -1,0 +1,31 @@
+diff --git c/ui/views/widget/widget.cc w/ui/views/widget/widget.cc
+index 5100d0c214cff5147397da70832425b4960657cc..42597b0d5b4f066325f884f4757d79a55c18f46b 100644
+--- c/ui/views/widget/widget.cc
++++ w/ui/views/widget/widget.cc
+@@ -45,6 +45,7 @@
+ #include "ui/events/event_utils.h"
+ #include "ui/gfx/geometry/insets.h"
+ #include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/vector2d.h"
+ #include "ui/gfx/image/image_skia.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/views/accessibility/tree/widget_ax_manager.h"
+@@ -1513,6 +1514,18 @@ void Widget::CancelDragDropLoop(View* view) {
+   native_widget_->CancelDragDropLoop(view);
+ }
+ 
++void Widget::UpdateDragImage(const gfx::ImageSkia& image,
++                             const gfx::Vector2d& offset) {
++  if (!native_widget_) {
++    return;
++  }
++  native_widget_->UpdateDragImage(image, offset);
++}
++
++bool Widget::HasActiveDrag() const {
++  return dragged_view_ != nullptr;
++}
++
+ void Widget::SchedulePaintInRect(const gfx::Rect& rect) {
+   // This happens when DestroyRootView removes all children from the
+   // RootView which triggers a SchedulePaint that ends up here. This happens

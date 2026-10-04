@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Test Extension",
+  "version": "1.0.0",
+  "description": "Test extension fixture for maho-extension integration tests",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://example.com/*"],
+      "js": ["content.js"],
+      "css": ["styles.css"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  }
+}

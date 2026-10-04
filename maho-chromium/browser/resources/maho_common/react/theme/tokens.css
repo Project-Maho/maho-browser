@@ -1,0 +1,219 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@source "../ui/**/*.tsx";
+/* GN sources/inputs are rebuild triggers; Tailwind only scans files listed by @source. */
+@source "../mail/**/*.tsx";
+@source "../../../maho_ai/react/**/*.tsx";
+@source "../../../maho_space_config/react/**/*.tsx";
+@source "../../../maho_settings/react/**/*.tsx";
+@source "../../../maho_welcome/react/**/*.tsx";
+
+@custom-variant dark (&:is([data-theme="dark"] *));
+
+@theme inline {
+  --color-panel-accent:      var(--panel-accent);
+  --color-panel-accent-soft: var(--panel-accent-soft);
+  --color-panel-hairline:    var(--panel-hairline);
+  --color-background:        var(--background);
+  --color-foreground:        var(--foreground);
+  --color-card:              var(--card);
+  --color-card-foreground:   var(--card-foreground);
+  --color-popover:           var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary:           var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary:         var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted:             var(--muted);
+  --color-muted-foreground:  var(--muted-foreground);
+  --color-accent:            var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive:       var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success:           var(--success);
+  --color-warning:           var(--warning);
+  --color-border:            var(--border);
+  --color-input:             var(--input);
+  --color-ring:              var(--ring);
+  --color-ring-offset:       var(--background);
+  --color-surface-hover:     var(--surface-hover);
+  --color-surface-selected:  var(--surface-selected);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-pill: 9999px;
+}
+
+/* Panel surface primitives. The agent side panel is a narrow (380-500px)
+   column, so its chrome is built from hairline-bordered translucent cards
+   rather than heavy filled boxes: one raised composer, quiet inline controls,
+   and cards that only gain contrast on hover. Values live here so the light
+   and dark themes stay in lockstep. */
+@utility panel-card {
+  background-color: var(--panel-card-bg);
+  border: 1px solid var(--panel-hairline);
+  box-shadow: var(--panel-shadow-flat);
+}
+
+@utility panel-card-raised {
+  background-color: var(--panel-card-raised-bg);
+  border: 1px solid var(--panel-hairline-strong);
+  box-shadow: var(--panel-shadow-raised);
+
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    -webkit-backdrop-filter: blur(24px) saturate(1.7);
+    backdrop-filter: blur(24px) saturate(1.7);
+  }
+}
+
+/* Quiet inline control: the pill dropdowns and icon buttons that sit on the
+   composer rail. Reads as text until hovered. */
+@utility panel-chip {
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+
+  &:hover {
+    background-color: var(--panel-chip-hover);
+    border-color: var(--panel-hairline);
+    color: var(--foreground);
+  }
+}
+
+@utility glass {
+  background-color: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+  }
+}
+
+@utility glass-strong {
+  background-color: var(--glass-bg-strong);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+  }
+}
+
+/* Dark theme (default for WebUI) — derived from existing --maho-ai/--maho-settings tokens */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --radius: 0.75rem;  /* 12px — matches existing --maho-settings-radius-sm */
+
+  --background:          #1a1a1a;
+  --foreground:          #f5f5f5;
+  --card:                #0f0f0f;
+  --card-foreground:     #f5f5f5;
+  --popover:             #0f0f0f;
+  --popover-foreground:  #f5f5f5;
+  --primary:             #e5e5e5;
+  --primary-foreground:  #1a1a1a;
+  --secondary:           #2a2a2a;
+  --secondary-foreground: #d5d5d5;
+  --muted:               #2a2a2a;
+  --muted-foreground:    #a0a0a0;
+  --accent:              #e5e5e5;
+  --accent-foreground:   #1a1a1a;
+  --destructive:         #ef4444;
+  --destructive-foreground: #ffffff;
+  --success:             #95d8bb;
+  --warning:             #f5b96a;
+  --border:              rgba(255,255,255,0.08);
+  --input:               rgba(0,0,0,0.38);
+  --ring:                rgba(229,229,229,0.5);
+
+  /* Interactive surface overlays (hover / selected). Soft translucent tints so
+     they read the same in every WebUI and never flash a hard accent block. */
+  --surface-hover:       rgba(255, 255, 255, 0.06);
+  --surface-selected:    rgba(255, 255, 255, 0.10);
+
+  /* Glassmorphism surface tokens */
+  --glass-bg:            rgba(20, 20, 22, 0.45);   /* default surface — text-safe on dark */
+  --glass-bg-strong:     rgba(20, 20, 22, 0.68);   /* modals / overlays only */
+  --glass-border:        rgba(255, 255, 255, 0.10);
+  --glass-highlight:     rgba(255, 255, 255, 0.06);
+  --glass-shadow:        0 8px 32px rgba(0, 0, 0, 0.25);
+
+  /* Side-panel surface primitives */
+  --panel-hairline:        rgba(255, 255, 255, 0.08);
+  --panel-hairline-strong: rgba(255, 255, 255, 0.13);
+  --panel-card-bg:         rgba(255, 255, 255, 0.03);
+  --panel-card-hover-bg:   rgba(255, 255, 255, 0.055);
+  --panel-card-raised-bg:  rgba(38, 38, 41, 0.72);
+  --panel-chip-hover:      rgba(255, 255, 255, 0.07);
+  --panel-shadow-flat:     0 1px 2px rgba(0, 0, 0, 0.20);
+  --panel-shadow-raised:   0 1px 1px rgba(0, 0, 0, 0.28), 0 8px 24px -6px rgba(0, 0, 0, 0.45);
+  --panel-accent:          #7aa2f7;
+  --panel-accent-soft:     rgba(122, 162, 247, 0.16);
+}
+
+/* Light theme */
+[data-theme="light"] {
+  color-scheme: light;
+  --background:          #f5f5f5;
+  --foreground:          #1a1a1a;
+  --card:                #ffffff;
+  --card-foreground:     #1a1a1a;
+  --popover:             #ffffff;
+  --popover-foreground:  #1a1a1a;
+  --primary:             #2b2b2b;
+  --primary-foreground:  #ffffff;
+  --secondary:           #f0f0f0;
+  --secondary-foreground: #4a4a4a;
+  --muted:               #f0f0f0;
+  --muted-foreground:    #737373;
+  --accent:              #2b2b2b;
+  --accent-foreground:   #ffffff;
+  --destructive:         #dc2626;
+  --destructive-foreground: #ffffff;
+  --success:             #2e9e6a;
+  --warning:             #d97706;
+  --border:              rgba(0,0,0,0.08);
+  --input:               rgba(0,0,0,0.03);
+  --ring:                rgba(43,43,43,0.5);
+
+  --surface-hover:       rgba(0, 0, 0, 0.04);
+  --surface-selected:    rgba(0, 0, 0, 0.06);
+
+  /* Glassmorphism surface tokens */
+  --glass-bg:            rgba(255, 255, 255, 0.55);   /* default surface — text-safe on light */
+  --glass-bg-strong:     rgba(255, 255, 255, 0.72);   /* modals / overlays only */
+  --glass-border:        rgba(255, 255, 255, 0.65);
+  --glass-highlight:     rgba(255, 255, 255, 0.80);
+  --glass-shadow:        0 8px 32px rgba(0, 0, 0, 0.12);
+
+  /* Side-panel surface primitives */
+  --panel-hairline:        rgba(0, 0, 0, 0.07);
+  --panel-hairline-strong: rgba(0, 0, 0, 0.11);
+  --panel-card-bg:         rgba(255, 255, 255, 0.70);
+  --panel-card-hover-bg:   #ffffff;
+  --panel-card-raised-bg:  rgba(255, 255, 255, 0.86);
+  --panel-chip-hover:      rgba(0, 0, 0, 0.045);
+  --panel-shadow-flat:     0 1px 2px rgba(15, 23, 42, 0.06);
+  --panel-shadow-raised:   0 1px 1px rgba(15, 23, 42, 0.05), 0 8px 24px -6px rgba(15, 23, 42, 0.14);
+  --panel-accent:          #3b6fe0;
+  --panel-accent-soft:     rgba(59, 111, 224, 0.12);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+}

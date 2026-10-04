@@ -1,0 +1,584 @@
+{
+  "groups": {
+    "task-2-python": {
+      "binary": "Python unittest",
+      "tests": [
+        "test_default_chrome_target",
+        "test_repeatable_ninja_targets",
+        "test_mixed_target_forms_rejected",
+        "test_narrow_target_skips_app_postprocessing",
+        "test_seatbelt_exact_uds_and_external_denial",
+        "test_lock_precedes_attempt_creation",
+        "test_subsecond_revert_detected",
+        "test_event_barrier_catches_up",
+        "test_build_output_domains_are_scoped",
+        "test_output_lifecycle_tombstones_are_not_runtime",
+        "test_literal_manifest_rejects_glob",
+        "test_shared_new_path_serial_order",
+        "test_source_manifest_add_remove_symlink",
+        "test_exact_test_zero_extra_rename_rejected",
+        "test_reused_roots_rejected",
+        "test_cbindgen_write_if_different",
+        "test_lucide_write_if_different"
+      ],
+      "expected_count": 17,
+      "artifact_type": "python_test"
+    },
+    "task-2-comparator": {
+      "binary": "compare_incognito_screenshots",
+      "tests": [
+        "alpha_composite_rounding",
+        "srgb_conversion",
+        "mask_half_open_edge",
+        "reflect101_border",
+        "per_channel_aggregation",
+        "semantic_crop_bounds",
+        "hotspot_8x8_rejected",
+        "size_mismatch_rejected"
+      ],
+      "expected_count": 8,
+      "artifact_type": "self_test"
+    },
+    "task-2-native-probe": {
+      "binary": "maho_native_ui_probe",
+      "tests": [
+        "loopback_debug_port_and_guid_only",
+        "ax_window_identity_size_and_2x_display",
+        "sampled_descendant_socket_reported",
+        "pid_reuse_rejected",
+        "orphan_descendant_rejected",
+        "screencapturekit_window_id_capture_only"
+      ],
+      "expected_count": 6,
+      "artifact_type": "self_test"
+    },
+    "task-2-node": {
+      "binary": "e2e_chromium_incognito.js",
+      "tests": [
+        "private_shell_schema",
+        "private_command_allowlist_schema",
+        "ai_denied_schema",
+        "last_window_teardown_schema",
+        "normal_negative_control_schema",
+        "occupied_debug_port_rejected",
+        "welcome_gate_rejected",
+        "malformed_fixture_rejected"
+      ],
+      "expected_count": 8,
+      "artifact_type": "node_self_test"
+    },
+    "task-2-override": {
+      "binary": "apply_chromium_src_overrides.py",
+      "tests": [
+        "dry_run_set_equals_appendix_c",
+        "copied_apply_is_idempotent",
+        "target_set_drift_rejected"
+      ],
+      "expected_count": 3,
+      "artifact_type": "override_fixture"
+    },
+    "task-3-policy": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoPrivateContextPolicyTest.NullFailsClosed",
+        "MahoPrivateContextPolicyTest.RegularCapabilities",
+        "MahoPrivateContextPolicyTest.PrimaryIncognitoCapabilities",
+        "MahoPrivateContextPolicyTest.GuestRegularFailsClosed",
+        "MahoPrivateContextPolicyTest.GuestPrimaryOtrFailsClosed",
+        "MahoPrivateContextPolicyTest.SystemRegularAndOtrFailClosed",
+        "MahoPrivateContextPolicyTest.DevToolsOtrFailsClosed",
+        "MahoPrivateContextPolicyTest.NonPrimaryOtrFailsClosed",
+        "MahoPrivateContextPolicyTest.BrowserWebContentsAndTokenAgree"
+      ],
+      "expected_count": 9,
+      "artifact_type": "gtest"
+    },
+    "task-4-webui-unit": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoWebUiPrivateBoundaryTest.RegisteredSurfaceInventoryMatchesBuildFlag",
+        "MahoWebUiPrivateBoundaryTest.ConfigMatrixFailsClosedForAllOtrClasses"
+      ],
+      "expected_count": 2,
+      "artifact_type": "gtest"
+    },
+    "task-4-webui-browser": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoWebUiPrivateBoundaryBrowserTest.DirectNavigationDeniedBeforeController",
+        "MahoWebUiPrivateBoundaryBrowserTest.ForgedFactoriesAndHandlersDisconnectBeforeStateAccess",
+        "MahoWebUiPrivateBoundaryBrowserTest.RegularControllersAndHandlersPositiveControl"
+      ],
+      "expected_count": 3,
+      "artifact_type": "gtest"
+    },
+    "task-5-command-rust": {
+      "binary": "maho-core",
+      "manifest_path": "maho/Cargo.toml",
+      "package": "maho-core",
+      "test": "ranking_regression",
+      "tests": [
+        "incognito_search_builds_only_ephemeral_sources",
+        "incognito_action_catalog_is_exact_ordered_existing_fields",
+        "normal_search_fixture_matches_preedit_sha"
+      ],
+      "expected_count": 3,
+      "artifact_type": "cargo_test"
+    },
+    "task-6-preview-core": {
+      "binary": "maho-core",
+      "manifest_path": "maho/Cargo.toml",
+      "package": "maho-core",
+      "test": "test_preview_persistence",
+      "tests": [
+        "normal_registered_preview_round_trips",
+        "legacy_private_preview_round_trips_for_mobile_compatibility",
+        "unknown_legacy_behavior_matches_preedit"
+      ],
+      "expected_count": 3,
+      "artifact_type": "cargo_test"
+    },
+    "task-6-preview-ffi": {
+      "binary": "maho-ffi",
+      "manifest_path": "maho/Cargo.toml",
+      "package": "maho-ffi",
+      "test": "ffi_test",
+      "tests": [
+        "legacy_preview_abi_matches_preedit",
+        "desktop_privacy_abi_rejects_private_and_unknown",
+        "null_length_utf8_boundaries_do_not_unwind"
+      ],
+      "expected_count": 3,
+      "artifact_type": "cargo_test"
+    },
+    "task-6-preview-jni": {
+      "binary": "maho-jni",
+      "manifest_path": "maho/Cargo.toml",
+      "package": "maho-jni",
+      "test": "jni_tests",
+      "tests": [
+        "tests::normal_preview_call_order_stays_compatible",
+        "tests::private_preview_call_order_stays_compatible"
+      ],
+      "expected_count": 2,
+      "artifact_type": "cargo_test"
+    },
+    "task-6-preview-cpp": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoPreviewFfiAbiTest.LegacyAndPrivacySymbolsLinkAndInvoke"
+      ],
+      "expected_count": 1,
+      "artifact_type": "gtest"
+    },
+    "task-6-mobile-artifacts": {
+      "receipts": [
+        "ios_device",
+        "ios_simulator",
+        "generated_mobile_header",
+        "android_jni_symbols"
+      ],
+      "expected_count": 4,
+      "artifact_type": "receipts"
+    },
+    "task-7-registry": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoIncognitoPrivacyBrowserTest.IncognitoOnlyProcessDoesNotInitializeMahoServicesOrOpenStorage",
+        "MahoIncognitoPrivacyBrowserTest.FirstRegularBrowserInitializesMahoServicesExactlyOnce",
+        "MahoIncognitoPrivacyBrowserTest.TabRegistryNormalPositiveControl",
+        "MahoIncognitoPrivacyBrowserTest.TabRegistryPrimaryOtrIsSilent",
+        "MahoIncognitoPrivacyBrowserTest.GuestAndOtherOtrHaveNoMahoRegistration",
+        "MahoIncognitoPrivacyBrowserTest.RegistryDelayedCallbacksAfterCloseAreSilent"
+      ],
+      "expected_count": 6,
+      "artifact_type": "gtest"
+    },
+    "task-8-mcp-session": {
+      "binary": "maho_mcp_session_test",
+      "tests": [
+        "MahoMcpSessionTest.ToolSetsAreExactAndEvaluateJsStaysDenied",
+        "MahoMcpSessionTest.EveryTargetedToolUsesStableResolution",
+        "MahoMcpSessionTest.NoCachedOrZeroActiveFallback",
+        "MahoMcpSessionTest.AsyncDenialCompletesExactlyOnce",
+        "MahoMcpSessionTest.CaptureAndLeaseRemainBoundToGeneration"
+      ],
+      "expected_count": 5,
+      "artifact_type": "gtest"
+    },
+    "task-8-mcp-session-regression": {
+      "binary": "maho_mcp_session_test",
+      "tests": [
+        "MahoMcpSessionTest.RejectsToolCallBeforeInitialize",
+        "MahoMcpSessionTest.InitializeSucceedsForSameUid",
+        "MahoMcpSessionTest.InitializeReturnsCapabilities",
+        "MahoMcpSessionTest.ToolsListAfterInitialize",
+        "MahoMcpSessionTest.RejectsPeerUidMismatch",
+        "MahoMcpSessionAllowedDomainsTest.NavigateBlockedWhenEmptyAllowlist",
+        "MahoMcpSessionAllowedDomainsTest.SetAllowedDomainsThenNavigateOk",
+        "MahoMcpSessionAllowedDomainsTest.WildcardMatchesSubdomainAndBare",
+        "MahoMcpSessionAllowedDomainsTest.DisallowedHostBlockedAfterSet",
+        "MahoMcpSessionAllowedDomainsTest.TabNewWithUrlEnforced",
+        "MahoMcpSessionAllowedDomainsTest.TabNewWithoutUrlUnaffected",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStartBindsExplicitTabId",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStartActiveTabResolvedByDelegate",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStartDoesNotQueryTabListSynchronously",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStartDuplicateReturnsError",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStartFailureThenSuccessfulRetry",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStopReturnsNoImmediateAndOneDeferredHar",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStopRedactsHarAtAsyncBoundary",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStopUnknownCaptureReturnsError",
+        "MahoMcpSessionNetworkCaptureTest.NetworkStopWithoutActiveCaptureErrors",
+        "MahoMcpSessionNetworkCaptureTest.NetworkTeardownCancelsAndStartCallbackIsSafe",
+        "MahoMcpSessionNewFeaturesTest.ConsoleMessages_RingBuffer_HoldsUpToLimit",
+        "MahoMcpSessionNewFeaturesTest.ConsoleMessages_LevelFilter_ReturnsMatchingOnly",
+        "MahoMcpSessionNewFeaturesTest.ConsoleMessages_SinceTimestamp_ReturnsAfterCutoff",
+        "MahoMcpSessionNewFeaturesTest.ConsoleMessages_Firewall_ScrubsAuthorizationInMessage",
+        "MahoMcpSessionNewFeaturesTest.ConsoleMessages_Firewall_ScrubsAccessTokenInUrl",
+        "MahoMcpSessionNewFeaturesTest.WaitForNavigation_ReturnsImmediately",
+        "MahoMcpSessionNewFeaturesTest.WaitForNavigation_TimesOutForUnknownTab",
+        "MahoMcpSessionNewFeaturesTest.TabSwitch_UpdatesActiveTab",
+        "MahoMcpSessionNewFeaturesTest.SetViewportSize_ValidAndOutOfBounds",
+        "MahoMcpSessionNewFeaturesTest.InteractiveTools_Scroll_Hover_KeyPress",
+        "MahoMcpSessionNetworkCaptureTest.WaitForSelectorForwardsArgsAndMarshalsFoundTrue",
+        "MahoMcpSessionNetworkCaptureTest.WaitForSelectorDefaultsTimeoutAndMarshalsFoundFalse",
+        "MahoMcpSessionNetworkCaptureTest.HistorySearchForwardsArgsAndMarshalsEntries",
+        "MahoMcpSessionNetworkCaptureTest.HistorySearchReturnsEmptyWhenDelegateHasNoMatch"
+      ],
+      "expected_count": 35,
+      "artifact_type": "gtest"
+    },
+    "task-8-mcp-socket-regression": {
+      "binary": "maho_mcp_socket_server_test",
+      "tests": [
+        "MahoMcpSocketServerTest.AcceptsConnection",
+        "MahoMcpSocketServerTest.RejectsMalformedFrame",
+        "MahoMcpSocketServerTest.EnforcesPeerUidMatch",
+        "MahoMcpSocketServerTest.HandlesStaleSocketOnStartup",
+        "MahoMcpSocketServerTest.CleansUpSocketOnDestruction",
+        "MahoMcpSocketServerDeferredTest.TwoClientReverseOrderDeferredRouting",
+        "MahoMcpSocketServerDeferredTest.ConnectionRemovedBeforeLateCallbackDropsSafely",
+        "MahoMcpSocketServerDeferredTest.LargeDeferredPayloadDrainsFully",
+        "MahoMcpSocketServerSyncTest.LargeSyncResponseDrainsFully"
+      ],
+      "expected_count": 9,
+      "artifact_type": "gtest"
+    },
+    "task-8-mcp-browser": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoMcpIncognitoBrowserTest.NormalTransportPositiveControl",
+        "MahoMcpIncognitoBrowserTest.OtrTargetsAreNonEnumerable",
+        "MahoMcpIncognitoBrowserTest.DirectOtrIdIsNonRevealingNotFound",
+        "MahoMcpIncognitoBrowserTest.ZeroAndOmittedWithOtrActiveAreDenied",
+        "MahoMcpIncognitoBrowserTest.ActiveSwitchRaceCannotRetarget",
+        "MahoMcpIncognitoBrowserTest.CloseReuseGenerationRaceIsDenied",
+        "MahoMcpIncognitoBrowserTest.ProfileToolsRequireRegularActiveBrowser"
+      ],
+      "expected_count": 7,
+      "artifact_type": "gtest"
+    },
+    "task-9-ai-unit": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoAiRuntimeRouterTest.RegularTokenBuildsAdapter",
+        "MahoAiRuntimeRouterTest.OtrTokenBuildsNothing",
+        "MahoAiRuntimeRouterTest.AsyncRevalidationRejectsProfileSwitch",
+        "MahoAiLlmClientTest.OtrTokenStopsBeforeRequest",
+        "MahoAiModelListFetcherTest.OtrTokenStopsBeforeRequest",
+        "MahoTabTidyOrchestratorTest.OtrTokenStopsBeforeClient",
+        "MahoInlineEditHandlerTest.ForgedOtrHandlerStopsBeforeCoreAndClient",
+        "MahoUnifiedAgentAdapterLifecycleTest.OtrTokenCancelsLateFfiCallbacks"
+      ],
+      "expected_count": 8,
+      "artifact_type": "gtest"
+    },
+    "task-9-ai-ui": {
+      "binary": "interactive_ui_tests",
+      "target": "//chrome/test:interactive_ui_tests",
+      "tests": [
+        "MahoAiSidePanelLifecycleTest.IncognitoWebUiAndEntryAreDisabled",
+        "MahoAiSidePanelLifecycleTest.ForgedFactoryStopsBeforeRouter",
+        "MahoAiSidePanelLifecycleTest.EveryPageHandlerMethodFailsClosed",
+        "MahoAiSidePanelLifecycleTest.AttachmentToolAndAgentSinksFailClosed",
+        "MahoAiSidePanelLifecycleTest.NormalFakeProviderPositiveControl"
+      ],
+      "expected_count": 5,
+      "artifact_type": "gtest"
+    },
+    "task-10-command-unit": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoCommandModelTest.PrivateSourcesAreNeverRead",
+        "MahoCommandModelTest.PrivateActionRowsMatchRustContract",
+        "MahoCommandModelTest.PrivateSearchUsesTemplateUrlServiceReadOnly",
+        "MahoCommandActionHandlerTest.ForgedActionIdsAreDenied",
+        "MahoCommandActionHandlerTest.PrivateSplitAndSidebarAreLocal",
+        "MahoCommandActionHandlerTest.RegularSplitAndSearchEnginePersist",
+        "MahoCommandOverlayViewTest.AiIngressDeniedBeforeMutation",
+        "MahoCommandOverlayControllerTest.OtherOtrHasNoController"
+      ],
+      "expected_count": 8,
+      "artifact_type": "gtest"
+    },
+    "task-10-command-ui": {
+      "binary": "interactive_ui_tests",
+      "target": "//chrome/test:interactive_ui_tests",
+      "tests": [
+        "MahoCommandIncognitoInteractiveUiTest.AllowlistHappyPath",
+        "MahoCommandIncognitoInteractiveUiTest.UnsafeQueriesAndPickerAbsent",
+        "MahoCommandIncognitoInteractiveUiTest.AiTabReturnAndForgedModeDenied",
+        "MahoCommandIncognitoInteractiveUiTest.FocusRestoresToWebContents"
+      ],
+      "expected_count": 4,
+      "artifact_type": "gtest"
+    },
+    "task-11-sidebar": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoIncognitoPrivacyBrowserTest.SidebarCurrentWindowOnly",
+        "MahoIncognitoPrivacyBrowserTest.SidebarReadsNoMahoCoreOrSpace",
+        "MahoIncognitoPrivacyBrowserTest.SidebarForgedCallbacksAreNoOps",
+        "MahoIncognitoPrivacyBrowserTest.GuestAndOtherOtrHaveNoMahoSidebar",
+        "MahoIncognitoPrivacyBrowserTest.CollapsedExpandedAndFullscreenGeometry",
+        "MahoIncognitoPrivacyBrowserTest.PrivateFocusOrder",
+        "MahoIncognitoPrivacyBrowserTest.TwoOtrWindowsRemainDisjoint"
+      ],
+      "expected_count": 7,
+      "artifact_type": "gtest"
+    },
+    "task-11-menu": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoTabContextMenuTest.PrivateModelReadsNoMahoCoreAndIsExactAllowlist",
+        "MahoTabContextMenuTest.ForgedPersistentCommandsAreNoOps",
+        "MahoTabContextMenuTest.RegularMenuPositiveControl"
+      ],
+      "expected_count": 3,
+      "artifact_type": "gtest"
+    },
+    "task-11-sidebar-contract": {
+      "binary": "interactive_ui_tests",
+      "target": "//chrome/test:interactive_ui_tests",
+      "tests": [
+        "MahoSidebarContractTest.SeededFavoritesMatchSnapshot",
+        "MahoSidebarContractTest.SeededFoldersMatchSnapshot",
+        "MahoSidebarContractTest.PinnedSectionContract",
+        "MahoSidebarContractTest.FolderSupportContract",
+        "MahoSidebarContractTest.TabReorderContract",
+        "MahoSidebarContractTest.SidebarTreeJsonContract",
+        "MahoSidebarContractTest.FolderCollapseExpandToggle",
+        "MahoSidebarContractTest.EmptyFolderRemovedAfterLastChildMove",
+        "MahoSidebarContractTest.LargeTabCountRenders",
+        "MahoSidebarContractTest.SidebarRowOrderTreeLayoutKeepsEmptyPinnedSectionContainer",
+        "MahoSidebarContractTest.SidebarRowOrderNoTabsWithBrowserContextKeepsFullScaffold",
+        "MahoSidebarContractTest.RefreshProducesConsistentActiveSpaceIdAcrossSections",
+        "MahoSidebarContractTest.RapidTabAdditionsProduceCoherentFinalViewState",
+        "MahoSidebarContractTest.BuildViewStateModelPreservesActiveSpaceIdThroughUpdate",
+        "MahoSidebarContractTest.ViewStateModelHasAllFiveSectionsPopulatedAfterSeed",
+        "MahoSidebarContractTest.UpdateWithNewSpaceIdClearsStaleRows",
+        "MahoSidebarContractTest.FavoritesReorderPropagatesIntoViewStateAfterRefresh",
+        "MahoSidebarContractTest.InFolderChildReorderChangesChildOrderInViewState",
+        "MahoSidebarContractTest.FavoritesNoOpSameIndexStabilityAfterRefresh",
+        "MahoSidebarContractTest.FooterAndBoardPreserveCanonicalThemeData",
+        "MahoSidebarContractTest.TabActivationUsesHelperIdentityOnly",
+        "MahoSidebarContractTest.InternalTabHasHelperIdentity",
+        "MahoSidebarContractTest.ResolveTabStripIndexUsesHelperScan",
+        "MahoSidebarContractTest.RuntimeNewTabIdentityAligned",
+        "MahoSidebarContractTest.CommandPathSwitchUpdatesBridgeAndSidebarState",
+        "MahoSidebarContractTest.FooterSwitchUpdatesBrowserScopedBridgeState",
+        "MahoSidebarContractTest.CommandPathSwitchDoesNotAffectOtherWindow",
+        "MahoSidebarContractTest.LastPinnedTabCloseKeepsFullScaffold",
+        "MahoSidebarContractTest.EmptyDisplayTreeWithLiveTabsKeepsFullScaffold",
+        "MahoSidebarContractTest.TrueZeroTabStateRendersBareNewTabOnly",
+        "MahoSidebarContractTest.SpaceHeader_TopRegionLayout",
+        "MahoSidebarContractTest.SpaceHeader_VisibilityFollowsActiveSpaceName",
+        "MahoSidebarContractTest.TabScrollView_WrapsTabListView",
+        "MahoSidebarContractTest.TabScrollView_ScrollBarConfig",
+        "MahoSidebarContractTest.WellFormedShellEventsDoNotProduceParseErrors"
+      ],
+      "expected_count": 35,
+      "artifact_type": "gtest"
+    },
+    "task-12-visual-contract": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoIncognitoPrivacyBrowserTest.PrivateColorsIgnoreActiveSpace",
+        "MahoIncognitoPrivacyBrowserTest.ContentBackgroundHasNoRegularFlash",
+        "MahoIncognitoPrivacyBrowserTest.IdentityVisibleRenderedStatesAndAbsentFullscreenHidden",
+        "MahoIncognitoPrivacyBrowserTest.AccessibilityContractAndFocusOrder",
+        "MahoIncognitoPrivacyBrowserTest.ReducedMotionIsZeroDuration",
+        "MahoIncognitoPrivacyBrowserTest.CjkNamesAreUnclipped"
+      ],
+      "expected_count": 6,
+      "artifact_type": "gtest"
+    },
+    "task-13-preview-scroll": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoIncognitoPrivacyBrowserTest.PreviewScrollNormalPositiveControl",
+        "MahoIncognitoPrivacyBrowserTest.PreviewOtrIngressRetrievalAndStorageDenied",
+        "MahoIncognitoPrivacyBrowserTest.DelayedCaptureAfterTeardownIsDenied"
+      ],
+      "expected_count": 3,
+      "artifact_type": "gtest"
+    },
+    "task-14-extension-unit": {
+      "binary": "unit_tests",
+      "target": "//chrome/test:unit_tests",
+      "tests": [
+        "MahoExtensionStateBridgeTest.FromProfileNullForIncognito"
+      ],
+      "expected_count": 1,
+      "artifact_type": "gtest"
+    },
+    "task-14-extension-download": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoIncognitoPrivacyBrowserTest.ExtensionDefaultOffOnOff",
+        "MahoIncognitoPrivacyBrowserTest.DownloadRegularHistoryControl",
+        "MahoIncognitoPrivacyBrowserTest.DownloadOtrFileWithoutHistory",
+        "MahoIncognitoPrivacyBrowserTest.RealDownloadsDoNotEnterMaho",
+        "MahoIncognitoPrivacyBrowserTest.DirectFfiMahoDownloadControl"
+      ],
+      "expected_count": 5,
+      "artifact_type": "gtest"
+    },
+    "task-15-lifecycle": {
+      "binary": "browser_tests",
+      "target": "//chrome/test:browser_tests",
+      "tests": [
+        "MahoIncognitoPrivacyBrowserTest.PrimaryOtrTwoWindowLifecycle",
+        "MahoIncognitoPrivacyBrowserTest.LastCloseDestroysPrivateStateAndRegularStoresHaveNoPrivateCookieOrDomRows",
+        "MahoIncognitoPrivacyBrowserTest.DelayedCallbacksAfterTeardownAreDenied",
+        "MahoIncognitoPrivacyBrowserTest.UpstreamInternalPagesKeepOtrRouting",
+        "MahoIncognitoPrivacyBrowserTest.AllMahoWebUiHostileActionsLeaveStoresUnchanged",
+        "MahoIncognitoPrivacyBrowserTest.EveryRequiredBoundaryTestIsLinked",
+        "MahoIncognitoPrivacyBrowserTest.NormalControlsArePresent"
+      ],
+      "expected_count": 7,
+      "artifact_type": "gtest"
+    },
+    "task-15-storage-rust": {
+      "binary": "maho-core",
+      "manifest_path": "maho/Cargo.toml",
+      "package": "maho-core",
+      "test": "incognito_storage_containment",
+      "tests": [
+        "exported_named_stores_exclude_all_otr_values"
+      ],
+      "expected_count": 1,
+      "artifact_type": "cargo_test"
+    },
+    "task-15-lmdb-enumerator": {
+      "binary": "maho-storage",
+      "manifest_path": "maho/Cargo.toml",
+      "package": "maho-storage",
+      "test": "incognito_lmdb_snapshot",
+      "tests": [
+        "snapshot_entries_is_complete_sorted_and_read_only",
+        "snapshot_tabs_exposes_scroll_inside_tabs_value"
+      ],
+      "expected_count": 2,
+      "artifact_type": "cargo_test"
+    },
+    "task-16-private-shell": {
+      "binary": "e2e_chromium_incognito.js",
+      "tests": [
+        "otr_window_class_primary",
+        "rail_expanded_bounds_288",
+        "rail_collapsed_bounds_40",
+        "rail_fullscreen_hidden_zero",
+        "rail_fullscreen_revealed_288",
+        "identity_visible_rendered_states_absent_hidden",
+        "current_window_rows_only",
+        "saved_sections_absent",
+        "expanded_focus_forward",
+        "expanded_focus_reverse",
+        "collapsed_focus_forward_reverse",
+        "fullscreen_focus_contract",
+        "escape_restoration",
+        "private_color_contrast",
+        "reduced_motion_zero",
+        "cjk_unclipped",
+        "arc_semantic_rois_pass",
+        "full_rail_edge_pass"
+      ],
+      "expected_count": 18,
+      "artifact_type": "e2e_assertion"
+    },
+    "task-16-private-command": {
+      "binary": "e2e_chromium_incognito.js",
+      "tests": [
+        "ephemeral_sources_exact",
+        "local_actions_exact",
+        "safe_action_outcomes",
+        "unsafe_actions_absent",
+        "search_engine_picker_absent",
+        "ai_ingress_denied",
+        "forged_ids_noop",
+        "split_has_no_persistence",
+        "same_window_switch_stable",
+        "escape_restores_search"
+      ],
+      "expected_count": 10,
+      "artifact_type": "e2e_assertion"
+    },
+    "task-16-ai-denied": {
+      "binary": "e2e_chromium_incognito.js",
+      "tests": [
+        "direct_webui_denied",
+        "side_panel_entry_absent",
+        "forged_factory_no_state",
+        "all_mojo_methods_default",
+        "attachment_extractor_denied",
+        "no_provider_or_network",
+        "ordinary_ai_site_works"
+      ],
+      "expected_count": 7,
+      "artifact_type": "e2e_assertion"
+    },
+    "task-16-last-window": {
+      "binary": "e2e_chromium_incognito.js",
+      "tests": [
+        "two_windows_share_otr_session",
+        "close_a_preserves_b",
+        "delayed_callbacks_denied",
+        "last_close_has_no_primary_otr_targets_and_profile_destroyed",
+        "new_otr_has_no_cookie",
+        "new_otr_has_no_session_or_local_storage",
+        "maho_stores_unchanged",
+        "no_external_socket"
+      ],
+      "expected_count": 8,
+      "artifact_type": "e2e_assertion"
+    },
+    "task-16-normal-control": {
+      "binary": "e2e_chromium_incognito.js",
+      "tests": [
+        "regular_sidebar_unchanged",
+        "saved_sections_present",
+        "command_saved_sources_present",
+        "search_engine_persists",
+        "fake_provider_exactly_one_sse_request",
+        "preview_storage_positive",
+        "regular_visual_matches_preedit_receipt"
+      ],
+      "expected_count": 7,
+      "artifact_type": "e2e_assertion"
+    }
+  }
+}

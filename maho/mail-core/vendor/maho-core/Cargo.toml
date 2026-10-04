@@ -1,0 +1,54 @@
+[package]
+name = "maho-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+# The legacy stub C-ABI in `ffi.rs` is superseded by the real `maho-mail-ffi`
+# crate (maho/mail-core). It is gated off by default so its `#[no_mangle]`
+# `MahoMail*` symbols do not collide when maho-core is linked as a dependency of
+# that real FFI crate. Nothing in the app references it.
+default = []
+legacy-ffi = ["dep:keyring"]
+
+[dependencies]
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+dirs = "6"
+rand = "0.8"
+tokio = { workspace = true }
+
+reqwest = { version = "0.12", features = ["json", "blocking", "stream"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+log = "0.4"
+imap = { version = "2", default-features = false }
+imap-proto = "0.10"
+rustls-connector = "0.22"
+rustls = "0.23"
+rustls-native-certs = "0.8"
+lettre = { version = "0.11", default-features = false, features = ["builder", "tokio1-rustls", "ring", "rustls-native-certs", "smtp-transport"] }
+mail-parser = "0.9"
+base64 = "0.22"
+regex = "1"
+pgp = "0.14"
+smallvec = "1"
+sha2 = "0.10"
+keyring = { version = "3", optional = true, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+futures = "0.3"
+urlencoding = "2"
+md-5 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+rusqlite = { version = "0.33", features = ["bundled"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "stress"
+harness = false

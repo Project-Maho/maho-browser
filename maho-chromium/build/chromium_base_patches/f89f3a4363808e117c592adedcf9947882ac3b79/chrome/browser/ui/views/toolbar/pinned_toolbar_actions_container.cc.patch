@@ -1,0 +1,15 @@
+diff --git c/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc w/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
+index 9f47ccc8056035587393766d4032746f0bf1e4f8..71e0fbba76560ce21a2d0cfc2259f12a50e0bc02 100644
+--- c/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
++++ w/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
+@@ -471,7 +471,9 @@ actions::ActionItem* PinnedToolbarActionsContainer::GetActionItemFor(
+ 
+ PinnedActionToolbarButton* PinnedToolbarActionsContainer::AddPoppedOutButtonFor(
+     actions::ActionId id) {
+-  CHECK(GetActionItemFor(id));
++  if (!GetActionItemFor(id)) {
++    return nullptr;
++  }
+   auto popped_out_button = CreateOrGetButtonForAction(id);
+   auto* button = popped_out_button.get();
+   popped_out_buttons_.push_back(AddChildView(std::move(popped_out_button)));

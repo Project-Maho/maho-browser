@@ -1,0 +1,83 @@
+diff --git c/chrome/browser/global_keyboard_shortcuts_mac.mm w/chrome/browser/global_keyboard_shortcuts_mac.mm
+index 1bbe4c5fab65668acadce3f60c0e6d181f83036e..94674d490cae28cd5ff076845b30a4c146c5793d 100644
+--- c/chrome/browser/global_keyboard_shortcuts_mac.mm
++++ w/chrome/browser/global_keyboard_shortcuts_mac.mm
+@@ -7,9 +7,12 @@
+ #import <AppKit/AppKit.h>
+ #include <Carbon/Carbon.h>
+ 
++#include <stdio.h>
++
+ #include "base/apple/foundation_util.h"
+ #include "base/check.h"
+ #include "base/feature_list.h"
++#include "base/logging.h"
+ #include "base/no_destructor.h"
+ #include "build/buildflag.h"
+ #include "chrome/app/chrome_command_ids.h"
+@@ -118,8 +121,6 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       {true,  true,  false, false, kVK_ANSI_LeftBracket,  IDC_SELECT_PREVIOUS_TAB},
+       {false, false, true,  false, kVK_PageDown,          IDC_SELECT_NEXT_TAB},
+       {false, false, true,  false, kVK_PageUp,            IDC_SELECT_PREVIOUS_TAB},
+-      {true,  false, false, true,  kVK_RightArrow,        IDC_SELECT_NEXT_TAB},
+-      {true,  false, false, true,  kVK_LeftArrow,         IDC_SELECT_PREVIOUS_TAB},
+       {false, true,  true,  false, kVK_PageDown,          IDC_MOVE_TAB_NEXT},
+       {false, true,  true,  false, kVK_PageUp,            IDC_MOVE_TAB_PREVIOUS},
+ 
+@@ -147,6 +148,8 @@ const std::vector<KeyboardShortcutData>& GetShortcutsNotPresentInMainMenu() {
+       {true,  false, false, true,  kVK_ANSI_L,            IDC_SHOW_DOWNLOADS},
+       {true,  true,  false, false, kVK_ANSI_C,            IDC_DEV_TOOLS_INSPECT},
+       {true,  false, false, true,  kVK_ANSI_C,            IDC_DEV_TOOLS_INSPECT},
++      {true,  false, false, false, kVK_ANSI_E,            IDC_MAHO_AI_PANEL},
++      {true,  true,  false, false, kVK_ANSI_Y,            IDC_SHOW_HISTORY},
+       {true,  false, false, true,  kVK_DownArrow,         IDC_FOCUS_NEXT_PANE},
+       {true,  false, false, true,  kVK_UpArrow,           IDC_FOCUS_PREVIOUS_PANE},
+       {true,  true,  false, true,  kVK_ANSI_A,            IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY},
+@@ -208,15 +211,46 @@ CommandForKeyEventResult CommandForKeyEvent(NSEvent* event) {
+   if ([event type] != NSEventTypeKeyDown)
+     return NoCommand();
+ 
++  const NSUInteger modifiers = [event modifierFlags];
++  const NSUInteger relevant_modifiers =
++      modifiers & (NSEventModifierFlagCommand | NSEventModifierFlagShift |
++                   NSEventModifierFlagControl | NSEventModifierFlagOption);
++  const bool trace_shortcut =
++      (relevant_modifiers & NSEventModifierFlagCommand) != 0 &&
++      (relevant_modifiers & (NSEventModifierFlagShift |
++                             NSEventModifierFlagControl |
++                             NSEventModifierFlagOption)) == 0 &&
++      ([event keyCode] == kVK_ANSI_E || [event keyCode] == kVK_ANSI_T);
++
+   int cmdNum = MenuCommandForKeyEvent(event);
++  if (trace_shortcut) {
++    fprintf(stderr,
++            "[maho-shortcut-trace] CommandForKeyEvent menu keycode=%d command_id=%d\n",
++            static_cast<int>([event keyCode]), cmdNum);
++    fflush(stderr);
++  }
+   if (cmdNum != NO_COMMAND)
+     return MainMenuCommand(cmdNum);
+ 
+   // Scan through keycodes and see if it corresponds to one of the non-menu
+   // shortcuts.
+   for (NSMenuItem* menu_item : GetMenuItemsNotPresentInMainMenu()) {
+-    if ([menu_item cr_firesForKeyEquivalentEvent:event])
++    if ([menu_item cr_firesForKeyEquivalentEvent:event]) {
++      if (trace_shortcut) {
++        fprintf(stderr,
++                "[maho-shortcut-trace] CommandForKeyEvent hidden keycode=%d command_id=%d\n",
++                static_cast<int>([event keyCode]), static_cast<int>(menu_item.tag));
++        fflush(stderr);
++      }
+       return ShortcutCommand(menu_item.tag);
++    }
++  }
++
++  if (trace_shortcut) {
++    fprintf(stderr,
++            "[maho-shortcut-trace] CommandForKeyEvent no_match keycode=%d\n",
++            static_cast<int>([event keyCode]));
++    fflush(stderr);
+   }
+ 
+   return NoCommand();

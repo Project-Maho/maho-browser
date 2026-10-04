@@ -1,0 +1,1137 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_settings.mojom;
+
+struct SettingValue {
+  string key;
+  string value;
+};
+
+struct SearchEngineInfo {
+  string keyword;
+  string name;
+  string icon_url;
+  bool is_default;
+};
+
+// Settings ownership is explicit at the transport boundary. A selected profile
+// may only affect kProfile values; the other scopes ignore profile selection.
+enum SettingScope {
+  kProfile,
+  kDevice,
+  kProcess,
+  kAccount,
+  kCoreGlobal,
+};
+
+struct ScopedSettingValue {
+  string key;
+  string value;
+  SettingScope scope;
+};
+
+enum ProfileLifecycleState {
+  kLoading,
+  kReady,
+  kDeleting,
+  kUnavailable,
+};
+
+enum ProfileTargetErrorCode {
+  kNone,
+  kInvalidProfileId,
+  kProfileNotFound,
+  kProfileDeleting,
+  kProfileUnavailable,
+  kStaleContext,
+  kStaleProfileRevision,
+  kUnsupportedScope,
+  kInvalidArgument,
+  kInternal,
+};
+
+// The browser resolves the opaque Maho profile ID to a canonical target token.
+// The token may be empty only for the initial context lookup; every subsequent
+// read and mutation must echo both values from SelectedProfileContext.
+struct ProfileTarget {
+  string profile_id;
+  string target_token;
+};
+
+struct ProfileTargetError {
+  ProfileTargetErrorCode code;
+  string message;
+  uint64 current_context_revision;
+  uint64? current_profile_revision;
+};
+
+struct SelectedProfileContext {
+  string profile_id;
+  string target_token;
+  uint64 context_revision;
+  uint64 profile_revision;
+  ProfileLifecycleState lifecycle_state;
+  bool is_host_profile;
+  bool is_active_maho_profile;
+};
+
+struct SelectedProfileContextResult {
+  SelectedProfileContext? context;
+  ProfileTargetError? error;
+};
+
+struct ProfileMetadata {
+  string name;
+  string avatar_color;
+};
+
+struct ProfileMetadataUpdate {
+  string name;
+  string avatar_color;
+  uint64 expected_profile_revision;
+};
+
+struct ProfileMetadataResult {
+  SelectedProfileContext? context;
+  ProfileMetadata? metadata;
+  ProfileTargetError? error;
+};
+
+struct ProfileSearchSettings {
+  array<SearchEngineInfo> engines;
+  bool suggestions_enabled;
+};
+
+struct ProfileSearchSettingsResult {
+  SelectedProfileContext? context;
+  ProfileSearchSettings? search;
+  ProfileTargetError? error;
+};
+
+struct ProfileDownloadSettings {
+  string directory_display_path;
+  bool prompt_for_download;
+};
+
+struct ProfileDownloadSettingsResult {
+  SelectedProfileContext? context;
+  ProfileDownloadSettings? download;
+  ProfileTargetError? error;
+};
+
+struct ProfileArchiveSettings {
+  int32 timeout_hours;
+};
+
+struct ProfileArchiveSettingsResult {
+  SelectedProfileContext? context;
+  ProfileArchiveSettings? archive;
+  ProfileTargetError? error;
+};
+
+struct ProfileMutationResult {
+  SelectedProfileContext? context;
+  ProfileTargetError? error;
+};
+
+struct ProfileInfo {
+  string id;
+  string name;
+  bool is_default;
+  bool is_active;
+  array<string> space_ids;
+};
+
+enum ProfileObservableLifecycleState {
+  kProvisioning,
+  kReady,
+  kDeleting,
+  kRepairRequired,
+};
+
+struct ProfileObservableLifecycleEntry {
+  string profile_id;
+  ProfileObservableLifecycleState lifecycle_state;
+};
+
+enum DeletedProfileHistoryAvailability {
+  kUnavailable,
+};
+
+struct ProfileObservablesSnapshot {
+  string? active_browser_profile_id;
+  string? active_maho_profile_id;
+  uint64 registry_revision;
+  array<ProfileObservableLifecycleEntry> lifecycle_entries;
+  array<string> pending_deletion_profile_ids;
+  DeletedProfileHistoryAvailability deleted_history_availability;
+};
+
+struct ATCRule {
+  string id;
+  string url_pattern;
+  string target_space_id;
+  bool enabled;
+};
+
+struct AISettings {
+  bool has_api_key;
+  string provider;
+  string base_url;
+  string model;
+  string approval_policy;
+  bool session_persistence_enabled;
+  bool mail_read_allowed;
+  bool has_byok_openai;
+  bool has_byok_anthropic;
+
+  // OAuth sign-in state per provider. The access token itself lands in the
+  // matching BYOK slot, so has_byok_* may be true purely because of OAuth.
+  bool has_oauth_openai;
+  bool has_oauth_anthropic;
+  string oauth_client_id_openai;
+  string oauth_client_id_anthropic;
+
+  bool has_relay_session;
+  string relay_tier;
+  string relay_subscription_status;
+  double credit_balance_usd;
+  double tier_ceiling_usd;
+};
+
+enum AIConnectionState {
+  kDisconnected,
+  kConnected,
+  kNeedsAuth,
+  kOffline,
+  kError,
+};
+
+enum AIModelCapability {
+  kUnknown,
+  kSupported,
+  kUnsupported,
+};
+
+struct AIModelDescriptor {
+  string id;
+  string label;
+  AIModelCapability vision;
+  AIModelCapability tools;
+};
+
+struct AIProviderDescriptor {
+  string id;
+  string label;
+  string auth_label;
+  AIConnectionState state;
+  bool is_default_provider;
+  string? base_url;
+  string? last_model_id;
+  array<AIModelDescriptor> models;
+  bool models_loading;
+  string? models_error;
+};
+
+struct AITaskModelRoute {
+  string task_id;
+  bool inherits_default;
+  string effective_provider_id;
+  string effective_model_id;
+  bool available;
+  string? unavailable_reason;
+  string? configured_provider_id;
+  string? configured_model_id;
+};
+
+struct AIModelsSettings {
+  array<AIProviderDescriptor> providers;
+  string default_provider_id;
+  string default_model_id;
+  array<AITaskModelRoute> task_routes;
+  bool has_relay_session;
+};
+
+struct AIProviderTestResult {
+  bool ok;
+  string message;
+};
+
+struct AITaskReplacement {
+  string task_id;
+  bool inherit_default;
+  string? provider_id;
+  string? model_id;
+};
+
+struct MojoKeyCombo {
+  string key;
+  array<string> modifiers;
+};
+
+struct ShortcutBinding {
+  string action;
+  string label;
+  string category;
+  MojoKeyCombo key_combo;
+  bool is_custom;
+  bool enabled;
+  MojoKeyCombo default_key_combo;
+};
+
+struct SetShortcutResult {
+  bool success;
+  string? conflict_action;
+};
+
+struct SyncStatus {
+  bool is_syncing;
+  string relay_url;
+  string room_id;
+  string status_label;
+  string error_message;
+  int64 last_sync_timestamp;
+};
+
+struct SyncDeviceInfo {
+  string id;
+  string name;
+  string device_type;
+  bool is_online;
+};
+
+struct SyncKeyInfo {
+  string sync_key;
+  string room_id;
+  string recovery_phrase;
+};
+
+enum PasswordProviderKind {
+  kMahoNative,
+  kBitwarden,
+  kOnePassword,
+  kDisabled,
+};
+
+enum VaultLockState {
+  kUninitialized,
+  kLocked,
+  kUnlocked,
+  kAutoLocked,
+};
+
+// Browser-startup classification of the persisted Vault database/key pair.
+// Fatal states disable Maho Native password operations until the underlying
+// storage issue is resolved. This carries diagnosis only; no key material or
+// credential data crosses Mojo.
+enum VaultPreflightState {
+  kUnavailable,
+  kHealthy,
+  kLocked,
+  kUnrecoverableKey,
+  kStructuralCorruption,
+  kPlaintextResidue,
+};
+
+enum VaultAgentPolicy {
+  kDeny,
+  kAskEveryUse,
+  kAllowForTask,
+  kWhileUnlocked,
+  kAlwaysAllow,
+};
+
+enum VaultItemKind {
+  kLogin,
+  kTotp,
+  kPasskey,
+  kSecureItem,
+  kUnknown,
+};
+
+// Public status only. This intentionally contains no Vault key material,
+// passphrases, recovery secrets, or decrypted credential fields.
+struct VaultStatus {
+  VaultLockState lock_state;
+  PasswordProviderKind selected_provider;
+  PasswordProviderKind effective_provider;
+  uint64 item_count;
+  VaultAgentPolicy agent_policy_default;
+  uint32 auto_lock_minutes;
+  uint32 failed_unlock_count;
+  int64? retry_at_timestamp;
+};
+
+// Public item metadata only. Passwords, OTP seeds, passkey credential IDs, and
+// ciphertext envelopes deliberately do not cross this Mojo boundary.
+struct VaultItem {
+  string id;
+  uint64 revision;
+  PasswordProviderKind provider;
+  VaultItemKind item_kind;
+  string title;
+  array<string> origins;
+  string username_hint;
+  string created_at;
+  string updated_at;
+  string? last_used_at;
+  bool has_totp;
+  bool has_passkey;
+  bool favorite;
+  string? trashed_at;
+  bool has_notes;
+};
+
+enum SecretAction {
+  kCopy = 0,
+  kReveal = 1,
+};
+
+struct VaultTotpCodeResult {
+  bool success;
+  string? code;
+  uint32 seconds_remaining;
+  uint32 period;
+  string? error_code;
+};
+
+struct PasswordGeneratorOptions {
+  string mode = "password";
+  uint32 length = 20;
+  bool include_lowercase = true;
+  bool include_uppercase = true;
+  bool include_digits = true;
+  bool include_symbols = true;
+  bool avoid_ambiguous = false;
+  uint32 word_count = 5;
+  string separator = "-";
+  bool capitalize = true;
+  bool include_number = true;
+};
+
+struct GeneratedPasswordResult {
+  bool success;
+  string? password;
+  uint32 strength_score;
+  double entropy_bits;
+};
+
+struct VaultHealthReport {
+  bool success;
+  array<string> weak_item_ids;
+  array<array<string>> reused_groups;
+  uint32 total_logins;
+  string? error_code;
+};
+
+struct VaultOperationResult {
+  bool success;
+  string? error_code;
+  string? error_message;
+  VaultStatus? status;
+  VaultItem? item;
+};
+
+struct VaultItemListResult {
+  bool success;
+  array<VaultItem> items;
+  string? next_cursor;
+  string? error_code;
+  string? error_message;
+};
+
+struct PasswordProviderCapabilities {
+  bool can_list_saved_passwords;
+  bool can_search_saved_passwords;
+  bool can_add_saved_passwords;
+  bool can_delete_saved_passwords;
+  bool can_edit_saved_passwords;
+};
+
+struct VaultProviderOption {
+  PasswordProviderKind provider;
+  string display_name;
+  bool is_available;
+  PasswordProviderCapabilities capabilities;
+};
+
+// The selected provider remains visible when it is unavailable. Effective
+// provider is the fail-closed operational fallback used by Vault metadata APIs.
+struct VaultProviderStatus {
+  PasswordProviderKind selected_provider;
+  PasswordProviderKind effective_provider;
+  bool selected_provider_is_available;
+  array<VaultProviderOption> providers;
+};
+
+// Todo14 exposes the policy contract before policy persistence arrives. The
+// unavailable state is explicit rather than represented as an implicit allow.
+struct VaultPolicyStatus {
+  bool is_available;
+  VaultAgentPolicy policy;
+  string? item_id;
+  string? origin;
+  string? expires_at;
+  string? unavailable_reason;
+};
+
+// Audit records never expose a Vault item ID or any credential value.
+struct VaultAuditEntry {
+  string timestamp;
+  string? task_id;
+  string? origin;
+  string? item_alias;
+  string operation;
+  VaultAgentPolicy? policy;
+  string decision;
+  string? reason;
+  string device_name;
+};
+
+struct VaultAuditPage {
+  bool is_available;
+  array<VaultAuditEntry> entries;
+  string? next_cursor;
+  string? error_code;
+  string? unavailable_reason;
+};
+
+enum PasswordImportSourceFormat {
+  kOnePasswordCsv,
+  kOnePasswordPux,
+  kBitwardenIndividualCsv,
+  kBitwardenOrganizationCsv,
+  kBitwardenJson,
+  kApplePasswordsCsv,
+  kKeePassXcCsv,
+  kKeePassClassicCsv,
+};
+
+struct PasswordImportPreview {
+  string preview_token;
+  PasswordImportSourceFormat source_format;
+  string source_label;
+  uint32 imported;
+  uint32 skipped;
+  uint32 duplicates;
+  uint32 blank_passwords;
+  uint32 unsupported_fields;
+  array<string> safe_messages;
+  array<string> safe_errors;
+};
+
+struct PasswordImportOperationResult {
+  bool success;
+  string? error_code;
+  string? error_message;
+  PasswordImportPreview? preview;
+  uint32 committed;
+  uint32 failed;
+  uint32 terminal_result_count;
+};
+
+struct PasswordProviderStatus {
+  PasswordProviderKind provider;
+  string display_name;
+  string description;
+  bool is_available;
+  bool is_enabled;
+  PasswordProviderCapabilities capabilities;
+};
+
+struct PasswordProviderOption {
+  PasswordProviderKind provider;
+  string display_name;
+  string description;
+  bool is_available;
+};
+
+struct SavedPassword {
+  string id;
+  string domain;
+  string username;
+  string created_at;
+  string? last_used;
+};
+
+
+struct SpaceBasicInfo {
+  string id;
+  string name;
+};
+
+// Read-only projection of the truly focused regular browser window and its
+// canonical per-browser Space assignment.
+struct CurrentBrowserSpaceSnapshot {
+  int32 focused_browser_session_id;
+  SpaceBasicInfo selected_space;
+  array<string> assigned_tab_ids;
+  array<string> assigned_window_ids;
+};
+
+struct AutofillAddress {
+  string id;
+  string name;
+  string address_line1;
+  string address_line2;
+  string city;
+  string state;
+  string postal_code;
+  string country;
+  string phone;
+  string email;
+};
+
+struct AutofillPayment {
+  string id;
+  string card_network;
+  string last_four;
+  string expiration;
+  string cardholder_name;
+};
+
+enum ContentBlockingMode {
+  kNative = 0,
+  kExtension = 1,
+  kDisabled = 2,
+  // Display-only fallback for unavailable or unrecognized authoritative state.
+  // PageHandler rejects this value for mutations; it must never select native.
+  kUnknown = 3,
+};
+
+struct FilterListInfo {
+  string id;
+  string name;
+  string url;
+  bool enabled;
+  uint32 rule_count;
+  string? etag;
+  string? last_modified;
+  string? sha256;
+  int64? last_attempt_timestamp;
+  int64? last_success_timestamp;
+  uint32 failure_count;
+  uint16? last_status;
+  string? last_error;
+  int64? next_retry_timestamp;
+};
+
+struct ContentBlockerStats {
+  ContentBlockingMode mode;
+  uint32 total_rule_count;
+  uint32 filter_list_count;
+  uint64 engine_generation;
+  string? health_status;
+  string? overall_error;
+  int64 last_update_timestamp;
+};
+
+struct ContentBlockerMutationResult {
+  bool success;
+  string? error_code;
+  string? error_message;
+  bool compile_required;
+  // True means compile/install work was accepted or coalesced, not completed.
+  bool compile_scheduled;
+  // Authoritative state projected after the synchronous mutation or scheduling
+  // decision. Async update/rebuild completion requires a later stats reload.
+  ContentBlockerStats? stats;
+};
+
+struct AccountStatus {
+  bool signed_in;
+  string email;
+  string display_name;
+  string user_id;
+  string tier;
+  string subscription_status;
+  int64 subscription_expires_at;
+};
+
+struct BillingInfo {
+  string tier;
+  string subscription_status;
+  int64 subscription_expires_at;
+  int64 period_start_at;
+  int32 anniversary_reset_day;
+  float tier_ceiling_usd;
+  float credit_balance_usd;
+  float lifetime_purchased_usd;
+  bool has_payment_method;
+};
+
+struct Invoice {
+  string id;
+  int64 created_at;
+  float amount_usd;
+  string currency;
+  string status;
+  string pdf_url;
+};
+
+// Mirrors maho::UpdateState (maho/browser/updates/maho_update_manager.h).
+enum BrowserUpdateState {
+  kIdle,
+  kChecking,
+  kUpdateAvailable,
+  kDownloading,
+  kVerifying,
+  kReadyToInstall,
+  kUpToDate,
+  kError,
+};
+
+struct BrowserVersionInfo {
+  string version;
+  string channel;
+  BrowserUpdateState update_state;
+  // False for unbranded/developer builds (channel UNKNOWN), which cannot
+  // self-update from the release feed, so the UI hides the check/apply
+  // controls. Not platform-gated: every shipped platform has a real delegate.
+  bool update_supported;
+  string update_guidance;
+};
+
+enum MailNotificationPermission {
+  kNotDetermined,
+  kPromptPending,
+  kDenied,
+  kGranted,
+  kUnsupported,
+};
+
+enum MailBehaviorUpdateStatus {
+  kApplied,
+  kConflict,
+  kRejected,
+  kInvalid,
+};
+
+struct MailBehaviorSnapshot {
+  uint32 version;
+  uint64 revision;
+  string value_json;
+  MailNotificationPermission notification_permission;
+};
+
+struct MailBehaviorUpdateResult {
+  MailBehaviorUpdateStatus status;
+  MailBehaviorSnapshot snapshot;
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  GetSettings() => (array<SettingValue> settings);
+  SetSetting(string key, string value) => (bool success);
+  GetSearchEngines() => (array<SearchEngineInfo> engines);
+  SetDefaultSearchEngine(string keyword) => (bool success);
+
+  // Additive contract for the selected-profile architecture. Existing methods
+  // remain host-bound until later handler tasks migrate their callers.
+  GetGlobalSettingsSnapshot() => (array<ScopedSettingValue> settings);
+  GetSelectedProfileContext(ProfileTarget target)
+      => (SelectedProfileContextResult result);
+
+  GetSelectedProfileMetadata(ProfileTarget target)
+      => (ProfileMetadataResult result);
+  UpdateSelectedProfileMetadata(ProfileTarget target,
+                                uint64 expected_context_revision,
+                                ProfileMetadataUpdate update)
+      => (ProfileMetadataResult result);
+
+  GetSelectedProfileSearchSettings(ProfileTarget target)
+      => (ProfileSearchSettingsResult result);
+  SetSelectedProfileDefaultSearchEngine(ProfileTarget target,
+                                        uint64 expected_context_revision,
+                                        string keyword,
+                                        uint64 expected_profile_revision)
+      => (ProfileSearchSettingsResult result);
+  SetSelectedProfileSearchSuggestionsEnabled(
+      ProfileTarget target,
+      uint64 expected_context_revision,
+      bool enabled,
+      uint64 expected_profile_revision) => (ProfileSearchSettingsResult result);
+
+  GetSelectedProfileDownloadSettings(ProfileTarget target)
+      => (ProfileDownloadSettingsResult result);
+  SetSelectedProfileDownloadPrompt(ProfileTarget target,
+                                   uint64 expected_context_revision,
+                                   bool prompt_for_download,
+                                   uint64 expected_profile_revision)
+      => (ProfileDownloadSettingsResult result);
+  // Directory selection is browser-owned; no renderer-provided path crosses
+  // the selected-profile mutation boundary.
+  SelectSelectedProfileDownloadDirectory(ProfileTarget target,
+                                         uint64 expected_context_revision,
+                                         uint64 expected_profile_revision)
+      => (ProfileDownloadSettingsResult result);
+
+  GetSelectedProfileArchiveSettings(ProfileTarget target)
+      => (ProfileArchiveSettingsResult result);
+  SetSelectedProfileArchiveTimeout(ProfileTarget target,
+                                   uint64 expected_context_revision,
+                                   int32 timeout_hours,
+                                   uint64 expected_profile_revision)
+      => (ProfileArchiveSettingsResult result);
+
+  // Current browser version + auto-update status (General / About surface).
+  GetBrowserVersionInfo() => (BrowserVersionInfo info);
+  CheckForBrowserUpdates();
+  ApplyBrowserUpdateAndRestart();
+
+  GetProfiles() => (array<ProfileInfo> profiles);
+  GetProfileObservablesSnapshot() => (ProfileObservablesSnapshot? snapshot);
+  CreateProfile(string name) => (ProfileInfo? profile);
+  DeleteProfile(string profile_id) => (bool success);
+  SwitchProfile(string profile_id) => (bool success);
+
+  GetATCRules() => (array<ATCRule> rules);
+  AddATCRule(string url_pattern, string target_space_id) => (ATCRule? rule);
+  RemoveATCRule(string rule_id);
+  ToggleATCRule(string rule_id, bool enabled);
+
+  GetAISettings() => (AISettings settings);
+  GetAIModelsSettings() => (AIModelsSettings settings);
+  SetDefaultAIModel(string provider_id, string model_id)
+      => (bool accepted, string? error);
+  SetTaskAIModel(string task_id, string? provider_id, string? model_id)
+      => (bool accepted, string? error);
+  SetAIProviderBaseUrl(string provider_id, string base_url)
+      => (bool accepted, string? error);
+  TestAIProvider(string provider_id)
+      => (AIProviderTestResult result);
+  DisconnectAIProvider(string provider_id,
+                       string? replacement_default_provider_id,
+                       string? replacement_default_model_id,
+                       array<AITaskReplacement> task_replacements)
+      => (bool accepted, array<string> affected_task_ids, string? error);
+  SetAIProvider(string provider);
+  SetAIBaseUrl(string url);
+  SetAIApiKey(string key);
+  SetAIModel(string model);
+  SetAIApprovalPolicy(string policy);
+  SetAISessionPersistence(bool enabled);
+  SetAIMailReadAllowed(bool allowed) => (bool success);
+  FetchProviderModels(string provider_id) => (array<string> model_ids, bool from_cache);
+  RefreshProviderModels(string provider_id) => (array<string> model_ids);
+  TestManagedConnection() => (bool success, string message);
+
+  GetShortcuts() => (array<ShortcutBinding> shortcuts);
+  SetShortcut(string action, MojoKeyCombo key_combo) => (SetShortcutResult result);
+  CheckShortcutConflict(MojoKeyCombo key_combo) => (string? conflict_action);
+  ResetShortcut(string action);
+  ResetAllShortcuts();
+  ToggleShortcut(string action, bool enabled);
+  SetRecordingMode(bool enabled);
+  ExportShortcuts() => (string json_data);
+  ImportShortcuts(string json_data) => (bool success);
+
+  GetSyncStatus() => (SyncStatus status);
+  GetSyncDevices() => (array<SyncDeviceInfo> devices);
+  GenerateSyncKey() => (SyncKeyInfo key_info);
+  ConfigureSyncEncryption(string recovery_phrase) => (SyncStatus status);
+  JoinSync(string recovery_phrase) => (SyncStatus status);
+  StopSync();
+  DisconnectSyncDevice(string device_id) => (bool success);
+  RenameSyncDevice(string device_id, string new_name) => (bool success);
+
+  GetSpaces() => (array<SpaceBasicInfo> spaces);
+  GetCurrentBrowserSpaceSnapshot()
+      => (CurrentBrowserSpaceSnapshot? snapshot);
+
+  GetPasswordProviderStatus() => (PasswordProviderStatus status);
+  GetPasswordProviderOptions() => (array<PasswordProviderOption> options);
+  GetSavedPasswords() => (array<SavedPassword> passwords);
+  SearchPasswords(string query) => (array<SavedPassword> passwords);
+  AddPassword(string domain, string username, string password) => (bool success);
+  UpdatePasswordUsername(string password_id, string username) => (bool success);
+  DeletePassword(string password_id) => (bool success);
+
+  // Vault lifecycle, metadata, and browser-process secret-use operations.
+  // Inbound passphrases/passwords and consumed secrets are never included in
+  // any response DTO; row actions observe only VaultOperationResult status.
+  GetVaultStatus() => (VaultOperationResult result);
+  GetVaultPreflightState() => (VaultPreflightState state);
+  GetVaultProviderStatus() => (VaultProviderStatus status);
+  InitializeVault(string master_passphrase, string recovery_secret)
+      => (VaultOperationResult result);
+  UnlockVault(string master_passphrase) => (VaultOperationResult result);
+  UnlockVaultWithRecovery(string recovery_secret)
+      => (VaultOperationResult result);
+  LockVault() => (VaultOperationResult result);
+  LockNow() => (VaultOperationResult result);
+  ListVaultItems(PasswordProviderKind? provider,
+                 array<VaultItemKind> kinds,
+                 string? cursor,
+                 uint32 limit, bool trash_only, bool favorites_only)
+      => (VaultItemListResult result);
+  SearchVaultItems(string origin,
+                   PasswordProviderKind? provider,
+                   array<VaultItemKind> kinds) => (VaultItemListResult result);
+  AddVaultLogin(string title,
+                array<string> origins,
+                string username,
+                string password, string? notes) => (VaultOperationResult result);
+  UpdateVaultLogin(string item_id,
+                   uint64 expected_revision,
+                   string title,
+                   array<string> origins,
+                   string username,
+                   string? password, string? notes) => (VaultOperationResult result);
+  TrashVaultItem(string item_id, uint64 expected_revision)
+      => (VaultOperationResult result);
+  RestoreVaultItem(string item_id, uint64 expected_revision)
+      => (VaultOperationResult result);
+  EmptyVaultTrash() => (VaultOperationResult result);
+  SetVaultItemFavorite(string item_id, uint64 expected_revision, bool favorite)
+      => (VaultOperationResult result);
+  // `username` is the stored (unmasked) login username; VaultItem only
+  // carries a masked display hint.
+  GetVaultItemNotes(string item_id)
+      => (bool success, string? notes, string? error_code, string? username);
+  AddVaultSecureNote(string title, string notes) => (VaultOperationResult result);
+  UpdateVaultSecureNote(string item_id, uint64 expected_revision,
+                       string title, string notes) => (VaultOperationResult result);
+  SetVaultLoginTotp(string item_id, uint64 expected_revision, string secret)
+      => (VaultOperationResult result);
+  GetVaultTotpCode(string item_id) => (VaultTotpCodeResult result);
+  GeneratePassword(PasswordGeneratorOptions options) => (GeneratedPasswordResult result);
+  EstimatePasswordStrength(string password) => (uint32 score, double entropy_bits);
+  GetVaultHealthReport() => (VaultHealthReport result);
+  DeleteVaultItem(string item_id, uint64 expected_revision)
+      => (VaultOperationResult result);
+  UseVaultSecret(string item_id,
+                 uint64 expected_revision,
+                 SecretAction action) => (VaultOperationResult result);
+  GetVaultPolicyStatus() => (VaultPolicyStatus status);
+  SetVaultPolicy(VaultAgentPolicy policy,
+                 string? item_id,
+                 string? origin,
+                 string? expires_at) => (VaultPolicyStatus status);
+  GetVaultAuditPage(string? cursor, uint32 limit) => (VaultAuditPage page);
+  SelectPasswordImportFile(PasswordImportSourceFormat source_format)
+      => (string? file_path);
+  PreviewPasswordImport(PasswordImportSourceFormat source_format,
+                        string file_path)
+      => (PasswordImportOperationResult result);
+  CancelPasswordImport() => (PasswordImportOperationResult result);
+  CommitPasswordImport(string preview_token)
+      => (PasswordImportOperationResult result);
+
+  GetAutofillAddresses() => (array<AutofillAddress> addresses);
+  AddAutofillAddress(string id,
+                     string name,
+                     string address_line1,
+                     string address_line2,
+                     string city,
+                     string state,
+                     string postal_code,
+                     string country,
+                     string phone,
+                     string email) => (AutofillAddress? address);
+  DeleteAutofillAddress(string id) => (bool success);
+  GetAutofillPayments() => (array<AutofillPayment> payments);
+  AddAutofillPayment(string id,
+                     string card_network,
+                     string last_four,
+                     string expiration,
+                     string cardholder_name) => (AutofillPayment? payment);
+  DeleteAutofillPayment(string id) => (bool success);
+
+  GetFilterLists() => (array<FilterListInfo> lists);
+  // `success` mirrors mutation.success for existing JS callers. The structured
+  // result carries the bridge error and scheduling truth without optimistic
+  // fallback behavior.
+  AddFilterList(string id, string name, string url)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  ToggleFilterList(string id, bool enabled)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  RemoveFilterList(string id)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Success means compile/install was accepted or coalesced. `stats` is the
+  // authoritative state at scheduling time, not proof installation completed.
+  RebuildContentRules() => (bool success,
+                            ContentBlockerStats stats,
+                            ContentBlockerMutationResult mutation);
+
+  GetContentBlockerStats() => (ContentBlockerStats stats);
+
+  SetContentBlockingMode(ContentBlockingMode mode)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Success means the designated updater accepted network work. It does not
+  // mean an update downloaded, validated, compiled, or installed.
+  TriggerFilterUpdate(string? list_id)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  OpenExtensionsPage();
+  OpenChromiumSettingsPage();
+  OpenMigrationDialog();
+
+  SetBYOKKey(string provider, string key) => (bool success);
+  ClearBYOKKey(string provider) => (bool success);
+
+  // Provider OAuth — signs in to "openai" or "anthropic" with the PKCE
+  // loopback flow instead of a pasted API key. The resulting access token is
+  // stored in that provider's encrypted BYOK slot.
+  SetAIProviderOAuthClientId(string provider, string client_id)
+      => (bool success);
+  SignInToAIProvider(string provider)
+      => (bool success, string error_message);
+  SignOutOfAIProvider(string provider) => (bool success);
+
+  // Auth — Identity domain (Account pane)
+  // Login attempts to sign in with email/password against the Maho relay.
+  // On success: stores encrypted tokens via OSCrypt and fires AccountStatusChanged.
+  // On failure: returns success=false with a human-readable error_message.
+  Login(string email, string password) => (bool success, string error_message);
+
+  // SignInWithGoogle runs the Google OAuth2 PKCE flow in a tab, then exchanges
+  // the resulting id_token for a relay session.
+  SignInWithGoogle() => (bool success, string error_message);
+
+  // Logout clears local tokens and best-effort POSTs /auth/logout.
+  Logout() => ();
+
+  // GetAccountStatus reads tokens from prefs. Does NOT make a network call.
+  // For network-backed status, use GetBillingInfo (which calls /auth/subscription).
+  GetAccountStatus() => (AccountStatus status);
+
+  // GetBillingInfo calls /auth/subscription on the relay using the stored access token.
+  // On 401: attempts a single refresh via /auth/refresh, then retries once.
+  // Returns an empty BillingInfo (tier="", all zeros, has_payment_method=false) when signed out.
+  GetBillingInfo() => (BillingInfo? info, string error);
+
+  // GetInvoices retrieves the user's order history from the relay.
+  GetInvoices() => (array<Invoice> invoices);
+
+  // GetBillingPortalUrl retrieves a customer portal link from the relay.
+  GetBillingPortalUrl() => (string url);
+
+  // Returns the LemonSqueezy checkout URL for buying a credit pack.
+  // pack_size_usd must be 10, 50, or 100 (matches ADR 0010 variants 4001/4002/4003).
+  // Returns empty string for unsupported pack sizes.
+  GetBuyCreditsUrl(int32 pack_size_usd) => (string checkout_url);
+
+  // Returns the LemonSqueezy checkout URL for a monthly subscription tier.
+  // tier must be "pro" or "max". Returns empty string otherwise.
+  GetSubscriptionCheckoutUrl(string tier) => (string checkout_url);
+
+  // Mail accounts
+  // Ongoing management of connected mail accounts (Settings is the account
+  // management home; first-run onboarding lives in the welcome wizard). Each
+  // method is a thin proxy to the profile-keyed MahoMailService, returning
+  // (ok, result_json) and reporting (false, "Mail service unavailable") when
+  // the service is missing for this profile.
+  MailListAccounts() => (bool ok, string result_json);
+  MailAddAccount(string request_json) => (bool ok, string result_json);
+  MailDeleteAccount(string account_id) => (bool ok, string result_json);
+  MailBeginOAuth(string provider) => (bool ok, string result_json);
+  MailOAuthComplete(string state, string code) => (bool ok, string result_json);
+  MailReconnectAccount(string account_id) => (bool ok, string result_json);
+  MailOAuthCancel(string state) => (bool accepted);
+
+  // === [mail-settings] ===
+  // Signatures
+  MailListSignatures(string? account_id) => (bool ok, string result_json);
+  MailUpsertSignature(string request_json) => (bool ok, string? error);
+  MailDeleteSignature(string id) => (bool ok);
+
+  // Templates
+  MailListTemplates() => (bool ok, string result_json);
+  MailUpsertTemplate(string request_json) => (bool ok, string? error);
+  MailDeleteTemplate(string id) => (bool ok);
+
+  // Labels
+  MailListLabels(string account_id) => (bool ok, string result_json);
+  MailCreateLabel(string account_id, string name, string color) => (bool ok, string? error);
+  MailDeleteLabel(string id) => (bool ok);
+
+  // Rules
+  MailListRules(string account_id) => (bool ok, string result_json);
+  MailUpsertRule(string request_json) => (bool ok, string? error);
+  MailDeleteRule(string id) => (bool ok);
+  MailReorderRules(string account_id, string rule_ids_json) => (bool ok);
+
+  // Calendar
+  MailGetCalendarPrefs() => (bool ok, string result_json);
+  MailSetCalendarPrefs(string prefs_json) => (bool ok);
+  MailListCalendarCategories(string account_id) => (bool ok, string result_json);
+  MailCreateCalendarCategory(string account_id, string name, string color) => (bool ok, string? error);
+  MailUpdateCalendarCategory(string id, string name, string color) => (bool ok, string? error);
+  MailDeleteCalendarCategory(string id) => (bool ok);
+  MailListAccountCalendars(string account_id) => (bool ok, string result_json);
+  MailSetCalendarVisibility(string calendar_row_id, bool visible) => (bool ok);
+
+  // Behavior
+  MailGetBehaviorPrefs() => (bool ok, MailBehaviorSnapshot snapshot);
+  MailSetBehaviorPref(uint64 expected_revision, string key, string value)
+      => (MailBehaviorUpdateResult result);
+  MailRequestNotificationPermission()
+      => (MailNotificationPermission permission);
+
+  // Security (PGP/S-MIME)
+  // PGP/S-MIME material is account-scoped: account_id selects which connected
+  // mail account the key/identity belongs to. Import methods take secret
+  // material (passphrase, p12 blob) as INBOUND params only; list/get never
+  // return decrypted secrets.
+  MailGeneratePgpKey(string account_id, string email, string passphrase) => (bool ok, string? error);
+  MailImportPgpKey(string account_id, string key_block, string? passphrase) => (bool ok, string? error);
+  MailListPgpKeys(string account_id) => (bool ok, string result_json);
+  MailDeletePgpKey(string key_id) => (bool ok);
+  MailSetDefaultPgpKey(string account_id, string key_id) => (bool ok);
+  MailImportSmimeIdentity(string account_id, string p12_data_base64, string passphrase) => (bool ok, string? error);
+  MailListSmimeIdentities(string account_id) => (bool ok, string result_json);
+  MailDeleteSmimeIdentity(string id) => (bool ok);
+  MailSetDefaultSmimeIdentity(string account_id, string identity_id) => (bool ok);
+  MailTestConnection(string request_json) => (bool ok, string result_json);
+};
+
+interface Page {
+  SettingsChanged(array<SettingValue> settings);
+
+  // Pushed when the auto-updater state machine advances (checking → up to date
+  // / update available / downloading / ready), so the General surface reflects
+  // check progress without polling.
+  OnBrowserUpdateStateChanged(BrowserUpdateState state);
+
+  // Pushed when account state changes (e.g., post-login, post-logout).
+  // Page can re-render Account and Billing surfaces without polling.
+  AccountStatusChanged(AccountStatus status);
+
+  // Pushed when a shortcut key combo is intercepted in recording mode.
+  OnShortcutRecorded(MojoKeyCombo key_combo);
+
+  // Pushed when background model-list refresh completes.
+  ProviderModelsRefreshed(string provider_id, array<string> model_ids);
+
+  // Pushed when any pref feeding the AIModelsSettings snapshot changes
+  // (Default provider/model, task overrides, provider configs, credentials),
+  // so an open Models page reflects composer-side Default changes live.
+  OnAIModelsSettingsChanged(AIModelsSettings settings);
+
+  // Pushed when the browser process observes the Vault lock state change,
+  // including the inactivity auto-lock evaluated by the periodic core tick,
+  // which no page action can otherwise observe. `locked` is false only for a
+  // fully unlocked Vault, so the page can drop transient secret UI and re-gate
+  // behind the unlock form on every other state.
+  OnVaultLockStateChanged(bool locked);
+
+  OnMailAccountsChanged();
+
+  // === [mail-settings] ===
+  OnMailSignaturesChanged();
+  OnMailTemplatesChanged();
+  OnMailLabelsChanged();
+  OnMailRulesChanged();
+  OnMailCalendarChanged();
+  OnMailBehaviorChanged();
+  OnMailSecurityChanged();
+};

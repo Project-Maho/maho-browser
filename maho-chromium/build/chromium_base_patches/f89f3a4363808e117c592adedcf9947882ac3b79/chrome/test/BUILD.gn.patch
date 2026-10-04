@@ -1,0 +1,75 @@
+diff --git c/chrome/test/BUILD.gn w/chrome/test/BUILD.gn
+index abc2dc97418a44f58f380fe423714eb2388f69ec..d5d210520bd5fca151f27c810e5b896529162899 100644
+--- c/chrome/test/BUILD.gn
++++ w/chrome/test/BUILD.gn
+@@ -2370,6 +2370,9 @@ if (!is_android) {
+       "//chrome/browser/ui/views/tabs/hovercard:hovercard_helpers",
+       "//chrome/browser/ui/views/tabs/organizer",
+       "//chrome/browser/ui/views/tabs/vertical:browser_tests",
++      "//maho/browser/ui/views/sidebar:browser_tests",
++      "//maho/browser:maho_google_sign_in_browser_tests",
++      "//maho/browser/mcp:browser_tests",
+       "//chrome/browser/ui/views/toolbar:browser_tests",
+       "//chrome/browser/ui/views/user_education",
+       "//chrome/browser/ui/views/user_education:browser_tests",
+@@ -6513,6 +6516,7 @@ test("unit_tests") {
+       "//chrome/browser/ui/desktop_to_mobile_promos:unit_tests",
+       "//chrome/browser/ui/extensions",
+       "//chrome/browser/ui/extensions:unit_tests",
++      "//maho/browser/ui/views/command:unit_tests",
+       "//chrome/browser/ui/passwords:test_support_ui",
+       "//chrome/browser/ui/passwords/bubble_controllers:unit_tests",
+       "//chrome/browser/ui/passwords/bubble_controllers/password_change",
+@@ -6567,6 +6571,18 @@ test("unit_tests") {
+       "//chrome/browser/ui/views/passwords/password_change:successful_password_change_view",
+       "//chrome/browser/ui/views/payments:unit_tests",
+       "//chrome/browser/ui/views/tabs/common:unit_tests",
++      "//maho/browser/ui/views/sidebar:unit_tests",
++      "//maho/browser/ui/views/spaces_overlay:unit_tests",
++      "//maho/browser/ui/tabs:unit_tests",
++      "//maho/browser/ui/views/peek:unit_tests",
++      "//maho/browser:maho_theme_io_unittests",
++      "//maho/browser:maho_context_menus_unittests",
++      "//maho/browser:maho_location_bar_views_unittests",
++      "//maho/browser:maho_incognito_unittests",
++      "//maho/browser:maho_ai_runtime_router_unittests",
++      "//maho/browser:maho_ai_llm_client_unittests",
++      "//maho/browser/net:maho_ad_block_tab_helper_unittests",
++      "//maho/browser/ui/site_control:maho_site_control_unittests",
+       "//chrome/browser/ui/views/tabs/glic",
+       "//chrome/browser/ui/views/tabs/groups:unit_tests",
+       "//chrome/browser/ui/views/tabs/horizontal:unit_tests",
+@@ -8480,8 +8496,8 @@ if (!is_android) {
+         "//ui/ozone",
+         "//ui/platform_window/common",
+         "//ui/resources:ui_test_pak",
+-        "//ui/web_dialogs:test_support",
+-      ]
++      "//ui/web_dialogs:test_support",
++    ]
+ 
+       if (is_linux) {
+         deps += [ "//ui/linux:display_server_utils" ]
+@@ -8618,6 +8634,7 @@ if (!is_android && !is_chromeos_device) {
+       "//chrome/browser/download:test_support",
+       "//chrome/browser/feedback:feedback_impl",
+       "//chrome/browser/feedback:interactive_ui_tests",
++      "//maho/browser/ui/views/command:interactive_tests",
+       "//chrome/browser/file_system_access",
+       "//chrome/browser/gcm",
+       "//chrome/browser/glic/browser_ui",
+@@ -8901,6 +8918,14 @@ if (!is_android && !is_chromeos_device) {
+       "//ui/strings:ui_strings_grit",
+       "//ui/views",
+       "//ui/web_dialogs:test_support",
++      "//maho/browser/ui/views/sidebar:interactive_tests",
++      "//maho/browser/ui/views/shields:interactive_tests",
++      "//maho/browser/ui/views/boost:interactive_tests",
++      "//maho/browser/ui/views/spaces_overlay:interactive_tests",
++      "//maho/browser/ui/views/peek:interactive_tests",
++      "//chrome/browser/ui/views/side_panel:interactive_tests",
++      "//maho/browser/ui/views/sidebar:interactive_tests",
++      "//maho/browser/ui/views/sidebar:interactive_tests",
+     ]
+ 
+     if (is_linux) {

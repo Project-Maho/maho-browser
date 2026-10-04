@@ -1,0 +1,151 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+
+module maho_welcome.mojom;
+
+import "maho/browser/ui/webui/maho_settings/maho_settings.mojom";
+
+// Bit-mask values MUST match Rust `ImportServices` constants in
+// maho/crates/maho-import/src/lib.rs — both sides treat the
+// `items` parameter of `StartImport` as a raw u32 with no translation,
+// so misalignment silently makes browser_detector → JS → orchestrator
+// produce wrong subsets of work.
+const uint32 kImportHistory    = 0x01;
+const uint32 kImportBookmarks  = 0x02;
+const uint32 kImportPasswords  = 0x04;
+const uint32 kImportAutofill   = 0x08;
+const uint32 kImportCookies    = 0x10;
+const uint32 kImportWorkspaces = 0x20;
+const uint32 kImportFavicons   = 0x40;
+const uint32 kImportEssential  = 0x80;
+
+
+struct SearchEngineInfo {
+  string keyword;
+  string name;
+  string icon_url;
+  bool is_default;
+};
+
+struct EssentialSite {
+  string url;
+  string name;
+  string icon_path;
+};
+
+struct BrowserProfile {
+  // Index into ImporterList for use with StartImport.
+  int32 index;
+  // Display name (e.g., "Google Chrome", "Safari").
+  string name;
+  // Bitmask of available items (HISTORY=1, FAVORITES=2, PASSWORDS=4, etc.)
+  uint32 services_supported;
+};
+
+struct MigrationDialogResult {
+  // True if user cancelled (clicked Cancel/X) before or during import.
+  bool was_cancelled;
+  // Bitmask of kImport* flags that were successfully imported (0 if cancelled).
+  uint32 imported_items_bitmask;
+};
+
+interface PageHandlerFactory {
+  CreatePageHandler(pending_remote<Page> page,
+                    pending_receiver<PageHandler> handler);
+};
+
+interface PageHandler {
+  // Import (REAL inline import — does NOT open any new windows)
+  GetAvailableBrowsers() => (array<BrowserProfile> browsers);
+  StartImport(int32 browser_index, uint32 items);
+  OpenMigrationDialog() => (MigrationDialogResult result);
+
+  // Localization
+  GetLocalizedStrings() => (map<string, string> strings);
+
+  // Default browser
+  IsDefaultBrowser() => (bool is_default);
+  SetAsDefaultBrowser();
+
+  // Search engine
+  GetSearchEngines() => (array<SearchEngineInfo> engines);
+  SetDefaultSearchEngine(string keyword);
+
+  // Essentials
+  GetEssentialSites() => (array<EssentialSite> sites);
+  FavoriteEssentialSites(array<string> urls);
+
+  // Theme
+  PreviewTheme(string theme_json);
+  ApplyTheme(string theme_json);
+  ClearThemePreview();
+  OpenThemePickerDialog(string current_theme_json) => (string picked_theme_json);
+
+  // AI onboarding
+  LoginFromWelcome(string email, string password) => (bool ok, string error_message);
+  SignupFromWelcome(string email, string password, string display_name) => (bool ok, string error_message);
+  SignInWithGoogleFromWelcome() => (bool ok, string error_message);
+  GetRelayAccountStatusFromWelcome() => (bool signed_in, string tier, string subscription_status, bool welcome_completed, bool has_stored_session, bool is_local_dev);
+
+  // Password setup
+  GetPasswordProviderOptions() => (array<maho_settings.mojom.PasswordProviderOption> options);
+  GetPasswordProviderStatus() => (maho_settings.mojom.PasswordProviderStatus status);
+  SetPasswordProvider(maho_settings.mojom.PasswordProviderKind provider) => (bool success);
+  GetVaultStatus() => (maho_settings.mojom.VaultOperationResult result);
+  InitializeVault(string master_passphrase, string recovery_secret) => (maho_settings.mojom.VaultOperationResult result);
+  UnlockVault(string master_passphrase) => (maho_settings.mojom.VaultOperationResult result);
+
+  // Sync key setup
+  GenerateSyncKey() => (string sync_key, string room_id, string recovery_phrase);
+  SaveSyncKeyBackup(string content) => (bool saved, string error_message);
+  StartSync(string room_id, string recovery_phrase) => (bool ok, string error_message);
+
+  // Mail account onboarding
+  // Thin proxies to the profile-keyed MahoMailService; each returns
+  // (ok, result_json) and reports (false, "Mail service unavailable") when the
+  // service is missing for this profile.
+  MailAddAccount(string request_json) => (bool ok, string result_json);
+  MailTestConnection(string params_json) => (bool ok, string result_json);
+  // Browser-driven OAuth for the first-run welcome wizard: starts the loopback
+  // sign-in and opens the provider consent page in a NEW browser window (not
+  // in-place, so the wizard state is preserved; not renderer window.open, which
+  // is unreliable from a chrome:// WebUI page). The mail helper's loopback
+  // listener completes the flow and OnMailAccountsChanged advances the wizard.
+  MailBeginOAuth(string provider) => (bool ok, string error_json, string state);
+  MailListAccounts() => (bool ok, string result_json);
+  MailDeleteAccount(string account_id) => (bool ok, string result_json);
+  MailOAuthCancel(string state) => (bool accepted);
+
+  // Translation setup (cloud-backed; no local model).
+  GetAiProviderConfigured() => (bool configured);
+  SetTranslationProvider(string provider) => (bool ok);
+
+  // Truthful BYOK readiness: true only when the provider selected in prefs
+  // (openai/anthropic/openai-compatible) has runtime-usable credentials —
+  // encrypted key, OAuth session, or legacy provider-scoped key (plus base
+  // URL for openai-compatible). "maho-managed" and unrelated stored keys
+  // never certify BYOK.
+  GetByokCredentialConfigured() => (bool configured);
+  // Opens chrome://maho-settings?pane=maho-ai parented to the welcome window
+  // so the existing Settings BYOK fields configure credentials during
+  // onboarding. Replies once the dialog closes with the re-read
+  // GetByokCredentialConfigured state; duplicate opens return false without
+  // replacing the existing dialog.
+  OpenByokSettingsDialog() => (bool configured);
+
+  // Returns the LemonSqueezy checkout URL for a monthly subscription tier.
+  // tier must be "pro" or "max". Returns empty string otherwise.
+  GetSubscriptionCheckoutUrl(string tier) => (string checkout_url);
+
+  // Completion / FDA
+  FinishOnboarding();
+  // Local-dev only: finish onboarding without a valid relay session. The
+  // handler ignores this unless MAHO_RELAY_URL is set (never in production).
+  DevSkipOnboarding();
+  OpenFDASettings();
+};
+
+interface Page {
+  // Import progress updates
+  OnImportProgress(uint32 type, int32 items_imported, string error, bool complete);
+  OnMailAccountsChanged();
+};

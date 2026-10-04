@@ -1,0 +1,85 @@
+diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
+index 8cd3cd5e5527cb3663262a2999b43ae651c03566..33d502a73a7b466710834bae86a887e5d280a1ae 100644
+--- a/chrome/browser/ui/browser_actions.cc
++++ b/chrome/browser/ui/browser_actions.cc
+@@ -48,6 +48,7 @@
+ #include "chrome/browser/ui/browser_action_prefs_listener.h"
+ #include "chrome/browser/ui/browser_command_controller.h"
+ #include "chrome/browser/ui/browser_commands.h"
++#include "chrome/browser/ui/chrome_pages.h"
+ #include "chrome/browser/ui/browser_element_identifiers.h"
+ #include "chrome/browser/ui/browser_window.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
+@@ -124,6 +125,7 @@
+ #include "components/media_router/browser/media_router_metrics.h"
+ #include "components/omnibox/browser/omnibox_field_trial.h"
+ #include "components/omnibox/browser/vector_icons.h"
++#include "components/prefs/pref_service.h"
+ #include "components/policy/core/common/policy_pref_names.h"
+ #include "components/record_replay/core/common/record_replay_features.h"
+ #include "components/saved_tab_groups/public/features.h"
+@@ -133,15 +135,19 @@
+ #include "components/tabs/public/tab_interface.h"
+ #include "components/user_prefs/user_prefs.h"
+ #include "components/vector_icons/vector_icons.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++#include "maho/components/constants/webui_url_constants.h"
+ #include "ui/accessibility/accessibility_features.h"
+ #include "ui/actions/actions.h"
+ #include "ui/base/l10n/l10n_util.h"
++#include "ui/base/window_open_disposition.h"
+ #include "ui/base/ui_base_features.h"
+ #include "ui/gfx/text_utils.h"
+ #include "ui/gfx/vector_icon_types.h"
+ #include "ui/menus/simple_menu_model.h"
+ #include "ui/views/view.h"
+ #include "ui/views/view_class_properties.h"
++#include "url/gurl.h"
+ 
+ #if !BUILDFLAG(IS_CHROMEOS)
+ #include "chrome/browser/ui/views/download/bubble/download_toolbar_ui_controller.h"
+@@ -454,6 +460,44 @@ void BrowserActions::InitializeSidePanelActions() {
+                     actions::ActionPinnableState::kNotPinnable))
+             .Build());
+   }
++
++  // Maho side panel action items.
++  root_action_item_->AddChild(
++      actions::ActionItem::Builder(
++          CreateToggleSidePanelActionCallback(
++              SidePanelEntryKey(SidePanelEntryId::kMahoAiPanel), bwi))
++          .SetActionId(kActionSidePanelShowMahoAiPanel)
++          .SetChecked(maho::sidebar_prefs::IsSidebarPanelExpanded(
++              profile_->GetPrefs()))
++          .SetText(u"Maho AI")
++          .SetTooltipText(u"Maho AI Panel")
++          .SetImage(ui::ImageModel::FromVectorIcon(kDockToRightSparkIcon,
++                                                   ui::kColorIcon))
++          .SetProperty(
++              actions::kActionItemPinnableKey,
++              static_cast<
++                  std::underlying_type_t<actions::ActionPinnableState>>(
++                  actions::ActionPinnableState::kPinnable))
++          .Build());
++  root_action_item_->AddChild(
++      actions::ActionItem::Builder(
++          base::BindRepeating(
++              [](BrowserWindowInterface* bwi, actions::ActionItem* /*item*/,
++                 actions::ActionInvocationContext /*context*/) {
++                chrome::ShowMahoSettings(bwi);
++              },
++               bwi))
++          .SetActionId(kActionSidePanelShowMahoSettings)
++          .SetText(u"Maho Settings")
++          .SetTooltipText(u"Maho Settings")
++          .SetImage(ui::ImageModel::FromVectorIcon(
++              vector_icons::kSettingsIcon, ui::kColorIcon))
++          .SetProperty(
++              actions::kActionItemPinnableKey,
++              static_cast<
++                  std::underlying_type_t<actions::ActionPinnableState>>(
++                  actions::ActionPinnableState::kNotPinnable))
++          .Build());
+ }
+ 
+ void BrowserActions::InitializePageActionIconActions() {

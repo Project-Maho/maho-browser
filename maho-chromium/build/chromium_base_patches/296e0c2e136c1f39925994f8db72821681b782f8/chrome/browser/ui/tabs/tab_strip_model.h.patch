@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.h b/chrome/browser/ui/tabs/tab_strip_model.h
+index f1a0f0ef51d9c29c49740179b84d8423663c55c4..4b3f07e6c9ad928b87ece62ccfcdafb262d8da25 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.h
++++ b/chrome/browser/ui/tabs/tab_strip_model.h
+@@ -652,6 +652,16 @@ class TabStripModel {
+       split_tabs::SplitTabVisualData visual_data,
+       split_tabs::SplitTabCreatedSource source);
+ 
++  // Adds one unsplit tab to an existing 2..3 pane split. The split is
++  // rebuilt with the same id so the existing collection, selection, and
++  // observer invariants remain centralized in AddToSplitImpl().
++  bool AddToExistingSplit(
++      split_tabs::SplitTabId split_id,
++      int source_index,
++      size_t insertion_index,
++      split_tabs::SplitTabVisualData visual_data,
++      split_tabs::SplitTabCreatedSource source);
++
+   // Adds all the tabs in `indices` to a split with `split_id` and
+   // `visual_data`. `pivot_index` is the index in indices to determine the
+   // properties of the split like group, pin, destination index.

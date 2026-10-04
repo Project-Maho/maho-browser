@@ -1,0 +1,312 @@
+diff --git c/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc w/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc
+index d0f0f711eaa58b43837d69c62dbe5e15301dea95..4b30535c2c9b6775afcfb46287a07fa941c0172e 100644
+--- c/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc
++++ w/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc
+@@ -6,13 +6,22 @@
+ 
+ #include <windows.h>
+ 
++#include <algorithm>
+ #include <memory>
++#include <optional>
++#include <set>
+ 
+ #include "base/win/windows_version.h"
+ #include "chrome/browser/ui/frame/window_frame_util.h"
+ #include "chrome/browser/ui/views/frame/browser_frame_view_win.h"
+ #include "chrome/browser/ui/views/frame/browser_view.h"
+ #include "chrome/browser/ui/views/frame/windows_caption_button.h"
++#include "base/time/time.h"
++#include "ui/events/event.h"
++#include "ui/gfx/scoped_animation_duration_scale_mode.h"
++#include "ui/views/event_monitor.h"
++#include "ui/display/screen.h"
++#include "ui/display/display.h"
+ #include "chrome/browser/win/titlebar_config.h"
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/metadata/metadata_impl_macros.h"
+@@ -23,6 +32,11 @@
+ 
+ namespace {
+ 
++constexpr int kMahoArcCaptionRevealTriggerWidth = 96;
++constexpr int kMahoArcCaptionRevealTriggerHeight = 8;
++constexpr base::TimeDelta kMahoArcCaptionHideDelay =
++    base::Milliseconds(500);
++
+ std::unique_ptr<WindowsCaptionButton> CreateCaptionButton(
+     views::Button::PressedCallback callback,
+     BrowserFrameViewWin* frame_view,
+@@ -94,6 +108,9 @@ int BrowserCaptionButtonContainer::NonClientHitTest(
+     const gfx::Point& point) const {
+   DCHECK(HitTestPoint(point))
+       << "should only be called with a point inside this view's bounds";
++  if (IsMahoArcCaptionMode() && !maho_arc_caption_revealed_) {
++    return HTNOWHERE;
++  }
+ 
+   // | WCO | Win11 | Caption Button    | Output                |
+   // |-----+-------+-------------------+-----------------------|
+@@ -123,7 +140,10 @@ int BrowserCaptionButtonContainer::NonClientHitTest(
+   }
+ 
+   // Return the base component if no button was hit or WCO is disabled.
++  // Maho(win): revealed Arc caption buttons return native HT codes so
++  // Windows 11 shows Snap Layouts on the maximize button.
+   if (hit_test_result == HTCAPTION ||
++      frame_view_->GetBrowserView()->IsMahoArcLayoutActive() ||
+       !frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
+     return hit_test_result;
+   }
+@@ -136,7 +156,8 @@ int BrowserCaptionButtonContainer::NonClientHitTest(
+ }
+ 
+ void BrowserCaptionButtonContainer::OnWindowControlsOverlayEnabledChanged() {
+-  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
++  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() ||
++      frame_view_->GetBrowserView()->IsMahoArcLayoutActive()) {
+     SetBackground(
+         views::CreateSolidBackground(frame_view_->GetTitlebarColor()));
+ 
+@@ -148,6 +169,8 @@ void BrowserCaptionButtonContainer::OnWindowControlsOverlayEnabledChanged() {
+     DestroyLayer();
+   }
+   UpdateButtonToolTipsForWindowControlsOverlay();
++  UpdateMahoArcCaptionEventMonitor();
++  ApplyMahoArcCaptionButtonVisibility();
+ }
+ 
+ void BrowserCaptionButtonContainer::OnThemeChanged() {
+@@ -171,10 +194,12 @@ void BrowserCaptionButtonContainer::AddedToWidget() {
+ 
+   DCHECK(!widget_observation_.IsObserving());
+   widget_observation_.Observe(widget);
++  UpdateMahoArcCaptionEventMonitor();
+ 
+   UpdateButtons();
+ 
+-  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled()) {
++  if (frame_view_->GetBrowserView()->IsWindowControlsOverlayEnabled() ||
++      frame_view_->GetBrowserView()->IsMahoArcLayoutActive()) {
+     SetBackground(
+         views::CreateSolidBackground(frame_view_->GetTitlebarColor()));
+     // BrowserView paints to a layer, so this must do the same to ensure that it
+@@ -184,6 +209,9 @@ void BrowserCaptionButtonContainer::AddedToWidget() {
+ }
+ 
+ void BrowserCaptionButtonContainer::RemovedFromWidget() {
++  maho_arc_caption_event_monitor_.reset();
++  maho_arc_caption_hide_timer_.Stop();
++  maho_arc_caption_revealed_ = false;
+   DCHECK(widget_observation_.IsObserving());
+   widget_observation_.Reset();
+ }
+@@ -191,9 +219,45 @@ void BrowserCaptionButtonContainer::RemovedFromWidget() {
+ void BrowserCaptionButtonContainer::OnWidgetBoundsChanged(
+     views::Widget* widget,
+     const gfx::Rect& new_bounds) {
++  maho_arc_caption_hide_timer_.Stop();
++  maho_arc_caption_revealed_ = false;
+   UpdateButtons();
+ }
+ 
++void BrowserCaptionButtonContainer::OnWidgetShowStateChanged(
++    views::Widget* widget) {
++  maho_arc_caption_hide_timer_.Stop();
++  maho_arc_caption_revealed_ = false;
++  UpdateMahoArcCaptionEventMonitor();
++  UpdateButtons();
++}
++
++void BrowserCaptionButtonContainer::OnWidgetDestroying(
++    views::Widget* widget) {
++  maho_arc_caption_event_monitor_.reset();
++  maho_arc_caption_hide_timer_.Stop();
++}
++
++void BrowserCaptionButtonContainer::OnEvent(const ui::Event& event) {
++  if (!IsMahoArcCaptionMode() || !maho_arc_caption_event_monitor_) {
++    return;
++  }
++  const gfx::Point screen_point =
++      maho_arc_caption_event_monitor_->GetLastMouseLocation();
++  if (maho_arc_caption_revealed_) {
++    return;
++  }
++  if (IsMahoArcCaptionTriggerPoint(screen_point)) {
++    if (!maho_arc_caption_hide_timer_.IsRunning()) {
++      maho_arc_caption_hide_timer_.Start(
++          FROM_HERE, base::Milliseconds(250), this,
++          &BrowserCaptionButtonContainer::MaybeRevealMahoArcCaption);
++    }
++  } else {
++    maho_arc_caption_hide_timer_.Stop();
++  }
++}
++
+ void BrowserCaptionButtonContainer::UpdateButtons() {
+   minimize_button_->SetVisible(frame_view_->GetBrowserView()->CanMinimize());
+ 
+@@ -210,6 +274,162 @@ void BrowserCaptionButtonContainer::UpdateButtons() {
+   const bool is_touch = ui::TouchUiController::Get()->touch_ui();
+   restore_button_->SetEnabled(!is_touch);
+   maximize_button_->SetEnabled(!is_touch || !is_maximized);
++  ApplyMahoArcCaptionButtonVisibility();
++}
++
++bool BrowserCaptionButtonContainer::IsMahoArcCaptionMode() const {
++  return frame_view_->GetBrowserView()->IsMahoArcLayoutActive();
++}
++
++bool BrowserCaptionButtonContainer::IsMahoArcCaptionTriggerPoint(
++    const gfx::Point& screen_point) const {
++  const views::Widget* widget = GetWidget();
++  if (!widget || widget->IsFullscreen()) {
++    return false;
++  }
++  // Maho: reveal when the pointer touches the full-width strip along
++  // the very top edge of the window (the hidden handle bar hotzone).
++  // Clamp to the display work area so the hotzone stays reachable when
++  // maximized (a maximized window's top border overhangs off-screen).
++  gfx::Rect trigger_bounds = widget->GetWindowBoundsInScreen();
++  trigger_bounds.Intersect(
++      display::Screen::Get()
++          ->GetDisplayNearestWindow(widget->GetNativeWindow())
++          .work_area());
++  if (trigger_bounds.width() <= 0 || trigger_bounds.height() <= 0) {
++    return false;
++  }
++  trigger_bounds.set_height(std::min(kMahoArcCaptionRevealTriggerHeight,
++                                      trigger_bounds.height()));
++  return trigger_bounds.Contains(screen_point);
++}
++
++bool BrowserCaptionButtonContainer::IsMahoArcCaptionKeepAlivePoint(
++    const gfx::Point& screen_point) const {
++  return GetBoundsInScreen().Contains(screen_point) ||
++         IsMahoArcCaptionTriggerPoint(screen_point);
++}
++
++int BrowserCaptionButtonContainer::GetMahoArcCaptionPreferredWidth()
++    const {
++  int width = 0;
++  if (frame_view_->GetBrowserView()->CanMinimize()) {
++    width += minimize_button_->GetPreferredSize().width();
++  }
++  if (frame_view_->GetBrowserView()->CanMaximize()) {
++    width += (frame_view_->IsMaximized() ? restore_button_
++                                       : maximize_button_)
++                 ->GetPreferredSize()
++                 .width();
++  }
++  width += close_button_->GetPreferredSize().width();
++  return std::max(width, kMahoArcCaptionRevealTriggerWidth);
++}
++
++void BrowserCaptionButtonContainer::MaybeRevealMahoArcCaption() {
++  if (maho_arc_caption_revealed_) {
++    return;
++  }
++  const gfx::Point cursor =
++      display::Screen::Get()->GetCursorScreenPoint();
++  if (IsMahoArcCaptionTriggerPoint(cursor)) {
++    RevealMahoArcCaptionButtons();
++  }
++}
++
++void BrowserCaptionButtonContainer::RevealMahoArcCaptionButtons() {
++  if (!IsMahoArcCaptionMode() ||
++      frame_view_->browser_widget()->IsFullscreen()) {
++    return;
++  }
++  if (!maho_arc_caption_hide_timer_.IsRunning()) {
++    maho_arc_caption_hide_timer_.Start(
++        FROM_HERE, base::Milliseconds(250), this,
++        &BrowserCaptionButtonContainer::PollMahoArcCaptionHide);
++  }
++  if (maho_arc_caption_revealed_) {
++    return;
++  }
++  maho_arc_caption_revealed_ = true;
++  UpdateButtons();
++  frame_view_->InvalidateLayout();
++  frame_view_->DeprecatedLayoutImmediately();
++}
++
++void BrowserCaptionButtonContainer::PollMahoArcCaptionHide() {
++  if (!maho_arc_caption_revealed_) {
++    return;
++  }
++  const gfx::Point cursor =
++      display::Screen::Get()->GetCursorScreenPoint();
++  if (!frame_view_->browser_widget()->IsFullscreen() &&
++      IsMahoArcCaptionKeepAlivePoint(cursor)) {
++    maho_arc_caption_hide_timer_.Start(
++        FROM_HERE, base::Milliseconds(250), this,
++        &BrowserCaptionButtonContainer::PollMahoArcCaptionHide);
++    return;
++  }
++  HideMahoArcCaptionButtons();
++}
++
++void BrowserCaptionButtonContainer::ScheduleHideMahoArcCaptionButtons() {
++  if (!maho_arc_caption_revealed_) {
++    return;
++  }
++  if (gfx::ScopedAnimationDurationScaleMode::is_zero()) {
++    HideMahoArcCaptionButtons();
++    return;
++  }
++  maho_arc_caption_hide_timer_.Start(
++      FROM_HERE, kMahoArcCaptionHideDelay, this,
++      &BrowserCaptionButtonContainer::HideMahoArcCaptionButtons);
++}
++
++void BrowserCaptionButtonContainer::HideMahoArcCaptionButtons() {
++  if (!maho_arc_caption_revealed_) {
++    return;
++  }
++  maho_arc_caption_hide_timer_.Stop();
++  maho_arc_caption_revealed_ = false;
++  UpdateButtons();
++  frame_view_->InvalidateLayout();
++  frame_view_->DeprecatedLayoutImmediately();
++}
++
++void BrowserCaptionButtonContainer::
++    ApplyMahoArcCaptionButtonVisibility() {
++  if (!IsMahoArcCaptionMode()) {
++    SetCanProcessEventsWithinSubtree(true);
++    SetPreferredSize(std::nullopt);
++    return;
++  }
++
++  const bool revealed = maho_arc_caption_revealed_ &&
++                        !frame_view_->browser_widget()->IsFullscreen();
++  if (!revealed) {
++    minimize_button_->SetVisible(false);
++    maximize_button_->SetVisible(false);
++    restore_button_->SetVisible(false);
++    close_button_->SetVisible(false);
++  }
++  SetCanProcessEventsWithinSubtree(revealed);
++  SetPreferredSize(gfx::Size(
++      revealed ? GetMahoArcCaptionPreferredWidth()
++               : 0,
++      0));
++}
++
++void BrowserCaptionButtonContainer::UpdateMahoArcCaptionEventMonitor() {
++  views::Widget* const widget = GetWidget();
++  if (!widget || !IsMahoArcCaptionMode()) {
++    maho_arc_caption_event_monitor_.reset();
++    return;
++  }
++  if (!maho_arc_caption_event_monitor_) {
++    maho_arc_caption_event_monitor_ = views::EventMonitor::CreateWindowMonitor(
++        this, widget->GetNativeWindow(),
++        {ui::EventType::kMouseMoved, ui::EventType::kMouseExited});
++  }
+ }
+ 
+ void BrowserCaptionButtonContainer::

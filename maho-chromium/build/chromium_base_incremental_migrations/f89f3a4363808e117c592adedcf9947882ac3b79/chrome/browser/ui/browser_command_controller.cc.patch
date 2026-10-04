@@ -1,0 +1,43 @@
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -212,13 +212,13 @@
+   }
+ 
+   if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
+-    NewTab(browser.get());
++    NewTab(browser.get(), NewTabTypes::kNewTabCommand);
+     return;
+   }
+ 
+   if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser.get())) {
+     if (!browser_view->maho_sidebar_container()) {
+-      NewTab(browser.get());
++      NewTab(browser.get(), NewTabTypes::kNewTabCommand);
+       return;
+     }
+     browser_view->ShowMahoCommandOverlayForNewTab();
+@@ -226,7 +226,7 @@
+   }
+ 
+   if (remaining_attempts <= 0) {
+-    NewTab(browser.get());
++    NewTab(browser.get(), NewTabTypes::kNewTabCommand);
+     return;
+   }
+ 
+@@ -877,7 +877,7 @@
+           }
+         }
+         int old_index = browser_->GetTabStripModel()->active_index();
+-        chrome::NewTab(browser_);
++        chrome::NewTab(browser_, NewTabTypes::kNoUserAction);
+         if (browser_->GetTabStripModel()->ContainsIndex(old_index)) {
+           browser_->GetTabStripModel()->CloseWebContentsAt(
+               old_index, TabCloseTypes::CLOSE_USER_GESTURE |
+@@ -2524,6 +2524,5 @@
+ 
+   const bool is_fullscreen = window() && window()->IsFullscreen();
+   const bool show_main_ui = IsShowingMainUI();
+-  const bool show_location_bar = IsShowingLocationBar();
+ 
+   const bool main_not_fullscreen = show_main_ui && !is_fullscreen;

@@ -1,0 +1,31 @@
+// Copyright 2026 Maho Browser. All rights reserved.
+// Single source of truth for in-browser agent browser-tool safety metadata.
+//
+// Approval column policy: driving the browser is full access, so plain page
+// and input actions are NotRequired. Only actions that leave the browser keep
+// an approval gate here: browser_file_upload_select reaches the local
+// filesystem and browser_visual_click drives OS-level (computer use) input.
+// See CapabilityLeavesBrowserBoundary() in maho_browser_action_contract.h.
+
+#ifndef MAHO_BROWSER_ACTION_CONTRACT
+#error "Define MAHO_BROWSER_ACTION_CONTRACT before including this file."
+#endif
+
+MAHO_BROWSER_ACTION_CONTRACT(browser_accessibility_snapshot, "browser_accessibility_snapshot", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(page_query_selector, "page_query_selector", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(page_get_text, "page_get_text", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(page_get_attribute, "page_get_attribute", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(page_wait_for_selector, "page_wait_for_selector", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_wait_for_navigation, "browser_wait_for_navigation", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_navigate, "browser_navigate", Action, Yes, Sensitive, NotRequired, Required, ActiveTabOriginOrApprovedDestination, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_history_back, "browser_history_back", Action, Yes, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_click, "browser_click", Action, No, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_type, "browser_type", Action, No, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_file_upload_select, "browser_file_upload_select", Action, No, Sensitive, Required, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_select, "browser_select", Action, No, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_scroll, "browser_scroll", Action, No, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_hover, "browser_hover", Action, No, Sensitive, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_key_press, "browser_key_press", Action, No, Sensitive, NotRequired, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_visual_click, "browser_visual_click", Action, Yes, Sensitive, Required, Required, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_observe, "browser_observe", Read, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)
+MAHO_BROWSER_ACTION_CONTRACT(browser_request_help, "browser_request_help", Action, No, Low, NotRequired, NotRequired, ActiveTabOrigin, FailClosed)

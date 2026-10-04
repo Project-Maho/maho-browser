@@ -1,0 +1,62 @@
+diff --git c/chrome/browser/ui/cocoa/browser_window_command_handler.mm w/chrome/browser/ui/cocoa/browser_window_command_handler.mm
+index c55aa489b8cf417ce86ab682283f6eacb6728d7a..26fcf54421d43c48cc95dce0bc67fe00f93b9d8d 100644
+--- c/chrome/browser/ui/cocoa/browser_window_command_handler.mm
++++ w/chrome/browser/ui/cocoa/browser_window_command_handler.mm
+@@ -10,9 +10,13 @@
+ #include "base/strings/sys_string_conversions.h"
+ #include "chrome/app/chrome_command_ids.h"
+ #import "chrome/browser/app_controller_mac.h"
++#include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_commands.h"
+ #include "chrome/browser/ui/browser_window.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+ #include "components/remote_cocoa/app_shim/native_widget_ns_window_bridge.h"
+ #include "components/remote_cocoa/common/native_widget_ns_window_host.mojom.h"
+ #include "content/public/browser/web_contents.h"
+@@ -60,6 +64,18 @@ remote_cocoa::NativeWidgetNSWindowBridge* FindBridgeForSender(
+   return bridge;
+ }
+ 
++BrowserWindowInterface* FindBrowserWindowForSender(id sender, NSWindow* window) {
++  NSWindow* targetWindow = window;
++  if ([sender respondsToSelector:@selector(window)]) {
++    targetWindow = [sender window];
++  }
++  BrowserWindowInterface* browser_window =
++      GlobalBrowserCollection::GetInstance()->FindBrowserWithWindow(
++          gfx::NativeWindow(targetWindow));
++  DCHECK(browser_window);
++  return browser_window;
++}
++
+ }  // namespace
+ 
+ @implementation BrowserWindowCommandHandler
+@@ -107,6 +123,11 @@ remote_cocoa::NativeWidgetNSWindowBridge* FindBridgeForSender(
+ - (void)commandDispatch:(id)sender window:(NSWindow*)window {
+   DCHECK(sender);
+   int command = [sender tag];
++  if (command == IDC_SAVE_PAGE) {
++    maho::sidebar_prefs::ToggleSidebarPanelExpanded(
++        FindBrowserWindowForSender(sender, window)->GetProfile()->GetPrefs());
++    return;
++  }
+   bool was_executed = false;
+   FindBridgeForSender(sender, window)
+       ->host()
+@@ -140,6 +161,12 @@ remote_cocoa::NativeWidgetNSWindowBridge* FindBridgeForSender(
+     modifierFlags &= ~NSEventModifierFlagCommand;
+   }
+ 
++  if (command == IDC_SAVE_PAGE) {
++    maho::sidebar_prefs::ToggleSidebarPanelExpanded(
++        FindBrowserWindowForSender(sender, window)->GetProfile()->GetPrefs());
++    return;
++  }
++
+   bool was_executed = false;
+   FindBridgeForSender(sender, window)
+       ->host()

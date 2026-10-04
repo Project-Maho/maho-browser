@@ -1,0 +1,146 @@
+--- a/chrome/browser/ui/browser_command_controller.cc
++++ b/chrome/browser/ui/browser_command_controller.cc
+@@ -205,20 +205,20 @@
+ 
+ namespace {
+ 
+-void ShowMahoCommandOverlayForNewTabWhenReady(base::WeakPtr<Browser> browser,
++void ShowMahoCommandOverlayForNewTabWhenReady(base::WeakPtr<BrowserWindowInterface> browser,
+                                               int remaining_attempts) {
+   if (!browser) {
+     return;
+   }
+ 
+-  if (!browser->is_type_normal()) {
+-    NewTab(browser.get());
++  if (browser->GetType() != BrowserWindowInterface::Type::TYPE_NORMAL) {
++    NewTab(browser.get(), NewTabTypes::kNewTabCommand);
+     return;
+   }
+ 
+   if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser.get())) {
+     if (!browser_view->maho_sidebar_container()) {
+-      NewTab(browser.get());
++      NewTab(browser.get(), NewTabTypes::kNewTabCommand);
+       return;
+     }
+     browser_view->ShowMahoCommandOverlayForNewTab();
+@@ -226,7 +226,7 @@
+   }
+ 
+   if (remaining_attempts <= 0) {
+-    NewTab(browser.get());
++    NewTab(browser.get(), NewTabTypes::kNewTabCommand);
+     return;
+   }
+ 
+@@ -263,7 +263,7 @@
+   }
+ }
+ 
+-void ExecuteStartupCommandWhenTabSelected(base::WeakPtr<Browser> browser,
++void ExecuteStartupCommandWhenTabSelected(base::WeakPtr<BrowserWindowInterface> browser,
+                                           int id,
+                                           WindowOpenDisposition disposition,
+                                           base::TimeTicks time_stamp,
+@@ -272,9 +272,8 @@
+     return;
+   }
+ 
+-  if (browser->tab_strip_model()->active_index() != TabStripModel::kNoTab) {
+-    browser->command_controller()->ExecuteCommandWithDisposition(
+-        id, disposition, time_stamp);
++  if (browser->GetTabStripModel()->active_index() != TabStripModel::kNoTab) {
++    ExecuteCommandWithDisposition(browser.get(), id, disposition, time_stamp);
+     return;
+   }
+ 
+@@ -732,10 +731,10 @@
+   // crashes, e.g. from Windows sending WM_COMMANDs at random times during
+   // window construction.  This probably could use closer examination someday.
+   if (browser_->tab_strip_model()->active_index() == TabStripModel::kNoTab) {
+-    if (id == IDC_NEW_TAB && browser_->is_type_normal()) {
+-      ShowMahoCommandOverlayForNewTabWhenReady(browser_->AsWeakPtr(), 200);
++    if (id == IDC_NEW_TAB && (browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL)) {
++      ShowMahoCommandOverlayForNewTabWhenReady(browser_->GetWeakPtr(), 200);
+     } else if (ShouldDeferStartupCommandUntilTabSelected(id)) {
+-      ExecuteStartupCommandWhenTabSelected(browser_->AsWeakPtr(), id,
++      ExecuteStartupCommandWhenTabSelected(browser_->GetWeakPtr(), id,
+                                            disposition, time_stamp, 200);
+     }
+     return true;
+@@ -835,7 +834,7 @@
+       break;
+     case IDC_NEW_TAB: {
+       if (auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_)) {
+-        if (browser_->is_type_normal() &&
++        if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) &&
+             browser_view->maho_sidebar_container()) {
+           browser_view->ShowMahoCommandOverlayForNewTab();
+         } else {
+@@ -843,9 +842,8 @@
+         }
+         break;
+       }
+-      ShowMahoCommandOverlayForNewTabWhenReady(browser_->AsWeakPtr(), 200);
++      ShowMahoCommandOverlayForNewTabWhenReady(browser_->GetWeakPtr(), 200);
+       break;
+-      break;
+     }
+     case IDC_NEW_TAB_TO_RIGHT: {
+       NewTabToRight(browser_);
+@@ -853,7 +851,7 @@
+     }
+     case IDC_CLOSE_TAB:
+       base::RecordAction(base::UserMetricsAction("CloseTabByKey"));
+-      if (browser_->tab_strip_model()->empty()) {
++      if (browser_->GetTabStripModel()->empty()) {
+         CloseWindow(browser_);
+         break;
+       }
+@@ -863,11 +861,11 @@
+           maho_browser_view->MaybeHandleMultiTabClose()) {
+         break;
+       }
+-      if (browser_->is_type_normal() &&
+-          !browser_->profile()->IsOffTheRecord() &&
+-          browser_->tab_strip_model()->count() == 1) {
++      if ((browser_->GetType() == BrowserWindowInterface::Type::TYPE_NORMAL) &&
++          !browser_->GetProfile()->IsOffTheRecord() &&
++          browser_->GetTabStripModel()->count() == 1) {
+         content::WebContents* active_wc =
+-            browser_->tab_strip_model()->GetActiveWebContents();
++            browser_->GetTabStripModel()->GetActiveWebContents();
+         if (active_wc) {
+           const GURL& url = active_wc->GetVisibleURL();
+           const bool is_empty_ntp =
+@@ -878,10 +876,10 @@
+             break;
+           }
+         }
+-        int old_index = browser_->tab_strip_model()->active_index();
+-        chrome::NewTab(browser_);
+-        if (browser_->tab_strip_model()->ContainsIndex(old_index)) {
+-          browser_->tab_strip_model()->CloseWebContentsAt(
++        int old_index = browser_->GetTabStripModel()->active_index();
++        chrome::NewTab(browser_, NewTabTypes::kNoUserAction);
++        if (browser_->GetTabStripModel()->ContainsIndex(old_index)) {
++          browser_->GetTabStripModel()->CloseWebContentsAt(
+               old_index, TabCloseTypes::CLOSE_USER_GESTURE |
+                              TabCloseTypes::CLOSE_CREATE_HISTORICAL_TAB);
+         }
+@@ -2524,6 +2524,5 @@
+ 
+   const bool is_fullscreen = window() && window()->IsFullscreen();
+   const bool show_main_ui = IsShowingMainUI();
+-  const bool show_location_bar = IsShowingLocationBar();
+ 
+   const bool main_not_fullscreen = show_main_ui && !is_fullscreen;
+@@ -2556,7 +2554,6 @@
+                                          main_not_fullscreen);
+   command_updater_->UpdateCommandEnabled(
+       IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY, main_not_fullscreen);
+-      IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY, main_not_fullscreen);
+ 
+   // Show various bits of UI
+   command_updater_->UpdateCommandEnabled(IDC_DEVELOPER_MENU, show_main_ui);

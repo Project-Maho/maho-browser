@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc b/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc
+--- a/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc
++++ b/chrome/browser/ui/views/frame/browser_caption_button_container_win.cc
+@@ -284,7 +284,7 @@
+ bool BrowserCaptionButtonContainer::IsMahoArcCaptionTriggerPoint(
+     const gfx::Point& screen_point) const {
+-  views::Widget* widget = GetWidget();
++  const views::Widget* widget = GetWidget();
+   if (!widget || widget->IsFullscreen()) {
+     return false;
+   }
+   // Maho: reveal when the pointer touches the full-width strip along

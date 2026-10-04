@@ -1,0 +1,68 @@
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+index 939a7916005c28760f38ff293779b9b78c90f4b4..80e0846ad64c173c823edc74fc6ef80555dd62ed 100644
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -1982,6 +1982,63 @@ split_tabs::SplitTabId TabStripModel::AddToNewSplit(
+   return split_id;
+ }
+ 
++bool TabStripModel::AddToExistingSplit(
++    split_tabs::SplitTabId split_id,
++    int source_index,
++    size_t insertion_index,
++    split_tabs::SplitTabVisualData visual_data,
++    split_tabs::SplitTabCreatedSource source) {
++  ReentrancyCheck reentrancy_check(&reentrancy_guard_);
++
++  if (!ContainsIndex(source_index) || !ContainsSplit(split_id)) {
++    return false;
++  }
++
++  tabs::TabInterface* source_tab = GetTabAtIndex(source_index);
++  split_tabs::SplitTabData* split_data = GetSplitData(split_id);
++  const std::vector<tabs::TabInterface*> existing_tabs =
++      split_data->ListTabs();
++  if (source_tab->IsSplit() || existing_tabs.size() < 2u ||
++      existing_tabs.size() >= 4u ||
++      insertion_index > existing_tabs.size() ||
++      !visual_data.ValidateForPaneCount(existing_tabs.size() + 1u)) {
++    return false;
++  }
++
++  split_tabs::RecordSplitTabCreated(source);
++  const bool source_was_active = source_tab == GetActiveTab();
++  const std::optional<tab_groups::TabGroupId> split_group =
++      existing_tabs.front()->GetGroup();
++  const bool split_pinned = existing_tabs.front()->IsPinned();
++
++  RemoveSplitImpl(
++      split_id, SplitTabChange::SplitTabRemoveReason::kSplitTabUpdated);
++
++  const int first_split_index = GetIndexOfTab(existing_tabs.front());
++  const int current_source_index = GetIndexOfTab(source_tab);
++  const int destination_index =
++      first_split_index + static_cast<int>(insertion_index) -
++      (current_source_index < first_split_index ? 1 : 0);
++  MoveTabToIndexImpl(current_source_index, destination_index, split_group,
++                     split_pinned, source_was_active);
++
++  std::vector<int> indices;
++  indices.reserve(existing_tabs.size() + 1u);
++  for (tabs::TabInterface* tab : existing_tabs) {
++    indices.push_back(GetIndexOfTab(tab));
++  }
++  indices.push_back(GetIndexOfTab(source_tab));
++  std::ranges::sort(indices);
++
++  const int pivot_index = active_index() == kNoTab
++                              ? GetIndexOfTab(existing_tabs.front())
++                              : active_index();
++  AddToSplitImpl(split_id, indices, pivot_index, visual_data,
++                 SplitTabChange::SplitTabAddReason::kSplitTabUpdated);
++  split_tabs::LogSplitViewUpdatedUKM(this, split_id);
++  return true;
++}
++
+ void TabStripModel::RestoreSplit(split_tabs::SplitTabId split_id,
+                                  const std::vector<int>& indices,
+                                  split_tabs::SplitTabVisualData visual_data) {

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>W6 Navigation Transition Benchmark</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; max-width: 600px; }
+    .card { border: 1px solid #ccc; border-radius: 6px; padding: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .form-group { margin-bottom: 1rem; display: flex; flex-direction: column; }
+    .form-group label { margin-bottom: 0.25rem; font-weight: bold; }
+    .form-group input { padding: 0.5rem; font-size: 1rem; }
+    .hidden { display: none; }
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+    .stat-box { background: #f0f3f6; padding: 1rem; border-radius: 4px; text-align: center; }
+  </style>
+</head>
+<body>
+  <!-- View 1: Login Route -->
+  <section id="view-login" class="card">
+    <h1>Account Sign In</h1>
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <div class="form-group">
+        <label for="login-username">Username or Email</label>
+        <input type="text" id="login-username" name="username" placeholder="admin" required />
+      </div>
+      <div class="form-group">
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" name="password" placeholder="••••••••" required />
+      </div>
+      <button type="submit" id="login-submit-btn">Sign In to Dashboard</button>
+    </form>
+    <div id="login-feedback" role="alert" style="margin-top: 0.5rem; color: #cb2431;"></div>
+  </section>
+
+  <!-- View 2: Dashboard Route (SPA Transition State) -->
+  <section id="view-dashboard" class="card hidden">
+    <header style="display: flex; justify-content: space-between; align-items: center;">
+      <h1 id="dashboard-heading">User Dashboard</h1>
+      <button id="logout-btn" onclick="handleLogout()">Log Out</button>
+    </header>
+    <p id="dashboard-welcome">Welcome back, <strong id="user-display">Admin</strong>!</p>
+    <div class="stats-grid">
+      <div class="stat-box">
+        <div>Active Sessions</div>
+        <div id="stat-sessions" style="font-size: 1.5rem; font-weight: bold;">3</div>
+      </div>
+      <div class="stat-box">
+        <div>Pending Tasks</div>
+        <div id="stat-tasks" style="font-size: 1.5rem; font-weight: bold;">12</div>
+      </div>
+    </div>
+    <div style="margin-top: 1rem;">
+      <button id="refresh-dashboard-btn" onclick="refreshDashboard()">Refresh Metrics</button>
+      <div id="dashboard-status" role="status" style="margin-top: 0.5rem; color: #22863a;">Dashboard active.</div>
+    </div>
+  </section>
+
+  <script>
+    function handleLogin(event) {
+      event.preventDefault();
+      const user = document.getElementById('login-username').value.trim();
+      const pass = document.getElementById('login-password').value.trim();
+      const feedback = document.getElementById('login-feedback');
+
+      if (!user || !pass) {
+        feedback.textContent = 'Please provide username and password.';
+        return;
+      }
+
+      // Simulate route navigation / SPA state transition
+      window.location.hash = '#/dashboard';
+      document.getElementById('view-login').className = 'card hidden';
+      document.getElementById('view-dashboard').className = 'card';
+      document.getElementById('user-display').textContent = user;
+      document.getElementById('dashboard-status').textContent = 'Authenticated as ' + user;
+    }
+
+    function handleLogout() {
+      window.location.hash = '#/login';
+      document.getElementById('view-dashboard').className = 'card hidden';
+      document.getElementById('view-login').className = 'card';
+      document.getElementById('login-feedback').textContent = 'You have logged out.';
+    }
+
+    function refreshDashboard() {
+      const s = Math.floor(Math.random() * 10) + 1;
+      const t = Math.floor(Math.random() * 20) + 1;
+      document.getElementById('stat-sessions').textContent = s;
+      document.getElementById('stat-tasks').textContent = t;
+      document.getElementById('dashboard-status').textContent = 'Metrics refreshed at ' + new Date().toLocaleTimeString();
+    }
+  </script>
+</body>
+</html>

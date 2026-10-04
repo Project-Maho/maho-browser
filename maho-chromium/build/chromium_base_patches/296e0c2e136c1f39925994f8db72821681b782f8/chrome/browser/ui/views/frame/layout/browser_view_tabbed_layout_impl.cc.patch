@@ -1,0 +1,534 @@
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+index 5f42b9931d6ddb532cade5eb7b4dcf9422336a5e..556a27c6db05ca79da8b5728b1619b3b4547a20a 100644
+--- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
++++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+@@ -9,16 +9,21 @@
+ #include <utility>
+ 
+ #include "base/i18n/rtl.h"
++#include "base/logging.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/trace_event/common/trace_event_common.h"
+ #include "base/trace_event/trace_event.h"
+ #include "build/build_config.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/animation/browser_animation_controller.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+ #include "chrome/browser/ui/ui_features.h"
+ #include "chrome/browser/ui/views/animations/tab_strip_animations.h"
+ #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
++#include "chrome/browser/ui/views/frame/browser_view.h"
++#include "chrome/browser/ui/views/frame/contents_container_view.h"
++#include "chrome/browser/ui/views/frame/contents_web_view.h"
+ #include "chrome/browser/ui/views/frame/custom_corners_background.h"
+ #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
+ #include "chrome/browser/ui/views/frame/horizontal_tab_strip_region_view.h"
+@@ -37,14 +42,22 @@
+ #include "chrome/browser/ui/views/tabs/projects/projects_panel_view.h"
+ #include "ui/gfx/geometry/outsets.h"
+ #include "ui/gfx/geometry/size.h"
++#include "ui/gfx/geometry/rounded_corners_f.h"
++#include "ui/compositor/layer.h"
+ #include "ui/views/controls/separator.h"
+ #include "ui/views/view_class_properties.h"
+ #include "ui/views/view_utils.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
++
++#include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "chrome/browser/ui/fullscreen_util_mac.h"
+ #endif
+ 
++#include "components/prefs/pref_service.h"
++
+ namespace {
+ 
+ // Loading bar is thicker than a separator, but instead of moving the bottom
+@@ -273,8 +286,10 @@ BrowserViewTabbedLayoutImpl::CalculateHorizontalLayout(
+     min_toolbar_height_side_panel_width = panel->GetMinimumSize().width();
+     preferred_toolbar_height_side_panel_width = std::max(
+         min_toolbar_height_side_panel_width, panel->GetPreferredSize().width());
+-    layout.side_panel_padding =
+-        GetLayoutConstant(LayoutConstant::kToolbarHeightSidePanelInset);
++    layout.side_panel_padding = panel->IsMahoAiPanelShowing()
++                                    ? 0
++                                    : GetLayoutConstant(
++                                          LayoutConstant::kToolbarHeightSidePanelInset);
+ 
+     // See if the toolbar-height side panel can fit next to the toolbar. If not,
+     // it is forced into content height.
+@@ -493,6 +508,13 @@ gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumMainAreaSize(
+ 
+ BrowserViewTabbedLayoutImpl::TabStripType
+ BrowserViewTabbedLayoutImpl::GetTabStripType() const {
++  // Maho Arc layout: suppress all Chromium tab strip types for normal windows.
++  // The left rail provides its own tab presentation.
++  if (IsMahoArcLayoutActive()) {
++    LOG(INFO) << "MahoPinnedDebug GetTabStripType: path=maho_arc_suppressed result=none";
++    return TabStripType::kNone;
++  }
++
+   if (delegate().ShouldDrawVerticalTabStrip()) {
+ #if BUILDFLAG(IS_MAC)
+     // Do not lay out the vertical tabstrip in content-fullscreen on Mac. This
+@@ -500,20 +522,28 @@ BrowserViewTabbedLayoutImpl::GetTabStripType() const {
+     // itself relies on BrowserView reporting which tab strip it *would* draw,
+     // creating a circular dependency/race condition.
+     if (fullscreen_utils::IsInContentFullscreen(browser())) {
++      LOG(INFO) << "MahoPinnedDebug GetTabStripType: path=vertical_content_fullscreen_suppressed result=none";
+       return TabStripType::kNone;
+     }
+ #endif
++    LOG(INFO) << "MahoPinnedDebug GetTabStripType: path=vertical result=vertical";
+     return TabStripType::kVertical;
+   }
+-  return delegate().ShouldDrawTabStrip() ? TabStripType::kHorizontal
+-                                         : TabStripType::kNone;
++  const bool should_draw_tab_strip = delegate().ShouldDrawTabStrip();
++  LOG(INFO) << "MahoPinnedDebug GetTabStripType: path="
++            << (should_draw_tab_strip ? "horizontal" : "none")
++            << " result="
++            << (should_draw_tab_strip ? "horizontal" : "none");
++  return should_draw_tab_strip ? TabStripType::kHorizontal
++                               : TabStripType::kNone;
+ }
+ 
+ bool BrowserViewTabbedLayoutImpl::ShadowOverlayVisible() const {
+   if (!views().toolbar_height_side_panel) {
+     return false;
+   }
+-  return views().toolbar_height_side_panel->GetVisible();
++  return views().toolbar_height_side_panel->GetVisible() &&
++         !views().toolbar_height_side_panel->IsMahoAiPanelShowing();
+ }
+ 
+ BrowserViewTabbedLayoutImpl::VerticalTabStripCollapsedState
+@@ -565,6 +595,18 @@ int BrowserViewTabbedLayoutImpl::GetCollapsedVerticalTabStripRelativeTop(
+ 
+ gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumSize(
+     const views::View* host) const {
++  // Maho Arc layout: rail width + minimum contents width.
++  if (IsMahoArcLayoutActive()) {
++    PrefService* prefs = browser()->profile()->GetPrefs();
++    const bool panel_expanded =
++        maho::sidebar_prefs::IsSidebarPanelExpanded(prefs);
++    const int sidebar_width = panel_expanded
++        ? maho::sidebar_prefs::GetSidebarWidthForLayout(
++              prefs->GetInteger(maho::sidebar_prefs::kSidebarWidth))
++        : maho::sidebar_layout::kHoverTriggerWidthDp;
++    return gfx::Size(sidebar_width + kMainBrowserContentsMinimumWidth, 0);
++  }
++
+   auto params = delegate().GetBrowserLayoutParams(/*use_browser_bounds=*/true);
+ 
+   // This is a simplified version of the same method in
+@@ -610,6 +652,11 @@ gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumSize(
+ BrowserViewTabbedLayoutImpl::ProposedLayout
+ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+     const BrowserLayoutParams& browser_params) const {
++  // Maho Arc layout: dedicated two-pane path for normal windows.
++  if (IsMahoArcLayoutActive()) {
++    return CalculateMahoArcLayout(browser_params);
++  }
++
+   // TODO(https://crbug.com/453717426): Consider caching layouts of the same
+   // size if no `InvalidateLayout()` has happened.
+ 
+@@ -798,9 +845,18 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+     layout.AddChild(views().projects_panel_container, projects_panel_bounds);
+   }
+ 
++  // Maho Arc layout: stock top chrome (tabs, toolbar, omnibox) must never occupy
++  // vertical space in the window, regardless of sidebar visibility or toggle state.
++  if (IsParentedTo(views().top_container, views().browser_view)) {
++    layout.AddChild(views().top_container, gfx::Rect(), false);
++  }
++  if (IsParentedTo(views().top_container_separator, views().browser_view)) {
++    layout.AddChild(views().top_container_separator, gfx::Rect(), false);
++  }
++
+   // When the tabstrip isn't at the top or in constrained widths, the top
+   // container is laid out before all side panels.
+-  if (horizontal_layout.force_top_container_to_top &&
++  if ((false) && horizontal_layout.force_top_container_to_top &&
+       IsParentedTo(views().top_container, views().browser_view)) {
+     auto& top_container_layout =
+         layout.AddChild(views().top_container, gfx::Rect());
+@@ -931,7 +987,7 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+   // Lay out top container. The top container is laid out after the
+   // toolbar-height side panel with a horizontal tabstrip if the browser is wide
+   // enough.
+-  if (!horizontal_layout.force_top_container_to_top &&
++  if ((false) && !horizontal_layout.force_top_container_to_top &&
+       IsParentedTo(views().top_container, views().browser_view)) {
+     auto& top_container_layout =
+         layout.AddChild(views().top_container, gfx::Rect());
+@@ -1169,6 +1225,282 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
+   return layout;
+ }
+ 
++bool BrowserViewTabbedLayoutImpl::IsMahoArcLayoutActive() const {
++  auto* browser_view = views::AsViewClass<BrowserView>(views().browser_view);
++  return browser_view && browser_view->IsMahoArcLayoutActive();
++}
++
++BrowserViewTabbedLayoutImpl::ProposedLayout
++BrowserViewTabbedLayoutImpl::CalculateMahoArcLayout(
++    const BrowserLayoutParams& browser_params) const {
++  TRACE_EVENT0("ui", "BrowserViewTabbedLayoutImpl::CalculateMahoArcLayout");
++  ProposedLayout layout;
++
++  const gfx::Rect& client_area = browser_params.visual_client_area;
++
++  if (views().window_scrim) {
++    layout.AddChild(views().window_scrim, client_area);
++  }
++
++  // In fullscreen the sidebar collapses so content gets the full area.
++  // This prevents the rail from overlapping immersive-reveal and content
++  // fullscreen (video, etc.).
++  const bool is_fullscreen =
++      delegate().GetBrowserWindowState() == WindowState::kFullscreen;
++  const bool panel_expanded = !is_fullscreen &&
++      maho::sidebar_prefs::IsSidebarPanelExpanded(
++          browser()->profile()->GetPrefs());
++  int rail_width;
++  if (is_fullscreen) {
++    rail_width = 0;
++  } else if (panel_expanded) {
++    rail_width = maho::sidebar_prefs::GetSidebarWidthForLayout(
++        browser()->profile()->GetPrefs()->GetInteger(
++            maho::sidebar_prefs::kSidebarWidth));
++  } else {
++    rail_width = views().maho_sidebar_container
++        ? views().maho_sidebar_container->GetPreferredSize().width()
++        : maho::sidebar_layout::kHoverTriggerWidthDp;
++  }
++
++  // Maho: an auto-hide sidebar reserves no width. It floats over the
++  // contents as a hover strip, or as the full sidebar while revealed, so the
++  // contents never relayout while it slides and the strip stays hoverable.
++  int sidebar_width = rail_width;
++  if (!is_fullscreen && rail_width == 0) {
++    if (const auto* floating_sidebar =
++            views::AsViewClass<maho::MahoSidebarContainerView>(
++                views().maho_sidebar_container)) {
++      sidebar_width = floating_sidebar->GetFloatingOverlayWidth();
++    }
++  }
++  const gfx::Rect rail_bounds(client_area.x(), client_area.y(), sidebar_width,
++                               client_area.height());
++  layout.AddChild(views().maho_sidebar_container, rail_bounds, !is_fullscreen);
++
++  // Contents: everything to the right of the rail.
++  const int contents_x = client_area.x() + rail_width;
++  const int contents_width = std::max(0, client_area.width() - rail_width);
++  int contents_left = contents_x;
++  int contents_right = contents_x + contents_width;
++
++  if (IsParentedToAndVisible(views().projects_panel_container,
++                             views().browser_view)) {
++    int target_width = projects_panel::kProjectsPanelMinWidth;
++    bool projects_panel_should_appear_elevated = true;
++    if (views().vertical_tab_strip_region_view &&
++        views().vertical_tab_strip_region_view->GetVisible()) {
++      const int vertical_tab_strip_width =
++          views().vertical_tab_strip_region_view->GetPreferredSize().width();
++      projects_panel_should_appear_elevated =
++          vertical_tab_strip_width < projects_panel::kProjectsPanelMinWidth;
++      if (!projects_panel_should_appear_elevated) {
++        target_width = std::max(target_width - views::Separator::kThickness,
++                                vertical_tab_strip_width -
++                                    views::Separator::kThickness);
++      }
++    }
++    views().projects_panel_container->SetTargetWidth(target_width);
++    views().projects_panel_container->SetIsElevated(
++        projects_panel_should_appear_elevated);
++
++    const double reveal_amount =
++        views().projects_panel_container->GetResizeAnimationValue();
++    const int visible_width = base::ClampFloor(target_width * reveal_amount);
++
++    gfx::Rect projects_panel_bounds(contents_x, client_area.y(), visible_width,
++                                    client_area.height());
++    layout.AddChild(views().projects_panel_container, projects_panel_bounds);
++  }
++
++  // Infobar sits at the top of the contents column; contents start below it.
++  int contents_top = client_area.y();
++  int infobar_height = 0;
++  const bool infobar_visible =
++      IsParentedTo(views().infobar_container, views().browser_view) &&
++      delegate().IsInfobarVisible();
++  if (infobar_visible) {
++    infobar_height = views().infobar_container->GetPreferredSize().height();
++    contents_top += infobar_height;
++  }
++
++  // Suppress all top chrome views with zero bounds.
++  if (IsParentedTo(views().horizontal_tab_strip_region_view,
++                   views().browser_view)) {
++    layout.AddChild(views().horizontal_tab_strip_region_view, gfx::Rect(),
++                    false);
++  }
++  if (IsParentedTo(views().vertical_tab_strip_region_view,
++                   views().browser_view)) {
++    layout.AddChild(views().vertical_tab_strip_region_view, gfx::Rect(),
++                    false);
++  }
++  if (IsParentedTo(views().vertical_tab_strip_top_corner,
++                   views().browser_view)) {
++    layout.AddChild(views().vertical_tab_strip_top_corner, gfx::Rect(), false);
++  }
++  if (IsParentedTo(views().vertical_tab_strip_bottom_corner,
++                   views().browser_view)) {
++    layout.AddChild(views().vertical_tab_strip_bottom_corner, gfx::Rect(),
++                    false);
++  }
++  if (IsParentedTo(views().top_container, views().browser_view)) {
++    auto& top_container_layout =
++        layout.AddChild(views().top_container, gfx::Rect(), false);
++    if (IsParentedTo(views().horizontal_tab_strip_region_view,
++                     views().top_container)) {
++      top_container_layout.AddChild(
++          views().horizontal_tab_strip_region_view, gfx::Rect(), false);
++    }
++    if (IsParentedTo(views().toolbar, views().top_container)) {
++      top_container_layout.AddChild(views().toolbar, gfx::Rect(), false);
++    }
++    if (IsParentedTo(views().bookmark_bar, views().top_container)) {
++      top_container_layout.AddChild(views().bookmark_bar, gfx::Rect(), false);
++    }
++    if (IsParentedTo(views().loading_bar, views().top_container)) {
++      top_container_layout.AddChild(views().loading_bar, gfx::Rect(), false);
++    }
++    if (IsParentedTo(views().top_container_separator, views().top_container)) {
++      top_container_layout.AddChild(views().top_container_separator,
++                                    gfx::Rect(), false);
++    }
++  }
++
++  if (IsParentedTo(views().main_shadow_overlay, views().browser_view)) {
++    layout.AddChild(views().main_shadow_overlay, gfx::Rect(), false);
++  }
++  if (IsParentedTo(views().main_background_region, views().browser_view)) {
++    layout.AddChild(views().main_background_region, gfx::Rect(), false);
++  }
++  if (IsParentedTo(views().bookmark_bar, views().browser_view)) {
++    layout.AddChild(views().bookmark_bar, gfx::Rect(), false);
++  }
++  if (IsParentedTo(views().loading_bar, views().browser_view)) {
++    layout.AddChild(views().loading_bar, gfx::Rect(), false);
++  }
++
++  if (IsParentedTo(views().infobar_container, views().browser_view)) {
++    gfx::Rect infobar_bounds;
++    if (infobar_visible) {
++      infobar_bounds = gfx::Rect(contents_x, client_area.y(), contents_width,
++                                  infobar_height);
++    }
++    layout.AddChild(views().infobar_container, infobar_bounds, infobar_visible);
++  }
++
++  if (IsParentedToAndVisible(views().toolbar_height_side_panel,
++                             views().browser_view)) {
++    SidePanel* const toolbar_height_side_panel =
++        views().toolbar_height_side_panel;
++    const bool toolbar_height_side_panel_leading =
++        toolbar_height_side_panel->IsRightAligned() == base::i18n::IsRTL();
++    const double toolbar_height_side_panel_reveal_amount =
++        toolbar_height_side_panel->GetAnimationValue();
++    const int target_width =
++        toolbar_height_side_panel->GetPreferredSize().width();
++    const int visible_width = base::ClampFloor(
++        target_width * toolbar_height_side_panel_reveal_amount);
++    if (visible_width > 0) {
++      if (toolbar_height_side_panel_leading) {
++        contents_left += visible_width;
++      } else {
++        contents_right -= visible_width;
++      }
++    }
++    const int top = client_area.y();
++    gfx::Rect toolbar_height_bounds(
++        toolbar_height_side_panel_leading
++            ? contents_x - (target_width - visible_width)
++            : client_area.right() - visible_width,
++        top, target_width, client_area.bottom() - top);
++    layout.AddChild(views().toolbar_height_side_panel, toolbar_height_bounds);
++
++    if (IsParentedToAndVisible(views().side_panel_animation_content,
++                               views().browser_view)) {
++      gfx::Rect toolbar_height_side_panel_final_bounds(
++          toolbar_height_side_panel_leading ? contents_x
++                                            : client_area.right() - target_width,
++          toolbar_height_bounds.y(), target_width,
++          toolbar_height_bounds.height());
++      gfx::Rect side_panel_animation_content_bounds =
++          toolbar_height_side_panel->GetContentAnimationBounds(
++              toolbar_height_side_panel_final_bounds);
++      layout.AddChild(views().side_panel_animation_content,
++                      side_panel_animation_content_bounds);
++    }
++  }
++
++  // Side panels: zero-out toolbar-height, allow contents-height if visible.
++  if (IsParentedTo(views().contents_height_side_panel, views().browser_view)) {
++    const bool panel_visible =
++        views().contents_height_side_panel->GetVisible();
++    if (panel_visible) {
++      const int panel_width =
++          views().contents_height_side_panel->GetPreferredSize().width();
++      const bool is_right =
++          views().contents_height_side_panel->IsRightAligned();
++      const int panel_top = infobar_visible ? client_area.y() + infobar_height
++                                             : client_area.y();
++      const gfx::Rect panel_bounds(
++          is_right ? contents_right - panel_width : contents_left, panel_top,
++          panel_width, client_area.height() - infobar_height);
++      layout.AddChild(views().contents_height_side_panel, panel_bounds);
++      if (panel_width > 0) {
++        if (is_right) {
++          contents_right -= panel_width;
++        } else {
++          contents_left += panel_width;
++        }
++      }
++    } else {
++      layout.AddChild(views().contents_height_side_panel, gfx::Rect(), false);
++    }
++  }
++
++  const int content_left =
++      std::max(contents_left, browser_params.visual_client_area.x());
++  const int content_right =
++      std::min(contents_right, browser_params.visual_client_area.right());
++  // Edge-to-edge on all sides (no margin); rounded right corners nest the pane
++  // into the window frame.
++  const int content_y = contents_top;
++  const int content_width = std::max(0, content_right - content_left);
++  const int content_height = std::max(0, client_area.height() - infobar_height);
++  const gfx::Rect contents_bounds(
++      content_left, content_y, content_width, content_height);
++  CHECK(
++      IsParentedToAndVisible(views().contents_container, views().browser_view));
++  layout.AddChild(views().contents_container, contents_bounds);
++
++  if (views().maho_content_gradient_view) {
++    gfx::Rect shared_glass_bounds = contents_bounds;
++    if (views().contents_height_side_panel &&
++        views().contents_height_side_panel->GetVisible()) {
++      const auto panel_bounds = layout.GetBoundsFor(
++          views().contents_height_side_panel, views().browser_view);
++      if (panel_bounds) {
++        shared_glass_bounds.Union(*panel_bounds);
++      }
++    }
++    shared_glass_bounds.Union(contents_bounds);
++    layout.AddChild(views().maho_content_gradient_view,
++                    shared_glass_bounds,
++                    views().maho_content_gradient_view->GetVisible());
++  }
++
++  if (views().maho_create_space_blank_view &&
++      views().maho_create_space_blank_view->GetVisible()) {
++    layout.AddChild(views().maho_create_space_blank_view, contents_bounds);
++  }
++
++  views().multi_contents_view->SetShouldShowLeadingSeparator(false);
++  views().multi_contents_view->SetShouldShowTrailingSeparator(false);
++  views().multi_contents_view->SetShouldShowTopSeparator(false);
++
++  return layout;
++}
++
+ gfx::Rect BrowserViewTabbedLayoutImpl::CalculateTopContainerLayout(
+     ProposedLayout& layout,
+     BrowserLayoutParams params,
+@@ -1294,6 +1626,43 @@ void BrowserViewTabbedLayoutImpl::ConfigureTopContainerBackground(
+ 
+ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
+     const BrowserLayoutParams& params) {
++  const bool maho_ai_panel_showing =
++      views().toolbar_height_side_panel &&
++      views().toolbar_height_side_panel->IsMahoAiPanelShowing();
++  views::View* contents = views().contents_container;
++  if (contents) {
++    if (IsMahoArcLayoutActive()) {
++      if (!contents->layer()) {
++        contents->SetPaintToLayer();
++        contents->layer()->SetFillsBoundsOpaquely(false);
++      }
++      // Square left / rounded right so content sits flush at the sidebar seam.
++      // RoundedCornersF order: upper_left, upper_right, lower_right, lower_left.
++      contents->layer()->SetRoundedCornerRadius(
++          maho_ai_panel_showing
++              ? gfx::RoundedCornersF(0.0f)
++              : gfx::RoundedCornersF(0.0f, 12.0f, 12.0f, 0.0f));
++      contents->layer()->SetMasksToBounds(true);
++      if (maho_ai_panel_showing && views().multi_contents_view) {
++        for (ContentsContainerView* container :
++             views().multi_contents_view->contents_container_views()) {
++          container->SetMahoAiPanelAdjacent(true);
++          container->contents_view()->SetBackgroundRadii(
++              gfx::RoundedCornersF(0.0f));
++          container->contents_view()->holder()->SetCornerRadii(
++              gfx::RoundedCornersF(0.0f));
++        }
++      } else if (views().multi_contents_view) {
++        for (ContentsContainerView* container :
++             views().multi_contents_view->contents_container_views()) {
++          container->SetMahoAiPanelAdjacent(false);
++        }
++      }
++    } else if (contents->layer()) {
++      contents->layer()->SetRoundedCornerRadius(gfx::RoundedCornersF(0.0f));
++      contents->layer()->SetMasksToBounds(false);
++    }
++  }
+   const auto tab_strip_type = GetTabStripType();
+   const auto window_state = delegate().GetBrowserWindowState();
+ 
+@@ -1408,8 +1777,10 @@ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
+   switch (tab_strip_type) {
+     case TabStripType::kHorizontal: {
+       // Trailing curve is always shown for normal horizontal tabstrip.
+-      toolbar_corners.upper_trailing.type =
+-          CustomCornersBackground::CornerType::kRoundedWithBackground;
++      if (!maho_ai_panel_showing) {
++        toolbar_corners.upper_trailing.type =
++            CustomCornersBackground::CornerType::kRoundedWithBackground;
++      }
+ 
+       // If there is anything on the leading side or the first tab is not
+       // selected, then the corner radius is shown, otherwise we hide the
+@@ -1455,8 +1826,10 @@ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
+           main_background_corners.upper_leading.type =
+               CustomCornersBackground::CornerType::kRoundedWithBackground;
+         }
+-        main_background_corners.upper_trailing.type =
+-            CustomCornersBackground::CornerType::kRoundedWithBackground;
++        if (!maho_ai_panel_showing) {
++          main_background_corners.upper_trailing.type =
++              CustomCornersBackground::CornerType::kRoundedWithBackground;
++        }
+       }
+     }
+ 
+@@ -1467,8 +1840,10 @@ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
+         main_background_corners.lower_leading =
+             background->GetWindowCorner(/*upper=*/false);
+       }
+-      main_background_corners.lower_trailing =
+-          background->GetWindowCorner(/*upper=*/false);
++      if (!maho_ai_panel_showing) {
++        main_background_corners.lower_trailing =
++            background->GetWindowCorner(/*upper=*/false);
++      }
+     }
+ 
+     background->SetCorners(main_background_corners);

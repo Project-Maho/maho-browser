@@ -1,0 +1,13 @@
+diff --git a/ui/views/widget/desktop_aura/desktop_native_widget_aura.h b/ui/views/widget/desktop_aura/desktop_native_widget_aura.h
+index 3bc641d73b3b25e9e31e9cb0f4778d355efa5914..30db751cc94b3854c8ce7c0ff86978e585f42a5c 100644
+--- a/ui/views/widget/desktop_aura/desktop_native_widget_aura.h
++++ b/ui/views/widget/desktop_aura/desktop_native_widget_aura.h
+@@ -202,6 +202,8 @@ class VIEWS_EXPORT DesktopNativeWidgetAura
+                        int operation,
+                        ui::mojom::DragEventSource source) override;
+   void CancelDragDropLoop(View* view) override;
++  void UpdateDragImage(const gfx::ImageSkia& image,
++                       const gfx::Vector2d& offset) override;
+   void SchedulePaintInRect(const gfx::Rect& rect) override;
+   void ScheduleLayout() override;
+   void SetCursor(const ui::Cursor& cursor) override;

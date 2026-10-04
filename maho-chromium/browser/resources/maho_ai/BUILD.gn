@@ -1,0 +1,176 @@
+import("//ui/webui/resources/tools/build_webui.gni")
+import("//ui/webui/resources/tools/generate_grd.gni")
+
+assert(!is_android)
+
+import("//maho/build/templates/tailwind_css.gni")
+
+tailwind_css("build_tailwind") {
+  input = "react/theme/app.css"
+  output = "$target_gen_dir/app.generated.css"
+  sources = [
+    "../maho_common/react/theme/tokens.css",
+    "../maho_common/react/ui/alert.tsx",
+    "../maho_common/react/ui/badge.tsx",
+    "../maho_common/react/ui/button.tsx",
+    "../maho_common/react/ui/card.tsx",
+    "../maho_common/react/ui/checkbox.tsx",
+    "../maho_common/react/ui/context-menu.tsx",
+    "../maho_common/react/ui/dialog.tsx",
+    "../maho_common/react/ui/dropdown-menu.tsx",
+    "../maho_common/react/ui/glass-ambient.tsx",
+    "../maho_common/react/ui/input.tsx",
+    "../maho_common/react/ui/agent-brand-icons.tsx",
+    "../maho_common/react/ui/mcp-agent-guidance-card.tsx",
+    "../maho_common/react/ui/popover.tsx",
+    "../maho_common/react/ui/select.tsx",
+    "../maho_common/react/ui/separator.tsx",
+    "../maho_common/react/ui/skeleton.tsx",
+    "../maho_common/react/ui/slider.tsx",
+    "../maho_common/react/ui/sonner.tsx",
+    "../maho_common/react/ui/switch.tsx",
+    "../maho_common/react/ui/tabs.tsx",
+    "../maho_common/react/ui/textarea.tsx",
+    "../maho_common/react/ui/toggle-group.tsx",
+    "../maho_common/react/ui/tooltip.tsx",
+    "react/app.tsx",
+    "react/components/artifact-card.tsx",
+    "react/components/composer-textarea.tsx",
+    "react/components/empty-state.tsx",
+    "react/components/error-detail.tsx",
+    "react/components/markdown.tsx",
+    "react/features/compact/compact-shell.tsx",
+    "react/features/compact/compact-stage.tsx",
+    "react/features/compact/compact-topbar.tsx",
+    "react/features/compact/composer.tsx",
+    "react/features/compact/conversation-message.tsx",
+    "react/features/compact/conversation-system-item.tsx",
+    "react/features/compact/conversation-thread.tsx",
+    "react/features/compact/pending-thought.tsx",
+    "react/features/compact/tab-tidy-modal.tsx",
+    "react/features/compact/voice-input-modal.tsx",
+    "react/features/developer/developer-workspace.tsx",
+    "react/features/developer/event-card.tsx",
+    "react/features/developer/inspector.tsx",
+    "react/features/developer/left-rail.tsx",
+    "react/features/developer/mode-toggle.tsx",
+    "react/features/developer/timeline.tsx",
+    "react/features/dismissible-mcp-guidance-card.tsx",
+    "react/theme/app.css",
+  ]
+}
+
+action("bundle_react") {
+  script = "//third_party/node/node.py"
+  inputs = [
+    "//third_party/node/node.py",
+    "../maho_common/react/mcp-agent-guidance-card.tsx",
+    "../maho_common/react/mcp-agent-guidance-copy.ts",
+    "../maho_common/react/store_utils.ts",
+    "../maho_common/react/use_mojo.ts",
+    "maho_ai.mojom-webui.js.d.ts",
+    "maho_routines.mojom-webui.js.d.ts",
+    "react/app.tsx",
+    "react/boot-guard.ts",
+    "react/components/artifact-card.tsx",
+    "react/features/compact/compact-shell.tsx",
+    "react/features/compact/compact-stage.tsx",
+    "react/features/compact/compact-topbar.tsx",
+    "react/features/compact/composer.tsx",
+    "react/features/compact/conversation-message.tsx",
+    "react/features/compact/conversation-system-item.tsx",
+    "react/features/compact/conversation-thread.tsx",
+    "react/features/compact/pending-thought.tsx",
+    "react/features/compact/voice-input-modal.tsx",
+    "react/features/developer/developer-workspace.tsx",
+    "react/features/developer/event-card.tsx",
+    "react/features/developer/inspector.tsx",
+    "react/features/developer/left-rail.tsx",
+    "react/features/developer/mode-toggle.tsx",
+    "react/features/developer/timeline.tsx",
+    "react/features/dismissible-mcp-guidance-card.tsx",
+    "react/hooks/use-app-state.ts",
+    "react/hooks/use-auto-scroll.ts",
+    "react/hooks/use-voice-input.ts",
+    "react/lib/editable-snapshot.ts",
+    "react/lib/format-size.ts",
+    "react/lib/format-timestamp.ts",
+    "react/store.ts",
+    "react/tsconfig.json",
+    "react/components/composer-textarea.tsx",
+    "react/components/empty-state.tsx",
+    "react/components/error-detail.tsx",
+    "react/components/markdown.tsx",
+    "store.ts",
+    "views/cards.ts",
+    "views/conversation_thread.ts",
+    "views/icons.ts",
+    "../maho_common/react/ui/context-menu.tsx",
+    "../maho_common/react/ui/glass-ambient.tsx",
+    "../maho_common/react/ui/agent-brand-icons.tsx",
+    "../maho_common/react/ui/mcp-agent-guidance-card.tsx",
+    "bundle_react.mjs",
+  ]
+  outputs = [ "$target_gen_dir/app_bundle.js" ]
+  args = [
+    rebase_path("//maho/browser/resources/maho_ai/bundle_react.mjs", root_build_dir),
+    rebase_path(".", root_build_dir),
+    rebase_path("$target_gen_dir/app_bundle.js", root_build_dir),
+  ]
+}
+
+generate_grd("bundle_grdp") {
+  grd_prefix = "maho_ai_bundle"
+  out_grd = "$target_gen_dir/maho_ai_bundle.grdp"
+  input_files = [
+    "app_bundle.js",
+    "app.generated.css",
+  ]
+  input_files_base_dir = rebase_path(target_gen_dir, root_build_dir)
+  deps = [
+    ":bundle_react",
+    ":build_tailwind",
+  ]
+}
+
+build_webui("build") {
+  grd_prefix = "maho_ai"
+
+  static_files = [
+    "maho_ai.html",
+    "icons/arrow-up-right.svg",
+    "icons/circle-stop.svg",
+    "icons/copy.svg",
+    "icons/ellipsis.svg",
+    "icons/globe.svg",
+    "icons/panel-right.svg",
+    "icons/pencil.svg",
+    "icons/plus.svg",
+    "icons/rotate-cw.svg",
+    "icons/send.svg",
+    "icons/settings.svg",
+    "icons/sparkles.svg",
+    "icons/thumbs-down.svg",
+    "icons/thumbs-up.svg",
+    "icons/trash-2.svg",
+    "icons/x.svg",
+  ]
+
+  ts_files = [ "app.ts" ]
+
+  ts_deps = [ "//ui/webui/resources/mojo:build_ts" ]
+
+  webui_context_type = "trusted"
+
+  mojo_files_deps = [
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings_ts__generator",
+    "//maho/browser/ui/webui/maho_routines:mojo_bindings_ts__generator",
+  ]
+  mojo_files = [
+    "$root_gen_dir/maho/browser/ui/webui/maho_ai/maho_ai.mojom-webui.ts",
+    "$root_gen_dir/maho/browser/ui/webui/maho_routines/maho_routines.mojom-webui.ts",
+  ]
+
+  extra_grdp_deps = [ ":bundle_grdp" ]
+  extra_grdp_files = [ "$target_gen_dir/maho_ai_bundle.grdp" ]
+}

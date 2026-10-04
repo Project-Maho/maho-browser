@@ -1,0 +1,65 @@
+diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
+index 25d86bd127e12c654dc839df70af88d8ee07c7b8..1149a97474f294a230f895432ce96dfa71188fa0 100644
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -37,6 +37,18 @@
+ #include "chrome/browser/gpu/gpu_mode_manager.h"
+ #include "chrome/browser/lifetime/browser_shutdown.h"
+ #include "chrome/browser/login_detection/login_detection_prefs.h"
++#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
++#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"
++#include "maho/browser/mail_helper/maho_mail_service.h"
++#include "maho/browser/passwords/maho_password_provider_utils.h"
++#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"
++#include "maho/browser/mail_helper/maho_mail_service.h"
++#include "maho/browser/ui/tabs/maho_ctrl_tab_prefs.h"
++#include "maho/browser/maho_space_profile_bridge.h"
++#include "maho/browser/maho_tab_id_session_helper.h"
++#include "maho/browser/ui/webui/maho_ai/maho_ai_prefs_registration.h"
++#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
++#include "maho/browser/updates/maho_update_prefs.h"
+ #include "chrome/browser/media/media_engagement_service.h"
+ #include "chrome/browser/media/media_storage_id_salt.h"
+ #include "chrome/browser/media/prefs/capture_device_ranking.h"
+@@ -1373,6 +1385,7 @@ std::string GetCountry() {
+ }
+ 
+ void RegisterLocalState(PrefRegistrySimple* registry) {
++  maho::passwords::RegisterLocalStatePrefs(registry);
+   // Call outs to individual subsystems that register Local State (browser-wide)
+   // prefs en masse. See RegisterProfilePrefs for per-profile prefs. Please
+   // keep this list alphabetized.
+@@ -1488,6 +1501,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+   RegisterBrowserPrefs(registry);
+   speech::SodaInstaller::RegisterLocalStatePrefs(registry);
+   StartupBrowserCreator::RegisterLocalStatePrefs(registry);
++  maho::MahoSpaceProfileBridge::RegisterLocalStatePrefs(registry);
++  maho::updates::RegisterLocalStatePrefs(registry);
+   task_manager::TaskManagerInterface::RegisterPrefs(registry);
+   UpgradeDetector::RegisterPrefs(registry);
+   registry->RegisterIntegerPref(prefs::kLastWhatsNewVersion, 0);
+@@ -1736,6 +1751,13 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+   language::LanguagePrefs::RegisterProfilePrefs(registry);
+   login_detection::prefs::RegisterProfilePrefs(registry);
+   lookalikes::RegisterProfilePrefs(registry);
++  maho::ai::RegisterProfilePrefs(registry);
++  maho::welcome::RegisterProfilePrefs(registry);
++  maho::updates::RegisterProfilePrefs(registry);
++  maho::sidebar_prefs::RegisterProfilePrefs(registry);
++  maho::ctrl_tab_prefs::RegisterProfilePrefs(registry);
++  maho::MahoMailService::RegisterProfilePrefs(registry);
++  maho::MahoTabIdSessionHelper::RegisterProfilePrefs(registry);
+   media_prefs::RegisterUserPrefs(registry);
+   MediaCaptureDevicesDispatcher::RegisterProfilePrefs(registry);
+   media_device_salt::MediaDeviceIDSalt::RegisterProfilePrefs(registry);
+@@ -2413,6 +2435,10 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
+   // TODO(crbug.com/356148174): Remove once kMoveThemePrefsToSpecifics has been
+   // enabled for an year.
+   MigrateSyncingThemePrefsToNonSyncingIfNeeded(profile_prefs);
++
++  // Added 2026-05-04 to seed the 2-state sidebar prefs from legacy shell
++  // visibility during profile migration.
++  maho::sidebar_prefs::MigrateFromLegacyVisiblePref(profile_prefs);
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+   // Added 10/2025.
