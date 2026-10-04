@@ -4,6 +4,11 @@ import sys
 import hashlib
 import subprocess
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
@@ -34,7 +39,7 @@ def get_git_info(cwd):
     return head, index_dig, diff_sha
 
 def main():
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
 
     # Git ls-files
     try:

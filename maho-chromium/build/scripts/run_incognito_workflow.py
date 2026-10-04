@@ -4,13 +4,18 @@ import os
 import sys
 import subprocess
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run incognito desktop implementation workflow.")
     parser.add_argument("--check-all", action="store_true", help="Run all verification checks.")
     parser.add_argument("--audit", action="store_true", help="Run preimage audit only.")
     args = parser.parse_args()
 
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     script_dir = os.path.join(workspace, "maho-chromium/build/scripts")
 
     if args.audit or args.check_all:

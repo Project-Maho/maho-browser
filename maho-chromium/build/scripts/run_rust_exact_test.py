@@ -5,6 +5,11 @@ import os
 import subprocess
 import sys
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run exact Rust tests for a specific inventory group.")
     parser.add_argument("--inventory", required=True, help="Path to incognito_required_inventory.json")
@@ -29,7 +34,7 @@ def main():
 
     os.makedirs(args.artifact_dir, exist_ok=True)
 
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     manifest_abs_path = os.path.join(workspace, manifest_path)
 
     passed_tests = []
