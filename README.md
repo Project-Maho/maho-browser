@@ -1,38 +1,49 @@
-# Maho
+<div align="center">
+  <img src="./docs/assets/product_logo.svg" width="80" alt="Maho">
 
-**A browser that works for you, not on you.**
+  <h1>Maho</h1>
 
-Maho is a Chromium-based browser built around a simple idea: your attention is
-yours. It organizes your work into **spaces** instead of one endless window,
-blocks ads and trackers by default, and puts an AI assistant and your email
-inside the browser so you stop switching between apps.
+  <p><strong>A browser that works for you, not on you.</strong></p>
 
-This repository is the **client source code** of that browser.
+  <p>
+    <a href="https://mahobrowser.com">Website</a> ·
+    <a href="https://github.com/Project-Maho/maho-browser/issues">Issues</a> ·
+    <a href="./CONTRIBUTING.md">Contribute</a> ·
+    <a href="./SECURITY.md">Security</a>
+  </p>
+
+  <p>
+    <img src="https://img.shields.io/badge/license-Sustainable%20Use-blue" alt="License: SUL">
+    <img src="https://img.shields.io/badge/status-public-brightgreen" alt="Status: public">
+    <img src="https://img.shields.io/badge/telemetry-none-success" alt="Telemetry: none">
+  </p>
+
+  <img src="./docs/assets/hero.png" alt="Maho browser — organized spaces, built-in blocking, AI and email in the browser" width="90%">
+
+  <p><a href="./README.zh-CN.md">中文</a> · <a href="./README.ja.md">日本語</a> · English</p>
+</div>
 
 ---
-
-**English** · [中文](./README.zh-CN.md) · [日本語](./README.ja.md)
-
----
-
-## Why Maho
 
 Most browsers are built to keep you looking at them. Maho is built to get out
 of your way.
 
-- **Spaces, not tabs sprawl.** Group tabs by what you're actually doing —
-  work, research, a trip — and switch between them instead of drowning in one
-  flat tab strip.
-- **Ads and trackers off by default.** Built-in blocking, tuned so pages stay
-  readable and fast. No extension roulette.
-- **An assistant that reads the page.** Ask questions about what you're
-  looking at, summarize it, or have routine work run on a schedule — from the
-  browser, not a separate app.
-- **Email in the browser.** Your inbox lives next to your browsing, so
-  checking mail doesn't mean leaving your work.
-- **Your data stays yours.** No telemetry. The client does not phone home, and
-  usage metrics are never sent from the app. You can also bring your own AI
-  key and keep full control.
+It organizes your work into **spaces** instead of one endless window, blocks
+ads and trackers by default, and puts an AI assistant and your email inside the
+browser so you stop switching between apps.
+
+| | |
+|---|---|
+| **Spaces, not tab sprawl** | Group tabs by what you're doing — work, research, a trip — and switch between them instead of drowning in one flat tab strip. |
+| **Ads & trackers off by default** | Built-in blocking, tuned so pages stay readable and fast. No extension roulette. |
+| **An assistant that reads the page** | Ask about what you're looking at, summarize it, or run routine work on a schedule — from the browser, not a separate app. |
+| **Email in the browser** | Your inbox lives next to your browsing, so checking mail doesn't mean leaving your work. |
+| **Your data stays yours** | No telemetry. The client does not phone home, and usage metrics are never sent from the app. Bring your own AI key and keep full control. |
+
+<div align="center">
+  <img src="./docs/assets/command-bar.png" alt="The Maho command bar — search, switch tabs, and ask the assistant in one place" width="85%">
+  <p><em>One command bar for search, tab switching, and asking the assistant.</em></p>
+</div>
 
 ---
 
@@ -48,16 +59,12 @@ for free, non-commercially. It does **not** let you sell or host it
 commercially, and it does **not** grant rights to the Maho name or logo
 ([TRADEMARK](TRADEMARK.md)).
 
-**What's here:** the client — the Chromium overlay (`maho-chromium/`), the Rust
-crates (`maho/crates/`), the WebView bundle (`maho/web-ai/`), the mail backend
-(`maho/mail-core/`), and the native shells (`maho/ios-shell/`,
-`maho/android-shell/`).
-
-**What's not here:** the hosted service (accounts, sync, the AI billing proxy,
-the update feed) — it runs separately and is not part of this tree. Upstream
-Chromium is also not here; you fetch it yourself.
-
----
+- **What's here:** the Chromium overlay (`maho-chromium/`), Rust crates
+  (`maho/crates/`), the WebView bundle (`maho/web-ai/`), the mail backend
+  (`maho/mail-core/`), and the native shells (`maho/ios-shell/`,
+  `maho/android-shell/`).
+- **What's not here:** the hosted service (accounts, sync, the AI billing
+  proxy, the update feed) and upstream Chromium — you fetch Chromium yourself.
 
 ## Build it yourself
 
@@ -74,20 +81,20 @@ python3 maho-chromium/build/scripts/build_maho_core.py
 python3 maho-chromium/build/scripts/build_maho.py
 ```
 
-- Builds serialize through a lock — one at a time on purpose.
-- Build the narrowest target that verifies your change.
-- Use **your own** API keys and OAuth clients for any build you run.
+Builds serialize through a lock (one at a time on purpose), and you should
+build the narrowest target that verifies your change. Use **your own** API keys
+and OAuth clients for any build you run.
+
+## Contributing
+
+Maho is maintained by a small team and welcomes contributions. Before your
+first pull request, sign the CLA and read the
+[contribution guide](CONTRIBUTING.md) — a `Signed-off-by` line alone is not
+enough. Report security issues **privately** (see [SECURITY.md](SECURITY.md)),
+not in public issues.
 
 ---
 
-## Good to know
-
-- **Source-available, not open source.** Please don't call it open source.
-- **No telemetry.** Don't add any.
-- **Commercial use is restricted** by the license — read it before building on this.
-- **Contributions need a CLA** — see [CONTRIBUTING](CONTRIBUTING.md).
-- **Report security issues privately** — see [SECURITY](SECURITY.md).
-
----
-
-*This is the source code. For the product, see [mahobrowser.com](https://mahobrowser.com).*
+<div align="center">
+  <sub>Source-available, not open source. For the product, see <a href="https://mahobrowser.com">mahobrowser.com</a>.</sub>
+</div>
