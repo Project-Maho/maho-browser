@@ -225,6 +225,10 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   // Translate flow (moved from the sidebar search pill).
   std::u16string ResolveTranslateTargetDisplayName() const;
   void OnTranslatePopoverPrimary();
+  void ShowTranslatePopover();
+  // Auto-offers the popover once per site (per profile, this session) when a
+  // foreign-language page is detected on the active pane.
+  void MaybeAutoShowTranslatePopover();
   void OnTranslatePopoverOptions(views::View* anchor,
                                  base::RepeatingClosure close_popover);
   void BuildTranslateOptionsMenuModels();
@@ -327,6 +331,7 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   bool is_loading_ = false;
   bool translation_offered_ = false;
   bool auto_translate_attempted_ = false;
+  bool auto_show_consumed_for_document_ = false;
   // Tooltip of the current security glyph, empty when hidden.
   std::u16string security_description_;
   raw_ptr<const gfx::VectorIcon> security_vector_icon_ = nullptr;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "base/functional/bind.h"
 #include "base/location.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/profile.h"
@@ -142,6 +144,25 @@ ui::ColorVariant DisabledGlyph(SkColor color, bool inactive) {
   }
   return ui::ColorVariant(SkColorSetA(
       color, static_cast<U8CPU>(SkColorGetA(color) * opacity)));
+}
+
+// Hosts the translate popover was auto-offered for, per profile and this
+// session only (never persisted).
+struct AutoShownTranslateHosts : public base::SupportsUserData::Data {
+  std::set<std::string> hosts;
+};
+
+// Returns true the first time |host| is seen for |profile| this session.
+bool MarkAutoShownTranslateHostOnce(Profile* profile, const std::string& host) {
+  static const char kKey = 0;
+  auto* data =
+      static_cast<AutoShownTranslateHosts*>(profile->GetUserData(&kKey));
+  if (!data) {
+    auto owned = std::make_unique<AutoShownTranslateHosts>();
+    data = owned.get();
+    profile->SetUserData(&kKey, std::move(owned));
+  }
+  return data->hosts.insert(host).second;
 }
 
 // views::Button only activates on Return when
@@ -341,6 +362,7 @@ void MahoContentsHeaderView::SetActive(bool active) {
   active_ = active;
   UpdateTranslateElementId();
   UpdateChrome();
+  MaybeAutoShowTranslatePopover();
   SchedulePaint();
 }
 
@@ -582,6 +604,7 @@ void MahoContentsHeaderView::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (navigation_handle->IsInPrimaryMainFrame()) {
     auto_translate_attempted_ = false;
+    auto_show_consumed_for_document_ = false;
     UpdateState();
   }
 }
@@ -604,6 +627,7 @@ void MahoContentsHeaderView::DidChangeVisibleSecurityState() {
 void MahoContentsHeaderView::WebContentsDestroyed() {
   Observe(nullptr);
   auto_translate_attempted_ = false;
+  auto_show_consumed_for_document_ = false;
   RefreshTranslateObservations();
   UpdateState();
 }
@@ -701,6 +725,7 @@ void MahoContentsHeaderView::OnWebContentsAttached(views::WebView* web_view) {
   Observe(web_view->web_contents());
   is_loading_ = web_contents() && web_contents()->IsLoading();
   auto_translate_attempted_ = false;
+  auto_show_consumed_for_document_ = false;
   RefreshTranslateObservations();
   UpdateState();
 }
@@ -711,6 +736,7 @@ void MahoContentsHeaderView::OnWebContentsDetached(views::WebView* web_view) {
   Observe(nullptr);
   is_loading_ = false;
   auto_translate_attempted_ = false;
+  auto_show_consumed_for_document_ = false;
   RefreshTranslateObservations();
   UpdateState();
 }
@@ -824,6 +850,13 @@ void MahoContentsHeaderView::OnCopyUrlPressed(const ui::Event& event) {
 }
 
 void MahoContentsHeaderView::OnTranslatePressed(const ui::Event& event) {
+  if (translate_popover_widget_) {
+    return;
+  }
+  ShowTranslatePopover();
+}
+
+void MahoContentsHeaderView::ShowTranslatePopover() {
   if (!web_contents()) {
     return;
   }
@@ -839,6 +872,33 @@ void MahoContentsHeaderView::OnTranslatePressed(const ui::Event& event) {
                           weak_factory_.GetWeakPtr()));
   translate_popover_widget_ =
       popover_widget ? popover_widget->GetWeakPtr() : nullptr;
+}
+
+void MahoContentsHeaderView::MaybeAutoShowTranslatePopover() {
+  if (auto_show_consumed_for_document_ || !translation_offered_ || !active_) {
+    return;
+  }
+  if (maho::GetMahoTranslateState(web_contents()) !=
+      MahoTranslateState::kIdle) {
+    return;
+  }
+  if (translate_popover_widget_) {
+    auto_show_consumed_for_document_ = true;
+    return;
+  }
+  Profile* profile = GetProfile();
+  if (!web_contents() || !profile || !translate_button_->GetWidget()) {
+    return;
+  }
+  const std::string host(GetCurrentUrl().host());
+  if (host.empty()) {
+    return;
+  }
+  auto_show_consumed_for_document_ = true;
+  if (!MarkAutoShownTranslateHostOnce(profile, host)) {
+    return;
+  }
+  ShowTranslatePopover();
 }
 
 std::u16string MahoContentsHeaderView::ResolveTranslateTargetDisplayName()
@@ -1282,6 +1342,7 @@ void MahoContentsHeaderView::UpdateTranslateAffordance() {
   }
   translate_button_->SetTooltipText(name);
   translate_button_->GetViewAccessibility().SetName(name);
+  MaybeAutoShowTranslatePopover();
 }
 
 void MahoContentsHeaderView::SetButtonIcon(views::ImageButton* button,
