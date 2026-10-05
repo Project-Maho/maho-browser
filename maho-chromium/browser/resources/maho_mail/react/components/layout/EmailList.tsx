@@ -956,7 +956,7 @@ export function EmailList({
     try {
       const ok = await confirm({
         title: "Delete Email",
-        message: "Are you sure you want to delete this email? This action cannot be undone.",
+        message: "This email moves to Trash. Deleting it from Trash removes it permanently.",
         confirmLabel: "Delete",
         danger: true,
       });

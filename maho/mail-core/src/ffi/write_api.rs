@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 
 use serde_json::json;
+use rusqlite::OptionalExtension;
 
 use crate::account::{connect_imap, resolve_account_auth, safe_logout};
 use crate::error::{MailFfiError, Result};
@@ -18,6 +19,10 @@ mod mail_replay;
 #[cfg(test)]
 #[path = "mutation_review_tests.rs"]
 mod mutation_review_tests;
+
+#[cfg(test)]
+#[path = "delete_semantics_tests.rs"]
+mod delete_semantics_tests;
 
 #[cfg(test)]
 #[path = "memory_thread_batch_tests.rs"]
@@ -453,6 +458,22 @@ pub extern "C" fn MahoMailToggleStar(
     })
 }
 
+fn trash_folder_for(conn: &rusqlite::Connection, email_id: &str) -> Result<Option<String>> {
+    let (account_id, folder_id): (String, String) = conn.query_row(
+        "SELECT account_id, folder_id FROM emails WHERE id = ?1",
+        [email_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let trash: Option<String> = conn
+        .query_row(
+            "SELECT id FROM folders WHERE account_id = ?1 AND folder_type = 'trash' LIMIT 1",
+            [&account_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(trash.filter(|id| id != &folder_id))
+}
+
 fn mutate_location(
     ctx: &crate::state::AppCtx,
     conn: &rusqlite::Connection,
@@ -461,7 +482,11 @@ fn mutate_location(
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
     let remote = get_email_imap_info(&tx, email_id)?;
-    let target_path = target.map(|id| tx.query_row("SELECT path FROM folders WHERE id=?1", [id], |r| r.get::<_, String>(0))).transpose()?;
+    let target = match target {
+        Some(id) => Some(id.to_string()),
+        None => trash_folder_for(&tx, email_id)?,
+    };
+    let target_path = target.as_deref().map(|id| tx.query_row("SELECT path FROM folders WHERE id=?1", [id], |r| r.get::<_, String>(0))).transpose()?;
     let kind = if target.is_some() { "move" } else { "delete" };
     let pending = if let Some((account, folder, uid)) = remote {
         maho_core::services::offline_queue::queue_mutation(&tx, &account, i64::from(uid), &folder, kind, target_path.as_deref())?;
@@ -470,7 +495,7 @@ fn mutate_location(
             .ok_or_else(|| MailFfiError::Internal("queued mutation missing".into()))?)
     } else { None };
     if let Some(target) = target {
-        maho_core::services::email::move_email(&tx, email_id, target)?;
+        maho_core::services::email::move_email(&tx, email_id, &target)?;
     } else {
         maho_core::services::email::delete_email(&tx, email_id)?;
     }
