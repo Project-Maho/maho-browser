@@ -4,9 +4,11 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "base/functional/callback_helpers.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/profiles/profile.h"
@@ -27,6 +29,9 @@ namespace maho {
 namespace {
 
 constexpr int kIsolatedWorldId = content::ISOLATED_WORLD_ID_CONTENT_END + 9;
+
+constexpr std::u16string_view kStateMessagePrefix =
+    u"__mahoTranslate:state:";
 
 std::string LoadClassicContentScript(int resource_id) {
   std::string script =
@@ -55,6 +60,22 @@ std::string ResolveFallbackTargetLanguage(content::WebContents* web_contents) {
   return target.empty() ? "en" : target;
 }
 
+std::optional<MahoTranslateState> ParseStateName(std::string_view name) {
+  if (name == "idle") {
+    return MahoTranslateState::kIdle;
+  }
+  if (name == "translating") {
+    return MahoTranslateState::kTranslating;
+  }
+  if (name == "translated") {
+    return MahoTranslateState::kTranslated;
+  }
+  if (name == "error") {
+    return MahoTranslateState::kError;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 WEB_CONTENTS_USER_DATA_KEY_IMPL(MahoTranslateTabHelper);
@@ -66,13 +87,52 @@ MahoTranslateTabHelper::MahoTranslateTabHelper(
 
 MahoTranslateTabHelper::~MahoTranslateTabHelper() = default;
 
+base::CallbackListSubscription MahoTranslateTabHelper::AddStateChangedCallback(
+    base::RepeatingClosure callback) {
+  return state_changed_callbacks_.Add(std::move(callback));
+}
+
 void MahoTranslateTabHelper::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (navigation_handle->IsInPrimaryMainFrame() &&
       navigation_handle->HasCommitted() &&
       !navigation_handle->IsSameDocument()) {
-    is_translated_ = false;
+    SetState(MahoTranslateState::kIdle, std::string());
   }
+}
+
+void MahoTranslateTabHelper::OnDidAddMessageToConsole(
+    content::RenderFrameHost* source_frame,
+    blink::mojom::ConsoleMessageLevel log_level,
+    const std::u16string& message,
+    int32_t line_no,
+    const std::u16string& source_id,
+    const std::optional<std::u16string>& untrusted_stack_trace) {
+  if (!base::StartsWith(message, kStateMessagePrefix)) {
+    return;
+  }
+  const std::string payload =
+      base::UTF16ToUTF8(message.substr(kStateMessagePrefix.size()));
+  const std::vector<std::string> parts = base::SplitString(
+      payload, ":", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
+  if (parts.empty()) {
+    return;
+  }
+  const std::optional<MahoTranslateState> state = ParseStateName(parts[0]);
+  if (!state) {
+    return;
+  }
+  SetState(*state, parts.size() > 1 ? parts[1] : std::string());
+}
+
+void MahoTranslateTabHelper::SetState(MahoTranslateState state,
+                                      std::string source_language) {
+  if (state_ == state && source_language_ == source_language) {
+    return;
+  }
+  state_ = state;
+  source_language_ = std::move(source_language);
+  state_changed_callbacks_.Notify();
 }
 
 bool CanOnDeviceTranslate(content::WebContents* web_contents) {
@@ -81,10 +141,15 @@ bool CanOnDeviceTranslate(content::WebContents* web_contents) {
 }
 
 bool IsMahoPageTranslated(content::WebContents* web_contents) {
+  return GetMahoTranslateState(web_contents) ==
+         MahoTranslateState::kTranslated;
+}
+
+MahoTranslateState GetMahoTranslateState(content::WebContents* web_contents) {
   auto* helper = web_contents
                      ? MahoTranslateTabHelper::FromWebContents(web_contents)
                      : nullptr;
-  return helper && helper->is_translated();
+  return helper ? helper->state() : MahoTranslateState::kIdle;
 }
 
 void TranslatePageViaOnDevice(content::WebContents* web_contents,
@@ -96,9 +161,7 @@ void TranslatePageViaOnDevice(content::WebContents* web_contents,
   auto* helper = MahoTranslateTabHelper::FromWebContents(web_contents);
 
   if (helper && helper->is_translated()) {
-    helper->set_is_translated(false);
-    web_contents->GetController().Reload(content::ReloadType::NORMAL,
-                                         /*check_for_repost=*/false);
+    RestoreOriginalPage(web_contents);
     return;
   }
 
@@ -129,7 +192,25 @@ void TranslatePageViaOnDevice(content::WebContents* web_contents,
       base::UTF8ToUTF16(call), base::DoNothing(), kIsolatedWorldId);
 
   if (helper) {
-    helper->set_is_translated(true);
+    helper->SetState(MahoTranslateState::kTranslating, std::string());
+  }
+}
+
+void RestoreOriginalPage(content::WebContents* web_contents) {
+  if (!CanOnDeviceTranslate(web_contents)) {
+    return;
+  }
+  content::RenderFrameHost* render_frame_host =
+      web_contents->GetPrimaryMainFrame();
+  if (!render_frame_host || !render_frame_host->IsRenderFrameLive()) {
+    return;
+  }
+  render_frame_host->ExecuteJavaScriptInIsolatedWorld(
+      u"window.__mahoTranslate && window.__mahoTranslate.restorePage();",
+      base::DoNothing(), kIsolatedWorldId);
+
+  if (auto* helper = MahoTranslateTabHelper::FromWebContents(web_contents)) {
+    helper->SetState(MahoTranslateState::kIdle, std::string());
   }
 }
 

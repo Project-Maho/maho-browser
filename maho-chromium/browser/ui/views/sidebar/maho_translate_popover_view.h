@@ -17,21 +17,25 @@ class Widget;
 
 namespace maho {
 
-// Arc-style confirm popover for the sidebar translate affordance: "Aa" badge,
-// "Translate this page to <language>?", and Options/Translate buttons. Owns no
+// Arc-style confirm popover for the pane header's translate affordance. Owns no
 // translation logic; reports the choice through the Show() callbacks.
 class MahoTranslatePopoverView : public views::View {
   METADATA_HEADER(MahoTranslatePopoverView, views::View)
 
  public:
+  // kOffer prompts to translate the page; kTranslated offers to restore the
+  // original.
+  enum class Mode { kOffer, kTranslated };
+
   // The callback receives the Options button to anchor the menu and a weak
   // close closure. The owner runs the closure after a terminal menu action so
   // the confirm popover never remains behind a completed action.
   using OptionsCallback =
       base::RepeatingCallback<void(views::View*, base::RepeatingClosure)>;
 
-  MahoTranslatePopoverView(const std::u16string& target_language_name,
-                           base::RepeatingClosure translate_callback,
+  MahoTranslatePopoverView(Mode mode,
+                           const std::u16string& language_name,
+                           base::RepeatingClosure primary_callback,
                            OptionsCallback options_callback);
   MahoTranslatePopoverView(const MahoTranslatePopoverView&) = delete;
   MahoTranslatePopoverView& operator=(const MahoTranslatePopoverView&) = delete;
@@ -39,8 +43,9 @@ class MahoTranslatePopoverView : public views::View {
 
   // Shows the popover anchored below `anchor_view`; returns the hosting widget.
   static views::Widget* Show(views::View* anchor_view,
-                             const std::u16string& target_language_name,
-                             base::RepeatingClosure translate_callback,
+                             Mode mode,
+                             const std::u16string& language_name,
+                             base::RepeatingClosure primary_callback,
                              OptionsCallback options_callback);
 
   // The arrow Show() uses for |anchor_view|: TOP_RIGHT when the anchor sits
@@ -50,11 +55,11 @@ class MahoTranslatePopoverView : public views::View {
       const views::View* anchor_view);
 
  private:
-  void OnTranslatePressed();
+  void OnPrimaryPressed();
   void OnOptionsPressed();
   void ClosePopover();
 
-  base::RepeatingClosure translate_callback_;
+  base::RepeatingClosure primary_callback_;
   OptionsCallback options_callback_;
   raw_ptr<views::View> options_button_ = nullptr;
 

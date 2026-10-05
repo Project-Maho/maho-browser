@@ -35,6 +35,7 @@
 #include "ui/views/bubble/bubble_border.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/test/button_test_api.h"
@@ -42,6 +43,7 @@
 #include "ui/views/test/views_test_utils.h"
 #include "ui/views/view.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "url/gurl.h"
 
@@ -59,6 +61,20 @@ void Click(views::Button* button) {
 }
 
 MahoSidebarPalette MakeLightPalette();
+
+views::MdTextButton* FindTextButton(views::View* root,
+                                    const std::u16string& text) {
+  if (auto* button = views::AsViewClass<views::MdTextButton>(root);
+      button && button->GetText() == text) {
+    return button;
+  }
+  for (views::View* child : root->children()) {
+    if (views::MdTextButton* found = FindTextButton(child, text)) {
+      return found;
+    }
+  }
+  return nullptr;
+}
 
 // Highest alpha across a rasterized button image: how strongly its glyph
 // draws.
@@ -128,14 +144,22 @@ TEST(MahoContentsHeaderViewStaticTest, BuildHostTextStripsWww) {
             u"Search or Enter URL...");
 }
 
-TEST(MahoContentsHeaderViewStaticTest, BuildTranslateTextStates) {
-  EXPECT_EQ(MahoContentsHeaderView::BuildTranslateText(false, false), u"");
-  EXPECT_EQ(MahoContentsHeaderView::BuildTranslateText(false, true),
-            u"Translation Available");
-  EXPECT_EQ(MahoContentsHeaderView::BuildTranslateText(true, true),
-            u"Translated");
-  EXPECT_EQ(MahoContentsHeaderView::BuildTranslateText(true, false),
-            u"Translated");
+TEST(MahoContentsHeaderViewStaticTest, TranslatePopoverModesChoosePrimaryAction) {
+  MahoTranslatePopoverView offer(
+      MahoTranslatePopoverView::Mode::kOffer, u"Korean",
+      base::RepeatingClosure(), base::RepeatingCallback<void(
+                                            views::View*,
+                                            base::RepeatingClosure)>());
+  EXPECT_TRUE(FindTextButton(&offer, u"Translate"));
+  EXPECT_FALSE(FindTextButton(&offer, u"Show original"));
+
+  MahoTranslatePopoverView translated(
+      MahoTranslatePopoverView::Mode::kTranslated, u"Korean",
+      base::RepeatingClosure(), base::RepeatingCallback<void(
+                                            views::View*,
+                                            base::RepeatingClosure)>());
+  EXPECT_TRUE(FindTextButton(&translated, u"Show original"));
+  EXPECT_FALSE(FindTextButton(&translated, u"Translate"));
 }
 
 TEST(MahoContentsHeaderViewStaticTest, InternalPagesHaveNoSecurityIcon) {
@@ -269,16 +293,17 @@ TEST_F(MahoContentsHeaderViewTest, InsecurePageShowsSecurityIcon) {
             u"Not secure");
 }
 
-TEST_F(MahoContentsHeaderViewTest, WebPageOffersTranslation) {
+// A page whose language was never detected offers no translate affordance:
+// the header no longer shows "Translation Available" on every http(s) page.
+TEST_F(MahoContentsHeaderViewTest, WebPageWithoutDetectedLanguageHidesTranslate) {
   NavigateAndCommit(web_contents_.get(), "https://example.com/");
 
-  EXPECT_TRUE(header_->translate_label_for_testing()->GetVisible());
-  EXPECT_EQ(header_->translate_label_for_testing()->GetText(),
-            u"Translation Available");
+  EXPECT_FALSE(header_->translate_button_for_testing()->GetVisible());
+  EXPECT_EQ(header_->translate_anchor(), header_->utility_icon_for_testing());
 }
 
 TEST_F(MahoContentsHeaderViewTest, OnlyActiveHeaderCarriesTranslateElementId) {
-  views::LabelButton* translate = header_->translate_label_for_testing();
+  views::ImageButton* translate = header_->translate_button_for_testing();
   ASSERT_TRUE(header_->is_active_for_testing());
   EXPECT_EQ(translate->GetProperty(views::kElementIdentifierKey),
             kTranslatePageActionElementId);
@@ -530,8 +555,8 @@ TEST_F(MahoContentsHeaderViewTest, DetachedContentsShowsPlaceholder) {
 TEST_F(MahoContentsHeaderViewTest, AnchorsResolveToHeaderControls) {
   EXPECT_EQ(header_->utility_anchor(), header_->utility_icon_for_testing());
   EXPECT_EQ(header_->security_anchor(), header_->security_icon_for_testing());
-  // Hidden translate label falls back to the utility icon.
-  header_->translate_label_for_testing()->SetVisible(false);
+  // Hidden translate affordance falls back to the utility icon.
+  header_->translate_button_for_testing()->SetVisible(false);
   EXPECT_EQ(header_->translate_anchor(), header_->utility_icon_for_testing());
 }
 

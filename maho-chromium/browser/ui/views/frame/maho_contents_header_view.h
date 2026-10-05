@@ -12,7 +12,9 @@
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/prefs/pref_change_registrar.h"
+#include "components/translate/core/browser/translate_driver.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "ui/base/metadata/metadata_header_macros.h"
@@ -31,6 +33,10 @@ class Profile;
 namespace content {
 class WebContents;
 }  // namespace content
+
+namespace translate {
+struct LanguageDetectionDetails;
+}  // namespace translate
 
 namespace gfx {
 struct VectorIcon;
@@ -66,6 +72,8 @@ struct MahoTranslateOptionsForTesting {
   std::vector<std::u16string> labels;
   int first_language_command_id = 0;
   std::string first_language_code;
+  int always_translate_command_id = 0;
+  int never_translate_language_command_id = 0;
   int never_translate_command_id = 0;
   int language_settings_command_id = 0;
 };
@@ -87,7 +95,9 @@ inline constexpr int kMahoContentsHeaderHeightDp = 24;
 // restore and arrow-key traversal internally.
 class MahoContentsHeaderView : public views::AccessiblePaneView,
                                public content::WebContentsObserver,
-                               public ui::SimpleMenuModel::Delegate {
+                               public ui::SimpleMenuModel::Delegate,
+                               public translate::TranslateDriver::
+                                   LanguageDetectionObserver {
   METADATA_HEADER(MahoContentsHeaderView, views::AccessiblePaneView)
 
  public:
@@ -99,8 +109,6 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   // Host text for |url|: the host with a leading "www." removed, or the
   // search placeholder when the URL has no host.
   static std::u16string BuildHostText(const GURL& url);
-  // Translate affordance text; empty when neither state applies.
-  static std::u16string BuildTranslateText(bool translated, bool available);
   // Only web pages carry a connection-security indicator; internal pages
   // (chrome://, about:, etc.) show none.
   static bool ShouldShowSecurityIcon(const GURL& url);
@@ -145,7 +153,7 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
     in_split_for_testing_ = in_split;
   }
   views::LabelButton* host_button_for_testing() { return host_button_; }
-  views::LabelButton* translate_label_for_testing() { return translate_label_; }
+  views::ImageButton* translate_button_for_testing() { return translate_button_; }
   MahoLocationBarUtilityIconView* utility_icon_for_testing() {
     return utility_icon_;
   }
@@ -181,6 +189,10 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   void ExecuteCommand(int command_id, int event_flags) override;
   bool IsCommandIdChecked(int command_id) const override;
 
+  // translate::TranslateDriver::LanguageDetectionObserver:
+  void OnLanguageDetermined(
+      const translate::LanguageDetectionDetails& details) override;
+
  private:
   Browser* GetBrowser() const;
   // The Maho sidebar container among BrowserView's children, or null when
@@ -212,15 +224,27 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
 
   // Translate flow (moved from the sidebar search pill).
   std::u16string ResolveTranslateTargetDisplayName() const;
-  void OnTranslatePopoverTranslate();
+  void OnTranslatePopoverPrimary();
   void OnTranslatePopoverOptions(views::View* anchor,
                                  base::RepeatingClosure close_popover);
   void BuildTranslateOptionsMenuModels();
   void OnTranslateOptionsMenuClosed();
   void OnTranslateLanguageSelected(const std::string& language_code);
+  void OnAlwaysTranslateLanguage();
+  void OnNeverTranslateLanguage();
   void OnNeverTranslateThisSite();
   void OnOpenTranslateLanguageSettings();
   void CloseTranslatePopover();
+  // True when the page language differs from the target and the site/language
+  // is not on a never-translate list.
+  bool ComputeTranslationOffered() const;
+  std::string GetDetectedPageLanguage() const;
+  // Re-subscribes the tab's translate helper and language observation.
+  void RefreshTranslateObservations();
+  void OnTranslateStateChanged();
+  // Auto-translates once per navigation when the page/target pair is on the
+  // always-translate list.
+  void MaybeAutoTranslate();
 
   // Utility panel (moved from the sidebar search pill).
   void ToggleUtilityPanel();
@@ -248,7 +272,7 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   void UpdateState();
   void UpdateNavigationButtons();
   void UpdateSecurityIcon();
-  void UpdateTranslateLabel();
+  void UpdateTranslateAffordance();
   // Re-binds text and glyph colors from the palette and active state.
   void UpdateChrome();
   void SetButtonIcon(views::ImageButton* button, const gfx::VectorIcon& icon);
@@ -265,7 +289,7 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   raw_ptr<views::ImageButton> reload_button_ = nullptr;
   raw_ptr<views::ImageButton> security_icon_ = nullptr;
   raw_ptr<views::LabelButton> host_button_ = nullptr;
-  raw_ptr<views::LabelButton> translate_label_ = nullptr;
+  raw_ptr<views::ImageButton> translate_button_ = nullptr;
   raw_ptr<MahoLocationBarUtilityIconView> utility_icon_ = nullptr;
   raw_ptr<views::ImageButton> copy_url_button_ = nullptr;
 
@@ -293,12 +317,16 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   base::WeakPtr<views::Widget> page_info_widget_;
   PageInfoOpenerForTesting page_info_opener_for_testing_;
   std::optional<bool> in_split_for_testing_;
+  base::CallbackListSubscription translate_state_subscription_;
+  base::ScopedObservation<translate::TranslateDriver,
+                          translate::TranslateDriver::LanguageDetectionObserver>
+      translate_language_observation_{this};
 
   MahoSidebarPalette palette_;
   bool active_ = true;
   bool is_loading_ = false;
-  bool is_translated_ = false;
-  bool translation_available_ = false;
+  bool translation_offered_ = false;
+  bool auto_translate_attempted_ = false;
   // Tooltip of the current security glyph, empty when hidden.
   std::u16string security_description_;
   raw_ptr<const gfx::VectorIcon> security_vector_icon_ = nullptr;
