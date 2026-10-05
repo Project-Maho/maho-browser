@@ -751,6 +751,27 @@ impl ImapClient {
         Ok(())
     }
 
+    /// Resolve a message's UID in `folder` from its RFC 5322 Message-ID. A
+    /// folder move parks a negative placeholder UID on the local row until the
+    /// next sync learns the real UID, and this is how an intent queued in that
+    /// window still addresses the server copy.
+    pub fn find_uid_by_message_id(
+        &mut self,
+        folder: &str,
+        message_id: &str,
+    ) -> Result<Option<u32>, AppError> {
+        self.select_folder_if_needed(folder)?;
+        let sanitized = message_id.replace(['"', '\\'], "");
+        if sanitized.is_empty() {
+            return Ok(None);
+        }
+        let uids = self
+            .session()
+            .uid_search(format!("HEADER Message-ID \"{}\"", sanitized))
+            .map_err(|e| AppError::Network(e.to_string()))?;
+        Ok(uids.into_iter().max())
+    }
+
     /// Apply a flag change to a whole UID set (RFC 3501 sequence-set, e.g.
     // "1,2,3") with one UID STORE command so batch flag mutations cost one
     // roundtrip per chunk instead of one per message.

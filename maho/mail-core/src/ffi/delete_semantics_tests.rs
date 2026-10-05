@@ -132,3 +132,68 @@ fn trash_folder_for_is_scoped_to_the_message_account() {
         "Another account's Trash must never be used as the target"
     );
 }
+
+#[test]
+fn placeholder_uid_still_leaves_a_message_id_addressed_delete() {
+    let pool = crate::test_support::pool_with_seeded_data();
+    let ctx = crate::test_support::ctx(pool);
+    let conn = ctx.pool.get().unwrap();
+    seed_trash_folder(&conn);
+    // The move parks the negative placeholder UID on the row, exactly as the
+    // real flow does. Credentials are gone so delivery fails before any network
+    // activity and the intent stays queued for inspection.
+    maho_core::services::email::move_email(&conn, "em1", TRASH_ID).expect("move into trash");
+    conn.execute("UPDATE accounts SET password=NULL WHERE id='acc1'", [])
+        .unwrap();
+
+    mutate_location(&ctx, &conn, "em1", None).expect("delete should succeed");
+
+    assert_eq!(
+        folder_of(&conn, "em1"),
+        None,
+        "Delete inside Trash must still remove the local row"
+    );
+    let queued =
+        maho_core::services::offline_queue::list_pending_mutations(&conn, "acc1").unwrap();
+    assert_eq!(
+        queued.len(),
+        1,
+        "a placeholder UID must not drop the durable server intent"
+    );
+    assert_eq!(queued[0].mutation_type, "delete");
+    assert_eq!(queued[0].folder_path.as_deref(), Some("[Gmail]/Trash"));
+    let payload: serde_json::Value =
+        serde_json::from_str(queued[0].payload_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        payload.get("message_id").and_then(|value| value.as_str()),
+        Some("<msg1@example.com>"),
+        "the intent must carry the Message-ID it can be resolved by"
+    );
+}
+
+#[test]
+fn delivery_rejects_a_mutation_that_cannot_name_its_message() {
+    let pool = crate::test_support::pool_with_seeded_data();
+    let ctx = crate::test_support::ctx(pool);
+    let conn = ctx.pool.get().unwrap();
+    conn.execute("UPDATE folders SET uid_validity=1234 WHERE id='fold1'", [])
+        .unwrap();
+    maho_core::services::offline_queue::queue_mutation(&conn, "acc1", 0, "INBOX", "delete", None)
+        .unwrap();
+    let queued =
+        maho_core::services::offline_queue::list_pending_mutations(&conn, "acc1").unwrap();
+
+    let result = mail_replay::deliver_and_ack(&conn, &ctx.credential_key, &queued[0]);
+
+    assert!(
+        result.is_err(),
+        "a mutation with neither a UID nor a Message-ID must be rejected"
+    );
+    assert_eq!(
+        maho_core::services::offline_queue::list_pending_mutations(&conn, "acc1")
+            .unwrap()
+            .len(),
+        1,
+        "a rejected mutation must stay queued for a later retry"
+    );
+}
