@@ -12270,6 +12270,15 @@ _UPDATED154_LAYOUT_SHA256: Final[dict[str, str]] = {
         "575045f2c245f645b918c6cffd2e52b9c59cb5ba4d619151b903755b19cc7245",
 }
 
+# Trees already carrying the previous canonical result for a path whose base
+# patch changed again (e.g. the Ctrl+Tab routing hunks added to
+# browser_command_controller.cc). These are the states a builder tree sits in
+# after the last build, so they must migrate forward like any older state.
+_UPDATED154_REAPPLY_SHA256: Final[dict[str, str]] = {
+    "chrome/browser/ui/browser_command_controller.cc":
+        "a2a18c212978494b311f4a2b4f412b9d26d5a078677a31f72b3a62518aaf210c",
+}
+
 
 def apply_base_patch(
     chromium_src: Path, relative_path: str, patch: Path, dry_run: bool
@@ -12308,6 +12317,10 @@ def apply_base_patch(
         if layout is not None and digest == layout:
             expected = layout
             migration_directory = "chromium_base_layout_migrations"
+        reapply = _UPDATED154_REAPPLY_SHA256.get(relative_path)
+        if reapply is not None and digest == reapply:
+            expected = reapply
+            migration_directory = "chromium_base_reapply_migrations"
         if (expected is not None and patch.resolve() == canonical.resolve() and
                 digest == expected):
             migration = (repo_root() / "build" / migration_directory /
@@ -13748,6 +13761,115 @@ MAHO_SCHEMA_FILE_COPIES: dict[str, str] = {
         "chromium_src/components/password_manager/core/browser/password_manager_driver.cc",
 }
 
+# ---------------------------------------------------------------------------
+# Maho intercepted-key binding gate
+# ---------------------------------------------------------------------------
+# Every key Maho's dispatch claims to intercept must, in the applied tree, be
+# bound by the platform accelerator table to a command id Maho routes into its
+# handler. Binding is keyed by the physical key, not the command id, so an
+# upstream command-id rename fails the gate instead of silently bypassing Maho:
+# Chromium 154 renamed the macOS Ctrl+Tab command from IDC_SELECT_NEXT_TAB to
+# IDC_CYCLE_TO_NEXT_TAB and the MRU overlay stopped appearing. This runs inside
+# main(), so every build (build_maho.py invokes this script with check=True)
+# fails closed on a regression rather than shipping it.
+# (platform, label, modifier flags, virtual key)
+_MAHO_INTERCEPTED_KEYS: Final = (
+    ("mac", "Ctrl+Tab", ("EF_CONTROL_DOWN",), "VKEY_TAB"),
+    ("mac", "Ctrl+Shift+Tab", ("EF_CONTROL_DOWN", "EF_SHIFT_DOWN"), "VKEY_TAB"),
+    ("win", "Ctrl+Tab", ("EF_CONTROL_DOWN",), "VKEY_TAB"),
+    ("win", "Ctrl+Shift+Tab", ("EF_CONTROL_DOWN", "EF_SHIFT_DOWN"), "VKEY_TAB"),
+    ("linux", "Ctrl+Tab", ("EF_CONTROL_DOWN",), "VKEY_TAB"),
+    ("linux", "Ctrl+Shift+Tab", ("EF_CONTROL_DOWN", "EF_SHIFT_DOWN"), "VKEY_TAB"),
+)
+
+# platform -> (accelerator table relative path, command-id field order)
+_MAHO_ACCELERATOR_TABLES: Final = {
+    "mac": ("chrome/browser/ui/cocoa/accelerators_cocoa.mm", "command_first"),
+    "win": ("chrome/browser/ui/accelerator_table.cc", "key_first"),
+    "linux": ("chrome/browser/ui/accelerator_table.cc", "key_first"),
+}
+
+_MAHO_DISPATCH_HANDLER: Final = "MaybeHandleMruTabSwitch"
+
+
+def _maho_modifier_flags(expression: str) -> frozenset[str]:
+    return frozenset(re.findall(r"EF_\w+", expression))
+
+
+def _maho_accelerator_bindings(
+    text: str, order: str
+) -> dict[tuple[frozenset[str], str], set[str]]:
+    # command_first: {IDC_.., <modifiers>, ui::VKEY_..};
+    # key_first:     {ui::VKEY_.., <modifiers>, IDC_..}.
+    pattern = (
+        r"\{\s*(IDC_\w+)\s*,\s*([^,{}]+?)\s*,\s*(ui::VKEY_\w+)\s*\}"
+        if order == "command_first"
+        else r"\{\s*(ui::VKEY_\w+)\s*,\s*([^,{}]+?)\s*,\s*(IDC_\w+)\s*\}"
+    )
+    bindings: dict[tuple[frozenset[str], str], set[str]] = {}
+    for match in re.finditer(pattern, text, re.DOTALL):
+        if order == "command_first":
+            command, modifiers, vkey = match.groups()
+        else:
+            vkey, modifiers, command = match.groups()
+        key = (_maho_modifier_flags(modifiers), vkey.removeprefix("ui::"))
+        bindings.setdefault(key, set()).add(command)
+    return bindings
+
+
+def _maho_handler_command_ids(dispatch_text: str) -> set[str]:
+    handled: set[str] = set()
+    # re.split on case labels yields [prefix, id1, body1, id2, body2, ...];
+    # each body runs to the next case label and owns its handler call.
+    parts = re.split(r"\bcase (IDC_\w+):", dispatch_text)
+    for index in range(1, len(parts), 2):
+        if _MAHO_DISPATCH_HANDLER in parts[index + 1]:
+            handled.add(parts[index])
+    return handled
+
+
+def verify_maho_intercepted_bindings(chromium_src: Path) -> list[str]:
+    """Return violations of the intercepted-key binding contract (empty = ok)."""
+    dispatch_path = (
+        chromium_src / "chrome/browser/ui/browser_command_controller.cc"
+    )
+    if not dispatch_path.is_file():
+        return []
+    handled = _maho_handler_command_ids(dispatch_path.read_text())
+    if not handled:
+        return [
+            "chrome/browser/ui/browser_command_controller.cc: no dispatch case "
+            f"calls {_MAHO_DISPATCH_HANDLER}; the interceptor contract cannot "
+            "be verified"
+        ]
+    violations: list[str] = []
+    for platform, (relative_path, order) in _MAHO_ACCELERATOR_TABLES.items():
+        table_path = chromium_src / relative_path
+        if not table_path.is_file():
+            violations.append(
+                f"{platform}: accelerator table {relative_path} is missing; "
+                "Maho's intercepted-key bindings cannot be verified"
+            )
+            continue
+        bindings = _maho_accelerator_bindings(table_path.read_text(), order)
+        for entry_platform, label, flags, vkey in _MAHO_INTERCEPTED_KEYS:
+            if entry_platform != platform:
+                continue
+            bound = bindings.get((frozenset(flags), vkey))
+            if not bound:
+                violations.append(
+                    f"{platform}: {relative_path} no longer binds {label}; "
+                    "Maho's interceptor expects it (renamed, moved or dropped "
+                    "upstream)"
+                )
+            elif not (bound & handled):
+                violations.append(
+                    f"{platform}: {label} binds {sorted(bound)}, but Maho's "
+                    f"dispatch routes none of them into "
+                    f"{_MAHO_DISPATCH_HANDLER} (handled: {sorted(handled)})"
+                )
+    return violations
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -13874,6 +13996,19 @@ def main() -> int:
         print(f"  - copied from {src}")
 
     print("result: changed" if any_changed else "result: no-op")
+
+    if not args.dry_run:
+        violations = verify_maho_intercepted_bindings(chromium_src)
+        if violations:
+            print(
+                "Maho intercepted-key binding gate FAILED (Ctrl+Tab and "
+                "friends would bypass their Maho handler):",
+                file=sys.stderr,
+            )
+            for violation in violations:
+                print(f"  - {violation}", file=sys.stderr)
+            return 1
+
     return 0
 
 

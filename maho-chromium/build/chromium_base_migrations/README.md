@@ -53,8 +53,21 @@ After the parent synchronizes the script, tests, canonical patches, and migratio
 directory to omarchy, run from the parent session:
 
 ```sh
-ssh omarchy 'cd /home/indo/maho-workspace/maho-chromium/build/scripts && MAHO_CHROMIUM_SRC=/home/indo/maho-workspace/chromium/src python3 -B -m unittest test_updated154_base_migrations test_apply_chromium_src_overrides.MahoBasePatchLayerTest -v'
+ssh omarchy 'cd /home/indo/maho-workspace/maho-chromium/build/scripts && MAHO_CHROMIUM_SRC=/home/indo/maho-workspace/chromium/src python3 -B -m unittest test_updated154_base_migrations test_maho_shortcut_binding_gate test_apply_chromium_src_overrides.MahoBasePatchLayerTest -v'
 ```
+
+`test_maho_shortcut_binding_gate` covers the revision binding gate. The gate
+itself lives in `apply_chromium_src_overrides.verify_maho_intercepted_bindings`
+and runs inside that script's `main()`, which `build_maho.py` invokes with
+`check=True` — so every build applies the overrides and then fails closed if the
+gate finds a violation. It cross-checks the platform accelerator tables (macOS
+`accelerators_cocoa.mm`, Win/Linux `accelerator_table.cc`) against the patched
+`browser_command_controller.cc` dispatch, asserting every key Maho intercepts
+binds to a command id Maho routes into its handler. It fails whenever upstream
+renames or moves an intercepted binding without a matching Maho dispatch update
+(the Chromium 154 `IDC_SELECT_NEXT_TAB` -> `IDC_CYCLE_TO_NEXT_TAB` Ctrl+Tab
+rename that bypassed the MRU overlay). The unittest command above is for
+isolated verification outside a build; it is not what makes the gate run.
 
 This uses temporary file fixtures and real git apply; it does not change the
 upstream working tree. Missing pinned blobs fail rather than skip tests.

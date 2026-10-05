@@ -1577,6 +1577,7 @@ test("maho_theme_io_test") {
     "//maho/browser/ui/views/changelog:unit_tests",
     "//maho/browser/ui/views/sidebar:unit_tests",
     "//maho/browser/ui/views/spaces_overlay:unit_tests",
+    "//maho/browser/ui/tabs:view_unit_tests",
     "//base",
     "//base/test:test_support",
     "//chrome/browser:browser",
