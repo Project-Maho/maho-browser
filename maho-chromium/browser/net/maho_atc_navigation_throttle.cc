@@ -25,9 +25,6 @@
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/net/maho_atc_state.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
-#include "maho/browser/ui/views/peek/maho_peek_controller.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
-#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "ui/base/page_transition_types.h"
 
 namespace maho {
@@ -108,90 +105,16 @@ const char* MahoAtcNavigationThrottle::GetNameForLogging() {
 
 content::NavigationThrottle::ThrottleCheckResult
 MahoAtcNavigationThrottle::WillStartRequest() {
-  return MaybeDeferNavigation(IsPeekEligibleAtStart());
+  return MaybeDeferNavigation();
 }
 
 content::NavigationThrottle::ThrottleCheckResult
 MahoAtcNavigationThrottle::WillRedirectRequest() {
-  return MaybeDeferNavigation(/*allow_peek_routing=*/false);
-}
-
-bool MahoAtcNavigationThrottle::IsPeekEligibleAtStart() {
-  content::NavigationHandle* handle = navigation_handle();
-  return handle->IsInPrimaryMainFrame() &&
-         handle->IsRendererInitiated() && handle->HasUserGesture() &&
-         handle->GetURL().SchemeIsHTTPOrHTTPS() && !handle->IsPost() &&
-         !handle->IsSameDocument() &&
-         ui::PageTransitionCoreTypeIs(handle->GetPageTransition(),
-                                      ui::PAGE_TRANSITION_LINK);
-}
-
-PeekRoute MahoAtcNavigationThrottle::DecideSameTabPeekRoute(
-    Browser* browser) {
-  content::WebContents* source = navigation_handle()->GetWebContents();
-  Profile* profile = browser ? browser->GetProfile() : nullptr;
-  PrefService* prefs = profile ? profile->GetPrefs() : nullptr;
-  BrowserView* browser_view =
-      browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
-  MahoPeekController* peek_controller =
-      browser_view ? browser_view->GetOrCreateMahoPeekController() : nullptr;
-  return DecidePeekRoute({
-      .master_enabled =
-          prefs && prefs->GetBoolean(sidebar_prefs::kPeekEnabled),
-      .popup_routing_enabled = false,
-      .link_routing_enabled =
-          prefs && prefs->GetBoolean(sidebar_prefs::kPeekLinkRoutingEnabled),
-      .seam = PeekSeam::kSameTabThrottle,
-      .disposition = WindowOpenDisposition::CURRENT_TAB,
-      .source_role =
-          MahoSidebarContainerView::GetPeekSourceRole(browser, source),
-      .is_user_initiated = true,
-      // Command-clicks are promoted by Blink to NEW_BACKGROUND_TAB and route
-      // through Browser::OpenURLFromTab, so a navigation reaching this
-      // CURRENT_TAB-only seam was not force-tabbed.
-      .force_tab = false,
-      .is_maho_mini_gesture = false,
-      .atc_has_cross_space_target = false,
-      .peek_slot_state =
-          peek_controller && peek_controller->SlotBusy()
-              ? PeekSlotState::kBusy
-              : PeekSlotState::kClosed,
-  });
+  return MaybeDeferNavigation();
 }
 
 content::NavigationThrottle::ThrottleCheckResult
-MahoAtcNavigationThrottle::ApplyPeekRouteWithoutAtc(Browser* browser,
-                                                     const GURL& url) {
-  const PeekRoute route = DecideSameTabPeekRoute(browser);
-  content::WebContents* source = navigation_handle()->GetWebContents();
-  BrowserView* browser_view =
-      browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
-  MahoPeekController* peek_controller =
-      browser_view ? browser_view->GetOrCreateMahoPeekController() : nullptr;
-  if (route == PeekRoute::kOpenInPeek && peek_controller &&
-      peek_controller->ShowUrl(source, url)) {
-    return CANCEL_AND_IGNORE;
-  }
-  if (route == PeekRoute::kOpenInForegroundTab && browser) {
-    ScopedAtcThrottleBypass bypass(browser);
-    chrome::AddSelectedTabWithURL(browser, url, ui::PAGE_TRANSITION_LINK);
-    return CANCEL_AND_IGNORE;
-  }
-  return PROCEED;
-}
-
-bool MahoAtcNavigationThrottle::ApplyPeekRouteAfterAtc(Browser* browser,
-                                                        const GURL& url) {
-  const ThrottleCheckResult result = ApplyPeekRouteWithoutAtc(browser, url);
-  if (result.action() == content::NavigationThrottle::CANCEL_AND_IGNORE) {
-    CancelDeferredNavigationAndIgnore();
-    return true;
-  }
-  return false;
-}
-
-content::NavigationThrottle::ThrottleCheckResult
-MahoAtcNavigationThrottle::MaybeDeferNavigation(bool allow_peek_routing) {
+MahoAtcNavigationThrottle::MaybeDeferNavigation() {
   content::NavigationHandle* handle = navigation_handle();
   content::WebContents* web_contents = handle->GetWebContents();
   Browser* browser =
@@ -199,9 +122,6 @@ MahoAtcNavigationThrottle::MaybeDeferNavigation(bool allow_peek_routing) {
                          GlobalBrowserCollection::GetInstance()
                              ->FindBrowserWithTab(web_contents))
                    : nullptr;
-  if (allow_peek_routing && !maho::MahoAtcState::HasEnabledRules()) {
-    return ApplyPeekRouteWithoutAtc(browser, handle->GetURL());
-  }
   if (!maho::MahoAtcState::HasEnabledRules()) {
     return PROCEED;
   }
@@ -250,7 +170,7 @@ MahoAtcNavigationThrottle::MaybeDeferNavigation(bool allow_peek_routing) {
       url, /*is_external=*/false,
       base::BindOnce(&MahoAtcNavigationThrottle::OnLinkDestinationDecided,
                      weak_factory_.GetWeakPtr(), browser->GetWeakPtr(), url,
-                     std::move(current_space_id), allow_peek_routing));
+                     std::move(current_space_id)));
   return DEFER;
 }
 
@@ -258,7 +178,6 @@ void MahoAtcNavigationThrottle::OnLinkDestinationDecided(
     base::WeakPtr<BrowserWindowInterface> browser,
     GURL url,
     std::string current_space_id,
-    bool peek_eligible_at_start,
     LinkDestinationResult result) {
   if (deferred_navigation_finished_) {
     return;
@@ -283,10 +202,6 @@ void MahoAtcNavigationThrottle::OnLinkDestinationDecided(
                            result.space_id))) {
       ResumeDeferredNavigation();
     }
-    return;
-  }
-  if (peek_eligible_at_start && browser &&
-      ApplyPeekRouteAfterAtc(static_cast<Browser*>(browser.get()), url)) {
     return;
   }
   ResumeDeferredNavigation();

@@ -14,7 +14,6 @@ namespace maho {
 enum class PeekSeam {
   kAddNewContents,
   kOpenUrlFromTab,
-  kSameTabThrottle,
 };
 
 enum class PeekSourceRole {

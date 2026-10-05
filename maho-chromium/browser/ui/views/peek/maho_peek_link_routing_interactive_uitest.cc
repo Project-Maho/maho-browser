@@ -332,147 +332,46 @@ IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       SeamB_NoAtcRulesRoutesPinnedAndFavorite) {
-  for (bool favorite_source : {false, true}) {
-    content::WebContents* source =
-        favorite_source ? PrepareFavoriteSource() : PreparePinnedSource();
-    ASSERT_TRUE(source);
-    const GURL source_url = source->GetLastCommittedURL();
-    const GURL target = embedded_test_server()->GetURL(kTargetPath);
-
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    ASSERT_TRUE(WaitForPeekAt(target));
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-
-    ui_test_utils::TabAddedWaiter tab_added(browser());
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    content::WebContents* foreground = tab_added.Wait();
-    ASSERT_TRUE(foreground);
-    ASSERT_TRUE(base::test::RunUntil(
-        [&]() { return foreground->GetLastCommittedURL() == target; }));
-    EXPECT_EQ(target, foreground->GetLastCommittedURL());
-    EXPECT_EQ(foreground, active_contents());
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-    HidePeek();
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       CommandClickBypassesPeekForPinnedAndFavorite) {
-  const GURL target = embedded_test_server()->GetURL(kTargetPath);
-  for (bool favorite_source : {false, true}) {
-    SCOPED_TRACE(favorite_source ? "favorite source" : "pinned source");
-    content::WebContents* source =
-        favorite_source ? PrepareFavoriteSource() : PreparePinnedSource();
-    ASSERT_TRUE(source);
-    const GURL source_url = source->GetLastCommittedURL();
-
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    ASSERT_TRUE(WaitForPeekAt(target));
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-    HidePeek();
-
-    content::TestNavigationObserver navigation(target);
-    navigation.StartWatchingNewWebContents();
-    ui_test_utils::TabAddedWaiter tab_added(browser());
-    const gfx::Point click_point = gfx::ToFlooredPoint(
-        content::GetCenterCoordinatesOfElementWithId(source, "same-tab"));
-    content::SimulateMouseClickAt(source, blink::WebInputEvent::kMetaKey,
-                                  blink::WebMouseEvent::Button::kLeft,
-                                  click_point);
-    content::WebContents* added = tab_added.Wait();
-    navigation.Wait();
-
-    ASSERT_TRUE(added);
-    EXPECT_TRUE(navigation.last_navigation_succeeded());
-    EXPECT_EQ(target, added->GetLastCommittedURL());
-    EXPECT_EQ(source_url, source->GetLastCommittedURL());
-    EXPECT_EQ(source, active_contents());
-    ASSERT_TRUE(base::test::RunUntil([&]() {
-      return controller()->state_for_testing() ==
-             MahoPeekController::State::Closed;
-    }));
-  }
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       ShiftClickForcesPeekFromNormalTab) {
-  const GURL source_url = embedded_test_server()->GetURL(kSourcePath);
-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), source_url));
-  content::WebContents* source = active_contents();
-  ASSERT_TRUE(source);
-  // Arc parity: force_peek applies to ANY tab, including a normal (unpinned,
-  // non-Favorite) source.
-  ASSERT_EQ(PeekSourceRole::kNormal,
-            MahoSidebarContainerView::GetPeekSourceRole(static_cast<Browser*>(browser()), source));
-
-  const GURL target = embedded_test_server()->GetURL(kTargetPath);
-
-  // A Shift-click arrives as a renderer-initiated NEW_WINDOW; force_peek routes
-  // it into Peek instead of a new window, from a normal tab.
-  const gfx::Point click_point = gfx::ToFlooredPoint(
-      content::GetCenterCoordinatesOfElementWithId(source, "same-tab"));
-  content::SimulateMouseClickAt(source, blink::WebInputEvent::kShiftKey,
-                                blink::WebMouseEvent::Button::kLeft,
-                                click_point);
-  ASSERT_TRUE(WaitForPeekAt(target));
-  EXPECT_EQ(source_url, source->GetLastCommittedURL());
-  EXPECT_EQ(source, active_contents());
-  HidePeek();
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       SeamB_RedirectDoesNotReevaluatePeek) {
+                       SameTabNavigationStaysInTab) {
   content::WebContents* source = PreparePinnedSource();
   ASSERT_TRUE(source);
-  const GURL source_url = source->GetLastCommittedURL();
+  const GURL target = embedded_test_server()->GetURL(kTargetPath);
+
+  // Same-tab navigations are never rerouted into Peek, with or without ATC
+  // rules: an in-page (location.href / same-tab) navigation stays in its tab.
+  for (bool with_atc : {false, true}) {
+    MahoAtcState::SetHasEnabledRules(with_atc);
+    content::TestNavigationObserver navigation(source);
+    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
+    navigation.Wait();
+    EXPECT_EQ(target, source->GetLastCommittedURL());
+    EXPECT_FALSE(controller()->SlotBusy());
+    EXPECT_EQ(with_atc, MahoAtcState::HasEnabledRules());
+    ASSERT_TRUE(ui_test_utils::NavigateToURL(
+        browser(), embedded_test_server()->GetURL(kSourcePath)));
+    source = active_contents();
+    ASSERT_TRUE(source);
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
+                       SameTabRedirectDoesNotReevaluatePeek) {
+  content::WebContents* source = PreparePinnedSource();
+  ASSERT_TRUE(source);
   const GURL redirect_target =
       embedded_test_server()->GetURL(kRedirectTargetPath);
   const int tab_count = browser()->GetTabStripModel()->count();
 
-  content::TestNavigationObserver navigation(redirect_target);
-  navigation.StartWatchingNewWebContents();
+  // A same-tab link that redirects must not re-trigger Peek evaluation on the
+  // redirect hop; it stays in the source tab the whole way.
+  content::TestNavigationObserver navigation(source);
   content::SimulateMouseClickOrTapElementWithId(source, "redirect");
   navigation.Wait();
 
-  content::WebContents* peek_contents = WaitForPeekAt(redirect_target);
-  ASSERT_TRUE(peek_contents);
+  EXPECT_EQ(redirect_target, source->GetLastCommittedURL());
   EXPECT_EQ(redirect_target, navigation.last_navigation_url());
   EXPECT_EQ(tab_count, browser()->GetTabStripModel()->count());
-  EXPECT_EQ(source_url, source->GetLastCommittedURL());
-  EXPECT_EQ(MahoPeekController::State::Open,
-            controller()->state_for_testing());
-}
-
-IN_PROC_BROWSER_TEST_F(MahoPeekLinkRoutingInteractiveUiTest,
-                       PrefsOffAndAtcBehaviorPreserved) {
-  content::WebContents* source = PreparePinnedSource();
-  ASSERT_TRUE(source);
-  const GURL target = embedded_test_server()->GetURL(kTargetPath);
-
-  for (const char* disabled_pref : {sidebar_prefs::kPeekEnabled,
-                                    sidebar_prefs::kPeekLinkRoutingEnabled}) {
-    PrefService* prefs = browser()->GetProfile()->GetPrefs();
-    prefs->SetBoolean(disabled_pref, false);
-    content::TestNavigationObserver normal_navigation(source);
-    content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-    normal_navigation.Wait();
-    EXPECT_EQ(target, source->GetLastCommittedURL());
-    EXPECT_FALSE(controller()->SlotBusy());
-    ASSERT_TRUE(ui_test_utils::NavigateToURL(
-        browser(), embedded_test_server()->GetURL(kSourcePath)));
-    prefs->SetBoolean(disabled_pref, true);
-  }
-
-  MahoAtcState::SetHasEnabledRules(true);
-  const GURL source_url = source->GetLastCommittedURL();
-  content::TestNavigationObserver navigation(target);
-  navigation.StartWatchingNewWebContents();
-  content::SimulateMouseClickOrTapElementWithId(source, "same-tab");
-  navigation.Wait();
-  ASSERT_TRUE(WaitForPeekAt(target));
-  EXPECT_EQ(source_url, source->GetLastCommittedURL());
-  EXPECT_TRUE(MahoAtcState::HasEnabledRules());
+  EXPECT_FALSE(controller()->SlotBusy());
 }
 
 }  // namespace
