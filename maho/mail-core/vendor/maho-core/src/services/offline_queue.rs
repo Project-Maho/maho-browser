@@ -25,16 +25,37 @@ pub fn queue_mutation(
     mutation_type: &str,
     target_folder: Option<&str>,
 ) -> Result<(), AppError> {
+    queue_mutation_with_payload(conn, account_id, email_uid, folder_path, mutation_type, target_folder, None)
+}
+
+/// `queue_mutation` plus extra payload fields the delivery step needs when the
+/// local row cannot name its server copy by UID. A folder move parks a negative
+/// placeholder UID on the row until the next sync learns the real one, so the
+/// intent carries the Message-ID it can be resolved by in the meantime.
+pub fn queue_mutation_with_payload(
+    conn: &Connection,
+    account_id: &str,
+    email_uid: i64,
+    folder_path: &str,
+    mutation_type: &str,
+    target_folder: Option<&str>,
+    extra_payload: Option<&serde_json::Value>,
+) -> Result<(), AppError> {
     let id = Uuid::new_v4().to_string();
     let epoch: i64 = conn.query_row(
         "SELECT COALESCE((SELECT uid_validity FROM folders WHERE account_id=?1 AND path=?2), 0)",
         params![account_id, folder_path], |row| row.get(0),
     )?;
-    let payload = serde_json::json!({"uid_validity": epoch}).to_string();
+    let mut payload = serde_json::json!({"uid_validity": epoch});
+    if let (Some(extra), Some(fields)) = (extra_payload.and_then(|value| value.as_object()), payload.as_object_mut()) {
+        for (key, value) in extra {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
     conn.execute(
         "INSERT OR REPLACE INTO pending_mutations (id, account_id, email_uid, folder_path, mutation_type, target_folder, payload_json)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, account_id, email_uid, folder_path, mutation_type, target_folder, payload],
+        params![id, account_id, email_uid, folder_path, mutation_type, target_folder, payload.to_string()],
     )?;
     Ok(())
 }

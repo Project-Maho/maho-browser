@@ -12,21 +12,42 @@ pub(super) fn deliver_and_ack(
     let epoch = payload.get("uid_validity").and_then(|v| v.as_u64())
         .and_then(|v| u32::try_from(v).ok()).filter(|v| *v != 0)
         .ok_or(MailFfiError::InvalidArg("mail mutation has no valid UIDVALIDITY"))?;
-    let uid = mutation.email_uid.and_then(|v| u32::try_from(v).ok()).filter(|v| *v != 0)
-        .ok_or(MailFfiError::InvalidArg("mail mutation has no valid UID"))?;
+    let stored_uid = mutation.email_uid.and_then(|v| u32::try_from(v).ok()).filter(|v| *v != 0);
     let folder = mutation.folder_path.as_deref().ok_or(MailFfiError::InvalidArg("mail mutation has no mailbox"))?;
+    // Validate addressability before opening a connection so a mutation that can
+    // never name its server copy fails fast instead of holding an IMAP session.
+    if stored_uid.is_none() && payload.get("message_id").and_then(|v| v.as_str()).is_none() {
+        return Err(MailFfiError::InvalidArg("mail mutation has no valid UID"));
+    }
     let resolved = resolve_account_auth(conn, key, &mutation.account_id)?;
     let mut client = connect_imap(&resolved)?;
     let outcome = (|| -> Result<()> {
         client.validate_uid_validity(folder, epoch)?;
+        let uid = match stored_uid {
+            Some(uid) => uid,
+            None => {
+                let message_id = payload.get("message_id").and_then(|v| v.as_str())
+                    .ok_or(MailFfiError::InvalidArg("mail mutation has no valid UID"))?;
+                client.find_uid_by_message_id(folder, message_id)?
+                    .ok_or_else(|| MailFfiError::Internal("mail mutation UID is not resolvable yet".into()))?
+            }
+        };
         match mutation.mutation_type.as_str() {
             "mark_read" => client.set_flags(folder, uid, "\\Seen")?,
             "mark_unread" => client.remove_flags(folder, uid, "\\Seen")?,
             "star" => client.set_flags(folder, uid, "\\Flagged")?,
             "unstar" => client.remove_flags(folder, uid, "\\Flagged")?,
             "delete" => client.delete_email(folder, uid)?,
-            "move" => client.move_email(folder, uid, mutation.target_folder.as_deref()
-                .ok_or(MailFfiError::InvalidArg("move has no target mailbox"))?)?,
+            "move" => {
+                let target = mutation.target_folder.as_deref()
+                    .ok_or(MailFfiError::InvalidArg("move has no target mailbox"))?;
+                client.move_email(folder, uid, target)?;
+                if let Some(message_id) = payload.get("message_id").and_then(|v| v.as_str()) {
+                    if let Some(moved) = client.find_uid_by_message_id(target, message_id)? {
+                        adopt_resolved_uid(conn, &mutation.account_id, target, message_id, moved)?;
+                    }
+                }
+            }
             _ => return Err(MailFfiError::InvalidArg("unsupported mail mutation")),
         }
         Ok(())
@@ -34,6 +55,23 @@ pub(super) fn deliver_and_ack(
     safe_logout(client);
     outcome?;
     offline_queue::remove_mutation(conn, &mutation.id)?;
+    Ok(())
+}
+
+/// Replace the negative placeholder UID a folder move parks on the moved row
+/// once the server reports the real UID it now has in the target mailbox.
+fn adopt_resolved_uid(
+    conn: &rusqlite::Connection,
+    account_id: &str,
+    folder_path: &str,
+    message_id: &str,
+    uid: u32,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE emails SET uid = ?1 WHERE account_id = ?2 AND message_id = ?3 AND uid < 0
+           AND folder_id = (SELECT id FROM folders WHERE account_id = ?2 AND path = ?4)",
+        rusqlite::params![i64::from(uid), account_id, message_id, folder_path],
+    )?;
     Ok(())
 }
 

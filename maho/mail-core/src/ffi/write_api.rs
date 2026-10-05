@@ -474,6 +474,42 @@ fn trash_folder_for(conn: &rusqlite::Connection, email_id: &str) -> Result<Optio
     Ok(trash.filter(|id| id != &folder_id))
 }
 
+/// The row's IMAP identity plus the Message-ID that can stand in for a UID the
+/// local row does not have yet: a folder move parks a negative placeholder UID
+/// on the row until the next sync learns the real one.
+fn get_email_location(
+    conn: &rusqlite::Connection,
+    email_id: &str,
+) -> Result<Option<(String, String, i64, Option<String>)>> {
+    let row = conn
+        .query_row(
+            "SELECT e.account_id, f.path, e.uid, e.message_id FROM emails e JOIN folders f ON e.folder_id = f.id AND e.account_id = f.account_id WHERE e.id = ?1",
+            [email_id],
+            |row| {
+                let account_id: String = row.get(0)?;
+                let folder_path: String = row.get(1)?;
+                let uid: Option<i64> = row.get(2)?;
+                let message_id: Option<String> = row.get(3)?;
+                Ok((account_id, folder_path, uid, message_id))
+            },
+        )
+        .optional()
+        .map_err(|e| MailFfiError::Core(maho_core::error::AppError::Database(e)))?;
+    let Some((account_id, folder_path, uid, message_id)) = row else {
+        return Ok(None);
+    };
+    let Some(uid) = uid else { return Ok(None) };
+    let message_id = message_id.filter(|value| !value.is_empty());
+    // uid > 0 names the server copy directly; uid < 0 is the placeholder a
+    // folder move parks on the row, addressable only through its Message-ID.
+    // uid = 0 means the row never had a server copy at all.
+    let addressable = uid > 0 || (uid < 0 && message_id.is_some());
+    if !addressable {
+        return Ok(None);
+    }
+    Ok(Some((account_id, folder_path, uid, message_id)))
+}
+
 fn mutate_location(
     ctx: &crate::state::AppCtx,
     conn: &rusqlite::Connection,
@@ -481,17 +517,18 @@ fn mutate_location(
     target: Option<&str>,
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
-    let remote = get_email_imap_info(&tx, email_id)?;
+    let location = get_email_location(&tx, email_id)?;
     let target = match target {
         Some(id) => Some(id.to_string()),
         None => trash_folder_for(&tx, email_id)?,
     };
     let target_path = target.as_deref().map(|id| tx.query_row("SELECT path FROM folders WHERE id=?1", [id], |r| r.get::<_, String>(0))).transpose()?;
     let kind = if target.is_some() { "move" } else { "delete" };
-    let pending = if let Some((account, folder, uid)) = remote {
-        maho_core::services::offline_queue::queue_mutation(&tx, &account, i64::from(uid), &folder, kind, target_path.as_deref())?;
+    let pending = if let Some((account, folder, uid, message_id)) = location {
+        let extra = message_id.as_deref().map(|value| json!({ "message_id": value }));
+        maho_core::services::offline_queue::queue_mutation_with_payload(&tx, &account, uid, &folder, kind, target_path.as_deref(), extra.as_ref())?;
         Some(maho_core::services::offline_queue::list_pending_mutations(&tx, &account)?.into_iter()
-            .find(|row| row.folder_path.as_deref() == Some(&folder) && row.email_uid == Some(i64::from(uid)) && row.mutation_type == kind)
+            .find(|row| row.folder_path.as_deref() == Some(folder.as_str()) && row.email_uid == Some(uid) && row.mutation_type == kind)
             .ok_or_else(|| MailFfiError::Internal("queued mutation missing".into()))?)
     } else { None };
     if let Some(target) = target {
