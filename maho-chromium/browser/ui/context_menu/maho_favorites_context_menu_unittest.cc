@@ -37,13 +37,9 @@ std::vector<ItemDesc> FlattenTopLevel(const ui::SimpleMenuModel& model) {
 class TestFavoritesMenuDelegate : public MahoFavoritesContextMenu::Delegate {
  public:
   void OnFavoriteShareRequested() override { share_called_ = true; }
-  void OnFavoriteRenameRequested() override { rename_called_ = true; }
-  void OnFavoriteIconChangeRequested() override { icon_called_ = true; }
   void OnFavoritePinnedUrlEditRequested() override { pinned_edit_called_ = true; }
 
   bool share_called_ = false;
-  bool rename_called_ = false;
-  bool icon_called_ = false;
   bool pinned_edit_called_ = false;
 };
 
@@ -67,8 +63,6 @@ TEST(MahoFavoritesContextMenuTest, CommandIdValues) {
   EXPECT_EQ(IDC_MAHO_FAV_OPEN_NEW_TAB, 57050);
   EXPECT_EQ(IDC_MAHO_FAV_OPEN_SPLIT,   57051);
   EXPECT_EQ(IDC_MAHO_FAV_COPY_LINK,    57052);
-  EXPECT_EQ(IDC_MAHO_FAV_RENAME,       57053);
-  EXPECT_EQ(IDC_MAHO_FAV_CHANGE_ICON,  57054);
   EXPECT_EQ(IDC_MAHO_FAV_MOVE_TO_SPACE, 57055);
   EXPECT_EQ(IDC_MAHO_FAV_DUPLICATE,    57056);
   EXPECT_EQ(IDC_MAHO_FAV_REMOVE,       57057);
@@ -121,18 +115,14 @@ TEST(MahoFavoritesContextMenuTest, BuildMenuModelContainsShare) {
   EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_SHARE));
 }
 
-TEST(MahoFavoritesContextMenuTest, BuildMenuModelContainsChangeIcon) {
+TEST(MahoFavoritesContextMenuTest, BuildMenuModelOmitsRenameAndChangeIcon) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", std::string());
   std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
   ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_CHANGE_ICON));
-}
-
-TEST(MahoFavoritesContextMenuTest, BuildMenuModelContainsRename) {
-  MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", std::string());
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-  EXPECT_TRUE(ModelContainsCommand(*model, IDC_MAHO_FAV_RENAME));
+  for (size_t i = 0; i < model->GetItemCount(); ++i) {
+    EXPECT_NE(model->GetCommandIdAt(i), 57053);
+    EXPECT_NE(model->GetCommandIdAt(i), 57054);
+  }
 }
 
 TEST(MahoFavoritesContextMenuTest, BuildMenuModelContainsEditPinnedPageSubmenuAndChildren) {
@@ -167,6 +157,53 @@ TEST(MahoFavoritesContextMenuTest, TopLevelOrderMatchesProductionWithoutTabId) {
   ASSERT_NE(model, nullptr);
 
   auto items = FlattenTopLevel(*model);
+  ASSERT_EQ(items.size(), 14u);
+
+  EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[0].command_id, IDC_MAHO_FAV_OPEN_NEW_TAB);
+
+  EXPECT_EQ(items[1].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[1].command_id, IDC_MAHO_FAV_OPEN_SPLIT);
+
+  EXPECT_EQ(items[2].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[2].command_id, IDC_MAHO_FAV_BOOST);
+
+  EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[4].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[4].command_id, IDC_MAHO_FAV_COPY_LINK);
+
+  EXPECT_EQ(items[5].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[5].command_id, IDC_MAHO_FAV_SHARE);
+
+  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_SUBMENU);
+  EXPECT_EQ(items[7].command_id, IDC_MAHO_FAV_EDIT_PINNED);
+
+  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[9].command_id, IDC_MAHO_FAV_RELOAD);
+
+  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[10].command_id, IDC_MAHO_FAV_DUPLICATE);
+
+  EXPECT_EQ(items[11].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[11].command_id, IDC_MAHO_FAV_MUTE);
+
+  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_SEPARATOR);
+
+  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[13].command_id, IDC_MAHO_FAV_REMOVE);
+}
+
+TEST(MahoFavoritesContextMenuTest, TopLevelOrderMatchesProductionWithTabId) {
+  MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "t1");
+  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
+  ASSERT_NE(model, nullptr);
+
+  auto items = FlattenTopLevel(*model);
   ASSERT_EQ(items.size(), 16u);
 
   EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
@@ -188,88 +225,29 @@ TEST(MahoFavoritesContextMenuTest, TopLevelOrderMatchesProductionWithoutTabId) {
 
   EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_SEPARATOR);
 
-  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[7].command_id, IDC_MAHO_FAV_CHANGE_ICON);
+  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_SUBMENU);
+  EXPECT_EQ(items[7].command_id, IDC_MAHO_FAV_EDIT_PINNED);
 
-  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[8].command_id, IDC_MAHO_FAV_RENAME);
+  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_SEPARATOR);
 
-  EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_EQ(items[9].command_id, IDC_MAHO_FAV_EDIT_PINNED);
+  EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[9].command_id, IDC_MAHO_FAV_RELOAD);
 
-  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_SEPARATOR);
+  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_COMMAND);
+  EXPECT_EQ(items[10].command_id, IDC_MAHO_FAV_DUPLICATE);
 
   EXPECT_EQ(items[11].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[11].command_id, IDC_MAHO_FAV_RELOAD);
+  EXPECT_EQ(items[11].command_id, IDC_MAHO_FAV_MUTE);
 
-  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[12].command_id, IDC_MAHO_FAV_DUPLICATE);
+  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_SEPARATOR);
 
-  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[13].command_id, IDC_MAHO_FAV_MUTE);
+  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_SUBMENU);
+  EXPECT_EQ(items[13].command_id, IDC_MAHO_FAV_MOVE_TO_SPACE);
 
   EXPECT_EQ(items[14].type, ui::MenuModel::TYPE_SEPARATOR);
 
   EXPECT_EQ(items[15].type, ui::MenuModel::TYPE_COMMAND);
   EXPECT_EQ(items[15].command_id, IDC_MAHO_FAV_REMOVE);
-}
-
-TEST(MahoFavoritesContextMenuTest, TopLevelOrderMatchesProductionWithTabId) {
-  MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "t1");
-  std::unique_ptr<ui::SimpleMenuModel> model = menu.BuildMenuModel();
-  ASSERT_NE(model, nullptr);
-
-  auto items = FlattenTopLevel(*model);
-  ASSERT_EQ(items.size(), 18u);
-
-  EXPECT_EQ(items[0].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[0].command_id, IDC_MAHO_FAV_OPEN_NEW_TAB);
-
-  EXPECT_EQ(items[1].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[1].command_id, IDC_MAHO_FAV_OPEN_SPLIT);
-
-  EXPECT_EQ(items[2].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[2].command_id, IDC_MAHO_FAV_BOOST);
-
-  EXPECT_EQ(items[3].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[4].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[4].command_id, IDC_MAHO_FAV_COPY_LINK);
-
-  EXPECT_EQ(items[5].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[5].command_id, IDC_MAHO_FAV_SHARE);
-
-  EXPECT_EQ(items[6].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[7].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[7].command_id, IDC_MAHO_FAV_CHANGE_ICON);
-
-  EXPECT_EQ(items[8].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[8].command_id, IDC_MAHO_FAV_RENAME);
-
-  EXPECT_EQ(items[9].type, ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_EQ(items[9].command_id, IDC_MAHO_FAV_EDIT_PINNED);
-
-  EXPECT_EQ(items[10].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[11].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[11].command_id, IDC_MAHO_FAV_RELOAD);
-
-  EXPECT_EQ(items[12].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[12].command_id, IDC_MAHO_FAV_DUPLICATE);
-
-  EXPECT_EQ(items[13].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[13].command_id, IDC_MAHO_FAV_MUTE);
-
-  EXPECT_EQ(items[14].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[15].type, ui::MenuModel::TYPE_SUBMENU);
-  EXPECT_EQ(items[15].command_id, IDC_MAHO_FAV_MOVE_TO_SPACE);
-
-  EXPECT_EQ(items[16].type, ui::MenuModel::TYPE_SEPARATOR);
-
-  EXPECT_EQ(items[17].type, ui::MenuModel::TYPE_COMMAND);
-  EXPECT_EQ(items[17].command_id, IDC_MAHO_FAV_REMOVE);
 }
 
 TEST(MahoFavoritesContextMenuTest, TopLevelSeparatorCounts) {
@@ -320,8 +298,6 @@ TEST(MahoFavoritesContextMenuTest, UrlCommandsDisabledWhenUrlIsInvalid) {
 
 TEST(MahoFavoritesContextMenuTest, TabIdDependentCommandsDisabledWhenTabIdEmpty) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", std::string());
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_RENAME));
-  EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_CHANGE_ICON));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_EDIT_PINNED_EDIT));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_EDIT_PINNED));
   EXPECT_FALSE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_REMOVE));
@@ -329,8 +305,6 @@ TEST(MahoFavoritesContextMenuTest, TabIdDependentCommandsDisabledWhenTabIdEmpty)
 
 TEST(MahoFavoritesContextMenuTest, TabIdSetWithoutLiveTabEnablesMetadataActionsAndDisablesLiveTabActions) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "tab-1");
-  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_RENAME));
-  EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_CHANGE_ICON));
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_EDIT_PINNED_EDIT));
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_EDIT_PINNED));
   EXPECT_TRUE(menu.IsCommandIdEnabled(IDC_MAHO_FAV_REMOVE));
@@ -432,8 +406,6 @@ TEST(MahoFavoritesContextMenuTest, ExecuteSharedTabActionsWithoutLiveTabDoNotCra
 TEST(MahoFavoritesContextMenuTest, ExecuteWithNullDelegateAndBrowserDoesNotCrash) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "tab-1", nullptr);
   menu.ExecuteCommand(IDC_MAHO_FAV_SHARE, 0);
-  menu.ExecuteCommand(IDC_MAHO_FAV_RENAME, 0);
-  menu.ExecuteCommand(IDC_MAHO_FAV_CHANGE_ICON, 0);
   menu.ExecuteCommand(IDC_MAHO_FAV_EDIT_PINNED_EDIT, 0);
   menu.ExecuteCommand(IDC_MAHO_FAV_EDIT_PINNED_REPLACE, 0);
   menu.ExecuteCommand(IDC_MAHO_FAV_MOVE_FOLDER_BASE, 0);
@@ -445,10 +417,6 @@ TEST(MahoFavoritesContextMenuTest, ExecuteCommandsInvokesDelegate) {
   MahoFavoritesContextMenu menu(nullptr, GURL("https://example.com"), u"Example", "tab-1", &delegate);
   menu.ExecuteCommand(IDC_MAHO_FAV_SHARE, 0);
   EXPECT_TRUE(delegate.share_called_);
-  menu.ExecuteCommand(IDC_MAHO_FAV_RENAME, 0);
-  EXPECT_TRUE(delegate.rename_called_);
-  menu.ExecuteCommand(IDC_MAHO_FAV_CHANGE_ICON, 0);
-  EXPECT_TRUE(delegate.icon_called_);
   menu.ExecuteCommand(IDC_MAHO_FAV_EDIT_PINNED_EDIT, 0);
   EXPECT_TRUE(delegate.pinned_edit_called_);
 }
