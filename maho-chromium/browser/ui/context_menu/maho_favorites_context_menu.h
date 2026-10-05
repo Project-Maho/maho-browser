@@ -19,8 +19,6 @@ class MahoFavoritesContextMenu : public ui::SimpleMenuModel::Delegate {
    public:
     virtual ~Delegate() = default;
     virtual void OnFavoriteShareRequested() = 0;
-    virtual void OnFavoriteRenameRequested() = 0;
-    virtual void OnFavoriteIconChangeRequested() = 0;
     virtual void OnFavoritePinnedUrlEditRequested() = 0;
   };
 

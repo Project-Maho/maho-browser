@@ -1859,7 +1859,6 @@ void MahoSidebarFavoritesGridView::ShowTileContextMenu(
   active_context_menu_url_ = tile_urls_[index];
   active_context_menu_title_ = tile_titles_[index];
   active_context_menu_pinned_url_ = tile_pinned_urls_[index];
-  active_context_menu_custom_icon_ = tile_custom_icons_[index];
   active_context_menu_custom_title_ = tile_custom_titles_[index];
   active_context_menu_ = std::make_unique<MahoFavoritesContextMenu>(
       browser_, active_context_menu_url_, active_context_menu_title_,
@@ -1908,60 +1907,35 @@ void MahoSidebarFavoritesGridView::OnFavoriteShareRequested() {
   maho::ShowLinkCopiedToast(browser_);
 }
 
-void MahoSidebarFavoritesGridView::OnFavoriteRenameRequested() {
-  OpenEditDialog(MahoFavoriteEditDialog::Focus::kName);
-}
-
-void MahoSidebarFavoritesGridView::OnFavoriteIconChangeRequested() {
-  OpenEditDialog(MahoFavoriteEditDialog::Focus::kIcon);
-}
-
 void MahoSidebarFavoritesGridView::OnFavoritePinnedUrlEditRequested() {
-  OpenEditDialog(MahoFavoriteEditDialog::Focus::kUrl);
+  OpenEditDialog();
 }
 
-void MahoSidebarFavoritesGridView::OpenEditDialog(
-    MahoFavoriteEditDialog::Focus focus) {
+void MahoSidebarFavoritesGridView::OpenEditDialog() {
   if (active_context_menu_tab_id_.empty()) {
     return;
   }
+  // Prefill with the pinned URL when one is set, else the live tab URL, and
+  // remember it as the change-detection baseline so saving an untouched field
+  // cannot author a pinned URL.
   const std::string initial_url = active_context_menu_pinned_url_.empty()
                                       ? active_context_menu_url_.spec()
                                       : active_context_menu_pinned_url_;
-  // Prefill with what the tile currently shows (authored title if any, else
-  // the derived one) and remember both values as the change-detection
-  // baseline, so saving a dialog without touching a field cannot author it.
-  const std::u16string initial_name =
-      active_context_menu_custom_title_.empty()
-          ? active_context_menu_title_
-          : active_context_menu_custom_title_;
   views::Widget* widget = GetWidget();
   MahoFavoriteEditDialog::Show(
-      widget ? widget->GetNativeWindow() : gfx::NativeWindow(), focus,
-      initial_name, base::UTF16ToUTF8(active_context_menu_custom_icon_),
-      initial_url,
+      widget ? widget->GetNativeWindow() : gfx::NativeWindow(), initial_url,
       base::BindOnce(&MahoSidebarFavoritesGridView::OnEditDialogAccepted,
                      weak_factory_.GetWeakPtr(), active_context_menu_tab_id_,
-                     initial_name, initial_url));
+                     initial_url));
 }
 
 void MahoSidebarFavoritesGridView::OnEditDialogAccepted(
     const std::string& tab_id,
-    std::u16string original_name,
     std::string original_url,
-    std::u16string name,
-    std::string icon,
     std::string url) {
   if (tab_id.empty()) {
     return;
   }
-  if (name != original_name) {
-    DispatchShellEvent("set_tab_custom_title",
-                       {{"tab_id", tab_id},
-                        {"custom_title", base::UTF16ToUTF8(name)}});
-  }
-  DispatchShellEvent("set_tab_custom_icon",
-                     {{"tab_id", tab_id}, {"custom_icon", icon}});
   if (!url.empty() && url != original_url && GURL(url).is_valid()) {
     DispatchShellEvent("set_tab_pinned_url",
                        {{"tab_id", tab_id}, {"url", url}});

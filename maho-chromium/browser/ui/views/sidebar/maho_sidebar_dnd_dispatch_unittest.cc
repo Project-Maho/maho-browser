@@ -6946,5 +6946,26 @@ TEST_F(SidebarDnDDispatchTest, CrossSpacePinnedTabsPreservedWithoutLeak) {
   maho_core_free(core);
 }
 
+TEST_F(SidebarDnDDispatchTest, PinnedUrlDialogDispatchesOnlyPinnedUrl) {
+  MahoSidebarFavoritesGridView grid(/*browser=*/nullptr);
+  observer_.events.clear();
+
+  grid.RunEditDialogAcceptedForTesting("fav-1", "https://papago.naver.com/",
+                                       "https://papago.naver.com/en/");
+
+  ASSERT_EQ(observer_.events.size(), 1u);
+  EXPECT_EQ(observer_.events[0].kind, "set_tab_pinned_url");
+}
+
+TEST_F(SidebarDnDDispatchTest, PinnedUrlDialogIgnoresUnchangedUrl) {
+  MahoSidebarFavoritesGridView grid(/*browser=*/nullptr);
+  observer_.events.clear();
+
+  grid.RunEditDialogAcceptedForTesting("fav-1", "https://papago.naver.com/",
+                                       "https://papago.naver.com/");
+
+  EXPECT_TRUE(observer_.events.empty());
+}
+
 }  // namespace
 }  // namespace maho
