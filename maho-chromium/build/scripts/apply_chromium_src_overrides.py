@@ -8672,6 +8672,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 '#include "chrome/browser/ui/webui/tab_search/tab_search_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_ai/maho_ai_ui.h"\n'
+                '#include "maho/browser/ui/webui/maho_boost/maho_boost_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_live_folders/maho_live_folders_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_mail/maho_mail_ui.h"\n'
                 '#include "maho/browser/ui/webui/maho_settings/maho_settings_ui.h"\n'
@@ -8700,6 +8701,29 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: expose the Maho WebUI page-handler factories",
             guard="registry.ForWebUI<MahoWelcomeUI>()",
+        ),
+        Replacement(
+            old=(
+                "  RegisterWebUIControllerInterfaceBinder<comments::mojom::PageHandlerFactory,\n"
+                "                                         CommentsSidePanelUI>(map);\n"
+            ),
+            new=(
+                "  RegisterWebUIControllerInterfaceBinder<comments::mojom::PageHandlerFactory,\n"
+                "                                         CommentsSidePanelUI>(map);\n"
+                "  // Maho Boost is the only Maho WebUI served from chrome-untrusted://, so\n"
+                "  // its page-handler factory belongs in the frame binder map; the\n"
+                "  // trusted registry above never serves the untrusted editor frame.\n"
+                "  // Without this the editor renderer is killed with \"No binder found\n"
+                "  // for interface maho_boost.mojom.PageHandlerFactory\" and the Boost\n"
+                "  // window closes the instant it opens.\n"
+                "  RegisterWebUIControllerInterfaceBinder<\n"
+                "      maho_boost::mojom::PageHandlerFactory, MahoBoostUI>(map);\n"
+            ),
+            description=(
+                "Maho: register the Boost page-handler factory for the "
+                "untrusted editor frame"
+            ),
+            guard="maho_boost::mojom::PageHandlerFactory, MahoBoostUI>(map);",
         ),
     ],
     "chrome/chrome_paks.gni": [
