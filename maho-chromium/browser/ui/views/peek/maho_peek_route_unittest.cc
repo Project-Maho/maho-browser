@@ -24,9 +24,7 @@ PeekRouteInput EligibleInput(PeekSeam seam) {
       .seam = seam,
       .disposition = seam == PeekSeam::kAddNewContents
                          ? content::WindowOpenDisposition::NEW_POPUP
-                     : seam == PeekSeam::kOpenUrlFromTab
-                         ? content::WindowOpenDisposition::NEW_FOREGROUND_TAB
-                         : content::WindowOpenDisposition::CURRENT_TAB,
+                         : content::WindowOpenDisposition::NEW_FOREGROUND_TAB,
       .source_role = seam == PeekSeam::kAddNewContents
                          ? PeekSourceRole::kNormal
                          : PeekSourceRole::kPinned,
@@ -177,61 +175,6 @@ TEST_F(MahoPeekRouteTest, OpenUrlFromTabBranches) {
     wrong_disposition.disposition = disposition;
     cases.push_back({"disposition outside the OpenURLFromTab set",
                      wrong_disposition, PeekRoute::kFallThrough});
-  }
-
-  ExpectCases(cases);
-}
-
-TEST_F(MahoPeekRouteTest, SameTabThrottleBranches) {
-  std::vector<RouteCase> cases =
-      CommonPrecedenceCases(PeekSeam::kSameTabThrottle);
-  const PeekRouteInput eligible = EligibleInput(PeekSeam::kSameTabThrottle);
-
-  auto link_disabled = eligible;
-  link_disabled.link_routing_enabled = false;
-  cases.push_back(
-      {"link routing disabled", link_disabled, PeekRoute::kFallThrough});
-
-  for (const PeekSourceRole source_role : {PeekSourceRole::kPinned,
-                                           PeekSourceRole::kFavorite}) {
-    auto force_tab = eligible;
-    force_tab.force_tab = true;
-    force_tab.source_role = source_role;
-    cases.push_back({"force tab bypasses same-tab Peek", force_tab,
-                     PeekRoute::kFallThrough});
-  }
-
-  auto normal_source = eligible;
-  normal_source.source_role = PeekSourceRole::kNormal;
-  cases.push_back({"normal source", normal_source, PeekRoute::kFallThrough});
-
-  auto favorite_source = eligible;
-  favorite_source.source_role = PeekSourceRole::kFavorite;
-  cases.push_back({"favorite source", favorite_source, PeekRoute::kOpenInPeek});
-
-  auto not_user_initiated = eligible;
-  not_user_initiated.is_user_initiated = false;
-  cases.push_back(
-      {"not user initiated", not_user_initiated, PeekRoute::kFallThrough});
-
-  for (const auto disposition : {
-           content::WindowOpenDisposition::UNKNOWN,
-           content::WindowOpenDisposition::SINGLETON_TAB,
-           content::WindowOpenDisposition::NEW_FOREGROUND_TAB,
-           content::WindowOpenDisposition::NEW_BACKGROUND_TAB,
-           content::WindowOpenDisposition::NEW_POPUP,
-           content::WindowOpenDisposition::NEW_WINDOW,
-           content::WindowOpenDisposition::SAVE_TO_DISK,
-           content::WindowOpenDisposition::OFF_THE_RECORD,
-           content::WindowOpenDisposition::IGNORE_ACTION,
-           content::WindowOpenDisposition::SWITCH_TO_TAB,
-           content::WindowOpenDisposition::NEW_PICTURE_IN_PICTURE,
-           content::WindowOpenDisposition::NEW_SPLIT_VIEW,
-       }) {
-    auto wrong_disposition = eligible;
-    wrong_disposition.disposition = disposition;
-    cases.push_back({"non-CURRENT_TAB disposition", wrong_disposition,
-                     PeekRoute::kFallThrough});
   }
 
   ExpectCases(cases);

@@ -26,6 +26,8 @@ struct LinkDestinationResult;
 // renderer-initiated link clicks (content BeginNavigation). New-tab /
 // new-window dispositions continue to route via the OpenURLFromTab hook (before
 // tab creation), and this throttle no-ops on the re-issued same-space tab.
+// Same-tab navigations are no longer rerouted into Peek; in-page flows
+// (location.href, same-tab link clicks) always stay in their tab.
 class MahoAtcNavigationThrottle : public content::NavigationThrottle {
  public:
   explicit MahoAtcNavigationThrottle(
@@ -42,16 +44,10 @@ class MahoAtcNavigationThrottle : public content::NavigationThrottle {
   const char* GetNameForLogging() override;
 
  private:
-  ThrottleCheckResult MaybeDeferNavigation(bool allow_peek_routing);
-  bool IsPeekEligibleAtStart();
-  PeekRoute DecideSameTabPeekRoute(Browser* browser);
-  ThrottleCheckResult ApplyPeekRouteWithoutAtc(Browser* browser,
-                                               const GURL& url);
-  bool ApplyPeekRouteAfterAtc(Browser* browser, const GURL& url);
+  ThrottleCheckResult MaybeDeferNavigation();
   void OnLinkDestinationDecided(base::WeakPtr<BrowserWindowInterface> browser,
                                 GURL url,
                                 std::string current_space_id,
-                                bool peek_eligible_at_start,
                                 LinkDestinationResult result);
   void OnTargetProfileLoaded(base::WeakPtr<BrowserWindowInterface> source_browser,
                              GURL url,
