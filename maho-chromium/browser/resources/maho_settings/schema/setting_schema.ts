@@ -124,7 +124,7 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
       scope: 'profile',
       selectedProfile: true,
       label: 'Translate pages into',
-      description: 'The language Maho translates web pages into. Right-click a page and choose "Translate this page" to translate it into this language.',
+      description: 'The language Maho translates web pages into. Use the translate button in the page header, or right-click a page and choose "Translate this page".',
       control: 'select',
       options: TRANSLATE_LANGUAGE_OPTIONS,
     },

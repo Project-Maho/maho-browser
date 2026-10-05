@@ -94,10 +94,11 @@ views::BubbleBorder::Arrow MahoTranslatePopoverView::ArrowForAnchorForTesting(
 }
 
 MahoTranslatePopoverView::MahoTranslatePopoverView(
-    const std::u16string& target_language_name,
-    base::RepeatingClosure translate_callback,
+    Mode mode,
+    const std::u16string& language_name,
+    base::RepeatingClosure primary_callback,
     OptionsCallback options_callback)
-    : translate_callback_(std::move(translate_callback)),
+    : primary_callback_(std::move(primary_callback)),
       options_callback_(std::move(options_callback)) {
   SetBackground(views::CreateRoundedRectBackground(
       ui::kColorSysBaseContainerElevated, kPopoverCornerRadiusDp));
@@ -125,8 +126,9 @@ MahoTranslatePopoverView::MahoTranslatePopoverView(
   prompt_row->AddChildView(std::move(badge));
 
   auto* prompt = prompt_row->AddChildView(std::make_unique<views::Label>(
-      std::u16string(u"Translate this page to ") + target_language_name +
-      u"?"));
+      mode == Mode::kTranslated
+          ? u"Translated to " + language_name
+          : u"Translate this page to " + language_name + u"?"));
   prompt->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   prompt->SetMultiLine(true);
   prompt->SetAutoColorReadabilityEnabled(false);
@@ -149,12 +151,12 @@ MahoTranslatePopoverView::MahoTranslatePopoverView(
   options->SetStyle(ui::ButtonStyle::kTonal);
   options_button_ = button_row->AddChildView(std::move(options));
 
-  auto translate = std::make_unique<views::MdTextButton>(
-      base::BindRepeating(&MahoTranslatePopoverView::OnTranslatePressed,
+  auto primary = std::make_unique<views::MdTextButton>(
+      base::BindRepeating(&MahoTranslatePopoverView::OnPrimaryPressed,
                           weak_factory_.GetWeakPtr()),
-      u"Translate");
-  translate->SetStyle(ui::ButtonStyle::kProminent);
-  button_row->AddChildView(std::move(translate));
+      mode == Mode::kTranslated ? u"Show original" : u"Translate");
+  primary->SetStyle(ui::ButtonStyle::kProminent);
+  button_row->AddChildView(std::move(primary));
 }
 
 MahoTranslatePopoverView::~MahoTranslatePopoverView() = default;
@@ -162,8 +164,9 @@ MahoTranslatePopoverView::~MahoTranslatePopoverView() = default;
 // static
 views::Widget* MahoTranslatePopoverView::Show(
     views::View* anchor_view,
-    const std::u16string& target_language_name,
-    base::RepeatingClosure translate_callback,
+    Mode mode,
+    const std::u16string& language_name,
+    base::RepeatingClosure primary_callback,
     OptionsCallback options_callback) {
   if (!anchor_view) {
     return nullptr;
@@ -174,7 +177,7 @@ views::Widget* MahoTranslatePopoverView::Show(
   delegate->SetButtons(static_cast<int>(ui::mojom::DialogButton::kNone));
   delegate->set_margins(gfx::Insets());
   delegate->SetContentsView(std::make_unique<MahoTranslatePopoverView>(
-      target_language_name, std::move(translate_callback),
+      mode, language_name, std::move(primary_callback),
       std::move(options_callback)));
 
   // Released to self-ownership: PopoverBubbleDelegate deletes itself (and the
@@ -188,9 +191,9 @@ views::Widget* MahoTranslatePopoverView::Show(
   return widget;
 }
 
-void MahoTranslatePopoverView::OnTranslatePressed() {
-  if (translate_callback_) {
-    translate_callback_.Run();
+void MahoTranslatePopoverView::OnPrimaryPressed() {
+  if (primary_callback_) {
+    primary_callback_.Run();
   }
   if (GetWidget()) {
     GetWidget()->CloseWithReason(views::Widget::ClosedReason::kAcceptButtonClicked);

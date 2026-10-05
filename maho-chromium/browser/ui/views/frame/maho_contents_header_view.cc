@@ -31,6 +31,8 @@
 #include "chrome/browser/ui/views/page_info/page_info_bubble_specification.h"
 #include "chrome/browser/ui/views/page_info/page_info_bubble_view.h"
 #include "components/security_state/core/security_state.h"
+#include "components/translate/content/browser/content_translate_driver.h"
+#include "components/translate/core/browser/language_state.h"
 #include "components/translate/core/browser/translate_download_manager.h"
 #include "components/translate/core/browser/translate_manager.h"
 #include "components/translate/core/browser/translate_prefs.h"
@@ -110,6 +112,8 @@ constexpr char16_t kSearchPlaceholder[] = u"Search or Enter URL...";
 constexpr int kTranslateOptionsChooseLanguageCommand = 41000;
 constexpr int kTranslateOptionsNeverTranslateSiteCommand = 41001;
 constexpr int kTranslateOptionsLanguageSettingsCommand = 41002;
+constexpr int kTranslateOptionsAlwaysTranslateLanguageCommand = 41003;
+constexpr int kTranslateOptionsNeverTranslateLanguageCommand = 41004;
 constexpr int kTranslateOptionsLanguageCommandFirst = 41100;
 
 // Same resolution order as Chromium's translate manager: auto-translate or
@@ -245,16 +249,11 @@ MahoContentsHeaderView::MahoContentsHeaderView(BrowserView* browser_view,
       ->SetMode(views::InkDropHost::InkDropMode::OFF);
   layout->SetFlexForView(host_button_, 1);
 
-  translate_label_ = AddChildView(std::make_unique<views::LabelButton>(
+  translate_button_ = AddChildView(CreateHeaderButton(
       base::BindRepeating(&MahoContentsHeaderView::OnTranslatePressed,
                           base::Unretained(this)),
-      std::u16string()));
-  translate_label_->SetLabelStyle(views::style::STYLE_BODY_4);
-  translate_label_->SetRequestFocusOnPress(false);
-  translate_label_->SetBorder(nullptr);
-  views::InkDrop::Get(translate_label_)
-      ->SetMode(views::InkDropHost::InkDropMode::OFF);
-  translate_label_->SetVisible(false);
+      u"Translate"));
+  translate_button_->SetVisible(false);
 
   utility_icon_ = AddChildView(
       std::make_unique<MahoLocationBarUtilityIconView>(base::BindRepeating(
@@ -302,6 +301,7 @@ MahoContentsHeaderView::MahoContentsHeaderView(BrowserView* browser_view,
   }
 
   UpdateTranslateElementId();
+  RefreshTranslateObservations();
   UpdateState();
 }
 
@@ -324,18 +324,6 @@ std::u16string MahoContentsHeaderView::BuildHostText(const GURL& url) {
     return base::UTF8ToUTF16(host);
   }
   return kSearchPlaceholder;
-}
-
-// static
-std::u16string MahoContentsHeaderView::BuildTranslateText(bool translated,
-                                                          bool available) {
-  if (translated) {
-    return u"Translated";
-  }
-  if (available) {
-    return u"Translation Available";
-  }
-  return std::u16string();
 }
 
 // static
@@ -362,10 +350,10 @@ void MahoContentsHeaderView::UpdateTranslateElementId() {
   // bubble resolves it with ElementTracker::GetUniqueElement, which requires
   // exactly one shown holder, so only the active pane carries it.
   if (active_) {
-    translate_label_->SetProperty(views::kElementIdentifierKey,
-                                  kTranslatePageActionElementId);
+    translate_button_->SetProperty(views::kElementIdentifierKey,
+                                   kTranslatePageActionElementId);
   } else {
-    translate_label_->ClearProperty(views::kElementIdentifierKey);
+    translate_button_->ClearProperty(views::kElementIdentifierKey);
   }
 }
 
@@ -379,8 +367,8 @@ void MahoContentsHeaderView::SetPalette(const MahoSidebarPalette& palette) {
 }
 
 views::View* MahoContentsHeaderView::translate_anchor() {
-  if (translate_label_->GetVisible() && translate_label_->IsDrawn()) {
-    return translate_label_;
+  if (translate_button_->GetVisible() && translate_button_->IsDrawn()) {
+    return translate_button_;
   }
   return utility_icon_;
 }
@@ -593,6 +581,7 @@ void MahoContentsHeaderView::UpdateVisibility() {
 void MahoContentsHeaderView::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   if (navigation_handle->IsInPrimaryMainFrame()) {
+    auto_translate_attempted_ = false;
     UpdateState();
   }
 }
@@ -614,6 +603,8 @@ void MahoContentsHeaderView::DidChangeVisibleSecurityState() {
 
 void MahoContentsHeaderView::WebContentsDestroyed() {
   Observe(nullptr);
+  auto_translate_attempted_ = false;
+  RefreshTranslateObservations();
   UpdateState();
 }
 
@@ -628,6 +619,12 @@ void MahoContentsHeaderView::ExecuteCommand(int command_id, int event_flags) {
     return;
   }
   switch (command_id) {
+    case kTranslateOptionsAlwaysTranslateLanguageCommand:
+      OnAlwaysTranslateLanguage();
+      return;
+    case kTranslateOptionsNeverTranslateLanguageCommand:
+      OnNeverTranslateLanguage();
+      return;
     case kTranslateOptionsNeverTranslateSiteCommand:
       OnNeverTranslateThisSite();
       return;
@@ -703,6 +700,8 @@ void MahoContentsHeaderView::OnWebContentsAttached(views::WebView* web_view) {
   CloseTranslatePopover();
   Observe(web_view->web_contents());
   is_loading_ = web_contents() && web_contents()->IsLoading();
+  auto_translate_attempted_ = false;
+  RefreshTranslateObservations();
   UpdateState();
 }
 
@@ -711,6 +710,8 @@ void MahoContentsHeaderView::OnWebContentsDetached(views::WebView* web_view) {
   CloseTranslatePopover();
   Observe(nullptr);
   is_loading_ = false;
+  auto_translate_attempted_ = false;
+  RefreshTranslateObservations();
   UpdateState();
 }
 
@@ -826,14 +827,13 @@ void MahoContentsHeaderView::OnTranslatePressed(const ui::Event& event) {
   if (!web_contents()) {
     return;
   }
-  // Translated pages restore the original directly, with no popover.
-  if (maho::IsMahoPageTranslated(web_contents())) {
-    OnTranslatePopoverTranslate();
-    return;
-  }
+  const bool translated = maho::IsMahoPageTranslated(web_contents());
   views::Widget* popover_widget = MahoTranslatePopoverView::Show(
-      translate_label_, ResolveTranslateTargetDisplayName(),
-      base::BindRepeating(&MahoContentsHeaderView::OnTranslatePopoverTranslate,
+      translate_button_,
+      translated ? MahoTranslatePopoverView::Mode::kTranslated
+                 : MahoTranslatePopoverView::Mode::kOffer,
+      ResolveTranslateTargetDisplayName(),
+      base::BindRepeating(&MahoContentsHeaderView::OnTranslatePopoverPrimary,
                           weak_factory_.GetWeakPtr()),
       base::BindRepeating(&MahoContentsHeaderView::OnTranslatePopoverOptions,
                           weak_factory_.GetWeakPtr()));
@@ -848,14 +848,18 @@ std::u16string MahoContentsHeaderView::ResolveTranslateTargetDisplayName()
       g_browser_process->GetApplicationLocale(), /*is_for_ui=*/true);
 }
 
-void MahoContentsHeaderView::OnTranslatePopoverTranslate() {
+void MahoContentsHeaderView::OnTranslatePopoverPrimary() {
   if (!web_contents()) {
     return;
   }
-  web_contents()->ClearFocusedElement();
-  maho::TranslatePageViaOnDevice(web_contents(),
-                                 ResolveTranslateTargetLanguage(GetProfile()));
-  UpdateTranslateLabel();
+  if (maho::IsMahoPageTranslated(web_contents())) {
+    maho::RestoreOriginalPage(web_contents());
+  } else {
+    web_contents()->ClearFocusedElement();
+    maho::TranslatePageViaOnDevice(
+        web_contents(), ResolveTranslateTargetLanguage(GetProfile()));
+  }
+  UpdateTranslateAffordance();
   UpdateChrome();
 }
 
@@ -892,10 +896,19 @@ MahoContentsHeaderView::PrepareTranslateOptionsForTesting() {
         translate_languages_menu_model_->GetCommandIdAt(0);
     result.first_language_code = translate_option_language_codes_.front();
   }
+  const auto present = [this](int command_id) {
+    return translate_options_menu_model_->GetIndexOfCommandId(command_id)
+               ? command_id
+               : 0;
+  };
+  result.always_translate_command_id =
+      present(kTranslateOptionsAlwaysTranslateLanguageCommand);
+  result.never_translate_language_command_id =
+      present(kTranslateOptionsNeverTranslateLanguageCommand);
   result.never_translate_command_id =
-      translate_options_menu_model_->GetCommandIdAt(1);
+      present(kTranslateOptionsNeverTranslateSiteCommand);
   result.language_settings_command_id =
-      translate_options_menu_model_->GetCommandIdAt(2);
+      present(kTranslateOptionsLanguageSettingsCommand);
   return result;
 }
 
@@ -969,6 +982,21 @@ void MahoContentsHeaderView::BuildTranslateOptionsMenuModels() {
   translate_options_menu_model_->AddSubMenu(
       kTranslateOptionsChooseLanguageCommand, u"Choose Another Language",
       translate_languages_menu_model_.get());
+
+  const std::string page_language = GetDetectedPageLanguage();
+  if (!page_language.empty() && page_language != "und") {
+    const std::u16string language_name = l10n_util::GetDisplayNameForLocale(
+        page_language, app_locale, /*is_for_ui=*/true);
+    if (!language_name.empty()) {
+      translate_options_menu_model_->AddItem(
+          kTranslateOptionsAlwaysTranslateLanguageCommand,
+          u"Always translate " + language_name);
+      translate_options_menu_model_->AddItem(
+          kTranslateOptionsNeverTranslateLanguageCommand,
+          u"Never translate " + language_name);
+    }
+  }
+
   translate_options_menu_model_->AddItem(
       kTranslateOptionsNeverTranslateSiteCommand, u"Never Translate This Site");
   translate_options_menu_model_->AddItem(
@@ -991,7 +1019,32 @@ void MahoContentsHeaderView::OnTranslateLanguageSelected(
   translate::TranslatePrefs(profile->GetPrefs())
       .SetRecentTargetLanguage(language_code);
   CloseTranslatePopover();
-  OnTranslatePopoverTranslate();
+  OnTranslatePopoverPrimary();
+}
+
+void MahoContentsHeaderView::OnAlwaysTranslateLanguage() {
+  Profile* profile = GetProfile();
+  const std::string page_language = GetDetectedPageLanguage();
+  if (!profile || page_language.empty() || page_language == "und") {
+    return;
+  }
+  translate::TranslatePrefs(profile->GetPrefs())
+      .AddLanguagePairToAlwaysTranslateList(
+          page_language, ResolveTranslateTargetLanguage(profile));
+  CloseTranslatePopover();
+  OnTranslatePopoverPrimary();
+}
+
+void MahoContentsHeaderView::OnNeverTranslateLanguage() {
+  Profile* profile = GetProfile();
+  const std::string page_language = GetDetectedPageLanguage();
+  if (!profile || page_language.empty() || page_language == "und") {
+    return;
+  }
+  translate::TranslatePrefs(profile->GetPrefs()).BlockLanguage(page_language);
+  CloseTranslatePopover();
+  UpdateTranslateAffordance();
+  UpdateChrome();
 }
 
 void MahoContentsHeaderView::OnNeverTranslateThisSite() {
@@ -1003,7 +1056,7 @@ void MahoContentsHeaderView::OnNeverTranslateThisSite() {
   translate::TranslatePrefs(profile->GetPrefs())
       .AddSiteToNeverPromptList(site_host);
   CloseTranslatePopover();
-  UpdateTranslateLabel();
+  UpdateTranslateAffordance();
   UpdateChrome();
 }
 
@@ -1070,7 +1123,7 @@ void MahoContentsHeaderView::UpdateState() {
   copy_url_button_->SetEnabled(has_contents && url.is_valid());
   UpdateNavigationButtons();
   UpdateSecurityIcon();
-  UpdateTranslateLabel();
+  UpdateTranslateAffordance();
   UpdateChrome();
 }
 
@@ -1114,26 +1167,121 @@ void MahoContentsHeaderView::UpdateSecurityIcon() {
   security_icon_->GetViewAccessibility().SetName(security_description_);
 }
 
-void MahoContentsHeaderView::UpdateTranslateLabel() {
-  is_translated_ = false;
-  translation_available_ = false;
-  if (web_contents()) {
-    is_translated_ = maho::IsMahoPageTranslated(web_contents());
-    const std::string site_host(GetCurrentUrl().host());
-    Profile* profile = GetProfile();
-    const bool is_never_translate_site =
-        profile && !site_host.empty() &&
-        translate::TranslatePrefs(profile->GetPrefs())
-            .IsSiteOnNeverPromptList(site_host);
-    translation_available_ =
-        maho::CanOnDeviceTranslate(web_contents()) && !is_never_translate_site;
+std::string MahoContentsHeaderView::GetDetectedPageLanguage() const {
+  content::WebContents* contents = web_contents();
+  if (!contents) {
+    return std::string();
   }
-  const std::u16string text =
-      BuildTranslateText(is_translated_, translation_available_);
-  translate_label_->SetText(text);
-  translate_label_->GetViewAccessibility().SetName(
-      text.empty() ? u"Translate" : text);
-  translate_label_->SetVisible(!text.empty());
+  ChromeTranslateClient* client =
+      ChromeTranslateClient::FromWebContents(contents);
+  translate::TranslateManager* manager =
+      client ? client->GetTranslateManager() : nullptr;
+  translate::LanguageState* state =
+      manager ? manager->GetLanguageState() : nullptr;
+  return state ? state->source_language() : std::string();
+}
+
+bool MahoContentsHeaderView::ComputeTranslationOffered() const {
+  if (!web_contents()) {
+    return false;
+  }
+  Profile* profile = GetProfile();
+  const std::string page_language = GetDetectedPageLanguage();
+  if (!profile || page_language.empty() || page_language == "und") {
+    return false;
+  }
+  if (page_language == ResolveTranslateTargetLanguage(profile)) {
+    return false;
+  }
+  const std::string site_host(GetCurrentUrl().host());
+  translate::TranslatePrefs prefs(profile->GetPrefs());
+  if (!site_host.empty() && prefs.IsSiteOnNeverPromptList(site_host)) {
+    return false;
+  }
+  return !prefs.IsBlockedLanguage(page_language);
+}
+
+void MahoContentsHeaderView::RefreshTranslateObservations() {
+  translate_state_subscription_ = {};
+  translate_language_observation_.Reset();
+
+  content::WebContents* contents = web_contents();
+  if (!contents) {
+    return;
+  }
+  MahoTranslateTabHelper::CreateForWebContents(contents);
+  if (auto* helper = MahoTranslateTabHelper::FromWebContents(contents)) {
+    translate_state_subscription_ = helper->AddStateChangedCallback(
+        base::BindRepeating(&MahoContentsHeaderView::OnTranslateStateChanged,
+                            weak_factory_.GetWeakPtr()));
+  }
+  if (ChromeTranslateClient* client =
+          ChromeTranslateClient::FromWebContents(contents)) {
+    if (translate::ContentTranslateDriver* driver =
+            client->translate_driver()) {
+      translate_language_observation_.Observe(driver);
+    }
+  }
+}
+
+void MahoContentsHeaderView::OnLanguageDetermined(
+    const translate::LanguageDetectionDetails& details) {
+  UpdateTranslateAffordance();
+  UpdateChrome();
+  MaybeAutoTranslate();
+}
+
+void MahoContentsHeaderView::OnTranslateStateChanged() {
+  UpdateTranslateAffordance();
+  UpdateChrome();
+}
+
+void MahoContentsHeaderView::MaybeAutoTranslate() {
+  if (auto_translate_attempted_ || !translation_offered_ || !web_contents()) {
+    return;
+  }
+  Profile* profile = GetProfile();
+  if (!profile) {
+    return;
+  }
+  const std::string page_language = GetDetectedPageLanguage();
+  const std::string target = ResolveTranslateTargetLanguage(profile);
+  if (page_language.empty() || page_language == target) {
+    return;
+  }
+  if (!translate::TranslatePrefs(profile->GetPrefs())
+           .IsLanguagePairOnAlwaysTranslateList(page_language, target)) {
+    return;
+  }
+  auto_translate_attempted_ = true;
+  maho::TranslatePageViaOnDevice(web_contents(), target);
+  UpdateTranslateAffordance();
+  UpdateChrome();
+}
+
+void MahoContentsHeaderView::UpdateTranslateAffordance() {
+  const MahoTranslateState state = maho::GetMahoTranslateState(web_contents());
+  translation_offered_ = ComputeTranslationOffered();
+
+  translate_button_->SetVisible(translation_offered_ ||
+                                state != MahoTranslateState::kIdle);
+
+  std::u16string name = u"Translate this page";
+  switch (state) {
+    case MahoTranslateState::kTranslating:
+      name = u"Translating page";
+      break;
+    case MahoTranslateState::kTranslated:
+      name = u"Translated. Show original";
+      break;
+    case MahoTranslateState::kError:
+      name = u"Translation failed";
+      break;
+    case MahoTranslateState::kIdle:
+      break;
+  }
+  translate_button_->SetTooltipText(name);
+  translate_button_->GetViewAccessibility().SetName(name);
 }
 
 void MahoContentsHeaderView::SetButtonIcon(views::ImageButton* button,
@@ -1195,14 +1343,24 @@ void MahoContentsHeaderView::UpdateChrome() {
                                              : palette_.secondary_text)
                   : ui::ColorVariant(active_ ? ui::kColorSysOnSurface
                                              : ui::kColorSysOnSurfaceSubtle);
-  const ui::ColorVariant secondary_color =
-      has_palette ? ui::ColorVariant(palette_.secondary_text)
-                  : ui::ColorVariant(ui::kColorSysOnSurfaceSubtle);
   for (views::Button::ButtonState state :
        {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
         views::Button::STATE_PRESSED, views::Button::STATE_DISABLED}) {
     host_button_->SetTextColor(state, host_color);
-    translate_label_->SetTextColor(state, secondary_color);
+  }
+
+  SetButtonIcon(translate_button_, maho_lucide_icons::kLanguagesIcon);
+  if (maho::IsMahoPageTranslated(web_contents())) {
+    const ui::ColorVariant accent =
+        has_palette ? ui::ColorVariant(palette_.primary_text)
+                    : ui::ColorVariant(ui::kColorSysOnSurface);
+    const ui::ImageModel accent_image = ui::ImageModel::FromVectorIcon(
+        maho_lucide_icons::kLanguagesIcon, accent, kHeaderIconSizeDp);
+    for (views::Button::ButtonState state :
+         {views::Button::STATE_NORMAL, views::Button::STATE_HOVERED,
+          views::Button::STATE_PRESSED}) {
+      translate_button_->SetImageModel(state, accent_image);
+    }
   }
 }
 

@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/run_until.h"
@@ -31,6 +32,7 @@
 #include "components/translate/core/browser/translate_pref_names.h"
 #include "components/translate/core/browser/translate_prefs.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/test_navigation_observer.h"
@@ -120,6 +122,14 @@ views::MdTextButton* FindTextButtonWithText(views::View* root,
 class MahoContentsHeaderInteractiveTest
     : public MahoSidebarInteractiveTestBase {
  protected:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    MahoSidebarInteractiveTestBase::SetUpCommandLine(command_line);
+    // Force deterministic language detection ("fr") so a plain test page is
+    // offered translation against the "en" target, independent of the CLD/
+    // TFLite model being available in the test binary.
+    command_line->AppendSwitch(switches::kOverrideLanguageDetection);
+  }
+
   void SetUpOnMainThread() override {
     MahoSidebarInteractiveTestBase::SetUpOnMainThread();
     embedded_test_server()->ServeFilesFromSourceDirectory("chrome/test/data");
@@ -147,8 +157,8 @@ class MahoContentsHeaderInteractiveTest
     return container ? container->maho_contents_header() : nullptr;
   }
 
-  // Navigates the active tab to an on-device-translatable page and returns
-  // the active pane header once its translate label is shown.
+  // Navigates the active tab to a translatable page and returns the active
+  // pane header once its translate affordance is shown.
   MahoContentsHeaderView* NavigateToTranslatablePage(GURL* page_url_out) {
     const GURL page_url = embedded_test_server()->GetURL("/title1.html");
     EXPECT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
@@ -162,7 +172,7 @@ class MahoContentsHeaderInteractiveTest
       return nullptr;
     }
     EXPECT_TRUE(base::test::RunUntil([header] {
-      return header->translate_label_for_testing()->GetVisible();
+      return header->translate_button_for_testing()->GetVisible();
     }));
     FlushLayout();
     if (page_url_out) {
@@ -342,7 +352,7 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
 }
 
 IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
-                       SplitTagsOnlyActiveTranslateLabel) {
+                       SplitTagsOnlyActiveTranslateButton) {
   CreateTwoPaneSplit();
   const std::vector<MahoContentsHeaderView*> headers = VisiblePaneHeaders();
   ASSERT_EQ(headers.size(), 2u);
@@ -350,7 +360,7 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
   auto tagged_count = [&]() {
     int count = 0;
     for (MahoContentsHeaderView* header : headers) {
-      if (header->translate_label_for_testing()->GetProperty(
+      if (header->translate_button_for_testing()->GetProperty(
               views::kElementIdentifierKey) == kTranslatePageActionElementId) {
         ++count;
       }
@@ -359,7 +369,7 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
   };
   EXPECT_EQ(tagged_count(), 1);
   for (MahoContentsHeaderView* header : headers) {
-    EXPECT_EQ(header->translate_label_for_testing()->GetProperty(
+    EXPECT_EQ(header->translate_button_for_testing()->GetProperty(
                   views::kElementIdentifierKey) ==
                   kTranslatePageActionElementId,
               header->is_active_for_testing());
@@ -375,7 +385,7 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
     return headers[0]->is_active_for_testing() != first_was_active;
   }));
   EXPECT_EQ(tagged_count(), 1);
-  EXPECT_EQ(headers[0]->translate_label_for_testing()->GetProperty(
+  EXPECT_EQ(headers[0]->translate_button_for_testing()->GetProperty(
                 views::kElementIdentifierKey) == kTranslatePageActionElementId,
             !first_was_active);
 }
@@ -647,24 +657,24 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
 
 // Replaces TranslationLabelClickShowsAnchoredConfirmationPopover.
 IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
-                       TranslateLabelClickShowsAnchoredConfirmationPopover) {
+                       TranslateButtonClickShowsAnchoredConfirmationPopover) {
   MahoContentsHeaderView* header = NavigateToTranslatablePage(nullptr);
   ASSERT_TRUE(header);
-  views::LabelButton* translate_label = header->translate_label_for_testing();
-  ASSERT_EQ(translate_label->GetText(), u"Translation Available");
-  ASSERT_FALSE(translate_label->GetBoundsInScreen().IsEmpty());
+  views::ImageButton* translate = header->translate_button_for_testing();
+  ASSERT_TRUE(translate->GetVisible());
+  ASSERT_FALSE(translate->GetBoundsInScreen().IsEmpty());
 
-  ClickScreenPoint(translate_label->GetBoundsInScreen().CenterPoint());
+  ClickScreenPoint(translate->GetBoundsInScreen().CenterPoint());
   ASSERT_TRUE(base::test::RunUntil([header] {
     views::Widget* widget = header->translate_popover_widget_for_testing();
     return widget && widget->IsVisible();
-  })) << "Clicking the translate label must open its confirmation popover";
+  })) << "Clicking the translate button must open its confirmation popover";
 
   views::Widget* popover = header->translate_popover_widget_for_testing();
   auto* bubble_delegate =
       static_cast<views::BubbleDialogDelegate*>(popover->widget_delegate());
   ASSERT_TRUE(bubble_delegate);
-  EXPECT_EQ(translate_label, bubble_delegate->GetAnchorView());
+  EXPECT_EQ(translate, bubble_delegate->GetAnchorView());
   EXPECT_TRUE(FindViewWithAccessibleName(popover->GetContentsView(),
                                          u"Options"));
   EXPECT_TRUE(FindViewWithAccessibleName(popover->GetContentsView(),
@@ -703,34 +713,33 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
       << "page info must open below the icon";
 }
 
-// Replaces TranslationLabelAccentAndHoverUnderlineCapture: the header binds the
-// translate label to the palette's secondary text (the pill's hover
-// underline is not part of the header design).
+// Replaces TranslationLabelAccentAndHoverUnderlineCapture: the translate
+// affordance is an icon button whose bubble anchors to it, and it falls back to
+// the utility icon when not offered.
 IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
-                       TranslateLabelUsesPaletteSecondaryText) {
+                       TranslateAffordanceIsTheBubbleAnchor) {
   MahoContentsHeaderView* header = NavigateToTranslatablePage(nullptr);
   ASSERT_TRUE(header);
-  const MahoSidebarPalette& palette = header->palette_for_testing();
-  ASSERT_NE(palette.secondary_text, SK_ColorTRANSPARENT)
-      << "Header must receive the sidebar palette";
-  // Palette colors are bound for every button state (UpdateChrome), so the
-  // drawn color matches regardless of window activation.
-  EXPECT_EQ(header->translate_label_for_testing()->GetCurrentTextColor(),
-            palette.secondary_text);
+  views::ImageButton* translate = header->translate_button_for_testing();
+  EXPECT_TRUE(translate->GetVisible());
+  EXPECT_EQ(header->translate_anchor(), translate);
 }
 
-// Replaces TranslationPopoverTranslateMarksActiveHttpPageTranslated.
+// Replaces TranslationPopoverTranslateMarksActiveHttpPageTranslated. The
+// browser cannot reach kTranslated without the on-device Translator API, which
+// the test binary does not provide, so this asserts the honest request state
+// (kTranslating) rather than a fabricated success.
 IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
-                       TranslatePopoverTranslateMarksPageTranslated) {
+                       TranslatePopoverPrimaryRequestsTranslation) {
   MahoContentsHeaderView* header = NavigateToTranslatablePage(nullptr);
   ASSERT_TRUE(header);
   content::WebContents* contents =
       browser()->GetTabStripModel()->GetActiveWebContents();
-  ASSERT_FALSE(maho::IsMahoPageTranslated(contents));
+  ASSERT_EQ(maho::GetMahoTranslateState(contents),
+            maho::MahoTranslateState::kIdle);
 
-  ClickScreenPoint(header->translate_label_for_testing()
-                       ->GetBoundsInScreen()
-                       .CenterPoint());
+  ClickScreenPoint(
+      header->translate_button_for_testing()->GetBoundsInScreen().CenterPoint());
   ASSERT_TRUE(base::test::RunUntil([header] {
     views::Widget* widget = header->translate_popover_widget_for_testing();
     return widget && widget->IsVisible();
@@ -741,24 +750,19 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
   ASSERT_TRUE(translate_button);
   // Under the headless test display (Xvfb, no window manager), an OS-level
   // click on the bubble deactivates it first, and close_on_deactivate closes
-  // the popover before the press lands (gdb evidence:
-  // .omo/evidence/content-pane-address-strip/task-9-popover-click-gdb.log,
-  // Widget::CloseWithReason from BubbleDialogDelegate::
-  // OnBubbleWidgetActivationChanged, bubble_dialog_delegate_view.cc:671), so
-  // the button is activated directly instead; the popover's own Translate
-  // handling is still what is under test.
+  // the popover before the press lands, so the button is activated directly
+  // instead; the popover's own handling is still what is under test.
   views::test::ButtonTestApi(translate_button)
       .NotifyClick(ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(),
                                    gfx::Point(), ui::EventTimeForNow(),
                                    ui::EF_LEFT_MOUSE_BUTTON,
                                    ui::EF_LEFT_MOUSE_BUTTON));
 
-  EXPECT_TRUE(base::test::RunUntil(
-      [contents] { return maho::IsMahoPageTranslated(contents); }));
+  EXPECT_EQ(maho::GetMahoTranslateState(contents),
+            maho::MahoTranslateState::kTranslating);
   EXPECT_TRUE(base::test::RunUntil([header] {
     return header->translate_popover_widget_for_testing() == nullptr;
   }));
-  EXPECT_EQ(u"Translated", header->translate_label_for_testing()->GetText());
 }
 
 // Replaces TranslationOptionsChooseLanguagePersistsAndTranslates.
@@ -774,7 +778,8 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
   const MahoTranslateOptionsForTesting options =
       header->PrepareTranslateOptionsForTesting();
   const std::vector<std::u16string> expected_labels = {
-      u"Choose Another Language", u"Never Translate This Site",
+      u"Choose Another Language", u"Always translate French",
+      u"Never translate French", u"Never Translate This Site",
       u"Language Settings"};
   EXPECT_EQ(expected_labels, options.labels);
   ASSERT_NE(0, options.first_language_command_id);
@@ -786,8 +791,8 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
   EXPECT_NE(selected_language,
             browser()->GetProfile()->GetPrefs()->GetString(
                 translate::prefs::kPrefTranslateRecentTarget));
-  EXPECT_TRUE(base::test::RunUntil(
-      [contents] { return maho::IsMahoPageTranslated(contents); }));
+  EXPECT_EQ(maho::GetMahoTranslateState(contents),
+            maho::MahoTranslateState::kTranslating);
 }
 
 // Replaces TranslationOptionsPinAndCheckCurrentTargetLanguage.
@@ -824,11 +829,11 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
     return translate::TranslatePrefs(profile->GetPrefs())
         .IsSiteOnNeverPromptList(host);
   }));
-  EXPECT_FALSE(header->translate_label_for_testing()->GetVisible());
+  EXPECT_FALSE(header->translate_button_for_testing()->GetVisible());
 
   // A reload recomputes the header state; the site stays suppressed.
   ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
-  EXPECT_FALSE(header->translate_label_for_testing()->GetVisible());
+  EXPECT_FALSE(header->translate_button_for_testing()->GetVisible());
 }
 
 // Replaces TranslationOptionsLanguageSettingsOpensGeneralPane.

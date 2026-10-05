@@ -48,6 +48,19 @@ interface MahoTranslateNamespace {
   const normalize = (code?: string): string | undefined =>
     code ? code.split("-")[0]?.toLowerCase() : undefined;
 
+  // Reports a state transition to the browser. The C++ injector observes these
+  // console messages (WebContentsObserver::OnDidAddMessageToConsole) because
+  // ExecuteJavaScriptInIsolatedWorld does not resolve promises, so this is the
+  // only channel the browser has to learn when on-device translation actually
+  // finished or failed (rather than optimistically assuming success). The
+  // message is emitted at the verbose level, which the DevTools console hides
+  // by default.
+  const report = (next: TranslateStatus, source_lang?: string): void => {
+    console.debug(
+        "__mahoTranslate:state:" + next +
+        (source_lang ? ":" + source_lang : ""));
+  };
+
   function translatable(node: Text): boolean {
     if (!node.nodeValue || !node.nodeValue.trim()) return false;
     const p = node.parentElement;
@@ -132,6 +145,7 @@ interface MahoTranslateNamespace {
       observer = null;
       status = "translating";
       target = normalize(t) ?? "en";
+      report("translating");
       const nodes = collect(document.body);
       // Prefer the declared <html lang>: it is instant, so Translator.create()
       // runs inside the fresh transient-activation window. Falling back to the
@@ -150,10 +164,14 @@ interface MahoTranslateNamespace {
         .then(() => {
           if (request !== generation) return;
           status = "translated";
+          report("translated", source);
           startObserver(request);
         })
         .catch(() => {
-          if (request === generation) status = "error";
+          if (request === generation) {
+            status = "error";
+            report("error");
+          }
         });
     },
     restorePage(): void {
@@ -161,6 +179,7 @@ interface MahoTranslateNamespace {
       observer?.disconnect();
       observer = null;
       status = "idle";
+      report("idle");
       for (const n of collect(document.body)) {
         const orig = originals.get(n);
         if (orig !== undefined) n.nodeValue = orig;
