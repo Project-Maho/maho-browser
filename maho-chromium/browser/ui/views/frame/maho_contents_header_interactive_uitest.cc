@@ -175,6 +175,15 @@ class MahoContentsHeaderInteractiveTest
       return header->translate_button_for_testing()->GetVisible();
     }));
     FlushLayout();
+    // A foreign-language page auto-offers the popover; close it so a test that
+    // clicks the button starts from a closed state.
+    if (views::Widget* popover =
+            header->translate_popover_widget_for_testing()) {
+      popover->Close();
+      EXPECT_TRUE(base::test::RunUntil([header] {
+        return header->translate_popover_widget_for_testing() == nullptr;
+      }));
+    }
     if (page_url_out) {
       *page_url_out = page_url;
     }
@@ -679,6 +688,36 @@ IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
                                          u"Options"));
   EXPECT_TRUE(FindViewWithAccessibleName(popover->GetContentsView(),
                                          u"Translate"));
+}
+
+// A foreign-language page offers the translate popover automatically, once per
+// site; re-evaluating the same document must not re-offer.
+IN_PROC_BROWSER_TEST_F(MahoContentsHeaderInteractiveTest,
+                       TranslatePopoverAutoShowsForForeignPage) {
+  const GURL page_url = embedded_test_server()->GetURL("/title1.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), page_url));
+  MahoContentsHeaderView* header = ActiveHeader();
+  ASSERT_TRUE(header);
+  ASSERT_TRUE(base::test::RunUntil([header] {
+    views::Widget* widget = header->translate_popover_widget_for_testing();
+    return widget && widget->IsVisible();
+  })) << "a foreign-language page must offer translation automatically";
+  FlushLayout();
+  views::Widget* popover = header->translate_popover_widget_for_testing();
+  auto* delegate =
+      static_cast<views::BubbleDialogDelegate*>(popover->widget_delegate());
+  ASSERT_TRUE(delegate);
+  EXPECT_EQ(header->translate_button_for_testing(), delegate->GetAnchorView());
+
+  popover->Close();
+  ASSERT_TRUE(base::test::RunUntil([header] {
+    return header->translate_popover_widget_for_testing() == nullptr;
+  }));
+
+  header->SetActive(false);
+  header->SetActive(true);
+  EXPECT_EQ(header->translate_popover_widget_for_testing(), nullptr)
+      << "the same document must not re-offer the popover";
 }
 
 // F3 D1: clicking the header security icon opens page info for the pane,
