@@ -697,7 +697,7 @@
     "loadingAccounts": "Loading accounts…",
     "dismiss": "Dismiss",
     "deleteEmailTitle": "Delete Email",
-    "deleteEmailConfirm": "Are you sure you want to delete this email? This action cannot be undone.",
+    "deleteEmailConfirm": "This email moves to Trash. Deleting it from Trash removes it permanently.",
     "emailPinned": "Email pinned",
     "emailUnpinned": "Email unpinned",
     "emailSnoozed": "Email snoozed",
