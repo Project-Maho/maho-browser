@@ -56,7 +56,7 @@ _PACKAGE_MSIX = os.path.join(_SCRIPT_DIR, 'package_windows_msix.py')
 _GEN_CHANGELOG = os.path.join(_SCRIPT_DIR, 'generate_changelog_json.py')
 _VERIFY_MACOS_RELEASE = os.path.join(_SCRIPT_DIR, 'verify_macos_release.py')
 
-DEFAULT_REPO = os.environ.get('MAHO_RELEASE_REPO', 'Project-Maho/release')
+DEFAULT_REPO = os.environ.get('MAHO_RELEASE_REPO', 'Project-Maho/maho-browser')
 DEFAULT_RELAY_URL = os.environ.get(
     'MAHO_RELAY_URL', 'https://relay.mahobrowser.com/updates/release'
 )
