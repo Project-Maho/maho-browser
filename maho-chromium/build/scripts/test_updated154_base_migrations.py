@@ -12,6 +12,7 @@ from apply_chromium_src_overrides import (
     _UPDATED154_INCREMENTAL_SHA256,
     _UPDATED154_LAYOUT_SHA256,
     _UPDATED154_OLD_SHA256,
+    _UPDATED154_REAPPLY_SHA256,
     _UPDATED154_REVISION,
     apply_base_patch,
     default_chromium_src,
@@ -32,7 +33,8 @@ class Updated154BaseMigrationTest(unittest.TestCase):
         self.upstream = Path(os.environ.get(
             "MAHO_CHROMIUM_SRC", str(default_chromium_src())))
 
-    def prepare(self, relative_path, *, incremental=False, focus=False, layout=False):
+    def prepare(self, relative_path, *, incremental=False, focus=False, layout=False,
+                reapply=False):
         target = self.src / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
         pristine = subprocess.run(
@@ -52,6 +54,9 @@ class Updated154BaseMigrationTest(unittest.TestCase):
         if layout:
             directory = "chromium_base_layout_migrations"
             expected = _UPDATED154_LAYOUT_SHA256
+        if reapply:
+            directory = "chromium_base_reapply_migrations"
+            expected = _UPDATED154_REAPPLY_SHA256
         migration = (repo_root() / "build" / directory /
                      _UPDATED154_REVISION / f"{relative_path}.patch")
         self.git_apply(base)
@@ -98,6 +103,12 @@ class Updated154BaseMigrationTest(unittest.TestCase):
             {path.relative_to(layout_directory).as_posix().removesuffix(".patch")
              for path in layout_directory.rglob("*.patch")},
             set(_UPDATED154_LAYOUT_SHA256))
+        reapply_directory = (repo_root() / "build" /
+                             "chromium_base_reapply_migrations" / _UPDATED154_REVISION)
+        self.assertEqual(
+            {path.relative_to(reapply_directory).as_posix().removesuffix(".patch")
+             for path in reapply_directory.rglob("*.patch")},
+            set(_UPDATED154_REAPPLY_SHA256))
 
     def drift_sources(self, relative_path, old, directory):
         migration = (repo_root() / "build" / directory /
@@ -157,6 +168,27 @@ class Updated154BaseMigrationTest(unittest.TestCase):
                 self.src, relative_path, base, False), "already")
             cases = [(source, base) for source in self.drift_sources(
                 relative_path, old, "chromium_base_layout_migrations")]
+            for source, candidate in (*cases, (old, copied)):
+                for dry_run in (True, False):
+                    target.write_bytes(source)
+                    with self.assertRaises(RuntimeError):
+                        apply_base_patch(self.src, relative_path, candidate, dry_run)
+                    self.assertEqual(target.read_bytes(), source)
+
+    def test_reapply_stage_converges_and_rejects_drift(self):
+        for relative_path in _UPDATED154_REAPPLY_SHA256:
+            target, base, pristine, current, old = self.prepare(relative_path, reapply=True)
+            copied = self.src / "unregistered.patch"
+            copied.write_bytes(base.read_bytes())
+            for source, expected in ((pristine, "patched"), (old, "patched"),
+                                     (current, "already")):
+                for dry_run in (True, False):
+                    target.write_bytes(source)
+                    self.assertEqual(apply_base_patch(
+                        self.src, relative_path, base, dry_run), expected)
+                    self.assertEqual(target.read_bytes(), source if dry_run else current)
+            cases = [(source, base) for source in self.drift_sources(
+                relative_path, old, "chromium_base_reapply_migrations")]
             for source, candidate in (*cases, (old, copied)):
                 for dry_run in (True, False):
                     target.write_bytes(source)
@@ -278,6 +310,46 @@ class Updated154BaseMigrationTest(unittest.TestCase):
                     self.assertEqual(apply_base_patch(
                         self.src, relative_path, base, dry_run=False), "already")
                     self.assertEqual(target.read_bytes(), current)
+
+    def test_ctrl_tab_routes_through_the_maho_mru_switcher(self):
+        """Regression: macOS binds Ctrl+Tab to IDC_CYCLE_TO_NEXT_TAB.
+
+        Upstream 154 renamed the macOS Ctrl+Tab command from
+        IDC_SELECT_NEXT_TAB/IDC_SELECT_PREVIOUS_TAB to
+        IDC_CYCLE_TO_NEXT_TAB/IDC_CYCLE_TO_PREV_TAB (accelerators_cocoa.mm).
+        The Maho switcher was only wired into the SELECT_* cases, so Ctrl+Tab
+        silently stopped reaching BrowserView::MaybeHandleMruTabSwitch and the
+        MRU overlay never appeared. Pin both halves of that contract.
+        """
+        accelerators = subprocess.run(
+            ["git", "-C", str(self.upstream), "show",
+             f"{_UPDATED154_REVISION}:"
+             "chrome/browser/ui/cocoa/accelerators_cocoa.mm"],
+            check=True, capture_output=True).stdout.decode()
+        self.assertIn(
+            "{IDC_CYCLE_TO_NEXT_TAB, ui::EF_CONTROL_DOWN, ui::VKEY_TAB}",
+            accelerators)
+        self.assertIn(
+            "IDC_CYCLE_TO_PREV_TAB", accelerators)
+
+        relative_path = "chrome/browser/ui/browser_command_controller.cc"
+        _, _, _, current, _ = self.prepare(relative_path)
+        text = current.decode()
+
+        next_start = text.index("case IDC_CYCLE_TO_NEXT_TAB:")
+        prev_start = text.index("case IDC_CYCLE_TO_PREV_TAB:")
+        move_start = text.index("case IDC_MOVE_TAB_NEXT:")
+        next_block = text[next_start:prev_start]
+        prev_block = text[prev_start:move_start]
+
+        # The switcher must be consulted before Chromium's own MRU cycle, or
+        # the overlay is bypassed even though the command still switches tabs.
+        self.assertLess(
+            next_block.index("MaybeHandleMruTabSwitch(/*forward=*/true)"),
+            next_block.index("CycleToMruTab("))
+        self.assertLess(
+            prev_block.index("MaybeHandleMruTabSwitch(/*forward=*/false)"),
+            prev_block.index("CycleToMruTab("))
 
     def test_unknown_old_drift_is_rejected_without_writes(self):
         for relative_path in _UPDATED154_OLD_SHA256:

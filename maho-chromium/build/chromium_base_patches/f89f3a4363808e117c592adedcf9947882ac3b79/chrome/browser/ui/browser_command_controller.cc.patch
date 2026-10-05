@@ -1,5 +1,5 @@
 diff --git c/chrome/browser/ui/browser_command_controller.cc w/chrome/browser/ui/browser_command_controller.cc
-index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda304623c6879c6 100644
+index e366925..b944e62 100644
 --- c/chrome/browser/ui/browser_command_controller.cc
 +++ w/chrome/browser/ui/browser_command_controller.cc
 @@ -15,6 +15,7 @@
@@ -173,7 +173,7 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
        break;
      }
      case IDC_NEW_TAB_TO_RIGHT: {
-@@ -755,22 +851,70 @@ void BrowserCommandController::HandleCommandWithDisposition(
+@@ -755,23 +851,80 @@ void BrowserCommandController::HandleCommandWithDisposition(
      }
      case IDC_CLOSE_TAB:
        base::RecordAction(base::UserMetricsAction("CloseTabByKey"));
@@ -242,11 +242,46 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
            TabStripUserGestureDetails(
                TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
        break;
+-    case IDC_CYCLE_TO_NEXT_TAB:
 +    }
-     case IDC_CYCLE_TO_NEXT_TAB:
++    case IDC_CYCLE_TO_NEXT_TAB: {
++      // macOS binds Ctrl+Tab to IDC_CYCLE_TO_NEXT_TAB (accelerators_cocoa),
++      // not IDC_SELECT_NEXT_TAB. Route it through the Maho MRU switcher
++      // overlay first; fall back to Chromium's MRU cycle when it declines.
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      if (maho_browser_view &&
++          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/true)) {
++        break;
++      }
        if (IsCtrlTabMruEnabled(browser_)) {
          base::RecordAction(base::UserMetricsAction("Accel_CycleToNextTab"));
-@@ -814,13 +958,29 @@ void BrowserCommandController::HandleCommandWithDisposition(
+         CycleToMruTab(browser_,
+@@ -786,7 +939,14 @@ void BrowserCommandController::HandleCommandWithDisposition(
+                           time_stamp));
+       }
+       break;
+-    case IDC_CYCLE_TO_PREV_TAB:
++    }
++    case IDC_CYCLE_TO_PREV_TAB: {
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      if (maho_browser_view &&
++          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/false)) {
++        break;
++      }
+       if (IsCtrlTabMruEnabled(browser_)) {
+         base::RecordAction(base::UserMetricsAction("Accel_CycleToPrevTab"));
+         CycleToMruTab(browser_,
+@@ -801,6 +961,7 @@ void BrowserCommandController::HandleCommandWithDisposition(
+                           time_stamp));
+       }
+       break;
++    }
+     case IDC_MOVE_TAB_NEXT:
+       MoveTabNext(browser_);
+       break;
+@@ -814,13 +975,29 @@ void BrowserCommandController::HandleCommandWithDisposition(
      case IDC_SELECT_TAB_4:
      case IDC_SELECT_TAB_5:
      case IDC_SELECT_TAB_6:
@@ -277,7 +312,7 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
      case IDC_SELECT_LAST_TAB:
        base::RecordAction(base::UserMetricsAction("Accel_SelectNumberedTab"));
        SelectLastTab(
-@@ -1767,7 +1927,7 @@ void BrowserCommandController::InitCommandState() {
+@@ -1767,7 +1944,7 @@ void BrowserCommandController::InitCommandState() {
    // The VisitDesktop command is only supported for up to 5 logged in users
    // because that's the max number of user sessions. If that number is increased
    // the IDC_VISIT_DESKTOP_OF_LRU_USER_ command ids should be updated as well.
@@ -286,7 +321,7 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
    static_assert(
        session_manager::kMaximumNumberOfUserSessions <=
            IDC_VISIT_DESKTOP_OF_LRU_USER_LAST -
-@@ -1988,22 +2148,11 @@ void BrowserCommandController::InitCommandState() {
+@@ -1988,22 +2165,11 @@ void BrowserCommandController::InitCommandState() {
    // Safety Hub commands.
    command_updater_->UpdateCommandEnabled(IDC_OPEN_SAFETY_HUB, true);
  
@@ -314,14 +349,15 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
  
    if (base::FeatureList::IsEnabled(features::kUIDebugTools)) {
      command_updater_->UpdateCommandEnabled(IDC_DEBUG_TOGGLE_TABLET_MODE, true);
-@@ -2375,6 +2524,5 @@
+@@ -2375,7 +2541,6 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
  
    const bool is_fullscreen = window() && window()->IsFullscreen();
    const bool show_main_ui = IsShowingMainUI();
 -  const bool show_location_bar = IsShowingLocationBar();
  
    const bool main_not_fullscreen = show_main_ui && !is_fullscreen;
-@@ -2393,7 +2542,7 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
+ 
+@@ -2393,7 +2558,7 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
  
    // Focus various bits of UI
    command_updater_->UpdateCommandEnabled(IDC_FOCUS_TOOLBAR, show_main_ui);
@@ -330,7 +366,7 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
    command_updater_->UpdateCommandEnabled(IDC_FOCUS_SEARCH, show_main_ui);
    command_updater_->UpdateCommandEnabled(IDC_FOCUS_MENU_BAR,
                                           main_not_fullscreen);
-@@ -2401,13 +2550,10 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
+@@ -2401,11 +2566,8 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
                                           main_not_fullscreen);
    command_updater_->UpdateCommandEnabled(IDC_FOCUS_PREVIOUS_PANE,
                                           main_not_fullscreen);
@@ -343,5 +379,3 @@ index e366925102783c4ec00f5ef2366b694b30b9eee9..38d067ae381ac8fc7adbf598bda30462
    command_updater_->UpdateCommandEnabled(
        IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY, main_not_fullscreen);
  
-   // Show various bits of UI
-   command_updater_->UpdateCommandEnabled(IDC_DEVELOPER_MENU, show_main_ui);

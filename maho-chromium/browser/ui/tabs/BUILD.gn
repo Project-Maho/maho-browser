@@ -111,3 +111,21 @@ source_set("pref_unit_tests") {
     "//testing/gtest",
   ]
 }
+
+source_set("view_unit_tests") {
+  testonly = true
+
+  sources = [ "maho_ctrl_tab_switcher_view_unittest.cc" ]
+
+  deps = [
+    ":maho_ctrl_tab_switcher_views",
+    "//base",
+    "//base/test:test_support",
+    "//content/public/browser",
+    "//testing/gtest",
+    "//ui/base",
+    "//ui/gfx",
+    "//ui/views",
+    "//ui/views:test_support",
+  ]
+}

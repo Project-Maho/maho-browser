@@ -34,10 +34,53 @@
          if (browser_->GetTabStripModel()->ContainsIndex(old_index)) {
            browser_->GetTabStripModel()->CloseWebContentsAt(
                old_index, TabCloseTypes::CLOSE_USER_GESTURE |
-@@ -2524,6 +2524,5 @@
+@@ -915,7 +915,16 @@
+               TabStripUserGestureDetails::GestureType::kKeyboard, time_stamp));
+       break;
+     }
+-    case IDC_CYCLE_TO_NEXT_TAB:
++    case IDC_CYCLE_TO_NEXT_TAB: {
++      // macOS binds Ctrl+Tab to IDC_CYCLE_TO_NEXT_TAB (accelerators_cocoa),
++      // not IDC_SELECT_NEXT_TAB. Route it through the Maho MRU switcher
++      // overlay first; fall back to Chromium's MRU cycle when it declines.
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      if (maho_browser_view &&
++          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/true)) {
++        break;
++      }
+       if (IsCtrlTabMruEnabled(browser_)) {
+         base::RecordAction(base::UserMetricsAction("Accel_CycleToNextTab"));
+         CycleToMruTab(browser_,
+@@ -930,7 +939,14 @@
+                           time_stamp));
+       }
+       break;
+-    case IDC_CYCLE_TO_PREV_TAB:
++    }
++    case IDC_CYCLE_TO_PREV_TAB: {
++      auto* maho_browser_view =
++          BrowserView::GetBrowserViewForBrowser(browser_);
++      if (maho_browser_view &&
++          maho_browser_view->MaybeHandleMruTabSwitch(/*forward=*/false)) {
++        break;
++      }
+       if (IsCtrlTabMruEnabled(browser_)) {
+         base::RecordAction(base::UserMetricsAction("Accel_CycleToPrevTab"));
+         CycleToMruTab(browser_,
+@@ -945,6 +961,7 @@
+                           time_stamp));
+       }
+       break;
++    }
+     case IDC_MOVE_TAB_NEXT:
+       MoveTabNext(browser_);
+       break;
+@@ -2524,7 +2541,6 @@
  
    const bool is_fullscreen = window() && window()->IsFullscreen();
    const bool show_main_ui = IsShowingMainUI();
 -  const bool show_location_bar = IsShowingLocationBar();
  
    const bool main_not_fullscreen = show_main_ui && !is_fullscreen;
+ 
