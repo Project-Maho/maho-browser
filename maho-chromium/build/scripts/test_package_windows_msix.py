@@ -165,6 +165,7 @@ class PackageWindowsMsixTest(unittest.TestCase):
                         "maho.exe: %(ChromeDir)s\\",
                         "maho_mail_helper.exe: %(ChromeDir)s\\",
                         "chrome.dll: %(VersionDir)s\\",
+                        "chrome_renderer.dll: %(VersionDir)s\\",
                         "[HIDPI]",
                         "chrome_200_percent.pak: %(VersionDir)s\\",
                     )
@@ -177,6 +178,37 @@ class PackageWindowsMsixTest(unittest.TestCase):
             self.assertFalse(
                 (root / "stage" / "chrome_200_percent.pak").exists()
             )
+            # chrome_renderer.dll is listed in [GENERAL] upstream but is only
+            # built when enable_separate_renderer_binary is set, whose default is
+            # false, so a release build never produces it.
+            self.assertFalse(
+                (root / "stage" / "chrome_renderer.dll").exists()
+            )
+
+    def test_stage_runtime_files_fails_closed_on_missing_essential_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_dir = root / "out"
+            input_dir.mkdir()
+            (input_dir / "maho.exe").write_bytes(b"maho")
+            (input_dir / "maho_mail_helper.exe").write_bytes(b"helper")
+            release_file = root / "chrome.release"
+            release_file.write_text(
+                "\n".join(
+                    (
+                        "[GENERAL]",
+                        "maho.exe: %(ChromeDir)s\\",
+                        "maho_mail_helper.exe: %(ChromeDir)s\\",
+                        "chrome_renderer.dll: %(VersionDir)s\\",
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                FileNotFoundError, "required Chromium runtime payload"
+            ):
+                msix.stage_runtime_files(input_dir, release_file, root / "stage")
 
     @patch.dict("sys.modules", {"PIL": MagicMock()})
     def test_stage_visual_assets_generates_required_manifest_assets(self) -> None:
