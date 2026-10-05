@@ -670,14 +670,18 @@ def codesign_app(identity: str, app_path: str) -> bool:
             helpers_dir = os.path.join(
                 maho_framework_path, 'Versions', 'Current', 'Helpers'
             )
-            for helper_name in (
-                'Maho Helper.app',
-                'Maho Helper (Alerts).app',
-                'Maho Helper (GPU).app',
-                'Maho Helper (Renderer).app',
-            ):
-                helper_path = os.path.join(helpers_dir, helper_name)
-                if os.path.isdir(helper_path):
+            # Discover every helper app instead of enumerating names: Chromium
+            # 154 added the "Maho Helper (Aperitif*)" bundles, and a hardcoded
+            # list silently left them ad-hoc signed, which notarization rejects
+            # ("The signature of the binary is invalid" / "does not include a
+            # secure timestamp" / "hardened runtime not enabled").
+            if os.path.isdir(helpers_dir):
+                for helper_name in sorted(os.listdir(helpers_dir)):
+                    if not helper_name.endswith('.app'):
+                        continue
+                    helper_path = os.path.join(helpers_dir, helper_name)
+                    if not os.path.isdir(helper_path):
+                        continue
                     subprocess.run(
                         [
                             'codesign',
