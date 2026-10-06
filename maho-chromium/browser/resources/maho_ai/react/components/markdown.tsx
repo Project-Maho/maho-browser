@@ -189,7 +189,7 @@ const markdownParser = new Marked({
  */
 const MATH_LAYOUT_CLASS_NAME = cn(
     '[&_.maho-math-inline]:inline-block [&_.maho-math-inline]:align-middle',
-    '[&_.maho-math-display]:my-2 [&_.maho-math-display]:overflow-x-auto',
+    '[&_.maho-math-block]:my-2 [&_.maho-math-block]:overflow-x-auto',
     '[&_.maho-math-fallback]:[overflow-wrap:anywhere]');
 
 export const Markdown = React.memo(function Markdown({className, text}: {className?: string; text: string}) {

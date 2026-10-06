@@ -241,7 +241,25 @@ describe('Markdown equation rendering', () => {
     expect(classes).toContain('text-sm');
     expect(classes).toContain('[&_p]:m-0');
     expect(classes).toContain('[&_.maho-math-inline]:inline-block');
-    expect(classes).toContain('[&_.maho-math-display]:overflow-x-auto');
+    expect(classes).toContain('[&_.maho-math-block]:overflow-x-auto');
+  });
+
+  it('targets the exact class the renderer emits for each math layout', () => {
+    renderMarkdown('$$\n\\frac{a}{b}\n$$');
+
+    const displayToken = Array.from(mathElement().classList)
+                             .find(token => token.startsWith('maho-math-'));
+    expect(displayToken).toBe('maho-math-block');
+    expect(requireElement(container.querySelector('div'), 'markdown wrapper').className)
+        .toContain(`[&_.${displayToken}]`);
+
+    renderMarkdown('$x$');
+
+    const inlineToken = Array.from(mathElement().classList)
+                            .find(token => token.startsWith('maho-math-'));
+    expect(inlineToken).toBe('maho-math-inline');
+    expect(requireElement(container.querySelector('div'), 'markdown wrapper').className)
+        .toContain(`[&_.${inlineToken}]`);
   });
 
   it('copies the raw equation source, not the rendered MathML', async () => {
