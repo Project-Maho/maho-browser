@@ -95,6 +95,7 @@ action("bundle_react") {
     "react/lib/editable-snapshot.ts",
     "react/lib/format-size.ts",
     "react/lib/format-timestamp.ts",
+    "react/lib/tex-math.ts",
     "react/store.ts",
     "react/tsconfig.json",
     "react/components/composer-textarea.tsx",
