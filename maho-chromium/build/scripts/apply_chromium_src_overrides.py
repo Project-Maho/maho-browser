@@ -12253,7 +12253,7 @@ _UPDATED154_INCREMENTAL_SHA256: Final[dict[str, str]] = {
     "chrome/browser/ui/browser_command_controller.cc":
         "8aea96cc899ed2b7123269b728324c396371719ee47b940ae04d11ea21389f89",
     "chrome/browser/ui/views/frame/browser_view.cc":
-        "808d230fa0f079d5823af6a3b7db1e37554b31519a2edb049aa4d32864858b1e",
+        "6a99e7d5f81bfb5df8cfbcdb2e4b06bdf7bbd01b1d922df7703a71255bbf41bc",
     "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc":
         "94139a8495e3e7e0dba0f500e901b773aca222716999aef629974eda9ef43144",
 }

@@ -1,10 +1,22 @@
+diff --git a/chrome/browser/ui/views/frame/browser_view.cc b/chrome/browser/ui/views/frame/browser_view.cc
+index 9531e5f..ec7f5cf 100644
 --- a/chrome/browser/ui/views/frame/browser_view.cc
 +++ b/chrome/browser/ui/views/frame/browser_view.cc
-@@ -2587,6 +2587,6 @@
- 
- void BrowserView::ShowMahoCommandOverlayForNewTab() {
-   if (!GetIsNormalType()) {
--    chrome::NewTab(browser_);
-+    chrome::NewTab(browser_, NewTabTypes::kNewTabCommand);
-     return;
+@@ -5545,8 +5545,16 @@ void BrowserView::AddedToWidget() {
+         }
+       }
+       for (const ui::Accelerator& accelerator : accelerators) {
++        // Maho shortcuts are registered at HIGH priority so that
++        // CommandDispatcherDelegate::prePerformKeyEquivalent's
++        // eventHandledByViewsFocusManager(kHighPriority) check catches them and
++        // routes the key to MahoShortcutInterceptor (via
++        // BrowserView::AcceleratorPressed) before the native macOS menu path
++        // dispatches e.g. IDC_NEW_TAB. With kNormalPriority that check never
++        // matched, so Cmd+T fell through to the stock NewTab instead of opening
++        // the Maho command palette in new-tab mode.
+         fm->RegisterAccelerator(
+-            accelerator, ui::AcceleratorManager::kNormalPriority, this);
++            accelerator, ui::AcceleratorManager::kHighPriority, this);
+       }
+     }
    }
