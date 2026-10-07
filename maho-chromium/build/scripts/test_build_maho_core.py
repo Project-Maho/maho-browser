@@ -274,6 +274,27 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
 
         self.assertIn('maho_mail_ffi.lib', str(error.exception))
 
+    def test_bundled_c_staticlibs_finds_the_cargo_hash_subdir_layout(self):
+        # cargo >= 1.8x nests the build dir as build/<crate>/<hash>/ instead of
+        # build/<crate>-<hash>/. Missing it left the vendored OpenSSL symbols
+        # unprefixed, so maho_mail_helper hit "duplicate symbol: PKCS7_sign"
+        # against Chromium's BoringSSL at link time.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            release = Path(temp_dir)
+            crypto = (
+                release / 'build' / 'openssl-sys' / '87f72f3f1530d1d6'
+                / 'out' / 'openssl-build' / 'install' / 'lib' / 'libcrypto.a'
+            )
+            crypto.parent.mkdir(parents=True)
+            crypto.touch()
+
+            discovered = {
+                Path(path) for path in _module._bundled_c_staticlibs(
+                    str(release))
+            }
+
+        self.assertEqual(discovered, {crypto})
+
     def test_bundled_c_staticlibs_include_openssl_and_sqlcipher(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             release = Path(temp_dir)

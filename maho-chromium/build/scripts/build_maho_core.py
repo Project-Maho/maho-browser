@@ -546,19 +546,29 @@ def _is_private_rust_runtime_symbol(symbol):
     ))
 
 
+def _cargo_build_output_dirs(release_dir, crate):
+    # cargo changed its build-dir layout from build/<crate>-<hash>/out to
+    # build/<crate>/<hash>/out. Match both so a vendored static lib is found
+    # regardless of the toolchain version; missing it silently skips the
+    # symbol privatize step and the lib collides with Chromium's BoringSSL.
+    out_dirs = []
+    for pattern in (f'{crate}-*', os.path.join(crate, '*')):
+        for build_dir in glob.glob(os.path.join(release_dir, 'build', pattern)):
+            out_dir = os.path.join(build_dir, 'out')
+            if os.path.isdir(out_dir):
+                out_dirs.append(out_dir)
+    return out_dirs
+
+
 def _bundled_c_staticlibs(release_dir):
     libraries = []
-    for name in ('libcrypto.lib', 'libssl.lib', 'libcrypto.a', 'libssl.a'):
-        libraries += glob.glob(
-            os.path.join(release_dir, 'build', 'openssl-sys-*', 'out',
-                         '**', name),
-            recursive=True)
-    for pattern in (
-            '*sqlcipher*.a', '*sqlcipher*.lib',
-            '*sqlite3*.a', '*sqlite3*.lib'):
-        libraries += glob.glob(
-            os.path.join(release_dir, 'build', 'libsqlite3-sys-*', 'out',
-                         pattern))
+    for crate in ('openssl-sys', 'libsqlite3-sys'):
+        for out_dir in _cargo_build_output_dirs(release_dir, crate):
+            for name in ('libcrypto.lib', 'libssl.lib', 'libcrypto.a', 'libssl.a',
+                         '*sqlcipher*.a', '*sqlcipher*.lib',
+                         '*sqlite3*.a', '*sqlite3*.lib'):
+                libraries += glob.glob(
+                    os.path.join(out_dir, '**', name), recursive=True)
     return libraries
 
 
