@@ -3,6 +3,7 @@
 #include "maho_sidebar_tab_list_view.h"
 #include "ui/views/controls/button/image_button.h"
 
+#include "maho/browser/ui/views/sidebar/maho_sidebar_tab_row_modifiers.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
 #include "maho/browser/maho_tab_registry.h"
 
@@ -30,6 +31,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/values.h"
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
@@ -2252,7 +2254,8 @@ bool SidebarTabRowView::OnMousePressed(const ui::MouseEvent& event) {
 
   MahoSidebarTabListView* tab_list_view = GetTabListView();
   if (tab_list_view) {
-    const bool is_cmd_ctrl = (event.flags() & (ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN)) != 0;
+    const bool is_cmd_ctrl = maho::IsTabMultiSelectModifierForPlatform(
+        event.flags(), BUILDFLAG(IS_MAC));
     const bool is_shift = (event.flags() & ui::EF_SHIFT_DOWN) != 0;
 
     if (is_cmd_ctrl) {
@@ -2709,8 +2712,8 @@ void SidebarTabRowView::ActivateFromRowClick(const ui::MouseEvent& event) {
 
 void SidebarTabRowView::ActivateTabFromEvent(const ui::Event& event) {
   if (MahoSidebarTabListView* list_view = GetTabListView()) {
-    const bool is_cmd_ctrl =
-        (event.flags() & (ui::EF_COMMAND_DOWN | ui::EF_CONTROL_DOWN)) != 0;
+    const bool is_cmd_ctrl = maho::IsTabMultiSelectModifierForPlatform(
+        event.flags(), BUILDFLAG(IS_MAC));
     const bool is_shift = (event.flags() & ui::EF_SHIFT_DOWN) != 0;
     if (is_cmd_ctrl) {
       list_view->ToggleTabSelected(tab_id_);

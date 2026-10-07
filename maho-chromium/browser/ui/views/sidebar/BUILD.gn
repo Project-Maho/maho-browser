@@ -130,6 +130,7 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_state_models.h",
     "maho_sidebar_tab_list_view.cc",
     "maho_sidebar_tab_list_view.h",
+    "maho_sidebar_tab_row_modifiers.h",
     "maho_sidebar_visibility_manager.cc",
     "maho_sidebar_visibility_manager.h",
     "maho_sidebar_folder_hover_popup_view.cc",
@@ -235,6 +236,7 @@ source_set("unit_tests") {
     "maho_sidebar_update_notification_controller_unittest.cc",
     "maho_sidebar_update_notification_view_unittest.cc",
     "maho_sidebar_processing_placeholder_view_unittest.cc",
+    "maho_sidebar_tab_row_modifiers_unittest.cc",
     "maho_now_playing_coordinator_unittest.cc",
   ]
 
