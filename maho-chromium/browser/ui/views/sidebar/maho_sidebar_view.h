@@ -19,6 +19,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "components/translate/content/browser/content_translate_driver.h"
 #include "maho/browser/maho_space_profile_bridge.h"
+#include "maho/browser/ui/downloads/maho_download_bridge_service.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_state_adapter.h"
@@ -87,6 +88,7 @@ class MahoSidebarView
       public views::ViewObserver,
       public TabStripModelObserver,
       public MahoSpaceProfileBridge::Observer,
+      public MahoDownloadBridgeService::Observer,
       public translate::ContentTranslateDriver::TranslationObserver {
   METADATA_HEADER(MahoSidebarView, views::View)
   friend class MahoSidebarViewSpaceSwitchSlideTest;
@@ -113,6 +115,11 @@ class MahoSidebarView
   void OnDragStarted(const std::string& tab_id);
   void SetActiveDragGhostImage(const gfx::ImageSkia& image,
                                const gfx::Vector2d& offset);
+
+  // maho::MahoDownloadBridgeService::Observer:
+  // Pushes the aggregated Downloads progress onto the library rail's Downloads
+  // icon, so it is current even while the Downloads pane is closed.
+  void OnMahoDownloadsChanged() override;
 
   void OpenLibrary();
   void OpenLibrary(MahoSidebarLibraryRailView::Category category);
@@ -425,6 +432,11 @@ class MahoSidebarView
   base::CallbackListSubscription media_palette_subscription_;
   base::CallbackListSubscription now_playing_palette_subscription_;
   base::CallbackListSubscription update_notification_palette_subscription_;
+  // Library rail Downloads indicator source. Registered only for a regular,
+  // capability-allowed profile; see the constructor and OnMahoDownloadsChanged.
+  base::ScopedObservation<MahoDownloadBridgeService,
+                          MahoDownloadBridgeService::Observer>
+      downloads_observation_{this};
   int palette_repaint_count_for_testing_ = 0;
   bool shared_browser_glass_active_ = false;
 

@@ -73,6 +73,9 @@
 #include "ui/views/view_tracker.h"
 #include "ui/views/view_class_properties.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
+#include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/downloads/maho_download_bridge_service_factory.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_favorites_grid_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_action_pane_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_media_view.h"
@@ -238,11 +241,28 @@ MahoSidebarView::MahoSidebarView(Browser* browser)
   if (tab_strip_model()) {
     tab_strip_model()->AddObserver(this);
   }
+
+  // Library rail Downloads indicator: subscribe to the throttled download
+  // notifications so the icon tracks aggregate progress even while the
+  // Downloads pane has never been built. Regular profiles only; an OTR window
+  // must neither read nor surface regular-profile download metadata.
+  if (!is_otr_ && browser_->GetProfile() &&
+      MahoIsCapabilityAllowed(browser_->GetProfile(),
+                              MahoPrivateCapability::kMahoDownloadMetadata)) {
+    if (auto* service = MahoDownloadBridgeServiceFactory::GetForProfile(
+            browser_->GetProfile())) {
+      downloads_observation_.Observe(service);
+      // Seed from whatever is already in flight so a window opened mid-download
+      // is correct before the next notification arrives.
+      OnMahoDownloadsChanged();
+    }
+  }
 }
 
 MahoSidebarView::~MahoSidebarView() {
   FinishSpaceSlide();
   outgoing_space_layer_owner_.reset();
+  downloads_observation_.Reset();
   if (auto* bridge = MahoSpaceProfileBridge::GetInstance(); bridge) {
     bridge->RemoveObserver(this);
   }
@@ -286,6 +306,26 @@ MahoSidebarNowPlayingView* MahoSidebarView::AddNowPlayingView(std::unique_ptr<Ma
       base::BindRepeating(&MahoSidebarNowPlayingView::SetSidebarPalette,
                           base::Unretained(now_playing_view_)));
   return now_playing_view_;
+}
+
+void MahoSidebarView::OnMahoDownloadsChanged() {
+  if (!library_rail_view_) {
+    return;
+  }
+
+  // Fail closed: only a regular, capability-allowed profile may surface
+  // regular-profile download metadata on the rail. An OTR window (or a test
+  // that flips the OTR flag after construction) clears the indicator instead
+  // of reading the process-global regular MahoCore.
+  if (is_otr_ || !browser_ || !browser_->GetProfile() ||
+      !MahoIsCapabilityAllowed(browser_->GetProfile(),
+                               MahoPrivateCapability::kMahoDownloadMetadata)) {
+    library_rail_view_->SetDownloadsIndicatorState(DownloadsIndicatorState());
+    return;
+  }
+
+  library_rail_view_->SetDownloadsIndicatorState(
+      ComputeDownloadsIndicatorState(ParseDownloads()));
 }
 
 void MahoSidebarView::UpdateSidebarBorderForOverlay() {

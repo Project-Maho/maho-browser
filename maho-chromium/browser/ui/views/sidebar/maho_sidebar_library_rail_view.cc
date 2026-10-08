@@ -2,6 +2,9 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_library_rail_view.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -12,6 +15,7 @@
 #include "build/buildflag.h"
 #include "components/vector_icons/vector_icons.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_layout_tokens.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -48,6 +52,14 @@ constexpr float kBackButtonDisabledAlpha = 0.38f;
 constexpr int kLibraryRailLabelLineHeightDp = 11;
 constexpr int kLibraryRailLabelFontSizeDeltaDp = -1;
 constexpr int kLibraryRailIconOpticalSizeDp = 22;
+// Rail Downloads progress indicator: a 3dp rounded track/fill bar sized to the
+// icon, painted in the gap between the icon and the label.
+constexpr int kDownloadsIndicatorWidthDp = 24;
+constexpr int kDownloadsIndicatorHeightDp = 3;
+constexpr int kDownloadsIndicatorCornerRadiusDp = 2;
+// Unknown total size has no honest fraction, so the indeterminate band is drawn
+// muted instead of reading as a near-complete transfer.
+constexpr uint8_t kDownloadsIndicatorIndeterminateAlpha = 0x66;
 
 struct RailCategorySpec {
   MahoSidebarLibraryRailView::Category category;
@@ -87,6 +99,76 @@ SkColor GetRailItemForegroundColor(const MahoSidebarPalette& palette,
 }
 
 }  // namespace
+
+// Aggregate Downloads progress painted under the rail's Downloads icon. Owned
+// by the Downloads rail item; it holds no download state of its own beyond the
+// snapshot the owning sidebar pushes in.
+class MahoSidebarDownloadsIndicatorView : public views::View {
+  METADATA_HEADER(MahoSidebarDownloadsIndicatorView, views::View)
+
+ public:
+  MahoSidebarDownloadsIndicatorView() {
+    SetPreferredSize(
+        gfx::Size(kDownloadsIndicatorWidthDp, kDownloadsIndicatorHeightDp));
+    // Purely decorative: the rail item's own accessible description carries the
+    // status, and pointer events must keep reaching the button underneath.
+    GetViewAccessibility().SetIsIgnored(true);
+    SetCanProcessEventsWithinSubtree(false);
+    fill_view_ = AddChildView(std::make_unique<views::View>());
+    fill_view_->GetViewAccessibility().SetIsIgnored(true);
+    SetVisible(false);
+  }
+
+  MahoSidebarDownloadsIndicatorView(const MahoSidebarDownloadsIndicatorView&) =
+      delete;
+  MahoSidebarDownloadsIndicatorView& operator=(
+      const MahoSidebarDownloadsIndicatorView&) = delete;
+  ~MahoSidebarDownloadsIndicatorView() override = default;
+
+  void SetState(const DownloadsIndicatorState& state,
+                const MahoSidebarPalette& palette,
+                bool enabled) {
+    state_ = state;
+    SkColor fill_color = enabled ? palette.focus_ring : palette.disabled_text;
+    if (state_.indeterminate) {
+      fill_color =
+          SkColorSetA(fill_color, kDownloadsIndicatorIndeterminateAlpha);
+    }
+    SetBackground(views::CreateRoundedRectBackground(
+        palette.row_selected, kDownloadsIndicatorCornerRadiusDp));
+    fill_view_->SetBackground(views::CreateRoundedRectBackground(
+        fill_color, kDownloadsIndicatorCornerRadiusDp));
+    SetVisible(state_.visible);
+    UpdateFillBounds();
+  }
+
+  // views::View:
+  void OnBoundsChanged(const gfx::Rect& previous_bounds) override {
+    views::View::OnBoundsChanged(previous_bounds);
+    UpdateFillBounds();
+  }
+
+  int fill_width_for_testing() const { return fill_view_->width(); }
+
+ private:
+  int FillWidth() const {
+    if (state_.indeterminate) {
+      return width();
+    }
+    return std::clamp(
+        static_cast<int>(std::lround(width() * state_.fraction)), 0, width());
+  }
+
+  void UpdateFillBounds() {
+    fill_view_->SetBounds(0, 0, FillWidth(), height());
+  }
+
+  DownloadsIndicatorState state_;
+  raw_ptr<views::View> fill_view_ = nullptr;
+};
+
+BEGIN_METADATA(MahoSidebarDownloadsIndicatorView)
+END_METADATA
 
 const gfx::VectorIcon& GetMahoSidebarArchiveboxIcon() {
   return maho_lucide_icons::kArchiveIcon;
@@ -128,6 +210,15 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
     icon_view_ = AddChildView(std::make_unique<views::ImageView>());
     icon_view_->SetImageSize(
         gfx::Size(kLibraryRailIconOpticalSizeDp, kLibraryRailIconOpticalSizeDp));
+
+    if (category == MahoSidebarLibraryRailView::Category::kDownloads) {
+      auto indicator =
+          std::make_unique<MahoSidebarDownloadsIndicatorView>();
+      // Positioned by PositionDownloadsIndicator(), not by the BoxLayout, so
+      // the icon/label stack keeps its exact pre-indicator geometry.
+      indicator->SetProperty(views::kViewIgnoredByLayoutKey, true);
+      downloads_indicator_ = AddChildView(std::move(indicator));
+    }
 
     label_ = AddChildView(std::make_unique<views::Label>(visible_label_));
     label_->SetHorizontalAlignment(gfx::ALIGN_CENTER);
@@ -177,6 +268,20 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
 
   MahoSidebarLibraryRailView::Category category() const { return category_; }
 
+  void SetDownloadsIndicatorState(const DownloadsIndicatorState& state) {
+    downloads_indicator_state_ = state;
+    UpdateAppearance();
+  }
+
+  views::View* downloads_indicator_for_testing() {
+    return downloads_indicator_;
+  }
+
+  int downloads_indicator_fill_width_for_testing() const {
+    return downloads_indicator_ ? downloads_indicator_->fill_width_for_testing()
+                                : 0;
+  }
+
   void OnSidebarPaletteChanged(const MahoSidebarPalette& palette) {
     palette_ = palette;
     UpdateAppearance();
@@ -201,7 +306,31 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
     UpdateAppearance();
   }
 
+  void Layout(PassKey) override {
+    LayoutSuperclass<views::Button>(this);
+    PositionDownloadsIndicator();
+  }
+
  private:
+  // Sits the indicator in the icon/label gap, centered on the icon. The
+  // indicator is ignored by the BoxLayout, so appearing progress never reflows
+  // the rail stack or shifts the icon.
+  void PositionDownloadsIndicator() {
+    if (!downloads_indicator_ || !downloads_indicator_->GetVisible() ||
+        !icon_view_ || !label_) {
+      return;
+    }
+    const gfx::Rect icon_bounds = icon_view_->bounds();
+    const gfx::Size indicator_size = downloads_indicator_->GetPreferredSize();
+    const int gap_height =
+        std::max(0, label_->bounds().y() - icon_bounds.bottom());
+    downloads_indicator_->SetBounds(
+        icon_bounds.CenterPoint().x() - indicator_size.width() / 2,
+        icon_bounds.bottom() +
+            std::max(0, gap_height - indicator_size.height()) / 2,
+        indicator_size.width(), indicator_size.height());
+  }
+
   void UpdateAppearance() {
     const bool enabled = GetEnabled();
     const bool hovered = enabled &&
@@ -234,6 +363,19 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
         0, gfx::Font::NORMAL,
         selected_ ? gfx::Font::Weight::MEDIUM : gfx::Font::Weight::NORMAL));
     SetCanProcessEventsWithinSubtree(enabled);
+
+    if (downloads_indicator_) {
+      downloads_indicator_->SetState(downloads_indicator_state_, palette_,
+                                    enabled);
+      PositionDownloadsIndicator();
+    }
+    // At-a-glance status for screen readers, e.g. "Downloads, 2 downloads in
+    // progress, 37% complete". Cleared with the indicator itself.
+    GetViewAccessibility().SetDescription(
+        downloads_indicator_state_.visible
+            ? DownloadsIndicatorAccessibleDescription(
+                  downloads_indicator_state_)
+            : std::u16string());
   }
 
   const MahoSidebarLibraryRailView::Category category_;
@@ -243,8 +385,10 @@ class MahoSidebarLibraryRailItemButton : public views::Button {
   const std::string accessibility_name_;
   gfx::FontList base_label_font_list_;
   raw_ptr<views::ImageView> icon_view_ = nullptr;
+  raw_ptr<MahoSidebarDownloadsIndicatorView> downloads_indicator_ = nullptr;
   raw_ptr<views::Label> label_ = nullptr;
   bool selected_ = false;
+  DownloadsIndicatorState downloads_indicator_state_;
   MahoSidebarPalette palette_;
 };
 
@@ -385,6 +529,36 @@ MahoSidebarLibraryRailView::visible_categories_for_testing() const {
   }
 
   return visible_categories;
+}
+
+void MahoSidebarLibraryRailView::SetDownloadsIndicatorState(
+    const DownloadsIndicatorState& state) {
+  downloads_indicator_state_ = state;
+  for (auto& button : category_buttons_) {
+    if (button && button->category() == Category::kDownloads) {
+      button->SetDownloadsIndicatorState(state);
+      return;
+    }
+  }
+}
+
+views::View* MahoSidebarLibraryRailView::downloads_indicator_for_testing() {
+  for (auto& button : category_buttons_) {
+    if (button && button->category() == Category::kDownloads) {
+      return button->downloads_indicator_for_testing();
+    }
+  }
+  return nullptr;
+}
+
+int MahoSidebarLibraryRailView::downloads_indicator_fill_width_for_testing()
+    const {
+  for (const auto& button : category_buttons_) {
+    if (button && button->category() == Category::kDownloads) {
+      return button->downloads_indicator_fill_width_for_testing();
+    }
+  }
+  return 0;
 }
 
 void MahoSidebarLibraryRailView::SetSelectedCategory(Category category) {

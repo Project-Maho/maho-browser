@@ -149,8 +149,10 @@ std::u16string StateLabel(const std::string& state) {
   return base::UTF8ToUTF16(state);
 }
 
+// Delegates to the shared predicate so the row progress bar and the Library
+// rail indicator can never disagree about which downloads are unfinished.
 bool IsInProgressState(const std::string& state) {
-  return state == "downloading" || state == "paused";
+  return IsActiveDownloadState(state);
 }
 
 bool HasProgressBar(const DownloadItem& item) {
