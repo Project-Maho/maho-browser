@@ -2,20 +2,24 @@
 
 #include "maho_sidebar_downloads_data.h"
 
+#include <cmath>
 #include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "base/byte_size.h"
 #include "base/json/json_reader.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/base/text/bytes_formatting.h"
 
 namespace maho {
 
@@ -27,6 +31,10 @@ DownloadItem& DownloadItem::operator=(DownloadItem&&) = default;
 DownloadItem::~DownloadItem() = default;
 
 namespace {
+
+std::u16string FormatByteCount(uint64_t bytes) {
+  return ui::FormatBytes(base::ByteSize(bytes));
+}
 
 bool EndsWithAny(std::string_view value,
                  std::initializer_list<std::string_view> suffixes) {
@@ -136,6 +144,28 @@ bool HasRealFilePath(const DownloadItem& item) {
   // platform_util::OpenItem/ShowItemInFolder handle a since-deleted file safely.
   return item.state == "completed" && item.file_path.has_value() &&
          !item.file_path->empty();
+}
+
+std::u16string DownloadsIndicatorAccessibleDescription(
+    const DownloadsIndicatorState& state) {
+  if (!state.visible) {
+    return std::u16string();
+  }
+
+  const std::u16string summary =
+      state.active_count == 1
+          ? u"Download in progress"
+          : base::UTF8ToUTF16(std::to_string(state.active_count)) +
+                u" downloads in progress";
+  if (state.indeterminate) {
+    return base::StrCat({summary, u", size unknown"});
+  }
+
+  const int percent = static_cast<int>(std::lround(state.fraction * 100.0));
+  return base::StrCat(
+      {summary, u", ", base::UTF8ToUTF16(std::to_string(percent)),
+       u"% complete (", FormatByteCount(state.received_bytes), u" of ",
+       FormatByteCount(state.total_bytes), u")"});
 }
 
 bool IsMediaLikeDownload(const DownloadItem& item) {
