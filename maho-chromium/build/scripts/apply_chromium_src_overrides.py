@@ -12256,6 +12256,8 @@ _UPDATED154_INCREMENTAL_SHA256: Final[dict[str, str]] = {
         "6a99e7d5f81bfb5df8cfbcdb2e4b06bdf7bbd01b1d922df7703a71255bbf41bc",
     "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc":
         "94139a8495e3e7e0dba0f500e901b773aca222716999aef629974eda9ef43144",
+    "chrome/browser/ui/chrome_pages.cc":
+        "37a293b3bddad0da14e11bdd573dbff956cb3ff29f514322ca25bd2622dda515",
 }
 
 

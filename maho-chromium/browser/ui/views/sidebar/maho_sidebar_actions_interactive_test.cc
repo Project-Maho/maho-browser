@@ -66,6 +66,7 @@
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "maho/browser/ui/views/command/maho_shortcut_interceptor.h"
 #include "maho/browser/ui/views/command/maho_command_overlay_controller.h"
+#include "maho/browser/ui/views/command/maho_command_overlay_view.h"
 #include "maho/browser/ui/views/location_bar/maho_location_bar_utility_icon_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_footer_view.h"
@@ -1785,6 +1786,77 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
          "core-ready retry both installed it";
 }
 #endif  // BUILDFLAG(IS_MAC)
+
+// SC1 regression: Cmd+T must open the Maho command palette in new-tab mode and
+// typing a URL + Enter must open a NEW foreground tab, leaving the original tab
+// untouched. This is the runnable analog of the (currently disabled)
+// maho_command_overlay_interactive_uitest NewTab_* cases: it drives the real
+// ShowMahoCommandOverlayForNewTab() entrypoint the accelerator resolves to and
+// asserts the same disposition invariant those cases pin.
+IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
+                       CmdTNewTabModeOpensNewForegroundTabAndKeepsOriginal) {
+  SeedProfile(1);
+  const GURL initial_url = embedded_test_server()->GetURL("/title1.html");
+  const GURL target_url = embedded_test_server()->GetURL("/title2.html");
+  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser(), initial_url));
+  ::base::RunLoop().RunUntilIdle();
+
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  const int initial_tab_count = browser()->GetTabStripModel()->count();
+
+  browser_view->ShowMahoCommandOverlayForNewTab();
+
+  ASSERT_TRUE(::base::test::RunUntil([browser_view] {
+    maho::MahoCommandOverlayController* c =
+        browser_view->GetMahoCommandOverlayControllerForTesting();
+    return c && c->IsVisible();
+  })) << "ShowMahoCommandOverlayForNewTab must open the overlay";
+
+  maho::MahoCommandOverlayController* controller =
+      browser_view->GetMahoCommandOverlayControllerForTesting();
+  ASSERT_TRUE(controller);
+  maho::MahoCommandOverlayView* overlay_view =
+      controller->GetOverlayViewForTesting();
+  ASSERT_TRUE(overlay_view);
+  EXPECT_EQ(maho::CommandOverlayMode::kNewTab,
+            overlay_view->CurrentModeForTesting())
+      << "Cmd+T must open the palette in new-tab mode";
+
+  views::Textfield* textfield = overlay_view->textfield();
+  ASSERT_TRUE(textfield);
+  textfield->SetText(base::UTF8ToUTF16(target_url.spec()));
+
+  SendKeyPressToWindow(browser_view->GetWidget()->GetNativeWindow(),
+                       ui::VKEY_RETURN);
+
+  ASSERT_TRUE(::base::test::RunUntil([browser_view] {
+    maho::MahoCommandOverlayController* c =
+        browser_view->GetMahoCommandOverlayControllerForTesting();
+    return !c || !c->IsVisible();
+  })) << "Pressing Enter must dismiss the overlay";
+
+  ASSERT_TRUE(::base::test::RunUntil([&] {
+    return browser()->GetTabStripModel()->count() > initial_tab_count;
+  })) << "Enter in new-tab mode must create a new tab";
+
+  EXPECT_EQ(initial_tab_count + 1, browser()->GetTabStripModel()->count())
+      << "Tab count must increase by exactly 1";
+
+  content::WebContents* new_active =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(new_active);
+  ASSERT_TRUE(::base::test::RunUntil([&] {
+    return new_active->GetLastCommittedURL() == target_url ||
+           new_active->GetVisibleURL() == target_url;
+  })) << "New tab must navigate to the typed URL; got: "
+      << new_active->GetLastCommittedURL().spec();
+
+  EXPECT_EQ(
+      initial_url,
+      browser()->GetTabStripModel()->GetWebContentsAt(0)->GetLastCommittedURL())
+      << "Original tab URL must remain unchanged after new-tab open";
+}
 
 
 // End-to-end proof for the headline symptom: a real Cmd+Shift+C keystroke must

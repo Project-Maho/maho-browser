@@ -1,0 +1,21 @@
+diff --git a/chrome/browser/ui/chrome_pages.cc b/chrome/browser/ui/chrome_pages.cc
+index ba7a39165871bc52414ecb6d2a179a68e5bdfb68..875e969af6fcfc41be4f25d3f1503c7b324474a8 100644
+--- a/chrome/browser/ui/chrome_pages.cc
++++ b/chrome/browser/ui/chrome_pages.cc
+@@ -603,6 +603,16 @@ void ShowClearBrowsingDataDialog(BrowserWindowInterface* browser) {
+ 
+ void ShowPasswordManager(BrowserWindowInterface* bwi) {
+   base::RecordAction(UserMetricsAction("Options_ShowPasswordManager"));
++  // Maho: route every password-manager entry point to Maho's own password
++  // manager instead of chrome://password-manager. This is the single choke
++  // point for the app menu Passwords item (IDC_SHOW_PASSWORD_MANAGER), the
++  // password-field context menu's "Import passwords" entry
++  // (NavigateToManagePasswordsPage), and the saved-password toasts.
++  if (bwi) {
++    ShowSingletonTabIgnorePathOverwriteNTP(
++        bwi, GURL(std::string(maho::kMahoSettingsURL) + "?pane=passwords"));
++    return;
++  }
+   // This code is necessary to fix a bug (crbug.com/40269361) during Password
+   // Manager Shortcut tutorial flow.
+   auto* service =

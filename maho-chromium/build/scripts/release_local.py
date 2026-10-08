@@ -348,6 +348,13 @@ def verify_manifest_matches_artifacts(
     if dry_run:
         return
 
+    # Fail closed: release-notes.html MUST be present and non-empty on all platforms
+    notes_files = [a for a in artifacts if os.path.basename(a) == 'release-notes.html']
+    if not notes_files or not os.path.exists(notes_files[0]):
+        raise ManifestVerificationError('release-notes.html artifact missing from release bundle')
+    if os.path.getsize(notes_files[0]) == 0:
+        raise ManifestVerificationError('release-notes.html artifact is empty (0 bytes)')
+
     appcast_files = [a for a in artifacts if a.endswith('.xml') or 'appcast' in os.path.basename(a)]
     dmg_files = [a for a in artifacts if a.endswith('.dmg')]
 
@@ -365,7 +372,7 @@ def verify_manifest_matches_artifacts(
             raise ManifestVerificationError(f'DMG artifact missing for {appcast_path}')
         _verify_appcast_manifest(appcast_path, matching_dmg, pubkey_bytes)
 
-    win_manifest_files = [a for a in artifacts if os.path.basename(a) == 'update-win.json']
+    win_manifest_files = [a for a in artifacts if 'update-win' in os.path.basename(a) and a.endswith('.json')]
     exe_files = [a for a in artifacts if a.endswith('.exe') and 'MahoSetup' in os.path.basename(a)]
     if not exe_files:
         exe_files = [a for a in artifacts if a.endswith('.exe')]
@@ -495,7 +502,11 @@ def build_and_bundle_win(version, args):
         args.dry_run, cwd=_WORKSPACE_ROOT)
     if not args.dry_run:
         require(msix)
-    return [exe, os.path.join(output_dir, 'update-win.json'), msix]
+    notes_html = os.path.join(output_dir, 'release-notes.html')
+    generate_release_notes(version, notes_html, args.dry_run)
+    if not args.dry_run:
+        require(notes_html)
+    return [exe, os.path.join(output_dir, 'update-win.json'), msix, notes_html]
 
 
 def build_and_bundle_linux(version, args):
@@ -526,7 +537,11 @@ def build_and_bundle_linux(version, args):
     run([sys.executable, _GEN_MANIFESTS, '--version', version, '--linux',
          '--output-dir', output_dir],
         args.dry_run, cwd=_WORKSPACE_ROOT)
-    return signed + [os.path.join(output_dir, 'update-linux.json')]
+    notes_html = os.path.join(output_dir, 'release-notes.html')
+    generate_release_notes(version, notes_html, args.dry_run)
+    if not args.dry_run:
+        require(notes_html)
+    return signed + [os.path.join(output_dir, 'update-linux.json'), notes_html]
 
 
 def ensure_release(tag, repo, version, dry_run):
@@ -680,6 +695,11 @@ def run_self_test() -> int:
     test_pub_bytes = test_key.public_key().public_bytes_raw()
 
     with tempfile.TemporaryDirectory() as tmp_dir:
+        # Mock release notes
+        notes_path = os.path.join(tmp_dir, 'release-notes.html')
+        with open(notes_path, 'w', encoding='utf-8') as f:
+            f.write('<html><body>Release Notes</body></html>')
+
         # 1. Valid macOS fixture
         dmg_path = os.path.join(tmp_dir, 'Maho-1.0.0.dmg')
         dmg_bytes = b'sample-macos-dmg-content-for-selftest-1234567890'
@@ -708,7 +728,7 @@ def run_self_test() -> int:
         with open(appcast_path, 'w', encoding='utf-8') as f:
             f.write(appcast_xml)
 
-        verify_manifest_matches_artifacts([dmg_path, appcast_path], pubkey_bytes=test_pub_bytes)
+        verify_manifest_matches_artifacts([dmg_path, appcast_path, notes_path], pubkey_bytes=test_pub_bytes)
         print('  [PASS] Valid macOS appcast verification passed')
 
         # 2. Known v1.0.0 defect: enclosure length 65355735 vs real DMG 197337667
@@ -722,7 +742,7 @@ def run_self_test() -> int:
 
         caught_defect = False
         try:
-            verify_manifest_matches_artifacts([dmg_path, tampered_appcast_path], pubkey_bytes=test_pub_bytes)
+            verify_manifest_matches_artifacts([dmg_path, tampered_appcast_path, notes_path], pubkey_bytes=test_pub_bytes)
         except ManifestVerificationError as e:
             caught_defect = True
             assert 'enclosure length mismatch' in str(e), f'Unexpected error message: {e}'
@@ -741,7 +761,7 @@ def run_self_test() -> int:
 
         caught_bad_sig = False
         try:
-            verify_manifest_matches_artifacts([dmg_path, tampered_sig_path], pubkey_bytes=test_pub_bytes)
+            verify_manifest_matches_artifacts([dmg_path, tampered_sig_path, notes_path], pubkey_bytes=test_pub_bytes)
         except ManifestVerificationError as e:
             caught_bad_sig = True
             assert 'edSignature verification failed' in str(e), f'Unexpected error message: {e}'
@@ -774,7 +794,7 @@ def run_self_test() -> int:
         with open(win_manifest_path, 'w', encoding='utf-8') as f:
             json.dump(win_envelope, f, indent=2)
 
-        verify_manifest_matches_artifacts([exe_path, win_manifest_path], pubkey_bytes=test_pub_bytes)
+        verify_manifest_matches_artifacts([exe_path, win_manifest_path, notes_path], pubkey_bytes=test_pub_bytes)
         print('  [PASS] Valid Windows manifest verification passed')
 
         # 5. Tampered Windows installer_sha256
@@ -788,7 +808,7 @@ def run_self_test() -> int:
 
         caught_bad_sha = False
         try:
-            verify_manifest_matches_artifacts([exe_path, tampered_win_path], pubkey_bytes=test_pub_bytes)
+            verify_manifest_matches_artifacts([exe_path, tampered_win_path, notes_path], pubkey_bytes=test_pub_bytes)
         except ManifestVerificationError as e:
             caught_bad_sha = True
             assert 'installer_sha256 mismatch' in str(e), f'Unexpected error message: {e}'
@@ -804,7 +824,7 @@ def run_self_test() -> int:
 
         caught_bad_env_sig = False
         try:
-            verify_manifest_matches_artifacts([exe_path, tampered_env_sig_path], pubkey_bytes=test_pub_bytes)
+            verify_manifest_matches_artifacts([exe_path, tampered_env_sig_path, notes_path], pubkey_bytes=test_pub_bytes)
         except ManifestVerificationError as e:
             caught_bad_env_sig = True
             assert 'signature verification failed' in str(e), f'Unexpected error message: {e}'
@@ -812,6 +832,18 @@ def run_self_test() -> int:
 
         if not caught_bad_env_sig:
             sys.exit('error: self-test failed to catch tampered Windows envelope signature')
+
+        # 7. Missing release-notes.html fixture check (fail-closed verification)
+        caught_missing_notes = False
+        try:
+            verify_manifest_matches_artifacts([exe_path, win_manifest_path], pubkey_bytes=test_pub_bytes)
+        except ManifestVerificationError as e:
+            caught_missing_notes = True
+            assert 'release-notes.html artifact missing' in str(e), f'Unexpected error message: {e}'
+            print(f'  [PASS] Successfully caught missing release-notes.html: {e}')
+
+        if not caught_missing_notes:
+            sys.exit('error: self-test failed to catch missing release-notes.html')
 
     # 7. Production public key check
     assert MANIFEST_PUBKEY_HEX == '8b076b75cb7896810997c59b1ec7e184730d714ca0679e0deae22f7aba0d4dbc', (
@@ -867,8 +899,8 @@ def main():
     p.add_argument(
         '--rollout-threshold',
         type=int,
-        default=10,
-        help='Relay rollout threshold percentage (0-100, default: 10).',
+        default=100,
+        help='Relay rollout threshold percentage (always 100 for immediate rollout).',
     )
     p.add_argument(
         '--version-code',
