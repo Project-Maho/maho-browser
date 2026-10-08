@@ -6867,9 +6867,11 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
 
   prefs->SetBoolean(maho::welcome::kLoginGateActive, needs_login_gate);
 
-  if (needs_login_gate) {
-    maho::MahoWelcomeWindow::Show(profile);
-  }
+  // Maho: the login gate no longer replaces the browser with a frameless welcome
+  // window at startup. StartupBrowserCreatorImpl::RestoreOrCreateBrowser opens the
+  // onboarding page as the first tab of a normal browser window instead, so the
+  // app presents a real browser (with URL entry) on launch — required by the
+  // macOS web-browser criteria that gate the passkey entitlement request.
 
   maho::MahoMcpSession::SetBrowserDelegate(GetMcpBrowserDelegate());
 

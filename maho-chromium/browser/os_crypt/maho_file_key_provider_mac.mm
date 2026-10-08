@@ -142,8 +142,4 @@ bool MahoFileKeyProvider::UseForEncryption() {
   return true;
 }
 
-bool MahoFileKeyProvider::IsCompatibleWithOsCryptSync() {
-  return true;
-}
-
 }  // namespace maho

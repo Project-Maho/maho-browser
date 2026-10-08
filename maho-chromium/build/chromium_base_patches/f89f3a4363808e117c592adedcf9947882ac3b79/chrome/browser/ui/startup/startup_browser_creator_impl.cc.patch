@@ -1,7 +1,7 @@
-diff --git c/chrome/browser/ui/startup/startup_browser_creator_impl.cc w/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-index c7b0a43fd05c881c7556fb35a64b2954746317cc..5c2ec8d55d367745ce92f72a92ab0e250b20e13c 100644
---- c/chrome/browser/ui/startup/startup_browser_creator_impl.cc
-+++ w/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
+index c7b0a43fd0..97c9146d50 100644
+--- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
++++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 @@ -7,6 +7,7 @@
  #include <stddef.h>
  
@@ -142,25 +142,36 @@ index c7b0a43fd05c881c7556fb35a64b2954746317cc..5c2ec8d55d367745ce92f72a92ab0e25
    }
  
    // Maybe add any tabs which the user has previously pinned.
-@@ -749,6 +807,17 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
+@@ -749,6 +807,28 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
      SessionRestore::BehaviorBitmask restore_options,
      chrome::startup::IsProcessStartup process_startup,
      bool is_post_crash_launch) {
-+  // Maho login gate: while active (no valid relay session) suppress ALL
-+  // startup browser creation AND session restore so onboarding shows alone.
-+  // FinishOnboarding restores-or-creates the browser afterwards. Placed
-+  // before the SYNCHRONOUS_RESTORE block and DeleteStaleSessionData() so the
-+  // on-disk session survives for the deferred restore.
++  // Maho login gate: never suppress the startup browser. The macOS web-browser
++  // criteria (which gate the passkey entitlement request) require a real browser
++  // window with URL entry to exist at launch, so the gate opens a normal browser
++  // window and loads the onboarding page as its first tab, instead of replacing
++  // the browser with a frameless overlay that reads as "not a browser".
 +  if (PrefService* gate_prefs = profile_->GetPrefs();
 +      gate_prefs && gate_prefs->GetBoolean("maho.auth.login_gate_active")) {
-+    maho::MahoWelcomeWindow::Show(profile_);
-+    return nullptr;
++    base::AutoReset<bool> synchronous_launch_resetter(
++        &StartupBrowserCreator::in_synchronous_profile_launch_, true);
++    BrowserWindowCreateParams gate_params(profile_, /*is_incognito=*/false);
++    gate_params.creation_source =
++        BrowserWindowCreateParams::CreationSource::kStartupCreator;
++    BrowserWindowInterface* gate_browser =
++        CreateBrowserWindow(std::move(gate_params));
++    if (gate_browser) {
++      chrome::AddTabAt(gate_browser, GURL("chrome://maho-welcome/"), -1, true);
++      gate_browser->GetWindow()->Show();
++      gate_browser->GetWindow()->Activate();
++    }
++    return gate_browser;
 +  }
 +
    BrowserWindowInterface* browser = nullptr;
    if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
      // It's worth noting that this codepath is not hit by crash restore
-@@ -773,17 +842,59 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
+@@ -773,17 +853,59 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
    base::AutoReset<bool> synchronous_launch_resetter(
        &StartupBrowserCreator::in_synchronous_profile_launch_, true);
  
@@ -223,7 +234,7 @@ index c7b0a43fd05c881c7556fb35a64b2954746317cc..5c2ec8d55d367745ce92f72a92ab0e25
  
    // Now that a restore is no longer possible, it is safe to clear session
    // cookie/storage, unless this is a crash recovery.
-@@ -791,6 +902,7 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
+@@ -791,6 +913,7 @@ BrowserWindowInterface* StartupBrowserCreatorImpl::RestoreOrCreateBrowser(
      profile_->GetDefaultStoragePartition()->DeleteStaleSessionData();
    }
  

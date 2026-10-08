@@ -34,6 +34,7 @@
 // creates Browser instances. Borrowing the concrete pointer does not own it.
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -63,6 +64,7 @@
 #include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 #include "maho/components/constants/webui_url_constants.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "net/base/url_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_mode.h"
@@ -1090,6 +1092,24 @@ IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
     ASSERT_TRUE(prefs->FindPreference(key)) << key;
     EXPECT_EQ(prefs->GetInt64(key), 0);
   }
+}
+
+IN_PROC_BROWSER_TEST_F(MahoUrlSchemeBrowserTest,
+                       ShowPasswordManagerRoutesToMahoPasswordPane) {
+  chrome::ShowPasswordManager(browser());
+  content::WebContents* contents =
+      ActiveWebContents(static_cast<Browser*>(browser()));
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(content::WaitForLoadStop(contents));
+
+  const GURL url = contents->GetLastCommittedURL();
+  EXPECT_NE("password-manager", url.host())
+      << "ShowPasswordManager must not open chrome://password-manager";
+  EXPECT_EQ(maho::kMahoSettingsHost, url.host())
+      << "ShowPasswordManager must route to Maho settings; got " << url;
+  std::string pane;
+  ASSERT_TRUE(net::GetValueForKeyInQuery(url, "pane", &pane));
+  EXPECT_EQ("passwords", pane);
 }
 
 class MahoWelcomeByokBrowserTest : public MahoUrlSchemeBrowserTest {
