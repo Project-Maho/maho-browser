@@ -393,9 +393,11 @@ def maho_cli_binary_name(rust_target: str) -> str:
 def build_maho_cli(target: str | None) -> str:
     rust_target, _, _ = build_maho_core.get_target_triple(target)
     print(f"Building maho CLI for {rust_target}...")
+    cargo_cmd = ['cargo']
+    if build_maho_core._is_apple_target(rust_target):
+        cargo_cmd = ['rustup', 'run', 'nightly', 'cargo']
     subprocess.run(
-        [
-            'cargo',
+        cargo_cmd + [
             'build',
             '--release',
             '--target',
