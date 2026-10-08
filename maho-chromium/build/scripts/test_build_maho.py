@@ -203,12 +203,19 @@ class TestCodesignApp(unittest.TestCase):
         app_path = '/fake/Maho.app'
         framework_path = f'{app_path}/Contents/Frameworks/Maho Framework.framework'
         sparkle_path = f'{app_path}/Contents/Frameworks/Sparkle.framework'
+        helpers_dir = f'{framework_path}/Versions/Current/Helpers'
         with patch(
             'os.path.isdir',
             side_effect=lambda path: path != (
                 f'{framework_path}/Versions/Current/Libraries'
             ),
         ), \
+             patch('os.listdir', return_value=[
+                 'Maho Helper.app',
+                 'Maho Helper (Alerts).app',
+                 'Maho Helper (GPU).app',
+                 'Maho Helper (Renderer).app',
+             ]), \
              patch('os.path.isfile', return_value=True), \
              patch('subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -220,6 +227,7 @@ class TestCodesignApp(unittest.TestCase):
         framework_path = (
             '/fake/Maho.app/Contents/Frameworks/Maho Framework.framework'
         )
+        helpers_dir = f'{framework_path}/Versions/Current/Helpers'
         helper_path = (
             f'{framework_path}/Versions/Current/Helpers/Maho Helper.app'
         )
@@ -229,9 +237,11 @@ class TestCodesignApp(unittest.TestCase):
             side_effect=lambda path: path in {
                 '/fake/Maho.app',
                 framework_path,
+                helpers_dir,
                 helper_path,
             },
         ), \
+             patch('os.listdir', return_value=['Maho Helper.app']), \
              patch('os.path.isfile', return_value=False), \
              patch('subprocess.run') as mock_run:
             result = codesign_app('DEADBEEF', '/fake/Maho.app')
