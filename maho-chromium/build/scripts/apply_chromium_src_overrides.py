@@ -13717,6 +13717,16 @@ REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.h"].extend([
 ])
 
 
+REPLACEMENTS.setdefault("v8/BUILD.gn", []).append(
+    Replacement(
+        old='        "--abort-on-bad-builtin-profile-data",\n',
+        new='        "--warn-about-builtin-profile-data",\n',
+        description="Warn instead of abort on bad builtin PGO profile data for mksnapshot",
+        guard='        "--warn-about-builtin-profile-data",\n',
+    )
+)
+
+
 # Per-(path, index) guard overrides for SPLIT_VIEW_REPLACEMENTS hunks whose
 # inserted text can already be present in a tree patched by an older
 # REPLACEMENTS entry before this hunk existed (e.g. omarchy's live tree
