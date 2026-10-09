@@ -435,7 +435,8 @@ impl BoostManager {
     ///     the chosen color while preserving readability — `color` blend would
     ///     be invisible on grayscale pages because it preserves luminosity)
     ///   * Media re-invert when smart_invert is on
-    ///   * Hue +180° compensation when invert is on (so the visible tint matches user intent)
+    ///   * No hue compensation under invert: `invert(1) hue-rotate(180deg)` preserves hue
+    ///   * Tint overlay only when the wheel dot is off-center (`dot_distance > 0`)
     pub fn compose_css(&self, boost: &Boost, _workspace_gradient_hue_deg: Option<f64>) -> String {
         let mut css = String::new();
 
@@ -494,10 +495,14 @@ impl BoostManager {
                 filter_parts.push("invert(1) hue-rotate(180deg)".to_string());
             }
             if color_on {
+                // Neutral (100%) at the Zen defaults (brightness 0.5,
+                // contrast 0.75, saturation 0.5) so an untouched Boost does
+                // not shift page colors; slopes match the previous mapping.
                 let brightness_pct = (50.0 + 100.0 * boost.color.brightness).clamp(10.0, 200.0);
-                let contrast_pct = (50.0 + 100.0 * boost.color.contrast).clamp(10.0, 200.0);
+                let contrast_pct =
+                    (100.0 + 100.0 * (boost.color.contrast - 0.75)).clamp(10.0, 200.0);
                 let saturation_pct =
-                    (100.0 + 50.0 * (1.0 - boost.color.saturation)).clamp(10.0, 200.0);
+                    (100.0 + 50.0 * (0.5 - boost.color.saturation)).clamp(10.0, 200.0);
                 filter_parts.push(format!("brightness({:.2}%)", brightness_pct));
                 filter_parts.push(format!("contrast({:.2}%)", contrast_pct));
                 filter_parts.push(format!("saturate({:.2}%)", saturation_pct));
@@ -515,21 +520,18 @@ impl BoostManager {
                 );
                 css.push_str("[style*=\"gradient(\"] { filter: none !important; }\n");
             }
-            if color_on {
-                let raw_hue = boost.color.dot_angle_deg.rem_euclid(360.0);
-                let visible_hue = if invert_on {
-                    (raw_hue + 180.0).rem_euclid(360.0)
-                } else {
-                    raw_hue
-                };
-                let raw_secondary_hue = (boost.color.dot_angle_deg
+            // The tint is chosen on the color wheel; its center (distance 0)
+            // means "no tint", matching Zen. Without this gate a fresh Boost
+            // painted a red multiply overlay over the whole page.
+            if color_on && boost.color.dot_distance > f32::EPSILON {
+                // No hue compensation under invert: the root filter is
+                // `invert(1) hue-rotate(180deg)`, which already maps the
+                // overlay's hue back onto itself. Adding 180deg here turned
+                // the chosen tint into its complementary color.
+                let visible_hue = boost.color.dot_angle_deg.rem_euclid(360.0);
+                let visible_secondary_hue = (boost.color.dot_angle_deg
                     + boost.color.secondary_dot_angle_deg_delta)
                     .rem_euclid(360.0);
-                let visible_secondary_hue = if invert_on {
-                    (raw_secondary_hue + 180.0).rem_euclid(360.0)
-                } else {
-                    raw_secondary_hue
-                };
                 let hsl_sat_pct = ((1.0 - boost.color.saturation).clamp(0.0, 1.0)) * 100.0;
                 let hsl_light_pct = ((0.1 + 0.9 * boost.color.brightness).clamp(0.0, 1.0)) * 100.0;
                 let opacity = boost.color.contrast.clamp(0.0, 1.0);
@@ -1046,6 +1048,65 @@ mod tests {
             !css.contains("background: #fff"),
             "Canvas normalization must preserve page background images: {css}"
         );
+    }
+
+    #[test]
+    fn test_default_boost_with_invert_injects_no_tint_or_color_shift() {
+        let mut mgr = BoostManager::new();
+        let boost = mgr.create_temp("example.com".to_string());
+        let inverted = mgr
+            .update(
+                &boost.id,
+                BoostUpdate {
+                    color: Some(maho_types::boost::ColorBoostUpdate {
+                        smart_invert: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(inverted.color.color_boost_enabled);
+
+        let css = mgr.compose_css(&inverted, None);
+        assert!(css.contains("invert(1) hue-rotate(180deg)"), "{css}");
+        assert!(
+            !css.contains("html::after"),
+            "An untouched color wheel (center dot) must not paint a tint overlay: {css}"
+        );
+        assert!(
+            css.contains("brightness(100.00%) contrast(100.00%) saturate(100.00%)"),
+            "Default sliders must be neutral: {css}"
+        );
+    }
+
+    #[test]
+    fn test_invert_keeps_chosen_tint_hue() {
+        let mut mgr = BoostManager::new();
+        let boost = mgr.create_temp("example.com".to_string());
+        let tinted = mgr
+            .update(
+                &boost.id,
+                BoostUpdate {
+                    color: Some(maho_types::boost::ColorBoostUpdate {
+                        dot_angle_deg: Some(30.0),
+                        dot_distance: Some(0.8),
+                        secondary_dot_angle_deg_delta: Some(0.0),
+                        smart_invert: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let css = mgr.compose_css(&tinted, None);
+        assert!(css.contains("html::after"), "{css}");
+        assert!(
+            css.contains("hsl(30.00deg"),
+            "invert(1) hue-rotate(180deg) already preserves hue; the tint must not be shifted to its complement: {css}"
+        );
+        assert!(!css.contains("hsl(210.00deg"), "{css}");
     }
 
     #[test]

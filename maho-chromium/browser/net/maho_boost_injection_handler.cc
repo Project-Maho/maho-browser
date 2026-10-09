@@ -72,14 +72,18 @@ std::string BuildBoostCssScript(const std::string& css) {
 std::string LoadClassicContentScript(int resource_id) {
   std::string script = ui::ResourceBundle::GetSharedInstance()
                            .LoadDataResourceString(resource_id);
-  constexpr std::string_view kModuleMarker = "export {};";
-  const size_t marker_offset = script.rfind(kModuleMarker);
-  if (marker_offset != std::string::npos &&
-      base::TrimWhitespaceASCII(
-          script.substr(marker_offset + kModuleMarker.size()),
-          base::TRIM_ALL)
-          .empty()) {
-    script.erase(marker_offset);
+  // tsc emits a trailing ES-module marker that is a SyntaxError when the file
+  // runs as a classic script. Debug builds keep tsc's `export {};`; release
+  // builds pass through terser, which emits `export{};` (no space). Missing
+  // the minified form made every content script fail to parse, so Zap and
+  // the element picker never appeared.
+  const std::string_view trimmed =
+      base::TrimWhitespaceASCII(script, base::TRIM_TRAILING);
+  for (std::string_view marker : {"export {};", "export{};"}) {
+    if (base::EndsWith(trimmed, marker)) {
+      script.resize(trimmed.size() - marker.size());
+      break;
+    }
   }
   return script;
 }

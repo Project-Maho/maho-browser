@@ -37,10 +37,15 @@ std::string LoadClassicContentScript(int resource_id) {
   std::string script =
       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
           resource_id);
-  constexpr std::string_view kModuleMarker = "export {};";
-  const size_t marker = script.rfind(kModuleMarker);
-  if (marker != std::string::npos) {
-    script.erase(marker, kModuleMarker.size());
+  // Release builds minify the trailing tsc module marker to `export{};`;
+  // both forms are a SyntaxError in a classic script.
+  const std::string_view trimmed =
+      base::TrimWhitespaceASCII(script, base::TRIM_TRAILING);
+  for (std::string_view marker : {"export {};", "export{};"}) {
+    if (base::EndsWith(trimmed, marker)) {
+      script.resize(trimmed.size() - marker.size());
+      break;
+    }
   }
   return script;
 }
