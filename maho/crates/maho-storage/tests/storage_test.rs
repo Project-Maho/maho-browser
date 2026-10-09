@@ -301,6 +301,17 @@ fn sqlite_save_and_load_boosts() {
     assert_eq!(boosts_with_state.len(), 1);
     assert_eq!(boosts_with_state[0].0.id.as_ref(), "b1");
     assert_eq!(boosts_with_state[0].1.as_deref(), Some("b1"));
+
+    // Every edit re-saves the boost; that must not clear the domain's active
+    // Boost (INSERT OR REPLACE fired ON DELETE SET NULL on domain_boost_state).
+    let mut edited = boost1.clone();
+    edited.color.smart_invert = true;
+    db.save_boost(&edited).unwrap();
+    assert_eq!(
+        db.get_active_boost("example.com").unwrap().as_deref(),
+        Some("b1")
+    );
+    assert!(db.load_boosts().unwrap()[0].color.smart_invert);
 }
 
 #[test]

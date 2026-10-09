@@ -2162,15 +2162,42 @@ impl SqliteStorage {
             Some(&boost.typography.font_family)
         };
 
+        // Upsert in place: `INSERT OR REPLACE` deletes the old row first, which
+        // fires `domain_boost_state`'s `ON DELETE SET NULL` and silently clears
+        // the domain's active Boost on every edit.
         self.conn.execute(
-            "INSERT OR REPLACE INTO boosts (
+            "INSERT INTO boosts (
                 id, domain, name, enable_color_boost, dot_angle_deg, secondary_dot_angle_deg_delta,
                 brightness, saturation, contrast, auto_theme, smart_invert,
                 font_family, text_case_override, zap_selectors, custom_css,
                 created_at, updated_at,
                 dot_pos_x, dot_pos_y, dot_distance, secondary_dot_pos_x, secondary_dot_pos_y,
                 change_was_made, size_mode
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+            ON CONFLICT(id) DO UPDATE SET
+                domain = excluded.domain,
+                name = excluded.name,
+                enable_color_boost = excluded.enable_color_boost,
+                dot_angle_deg = excluded.dot_angle_deg,
+                secondary_dot_angle_deg_delta = excluded.secondary_dot_angle_deg_delta,
+                brightness = excluded.brightness,
+                saturation = excluded.saturation,
+                contrast = excluded.contrast,
+                auto_theme = excluded.auto_theme,
+                smart_invert = excluded.smart_invert,
+                font_family = excluded.font_family,
+                text_case_override = excluded.text_case_override,
+                zap_selectors = excluded.zap_selectors,
+                custom_css = excluded.custom_css,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                dot_pos_x = excluded.dot_pos_x,
+                dot_pos_y = excluded.dot_pos_y,
+                dot_distance = excluded.dot_distance,
+                secondary_dot_pos_x = excluded.secondary_dot_pos_x,
+                secondary_dot_pos_y = excluded.secondary_dot_pos_y,
+                change_was_made = excluded.change_was_made,
+                size_mode = excluded.size_mode",
             rusqlite::params![
                 boost.id.as_ref(),
                 &boost.domain,
