@@ -2497,6 +2497,8 @@ pub struct MahoCore {
     account_manager: AccountManager,
     split_view_configs: HashMap<WindowId, SplitViewConfig>,
     sync_manager: Option<crate::sync_manager::SyncManager>,
+    sync_baseline_needed: bool,
+    storage_maintenance: Option<std::thread::JoinHandle<()>>,
     llm_manager: LLMManager,
     tool_registry: ToolRegistry,
     skills_manager: SkillsManager,
@@ -2859,6 +2861,8 @@ impl MahoCore {
             account_manager: AccountManager::new(),
             split_view_configs: HashMap::new(),
             sync_manager: None,
+            sync_baseline_needed: false,
+            storage_maintenance: None,
             llm_manager: LLMManager::new(),
             tool_registry: ToolRegistry::new(),
             skills_manager: SkillsManager::new(),
@@ -2986,6 +2990,8 @@ impl MahoCore {
                 eprintln!("[MahoCore::with_storage] OK: opened SQLite storage at {path}");
                 self.storage = Some(storage);
                 if let Some(ref storage) = self.storage {
+                    self.sync_baseline_needed = storage.get_setting("sync_baseline_needed")
+                        .ok().flatten().as_deref() == Some("true");
                     if let Ok(Some(json)) = storage.get_setting("browser_settings") {
                         if let Ok(settings) = serde_json::from_str::<Settings>(&json) {
                             self.settings_manager = SettingsManager::with_settings(settings);
@@ -3021,18 +3027,12 @@ impl MahoCore {
                         let cache_is_valid = version.as_deref()
                             == Some(CONTENT_BLOCKER_ENGINE_VERSION)
                             && hash.as_deref() == Some(expected_hash.as_str());
-                        let restored_from_cache = match (cache_is_valid, cache) {
-                            (true, Some(bytes)) => self
-                                .content_blocker
-                                .deserialize_engine_with_gen(&bytes, generation, hash.as_deref())
-                                .is_ok(),
-                            _ => false,
-                        };
-                        if !restored_from_cache {
-                            self.content_blocker.rebuild_engine_sync();
-                        }
+                        self.content_blocker.defer_engine_restore(
+                            if cache_is_valid { cache } else { None }, expected_hash,
+                        );
                     } else {
-                        self.content_blocker.rebuild_engine_sync();
+                        let hash = self.content_blocker.create_compile_snapshot().content_hash;
+                        self.content_blocker.defer_engine_restore(None, hash);
                     }
                     if !had_persisted_lists {
                         Self::write_content_blocker_snapshot(storage, &self.content_blocker);
@@ -3348,7 +3348,17 @@ impl MahoCore {
         self.set_readiness_status(CoreReadinessStatus::Initializing);
         let result = self.load_state_inner();
         match &result {
-            Ok(()) => self.set_readiness_status(CoreReadinessStatus::Ready),
+            Ok(()) => {
+                self.set_readiness_status(CoreReadinessStatus::Ready);
+                if let Some(storage) = self.storage.as_ref() {
+                    if self.storage_maintenance.is_none() {
+                        match storage.compact_after_startup() {
+                            Ok(worker) => self.storage_maintenance = worker,
+                            Err(error) => eprintln!("[Maho] storage maintenance admission failed: {error}"),
+                        }
+                    }
+                }
+            }
             Err(error) => self.set_readiness_status(CoreReadinessStatus::Failed(error.to_string())),
         }
         result
@@ -8788,7 +8798,7 @@ impl MahoCore {
                             fields_hlc_json,
                             profile_id: None,
                         };
-                        self.sync_push_entity_persisted(sync_entity);
+                        self.push_sync_entity(sync_entity.entity_type, sync_entity.entity_id, sync_entity.payload_json, false);
                     }
                     Err(e) => {
                         eprintln!(
@@ -9234,8 +9244,13 @@ impl MahoCore {
                 })
                 .collect();
         let exceptions = content_blocker.get_site_exceptions();
-        let engine_cache = content_blocker.serialize_engine();
         let engine_hash = content_blocker.active_content_hash().map(str::to_string);
+        let unchanged = match engine_hash.as_deref() {
+            Some(hash) => storage.content_blocker_engine_matches(hash, CONTENT_BLOCKER_ENGINE_VERSION)
+                .map_err(|error| error.to_string())?,
+            None => false,
+        };
+        let engine_cache = if unchanged { Vec::new() } else { content_blocker.serialize_engine() };
         let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
             mode: content_blocker.mode(),
             generation: content_blocker.generation(),
@@ -9245,41 +9260,19 @@ impl MahoCore {
             lists: &lists,
             exceptions: &exceptions,
         };
-        storage
-            .replace_content_blocker_snapshot(&snapshot)
-            .map_err(|e| e.to_string())
+        if unchanged {
+            storage.replace_content_blocker_metadata_snapshot(&snapshot)
+        } else {
+            storage.replace_content_blocker_snapshot(&snapshot)
+        }.map_err(|e| e.to_string())
     }
 
     fn write_content_blocker_snapshot(
         storage: &maho_storage::sqlite::SqliteStorage,
         content_blocker: &ContentBlocker,
     ) {
-        let lists: Vec<(maho_types::content_blocking::FilterListMetadata, String)> =
-            content_blocker
-                .get_filter_lists()
-                .iter()
-                .map(|meta| {
-                    let raw = content_blocker
-                        .filter_list_content(&meta.id)
-                        .unwrap_or("")
-                        .to_string();
-                    (meta.clone(), raw)
-                })
-                .collect();
-        let exceptions = content_blocker.get_site_exceptions();
-        let engine_cache = content_blocker.serialize_engine();
-        let engine_hash = content_blocker.active_content_hash().map(str::to_string);
-        let snapshot = maho_storage::sqlite::ContentBlockerSnapshot {
-            mode: content_blocker.mode(),
-            generation: content_blocker.generation(),
-            engine_cache: Some(&engine_cache),
-            engine_version: Some(CONTENT_BLOCKER_ENGINE_VERSION),
-            engine_hash: engine_hash.as_deref(),
-            lists: &lists,
-            exceptions: &exceptions,
-        };
-        if let Err(err) = storage.replace_content_blocker_snapshot(&snapshot) {
-            eprintln!("[MahoCore] content-blocker snapshot persist failed: {err}");
+        if let Err(error) = Self::write_content_blocker_snapshot_result(storage, content_blocker) {
+            eprintln!("[MahoCore] content-blocker snapshot persist failed: {error}");
         }
     }
 
@@ -9623,6 +9616,7 @@ impl MahoCore {
             Ok(())
         }
     }
+
 
     pub fn load_content_engine_cache(&mut self, _path: &str) -> Result<(), String> {
         if let Some(ref storage) = self.storage {
@@ -10411,7 +10405,7 @@ impl MahoCore {
                         fields_hlc_json,
                         profile_id: None,
                     };
-                    self.sync_push_entity_persisted(sync_entity);
+                    self.push_sync_entity(sync_entity.entity_type, sync_entity.entity_id, sync_entity.payload_json, false);
                 }
                 Err(e) => {
                     eprintln!(
@@ -10442,7 +10436,7 @@ impl MahoCore {
                     fields_hlc_json: None,
                     profile_id: None,
                 };
-                self.sync_push_entity_persisted(sync_entity);
+                self.push_sync_entity(sync_entity.entity_type, sync_entity.entity_id, sync_entity.payload_json, true);
             }
             Err(e) => {
                 eprintln!(
@@ -10978,8 +10972,9 @@ impl MahoCore {
             if tab.is_private {
                 return;
             }
-            if let Ok(payload) = serde_json::to_string(tab) {
-                self.push_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload, false);
+            if let Ok(mut payload) = serde_json::to_value(tab) {
+                payload["favicon"] = serde_json::Value::Null;
+                self.push_sync_entity(SyncEntityType::Tab, tab.id.to_string(), payload.to_string(), false);
             }
         }
     }
@@ -11046,6 +11041,44 @@ impl MahoCore {
         self.sync_manager = Some(sm);
         if let Err(e) = self.load_sync_queue() {
             eprintln!("Failed to load sync queue: {}", e);
+        }
+        if self.sync_baseline_needed {
+        match self.build_raw_snapshot() {
+            Ok(snapshot) => {
+                for mut entity in snapshot.entities.into_values().flatten() {
+                    if entity.entity_type == SyncEntityType::Tab {
+                        if let Ok(mut payload) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) {
+                            payload["favicon"] = serde_json::Value::Null;
+                            entity.payload_json = payload.to_string();
+                        }
+                    }
+                    self.sync_push_entity_persisted(entity);
+                }
+            }
+            Err(error) => eprintln!("[sync] Initial local baseline failed: {error}"),
+        }
+        let tombstones = self.storage.as_ref().map(|storage| storage.load_local_sync_tombstones());
+        if let Some(Ok(tombstones)) = tombstones {
+            for (kind, storage_id, version, device_id, payload_json) in tombstones {
+                let Some(entity_type) = parse_sync_entity_type(&kind) else { continue };
+                let profile_id = SyncEntity::profile_id_from_payload(&entity_type, &payload_json);
+                let entity_id = if entity_type.is_profile_scoped() {
+                    profile_id.as_ref().and_then(|profile| storage_id.strip_prefix(&format!("{profile}:")))
+                        .unwrap_or(&storage_id).to_string()
+                } else { storage_id };
+                self.sync_push_entity_persisted(SyncEntity {
+                    entity_type, entity_id, version, device_id, payload_json, profile_id,
+                    modified_at: chrono::Utc::now().timestamp(), schema_version: 1,
+                    deleted: true, queue_row_id: None, fields_hlc_json: None,
+                });
+            }
+        }
+        self.sync_baseline_needed = false;
+        if let Some(storage) = self.storage.as_ref() {
+            if let Err(error) = storage.set_setting("sync_baseline_needed", "false") {
+                eprintln!("[sync] baseline marker persistence failed: {error}");
+            }
+        }
         }
     }
 
@@ -11683,7 +11716,9 @@ impl MahoCore {
                 if tab.is_private {
                     continue;
                 }
-                let payload = serde_json::to_string(tab).map_err(|e| e.to_string())?;
+                let mut synced_tab = tab.clone();
+                synced_tab.favicon = None;
+                let payload = serde_json::to_string(&synced_tab).map_err(|e| e.to_string())?;
                 let sync_ent = self.create_sync_entity(
                     SyncEntityType::Tab,
                     tab.id.to_string(),
@@ -12342,6 +12377,16 @@ impl MahoCore {
         payload_json: String,
         deleted: bool,
     ) {
+        if self.sync_manager.is_none() {
+            if !self.sync_baseline_needed {
+                if let Some(storage) = self.storage.as_ref() {
+                    if let Err(error) = storage.set_setting("sync_baseline_needed", "true") {
+                        eprintln!("[sync] baseline marker persistence failed: {error}");
+                    }
+                }
+            }
+            self.sync_baseline_needed = true;
+        }
         if let Some(ref sm) = self.sync_manager {
             if sm.config().disabled_entity_types.contains(&entity_type) {
                 return; // Disabled entity type, skip sync push!
@@ -12369,7 +12414,7 @@ impl MahoCore {
                     fields_hlc_json,
                     profile_id: None,
                 };
-                self.sync_push_entity_persisted(sync_entity);
+                self.persist_sync_entity(sync_entity, self.sync_manager.is_some());
 
                 // Increment push count and run scheduled check
                 let count = self.sync_push_count.get() + 1;
@@ -12785,9 +12830,14 @@ impl MahoCore {
                             tab_id,
                             animated: false,
                         });
-                    } else if let Ok(tab) =
+                    } else if let Ok(mut tab) =
                         serde_json::from_str::<maho_types::tab::Tab>(&entity.payload_json)
                     {
+                        if tab.favicon.is_none() {
+                            tab.favicon = self.tab_manager.get_tab(&tab.id)
+                                .filter(|existing| existing.url == tab.url)
+                                .and_then(|existing| existing.favicon.clone());
+                        }
                         let is_favorite = tab.role.is_favorite(); // L3-EXEMPT: local query
                         let tab_id = tab.id.clone();
                         let vm = self.tab_manager.to_view_model(&tab);
@@ -13332,7 +13382,11 @@ impl MahoCore {
     }
 
     /// Push an entity through sync, persisting to queue if storage available
-    pub fn sync_push_entity_persisted(&mut self, mut entity: SyncEntity) {
+    pub fn sync_push_entity_persisted(&mut self, entity: SyncEntity) {
+        self.persist_sync_entity(entity, true);
+    }
+
+    fn persist_sync_entity(&mut self, mut entity: SyncEntity, enqueue: bool) {
         if entity.profile_id.is_none() {
             if let Some(active_profile_id) = self.profile_manager.get_active_profile_id() {
                 entity.profile_id = Some(active_profile_id.to_string());
@@ -13378,6 +13432,7 @@ impl MahoCore {
         // Persist to SQLite queue first
         if let Some(ref storage) = self.storage {
             let entity_type_str = entity.entity_type.as_str();
+            if enqueue {
             if let Ok(row_id) = storage.enqueue_sync_entity(
                 entity_type_str,
                 &entity.entity_id,
@@ -13388,6 +13443,10 @@ impl MahoCore {
             ) {
                 entity.queue_row_id = Some(row_id);
             }
+            }
+            let persisted_payload = if entity.deleted {
+                serde_json::json!({"mahoSyncDeleted": true, "profileId": entity.profile_id}).to_string()
+            } else { entity.payload_json.clone() };
             // Also update entity_versions table for local change
             let _ = storage.save_entity_version(
                 entity_type_str,
@@ -13395,7 +13454,7 @@ impl MahoCore {
                 entity.version,
                 entity.device_id,
                 entity.fields_hlc_json.as_deref(),
-                Some(&entity.payload_json),
+                Some(&persisted_payload),
             );
         }
         // Then push to in-memory sync manager
@@ -13407,10 +13466,15 @@ impl MahoCore {
 
     /// Load pending sync entities from persistent storage on startup
     pub fn load_sync_queue(&mut self) -> Result<(), PersistenceError> {
+        if let Some(worker) = self.storage_maintenance.take() {
+            worker.join().map_err(|_| PersistenceError::Storage("Storage maintenance worker panicked".to_string()))?;
+        }
         let storage = match self.storage.as_ref() {
             Some(s) => s,
             None => return Ok(()),
         };
+        storage.coalesce_legacy_sync_queue()
+            .map_err(|error| PersistenceError::Storage(error.to_string()))?;
         let entries = storage
             .load_pending_sync_entities()
             .map_err(|e| PersistenceError::Storage(e.to_string()))?;
