@@ -498,6 +498,10 @@ impl SyncManager {
             let message = SyncMessage::EntityPush { entity };
             match self.encrypt_message(&message, SyncTransportOp::Push) {
                 Ok(data) => {
+                    if let Some(row_id) = queue_row_id {
+                        self.outgoing_messages.retain(|message| message.queue_row_id != Some(row_id));
+                        self.sent_entities.retain(|id| *id != row_id);
+                    }
                     self.outgoing_messages.push(QueuedSyncMessage {
                         message: SyncMessage::Encrypted { data },
                         queue_row_id,
@@ -509,6 +513,8 @@ impl SyncManager {
                 Err(error) => self.record_transport_error(error),
             }
         } else {
+            let cache_key = entity.cache_key();
+            self.pending_pushes.retain(|pending| pending.cache_key() != cache_key);
             self.pending_pushes.push(entity);
         }
     }

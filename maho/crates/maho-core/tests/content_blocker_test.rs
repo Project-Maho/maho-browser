@@ -18,6 +18,20 @@ fn resp(list_id: &str, status: u16, body: Option<&str>) -> FilterListUpdateRespo
 }
 
 #[test]
+fn deferred_restore_blocks_the_first_request_and_rebuilds_invalid_cache() {
+    let mut blocker = ContentBlocker::new();
+    blocker.add_filter_list("lazy".into(), "Lazy".into(), "https://example.com/list".into()).unwrap();
+    blocker.update_filter_list_content("lazy", "||ads.example.com^".to_string()).unwrap();
+    blocker.rebuild_engine_sync();
+    let hash = blocker.create_compile_snapshot().content_hash;
+    let cache = blocker.serialize_engine();
+    blocker.defer_engine_restore(Some(cache), hash.clone());
+    assert!(blocker.should_block_request("https://ads.example.com/ad.js", "https://example.com", "script"));
+    blocker.defer_engine_restore(Some(vec![0, 1, 2]), hash);
+    assert!(blocker.should_block_request("https://ads.example.com/ad.js", "https://example.com", "script"));
+}
+
+#[test]
 fn normalize_site_exception_key_handles_various_inputs() {
     assert_eq!(
         normalize_site_exception_key("https://www.example.co.uk:8443/path?q=1#hash"),

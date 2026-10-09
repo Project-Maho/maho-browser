@@ -12,6 +12,7 @@ heed = "0.20"
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
+zeroize = "1"
 
 [dev-dependencies]
 tempfile = "3"

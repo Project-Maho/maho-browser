@@ -76,8 +76,8 @@ pub struct SyncQueueLease {
 /// Key loss is intentionally caller-established: SQLCipher gives the same
 /// `not a database` signal for a wrong key and corrupt encrypted pages, so this
 /// function never invents an unsafe oracle. Missing key material is only fatal
-/// when a database exists. With verified key material, unreadable pages, failed
-/// integrity checks, and broken Vault schema are structural corruption.
+/// when a database exists. With verified key material, unreadable Vault pages
+/// and broken Vault schema are structural corruption.
 pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDatabaseInspection {
     if !path.exists() {
         return VaultDatabaseInspection::Absent;
@@ -100,7 +100,6 @@ pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDa
         return VaultDatabaseInspection::StructuralCorruption;
     };
     if apply_key(&conn, cipher_key).is_err()
-        || !database_integrity_is_valid(&conn)
         || !vault_schema_is_valid(&conn)
     {
         return VaultDatabaseInspection::StructuralCorruption;
@@ -113,11 +112,6 @@ pub fn inspect_vault_database(path: &Path, key: VaultDatabaseKey<'_>) -> VaultDa
         Ok(snapshot) => VaultDatabaseInspection::Readable(snapshot),
         Err(_) => VaultDatabaseInspection::StructuralCorruption,
     }
-}
-
-fn database_integrity_is_valid(conn: &Connection) -> bool {
-    conn.query_row("PRAGMA quick_check(1);", [], |row| row.get::<_, String>(0))
-        .is_ok_and(|result| result == "ok")
 }
 
 fn vault_schema_is_valid(conn: &Connection) -> bool {
@@ -256,6 +250,19 @@ fn configure_connection(conn: &Connection, key: &str) -> Result<(), StorageError
     // the DB header, so re-applying it on every open is a no-op after the first.
     let _: String = conn.query_row("PRAGMA journal_mode = WAL;", [], |row| row.get(0))?;
     conn.execute("PRAGMA synchronous = NORMAL;", [])?;
+
+    // Incremental auto-vacuum: reclaim pages freed by large overwrites
+    // (the 6 MB engine_cache column is the main source) without the cost of
+    // a full VACUUM.  `auto_vacuum` can only change on a fresh database;
+    // for existing DBs this is a no-op that leaves the current mode.
+    let tables: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
+        [],
+        |row| row.get(0),
+    )?;
+    if tables == 0 {
+        conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+    }
     Ok(())
 }
 
@@ -548,6 +555,57 @@ impl SqliteStorage {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    /// Compact superseded unsent changes without discarding an unacknowledged
+    /// delivery. Run outside startup: converting legacy databases needs a
+    /// complete rewrite, whereas incremental databases reclaim free pages.
+    pub fn compact(&self) -> Result<(), StorageError> {
+        self.coalesce_legacy_sync_queue()?;
+        self.reclaim_free_pages()
+    }
+
+    pub fn coalesce_legacy_sync_queue(&self) -> Result<(), StorageError> {
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_sync_queue_pending_entity
+             ON sync_queue(entity_type, entity_id, json_extract(payload_json, '$.profileId'), id)
+             WHERE state = 'pending'",
+        )?;
+        self.conn.execute(
+            "DELETE FROM sync_queue WHERE state = 'pending' AND id NOT IN (
+                SELECT MAX(id) FROM sync_queue WHERE state = 'pending'
+                GROUP BY entity_type, entity_id, json_extract(payload_json, '$.profileId')
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn reclaim_free_pages(&self) -> Result<(), StorageError> {
+        let mode: i64 = self.conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0))?;
+        if mode == 0 {
+            self.conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
+            self.conn.execute_batch("VACUUM")?;
+        } else {
+            self.conn.execute_batch("PRAGMA incremental_vacuum")?;
+        }
+        Ok(())
+    }
+
+    pub fn compact_after_startup(&self) -> Result<Option<std::thread::JoinHandle<()>>, StorageError> {
+        if self.path == ":memory:" {
+            return Ok(None);
+        }
+        let path = self.path.clone();
+        let key = zeroize::Zeroizing::new(injected_key()?.to_string());
+        let worker = std::thread::Builder::new().name("maho-storage-compaction".to_string()).spawn(move || {
+            let result = Self::open_with_key(&path, &key).and_then(|storage| storage.compact());
+            match result {
+                Ok(()) => eprintln!("[Maho] background storage compaction complete"),
+                Err(error) => eprintln!("[Maho] background storage compaction failed: {error}"),
+            }
+        }).map_err(|error| StorageError::Other(error.to_string()))?;
+        Ok(Some(worker))
     }
 
     fn run_migrations(&self) -> Result<(), StorageError> {
@@ -3038,7 +3096,14 @@ impl SqliteStorage {
 
     // === Sync Queue ===
 
-    /// Enqueue an entity push to the persistent sync queue
+    /// Enqueue an entity push to the persistent sync queue.
+    ///
+    /// Coalesces: if a `pending` row for the same (entity_type, entity_id)
+    /// already exists, it is replaced in-place instead of appending a new row.
+    /// This prevents unbounded growth when the same tab emits dozens of updates
+    /// (title, URL, loading, favicon) before the relay acknowledges any of them.
+    /// Rows already in-flight (`inflight` / `acknowledged`) are left untouched
+    /// so the relay’s ack path stays valid.
     pub fn enqueue_sync_entity(
         &self,
         entity_type: &str,
@@ -3049,6 +3114,39 @@ impl SqliteStorage {
         deleted: bool,
     ) -> Result<i64, StorageError> {
         let now = chrono::Utc::now().timestamp();
+        // Try to coalesce into an existing pending row first.
+        let updated = self.conn.execute(
+            "UPDATE sync_queue
+             SET version = ?1, modified_at = ?2, payload_json = ?3,
+                 deleted = ?4, created_at = ?5, delivery_id = ?8
+             WHERE id = (
+                 SELECT id FROM sync_queue
+                 WHERE entity_type = ?6 AND entity_id = ?7 AND state = 'pending'
+                   AND json_extract(payload_json, '$.profileId') IS json_extract(?3, '$.profileId')
+                 ORDER BY id DESC LIMIT 1
+             )",
+            rusqlite::params![
+                version,
+                modified_at,
+                payload_json,
+                deleted as i32,
+                now,
+                entity_type,
+                entity_id,
+                uuid::Uuid::new_v4().to_string(),
+            ],
+        )?;
+        if updated > 0 {
+            // Return the existing row id so the caller can track it.
+            let id: i64 = self.conn.query_row(
+                "SELECT id FROM sync_queue WHERE entity_type = ?1 AND entity_id = ?2 AND state = 'pending'
+                   AND json_extract(payload_json, '$.profileId') IS json_extract(?3, '$.profileId')
+                 ORDER BY id DESC LIMIT 1",
+                rusqlite::params![entity_type, entity_id, payload_json],
+                |row| row.get(0),
+            )?;
+            return Ok(id);
+        }
         self.conn.execute(
             "INSERT INTO sync_queue (
                 entity_type, entity_id, version, modified_at, payload_json,
@@ -3357,6 +3455,15 @@ impl SqliteStorage {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn load_local_sync_tombstones(&self) -> Result<Vec<(String, String, u64, u32, String)>, StorageError> {
+        let mut statement = self.conn.prepare(
+            "SELECT entity_type, entity_id, hlc_ts, device_id, payload_json FROM entity_versions
+             WHERE json_extract(payload_json, '$.mahoSyncDeleted') = 1",
+        )?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn save_entity_version(
@@ -5373,14 +5480,76 @@ impl SqliteStorage {
         &self,
         snapshot: &ContentBlockerSnapshot<'_>,
     ) -> Result<(), StorageError> {
+        self.replace_content_blocker_snapshot_inner(snapshot, false)
+    }
+
+    pub fn content_blocker_engine_matches(&self, hash: &str, version: &str) -> Result<bool, StorageError> {
+        Ok(self.conn.query_row(
+            "SELECT engine_hash = ?1 AND engine_version = ?2 AND engine_cache IS NOT NULL
+             FROM content_blocker_state WHERE id = 1",
+            rusqlite::params![hash, version],
+            |row| row.get(0),
+        ).optional()?.unwrap_or(false))
+    }
+
+    pub fn replace_content_blocker_metadata_snapshot(
+        &self,
+        snapshot: &ContentBlockerSnapshot<'_>,
+    ) -> Result<(), StorageError> {
+        self.replace_content_blocker_snapshot_inner(snapshot, true)
+    }
+
+    fn replace_content_blocker_snapshot_inner(
+        &self,
+        snapshot: &ContentBlockerSnapshot<'_>,
+        preserve_engine: bool,
+    ) -> Result<(), StorageError> {
         self.content_blocker_transaction(|tx| {
-            tx.clear_lists()?;
-            tx.clear_exceptions()?;
+            let existing = {
+                let mut statement = tx.conn.prepare("SELECT id FROM content_blocker_lists")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for id in existing {
+                if !snapshot.lists.iter().any(|(list, _)| list.id == id) {
+                    tx.delete_list(&id)?;
+                }
+            }
+            let existing = {
+                let mut statement = tx.conn.prepare("SELECT key FROM content_blocker_exceptions")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for key in existing {
+                if !snapshot.exceptions.iter().any(|exception| exception.key == key) {
+                    tx.delete_exception(&key)?;
+                }
+            }
             for (list, raw_content) in snapshot.lists {
-                tx.save_list(list, Some(raw_content.as_str()))?;
+                let unchanged = tx.conn.query_row(
+                    "SELECT raw_content = ?2 FROM content_blocker_lists WHERE id = ?1",
+                    rusqlite::params![list.id, raw_content],
+                    |row| row.get::<_, bool>(0),
+                ).optional()?.unwrap_or(false);
+                tx.save_list(list, if unchanged { None } else { Some(raw_content.as_str()) })?;
             }
             for exception in snapshot.exceptions {
                 tx.save_exception(&exception.key, exception.created_at)?;
+            }
+            if preserve_engine {
+                use maho_types::content_blocking::ContentBlockingMode;
+                let mode = match snapshot.mode {
+                    ContentBlockingMode::Native => "native",
+                    ContentBlockingMode::Extension => "extension",
+                    ContentBlockingMode::Disabled => "disabled",
+                    ContentBlockingMode::Unknown => "unknown",
+                };
+                tx.conn.execute(
+                    "UPDATE content_blocker_state SET mode = ?1, generation = ?2, updated_at = ?3
+                     WHERE id = 1 AND (mode IS NOT ?1 OR generation IS NOT ?2)",
+                    rusqlite::params![mode, snapshot.generation as i64, chrono::Utc::now().timestamp()],
+                )?;
+                return Ok(());
             }
             tx.save_state(
                 snapshot.mode,
@@ -5494,7 +5663,17 @@ fn upsert_content_blocker_list(
             last_success_timestamp = excluded.last_success_timestamp,
             failure_count = excluded.failure_count,
             last_status = excluded.last_status,
-            last_error = excluded.last_error",
+            last_error = excluded.last_error
+        WHERE name IS NOT excluded.name OR url IS NOT excluded.url
+            OR enabled IS NOT excluded.enabled
+            OR (?15 AND raw_content IS NOT excluded.raw_content)
+            OR rule_count IS NOT excluded.rule_count
+            OR etag IS NOT excluded.etag OR last_modified IS NOT excluded.last_modified
+            OR sha256 IS NOT excluded.sha256
+            OR last_attempt_timestamp IS NOT excluded.last_attempt_timestamp
+            OR last_success_timestamp IS NOT excluded.last_success_timestamp
+            OR failure_count IS NOT excluded.failure_count
+            OR last_status IS NOT excluded.last_status OR last_error IS NOT excluded.last_error",
         rusqlite::params![
             list.id,
             list.name,
@@ -5523,7 +5702,8 @@ fn upsert_site_exception(
 ) -> Result<(), StorageError> {
     conn.execute(
         "INSERT INTO content_blocker_exceptions (key, created_at) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET created_at = excluded.created_at",
+         ON CONFLICT(key) DO UPDATE SET created_at = excluded.created_at
+         WHERE created_at IS NOT excluded.created_at",
         rusqlite::params![key, created_at],
     )?;
     Ok(())
@@ -5553,7 +5733,11 @@ fn upsert_content_blocker_state(
             engine_cache = excluded.engine_cache,
             engine_version = excluded.engine_version,
             engine_hash = excluded.engine_hash,
-            updated_at = excluded.updated_at",
+            updated_at = excluded.updated_at
+         WHERE mode IS NOT excluded.mode OR generation IS NOT excluded.generation
+            OR engine_cache IS NOT excluded.engine_cache
+            OR engine_version IS NOT excluded.engine_version
+            OR engine_hash IS NOT excluded.engine_hash",
         rusqlite::params![mode_str, generation as i64, engine_cache, engine_version, engine_hash, now],
     )?;
     Ok(())
