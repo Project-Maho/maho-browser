@@ -1,0 +1,30 @@
+diff --git c/chrome/browser/sessions/session_service.cc w/chrome/browser/sessions/session_service.cc
+index 781d2e2f7ef99797284888c446e290488cdc1620..875d7417a2c5264aa2355be67eccbf9ca6b3014e 100644
+--- c/chrome/browser/sessions/session_service.cc
++++ w/chrome/browser/sessions/session_service.cc
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ #include "chrome/browser/sessions/session_service.h"
++#include "maho/browser/maho_tab_id_helper.h"
+ 
+ #include <stddef.h>
+ 
+@@ -663,6 +664,17 @@ void SessionService::BuildCommandsForTab(
+     command_storage_manager()->AppendRebuildCommand(
+         sessions::CreateSplitTabCommand(session_id, std::move(split)));
+   }
++
++  // Maho: a rebuild replaces the whole session file, so the stable tab id
++  // written on insertion would be dropped. Re-emit it with the tab's rebuilt
++  // state so session restore can rebind the tab to its maho-core record.
++  if (auto* maho_tab_id = MahoTabIdHelper::FromWebContents(tab);
++      maho_tab_id && !maho_tab_id->stable_tab_id().empty()) {
++    command_storage_manager()->AppendRebuildCommand(
++        sessions::CreateAddTabExtraDataCommand(
++            session_id, MahoTabIdHelper::kExtraDataKey,
++            maho_tab_id->stable_tab_id()));
++  }
+ }
+ 
+ void SessionService::ScheduleResetCommands() {

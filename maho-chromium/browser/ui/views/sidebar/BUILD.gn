@@ -405,6 +405,7 @@ source_set("interactive_tests") {
     "maho_sidebar_navigation_interactive_test.cc",
     "maho_sidebar_spaces_interactive_test.cc",
     "maho_sidebar_now_playing_interactive_test.cc",
+    "maho_pinned_split_restart_interactive_test.cc",
     "../frame/maho_contents_header_interactive_uitest.cc",
   ]
 
