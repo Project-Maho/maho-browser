@@ -1388,10 +1388,10 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,
   // Simulate auto-hide transition by collapsing the panel (unpinning)
   browser()->GetProfile()->GetPrefs()->SetBoolean(
       maho::sidebar_prefs::kSidebarPanelExpanded, false);
-  base::RunLoop().RunUntilIdle();
 
-  // Verify that the overlay is dismissed automatically
-  EXPECT_FALSE(container->IsSpacesOverlayVisible());
+  // The overlay is dismissed when the hide slide ends, not synchronously.
+  EXPECT_TRUE(base::test::RunUntil(
+      [&] { return !container->IsSpacesOverlayVisible(); }));
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarNavigationInteractiveTest,

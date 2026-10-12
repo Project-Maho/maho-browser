@@ -2326,6 +2326,38 @@ class MahoSidebarFloatingLayoutTest(unittest.TestCase):
         self.assertIn(_MAHO_SIDEBAR_RAIL_LAYOUT, output)
 
 
+class MahoArcLayoutBasePatchTest(unittest.TestCase):
+    """f89f3a43 rebuilds this file from its whole-file base patch and skips
+    REPLACEMENTS, so the live Arc layout must be asserted on the patch."""
+
+    _PATCH = (
+        Path(__file__).resolve().parents[1] / "chromium_base_patches"
+        / "f89f3a4363808e117c592adedcf9947882ac3b79"
+        / "chrome/browser/ui/views/frame/layout/"
+        "browser_view_tabbed_layout_impl.cc.patch")
+
+    def _added_lines(self):
+        return "\n".join(
+            line[1:] for line in self._PATCH.read_text().splitlines()
+            if line.startswith("+") and not line.startswith("+++"))
+
+    def test_base_patch_floats_auto_hide_sidebar(self):
+        self.assertIn("GetFloatingOverlayWidth()", self._added_lines())
+
+    def test_base_patch_collapses_sidebar_in_fullscreen_with_toolbar(self):
+        self.assertIn("WindowState::kFullscreenWithToolbar", self._added_lines())
+
+    def test_base_patch_reads_panel_state_from_container(self):
+        added = self._added_lines()
+        self.assertGreaterEqual(added.count("->IsPanelExpanded()"), 2)
+        self.assertGreaterEqual(
+            added.count("->GetPinnedRailWidthForLayout()"), 2)
+
+    def test_base_patch_mirrors_contents_corners_in_rtl(self):
+        self.assertIn("gfx::RoundedCornersF(12.0f, 0.0f, 0.0f, 12.0f)",
+                      self._added_lines())
+
+
 class MahoContentsHeaderSlotTest(unittest.TestCase):
     """contents_container_view.{h,cc} are pinned-incompatible, so only
     SPLIT_VIEW_REPLACEMENTS patch them; the pinned pristine blobs must gain the

@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_interactive_test_base.h"
 
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/run_until.h"
 #include "chrome/browser/profiles/profile.h"
@@ -39,6 +41,7 @@
 #include "maho/browser/ui/views/spaces_overlay/maho_browser_frame_overlay_host.h"
 #include "ui/base/test/ui_controls.h"
 #include "ui/compositor/layer.h"
+#include "ui/gfx/animation/animation.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/button/md_text_button.h"
@@ -1396,9 +1399,96 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
 
   browser()->GetProfile()->GetPrefs()->SetBoolean(
       sidebar_prefs::kSidebarPanelExpanded, false);
-  base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(controller->IsVisible())
+  // The overlay is dismissed when the hide slide ends, not synchronously.
+  EXPECT_TRUE(base::test::RunUntil([&] { return !controller->IsVisible(); }))
       << "Fully auto-hiding the sidebar must dismiss the library overlay";
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       HoverRevealedSidebarStaysOpenWhileLibraryOverlayShown) {
+  ResolveViews();
+  ASSERT_TRUE(sidebar_);
+  ASSERT_TRUE(container_);
+
+  SeedSidebarPrefs(/*layout_enabled=*/true, /*panel_expanded=*/false);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !container_->sidebar_view()->GetVisible(); }));
+  BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
+  ASSERT_TRUE(browser_view);
+  browser_view->DeprecatedLayoutImmediately();
+
+  // Hover-reveal the sidebar (see HoverRevealSlidesByTransform... for why
+  // OnMouseEntered is invoked directly).
+  const gfx::Point strip = container_->GetBoundsInScreen().CenterPoint();
+  ASSERT_TRUE(ui_controls::SendMouseMove(strip.x(), strip.y()));
+  ui::MouseEvent enter_event(ui::EventType::kMouseEntered, gfx::Point(),
+                             gfx::Point(), base::TimeTicks::Now(), 0, 0);
+  container_->OnMouseEntered(enter_event);
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return container_->GetRevealFraction() == 1.0; }));
+  ASSERT_TRUE(container_->IsOverlayVisible());
+
+  sidebar_->OpenLibrary(MahoSidebarLibraryRailView::Category::kArchivedTabs);
+  ResolveViews();
+  base::RunLoop().RunUntilIdle();
+  SelectLibraryCategoryViaRail(
+      sidebar_, MahoSidebarLibraryRailView::Category::kDownloads);
+
+  auto* controller = GetLibraryOverlayController(container_);
+  ASSERT_TRUE(controller);
+  ASSERT_TRUE(controller->IsVisible());
+
+  // Park the cursor outside the rail so only the overlay can keep the
+  // sidebar revealed.
+  browser_view->DeprecatedLayoutImmediately();
+  const gfx::Rect contents =
+      browser_view->contents_container()->GetBoundsInScreen();
+  const gfx::Point outside(contents.right() - 10, contents.bottom() - 10);
+  ASSERT_FALSE(container_->GetBoundsInScreen().Contains(outside));
+  ASSERT_TRUE(ui_controls::SendMouseMove(outside.x(), outside.y()));
+  ASSERT_TRUE(base::test::RunUntil(
+      [&] { return !container_->IsMouseHovered(); }));
+
+  // Time is the behavior under test: let several hide delays elapse.
+  base::RunLoop wait_loop;
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE, wait_loop.QuitClosure(),
+      base::Milliseconds(3 * sidebar_layout::kSidebarHideDelayMs +
+                         sidebar_layout::kSidebarRevealDurationMs));
+  wait_loop.Run();
+
+  EXPECT_TRUE(controller->IsVisible())
+      << "The hide delay must not dismiss an open library overlay";
+  EXPECT_FALSE(container_->IsFullyAutoHidden());
+  EXPECT_TRUE(container_->IsOverlayVisible());
+
+  // Once the overlay closes, the re-armed hide delay hides the sidebar.
+  container_->DismissLibraryOverlay();
+  EXPECT_TRUE(
+      base::test::RunUntil([&] { return container_->IsFullyAutoHidden(); }));
+}
+
+IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
+                       ReducedMotionUnpinHidesSidebarSynchronously) {
+  ResolveViews();
+  ASSERT_TRUE(container_);
+
+  const bool original_reduced_motion = gfx::Animation::PrefersReducedMotion();
+  gfx::Animation::SetPrefersReducedMotionForTesting(true);
+  base::ScopedClosureRunner reset_reduced_motion(base::BindOnce(
+      &gfx::Animation::SetPrefersReducedMotionForTesting,
+      original_reduced_motion));
+
+  SeedSidebarPrefs(/*layout_enabled=*/true, /*panel_expanded=*/true);
+  ASSERT_TRUE(container_->sidebar_view()->GetVisible());
+  ASSERT_FALSE(container_->IsFullyAutoHidden());
+
+  browser()->GetProfile()->GetPrefs()->SetBoolean(
+      sidebar_prefs::kSidebarPanelExpanded, false);
+
+  // No run loop: the zero-duration slide ends inside the pref observer.
+  EXPECT_TRUE(container_->IsFullyAutoHidden());
+  EXPECT_FALSE(container_->sidebar_view()->GetVisible());
 }
 
 IN_PROC_BROWSER_TEST_F(MahoSidebarEdgeCasesInteractiveTest,
