@@ -121,6 +121,9 @@ class MahoSidebarContainerView : public views::View,
                             ui::ColorId text_color_id);
   bool IsPrivateMode() const { return is_private_; }
   bool IsPanelExpanded() const { return ReadPanelExpanded(); }
+  // Pinned rail width BrowserView layout reserves, read from the same
+  // authority as IsPanelExpanded() (in-memory for private/OTR, prefs else).
+  int GetPinnedRailWidthForLayout() const;
 
   // Toggles expanded/collapsed. Private/OTR flips in-memory state only, never
   // sidebar prefs; R-10 `toggle_sidebar` routes here.
@@ -155,6 +158,8 @@ class MahoSidebarContainerView : public views::View,
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
   bool IsCursorInsideContainerScreenBounds() const;
 
+  // Zero under reduced motion so reveal/hide snap; call before Show()/Hide().
+  void UpdateRevealAnimationDuration();
   void StartReveal();
   void StartHide();
   void OnHideDelayExpired();

@@ -324,9 +324,15 @@ void ExecutePrivateCommandAction(Browser* browser,
       writer.WriteText(base::UTF8ToUTF16(active->GetVisibleURL().spec()));
     }
   } else if (action_id == "toggle_sidebar") {
-    // Local-only: must NOT persist sidebar prefs. The in-memory container width
-    // toggle is owned/wired by R-11 (MahoSidebarContainerView); until then this
-    // deliberately performs no pref mutation.
+    // Local-only: must NOT persist sidebar prefs. The container flips its
+    // in-memory private state; no container means no-op.
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (auto* container =
+            browser_view ? views::AsViewClass<MahoSidebarContainerView>(
+                               browser_view->maho_sidebar_container())
+                         : nullptr) {
+      container->TogglePanelExpanded();
+    }
   } else if (action_id == "toggle_split_view") {
     MahoSplitViewController(browser, MahoSplitPersistence::kPrivateLocal)
         .ToggleSplit();
@@ -452,8 +458,16 @@ void ExecuteCommandAction(Browser* browser, const std::string& action_id) {
     // nullopt rather than mutating anything.
     MahoSplitViewController(browser).ToggleSplitOrientation();
   } else if (action_id == "toggle_sidebar") {
-    maho::sidebar_prefs::ToggleSidebarPanelExpanded(
-        browser->GetProfile()->GetPrefs());
+    BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser);
+    if (auto* container =
+            browser_view ? views::AsViewClass<MahoSidebarContainerView>(
+                               browser_view->maho_sidebar_container())
+                         : nullptr) {
+      container->TogglePanelExpanded();
+    } else {
+      maho::sidebar_prefs::ToggleSidebarPanelExpanded(
+          browser->GetProfile()->GetPrefs());
+    }
   } else if (action_id == "navigate_back") {
     chrome::GoBack(browser, WindowOpenDisposition::CURRENT_TAB);
   } else if (action_id == "navigate_forward") {

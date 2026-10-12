@@ -1,3 +1,5 @@
+diff --git a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
+index 0e295be7872d4..5338de59369c2 100644
 --- a/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 +++ b/chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 @@ -11,21 +11,35 @@
@@ -36,7 +38,7 @@
  #include "chrome/browser/ui/views/frame/custom_corners_background.h"
  #include "chrome/browser/ui/views/frame/custom_floating_corner.h"
  #include "chrome/browser/ui/views/frame/layout/browser_view_layout_delegate.h"
-@@ -49,14 +63,22 @@
+@@ -49,15 +63,23 @@
  #include "ui/gfx/geometry/rect.h"
  #include "ui/gfx/geometry/rounded_corners_f.h"
  #include "ui/gfx/geometry/size.h"
@@ -54,12 +56,13 @@
  #if BUILDFLAG(IS_MAC)
  #include "chrome/browser/ui/fullscreen_util_mac.h"
  #endif
-+
-+#include "components/prefs/pref_service.h"
  
++#include "components/prefs/pref_service.h"
++
  namespace {
  
-@@ -460,8 +482,9 @@
+ // Minimum area next to caption buttons to use as a grab handle.
+@@ -460,8 +482,9 @@ BrowserViewTabbedLayoutImpl::CalculateHorizontalLayout(
          std::max(min_side_panel_width, preferred_side_panel_width);
  
      // Add additional padding.
@@ -71,7 +74,7 @@
  
      // See if the toolbar-height side panel can fit next to the toolbar. If not,
      // it is forced into content height.
-@@ -629,11 +652,34 @@
+@@ -629,11 +652,34 @@ gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumMainAreaSize(
  
  BrowserViewTabbedLayoutImpl::TabStripType
  BrowserViewTabbedLayoutImpl::GetTabStripType() const {
@@ -108,26 +111,36 @@
  }
  
  BrowserViewTabbedLayoutImpl::VerticalTabStripCollapsedState
-@@ -686,6 +732,18 @@
+@@ -686,6 +732,28 @@ int BrowserViewTabbedLayoutImpl::GetCollapsedVerticalTabStripRelativeTop()
  
  gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumSize(
      const views::View* host) const {
 +  // Maho Arc layout: rail width + minimum contents width.
 +  if (IsMahoArcLayoutActive()) {
++    // The sidebar container owns the panel state (in memory for private
++    // windows); profile prefs are only a fallback when it is absent.
++    const auto* sidebar_container =
++        views::AsViewClass<maho::MahoSidebarContainerView>(
++            views().maho_sidebar_container);
 +    PrefService* prefs = views::AsViewClass<BrowserView>(views().browser_view)->browser()->GetProfile()->GetPrefs();
 +    const bool panel_expanded =
-+        maho::sidebar_prefs::IsSidebarPanelExpanded(prefs);
-+    const int sidebar_width = panel_expanded
-+        ? maho::sidebar_prefs::GetSidebarWidthForLayout(
-+              prefs->GetInteger(maho::sidebar_prefs::kSidebarWidth))
-+        : maho::sidebar_layout::kHoverTriggerWidthDp;
++        sidebar_container ? sidebar_container->IsPanelExpanded()
++                          : maho::sidebar_prefs::IsSidebarPanelExpanded(prefs);
++    int sidebar_width = maho::sidebar_layout::kHoverTriggerWidthDp;
++    if (panel_expanded) {
++      sidebar_width =
++          sidebar_container
++              ? sidebar_container->GetPinnedRailWidthForLayout()
++              : maho::sidebar_prefs::GetSidebarWidthForLayout(
++                    prefs->GetInteger(maho::sidebar_prefs::kSidebarWidth));
++    }
 +    return gfx::Size(sidebar_width + kMainBrowserContentsMinimumWidth, 0);
 +  }
 +
    auto params = delegate().GetBrowserLayoutParams(/*use_browser_bounds=*/true);
  
    // This is a simplified version of the same method in
-@@ -726,6 +784,11 @@
+@@ -726,6 +794,11 @@ gfx::Size BrowserViewTabbedLayoutImpl::GetMinimumSize(
  BrowserViewTabbedLayoutImpl::ProposedLayout
  BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
      const BrowserLayoutParams& browser_params) const {
@@ -139,7 +152,7 @@
    // TODO(https://crbug.com/453717426): Consider caching layouts of the same
    // size if no `InvalidateLayout()` has happened.
  
-@@ -928,9 +991,18 @@
+@@ -928,9 +1001,18 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
      layout.AddChild(views().organizer_panel_container, organizer_panel_bounds);
    }
  
@@ -159,7 +172,7 @@
        IsParentedTo(views().top_container, views().browser_view)) {
      auto& top_container_layout =
          layout.AddChild(views().top_container, gfx::Rect());
-@@ -1066,7 +1138,7 @@
+@@ -1066,7 +1148,7 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
    // Lay out top container. The top container is laid out after the
    // toolbar-height side panel with a horizontal tabstrip if the browser is wide
    // enough.
@@ -168,7 +181,7 @@
        IsParentedTo(views().top_container, views().browser_view)) {
      auto& top_container_layout =
          layout.AddChild(views().top_container, gfx::Rect());
-@@ -1329,6 +1401,250 @@
+@@ -1329,6 +1411,260 @@ BrowserViewTabbedLayoutImpl::CalculateProposedLayout(
    return layout;
  }
  
@@ -191,19 +204,33 @@
 +
 +  // In fullscreen the sidebar collapses so content gets the full area.
 +  // This prevents the rail from overlapping immersive-reveal and content
-+  // fullscreen (video, etc.).
++  // fullscreen (video, etc.). macOS browser fullscreen with the toolbar
++  // always shown reports kFullscreenWithToolbar and is treated the same.
++  const WindowState window_state = delegate().GetBrowserWindowState();
 +  const bool is_fullscreen =
-+      delegate().GetBrowserWindowState() == WindowState::kFullscreen;
-+  const bool panel_expanded = !is_fullscreen &&
-+      maho::sidebar_prefs::IsSidebarPanelExpanded(
-+          views::AsViewClass<BrowserView>(views().browser_view)->browser()->GetProfile()->GetPrefs());
++      window_state == WindowState::kFullscreen ||
++      window_state == WindowState::kFullscreenWithToolbar;
++  // The sidebar container owns the panel state (in memory for private
++  // windows); profile prefs are only a fallback when it is absent.
++  const auto* sidebar_container =
++      views::AsViewClass<maho::MahoSidebarContainerView>(
++          views().maho_sidebar_container);
++  const bool panel_expanded =
++      !is_fullscreen &&
++      (sidebar_container
++           ? sidebar_container->IsPanelExpanded()
++           : maho::sidebar_prefs::IsSidebarPanelExpanded(
++                 views::AsViewClass<BrowserView>(views().browser_view)->browser()->GetProfile()->GetPrefs()));
 +  int rail_width;
 +  if (is_fullscreen) {
 +    rail_width = 0;
 +  } else if (panel_expanded) {
-+    rail_width = maho::sidebar_prefs::GetSidebarWidthForLayout(
-+        views::AsViewClass<BrowserView>(views().browser_view)->browser()->GetProfile()->GetPrefs()->GetInteger(
-+            maho::sidebar_prefs::kSidebarWidth));
++    rail_width =
++        sidebar_container
++            ? sidebar_container->GetPinnedRailWidthForLayout()
++            : maho::sidebar_prefs::GetSidebarWidthForLayout(
++                  views::AsViewClass<BrowserView>(views().browser_view)->browser()->GetProfile()->GetPrefs()->GetInteger(
++                      maho::sidebar_prefs::kSidebarWidth));
 +  } else {
 +    rail_width = views().maho_sidebar_container
 +        ? views().maho_sidebar_container->GetPreferredSize().width()
@@ -214,12 +241,8 @@
 +  // contents as a hover strip, or as the full sidebar while revealed, so the
 +  // contents never relayout while it slides and the strip stays hoverable.
 +  int sidebar_width = rail_width;
-+  if (!is_fullscreen && rail_width == 0) {
-+    if (const auto* floating_sidebar =
-+            views::AsViewClass<maho::MahoSidebarContainerView>(
-+                views().maho_sidebar_container)) {
-+      sidebar_width = floating_sidebar->GetFloatingOverlayWidth();
-+    }
++  if (!is_fullscreen && rail_width == 0 && sidebar_container) {
++    sidebar_width = sidebar_container->GetFloatingOverlayWidth();
 +  }
 +  const gfx::Rect rail_bounds(client_area.x(), client_area.y(), sidebar_width,
 +                               client_area.height());
@@ -419,7 +442,7 @@
  gfx::Rect BrowserViewTabbedLayoutImpl::CalculateTopContainerLayout(
      ProposedLayout& layout,
      BrowserLayoutParams params,
-@@ -1480,6 +1796,44 @@
+@@ -1480,6 +1816,46 @@ void BrowserViewTabbedLayoutImpl::DoPreLayoutComputations(
  
  void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
      const BrowserLayoutParams& params) {
@@ -433,12 +456,14 @@
 +        contents->SetPaintToLayer();
 +        contents->layer()->SetFillsBoundsOpaquely(false);
 +      }
-+      // Square left / rounded right so content sits flush at the sidebar seam.
++      // Square at the sidebar seam / rounded on the far side so content sits
++      // flush at the seam. Layer radii are physical, and in RTL the sidebar
++      // is on the right, so mirror them there.
 +      // RoundedCornersF order: upper_left, upper_right, lower_right, lower_left.
 +      contents->layer()->SetRoundedCornerRadius(
-+          maho_ai_panel_showing
-+              ? gfx::RoundedCornersF(0.0f)
-+              : gfx::RoundedCornersF(0.0f, 12.0f, 12.0f, 0.0f));
++          maho_ai_panel_showing ? gfx::RoundedCornersF(0.0f)
++          : base::i18n::IsRTL() ? gfx::RoundedCornersF(12.0f, 0.0f, 0.0f, 12.0f)
++                                : gfx::RoundedCornersF(0.0f, 12.0f, 12.0f, 0.0f));
 +      contents->layer()->SetMasksToBounds(true);
 +      if (maho_ai_panel_showing && views().multi_contents_view) {
 +        for (ContentsContainerView* container :
@@ -464,7 +489,7 @@
    // Want to cut the vertical tabstrip and its decorations out of the top
    // container in transparency mode.
    CustomCornersBackground::Cutouts top_container_cutout_views;
-@@ -1683,8 +2037,10 @@
+@@ -1683,8 +2059,10 @@ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
        if (toolbar_bounds.y() <= tabstrip_bounds.bottom()) {
          // Trailing curve is always shown for normal horizontal tabstrip when
          // the two are vertically adjacent.
@@ -477,7 +502,7 @@
  
          // If there is anything on the leading side or the first tab is not
          // selected, then the corner radius is shown, otherwise we hide the
-@@ -1826,8 +2182,10 @@
+@@ -1826,8 +2204,10 @@ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
            main_background_corners[CornerOrientation::kTopLeading].type =
                CustomCornersBackground::CornerType::kRoundedWithBackground;
          }
@@ -490,7 +515,7 @@
        }
      }
  
-@@ -1838,8 +2196,10 @@
+@@ -1838,8 +2218,10 @@ void BrowserViewTabbedLayoutImpl::DoPostLayoutVisualAdjustments(
          main_background_corners[CornerOrientation::kBottomLeading] =
              main_background->GetWindowCorner(/*upper=*/false);
        }

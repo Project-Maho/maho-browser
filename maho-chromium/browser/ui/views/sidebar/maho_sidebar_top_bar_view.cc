@@ -80,6 +80,7 @@
 #include "ui/views/layout/box_layout.h"
 #include "ui/views/style/typography.h"
 #include "ui/views/view_class_properties.h"
+#include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/window/dialog_delegate.h"
@@ -569,8 +570,23 @@ void MahoSidebarTopBarView::OnMailPressed(const ui::Event& event) {
   Navigate(&params);
 }
 void MahoSidebarTopBarView::OnToggleSidebarPressed(const ui::Event& event) {
-  if (browser_) {
-    sidebar_prefs::ToggleSidebarPanelExpanded(browser_->GetProfile()->GetPrefs());
+  if (!browser_) {
+    return;
+  }
+  // The window's container owns the state authority (prefs for regular,
+  // in-memory for private/OTR).
+  auto* browser_view = BrowserView::GetBrowserViewForBrowser(browser_);
+  auto* container = browser_view
+                        ? views::AsViewClass<MahoSidebarContainerView>(
+                              browser_view->maho_sidebar_container())
+                        : nullptr;
+  if (container) {
+    container->TogglePanelExpanded();
+    return;
+  }
+  Profile* profile = browser_->GetProfile();
+  if (!(profile->IsIncognitoProfile() && profile->IsPrimaryOTRProfile())) {
+    sidebar_prefs::ToggleSidebarPanelExpanded(profile->GetPrefs());
   }
 }
 

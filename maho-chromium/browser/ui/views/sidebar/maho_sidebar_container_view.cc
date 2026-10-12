@@ -12,6 +12,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "maho/browser/ui/views/command/maho_command_action_handler.h"
 #include "base/functional/bind.h"
+#include "base/i18n/rtl.h"
 #include "base/task/sequenced_task_runner.h"
 #include "components/prefs/pref_service.h"
 #include "base/time/time.h"
@@ -31,6 +32,7 @@
 #include "ui/base/interaction/element_identifier.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/events/event.h"
+#include "ui/gfx/animation/animation.h"
 #include "ui/gfx/animation/tween.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/transform.h"
@@ -99,8 +101,7 @@ MahoSidebarContainerView::MahoSidebarContainerView(Browser* browser)
   SetLayoutManager(std::make_unique<views::FillLayout>());
   SetNotifyEnterExitOnChild(true);
 
-  reveal_animation_.SetSlideDuration(
-      base::Milliseconds(sidebar_layout::kSidebarRevealDurationMs));
+  UpdateRevealAnimationDuration();
   reveal_animation_.SetTweenType(gfx::Tween::EASE_OUT);
 
   // Own layer: the auto-hide sidebar floats over the web contents, which only
@@ -327,6 +328,9 @@ void MahoSidebarContainerView::ApplyPanelState() {
     if (is_hover_revealed_ || reveal_animation_.is_animating()) {
       ApplyPreferredWidthFromPrefs();
       ApplySidebarViewBackground();
+      // Under reduced motion this ends synchronously, running the
+      // AnimationEnded() hidden-state cleanup before returning.
+      UpdateRevealAnimationDuration();
       reveal_animation_.Hide();
     } else {
       reveal_animation_.Reset(0.0);
@@ -504,6 +508,7 @@ void MahoSidebarContainerView::OnMouseEntered(const ui::MouseEvent& event) {
       return;
     }
 
+    UpdateRevealAnimationDuration();
     reveal_animation_.Show();
     hide_delay_timer_.Start(
         FROM_HERE,
@@ -549,6 +554,7 @@ void MahoSidebarContainerView::StartReveal() {
   // once; the slide itself is a transform and never relayouts the browser.
   ApplyRevealTransform();
   RelayoutParent(this);
+  UpdateRevealAnimationDuration();
   reveal_animation_.Show();
   hide_delay_timer_.Start(
       FROM_HERE,
@@ -557,13 +563,24 @@ void MahoSidebarContainerView::StartReveal() {
       &MahoSidebarContainerView::OnHideDelayExpired);
 }
 
+void MahoSidebarContainerView::UpdateRevealAnimationDuration() {
+  reveal_animation_.SetSlideDuration(
+      gfx::Animation::PrefersReducedMotion()
+          ? base::TimeDelta()
+          : base::Milliseconds(sidebar_layout::kSidebarRevealDurationMs));
+}
+
 void MahoSidebarContainerView::StartHide() {
+  UpdateRevealAnimationDuration();
   reveal_animation_.Hide();
 }
 
 void MahoSidebarContainerView::OnHideDelayExpired() {
   if (IsAutoHideMode() && is_hover_revealed_) {
-    if (IsCursorInsideContainerScreenBounds()) {
+    // Hiding would dismiss a Spaces/Library overlay opened from the revealed
+    // sidebar (AnimationEnded -> CheckAndNotifyAutoHide); keep it revealed.
+    if (IsCursorInsideContainerScreenBounds() || IsSpacesOverlayVisible() ||
+        IsLibraryOverlayVisible()) {
       hide_delay_timer_.Start(
           FROM_HERE,
           base::Milliseconds(sidebar_layout::kSidebarHideDelayMs),
@@ -776,7 +793,10 @@ gfx::Insets MahoSidebarContainerView::GetSidebarSlotInsets() const {
       }
     }
   }
-  return gfx::Insets::TLBR(0, width, 0, 0);
+  // Overlays inset screen-space client bounds; in RTL the sidebar is on the
+  // right edge.
+  return base::i18n::IsRTL() ? gfx::Insets::TLBR(0, 0, 0, width)
+                             : gfx::Insets::TLBR(0, width, 0, 0);
 }
 
 bool MahoSidebarContainerView::IsFullyAutoHidden() const {
@@ -818,9 +838,18 @@ int MahoSidebarContainerView::ReadSidebarWidth() const {
       sidebar_prefs::kSidebarWidth);
 }
 
+int MahoSidebarContainerView::GetPinnedRailWidthForLayout() const {
+  return sidebar_prefs::GetSidebarWidthForLayout(ReadSidebarWidth());
+}
+
 void MahoSidebarContainerView::WriteSidebarWidth(int clamped_width) {
   if (is_private_) {
-    private_sidebar_width_ = clamped_width;
+    // Mirrors the regular pref-observer path. The equality guard stops the
+    // relayout -> OnBoundsChanged -> WriteSidebarWidth re-entry.
+    if (private_sidebar_width_ != clamped_width) {
+      private_sidebar_width_ = clamped_width;
+      OnSidebarWidthChanged();
+    }
     return;
   }
   PrefService* prefs = browser_->GetProfile()->GetPrefs();
