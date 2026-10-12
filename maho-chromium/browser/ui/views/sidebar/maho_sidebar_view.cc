@@ -1547,6 +1547,11 @@ bool MahoSidebarView::ShouldAnimateSpaceSwitch(
   if (!GetWidget() || !GetWidget()->IsVisible()) {
     return false;
   }
+  // The auto-hide container hides this view (SetVisible(false)) while the
+  // widget stays visible; never snapshot layers or slide an undrawn sidebar.
+  if (!IsDrawn()) {
+    return false;
+  }
   if (const_cast<views::Widget*>(GetWidget())->HasCapture()) {
     return false;
   }
