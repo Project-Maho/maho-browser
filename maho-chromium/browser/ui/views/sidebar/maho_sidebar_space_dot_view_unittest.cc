@@ -330,6 +330,35 @@ TEST_F(MahoSidebarViewSpaceSwitchSlideTest, DirectionsAndSnapshot) {
   EXPECT_EQ(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
 }
 
+TEST_F(MahoSidebarViewSpaceSwitchSlideTest, NotDrawnNoAnimation) {
+  gfx::ScopedAnimationDurationScaleMode normal_duration(
+      gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
+
+  MahoSidebarViewStateModel model1;
+  model1.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model1.tab_list.active_space_id = "space-1";
+  sidebar_view_->ApplyViewState(model1);
+  sidebar_view_->DeprecatedLayoutImmediately();
+
+  // Mirrors the auto-hide container hiding the sidebar view while the widget
+  // itself stays visible.
+  sidebar_view_->SetVisible(false);
+  ASSERT_TRUE(widget_->IsVisible());
+  ASSERT_FALSE(sidebar_view_->IsDrawn());
+
+  int dir = 0;
+  MahoSidebarViewStateModel model2;
+  model2.footer.space_ids = {"space-1", "space-2", "space-3"};
+  model2.tab_list.active_space_id = "space-2";
+
+  EXPECT_FALSE(sidebar_view_->ShouldAnimateSpaceSwitch(model2, &dir));
+  sidebar_view_->ApplyViewState(model2);
+  EXPECT_FALSE(sidebar_view_->space_switch_anim_in_progress_for_testing());
+  EXPECT_EQ(sidebar_view_->outgoing_space_layer_owner_for_testing(), nullptr);
+  EXPECT_EQ(sidebar_view_->last_rendered_active_space_id_for_testing(),
+            "space-2");
+}
+
 TEST_F(MahoSidebarViewSpaceSwitchSlideTest, SameSpaceNoAnimation) {
   MahoSidebarViewStateModel model1;
   model1.footer.space_ids = {"space-1", "space-2"};
