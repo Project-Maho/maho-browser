@@ -78,10 +78,6 @@ class MahoSidebarFolderHoverController : public views::WidgetObserver,
   // C1 Focus loss & browser widget tracking
   raw_ptr<views::Widget> observed_browser_widget_ = nullptr;
 
-  // M1 Grace timer cap
-  static constexpr int kMaxGraceRearms = 10;
-  int grace_rearm_count_ = 0;
-
   SEQUENCE_CHECKER(sequence_checker_);
 
   // WeakPtrFactory must be the absolute last member inside the class definition

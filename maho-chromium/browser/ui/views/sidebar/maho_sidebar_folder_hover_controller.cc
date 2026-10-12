@@ -65,7 +65,6 @@ void MahoSidebarFolderHoverController::ScheduleShow(
 void MahoSidebarFolderHoverController::OnRowMouseExited() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   show_timer_.Stop();
-  grace_rearm_count_ = 0;
   hide_grace_timer_.Start(FROM_HERE, kHideGraceMs,
                           base::BindOnce(&MahoSidebarFolderHoverController::OnHideGraceTimerFired,
                                          weak_factory_.GetWeakPtr()));
@@ -78,7 +77,6 @@ void MahoSidebarFolderHoverController::HideImmediately() {
   pending_folder_id_.clear();
   pending_folder_name_.clear();
   pending_children_.clear();
-  grace_rearm_count_ = 0;
 
   if (observed_browser_widget_) {
     observed_browser_widget_->RemoveObserver(this);
@@ -106,6 +104,15 @@ void MahoSidebarFolderHoverController::OnWidgetDestroying(views::Widget* widget)
   if (widget == popup_widget_) {
     popup_widget_ = nullptr;
     open_folder_id_.clear();
+    // The popup can close itself (ESC, bubble deactivation), so drop the
+    // browser widget observation here too; otherwise the next ShowNow() would
+    // add a duplicate observer.
+    if (observed_browser_widget_) {
+      if (observed_browser_widget_ != widget) {
+        observed_browser_widget_->RemoveObserver(this);
+      }
+      observed_browser_widget_ = nullptr;
+    }
     if (browser_ && browser_->GetTabStripModel()) {
       browser_->GetTabStripModel()->RemoveObserver(this);
     }
@@ -161,6 +168,10 @@ void MahoSidebarFolderHoverController::ShowNow() {
   open_folder_id_ = folder_id;
   popup_widget_->AddObserver(this);
 
+  if (observed_browser_widget_) {
+    observed_browser_widget_->RemoveObserver(this);
+    observed_browser_widget_ = nullptr;
+  }
   if (anchor && anchor->GetWidget()) {
     observed_browser_widget_ = anchor->GetWidget()->GetTopLevelWidget();
     if (observed_browser_widget_ && observed_browser_widget_ != popup_widget_) {
@@ -175,8 +186,7 @@ void MahoSidebarFolderHoverController::ShowNow() {
 
 void MahoSidebarFolderHoverController::OnHideGraceTimerFired() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (IsCursorInsidePopup() && grace_rearm_count_ < kMaxGraceRearms) {
-    ++grace_rearm_count_;
+  if (IsCursorInsidePopup()) {
     hide_grace_timer_.Start(FROM_HERE, kHideGraceMs,
                             base::BindOnce(&MahoSidebarFolderHoverController::OnHideGraceTimerFired,
                                            weak_factory_.GetWeakPtr()));
