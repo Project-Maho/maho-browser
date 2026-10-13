@@ -25,6 +25,7 @@
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
@@ -539,8 +540,8 @@ class MahoAgentChannelGateway {
 
   ChannelRegistry registry_;
   std::unique_ptr<ChannelTransport> transport_;
-  MahoAuthenticatedServiceApiBroker* broker_ = nullptr;
-  ::MahoAiRuntimeAdapter* runtime_adapter_ = nullptr;
+  raw_ptr<MahoAuthenticatedServiceApiBroker> broker_ = nullptr;
+  raw_ptr<::MahoAiRuntimeAdapter> runtime_adapter_ = nullptr;
   TriggerCallback trigger_callback_;
 
   base::FilePath persistence_path_;
