@@ -105,7 +105,7 @@ MahoSidebarProcessingPlaceholderView::~MahoSidebarProcessingPlaceholderView() {
 void MahoSidebarProcessingPlaceholderView::SetButtonSurface(
     views::View* button_surface) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  button_surface_ = button_surface;
+  button_surface_.SetView(button_surface);
 }
 
 void MahoSidebarProcessingPlaceholderView::SetSidebarPalette(
@@ -326,8 +326,9 @@ void MahoSidebarProcessingPlaceholderView::UpdateButtonOpacity() {
       button_alpha = 0.0;
     }
   }
-  if (button_surface_ && button_surface_->layer()) {
-    button_surface_->layer()->SetOpacity(static_cast<float>(button_alpha));
+  views::View* button_surface = button_surface_.view();
+  if (button_surface && button_surface->layer()) {
+    button_surface->layer()->SetOpacity(static_cast<float>(button_alpha));
   }
 }
 
