@@ -1,8 +1,8 @@
-diff --git i/chrome/browser/app_controller_mac.mm w/chrome/browser/app_controller_mac.mm
-index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17edb33dca8b 100644
---- i/chrome/browser/app_controller_mac.mm
-+++ w/chrome/browser/app_controller_mac.mm
-@@ -3,12 +3,20 @@
+diff --git a/chrome/browser/app_controller_mac.mm b/chrome/browser/app_controller_mac.mm
+index 608f3503bb68c..4375fd9254c68 100644
+--- a/chrome/browser/app_controller_mac.mm
++++ b/chrome/browser/app_controller_mac.mm
+@@ -3,12 +3,21 @@
  // found in the LICENSE file.
  
  #import "chrome/browser/app_controller_mac.h"
@@ -10,6 +10,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
 +#include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 +#include "components/prefs/pref_service.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
++#include "chrome/browser/ui/browser.h"
 +#include "maho/browser/maho_space_profile_bridge.h"
 +#include "maho/browser/ui/webui/maho_welcome/maho_welcome_prefs.h"
 +#include "maho/browser/ui/views/welcome/maho_welcome_window.h"
@@ -23,7 +24,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
  #include <memory>
  #include <vector>
  
-@@ -167,6 +176,7 @@ GetPendingWebAuthRequests() {
+@@ -167,6 +176,7 @@
    return g_pending_requests;
  }
  
@@ -31,7 +32,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
  // Returns true if the profile requires signin before being used.
  bool IsProfileSignedOut(const base::FilePath& profile_path);
  
-@@ -256,7 +266,12 @@ BrowserWindowInterface* CreateBrowser(Profile* profile) {
+@@ -256,7 +266,12 @@ void LaunchBrowserStartup(Profile* profile) {
  
    BrowserWindowInterface* browser =
        GlobalBrowserCollection::GetInstance()->GetLastActiveBrowser();
@@ -45,7 +46,17 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
    return browser;
  }
  
-@@ -710,8 +725,9 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -433,6 +448,9 @@ void FocusWindowSetOnCurrentSpace(NSSet<NSWindow*>* windows) {
+ void OpenStartupTabsInBrowserWithProfile(const StartupTabs& tabs,
+                                          Profile* profile);
+ 
++void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,
++                                  Profile* profile);
++
+ void OpenStartupTabsInBrowser(StartupTabs tabs) {
+   StartupTabs regular_tabs;
+   std::vector<base::FilePath> shortcuts;
+@@ -710,8 +728,9 @@ @implementation AppController {
  
    // If we're told to open URLs (in particular, via |-application:openURLs:| by
    // Launch Services) before we've launched the browser, we queue them up in
@@ -56,7 +67,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
    BOOL _startupComplete;
  
    // Outlets for testing close tab/window menu items.
-@@ -1741,13 +1756,16 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -1741,13 +1760,16 @@ - (void)executeCommand:(id)sender withProfile:(Profile*)profile {
  
    switch (tag) {
      case IDC_NEW_TAB:
@@ -64,14 +75,12 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
 -      // possible.
 -      if (BrowserWindowInterface* browser = ActivateBrowser(profile)) {
 -        chrome::ExecuteCommand(browser, IDC_NEW_TAB);
--        break;
--      }
--      [[fallthrough]];  // To create new window.
 +      if (BrowserWindowInterface* browser_window =
 +              ActivateBrowser(profile)) {
 +        chrome::ExecuteCommand(browser_window, IDC_NEW_TAB);
-+        break;
-+      }
+         break;
+       }
+-      [[fallthrough]];  // To create new window.
 +      if (BrowserWindowInterface* browser_window =
 +              CreateBrowser(profile->GetOriginalProfile())) {
 +        chrome::ExecuteCommand(browser_window, IDC_NEW_TAB);
@@ -80,7 +89,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
      case IDC_NEW_WINDOW:
        CreateBrowser(profile->GetOriginalProfile());
        break;
-@@ -1876,6 +1894,14 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -1876,6 +1898,14 @@ - (BOOL)applicationShouldHandleReopen:(NSApplication*)theApplication
      }
    }
  
@@ -95,7 +104,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
    base::FilePath lastProfilePath = GetStartupProfilePathMac();
    DCHECK_NE(lastProfilePath, ProfileManager::GetSystemProfilePath());
  
-@@ -2094,12 +2120,7 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -2094,12 +2124,7 @@ - (IBAction)showPreferencesForProfile:(Profile*)profile {
      // Failed to load profile, show Profile Picker instead.
      return;
    }
@@ -109,7 +118,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
  }
  
  - (IBAction)orderFrontStandardAboutPanel:(id)sender {
-@@ -2295,27 +2316,35 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -2295,27 +2320,35 @@ - (void)setLastProfile:(Profile*)profile {
    if (_lastProfile == nullptr)
      return;
  
@@ -120,6 +129,11 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
 -    // the menu should reduce the impact in most flows.
 -    NSMenu* submenu = [bookmarkItem.submenu copy];
 -    submenu.delegate = nil;  // The delegate is also copied. Remove it.
+-
+-    // The original profile outlives the OTR profile. Always create the bridge
+-    // on the original profile, to prevent bugs WRT profile lifetime.
+-    entry = std::make_unique<BookmarkMenuBridge>(profile->GetOriginalProfile(),
+-                                                 submenu);
 +  // Maho: the macOS Bookmarks menu is never built (BuildBookmarksMenu
 +  // returns nil), so |bookmarkItem| is nil. AppKit tolerates messaging nil,
 +  // but building a BookmarkMenuBridge without a root menu trips its
@@ -133,24 +147,20 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
 +      // lazy-loading of the menu should reduce the impact in most flows.
 +      NSMenu* submenu = [bookmarkItem.submenu copy];
 +      submenu.delegate = nil;  // The delegate is also copied. Remove it.
- 
--    // The original profile outlives the OTR profile. Always create the bridge
--    // on the original profile, to prevent bugs WRT profile lifetime.
--    entry = std::make_unique<BookmarkMenuBridge>(profile->GetOriginalProfile(),
--                                                 submenu);
++
 +      // The original profile outlives the OTR profile. Always create the
 +      // bridge on the original profile, to prevent bugs WRT profile
 +      // lifetime.
 +      entry = std::make_unique<BookmarkMenuBridge>(
 +          profile->GetOriginalProfile(), submenu);
- 
--    // Clear bookmarks from the old profile.
--    entry->ClearBookmarkMenu();
++
 +      // Clear bookmarks from the old profile.
 +      entry->ClearBookmarkMenu();
 +    }
 +    _bookmarkMenuBridge = entry.get();
-+
+ 
+-    // Clear bookmarks from the old profile.
+-    entry->ClearBookmarkMenu();
 +    // No need to |BuildMenu| here.  It is done lazily upon menu access.
 +    bookmarkItem.submenu = _bookmarkMenuBridge->BookmarkMenu();
 +    bookmarkItem.hidden = hidden;
@@ -163,7 +173,7 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
  
    _historyMenuBridge = std::make_unique<HistoryMenuBridge>(_lastProfile);
    _historyMenuBridge->BuildMenu();
-@@ -2619,8 +2648,88 @@ class AppControllerProfileObserver : public ProfileAttributesStorage::Observer,
+@@ -2619,8 +2652,88 @@ - (void)setLastProfileForTesting:(Profile*)profile {
    _lastActiveBrowser = collection->GetLastActiveBrowser()->GetWeakPtr();
  }
  
@@ -252,17 +262,12 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
  //---------------------------------------------------------------------------
  
  namespace {
-@@ -2632,10 +2741,96 @@ void UpdateProfileInUse(Profile* profile) {
+@@ -2632,10 +2745,89 @@ void UpdateProfileInUse(Profile* profile) {
    [AppController.sharedController setLastProfile:profile];
  }
  
 +void OpenStartupTabsInBrowserWithProfileNormal(const StartupTabs& tabs,
 +                                                Profile* profile);
-+
-+void OpenUrlsInBrowserWithProfile(const std::vector<GURL>& urls,
-+                                  Profile* profile);
-+
-+}  // namespace
 +
  void OpenStartupTabsInBrowserWithProfile(const StartupTabs& tabs,
                                           Profile* profile) {
@@ -339,8 +344,6 @@ index 608f3503bb68c6039b5e18d2d6214ff8a852d49e..fc9b3fee3ca437e56809242c154f17ed
 +  }
 +  OpenStartupTabsInBrowserWithProfile(tabs, profile);
 +}
-+
-+namespace {
 +
 +void OpenStartupTabsInBrowserWithProfileNormal(const StartupTabs& tabs,
 +                                                Profile* profile) {
