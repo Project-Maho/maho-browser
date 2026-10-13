@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
@@ -44,7 +45,7 @@ class FakeMediaItemManager : public global_media_controls::MediaItemManager {
   std::list<std::string> GetActiveItemIds() override { return {}; }
   base::WeakPtr<MediaItemManager> GetWeakPtr() override { return weak_factory_.GetWeakPtr(); }
 
-  global_media_controls::MediaDialogDelegate* delegate_ = nullptr;
+  raw_ptr<global_media_controls::MediaDialogDelegate> delegate_ = nullptr;
   std::vector<global_media_controls::MediaDialogDelegate*> delegate_transitions_;
 
  private:
@@ -167,7 +168,7 @@ class MahoNowPlayingCoordinatorTest : public BrowserWithTestWindowTest {
 
 TEST_F(MahoNowPlayingCoordinatorTest, DelegateLifecycle) {
   // Initially, manager has no delegate.
-  EXPECT_EQ(nullptr, fake_manager_->delegate_);
+  EXPECT_EQ(nullptr, fake_manager_->delegate_.get());
   EXPECT_TRUE(fake_manager_->delegate_transitions_.empty());
 
   // First host registers -> coordinator registers as manager delegate.
@@ -178,7 +179,7 @@ TEST_F(MahoNowPlayingCoordinatorTest, DelegateLifecycle) {
   FakeMahoNowPlayingCardHost host1(browser());
   coordinator_->RegisterHost(&host1);
 
-  EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_);
+  EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_.get());
   ASSERT_EQ(1u, fake_manager_->delegate_transitions_.size());
   EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_transitions_[0]);
 
@@ -186,19 +187,19 @@ TEST_F(MahoNowPlayingCoordinatorTest, DelegateLifecycle) {
   FakeMahoNowPlayingCardHost host2(browser2.get());
   coordinator_->RegisterHost(&host2);
 
-  EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_);
+  EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_.get());
   EXPECT_EQ(1u, fake_manager_->delegate_transitions_.size());
 
   // Unregister host 1 -> remains delegate because host 2 exists.
   coordinator_->UnregisterHost(&host1);
 
-  EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_);
+  EXPECT_EQ(coordinator_.get(), fake_manager_->delegate_.get());
   EXPECT_EQ(1u, fake_manager_->delegate_transitions_.size());
 
   // Unregister host 2 -> manager delegate cleared.
   coordinator_->UnregisterHost(&host2);
 
-  EXPECT_EQ(nullptr, fake_manager_->delegate_);
+  EXPECT_EQ(nullptr, fake_manager_->delegate_.get());
   ASSERT_EQ(2u, fake_manager_->delegate_transitions_.size());
   EXPECT_EQ(nullptr, fake_manager_->delegate_transitions_[1]);
 }

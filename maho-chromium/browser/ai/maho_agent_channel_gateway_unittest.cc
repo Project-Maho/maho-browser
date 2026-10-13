@@ -14,6 +14,7 @@
 #ifndef MAHO_STANDALONE_TEST
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/memory/raw_ptr.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho::ai {
@@ -38,7 +39,7 @@ class TriggerRecorder {
   }
 
  private:
-  std::vector<AgentSessionTrigger>* sink_;
+  raw_ptr<std::vector<AgentSessionTrigger>> sink_;
 };
 
 class FakeChannelTransport : public ChannelTransport {

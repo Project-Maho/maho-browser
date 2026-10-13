@@ -24,6 +24,8 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/synchronization/waitable_event.h"
@@ -327,7 +329,8 @@ class MahoNewTabPositionCoreTest : public testing::Test {
   static constexpr char kTabThree[] =
       "00000000-0000-4000-8000-000000000003";
 
-  ::MahoCore* core_ = nullptr;
+  // RAW_PTR_EXCLUSION: maho-core FFI handle (Rust heap), not PartitionAlloc.
+  RAW_PTR_EXCLUSION ::MahoCore* core_ = nullptr;
   std::string space_id_;
 };
 
@@ -519,8 +522,9 @@ class MahoNativeTabStripNewTabPositionTest
   }
 
  protected:
-  ::MahoCore* core_ = nullptr;
-  ::MahoCore* saved_core_ = nullptr;
+  // RAW_PTR_EXCLUSION: maho-core FFI handles (Rust heap), not PartitionAlloc.
+  RAW_PTR_EXCLUSION ::MahoCore* core_ = nullptr;
+  RAW_PTR_EXCLUSION ::MahoCore* saved_core_ = nullptr;
   std::string space_id_;
 };
 
@@ -974,12 +978,13 @@ class MahoSidebarCoreCacheTest : public testing::Test {
         core_, base::GetQuotedJSONString(space_id), bypass);
   }
 
-  ::MahoCore* core_ = nullptr;
+  // RAW_PTR_EXCLUSION: fake integer identity from Core(), never dereferenced.
+  RAW_PTR_EXCLUSION ::MahoCore* core_ = nullptr;
   int footer_fetches_ = 0;
   int tree_fetches_ = 0;
   int favorites_fetches_ = 0;
-  base::WaitableEvent* footer_fetch_started_ = nullptr;
-  base::WaitableEvent* footer_fetch_continue_ = nullptr;
+  raw_ptr<base::WaitableEvent> footer_fetch_started_ = nullptr;
+  raw_ptr<base::WaitableEvent> footer_fetch_continue_ = nullptr;
 };
 
 TEST_F(MahoSidebarCoreCacheTest, InvalidationMaskTableCoversCoreVariants) {
