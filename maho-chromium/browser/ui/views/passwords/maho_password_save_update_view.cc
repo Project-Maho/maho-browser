@@ -8,6 +8,7 @@
 
 #include "base/check.h"
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/passwords/passwords_model_delegate.h"
 #include "chrome/grit/generated_resources.h"
 #include "components/password_manager/core/browser/password_form.h"
@@ -63,8 +64,8 @@ const gfx::Insets kCredentialFieldInsets =
     gfx::Insets::VH(tokens::kSpace3, tokens::kSpace4);
 
 struct CredentialFieldViews {
-  views::Label* value_label = nullptr;
-  views::View* value_row = nullptr;
+  raw_ptr<views::Label> value_label = nullptr;
+  raw_ptr<views::View> value_row = nullptr;
 };
 
 std::u16string CanonicalOrigin(const url::Origin& origin) {

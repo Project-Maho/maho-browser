@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/no_destructor.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -86,9 +85,8 @@ namespace {
 // ClearWindowControlsRectForTesting().
 std::optional<std::optional<gfx::Rect>>&
 GetTestingWindowControlsRectOverride() {
-  static base::NoDestructor<std::optional<std::optional<gfx::Rect>>>
-      override_rect;
-  return *override_rect;
+  static std::optional<std::optional<gfx::Rect>> override_rect;
+  return override_rect;
 }
 
 // Converts one AppKit content-view-space button frame (bottom-origin points)

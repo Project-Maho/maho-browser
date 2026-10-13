@@ -9,6 +9,7 @@
 #include <string>
 
 #include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/memory/singleton.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_widget_host.h"
@@ -58,7 +59,9 @@ class MahoTraceRecorderClient
   void AttachInputObserver();
   void DetachInputObserver();
 
-  struct MahoTraceRecorder* recorder_{nullptr};
+  // RAW_PTR_EXCLUSION: Rust-heap handle owned by maho-ffi
+  // (maho_trace_recorder_create/finish_json); not PartitionAlloc memory.
+  RAW_PTR_EXCLUSION struct MahoTraceRecorder* recorder_{nullptr};
   int64_t tab_id_{0};
   raw_ptr<content::RenderWidgetHost> observed_rwh_{nullptr};
 };
