@@ -192,9 +192,14 @@ class RepeatingTimer {
   bool running_ = false;
 };
 
+template <typename T>
+using raw_ptr = T*;
+
 }  // namespace base
+using base::raw_ptr;
 #else
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/functional/callback.h"
 #include "base/types/expected.h"
 #include "base/values.h"
@@ -579,7 +584,7 @@ class ProfileCookieJarDirectApiTransport : public DirectApiTransport {
   Profile* profile() const { return profile_; }
 
  private:
-  [[maybe_unused]] Profile* profile_ = nullptr;
+  [[maybe_unused]] raw_ptr<Profile> profile_ = nullptr;
 };
 
 // Main broker for Gap #11: Zero-tab direct API calls with cookie jar auth.
@@ -638,7 +643,7 @@ class MahoAuthenticatedServiceApiBroker {
   Profile* profile() const { return profile_; }
 
  private:
-  [[maybe_unused]] Profile* profile_ = nullptr;
+  [[maybe_unused]] raw_ptr<Profile> profile_ = nullptr;
   std::shared_ptr<CredentialVault> vault_;
   std::shared_ptr<ApprovalTokenStore> approval_store_;
   std::shared_ptr<ScopeRegistry> scope_registry_;
