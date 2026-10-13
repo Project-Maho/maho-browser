@@ -6,7 +6,6 @@
 #include <optional>
 
 #include "base/functional/callback.h"
-#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/time/time.h"
@@ -16,6 +15,7 @@
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/linear_animation.h"
 #include "ui/views/view.h"
+#include "ui/views/view_tracker.h"
 
 namespace gfx {
 class Canvas;
@@ -148,7 +148,9 @@ class MahoSidebarProcessingPlaceholderView : public views::View,
   bool disable_animation_for_testing_ = false;
   bool reduced_motion_for_testing_ = false;
 
-  raw_ptr<views::View> button_surface_ = nullptr;
+  // A sibling in the action row, destroyed before this view; the tracker
+  // clears itself so teardown never leaves a dangling pointer.
+  views::ViewTracker button_surface_;
   MahoSidebarPalette palette_;
 
   SEQUENCE_CHECKER(sequence_checker_);
