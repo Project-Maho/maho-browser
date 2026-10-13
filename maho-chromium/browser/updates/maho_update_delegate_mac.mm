@@ -152,8 +152,8 @@ std::unique_ptr<PlatformUpdaterDelegate> CreatePlatformUpdaterDelegate() {
 // link as the fallback when no in-app handler was injected.
 - (void)standardUserDriverShowVersionHistoryForAppcastItem:
     (SUAppcastItem*)item {
-  maho::PlatformUpdaterDelegateMac* owner = self.owner;
-  if (owner && owner->ShowVersionHistory()) {
+  maho::PlatformUpdaterDelegateMac* delegate = self.owner;
+  if (delegate && delegate->ShowVersionHistory()) {
     return;
   }
   NSURL* url = item.fullReleaseNotesURL ?: item.releaseNotesURL;
