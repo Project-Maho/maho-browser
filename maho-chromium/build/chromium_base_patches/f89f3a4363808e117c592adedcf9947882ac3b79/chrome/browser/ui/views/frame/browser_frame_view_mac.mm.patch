@@ -1,7 +1,7 @@
-diff --git c/chrome/browser/ui/views/frame/browser_frame_view_mac.mm w/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
-index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da864938b8f35c 100644
---- c/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
-+++ w/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+diff --git a/chrome/browser/ui/views/frame/browser_frame_view_mac.mm b/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
+index 39c36aab3c4d2..93e24bb45073a 100644
+--- a/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
++++ b/chrome/browser/ui/views/frame/browser_frame_view_mac.mm
 @@ -7,7 +7,10 @@
  #include <algorithm>
  #include <vector>
@@ -13,7 +13,15 @@ index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da8649
  #include "base/containers/fixed_flat_map.h"
  #include "base/functional/bind.h"
  #include "base/i18n/rtl.h"
-@@ -49,9 +52,12 @@
+@@ -22,6 +25,7 @@
+ #include "chrome/browser/themes/theme_service.h"
+ #include "chrome/browser/themes/theme_service_factory.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser.h"
+ #include "chrome/browser/ui/cocoa/fullscreen/fullscreen_menubar_tracker.h"
+ #include "chrome/browser/ui/cocoa/fullscreen/fullscreen_toolbar_controller.h"
+ #include "chrome/browser/ui/color/chrome_color_provider_utils.h"
+@@ -49,9 +53,12 @@
  #include "chrome/common/pref_names.h"
  #include "components/prefs/pref_service.h"
  #include "components/remote_cocoa/common/native_widget_ns_window.mojom.h"
@@ -26,7 +34,7 @@ index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da8649
  #include "ui/compositor/layer.h"
  #include "ui/gfx/canvas.h"
  #include "ui/gfx/color_utils.h"
-@@ -67,6 +73,10 @@
+@@ -67,6 +74,10 @@
  #include "ui/views/layout/layout_types.h"
  #include "ui/views/widget/widget.h"
  
@@ -37,19 +45,21 @@ index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da8649
  namespace {
  
  FullscreenToolbarStyle GetUserPreferredToolbarStyle(bool always_show) {
-@@ -462,8 +472,9 @@ BrowserFrameViewMac::GetCaptionButtonBounds() const {
+@@ -462,8 +473,11 @@ FullscreenToolbarStyle GetUserPreferredToolbarStyle(bool always_show) {
  
    // In popups, the titlebar is system-drawn and the caption buttons aren't part
    // of the client area.
 -  if (GetBrowserView()->browser()->GetType() ==
 -          BrowserWindowInterface::Type::TYPE_POPUP ||
++  const bool is_mini = GetBrowserView()->browser() &&
++                       static_cast<Browser*>(GetBrowserView()->browser())->is_maho_mini();
 +  if ((GetBrowserView()->browser()->GetType() ==
 +           BrowserWindowInterface::Type::TYPE_POPUP &&
-+       !GetBrowserView()->browser()->is_maho_mini()) ||
++       !is_mini) ||
        GetBrowserView()->browser()->GetType() ==
            BrowserWindowInterface::Type::TYPE_DEVTOOLS) {
      return result;
-@@ -500,10 +511,33 @@ void BrowserFrameViewMac::OnPaint(gfx::Canvas* canvas) {
+@@ -500,16 +514,35 @@ FullscreenToolbarStyle GetUserPreferredToolbarStyle(bool always_show) {
      return;
    }
  
@@ -86,8 +96,14 @@ index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da8649
 +    canvas->DrawColor(frame_color);
    }
  
-   const SkColor frame_color =
-@@ -522,6 +556,7 @@ void BrowserFrameViewMac::Layout(PassKey) {
+-  const SkColor frame_color =
+-      GetFrameColor(BrowserFrameActiveState::kUseCurrent);
+-  canvas->DrawColor(frame_color);
+-
+   auto* theme_service = ThemeServiceFactory::GetForProfile(
+       GetBrowserView()->browser()->GetProfile());
+   if (!theme_service->UsingSystemTheme()) {
+@@ -522,6 +555,7 @@ FullscreenToolbarStyle GetUserPreferredToolbarStyle(bool always_show) {
      LayoutWindowControlsOverlay();
    }
    LayoutSuperclass<BrowserFrameView>(this);
@@ -95,7 +111,7 @@ index 39c36aab3c4d21afa7da7483700c91d62876ef0f..f40d33a57b5228095814597a42da8649
  }
  
  ///////////////////////////////////////////////////////////////////////////////
-@@ -590,6 +625,29 @@ void BrowserFrameViewMac::UpdateCaptionButtonPlaceholderContainerBackground() {
+@@ -590,6 +624,29 @@ FullscreenToolbarStyle GetUserPreferredToolbarStyle(bool always_show) {
    }
  }
  
