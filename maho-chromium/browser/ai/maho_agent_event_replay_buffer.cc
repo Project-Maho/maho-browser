@@ -4,10 +4,28 @@
 
 namespace maho::ai {
 
+ReplayResult::ReplayResult(Status status,
+                           std::vector<ReplayEvent> events,
+                           uint64_t oldest)
+    : status_(status),
+      events_(std::move(events)),
+      oldest_retained_seq_(oldest) {}
+
+ReplayResult::ReplayResult(const ReplayResult&) = default;
+ReplayResult::ReplayResult(ReplayResult&&) = default;
+ReplayResult& ReplayResult::operator=(const ReplayResult&) = default;
+ReplayResult& ReplayResult::operator=(ReplayResult&&) = default;
+ReplayResult::~ReplayResult() = default;
+
 MahoAgentEventReplayBuffer::MahoAgentEventReplayBuffer(size_t capacity)
     : capacity_(capacity > 0 ? capacity : 1) {}
 
 MahoAgentEventReplayBuffer::~MahoAgentEventReplayBuffer() = default;
+
+MahoAgentEventReplayBuffer::MahoAgentEventReplayBuffer(
+    MahoAgentEventReplayBuffer&&) noexcept = default;
+MahoAgentEventReplayBuffer& MahoAgentEventReplayBuffer::operator=(
+    MahoAgentEventReplayBuffer&&) noexcept = default;
 
 bool MahoAgentEventReplayBuffer::Append(uint64_t seq, std::string payload) {
   // Sequences are strictly 1-based and monotonic: reject seq == 0 or non-increasing seq

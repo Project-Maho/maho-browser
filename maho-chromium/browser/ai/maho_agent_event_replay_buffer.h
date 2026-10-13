@@ -40,6 +40,12 @@ class ReplayResult {
     kGap,
   };
 
+  ReplayResult(const ReplayResult&);
+  ReplayResult(ReplayResult&&);
+  ReplayResult& operator=(const ReplayResult&);
+  ReplayResult& operator=(ReplayResult&&);
+  ~ReplayResult();
+
   static ReplayResult Ok(std::vector<ReplayEvent> events) {
     return ReplayResult(Status::kOk, std::move(events), 0);
   }
@@ -56,8 +62,7 @@ class ReplayResult {
   ReplayGap gap() const { return ReplayGap{oldest_retained_seq_}; }
 
  private:
-  ReplayResult(Status status, std::vector<ReplayEvent> events, uint64_t oldest)
-      : status_(status), events_(std::move(events)), oldest_retained_seq_(oldest) {}
+  ReplayResult(Status status, std::vector<ReplayEvent> events, uint64_t oldest);
 
   Status status_;
   std::vector<ReplayEvent> events_;
@@ -75,8 +80,8 @@ class MahoAgentEventReplayBuffer {
 
   MahoAgentEventReplayBuffer(const MahoAgentEventReplayBuffer&) = delete;
   MahoAgentEventReplayBuffer& operator=(const MahoAgentEventReplayBuffer&) = delete;
-  MahoAgentEventReplayBuffer(MahoAgentEventReplayBuffer&&) noexcept = default;
-  MahoAgentEventReplayBuffer& operator=(MahoAgentEventReplayBuffer&&) noexcept = default;
+  MahoAgentEventReplayBuffer(MahoAgentEventReplayBuffer&&) noexcept;
+  MahoAgentEventReplayBuffer& operator=(MahoAgentEventReplayBuffer&&) noexcept;
 
   /// Appends an event to the ring buffer.
   /// Strictly enforces monotonic sequence order: if seq <= highest_seq_seen_,

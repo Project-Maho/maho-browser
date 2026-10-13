@@ -12,6 +12,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/sequence_checker.h"
 #include "base/values.h"
 #include "chrome/browser/devtools/devtools_window.h"
@@ -62,7 +63,9 @@ class ScopedFfiSerialization {
   bool acquired() const { return scope_ != nullptr; }
 
  private:
-  void* scope_;
+  // RAW_PTR_EXCLUSION: opaque handle returned by the Rust FFI
+  // (maho_ffi_serialization_scope_enter); not PartitionAlloc memory.
+  RAW_PTR_EXCLUSION void* scope_;
 };
 
 maho_boost::mojom::CaseMode ParseCaseMode(const std::string& s) {
