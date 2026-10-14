@@ -1,3 +1,6 @@
+// These tests serve the CLI over a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;

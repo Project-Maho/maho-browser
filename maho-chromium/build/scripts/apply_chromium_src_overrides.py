@@ -9335,6 +9335,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  void OnWidgetDestroying(views::Widget* widget) override;\n"
                 "\n"
                 "  // ui::EventObserver:\n"
+                "  using views::View::OnEvent;\n"
                 "  void OnEvent(const ui::Event& event) override;\n"
             ),
             description="Maho(win): reset Arc caption reveal on widget state changes",
@@ -13715,6 +13716,81 @@ REPLACEMENTS["chrome/browser/ui/views/frame/browser_view.h"].extend([
         guard="      maho_toolbar_button_provider_;\n",
     ),
 ])
+
+
+# Desktop OTP autofill: Chromium only wires an Android SMS backend into the
+# OneTimeTokenService, so OTP fields never got suggestions on desktop. Maho
+# supplies a Messages + Maho Mail backend and enables OTP field heuristics.
+REPLACEMENTS.setdefault("chrome/browser/autofill/one_time_token_service_factory.cc", []).extend([
+    Replacement(
+        old='#include "content/public/browser/browser_context.h"\n',
+        new=(
+            '#include "content/public/browser/browser_context.h"\n'
+            '#include "maho/browser/autofill/maho_otp_backend.h"\n'
+            '#include "maho/browser/mail_helper/maho_mail_service_factory.h"\n'
+        ),
+        description="Maho: include the desktop OTP backend in OneTimeTokenServiceFactory",
+        guard='#include "maho/browser/autofill/maho_otp_backend.h"\n',
+    ),
+    Replacement(
+        old="  DependsOn(GmailOtpBackendFactory::GetInstance());\n}",
+        new=(
+            "  DependsOn(GmailOtpBackendFactory::GetInstance());\n"
+            "  DependsOn(maho::MahoMailServiceFactory::GetInstance());\n"
+            "}"
+        ),
+        description="Maho: OneTimeTokenService outlives-order after MahoMailService",
+        guard="  DependsOn(maho::MahoMailServiceFactory::GetInstance());\n",
+    ),
+    Replacement(
+        old=(
+            "  return std::make_unique<OneTimeTokenServiceImpl>(sms_otp_backend,\n"
+            "                                                   gmail_otp_backend);\n"
+        ),
+        new=(
+            "  return maho::autofill::BuildMahoOneTimeTokenService(\n"
+            "      Profile::FromBrowserContext(context), sms_otp_backend,\n"
+            "      gmail_otp_backend);\n"
+        ),
+        description="Maho: attach the Messages/Maho Mail OTP backend on desktop",
+        guard="maho::autofill::BuildMahoOneTimeTokenService(",
+    ),
+])
+REPLACEMENTS.setdefault("chrome/browser/autofill/BUILD.gn", []).append(
+    Replacement(
+        old=(
+            "  deps = [\n"
+            "    \"//chrome/browser:browser_process\",\n"
+            "    \"//chrome/browser/account_settings\",\n"
+        ),
+        new=(
+            "  deps = [\n"
+            "    \"//maho/browser:maho_otp_backend\",\n"
+            "    \"//maho/browser/mail_helper:maho_mail_service_factory\",\n"
+            "    \"//chrome/browser:browser_process\",\n"
+            "    \"//chrome/browser/account_settings\",\n"
+        ),
+        description="Maho: link chrome/browser/autofill against the desktop OTP backend",
+        guard='    "//maho/browser:maho_otp_backend",\n',
+    )
+)
+REPLACEMENTS.setdefault("components/autofill/core/common/autofill_features.cc", []).append(
+    Replacement(
+        old=(
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_DISABLED_BY_DEFAULT);"
+        ),
+        new=(
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_ENABLED_BY_DEFAULT);"
+        ),
+        description="Maho: detect one-time-code fields so OTP suggestions appear",
+        guard=(
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_ENABLED_BY_DEFAULT);"
+        ),
+    )
+)
 
 
 REPLACEMENTS.setdefault("v8/BUILD.gn", []).append(

@@ -6,14 +6,14 @@ use maho_types::vault::{
     VaultItemPublicMetadata, VaultRangeDeleteResult, VaultSchemaVersion,
 };
 
-use crate::vault_manager::origin::{canonicalize_origin, origin_matches};
+use crate::vault_manager::origin::{canonicalize_origin, origin_matches, public_suffix_matches};
 use crate::vault_manager::record::{
     decode_envelope, deserialize_record, encode_envelope, public_dto, serialize_record,
     RecordSecret, VaultRecordPayload,
 };
 use crate::vault_manager::{VaultCredentialFormDetails, VaultCrudError};
 use crate::vault_runtime::repository::{VaultRepository, VaultTombstoneCandidate};
-use crate::vault_runtime::session::VaultBackendLoginCredential;
+use crate::vault_runtime::session::{VaultBackendLoginCredential, VaultBackendMatchType};
 
 use super::VaultRuntime;
 
@@ -141,10 +141,12 @@ impl VaultRuntime {
                 _ => None,
             };
             let mut credentials = Vec::new();
+            let mut psl_credentials = Vec::new();
             for (row, record) in records {
                 if record.metadata.item_kind != VaultItemKind::Login {
                     continue;
                 }
+                let mut match_type = VaultBackendMatchType::Exact;
                 if let Some(realm) = android_realm.or(http_auth_realm) {
                     let matches_realm = record.form_details.as_ref().is_some_and(|details| {
                         details.signon_realm == realm
@@ -170,16 +172,33 @@ impl VaultRuntime {
                         )
                     });
                     if !matches_origin {
-                        continue;
+                        // Web-only PSL affiliation (https, same eTLD+1). An
+                        // exact match above always wins, so a credential is
+                        // never duplicated as psl.
+                        let matches_psl = record
+                            .metadata
+                            .origins
+                            .iter()
+                            .any(|stored| public_suffix_matches(stored, target));
+                        if !matches_psl {
+                            continue;
+                        }
+                        match_type = VaultBackendMatchType::Psl;
                     }
                 }
                 let public = public_dto(&row, &record)?;
-                credentials.push(credential_from_record(
+                let credential = credential_from_record(
                     public,
                     record.username.clone(),
                     record.form_details.clone(),
-                ));
+                    match_type,
+                );
+                match match_type {
+                    VaultBackendMatchType::Exact => credentials.push(credential),
+                    VaultBackendMatchType::Psl => psl_credentials.push(credential),
+                }
             }
+            credentials.extend(psl_credentials);
             Ok(credentials)
         })
         .map_err(VaultCrudError::from)?
@@ -220,6 +239,7 @@ fn credential_from_record(
     public: maho_types::vault::VaultItemPublicDto,
     username: Option<String>,
     form_details: Option<VaultCredentialFormDetails>,
+    match_type: VaultBackendMatchType,
 ) -> VaultBackendLoginCredential {
     // The stored `signonRealm` is authoritative when present: it can express
     // realms a canonical origin cannot (android://, HTTP-auth realms). Legacy
@@ -246,6 +266,7 @@ fn credential_from_record(
         updated_at: public.updated_at,
         last_used_at: public.last_used_at,
         form_details,
+        match_type,
     }
 }
 

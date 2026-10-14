@@ -3556,6 +3556,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     std::string account_id = "";
     std::string folder_id = "";
     std::string query = "";
+    std::string page_origin;
     int64_t max_age = 300;
     if (arguments) {
       if (const std::string* val = arguments->FindString("account_id")) {
@@ -3567,6 +3568,9 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       if (const std::string* val = arguments->FindString("query")) {
         query = *val;
       }
+      if (const std::string* val = arguments->FindString("page_origin")) {
+        page_origin = *val;
+      }
       if (std::optional<int> val = arguments->FindInt("max_age_seconds")) {
         max_age = *val;
       }
@@ -3575,7 +3579,7 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
       return;
     }
     g_browser_delegate->MailExtractOtp(
-        account_id, folder_id, query, max_age,
+        account_id, folder_id, query, max_age, page_origin,
         make_mail_completion(/*recheck_read_consent=*/true));
     return;
   }
@@ -6345,6 +6349,7 @@ void MahoMcpBrowserDelegate::MailExtractOtp(const std::string& account_id,
                                             const std::string& folder_id,
                                             const std::string& query,
                                             int64_t max_age_seconds,
+                                            const std::string& page_origin,
                                             MailReadCallback callback) {
   std::move(callback).Run(false, "Mail onboarding broker unavailable");
 }

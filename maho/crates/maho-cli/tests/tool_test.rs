@@ -1,3 +1,6 @@
+// These tests serve the CLI over a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::process::Command;

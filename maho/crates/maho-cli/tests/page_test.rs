@@ -8,6 +8,9 @@
 // page_query_selector, page_get_text, page_get_attribute,
 // page_wait_for_selector, browser_screenshot_full.
 
+// These tests serve the CLI over a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

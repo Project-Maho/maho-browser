@@ -1548,14 +1548,24 @@ void MahoMailService::SaveAttachment(
       std::move(callback));
 }
 
-void MahoMailService::ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback) {
+void MahoMailService::ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   mojom::MahoMailHelper* helper = GetHelperOrNull();
   if (!helper) {
     std::move(callback).Run(false, kMahoMailHelperUnavailable);
     return;
   }
-  helper->ExtractOtp(account_id, folder_id, query, max_age_seconds, WrapReadReply(std::move(callback)));
+  helper->ExtractOtp(account_id, folder_id, query, max_age_seconds, page_origin, WrapReadReply(std::move(callback)));
+}
+
+void MahoMailService::ExtractMessagesOtp(int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  mojom::MahoMailHelper* helper = GetHelperOrNull();
+  if (!helper) {
+    std::move(callback).Run(false, kMahoMailHelperUnavailable);
+    return;
+  }
+  helper->ExtractMessagesOtp(max_age_seconds, page_origin, WrapReadReply(std::move(callback)));
 }
 
 void MahoMailService::SnoozeEmail(const std::string& email_id, const std::string& snooze_until, MailReadCallback callback) {

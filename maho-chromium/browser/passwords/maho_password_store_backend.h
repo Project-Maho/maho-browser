@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/callback_list.h"
 #include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
@@ -104,6 +105,10 @@ struct MahoPasswordForm {
   std::u16string display_name;
   std::string icon_url;
   std::optional<password_manager::PasswordForm::MatchType> match_type;
+  // True when the Vault returned this form as a public-suffix (sibling
+  // subdomain) match for the requested realm. Separate from `match_type`,
+  // which is stored form metadata that must round-trip unchanged.
+  bool vault_psl_match = false;
   bool skip_zero_click = false;
   password_manager::PasswordForm::Store in_store =
       password_manager::PasswordForm::Store::kNotSet;
@@ -363,6 +368,10 @@ private:
   // profile path + PrefService identity at construction.
   static bool IsMahoVaultRoutingActive();
 
+  // Vault lock-state observer: on unlock, reports unknown remote changes so
+  // form managers created while the Vault was locked refetch credentials.
+  void OnVaultLockStateChanged(bool locked);
+
   // Captured from the factory's profile path + PrefService construction
   // context. Never rebound from the browser-global core owner.
   const std::string profile_key_;
@@ -375,6 +384,8 @@ private:
   MahoCredentialIdentityMap identity_map_;
   std::map<FillContextKey, std::map<int, FillContextSnapshot>>
       fill_context_snapshots_;
+  RemoteChangesReceived remote_form_changes_received_;
+  base::CallbackListSubscription vault_lock_state_subscription_;
   base::WeakPtrFactory<MahoPasswordStoreBackend> weak_ptr_factory_{this};
 };
 

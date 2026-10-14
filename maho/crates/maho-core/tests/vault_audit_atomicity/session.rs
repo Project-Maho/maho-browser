@@ -42,6 +42,36 @@ fn browser_session_audit_failure_does_not_release_secret_or_persist_use() {
 }
 
 #[test]
+fn browser_session_preview_reads_secret_without_bumping_revision() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut core = core(&dir);
+    let item = core.vault_add_login(login()).expect("create login");
+    let session = core
+        .create_vault_backend_session()
+        .expect("browser backend session");
+    let before_items = items(&core);
+
+    // Page-load discovery decrypts every candidate; that must not count as a
+    // use, or the revision the page later selects would already be stale.
+    let preview = session
+        .resolve_login_secret(item.id, item.revision, VaultBackendSecretAction::Preview)
+        .expect("preview at discovered revision");
+    assert_eq!(preview.as_str(), SECRET);
+    assert_eq!(items(&core), before_items);
+
+    let fill = session
+        .resolve_login_secret(item.id, item.revision, VaultBackendSecretAction::Fill)
+        .expect("fill at the revision preview saw");
+    assert_eq!(fill.as_str(), SECRET);
+    assert_eq!(items(&core)[0].revision, 2);
+
+    assert!(matches!(
+        session.resolve_login_secret(item.id, item.revision, VaultBackendSecretAction::Preview),
+        Err(VaultBackendSessionError::Batch(VaultCrudError::RevisionConflict { .. }))
+    ));
+}
+
+#[test]
 fn browser_session_audits_success_stale_missing_and_locked_outcomes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut core = core(&dir);

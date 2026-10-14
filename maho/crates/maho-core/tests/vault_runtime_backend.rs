@@ -281,3 +281,94 @@ fn vault_backend_range_delete_denies_locked_before_repository_access() {
     // Then lock denial wins before repository construction or row access.
     assert!(matches!(result, Err(VaultCrudError::Locked)));
 }
+
+fn discover(core: &MahoCore, origin: &str) -> Vec<(String, String)> {
+    let session = core
+        .create_vault_backend_session()
+        .expect("create backend session");
+    let credentials = session
+        .login_credentials(Some(origin), None)
+        .expect("discover credentials");
+    let json = serde_json::to_value(&credentials).expect("serialize discovery");
+    json.as_array()
+        .expect("credential array")
+        .iter()
+        .map(|credential| {
+            (
+                credential["username"].as_str().expect("username").to_string(),
+                credential["matchType"].as_str().expect("matchType").to_string(),
+            )
+        })
+        .collect()
+}
+
+fn pair(username: &str, match_type: &str) -> (String, String) {
+    (username.to_string(), match_type.to_string())
+}
+
+#[test]
+fn vault_backend_discovery_returns_related_subdomain_as_psl_after_exact() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    core.vault_add_login(login("Accounts", "https://accounts.example.com", "psl-user"))
+        .expect("add accounts login");
+    core.vault_add_login(login("Login", "https://login.example.com", "exact-user"))
+        .expect("add login login");
+
+    assert_eq!(
+        vec![pair("exact-user", "exact"), pair("psl-user", "psl")],
+        discover(&core, "https://login.example.com")
+    );
+}
+
+#[test]
+fn vault_backend_discovery_same_origin_is_exact_only() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    core.vault_add_login(login("Root", "https://example.com", "root-user"))
+        .expect("add root login");
+
+    assert_eq!(
+        vec![pair("root-user", "exact")],
+        discover(&core, "https://example.com")
+    );
+}
+
+#[test]
+fn vault_backend_discovery_never_psl_matches_across_schemes() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    core.vault_add_login(login("Insecure", "http://accounts.example.com", "http-user"))
+        .expect("add http login");
+    core.vault_add_login(login("Secure", "https://accounts.example.com", "https-user"))
+        .expect("add https login");
+
+    assert!(discover(&core, "https://login.example.com")
+        .iter()
+        .all(|(username, _)| username != "http-user"));
+    assert!(discover(&core, "http://login.example.com").is_empty());
+}
+
+#[test]
+fn vault_backend_discovery_never_psl_matches_across_public_suffix() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    core.vault_add_login(login("UK", "https://example.co.uk", "uk-user"))
+        .expect("add co.uk login");
+
+    assert!(discover(&core, "https://other.co.uk").is_empty());
+}
+
+#[test]
+fn vault_backend_discovery_ip_and_localhost_are_exact_only() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let mut core = unlocked_core(&dir);
+    core.vault_add_login(login("Loopback", "https://127.0.0.1", "ip-user"))
+        .expect("add ip login");
+    core.vault_add_login(login("Local", "https://a.localhost", "local-user"))
+        .expect("add localhost login");
+
+    assert_eq!(vec![pair("ip-user", "exact")], discover(&core, "https://127.0.0.1"));
+    assert!(discover(&core, "https://127.0.0.2").is_empty());
+    assert!(discover(&core, "https://b.localhost").is_empty());
+}

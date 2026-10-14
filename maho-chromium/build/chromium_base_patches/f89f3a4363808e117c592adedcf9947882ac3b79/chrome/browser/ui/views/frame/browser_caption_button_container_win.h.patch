@@ -35,7 +35,7 @@ index bda5b2b0ab02d4d4b254bf3ed64e1ccbfbf51b83..c608117bd65208315475e7d9058676bd
    METADATA_HEADER(BrowserCaptionButtonContainer, views::View)
  
   public:
-@@ -49,6 +58,11 @@ class BrowserCaptionButtonContainer : public views::View,
+@@ -49,6 +58,12 @@ class BrowserCaptionButtonContainer : public views::View,
    // views::WidgetObserver:
    void OnWidgetBoundsChanged(views::Widget* widget,
                               const gfx::Rect& new_bounds) override;
@@ -43,11 +43,12 @@ index bda5b2b0ab02d4d4b254bf3ed64e1ccbfbf51b83..c608117bd65208315475e7d9058676bd
 +  void OnWidgetDestroying(views::Widget* widget) override;
 +
 +  // ui::EventObserver:
++  using views::View::OnEvent;
 +  void OnEvent(const ui::Event& event) override;
  
    void ResetWindowControls();
  
-@@ -62,6 +76,17 @@ class BrowserCaptionButtonContainer : public views::View,
+@@ -62,6 +77,17 @@ class BrowserCaptionButtonContainer : public views::View,
    // this mode, the web contents covers the frame view and so does it's legacy
    // hwnd which prevent tooltips being shown for the caption buttons.
    void UpdateButtonToolTipsForWindowControlsOverlay();
@@ -65,7 +66,7 @@ index bda5b2b0ab02d4d4b254bf3ed64e1ccbfbf51b83..c608117bd65208315475e7d9058676bd
  
    const raw_ptr<BrowserFrameViewWin> frame_view_;
    const raw_ptr<WindowsCaptionButton> minimize_button_;
-@@ -69,6 +94,10 @@ class BrowserCaptionButtonContainer : public views::View,
+@@ -69,6 +95,10 @@ class BrowserCaptionButtonContainer : public views::View,
    const raw_ptr<WindowsCaptionButton> restore_button_;
    const raw_ptr<WindowsCaptionButton> close_button_;
  

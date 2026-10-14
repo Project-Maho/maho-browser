@@ -1006,6 +1006,12 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
     properties.Set("query", BuildStringSchema("Optional OTP search text."));
     properties.Set("max_age_seconds",
                    BuildIntegerSchema("Maximum message age; default 300."));
+    properties.Set(
+        "page_origin",
+        BuildStringSchema("Optional origin of the page requesting the code "
+                          "(e.g. https://example.com). When set, only codes "
+                          "whose sender or links match that domain are "
+                          "returned."));
     return BuildObjectSchema(std::move(properties), {});
   }
   if (name == "mail_send" || name == "mail_save_draft" ||

@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/autofill/BUILD.gn w/chrome/browser/autofill/BUILD.gn
+index 6e9531c343b5e7a139a7b5fd0e6402237664849c..4f64d963746b13eb65026f31bd181cdc606dca58 100644
+--- c/chrome/browser/autofill/BUILD.gn
++++ w/chrome/browser/autofill/BUILD.gn
+@@ -77,6 +77,8 @@ static_library("autofill") {
+     "//url",
+   ]
+   deps = [
++    "//maho/browser:maho_otp_backend",
++    "//maho/browser/mail_helper:maho_mail_service_factory",
+     "//chrome/browser:browser_process",
+     "//chrome/browser/account_settings",
+     "//chrome/browser/history",

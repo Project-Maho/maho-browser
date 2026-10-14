@@ -310,6 +310,33 @@ impl VaultRuntime {
         })
         .map_err(VaultCrudError::from)?
     }
+
+    /// Decrypts a login password at an exact revision without recording a use.
+    /// Page-load fill discovery needs the secret for every candidate, but only
+    /// a confirmed fill counts as a use: bumping `last_used_at` here would
+    /// advance the revision and invalidate the very selection the page makes.
+    pub(crate) fn peek_login_password_at_revision(
+        &self,
+        repository: &VaultRepository<'_>,
+        id: VaultItemId,
+        expected_revision: VaultRevision,
+    ) -> Result<Zeroizing<String>, VaultCrudError> {
+        self.with_manager(|manager| {
+            let (row, record) = active_item(manager, repository, &id)?;
+            if record.metadata.trashed_at.is_some() {
+                return Err(VaultCrudError::ItemNotFound);
+            }
+            ensure_revision(&row, expected_revision)?;
+            if record.metadata.item_kind != VaultItemKind::Login {
+                return Err(VaultCrudError::ItemKindMismatch);
+            }
+            match secret_result_from_record(&record, VaultItemKind::Login)? {
+                VaultSecretResult::LoginPassword(secret) => Ok(secret),
+                _ => Err(VaultCrudError::FieldMismatch),
+            }
+        })
+        .map_err(VaultCrudError::from)?
+    }
 }
 
 fn secret_result_from_record(

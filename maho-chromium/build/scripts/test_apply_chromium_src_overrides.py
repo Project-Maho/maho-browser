@@ -780,6 +780,54 @@ class ApplyChromiumSrcOverridesTest(unittest.TestCase):
             self.assertIn('"//maho/browser:maho_core_holder"', output)
             self.assertEqual(output.count('"//maho/browser:maho_core_holder"'), 1)
 
+    def test_one_time_token_factory_attaches_maho_otp_backend_once(self):
+        path = "chrome/browser/autofill/one_time_token_service_factory.cc"
+        source = (
+            '#include "content/public/browser/browser_context.h"\n'
+            "OneTimeTokenServiceFactory::OneTimeTokenServiceFactory() {\n"
+            "  DependsOn(GmailOtpBackendFactory::GetInstance());\n}"
+            "\n"
+            "  return std::make_unique<OneTimeTokenServiceImpl>(sms_otp_backend,\n"
+            "                                                   gmail_otp_backend);\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "one_time_token_service_factory.cc"
+            target.write_text(source)
+            changed, _ = apply_replacements(
+                target, REPLACEMENTS[path], relative_path=path
+            )
+            changed_again, _ = apply_replacements(
+                target, REPLACEMENTS[path], relative_path=path
+            )
+
+            output = target.read_text()
+            self.assertTrue(changed)
+            self.assertFalse(changed_again)
+            self.assertEqual(
+                output.count('#include "maho/browser/autofill/maho_otp_backend.h"'), 1
+            )
+            self.assertEqual(
+                output.count("DependsOn(maho::MahoMailServiceFactory::GetInstance());"), 1
+            )
+            self.assertIn("maho::autofill::BuildMahoOneTimeTokenService(", output)
+            self.assertNotIn("std::make_unique<OneTimeTokenServiceImpl>", output)
+
+    def test_one_time_code_heuristics_enabled_by_default(self):
+        path = "components/autofill/core/common/autofill_features.cc"
+        source = (
+            "BASE_FEATURE(kAutofillEnableOneTimeCodeHeuristics,\n"
+            "             base::FEATURE_DISABLED_BY_DEFAULT);\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "autofill_features.cc"
+            target.write_text(source)
+            changed, _ = apply_replacements(
+                target, REPLACEMENTS[path], relative_path=path
+            )
+
+            self.assertTrue(changed)
+            self.assertIn("base::FEATURE_ENABLED_BY_DEFAULT", target.read_text())
+
     def test_toolbar_minimum_size_tolerates_preinit_overflow_button(self):
         source = (
             "  if (media_button) {\n"

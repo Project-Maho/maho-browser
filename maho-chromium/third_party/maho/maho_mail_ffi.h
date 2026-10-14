@@ -663,8 +663,14 @@ bool MahoMailExtractOtp(const char *account_id,
                         const char *folder_id,
                         const char *query,
                         int64_t max_age_seconds,
+                        const char *page_origin,
                         MahoMailReadCallback callback,
                         void *user_data);
+
+bool MahoMessagesExtractOtp(int64_t max_age_seconds,
+                            const char *page_origin,
+                            MahoMailReadCallback callback,
+                            void *user_data);
 
 bool MahoMailListAccounts(MahoMailReadCallback callback, void *user_data);
 

@@ -24,6 +24,14 @@ fn headless_launch_flag_appears_in_help() {
 
 #[test]
 fn headless_launch_with_false_binary_fails() {
+    // A binary that exits immediately on every supported platform.
+    #[cfg(windows)]
+    let exits_immediately = std::env::var("SystemRoot")
+        .map(|root| format!(r"{root}\System32\whoami.exe"))
+        .unwrap_or_else(|_| r"C:\Windows\System32\whoami.exe".to_owned());
+    #[cfg(not(windows))]
+    let exits_immediately = "/usr/bin/false".to_owned();
+    let home = std::env::temp_dir().join("maho-test-nonexistent");
     let output = Command::new(cli_bin())
         .args([
             "headless",
@@ -33,9 +41,9 @@ fn headless_launch_with_false_binary_fails() {
             "title",
             "--launch",
         ])
-        .env("MAHO_APP_PATH", "/usr/bin/false")
+        .env("MAHO_APP_PATH", &exits_immediately)
         .env("MAHO_SOCKET_TIMEOUT_MS", "1000")
-        .env("HOME", "/tmp/maho-test-nonexistent")
+        .env("HOME", &home)
         .output()
         .expect("failed to run CLI");
 

@@ -264,7 +264,8 @@ class MahoMailService : public KeyedService,
                       MahoMailAttachmentRegistry::ConsumeCallback callback);
   void SaveAttachment(const std::string& capability_token,
                       MahoMailAttachmentRegistry::SaveCallback callback);
-  void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, MailReadCallback callback);
+  void ExtractOtp(const std::string& account_id, const std::string& folder_id, const std::string& query, int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback);
+  void ExtractMessagesOtp(int64_t max_age_seconds, const std::string& page_origin, MailReadCallback callback);
   void SnoozeEmail(const std::string& email_id, const std::string& snooze_until, MailReadCallback callback);
   void UnsnoozeEmail(const std::string& email_id, MailReadCallback callback);
   void ListSnoozedEmails(const std::string& account_id, MailReadCallback callback);

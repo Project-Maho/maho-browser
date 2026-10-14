@@ -160,6 +160,22 @@ source_set("maho_password_store_backend") {
   ]
 }
 
+source_set("maho_otp_backend") {
+  sources = [
+    "autofill/maho_otp_backend.cc",
+    "autofill/maho_otp_backend.h",
+  ]
+  public_deps = [
+    "//base",
+    "//components/one_time_tokens/core/browser",
+  ]
+  deps = [
+    "//chrome/browser/profiles:profile",
+    "//components/keyed_service/core",
+    "//maho/browser/mail_helper:maho_mail_service_factory",
+  ]
+}
+
 source_set("maho_ai_client") {
   sources = [
     "ai/maho_ai_llm_client.cc",
@@ -1660,6 +1676,10 @@ test("maho_password_store_backend_test") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
   ]
+
+  # TestingProfile registers localized prefs that read resource strings, so
+  # the packed resources must exist next to the test binary at runtime.
+  data_deps = [ "//chrome:packed_resources" ]
 }
 
 # Automated coverage for previously-manual QA items across three surfaces:
@@ -1886,6 +1906,7 @@ if (!is_android) {
       "//chrome/browser",
       "//chrome/browser:browser_process",
       "//chrome/browser/password_manager/factories",
+      "//chrome/browser/password_manager:test_support_ui",
       "//chrome/browser/profiles:profile",
       "//chrome/browser/profiles:profile_manager",
       "//chrome/browser/ui",

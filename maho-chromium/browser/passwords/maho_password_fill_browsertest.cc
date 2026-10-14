@@ -10,6 +10,7 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/memory/raw_ptr_exclusion.h"
 #include "base/run_loop.h"
 #include "base/test/run_until.h"
 #include "base/time/time.h"
@@ -551,7 +552,8 @@ protected:
 
   virtual int TestServerPort() const { return 0; }
 
-  MahoCore *core_ = nullptr;
+  // RAW_PTR_EXCLUSION: opaque Rust FFI handle; not PartitionAlloc memory.
+  RAW_PTR_EXCLUSION MahoCore *core_ = nullptr;
   base::CallbackListSubscription create_services_subscription_;
 };
 

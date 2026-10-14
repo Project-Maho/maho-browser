@@ -1,3 +1,6 @@
+// These tests serve the CLI over a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::PathBuf;
