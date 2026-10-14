@@ -186,9 +186,13 @@ The script:
 
 ### Windows
 
-**Required tooling:**
-- Visual Studio Build Tools 2022 or a full Visual Studio install
-- Windows SDK 10.0.22000.0 or later
+A fresh Windows machine is provisioned with the scripts in
+`maho-chromium/build/windows_builder/`; see
+[windows-builder.md](windows-builder.md) for the full runbook.
+
+**Required tooling (Chromium 154):**
+- Visual Studio 2026 (18.x) Build Tools with the C++ workload and ATL/MFC
+- Windows SDK 10.0.28000 plus SDK Debugging Tools
 - Rust targets: `x86_64-pc-windows-msvc` (primary), optionally `aarch64-pc-windows-msvc`
 - `depot_tools` must be on `PATH`
 
