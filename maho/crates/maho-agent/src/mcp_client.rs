@@ -219,43 +219,6 @@ pub struct McpClient {
     resolved_permission: ToolPermission,
 }
 
-fn apply_output_cap(mut val: Value, output_cap: usize) -> Result<Value> {
-    let mut truncated_inner = false;
-    if let Some(content) = val.get_mut("content") {
-        if let Some(arr) = content.as_array_mut() {
-            if let Some(first) = arr.first_mut() {
-                if let Some(text_val) = first.get_mut("text") {
-                    if let Some(text) = text_val.as_str() {
-                        if text.len() > output_cap {
-                            let mut end = output_cap;
-                            while end > 0 && !text.is_char_boundary(end) {
-                                end -= 1;
-                            }
-                            let truncated = format!("{}... [output truncated]", &text[..end]);
-                            *text_val = Value::String(truncated);
-                            truncated_inner = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !truncated_inner {
-        let mut val_str = serde_json::to_string(&val)?;
-        if val_str.len() > output_cap {
-            let mut end = output_cap;
-            while end > 0 && !val_str.is_char_boundary(end) {
-                end -= 1;
-            }
-            val_str.truncate(end);
-            return Ok(Value::String(format!("{}... [output truncated]", val_str)));
-        }
-    }
-
-    Ok(val)
-}
-
 impl McpClient {
     pub async fn connect(config: &AiMcpServer, auth_token: Option<String>) -> Result<Self> {
         let config_clone = config.clone();
@@ -300,8 +263,9 @@ impl McpClient {
                     .ok_or_else(|| anyhow::anyhow!("Command is required for stdio transport"))?;
 
                 let mut parts: Vec<String> = if command_str.trim().starts_with('[') {
-                    serde_json::from_str(command_str)
-                        .unwrap_or_else(|_| vec![command_str.to_string()])
+                    serde_json::from_str(command_str).map_err(|e| {
+                        anyhow::anyhow!("Malformed JSON command for stdio transport: {}", e)
+                    })?
                 } else {
                     command_str
                         .split_whitespace()
@@ -447,7 +411,17 @@ impl McpClient {
                         permission = ?resolved_permission,
                         "McpClient::connect UDS succeeded"
                     );
+                    // FIX-9b: the browser client opens its own connection, so the
+                    // peer behind it must be verified too; a socket swapped
+                    // between the two connects must not inherit AutoApprove.
                     let browser_client = if resolved_permission == ToolPermission::AutoApprove {
+                        let probe = tokio::net::UnixStream::connect(socket_path)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Failed to connect to UDS: {:?}", e))?;
+                        verify_uds_peer(&probe).map_err(|reason| {
+                            anyhow::anyhow!("browser client UDS peer verification failed: {reason}")
+                        })?;
+                        drop(probe);
                         Some(Arc::new(
                             maho_browser_mcp::client::BrowserClient::connect(std::path::Path::new(
                                 socket_path,
@@ -477,10 +451,14 @@ impl McpClient {
         if let Some(browser_client) = self.browser_client.clone() {
             let server_name = self.server_name.clone();
             let permission = self.resolved_permission;
+            let timeout = self.timeout;
             let handle = get_mcp_runtime()?.spawn(async move {
-                let result = browser_client
-                    .call("tools/list", serde_json::json!({}))
-                    .await?;
+                let result = tokio::time::timeout(
+                    timeout,
+                    browser_client.call("tools/list", serde_json::json!({})),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("list_tools timed out after {:?}", timeout))??;
                 let tools = result
                     .get("tools")
                     .and_then(|tools| tools.as_array())
@@ -615,9 +593,12 @@ impl McpClient {
 
         if let Some(browser_client) = self.browser_client.clone() {
             let output_cap = self.output_cap;
+            let timeout = self.timeout;
             let handle = get_mcp_runtime()?.spawn(async move {
-                let result = browser_client.call_tool(&raw_name, args).await?;
-                apply_output_cap(result, output_cap)
+                let result = tokio::time::timeout(timeout, browser_client.call_tool(&raw_name, args))
+                    .await
+                    .map_err(|_| anyhow::anyhow!("call_tool timed out after {:?}", timeout))??;
+                crate::tool_registry::apply_mcp_output_cap(result, output_cap)
             });
 
             return handle.await?;
@@ -639,7 +620,7 @@ impl McpClient {
                 .map_err(|_| anyhow::anyhow!("call_tool timed out after {:?}", timeout))?
                 .map_err(|e| anyhow::anyhow!("Failed to call tool: {:?}", e))?;
 
-            apply_output_cap(serde_json::to_value(&res)?, output_cap)
+            crate::tool_registry::apply_mcp_output_cap(serde_json::to_value(&res)?, output_cap)
         });
 
         handle.await?

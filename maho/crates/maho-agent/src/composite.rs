@@ -22,6 +22,9 @@ use std::sync::Arc;
 /// Default hard cap on steps per batch (fail-closed bound).
 pub const DEFAULT_MAX_STEPS: usize = 8;
 
+/// Hard wall-clock bound for a single step; a hung executor fails that step in isolation.
+const STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// One page operation inside a batch: a tool name plus its argument object.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompositeStep {
@@ -224,9 +227,11 @@ impl CompositeRunner {
         if request.steps.is_empty() {
             return Err(CompositeError::EmptyBatch);
         }
-        if request.steps.len() > self.config.max_steps {
+        // `max_steps` can arrive from deserialized config; never trust it past the ceiling.
+        let max_steps = self.config.max_steps.min(DEFAULT_MAX_STEPS);
+        if request.steps.len() > max_steps {
             return Err(CompositeError::TooManySteps {
-                max: self.config.max_steps,
+                max: max_steps,
                 got: request.steps.len(),
             });
         }
@@ -248,7 +253,16 @@ impl CompositeRunner {
                 total,
             });
 
-            let step_result = match executor.execute_step(&step.tool, &step.args).await {
+            let step_outcome = match tokio::time::timeout(
+                STEP_TIMEOUT,
+                executor.execute_step(&step.tool, &step.args),
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(_elapsed) => Err(format!("step timed out after {}s", STEP_TIMEOUT.as_secs())),
+            };
+            let step_result = match step_outcome {
                 Ok(output) => CompositeStepResult {
                     index,
                     tool: step.tool.clone(),
@@ -511,6 +525,38 @@ mod tests {
                 .unwrap_err()
         });
         assert_eq!(outcome, CompositeError::EmptyBatch);
+    }
+
+    #[test]
+    fn deserialized_max_steps_is_clamped_to_ceiling() {
+        let tokio_rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let outcome = tokio_rt.block_on(async {
+            let executor = ScriptedExecutor::new(vec![]);
+            let request = CompositeRequest {
+                batch_id: "batch-huge".to_string(),
+                steps: (0..DEFAULT_MAX_STEPS + 1)
+                    .map(|_| CompositeStep {
+                        tool: "browser_snapshot".to_string(),
+                        args: Value::Object(Default::default()),
+                    })
+                    .collect(),
+            };
+            let runner = CompositeRunner::new(CompositeExecutionConfig {
+                enabled: true,
+                max_steps: usize::MAX,
+            });
+            runner
+                .execute_batch(&request, &executor, |_| {})
+                .await
+                .unwrap_err()
+        });
+        assert_eq!(
+            outcome,
+            CompositeError::TooManySteps {
+                max: DEFAULT_MAX_STEPS,
+                got: DEFAULT_MAX_STEPS + 1
+            }
+        );
     }
 
     #[test]

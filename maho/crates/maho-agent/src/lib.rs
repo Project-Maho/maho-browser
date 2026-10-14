@@ -994,7 +994,7 @@ mod unavailable_runtime_tests {
 pub fn init_audit_logging() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
-        use std::fs::{create_dir_all, OpenOptions};
+        use std::fs::create_dir_all;
         use std::path::PathBuf;
         use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -1027,7 +1027,6 @@ pub fn init_audit_logging() {
                 );
             }
             paths.push(PathBuf::from("/var/log/maho/audit.json"));
-            paths.push(PathBuf::from("/tmp/maho_audit.json"));
         }
 
         #[cfg(all(unix, not(target_os = "macos")))]
@@ -1044,23 +1043,73 @@ pub fn init_audit_logging() {
                 );
             }
             paths.push(PathBuf::from("/var/log/maho/audit.json"));
-            paths.push(PathBuf::from("/tmp/maho_audit.json"));
         }
 
         for path in paths {
             if let Some(parent) = path.parent() {
-                let _ = create_dir_all(parent);
+                if let Err(error) = create_dir_all(parent) {
+                    tracing::debug!(path = %parent.display(), %error, "audit log dir unavailable");
+                    continue;
+                }
             }
-            if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
-                let audit_layer = tracing_subscriber::fmt::layer()
-                    .json()
-                    .with_writer(file)
-                    .with_filter(EnvFilter::new("maho_agent::audit=info"));
-                let _ = tracing_subscriber::registry().with(audit_layer).try_init();
-                break;
+            match open_audit_log_file(&path) {
+                Ok(file) => {
+                    let audit_layer = tracing_subscriber::fmt::layer()
+                        .json()
+                        .with_writer(file)
+                        .with_filter(EnvFilter::new("maho_agent::audit=info"));
+                    if let Err(error) = tracing_subscriber::registry().with(audit_layer).try_init()
+                    {
+                        tracing::warn!(
+                            path = %path.display(),
+                            %error,
+                            "audit log subscriber not installed; audit events have no sink"
+                        );
+                    }
+                    return;
+                }
+                Err(error) => {
+                    tracing::debug!(path = %path.display(), %error, "audit log path unavailable");
+                }
             }
         }
+        tracing::warn!("no writable audit log location; audit events have no sink");
     });
+}
+
+/// Opens the audit log for append with owner-only permissions. On unix the
+/// final path component must not be a symlink (O_NOFOLLOW), so a pre-planted
+/// link cannot redirect audit writes.
+fn open_audit_log_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path)
+}
+
+#[cfg(all(test, unix))]
+mod audit_log_tests {
+    use super::open_audit_log_file;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn audit_log_file_is_owner_only_and_refuses_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.json");
+        open_audit_log_file(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let target = dir.path().join("target.json");
+        std::fs::write(&target, b"").unwrap();
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(open_audit_log_file(&link).is_err());
+    }
 }
 
 pub fn proxy_url() -> String {

@@ -39,8 +39,8 @@ fn get_mcp_runtime() -> Result<&'static Runtime> {
 /// for the effective post-verification permission. On iOS the browser server is
 /// in-process/UDS so the peer is always same-user.
 ///
-/// SECURITY (FIX-9a): even at `AutoApprove`, only READ-ONLY dogfood tools may
-/// auto-run; sensitive browser actions stay gated — see [`is_readonly_dogfood_tool`].
+/// SECURITY (FIX-9a): every tool listed by this stub stays `sensitive`, so the
+/// permission callback still gates each call even at `AutoApprove`.
 pub fn resolve_uds_permission(
     transport: McpTransport,
     socket_path: Option<&str>,
@@ -55,34 +55,6 @@ pub fn resolve_uds_permission(
     } else {
         ToolPermission::AlwaysAsk
     }
-}
-
-/// Read-only classification for dogfood (`AutoApprove`) browser MCP tools.
-///
-/// FIX-9a (#3): only tools on this READ-ONLY allowlist auto-run under dogfood
-/// `AutoApprove`; sensitive actions (mutation / navigation / input) and any
-/// unknown tool keep `sensitive == true` so the permission callback still gates
-/// them. Mirrors the desktop [`crate::mcp_client`] implementation.
-pub fn is_readonly_dogfood_tool(raw_name: &str) -> bool {
-    matches!(
-        raw_name,
-        "browser_ping"
-            | "browser_tab_list"
-            | "browser_tab_get"
-            | "browser_history_search"
-            | "browser_bookmarks_search"
-            | "browser_page_content"
-            | "browser_page_text"
-            | "browser_search_in_page"
-            | "browser_page_context"
-            | "browser_screenshot_full"
-            | "browser_screenshot_element"
-            | "browser_accessibility_snapshot"
-            | "browser_console_messages"
-            | "browser_network_get_har"
-            | "browser_get_blocked_domains"
-            | "browser_routines_list"
-    )
 }
 
 /// FIX-9b (#4): require the connected UDS peer to be a same-user process before
@@ -119,7 +91,15 @@ impl McpClient {
             let config_clone = config.clone();
             let handle = get_mcp_runtime()?
                 .spawn(async move { Self::connect_uds(&config_clone, auth_token).await });
-            handle.await?
+            let result = handle.await?;
+            maho_types::events::core_update::emit_core_update(
+                maho_types::events::core_update::CoreUpdate::ToolAvailabilityChanged {
+                    workspace_id: config.workspace_id.clone(),
+                    server_name: config.name.clone(),
+                    available: result.is_ok(),
+                },
+            );
+            result
         } else {
             Err(anyhow!(UNSUPPORTED))
         }
@@ -249,43 +229,7 @@ impl McpClient {
                 .map_err(|_| anyhow!("call_tool timed out after {:?}", timeout))?
                 .map_err(|e| anyhow!("Failed to call tool: {:?}", e))?;
 
-            let mut val = serde_json::to_value(&res)?;
-
-            let mut truncated_inner = false;
-            if let Some(content) = val.get_mut("content") {
-                if let Some(arr) = content.as_array_mut() {
-                    if let Some(first) = arr.first_mut() {
-                        if let Some(text_val) = first.get_mut("text") {
-                            if let Some(text) = text_val.as_str() {
-                                if text.len() > output_cap {
-                                    let mut end = output_cap;
-                                    while end > 0 && !text.is_char_boundary(end) {
-                                        end -= 1;
-                                    }
-                                    let truncated =
-                                        format!("{}... [output truncated]", &text[..end]);
-                                    *text_val = Value::String(truncated);
-                                    truncated_inner = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !truncated_inner {
-                let mut val_str = serde_json::to_string(&val)?;
-                if val_str.len() > output_cap {
-                    let mut end = output_cap;
-                    while end > 0 && !val_str.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    val_str.truncate(end);
-                    return Ok(Value::String(format!("{}... [output truncated]", val_str)));
-                }
-            }
-
-            Ok(val)
+            crate::tool_registry::apply_mcp_output_cap(serde_json::to_value(&res)?, output_cap)
         });
 
         handle.await?

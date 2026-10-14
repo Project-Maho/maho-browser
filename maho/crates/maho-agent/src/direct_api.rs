@@ -250,10 +250,25 @@ impl DirectApiExecutionOutcome {
                 message,
                 retryable,
             } => match code {
-                DirectApiErrorCode::RateLimited | DirectApiErrorCode::ServiceUnavailable => {
+                // A rate-limited request was rejected before execution, and a retryable
+                // 5xx is a read; both may be replayed through tabs. A non-retryable
+                // 5xx/network failure is an uncertain write: the mutation may have
+                // landed, so a tab replay could duplicate it.
+                DirectApiErrorCode::RateLimited => DirectApiOutcome::TypedUnavailable {
+                    reason: message.clone(),
+                    can_fallback_to_tabs: true,
+                },
+                DirectApiErrorCode::ServiceUnavailable if *retryable => {
                     DirectApiOutcome::TypedUnavailable {
                         reason: message.clone(),
                         can_fallback_to_tabs: true,
+                    }
+                }
+                DirectApiErrorCode::ServiceUnavailable | DirectApiErrorCode::NetworkError => {
+                    DirectApiOutcome::HardFailure {
+                        code: code.to_string().to_uppercase(),
+                        message: message.clone(),
+                        is_policy_denial: false,
                     }
                 }
                 DirectApiErrorCode::ScopeDenied
@@ -408,10 +423,42 @@ pub trait ApprovalTokenStore: Send + Sync {
     fn consume_token(&self, action_id: &str, token: &str) -> Result<(), DirectApiErrorCode>;
 }
 
+/// Approval tokens expire so an unused approval cannot be replayed indefinitely.
+const APPROVAL_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// Upper bound on simultaneously outstanding approval tokens.
+const MAX_PENDING_APPROVAL_TOKENS: usize = 1024;
+/// Upper bound on remembered consumed tokens (older ones then report `InvalidApprovalToken`).
+const MAX_CONSUMED_APPROVAL_TOKENS: usize = 4096;
+
+/// Identifies one exact action: service, operation and a digest of its parameters.
+///
+/// Approval tokens are issued and consumed per action id, so a token granted for
+/// one parameter set (e.g. a message to Alice) cannot authorize another (to Bob).
+pub fn approval_action_id(operation: &DirectApiOperation) -> String {
+    use std::hash::{Hash, Hasher};
+    // serde_json maps are ordered, so the serialization is canonical. Two
+    // differently salted 64-bit hashes give a 128-bit digest.
+    let canonical = operation.parameters.to_string();
+    let digest = |salt: u8| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        salt.hash(&mut hasher);
+        canonical.hash(&mut hasher);
+        hasher.finish()
+    };
+    format!(
+        "{}:{}#{:016x}{:016x}",
+        operation.service,
+        operation.operation_name,
+        digest(1),
+        digest(2)
+    )
+}
+
 /// In-memory implementation of ApprovalTokenStore.
 #[derive(Default)]
 pub struct InMemoryApprovalTokenStore {
-    valid_tokens: Mutex<HashMap<String, HashSet<String>>>,
+    /// action id -> token -> issue time
+    valid_tokens: Mutex<HashMap<String, HashMap<String, std::time::Instant>>>,
     consumed_tokens: Mutex<HashSet<String>>,
 }
 
@@ -431,10 +478,35 @@ impl ApprovalTokenStore for InMemoryApprovalTokenStore {
             .valid_tokens
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let now = std::time::Instant::now();
+        valid.retain(|_, tokens| {
+            tokens.retain(|_, issued| now.duration_since(*issued) < APPROVAL_TOKEN_TTL);
+            !tokens.is_empty()
+        });
+        // Over the cap: evict the oldest outstanding tokens to make room.
+        while valid.values().map(HashMap::len).sum::<usize>() >= MAX_PENDING_APPROVAL_TOKENS {
+            let oldest = valid
+                .iter()
+                .flat_map(|(action, tokens)| {
+                    tokens
+                        .iter()
+                        .map(move |(token, issued)| (*issued, action.clone(), token.clone()))
+                })
+                .min();
+            let Some((_, action, token)) = oldest else {
+                break;
+            };
+            if let Some(tokens) = valid.get_mut(&action) {
+                tokens.remove(&token);
+                if tokens.is_empty() {
+                    valid.remove(&action);
+                }
+            }
+        }
         valid
             .entry(action_id.to_string())
             .or_default()
-            .insert(token_value.clone());
+            .insert(token_value.clone(), now);
         ApprovalToken(token_value)
     }
 
@@ -452,7 +524,16 @@ impl ApprovalTokenStore for InMemoryApprovalTokenStore {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(tokens_for_action) = valid.get_mut(action_id) {
-            if tokens_for_action.remove(token) {
+            if let Some(issued) = tokens_for_action.remove(token) {
+                if tokens_for_action.is_empty() {
+                    valid.remove(action_id);
+                }
+                if issued.elapsed() >= APPROVAL_TOKEN_TTL {
+                    return Err(DirectApiErrorCode::InvalidApprovalToken);
+                }
+                if consumed.len() >= MAX_CONSUMED_APPROVAL_TOKENS {
+                    consumed.clear();
+                }
                 consumed.insert(token.to_string());
                 return Ok(());
             }
@@ -547,13 +628,28 @@ impl ScopeRegistry for InMemoryScopeRegistry {
 /// Internal request dispatched to the transport layer.
 ///
 /// Invariant: Contains injected Authorization headers. Never leaked to model context.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct TransportRequest {
     pub service: DirectApiServiceKind,
     pub operation_name: String,
     pub method: String,
     pub headers: HashMap<String, String>,
     pub body: Option<serde_json::Value>,
+}
+
+impl std::fmt::Debug for TransportRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Header values carry the injected Authorization credential: names only.
+        let mut header_names: Vec<&str> = self.headers.keys().map(String::as_str).collect();
+        header_names.sort_unstable();
+        f.debug_struct("TransportRequest")
+            .field("service", &self.service)
+            .field("operation_name", &self.operation_name)
+            .field("method", &self.method)
+            .field("headers", &format_args!("{header_names:?} [REDACTED]"))
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 /// Response returned from the transport layer.
@@ -708,35 +804,24 @@ impl DirectApiBroker for InMemoryDirectApiBroker {
             };
         }
 
-        let action_id = format!(
-            "{}:{}",
-            request.operation.service, request.operation.operation_name
-        );
+        // The action id binds the approval to this exact service, operation and
+        // parameter set; an approval for one payload never authorizes another.
+        let action_id = approval_action_id(&request.operation);
 
-        // Step 2: Confirmation check (Fail-closed)
-        if request.requires_confirmation {
-            match &request.approval_token {
-                None => {
-                    let _ = self.approval_store.issue_token(&action_id);
-                    return DirectApiExecutionOutcome::NeedsConfirmation {
-                        action_id,
-                        description: format!(
-                            "Action {} on service {} requires explicit user confirmation",
-                            request.operation.operation_name, request.operation.service
-                        ),
-                        required_scopes: request.operation.required_scopes.clone(),
-                    };
-                }
-                Some(token) => {
-                    if let Err(err_code) = self.approval_store.consume_token(&action_id, token) {
-                        return DirectApiExecutionOutcome::TypedError {
-                            code: err_code,
-                            message: format!("Confirmation verification failed: {err_code}"),
-                            retryable: false,
-                        };
-                    }
-                }
-            }
+        // Step 2: Confirmation check (Fail-closed). The caller-supplied flag can only
+        // add confirmation; a mutating operation always requires it.
+        let requires_confirmation =
+            request.requires_confirmation || !request.operation.read_only;
+        if requires_confirmation && request.approval_token.is_none() {
+            let _ = self.approval_store.issue_token(&action_id);
+            return DirectApiExecutionOutcome::NeedsConfirmation {
+                action_id,
+                description: format!(
+                    "Action {} on service {} requires explicit user confirmation",
+                    request.operation.operation_name, request.operation.service
+                ),
+                required_scopes: request.operation.required_scopes.clone(),
+            };
         }
 
         // Step 3: Auth handle resolution and Scope enforcement
@@ -794,6 +879,19 @@ impl DirectApiBroker for InMemoryDirectApiBroker {
         headers.insert("Authorization".to_string(), cred.format_auth_header());
         headers.insert("Content-Type".to_string(), "application/json".to_string());
 
+        // Step 4b: Consume the approval only now that auth, scope and credential checks
+        // have passed, immediately before dispatch, so a rejected request never burns it.
+        if requires_confirmation {
+            let token = request.approval_token.as_deref().unwrap_or_default();
+            if let Err(err_code) = self.approval_store.consume_token(&action_id, token) {
+                return DirectApiExecutionOutcome::TypedError {
+                    code: err_code,
+                    message: format!("Confirmation verification failed: {err_code}"),
+                    retryable: false,
+                };
+            }
+        }
+
         let method = if request.operation.read_only {
             "GET".to_string()
         } else {
@@ -807,6 +905,10 @@ impl DirectApiBroker for InMemoryDirectApiBroker {
             headers,
             body: Some(request.operation.parameters.clone()),
         };
+
+        // A write whose outcome is unknown (5xx, timeout, dropped connection) may have
+        // been applied; replaying it, or re-running it through tabs, could duplicate it.
+        let replay_safe = request.operation.read_only;
 
         // Step 5: Transport execution and outcome mapping
         match self.transport.send(transport_req).await {
@@ -841,7 +943,7 @@ impl DirectApiBroker for InMemoryDirectApiBroker {
                 500..=599 => DirectApiExecutionOutcome::TypedError {
                     code: DirectApiErrorCode::ServiceUnavailable,
                     message: format!("Service unavailable: {}", resp.status_code),
-                    retryable: true,
+                    retryable: replay_safe,
                 },
                 other => DirectApiExecutionOutcome::TypedError {
                     code: DirectApiErrorCode::InternalError,
@@ -855,30 +957,44 @@ impl DirectApiBroker for InMemoryDirectApiBroker {
             Err(TransportError::Timeout) => DirectApiExecutionOutcome::TypedError {
                 code: DirectApiErrorCode::NetworkError,
                 message: "Direct API transport request timed out".to_string(),
-                retryable: true,
+                retryable: replay_safe,
             },
             Err(TransportError::NetworkError(msg)) => DirectApiExecutionOutcome::TypedError {
                 code: DirectApiErrorCode::NetworkError,
-                message: format!("Network error: {msg}"),
-                retryable: true,
+                message: format!("Network error: {}", sanitize_error_text(&msg)),
+                retryable: replay_safe,
             },
         }
     }
 }
 
+/// Maximum length of an upstream error message surfaced to the model.
+const MAX_ERROR_MESSAGE_CHARS: usize = 512;
+
+/// Caps length (on a char boundary) of text derived from upstream responses.
+fn sanitize_error_text(text: &str) -> String {
+    if text.chars().count() <= MAX_ERROR_MESSAGE_CHARS {
+        return text.to_string();
+    }
+    let mut truncated: String = text.chars().take(MAX_ERROR_MESSAGE_CHARS).collect();
+    truncated.push_str("...");
+    truncated
+}
+
 /// Sanitizes backend error responses to prevent raw HTML dumps from entering model context.
 fn sanitize_error_payload(body: &serde_json::Value) -> String {
     if let Some(msg) = body.get("message").and_then(|m| m.as_str()) {
-        return msg.to_string();
+        return sanitize_error_text(msg);
     }
     if let Some(err) = body.get("error").and_then(|e| e.as_str()) {
-        return err.to_string();
+        return sanitize_error_text(err);
     }
     let raw = body.to_string();
-    if raw.contains("<html") || raw.contains("<HTML") {
+    let lower = raw.to_ascii_lowercase();
+    if lower.contains("<html") || lower.contains("<!doctype") {
         "HTML error response from upstream service".to_string()
     } else {
-        raw
+        sanitize_error_text(&raw)
     }
 }
 
@@ -1014,7 +1130,8 @@ mod tests {
         let outcome1 = broker.execute(req).await;
         let action_id = match outcome1 {
             DirectApiExecutionOutcome::NeedsConfirmation { action_id, .. } => {
-                assert_eq!(action_id, "slack:chat.postMessage");
+                assert_eq!(action_id, approval_action_id(&op));
+                assert!(action_id.starts_with("slack:chat.postMessage#"));
                 action_id
             }
             other => panic!("Expected NeedsConfirmation, got {other:?}"),
@@ -1274,15 +1391,13 @@ mod tests {
         let broker =
             InMemoryDirectApiBroker::new(vault, approval_store.clone(), scope_registry, transport);
 
-        let action_id = "telegram:sendMessage";
-        let token = approval_store.issue_token(action_id);
-
         let op = DirectApiOperation::new(
             DirectApiServiceKind::Telegram,
             "sendMessage",
             serde_json::json!({ "chat_id": 123, "text": "Hi" }),
             false,
         );
+        let token = approval_store.issue_token(&approval_action_id(&op));
 
         let req = DirectApiExecutionRequest::new(
             op,
@@ -1565,5 +1680,207 @@ mod tests {
             }
             other => panic!("Expected TypedError ServiceUnavailable, got {other:?}"),
         }
+    }
+
+    fn write_op(text: &str) -> DirectApiOperation {
+        DirectApiOperation::new(
+            DirectApiServiceKind::Slack,
+            "chat.postMessage",
+            serde_json::json!({ "channel": "C1", "text": text }),
+            false,
+        )
+    }
+
+    fn broker_with_handle() -> (
+        InMemoryDirectApiBroker,
+        Arc<InMemoryApprovalTokenStore>,
+        Arc<InMemoryDirectApiTransport>,
+    ) {
+        let vault = Arc::new(InMemoryCredentialVault::new());
+        vault.store_credential("h".to_string(), VaultCredential::bearer("tok"));
+        let approvals = Arc::new(InMemoryApprovalTokenStore::new());
+        let transport = Arc::new(InMemoryDirectApiTransport::new());
+        let broker = InMemoryDirectApiBroker::new(
+            vault,
+            approvals.clone(),
+            Arc::new(InMemoryScopeRegistry::new()),
+            transport.clone(),
+        );
+        (broker, approvals, transport)
+    }
+
+    fn ctx() -> DirectApiExecutionContext {
+        DirectApiExecutionContext::new("s").with_auth_handle("h")
+    }
+
+    #[tokio::test]
+    async fn review_mutating_op_requires_confirmation_even_if_caller_clears_flag() {
+        let (broker, _, transport) = broker_with_handle();
+        let req = DirectApiExecutionRequest::new(write_op("hi"), ctx())
+            .with_requires_confirmation(false);
+        let outcome = broker.execute(req).await;
+        assert!(
+            matches!(outcome, DirectApiExecutionOutcome::NeedsConfirmation { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(transport.sent_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn review_uncertain_write_failures_are_not_retryable_or_tab_fallback() {
+        let (broker, _, transport) = broker_with_handle();
+        let op = write_op("hi");
+        for response in [
+            Ok(TransportResponse {
+                status_code: 503,
+                body: serde_json::json!({}),
+                headers: HashMap::new(),
+            }),
+            Err(TransportError::Timeout),
+            Err(TransportError::NetworkError("reset".into())),
+        ] {
+            transport.set_response(op.service, op.operation_name.clone(), response);
+            let token = broker.approval_store.issue_token(&approval_action_id(&op));
+            let outcome = broker
+                .execute(DirectApiExecutionRequest::new(op.clone(), ctx()).with_approval_token(&token.0))
+                .await;
+            match &outcome {
+                DirectApiExecutionOutcome::TypedError { retryable, .. } => assert!(!retryable),
+                other => panic!("expected TypedError, got {other:?}"),
+            }
+            assert!(
+                matches!(
+                    outcome.to_direct_api_outcome(),
+                    DirectApiOutcome::HardFailure { .. }
+                ),
+                "uncertain write must not fall back to tabs: {outcome:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn review_read_5xx_stays_retryable_with_tab_fallback() {
+        let (broker, _, transport) = broker_with_handle();
+        let op = DirectApiOperation::new(
+            DirectApiServiceKind::Slack,
+            "conversations.history",
+            serde_json::json!({}),
+            true,
+        );
+        transport.set_response(
+            op.service,
+            op.operation_name.clone(),
+            Ok(TransportResponse {
+                status_code: 503,
+                body: serde_json::json!({}),
+                headers: HashMap::new(),
+            }),
+        );
+        let outcome = broker.execute(DirectApiExecutionRequest::new(op, ctx())).await;
+        assert!(matches!(
+            outcome.to_direct_api_outcome(),
+            DirectApiOutcome::TypedUnavailable {
+                can_fallback_to_tabs: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn review_transport_request_debug_redacts_authorization() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer super-secret".to_string());
+        let req = TransportRequest {
+            service: DirectApiServiceKind::Gmail,
+            operation_name: "op".into(),
+            method: "GET".into(),
+            headers,
+            body: None,
+        };
+        let debug = format!("{req:?}");
+        assert!(!debug.contains("super-secret"), "{debug}");
+        assert!(debug.contains("Authorization"));
+    }
+
+    #[tokio::test]
+    async fn review_approval_token_is_bound_to_params() {
+        let (broker, approvals, transport) = broker_with_handle();
+        let token = approvals.issue_token(&approval_action_id(&write_op("to alice")));
+        let outcome = broker
+            .execute(
+                DirectApiExecutionRequest::new(write_op("to mallory"), ctx())
+                    .with_approval_token(&token.0),
+            )
+            .await;
+        assert!(matches!(
+            outcome,
+            DirectApiExecutionOutcome::TypedError {
+                code: DirectApiErrorCode::InvalidApprovalToken,
+                ..
+            }
+        ));
+        assert_eq!(transport.sent_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn review_approval_token_survives_failed_auth_and_scope_checks() {
+        let (broker, approvals, transport) = broker_with_handle();
+        let op = write_op("hi");
+        let token = approvals.issue_token(&approval_action_id(&op));
+        // Missing credentials: rejected before the token is consumed.
+        let missing = broker
+            .execute(
+                DirectApiExecutionRequest::new(op.clone(), DirectApiExecutionContext::new("s"))
+                    .with_approval_token(&token.0),
+            )
+            .await;
+        assert!(matches!(
+            missing,
+            DirectApiExecutionOutcome::TypedError {
+                code: DirectApiErrorCode::MissingCredentials,
+                ..
+            }
+        ));
+        // The same token still authorizes the corrected request.
+        let ok = broker
+            .execute(DirectApiExecutionRequest::new(op, ctx()).with_approval_token(&token.0))
+            .await;
+        assert!(matches!(ok, DirectApiExecutionOutcome::Ok { .. }), "{ok:?}");
+        assert_eq!(transport.sent_count(), 1);
+    }
+
+    #[test]
+    fn review_approval_store_is_bounded() {
+        let store = InMemoryApprovalTokenStore::new();
+        let first = store.issue_token("a");
+        for i in 0..(MAX_PENDING_APPROVAL_TOKENS + 10) {
+            store.issue_token(&format!("action-{i}"));
+        }
+        let pending: usize = store
+            .valid_tokens
+            .lock()
+            .unwrap()
+            .values()
+            .map(HashMap::len)
+            .sum();
+        assert!(pending <= MAX_PENDING_APPROVAL_TOKENS);
+        // The oldest token was evicted.
+        assert_eq!(
+            store.consume_token("a", &first.0),
+            Err(DirectApiErrorCode::InvalidApprovalToken)
+        );
+    }
+
+    #[test]
+    fn review_sanitize_error_payload_caps_length_and_catches_doctype() {
+        let long = serde_json::json!({ "message": "x".repeat(5000) });
+        assert!(sanitize_error_payload(&long).chars().count() <= MAX_ERROR_MESSAGE_CHARS + 3);
+        let doctype = serde_json::json!("<!DOCTYPE html><body>oops</body>");
+        assert_eq!(
+            sanitize_error_payload(&doctype),
+            "HTML error response from upstream service"
+        );
+        let long_raw = serde_json::json!({ "unrecognized": "y".repeat(5000) });
+        assert!(sanitize_error_payload(&long_raw).chars().count() <= MAX_ERROR_MESSAGE_CHARS + 3);
     }
 }

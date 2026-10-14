@@ -12,11 +12,9 @@ fn rpc_entry() -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs the omo runtime; opt in with cargo test -- --ignored"]
 async fn spawns_a_real_omo_runtime_and_reports_ready() {
-    if !rpc_entry().exists() {
-        eprintln!("skipping: omo runtime not installed at {:?}", rpc_entry());
-        return;
-    }
+    assert!(rpc_entry().exists(), "omo runtime not installed at {:?}", rpc_entry());
 
     let scratch = std::env::temp_dir().join(format!("maho-omo-live-{}", std::process::id()));
     let socket = scratch.join("rpc.sock");

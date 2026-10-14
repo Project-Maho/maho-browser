@@ -177,6 +177,10 @@ pub enum InteractionError {
     EmptyEffectDescription,
     #[error("Interaction request not found: {0}")]
     NotFound(InteractionRequestId),
+    #[error("Answer kind does not match interaction request {0}")]
+    AnswerKindMismatch(InteractionRequestId),
+    #[error("Selected option is not offered by interaction request {0}")]
+    UnknownOption(InteractionRequestId),
     #[error("Interaction request {id} is already in terminal state {state:?}")]
     AlreadyTerminal {
         id: InteractionRequestId,
@@ -281,6 +285,25 @@ impl InteractionBroker {
         }
 
         let ans = answer.into();
+        // Validate the answer against what was actually asked; a mismatched
+        // kind or an option id that was never offered is rejected and the
+        // request stays pending.
+        match (&req.kind, &ans) {
+            // Denial (dismiss) is valid for every kind and always fails closed.
+            (_, InteractionAnswer::Denied) => {}
+            (InteractionKind::Question { options, .. }, InteractionAnswer::SelectedOption(opt)) => {
+                if !options.iter().any(|offered| &offered.id == opt) {
+                    return Err(InteractionError::UnknownOption(id.clone()));
+                }
+            }
+            // Free text is accepted for both kinds: a question's "Other"
+            // reply, or an instruction sent with a confirmation (the approval
+            // card's confirm-with-instruction path). Text never satisfies
+            // `is_confirmed`, so it cannot stand in for an explicit confirm.
+            (_, InteractionAnswer::Text(_)) => {}
+            (InteractionKind::Confirmation { .. }, InteractionAnswer::Confirmed) => {}
+            _ => return Err(InteractionError::AnswerKindMismatch(id.clone())),
+        }
         if ans.is_denied() {
             req.state = InteractionState::Denied;
         } else {
@@ -593,6 +616,40 @@ mod tests {
             broker.cancel(&unknown_id),
             Err(InteractionError::NotFound(unknown_id.clone()))
         );
+    }
+
+    #[test]
+    fn test_interaction_resolve_rejects_wrong_kind_and_unknown_option() {
+        let mut broker = InteractionBroker::new();
+        let question = broker
+            .ask_user_question("Pick", vec![InteractionOption::new("a", "A")])
+            .expect("question");
+        // A question cannot be "confirmed", nor answered with an unoffered id.
+        assert_eq!(
+            broker.resolve(&question, InteractionAnswer::Confirmed),
+            Err(InteractionError::AnswerKindMismatch(question.clone()))
+        );
+        assert_eq!(
+            broker.resolve(&question, InteractionAnswer::option("install_approve")),
+            Err(InteractionError::UnknownOption(question.clone()))
+        );
+        assert!(broker.get(&question).unwrap().state.is_pending());
+        broker
+            .resolve(&question, InteractionAnswer::option("a"))
+            .expect("offered option resolves");
+
+        let confirmation = broker
+            .request_action_confirmation("Delete everything")
+            .expect("confirmation");
+        assert_eq!(
+            broker.resolve(&confirmation, InteractionAnswer::option("a")),
+            Err(InteractionError::AnswerKindMismatch(confirmation.clone()))
+        );
+        assert!(!broker.is_confirmed(&confirmation));
+        broker
+            .resolve(&confirmation, InteractionAnswer::Denied)
+            .expect("denial is valid for confirmations");
+        assert!(broker.get(&confirmation).unwrap().state.is_denied());
     }
 
     #[test]

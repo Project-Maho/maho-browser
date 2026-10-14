@@ -20,18 +20,14 @@ fn browser_mcp_binary() -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs the omo runtime and a built maho-browser-mcp; opt in with cargo test -- --ignored"]
 async fn drives_a_turn_through_a_real_omo_rpc_runtime() {
-    if !rpc_entry().exists() {
-        eprintln!("skipping: omo runtime not installed at {:?}", rpc_entry());
-        return;
-    }
-    if !browser_mcp_binary().exists() {
-        eprintln!(
-            "skipping: browser MCP binary not built at {:?}",
-            browser_mcp_binary()
-        );
-        return;
-    }
+    assert!(rpc_entry().exists(), "omo runtime not installed at {:?}", rpc_entry());
+    assert!(
+        browser_mcp_binary().exists(),
+        "browser MCP binary not built at {:?}",
+        browser_mcp_binary()
+    );
 
     let scratch = tempfile::tempdir().expect("scratch directory");
     let socket = scratch.path().join("rpc.sock");
@@ -85,18 +81,18 @@ async fn drives_a_turn_through_a_real_omo_rpc_runtime() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs the omo runtime, maho-browser-mcp and MAHO_TEST_PROXY_URL/KEY/MODEL; opt in with cargo test -- --ignored"]
 async fn streams_real_assistant_tokens_through_a_configured_provider() {
-    if !rpc_entry().exists() || !browser_mcp_binary().exists() {
-        eprintln!("skipping: omo runtime or browser MCP binary missing");
-        return;
-    }
+    assert!(
+        rpc_entry().exists() && browser_mcp_binary().exists(),
+        "omo runtime or browser MCP binary missing"
+    );
     let (Ok(base_url), Ok(api_key), Ok(model)) = (
         std::env::var("MAHO_TEST_PROXY_URL"),
         std::env::var("MAHO_TEST_PROXY_KEY"),
         std::env::var("MAHO_TEST_PROXY_MODEL"),
     ) else {
-        eprintln!("skipping: MAHO_TEST_PROXY_URL, MAHO_TEST_PROXY_KEY, or MAHO_TEST_PROXY_MODEL not set");
-        return;
+        panic!("MAHO_TEST_PROXY_URL, MAHO_TEST_PROXY_KEY and MAHO_TEST_PROXY_MODEL must be set");
     };
 
     let scratch = tempfile::tempdir().expect("scratch directory");
@@ -165,6 +161,7 @@ async fn streams_real_assistant_tokens_through_a_configured_provider() {
 }
 
 #[tokio::test]
+#[ignore = "live: needs the omo runtime; opt in with cargo test -- --ignored"]
 async fn omo_returns_auth_providers_with_oauth_and_api_key() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let sock = scratch.path().join("omo.sock");
@@ -191,11 +188,9 @@ async fn omo_returns_auth_providers_with_oauth_and_api_key() {
 }
 
 #[test]
+#[ignore = "live: needs MAHO_STAGED_MACOS_DIR pointing at a staged build; opt in with cargo test -- --ignored"]
 fn resolver_agrees_with_the_build_staging_layout() {
-    let Ok(dir) = std::env::var("MAHO_STAGED_MACOS_DIR") else {
-        eprintln!("skipping: MAHO_STAGED_MACOS_DIR not set");
-        return;
-    };
+    let dir = std::env::var("MAHO_STAGED_MACOS_DIR").expect("MAHO_STAGED_MACOS_DIR must be set");
     let rt = maho_agent::omo::config::BundledRuntime::from_executable_dir(&dir);
     let missing = rt.missing();
     assert!(
@@ -205,19 +200,14 @@ fn resolver_agrees_with_the_build_staging_layout() {
 }
 
 #[tokio::test]
+#[ignore = "live: needs the omo runtime, a running browser with its maho-browser-mcp helper and MAHO_TEST_PROXY_KEY; opt in with cargo test -- --ignored"]
 async fn omo_invokes_browser_tab_list_through_mcp() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let sock = scratch.path().join("omo.sock");
     let helpers_mcp = std::path::PathBuf::from("/Volumes/T9-Mac/chromium/src/out/Default/Maho.app/Contents/Helpers/maho-browser-mcp");
-    if !helpers_mcp.exists() {
-        eprintln!("skipping: helpers_mcp not built yet");
-        return;
-    }
+    assert!(helpers_mcp.exists(), "helpers_mcp not built at {helpers_mcp:?}");
 
-    let Ok(api_key) = std::env::var("MAHO_TEST_PROXY_KEY") else {
-        eprintln!("skipping: MAHO_TEST_PROXY_KEY not set");
-        return;
-    };
+    let api_key = std::env::var("MAHO_TEST_PROXY_KEY").expect("MAHO_TEST_PROXY_KEY must be set");
     let base_url = std::env::var("MAHO_TEST_PROXY_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:18801/v1".to_string());
     let model = std::env::var("MAHO_TEST_PROXY_MODEL")
@@ -282,14 +272,12 @@ async fn omo_invokes_browser_tab_list_through_mcp() {
 }
 
 #[tokio::test]
+#[ignore = "live: needs the omo runtime and a running browser with its maho-browser-mcp helper; opt in with cargo test -- --ignored"]
 async fn omo_gates_boundary_tools_as_always_ask() {
     let scratch = tempfile::tempdir().expect("tempdir");
     let sock = scratch.path().join("omo.sock");
     let helpers_mcp = std::path::PathBuf::from("/Volumes/T9-Mac/chromium/src/out/Default/Maho.app/Contents/Helpers/maho-browser-mcp");
-    if !helpers_mcp.exists() {
-        eprintln!("skipping: helpers_mcp not built yet");
-        return;
-    }
+    assert!(helpers_mcp.exists(), "helpers_mcp not built at {helpers_mcp:?}");
 
     let config = OmoLaunchConfig::builder(scratch.path())
         .runtime_binary("bun")
@@ -300,10 +288,7 @@ async fn omo_gates_boundary_tools_as_always_ask() {
 
     let backend = OmoBackend::new(config, helpers_mcp, scratch.path());
     let tools = backend.list_tools().await.expect("list tools");
-    if tools.is_empty() {
-        eprintln!("skipping: browser is not running to answer MCP tools");
-        return;
-    }
+    assert!(!tools.is_empty(), "the browser must be running to answer MCP tools");
 
     if let Some(mail_send) = tools.iter().find(|t| t.name == "mail_send") {
         assert_eq!(mail_send.permission, maho_types::tool::ToolPermission::AlwaysAsk);

@@ -2,7 +2,8 @@
 //! Drives `OmoBackend` against the omo runtime shipped inside Maho.app, so session
 //! lifecycle and error propagation are proven against the real RPC server rather than a
 //! stand-in. Point `MAHO_OMO_BUNDLE_DIR` at `<Maho.app>/Contents`, or `MAHO_OMO_BUN` plus
-//! `MAHO_OMO_RPC_ENTRY` at an equivalent runtime; the tests skip when none is present.
+//! `MAHO_OMO_RPC_ENTRY` at an equivalent runtime. The tests are `#[ignore]`d; opt in with
+//! `cargo test -- --ignored` and they fail when no runtime is present.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -77,11 +78,9 @@ async fn turn(backend: &OmoBackend, session: &str) -> Result<ChatMessage, maho_a
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs the bundled omo runtime (MAHO_OMO_BUNDLE_DIR or MAHO_OMO_BUN + MAHO_OMO_RPC_ENTRY); opt in with cargo test -- --ignored"]
 async fn provider_http_error_reaches_the_caller_with_its_text() {
-    if bundle().is_none() {
-        eprintln!("skipping: bundled omo runtime not found");
-        return;
-    }
+    assert!(bundle().is_some(), "bundled omo runtime not found");
     let scratch = tempfile::tempdir().unwrap();
     let provider = fixed_provider(
         "429 Too Many Requests",
@@ -98,11 +97,9 @@ async fn provider_http_error_reaches_the_caller_with_its_text() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "live: needs the bundled omo runtime (MAHO_OMO_BUNDLE_DIR or MAHO_OMO_BUN + MAHO_OMO_RPC_ENTRY); opt in with cargo test -- --ignored"]
 async fn idle_evicted_session_is_reopened_without_unknown_session() {
-    if bundle().is_none() {
-        eprintln!("skipping: bundled omo runtime not found");
-        return;
-    }
+    assert!(bundle().is_some(), "bundled omo runtime not found");
     let scratch = tempfile::tempdir().unwrap();
     // Any provider answer works here: the assertion is about the session handle, and
     // a provider error proves the prompt was accepted by a live session. A 400 is not
@@ -113,13 +110,22 @@ async fn idle_evicted_session_is_reopened_without_unknown_session() {
         provider,
         &[("SENPI_RPC_SESSION_IDLE_EVICTION_MS", "1500")],
     );
+    let mut events = backend.subscribe_rpc_events().await.expect("subscribe before turn");
 
     let first = turn(&backend, "live-evict").await.expect_err("fixture provider fails");
     eprintln!("LIVE_TURN_1={first}");
     assert!(!first.to_string().contains("unknown_session"), "{first}");
 
-    // Outlast omo's idle window (1.5 s plus its sweep tick) so the session is evicted.
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match events.recv().await.expect("runtime event stream must stay open") {
+                maho_agent::omo::proto::RpcEvent::SessionClosed { reason, .. }
+                    if reason.as_deref() == Some("idle_evicted") => break,
+                maho_agent::omo::proto::RpcEvent::SessionParked { .. } => break,
+                _ => {}
+            }
+        }
+    }).await.expect("runtime must announce idle eviction");
 
     let second = turn(&backend, "live-evict").await.expect_err("fixture provider fails");
     eprintln!("LIVE_TURN_2={second}");

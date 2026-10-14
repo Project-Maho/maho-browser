@@ -1,5 +1,7 @@
 use crate::approval::ToolSensitivity;
-use crate::fallback_ladder::{FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval};
+use crate::fallback_ladder::{
+    tool_profile, FallbackSelectionRequest, FallbackTier, ScreenshotCuaApproval,
+};
 
 pub fn browser_tool_fallback_request<'a>(
     tool_name: &'a str,
@@ -28,46 +30,16 @@ pub fn browser_tool_fallback_request<'a>(
 }
 
 fn infer_requested_tier(tool_name: &str, args: Option<&serde_json::Value>) -> FallbackTier {
-    if requests_screenshot_cua(tool_name, args) {
+    // Tier comes from the same table as the ladder's action class, so the two can
+    // never disagree; unknown tools get its most conservative profile.
+    let profile = tool_profile(tool_name);
+    if profile.tier == FallbackTier::ScreenshotCua || args_request_screenshot_cua(args) {
         return FallbackTier::ScreenshotCua;
     }
-    match tool_name {
-        "browser_navigate" | "browser_key_press" | "input.key_press" | "input_key_press" => {
-            FallbackTier::TypedDomainApi
-        }
-        "page_query_selector"
-        | "page_get_text"
-        | "page_get_attribute"
-        | "page_wait_for_selector"
-        | "browser_wait_for_navigation"
-        | "input.locator_click"
-        | "input.locator_type"
-        | "input_locator_click"
-        | "input_locator_type"
-        | "locator_click"
-        | "locator_type"
-        | "browser_locator_click"
-        | "browser_locator_type"
-        | "browser_act_and_observe"
-        | "browser.act_and_observe" => FallbackTier::DomRefLocator,
-        "browser_accessibility_snapshot"
-        | "page.accessibility_snapshot"
-        | "page.accessibility_snapshot_v2"
-        | "page_accessibility_snapshot_v2"
-        | "browser_accessibility_snapshot_v2" => FallbackTier::AccessibilitySnapshot,
-        "browser_click"
-        | "browser_type"
-        | "browser_select"
-        | "browser_scroll"
-        | "browser_hover"
-        | "browser_file_upload_select"
-        | "input.click"
-        | "input.type"
-        | "input.select"
-        | "input.scroll"
-        | "input.hover"
-        | "input.file_upload_select" => element_action_tier(tool_name, args),
-        _ => FallbackTier::TypedDomainApi,
+    if profile.element_action {
+        element_action_tier(tool_name, args)
+    } else {
+        profile.tier
     }
 }
 
@@ -89,12 +61,7 @@ fn element_action_tier(tool_name: &str, args: Option<&serde_json::Value>) -> Fal
     FallbackTier::AccessibilitySnapshot
 }
 
-fn requests_screenshot_cua(tool_name: &str, args: Option<&serde_json::Value>) -> bool {
-    if (tool_name.contains("screenshot") && !tool_name.contains("snapshot"))
-        || tool_name.contains("cua")
-    {
-        return true;
-    }
+fn args_request_screenshot_cua(args: Option<&serde_json::Value>) -> bool {
     args.is_some_and(|value| {
         value
             .get("fallback_tier")

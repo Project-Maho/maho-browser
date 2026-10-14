@@ -6,14 +6,11 @@ use maho_agent::AgentRuntime;
 use maho_core::maho_core::MahoCore;
 
 use crate::agent::callback_lease::{
-    dispatch_unified_event, CallbackReleasePolicy, MahoAgentReleaseCallback, SendableCallback,
-    SendableUserData, SessionCallbackLease, UnifiedEventCallbackRegistration,
+    dispatch_unified_event, MahoAgentReleaseCallback, SessionCallbackLease,
+    UnifiedEventCallbackRegistration,
 };
-use crate::agent::session::{
-    agent_error_callback_text, apply_agent_skill_system_prompt, maho_agent_send_message_impl,
-    ActiveConversationGuard, MahoAgentSession,
-};
-use crate::common::{cstring_or_fallback, to_c_string};
+use crate::agent::session::MahoAgentSession;
+use crate::common::to_c_string;
 use crate::ffi_safe;
 use crate::import_gate;
 
@@ -450,282 +447,10 @@ pub unsafe extern "C" fn maho_chat_send_text_with_image(
     )
 }
 
-/// # Safety
-/// `session` must be a valid pointer to a `MahoAgentSession`.
-/// `message` must be a null-terminated C string.
-pub unsafe extern "C" fn maho_agent_send_message(
-    session: *mut MahoAgentSession,
-    message: *const c_char,
-    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
-    on_thinking: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
-    >,
-    on_tool_call: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            id: *const c_char,
-            name: *const c_char,
-            args: *const c_char,
-        ),
-    >,
-    on_tool_result: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            id: *const c_char,
-            name: *const c_char,
-            result: *const c_char,
-            success: bool,
-        ),
-    >,
-    on_complete: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            full_text: *const c_char,
-            tool_calls_json: *const c_char,
-        ),
-    >,
-    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
-    user_data: *mut std::ffi::c_void,
-) -> bool {
-    // SAFETY: this legacy ABI forwards its validated caller contract without a lease policy.
-    unsafe {
-        maho_agent_send_message_impl(
-            session,
-            message,
-            on_token,
-            on_thinking,
-            on_tool_call,
-            on_tool_result,
-            on_complete,
-            on_error,
-            user_data,
-            None,
-        )
-    }
-}
-
-/// # Safety
-/// Same pointer requirements as `maho_agent_send_message`. When this function returns `true`,
-/// `on_release` receives `release_user_data` exactly once after the terminal callback and every
-/// turn callback closure are dropped. The callback must not unwind.
-pub unsafe extern "C" fn maho_agent_send_message_leased(
-    session: *mut MahoAgentSession,
-    message: *const c_char,
-    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
-    on_thinking: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
-    >,
-    on_tool_call: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            id: *const c_char,
-            name: *const c_char,
-            args: *const c_char,
-        ),
-    >,
-    on_tool_result: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            id: *const c_char,
-            name: *const c_char,
-            result: *const c_char,
-            success: bool,
-        ),
-    >,
-    on_complete: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            full_text: *const c_char,
-            tool_calls_json: *const c_char,
-        ),
-    >,
-    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
-    callback_user_data: *mut std::ffi::c_void,
-    on_release: MahoAgentReleaseCallback,
-    release_user_data: *mut c_void,
-) -> bool {
-    // SAFETY: the leased ABI transfers the dedicated release context only after the private
-    // implementation accepts the turn and creates its turn callback lease.
-    unsafe {
-        maho_agent_send_message_impl(
-            session,
-            message,
-            on_token,
-            on_thinking,
-            on_tool_call,
-            on_tool_result,
-            on_complete,
-            on_error,
-            callback_user_data,
-            Some(CallbackReleasePolicy {
-                callback: on_release,
-                user_data: release_user_data,
-            }),
-        )
-    }
-}
-
-/// # Safety
-/// Fast-path variant of `maho_agent_send_message`. Skips all tool registration
-/// and dispatches straight to the LLM. Callers MUST NOT rely on tool_calls
-/// being processed. Same pointer safety requirements as `maho_agent_send_message`.
-pub unsafe extern "C" fn maho_agent_send_message_simple(
-    session: *mut MahoAgentSession,
-    message: *const c_char,
-    on_token: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, token: *const c_char)>,
-    on_thinking: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, thinking: *const c_char),
-    >,
-    on_complete: Option<
-        unsafe extern "C" fn(
-            user_data: *mut std::ffi::c_void,
-            full_text: *const c_char,
-            tool_calls_json: *const c_char,
-        ),
-    >,
-    on_error: Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, error: *const c_char)>,
-    user_data: *mut std::ffi::c_void,
-) -> bool {
-    ffi_safe!(
-        {
-            if session.is_null() || message.is_null() {
-                return false;
-            }
-            let session = &*session;
-            let msg_str = match CStr::from_ptr(message).to_str() {
-                Ok(s) => s.to_string(),
-                Err(_) => return false,
-            };
-            let runtime = Arc::clone(&session.runtime);
-            let session_id = session.session_id.clone();
-            apply_agent_skill_system_prompt(session, runtime.as_ref());
-
-            let on_token_cb = on_token.map(|cb| {
-                let cb_sendable = SendableCallback(cb);
-                let user_data_val = SendableUserData(user_data as usize);
-                let callback: Box<dyn Fn(&str) + Send + Sync> = Box::new(move |token| {
-                    let cb = cb_sendable.0;
-                    let udata = user_data_val.0 as *mut std::ffi::c_void;
-                    let token_c = match CString::new(token) {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
-                    unsafe {
-                        cb(udata, token_c.as_ptr());
-                    }
-                });
-                callback
-            });
-
-            let on_thinking_sendable = SendableCallback(on_thinking);
-            let on_event_cb = if on_thinking.is_some() {
-                let user_data_val = SendableUserData(user_data as usize);
-                let callback = move |event: maho_agent::AgentStreamEvent| {
-                    let udata = user_data_val.0 as *mut std::ffi::c_void;
-                    match event {
-                        maho_agent::AgentStreamEvent::Thinking(thinking) => {
-                            if let Some(cb) = on_thinking_sendable.0 {
-                                if let Ok(thinking_c) = CString::new(thinking) {
-                                    unsafe {
-                                        cb(udata, thinking_c.as_ptr());
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                };
-                Some(Arc::new(callback)
-                    as Arc<
-                        dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static,
-                    >)
-            } else {
-                None
-            };
-
-            let on_complete = SendableCallback(on_complete);
-            let on_error = SendableCallback(on_error);
-            let user_data_val = SendableUserData(user_data as usize);
-
-            let active_guard = ActiveConversationGuard::new(
-                Arc::clone(&session.active_conversation_registry),
-                session_id.clone(),
-            );
-
-            let fut = async move {
-                let _active_guard = active_guard;
-                let user_chat_msg = maho_types::chat::ChatMessage::user(
-                    maho_types::chat::ChatContent::text(msg_str),
-                );
-                match runtime
-                    .run_turn_simple(&session_id, user_chat_msg, on_token_cb, on_event_cb)
-                    .await
-                {
-                    Ok(response) => {
-                        let text = match &response.content {
-                            maho_types::chat::ChatContent::Text(t) => t.clone(),
-                            _ => String::new(),
-                        };
-                        let Some(text_c) = cstring_or_fallback(&text, "") else {
-                            return;
-                        };
-                        let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
-                            return;
-                        };
-                        if let Some(cb) = on_complete.0 {
-                            cb(
-                                user_data_val.0 as *mut std::ffi::c_void,
-                                text_c.as_ptr(),
-                                empty_json.as_ptr(),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        let error_text = agent_error_callback_text(&e);
-                        let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
-                            return;
-                        };
-                        if let Some(cb) = on_error.0 {
-                            cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
-                        }
-                    }
-                }
-            };
-
-            let isolation = Arc::clone(&session.isolation);
-            let _handle = isolation.block_on(async move {
-                tokio::spawn(fut);
-            });
-
-            true
-        },
-        false
-    )
-}
-
-/// function. `cb` (nullable) receives a JSON-serialized `ArtifactInfo` string
-/// for each artifact created during a turn; `user_data` is passed back verbatim.
-/// ABI-stable: callers that never install this still stream token/tool/complete
-/// events unchanged (the artifact arm is only added when a callback is set).
-pub unsafe extern "C" fn maho_agent_set_artifact_created_callback(
-    session: *mut MahoAgentSession,
-    cb: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
-    >,
-    user_data: *mut std::ffi::c_void,
-) {
-    ffi_safe!(
-        {
-            if session.is_null() {
-                return;
-            }
-            let session = &mut *session;
-            session.artifact_created_cb = cb;
-            session.artifact_created_user_data = user_data as usize;
-        },
-        ()
-    )
-}
+pub use crate::{
+    maho_agent_send_message, maho_agent_send_message_leased, maho_agent_send_message_simple,
+    maho_agent_set_artifact_created_callback,
+};
 
 /// # Safety
 /// `session` must be a valid pointer to a `MahoAgentSession`.
@@ -1293,42 +1018,47 @@ pub unsafe extern "C" fn maho_agent_turn_submit(
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 match controller.submit_follow_up(msg_text.clone(), behavior, now) {
-                    Ok(maho_agent::turn_control::FollowUpSubmissionResult::Queued { id, position }) => {
-                        Some(serde_json::json!({
+                    Ok(maho_agent::turn_control::FollowUpSubmissionResult::Queued {
+                        id,
+                        position,
+                    }) => Some(
+                        serde_json::json!({
                             "event": "turn_queued",
                             "follow_up_id": id,
                             "position": position,
                             "message": msg_text,
                             "intent": "queue",
                         })
-                        .to_string())
-                    }
-                    Ok(maho_agent::turn_control::FollowUpSubmissionResult::Steered { guidance }) => {
-                        Some(serde_json::json!({
+                        .to_string(),
+                    ),
+                    Ok(maho_agent::turn_control::FollowUpSubmissionResult::Steered {
+                        guidance,
+                    }) => Some(
+                        serde_json::json!({
                             "event": "turn_steered",
                             "guidance": guidance,
                             "intent": "steer",
                         })
-                        .to_string())
-                    }
+                        .to_string(),
+                    ),
                     Ok(maho_agent::turn_control::FollowUpSubmissionResult::Interrupted {
                         cancelled_turn_id,
-                    }) => {
-                        Some(serde_json::json!({
+                    }) => Some(
+                        serde_json::json!({
                             "event": "turn_interrupted",
                             "cancelled_turn_id": cancelled_turn_id,
                             "intent": "interrupt",
                         })
-                        .to_string())
-                    }
-                    Ok(maho_agent::turn_control::FollowUpSubmissionResult::Continued) => {
-                        Some(serde_json::json!({
+                        .to_string(),
+                    ),
+                    Ok(maho_agent::turn_control::FollowUpSubmissionResult::Continued) => Some(
+                        serde_json::json!({
                             "event": "turn_continued",
                             "message": msg_text,
                             "intent": "continue",
                         })
-                        .to_string())
-                    }
+                        .to_string(),
+                    ),
                     Err(_) => std::option::Option::None,
                 }
             };
@@ -2217,9 +1947,17 @@ mod tests {
         };
 
         let req_id_c = CString::new(req_id.as_str()).unwrap();
-        let answer_c = CString::new(r#"{"answer_kind":"confirmed"}"#).unwrap();
+        // A question is answered with one of its offered options; a bare
+        // confirmation is the wrong answer kind and is rejected.
+        let confirmed_c = CString::new(r#"{"answer_kind":"confirmed"}"#).unwrap();
+        let answer_c = CString::new(r#"{"selected_option":"opt1"}"#).unwrap();
 
         unsafe {
+            assert!(!maho_agent_interaction_resolve(
+                session_ptr,
+                req_id_c.as_ptr(),
+                confirmed_c.as_ptr()
+            ));
             let ok =
                 maho_agent_interaction_resolve(session_ptr, req_id_c.as_ptr(), answer_c.as_ptr());
             assert!(ok);
@@ -2231,7 +1969,9 @@ mod tests {
         assert!(req.state.is_resolved());
         assert_eq!(
             req.state,
-            maho_agent::interaction::InteractionState::Resolved(InteractionAnswer::Confirmed)
+            maho_agent::interaction::InteractionState::Resolved(InteractionAnswer::SelectedOption(
+                "opt1".to_string()
+            ))
         );
     }
 
@@ -2429,9 +2169,14 @@ mod tests {
         const CHILD: &str = "MAHO_REENTRY_REGRESSION_CHILD";
         if std::env::var_os(CHILD).is_none() {
             let child = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "agent::events::tests::review_synchronous_callbacks_can_query_session", "--nocapture"])
+                .args([
+                    "--exact",
+                    "agent::events::tests::review_synchronous_callbacks_can_query_session",
+                    "--nocapture",
+                ])
                 .env(CHILD, "1")
-                .spawn().unwrap();
+                .spawn()
+                .unwrap();
             let pid = child.id();
             let (tx, rx) = std::sync::mpsc::channel();
             let waiter = std::thread::spawn(move || {
@@ -2440,13 +2185,21 @@ mod tests {
             });
             let result = rx.recv_timeout(std::time::Duration::from_secs(10));
             if result.is_err() {
-                std::process::Command::new("kill").args(["-KILL", &pid.to_string()]).status().unwrap();
+                std::process::Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .status()
+                    .unwrap();
             }
             waiter.join().unwrap();
-            assert!(result.expect("callback-side state query deadlocked").success());
+            assert!(result
+                .expect("callback-side state query deadlocked")
+                .success());
             return;
         }
-        unsafe extern "C" fn query(user_data: *mut c_void, event: *const MahoUnifiedAgentEventEnvelope) {
+        unsafe extern "C" fn query(
+            user_data: *mut c_void,
+            event: *const MahoUnifiedAgentEventEnvelope,
+        ) {
             let session = user_data.cast::<MahoAgentSession>();
             let payload = CStr::from_ptr((*event).payload_json).to_string_lossy();
             if payload.contains("turn_queued") {
@@ -2463,8 +2216,17 @@ mod tests {
         let run = CString::new("reentry-run").unwrap();
         let message = CString::new("follow up").unwrap();
         unsafe {
-            assert!(maho_agent_register_unified_event_callback(session_ptr, Some(query), session_ptr.cast()));
-            assert!(maho_agent_turn_submit(session_ptr, run.as_ptr(), message.as_ptr(), ptr::null()));
+            assert!(maho_agent_register_unified_event_callback(
+                session_ptr,
+                Some(query),
+                session_ptr.cast()
+            ));
+            assert!(maho_agent_turn_submit(
+                session_ptr,
+                run.as_ptr(),
+                message.as_ptr(),
+                ptr::null()
+            ));
             let handle = maho_agent_wait_register(session_ptr, run.as_ptr(), ptr::null(), 10000);
             assert!(!handle.is_null());
             crate::common::maho_core_free_string(handle);
@@ -2539,16 +2301,154 @@ mod tests {
                 None,
                 Arc::as_ptr(&legacy_ctx) as *mut c_void,
                 released,
-                (&release_tx as *const std::sync::mpsc::Sender<()>).cast_mut().cast(),
+                (&release_tx as *const std::sync::mpsc::Sender<()>)
+                    .cast_mut()
+                    .cast(),
             );
             assert!(ok);
         }
 
-        release_rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        release_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
         assert!(
             legacy_ctx.completed.load(Ordering::SeqCst),
             "completion callback did not signal its context"
         );
+        let events = unified_events.lock().unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.kind == MahoAgentEventKindV2::Token));
+        assert!(events
+            .iter()
+            .any(|event| event.kind == MahoAgentEventKindV2::Completed));
+        assert!(events.iter().any(|event| event.kind == MahoAgentEventKindV2::ToolCall));
+        assert!(events.iter().any(|event| event.kind == MahoAgentEventKindV2::ToolResult));
+        assert!(events.windows(2).all(|pair| pair[0].event_seq < pair[1].event_seq));
+        assert!(!session.turn_controller.lock().unwrap().is_active());
+    }
+
+    #[test]
+    fn live_send_drains_followups_and_clears_controller_on_error() {
+        for fail in [false, true] {
+            let mut session = create_test_session();
+            let runtime = Arc::new(ReviewRuntime {
+                fail,
+                ..ReviewRuntime::default()
+            });
+            session.runtime = runtime.clone();
+            session
+                .turn_controller
+                .lock()
+                .unwrap()
+                .submit_follow_up(
+                    "second",
+                    maho_agent::turn_control::FollowUpBehavior::Queue,
+                    0,
+                )
+                .unwrap();
+            let (tx, rx) = std::sync::mpsc::channel::<()>();
+            unsafe extern "C" fn released(data: *mut c_void) {
+                unsafe { &*data.cast::<std::sync::mpsc::Sender<()>>() }
+                    .send(())
+                    .unwrap();
+            }
+            let message = CString::new("first").unwrap();
+            assert!(unsafe {
+                crate::maho_agent_send_message_leased(
+                    session.as_mut(),
+                    message.as_ptr(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    ptr::null_mut(),
+                    released,
+                    (&tx as *const std::sync::mpsc::Sender<()>)
+                        .cast_mut()
+                        .cast(),
+                )
+            });
+            rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert_eq!(*runtime.messages.lock().unwrap(), vec!["first", "second"]);
+            let controller = session.turn_controller.lock().unwrap();
+            assert!(!controller.is_active());
+            assert!(controller.queue.is_empty());
+        }
+    }
+
+    #[test]
+    fn live_cancel_finishes_pending_turn_and_releases_callbacks() {
+        let mut session = create_test_session();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        session.runtime = Arc::new(ReviewRuntime {
+            entered: Some(entered_tx),
+            pending: true,
+            ..ReviewRuntime::default()
+        });
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        unsafe extern "C" fn released(data: *mut c_void) {
+            unsafe { &*data.cast::<std::sync::mpsc::Sender<()>>() }
+                .send(())
+                .unwrap();
+        }
+        let message = CString::new("pending").unwrap();
+        assert!(unsafe {
+            crate::maho_agent_send_message_leased(
+                session.as_mut(),
+                message.as_ptr(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                ptr::null_mut(),
+                released,
+                (&tx as *const std::sync::mpsc::Sender<()>)
+                    .cast_mut()
+                    .cast(),
+            )
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert!(session.turn_controller.lock().unwrap().is_active());
+        assert!(unsafe { crate::maho_agent_cancel(session.as_mut()) });
+        rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(!session.turn_controller.lock().unwrap().is_active());
+    }
+
+    #[test]
+    fn artifact_registration_updates_through_shared_session_reference() {
+        let session = create_test_session();
+        let shared = &*session;
+        let pointer = std::ptr::from_ref(shared).cast_mut();
+        unsafe extern "C" fn artifact(_: *mut c_void, _: *const c_char) {}
+        unsafe {
+            crate::maho_agent_set_artifact_created_callback(
+                pointer,
+                Some(artifact),
+                pointer.cast(),
+            );
+        }
+        let registration = shared.artifact_registration.lock().unwrap();
+        assert!(registration.0.is_some());
+        assert_eq!(registration.1, pointer as usize);
+    }
+
+    #[test]
+    fn cancel_times_out_when_backend_never_completes() {
+        let mut session = create_test_session();
+        session.runtime = Arc::new(ReviewRuntime {
+            cancel_pending: true,
+            ..ReviewRuntime::default()
+        });
+        let start = std::time::Instant::now();
+        assert!(!unsafe { crate::maho_agent_cancel(session.as_mut()) });
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }
 
     #[test]

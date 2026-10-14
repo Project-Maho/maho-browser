@@ -3,6 +3,62 @@ use std::os::raw::c_char;
 
 use serde_json::Value;
 
+static STORAGE_KEY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct AgentFixture {
+    session: *mut maho_ffi::MahoAgentSession,
+    _core: Box<maho_core::maho_core::MahoCore>,
+    _dir: tempfile::TempDir,
+    _key_lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl AgentFixture {
+    fn new(id: &str) -> Self {
+        let key_lock = STORAGE_KEY_LOCK.lock().unwrap();
+        maho_storage::sqlite::set_sqlcipher_key(
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut core = Box::new(
+            maho_core::maho_core::MahoCore::new()
+                .with_storage(dir.path().join("agent.sqlite").to_str().unwrap()),
+        );
+        let id = CString::new(id).unwrap();
+        let workspace = CString::new(dir.path().to_str().unwrap()).unwrap();
+        let session = unsafe {
+            maho_ffi::maho_agent_create_session(
+                core.as_mut(),
+                id.as_ptr(),
+                workspace.as_ptr(),
+                true,
+                None,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+                None,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!session.is_null());
+        Self {
+            session,
+            _core: core,
+            _dir: dir,
+            _key_lock: key_lock,
+        }
+    }
+}
+
+impl Drop for AgentFixture {
+    fn drop(&mut self) {
+        unsafe {
+            maho_ffi::maho_agent_session_free(self.session);
+        }
+    }
+}
+
 #[test]
 fn create_and_free() {
     let ptr = maho_ffi::maho_core_new();
@@ -24,6 +80,7 @@ fn take_json(ptr: *mut c_char) -> Value {
 
 #[test]
 fn profile_update_ffi_persists_target_metadata_and_archive_without_switching_active() {
+    let _key_lock = STORAGE_KEY_LOCK.lock().unwrap();
     let key =
         CString::new("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789").unwrap();
     assert!(unsafe { maho_ffi::maho_storage_set_sqlcipher_key(key.as_ptr()) });
@@ -619,6 +676,7 @@ fn test_password_list_omits_plaintext_and_unauthenticated_reveal_fails_closed() 
 
 #[test]
 fn test_legacy_password_ffi_routes_to_vault_when_initialized() {
+    let _key_lock = STORAGE_KEY_LOCK.lock().unwrap();
     let key =
         CString::new("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
     assert!(unsafe { maho_ffi::maho_storage_set_sqlcipher_key(key.as_ptr()) });
@@ -809,8 +867,8 @@ fn test_agent_unified_event_callback_leased_receives_event_and_releases() {
     }
 
     // Create a test session
-    let session = maho_ffi::agent::session::MahoAgentSession::create_for_test("test-sess-leased");
-    let session_ptr = Box::into_raw(session);
+    let fixture = AgentFixture::new("test-sess-leased");
+    let session_ptr = fixture.session;
 
     let captured = Arc::new(Mutex::new(Vec::<CapturedEvent>::new()));
     let release_count = Arc::new(AtomicUsize::new(0));
@@ -861,8 +919,7 @@ fn test_agent_unified_event_callback_leased_receives_event_and_releases() {
             "Release callback must be called exactly once"
         );
 
-        // Clean up
-        drop(Box::from_raw(session_ptr));
+        // The fixture frees the session before its core and database.
     }
 }
 
@@ -871,8 +928,8 @@ fn test_agent_get_last_compaction_info_after_overflow() {
     use std::ffi::CStr;
 
     let session_id = "test-sess-compaction-1";
-    let session = maho_ffi::agent::session::MahoAgentSession::create_for_test(session_id);
-    let session_ptr = Box::into_raw(session);
+    let fixture = AgentFixture::new(session_id);
+    let session_ptr = fixture.session;
 
     unsafe {
         // Null checks
@@ -951,8 +1008,7 @@ fn test_agent_get_last_compaction_info_after_overflow() {
         // Free the returned C string
         maho_ffi::maho_string_free(out_json);
 
-        // Teardown
-        drop(Box::from_raw(session_ptr));
+        // The fixture frees the session before its core and database.
     }
 }
 
@@ -1069,7 +1125,9 @@ fn test_trace_recorder_ffi_roundtrip() {
     assert_eq!(steps[1]["step"]["kind"], "fill");
     assert_eq!(steps[1]["step"]["text"], "hello");
     assert_eq!(steps[2]["step"]["kind"], "navigate");
-    assert_eq!(steps[2]["step"]["url"], "https://example.com");
+    // Recorded navigations are normalized (query/fragment stripped), which
+    // also canonicalizes the empty path to "/".
+    assert_eq!(steps[2]["step"]["url"], "https://example.com/");
 
     unsafe { maho_ffi::maho_string_free(json_ptr) };
 }

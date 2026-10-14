@@ -34,6 +34,17 @@ pub struct VaultCredentialHandle {
 pub struct VaultCredentialLease {
     pub handle: VaultCredentialHandle,
     pub item_id: String,
+    /// Monotonic grant time; TTL is enforced against this, never against the
+    /// wall-clock `created_at_ms`, so clock changes cannot extend a lease.
+    pub granted_at: std::time::Instant,
+}
+
+/// Normalizes an origin string to its serialized tuple origin
+/// (scheme/host/port, default ports elided, host lowercased). Opaque or
+/// unparseable origins return `None` and must fail closed.
+fn normalized_origin(raw: &str) -> Option<String> {
+    let origin = reqwest::Url::parse(raw.trim()).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization())
 }
 
 impl VaultCredentialHandle {
@@ -131,6 +142,67 @@ mod tests {
             Err(LeaseValidationError::OriginMismatch)
         );
     }
+
+    #[test]
+    fn lease_origin_is_normalized_and_lookalikes_fail_closed() {
+        let mut manager = VaultCredentialLeaseManager::new(300);
+        let handle = manager.grant_lease("item_abc", "https://trusted.com");
+        assert!(manager
+            .validate_and_consume(&handle.handle_id, "https://TRUSTED.com:443/login?x=1")
+            .is_ok());
+        for target in [
+            "https://trusted.com.attacker.com",
+            "http://trusted.com",
+            "https://trusted.com:8443",
+            "not a url",
+            "null",
+        ] {
+            let handle = manager.grant_lease("item_abc", "https://trusted.com");
+            assert_eq!(
+                manager.validate_and_consume(&handle.handle_id, target),
+                Err(LeaseValidationError::OriginMismatch),
+                "{target}"
+            );
+        }
+        // Opaque grant origins never match, even each other.
+        let handle = manager.grant_lease("item_abc", "data:text/html,x");
+        assert_eq!(
+            manager.validate_and_consume(&handle.handle_id, "data:text/html,x"),
+            Err(LeaseValidationError::OriginMismatch)
+        );
+    }
+
+    #[test]
+    fn lease_ttl_uses_monotonic_grant_time_not_wall_clock() {
+        let mut manager = VaultCredentialLeaseManager::new(60);
+        // Wall-clock timestamp is irrelevant: an ancient created_at_ms on a
+        // freshly granted lease stays valid...
+        let fresh = manager.grant_lease("item_a", "https://trusted.com");
+        manager
+            .leases
+            .get_mut(&fresh.handle_id)
+            .expect("lease exists")
+            .handle
+            .created_at_ms = 0;
+        assert!(manager
+            .validate_and_consume(&fresh.handle_id, "https://trusted.com")
+            .is_ok());
+        // ...while a lease whose monotonic grant time is past the TTL expires
+        // even if its wall-clock timestamp claims it is brand new.
+        let stale = manager.grant_lease("item_b", "https://trusted.com");
+        let past = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(120))
+            .expect("monotonic clock can represent an instant 120s ago");
+        manager
+            .leases
+            .get_mut(&stale.handle_id)
+            .expect("lease exists")
+            .granted_at = past;
+        assert_eq!(
+            manager.validate_and_consume(&stale.handle_id, "https://trusted.com"),
+            Err(LeaseValidationError::ExpiredOrNotFound)
+        );
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -152,14 +224,21 @@ impl VaultCredentialLeaseManager {
         }
     }
 
+    fn lease_expired(&self, lease: &VaultCredentialLease) -> bool {
+        let ttl = std::time::Duration::from_secs(self.ttl_seconds.max(0) as u64);
+        lease.granted_at.elapsed() > ttl
+    }
+
     pub fn sweep_expired_leases(&mut self) {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        self.leases
-            .retain(|_, lease| (now - (lease.handle.created_at_ms / 1000)) <= self.ttl_seconds);
+        let expired: Vec<String> = self
+            .leases
+            .iter()
+            .filter(|(_, lease)| self.lease_expired(lease))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in expired {
+            self.leases.remove(&id);
+        }
     }
 
     pub fn grant_lease(&mut self, item_id: &str, origin: &str) -> VaultCredentialHandle {
@@ -170,6 +249,7 @@ impl VaultCredentialLeaseManager {
             VaultCredentialLease {
                 handle: handle.clone(),
                 item_id: item_id.to_string(),
+                granted_at: std::time::Instant::now(),
             },
         );
         handle
@@ -181,22 +261,21 @@ impl VaultCredentialLeaseManager {
         target_origin: &str,
     ) -> Result<VaultCredentialLease, LeaseValidationError> {
         self.sweep_expired_leases();
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
 
         let handle = self
             .leases
             .remove(handle_id)
             .ok_or(LeaseValidationError::ExpiredOrNotFound)?;
 
-        if target_origin != handle.handle.origin {
-            return Err(LeaseValidationError::OriginMismatch);
+        match (
+            normalized_origin(target_origin),
+            normalized_origin(&handle.handle.origin),
+        ) {
+            (Some(target), Some(granted)) if target == granted => {}
+            _ => return Err(LeaseValidationError::OriginMismatch),
         }
 
-        if (now - (handle.handle.created_at_ms / 1000)) > self.ttl_seconds {
+        if self.lease_expired(&handle) {
             return Err(LeaseValidationError::ExpiredOrNotFound);
         }
 
