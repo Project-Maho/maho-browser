@@ -13,3 +13,11 @@ ignore_missing_widevine_signing_cert = true
 use_sysroot = true
 use_siso = true
 cc_wrapper = "sccache"
+
+# sccache cannot cache Chromium's explicit Clang header modules: every module
+# compile carries -fmodules-cache-path, which sccache reports as non-cacheable,
+# so with modules on (the Chromium 154 default) 100% of compiles bypass the
+# remote cache. Chromium only auto-disables modules for icecc, so turn them off
+# here like the macOS templates do. Measured on maho-win 2026-10-15: 23,653 of
+# 23,653 compile requests "Non-cacheable: -fmodules-cache-path".
+use_clang_modules = false
