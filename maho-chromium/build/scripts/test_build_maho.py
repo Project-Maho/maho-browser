@@ -488,6 +488,50 @@ class TestMahoCliBinaryName(unittest.TestCase):
         self.assertEqual(_bm.maho_cli_binary_name('x86_64-unknown-linux-gnu'), 'maho')
 
 
+class TestBuildMahoCliArtifactPath(unittest.TestCase):
+
+    def _build(self, temp_dir, env):
+        def effective_cargo_target_dir(default_crate_dir, rust_target):
+            target_dir = os.environ.get('CARGO_TARGET_DIR')
+            base = target_dir if target_dir else os.path.join(
+                default_crate_dir, 'target')
+            return os.path.join(base, rust_target)
+
+        core = _bm.build_maho_core
+        with patch.object(_bm, '_WORKSPACE_ROOT', temp_dir), \
+             patch.dict(_bm.os.environ, env, clear=False), \
+             patch.object(core, 'get_target_triple', create=True,
+                          return_value=('x86_64-pc-windows-msvc', 'x64', 'maho_ffi.lib')), \
+             patch.object(core, '_is_apple_target', create=True, return_value=False), \
+             patch.object(core, 'effective_cargo_target_dir', create=True,
+                          side_effect=effective_cargo_target_dir), \
+             patch.object(_bm.subprocess, 'run'):
+            return _bm.build_maho_cli('x86_64-pc-windows-msvc')
+
+    def test_honors_cargo_target_dir(self):
+        # cargo writes to $CARGO_TARGET_DIR when it is set, so the artifact must
+        # be looked up there, not under <workspace>/maho/target.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target_dir = os.path.join(temp_dir, 'cargo-target')
+            release = os.path.join(target_dir, 'x86_64-pc-windows-msvc', 'release')
+            os.makedirs(release)
+            exe = os.path.join(release, 'maho.exe')
+            open(exe, 'wb').close()
+            self.assertEqual(
+                self._build(temp_dir, {'CARGO_TARGET_DIR': target_dir}), exe)
+
+    def test_defaults_to_workspace_target_dir(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            release = os.path.join(
+                temp_dir, 'maho', 'target', 'x86_64-pc-windows-msvc', 'release')
+            os.makedirs(release)
+            exe = os.path.join(release, 'maho.exe')
+            open(exe, 'wb').close()
+            with patch.dict(_bm.os.environ, {}, clear=False):
+                _bm.os.environ.pop('CARGO_TARGET_DIR', None)
+                self.assertEqual(self._build(temp_dir, {}), exe)
+
+
 class TestRequireWindowsMailHelper(unittest.TestCase):
 
     def test_returns_helper_beside_browser(self):

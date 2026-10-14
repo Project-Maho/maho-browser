@@ -416,10 +416,8 @@ def build_maho_cli(target: str | None) -> str:
         check=True,
     )
     cli_path = os.path.join(
-        _WORKSPACE_ROOT,
-        'maho',
-        'target',
-        rust_target,
+        build_maho_core.effective_cargo_target_dir(
+            os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target),
         'release',
         maho_cli_binary_name(rust_target),
     )
