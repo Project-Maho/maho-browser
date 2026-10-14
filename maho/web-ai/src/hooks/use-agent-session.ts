@@ -36,6 +36,35 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
+function nonEmpty(value: string | undefined): string | undefined {
+  return value !== undefined && value.trim().length > 0 ? value : undefined;
+}
+
+/**
+ * A confirmation that carries no prompt text must never render as a blind
+ * Confirm button: fall back to the tool name plus a bounded args summary.
+ */
+function describeBlindConfirmation(
+  d: Record<string, unknown>,
+  kindDict: Record<string, unknown> | null,
+  argsDict: Record<string, unknown> | null,
+): string {
+  const tool = nonEmpty(firstString(
+    d.tool_name, d.tool, kindDict?.tool_name, kindDict?.tool, argsDict?.tool_name, argsDict?.tool, argsDict?.name,
+  ));
+  let summary = '';
+  if (typeof d.args === 'string' && d.args.trim().length > 0) {
+    summary = d.args.trim();
+  } else if (argsDict !== null) {
+    summary = JSON.stringify(argsDict);
+  }
+  if (summary.length > 200) summary = `${summary.slice(0, 200)}…`;
+  const subject = tool !== undefined ? `the "${tool}" action` : 'an action';
+  return summary
+    ? `The agent wants approval to run ${subject} with arguments: ${summary}`
+    : `The agent wants approval to run ${subject}. No further details were provided.`;
+}
+
 /** Parse interaction request options from any wire variant; drops invalid entries. */
 function parseInteractionOptions(raw: unknown): AgentInteractionRequestOption[] {
   if (!Array.isArray(raw)) return [];
@@ -63,7 +92,8 @@ function parseInteractionOptions(raw: unknown): AgentInteractionRequestOption[] 
 function parseInteractionRequest(data: unknown): AgentEvent | null {
   if (typeof data !== 'object' || data === null) return null;
   const d = data as Record<string, unknown>;
-  const id = firstString(d.id, d.request_id, d.interaction_id);
+  // request_id is the kernel reply key; `id` is only a fallback wire variant.
+  const id = firstString(d.request_id, d.id, d.interaction_id);
   if (!id) return null; // no reply key — unsafe to surface
 
   // `kind` is either a plain tag string (FFI wire) or the typed serde dict
@@ -100,7 +130,8 @@ function parseInteractionRequest(data: unknown): AgentEvent | null {
     interactionKind = 'confirmation';
   }
   const question =
-    firstString(d.question, kindDict?.question, effectDescription, argsDict?.question) ?? '';
+    nonEmpty(firstString(d.question, kindDict?.question, effectDescription, argsDict?.question))
+    ?? (interactionKind === 'confirmation' ? describeBlindConfirmation(d, kindDict, argsDict) : '');
   const options = parseInteractionOptions(d.options ?? kindDict?.options ?? argsDict?.options);
   const state = firstString(d.state);
   const artifactRef = firstString(
@@ -122,12 +153,25 @@ function parseInteractionRequest(data: unknown): AgentEvent | null {
   return event;
 }
 
+/**
+ * Transport-level poll failure, delivered to `onPollStatus`. A failed poll is
+ * NOT a kernel error — the session is still attached and retried — so it is
+ * reported separately from `onEvent`/`onDone`; the next successful event
+ * recovers the run.
+ */
+export interface AgentPollStatus {
+  kind: 'poll_error';
+  message: string;
+}
+
 export interface UseAgentSessionOptions {
   bridge: MahoBridge;
   /** Opaque handle returned by agentCreateSession. Poll loop is inactive when null. */
   handle: AgentHandle | null;
   /** Called for every normalized AgentEvent (token, complete, error). */
   onEvent: (event: AgentEvent) => void;
+  /** Called on poll transport failure (recoverable; the poll loop keeps retrying). */
+  onPollStatus?: (status: AgentPollStatus) => void;
   /** Called once when the turn is finished (complete or error), before onEvent fires. */
   onDone?: () => void;
   /** Optional wake trigger callback ref for local send/resume/approval wake (U12). */
@@ -247,12 +291,15 @@ export function useAgentSession({
   handle,
   onEvent,
   onDone,
+  onPollStatus,
   wakeRef,
 }: UseAgentSessionOptions): void {
   const onEventRef = useRef(onEvent);
   const onDoneRef = useRef(onDone);
+  const onPollStatusRef = useRef(onPollStatus);
   onEventRef.current = onEvent;
   onDoneRef.current = onDone;
+  onPollStatusRef.current = onPollStatus;
 
   const pollOnce = useCallback(async (isActive: () => boolean): Promise<'event' | 'empty' | 'error'> => {
     if (handle === null) return 'error';
@@ -279,10 +326,13 @@ export function useAgentSession({
       return 'event';
     } catch (error) {
       if (!isActive()) return 'error';
-      onEventRef.current({ kind: 'error', message: error instanceof Error ? error.message : 'Unable to poll the agent session.' });
-      onDoneRef.current?.();
-      // Keep the attached session retryable, with the same bounded backoff
-      // as an empty queue (local wake can retry immediately).
+      // A transient transport failure is not a terminal agent error: the run
+      // keeps its state (no onDone, no terminal event) and the poll loop retries.
+      onPollStatusRef.current?.({
+        kind: 'poll_error',
+        message: error instanceof Error && error.message.trim() ? error.message : 'Unable to poll the agent session.',
+      });
+      // Same bounded backoff as an empty queue (local wake can retry immediately).
       return 'empty';
     }
   }, [bridge, handle]);

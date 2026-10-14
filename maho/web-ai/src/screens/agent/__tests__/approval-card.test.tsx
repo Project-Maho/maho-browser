@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MahoBridge } from '../../../bridge/types';
+import { ApprovalCard } from '../approval-card';
 import { agentReducer, initialAgentState } from '../agent-reducer';
 import { AgentScreen } from '../agent-screen';
 
@@ -218,7 +219,51 @@ describe('AgentScreen approval cards (interaction_request events)', () => {
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    // jsdom drops clicks on a disabled button, so that alone could never fail:
+    // strip the attribute so only the component's own terminal guard stands.
+    const confirm = screen.getByRole('button', { name: 'Confirm' });
+    confirm.removeAttribute('disabled');
+    fireEvent.click(confirm);
     expect(harness.agentResolveInteraction).not.toHaveBeenCalled();
+  });
+});
+
+describe('ApprovalCard unit', () => {
+  const baseRequest = {
+    id: 'req-1',
+    interactionKind: 'confirmation' as const,
+    question: 'Send the email?',
+    options: [],
+    artifactRef: null,
+    initialState: null,
+    status: 'pending' as const,
+    answerLabel: null,
+    handle: 'handle-1',
+  };
+
+  afterEach(() => cleanup());
+
+  it('exposes a labelled group and announces the pending approval assertively', () => {
+    render(<ApprovalCard request={baseRequest} onAnswer={vi.fn().mockResolvedValue(undefined)} />);
+    const card = screen.getByRole('group');
+    const labelId = card.getAttribute('aria-labelledby');
+    expect(labelId).toBeTruthy();
+    expect(document.getElementById(labelId!)).toHaveTextContent('Approval required');
+    expect(screen.getByTestId('agent-approval-announcement')).toHaveAttribute('role', 'alert');
+  });
+
+  it('submits once for rapid double clicks and routes the answer to the issuing handle', async () => {
+    let finish: (() => void) | null = null;
+    const onAnswer = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    render(<ApprovalCard request={baseRequest} onAnswer={onAnswer} />);
+    const confirm = screen.getByRole('button', { name: 'Confirm' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    expect(onAnswer).toHaveBeenCalledWith('req-1', { kind: 'confirmed' }, 'handle-1');
+    // aria-disabled (not disabled) while sending keeps keyboard focus.
+    expect(confirm).toHaveAttribute('aria-disabled', 'true');
+    expect(confirm).not.toBeDisabled();
+    await act(async () => { finish?.(); });
   });
 });

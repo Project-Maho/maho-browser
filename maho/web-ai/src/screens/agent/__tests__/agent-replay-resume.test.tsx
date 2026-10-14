@@ -195,7 +195,11 @@ describe('AgentScreen replay-resume approval cards', () => {
   });
 
   it('falls back to the plain thread when a replayed payload is unsupported', async () => {
-    await runFirstTurnToCompletion();
+    // The turn is still live: a late token after COMPLETE is intentionally ignored.
+    render(<AgentScreen bridge={mockCtx.bridge} />);
+    fireEvent.input(promptInput(), { target: { value: 'Go' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(mockCtx.agentSendMessage).toHaveBeenCalledWith('handle-1', 'Go'));
 
     // No request id — the normalization must discard it safely.
     act(() => mockCtx.enqueueEvent('interaction_request', { kind: 'question' }));

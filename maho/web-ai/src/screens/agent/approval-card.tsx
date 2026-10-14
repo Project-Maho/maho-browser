@@ -1,7 +1,7 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Icon } from '../../ui/icon';
 import { clsx } from '../../utils/clsx';
-import type { AgentInteractionRequestOption } from '../../bridge/types';
+import type { AgentHandle, AgentInteractionRequestOption } from '../../bridge/types';
 
 /** A user resolution for an agent interaction request. */
 export type AgentInteractionAnswer =
@@ -66,45 +66,77 @@ export interface ApprovalCardRequest {
   readonly initialState: string | null;
   readonly status: 'pending' | 'resolved';
   readonly answerLabel: string | null;
+  /** Session handle that issued the request; the answer is routed back to it. */
+  readonly handle: AgentHandle | null;
 }
 
 interface ApprovalCardProps {
   readonly request: ApprovalCardRequest;
   /** Throws on failure so the card can surface the error and stay retryable. */
-  readonly onAnswer: (requestId: string, answer: AgentInteractionAnswer) => Promise<void>;
+  readonly onAnswer: (
+    requestId: string,
+    answer: AgentInteractionAnswer,
+    handle: AgentHandle | null,
+  ) => Promise<void>;
 }
 
 export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
   const [sending, setSending] = useState(false);
   const [text, setText] = useState('');
   const [sendError, setSendError] = useState<string | null>(null);
+  // Synchronous in-flight guard: render-time `sending` state lags a second
+  // click that lands before the re-render, which would double-submit.
+  const inFlightRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const terminal = isTerminalInteractionState(request.initialState);
   const answered = request.status === 'resolved';
-  const disabled = sending || terminal || answered;
+  // Dead cards are natively disabled; an in-flight send only sets
+  // aria-disabled so keyboard focus stays on the pressed control.
+  const dead = terminal || answered;
+  const disabled = sending || dead;
 
   const answer = (choice: AgentInteractionAnswer) => {
-    if (disabled) return;
+    if (inFlightRef.current || dead) return;
+    inFlightRef.current = true;
     setSending(true);
     setSendError(null);
-    onAnswer(request.id, choice)
-      .then(() => setSending(false))
+    onAnswer(request.id, choice, request.handle)
       .catch((error) => {
-        setSending(false);
-        setSendError(messageFromError(error, 'Failed to send the answer.'));
+        if (mountedRef.current) setSendError(messageFromError(error, 'Failed to send the answer.'));
+      })
+      .finally(() => {
+        inFlightRef.current = false;
+        if (mountedRef.current) setSending(false);
       });
   };
 
   const header = request.interactionKind === 'confirmation' ? 'Approval required' : 'Agent question';
+  const titleId = `agent-approval-title-${request.id}`;
 
   return (
     <div
       class={clsx('agent-approval-card', disabled && 'agent-approval-card-disabled')}
       data-testid="agent-approval-card"
+      role="group"
+      aria-labelledby={titleId}
     >
+      {!dead && (
+        // Assertive announcement of a new pending approval; mounted with the
+        // card so the text change is what assistive tech reads out.
+        <span class="agent-sr-only" role="alert" data-testid="agent-approval-announcement">
+          {header}: {request.question}
+        </span>
+      )}
       <div class="agent-approval-header">
         <Icon name="triangle-alert" size={14} aria-hidden />
-        <span class="agent-approval-title">{header}</span>
+        <span class="agent-approval-title" id={titleId}>{header}</span>
       </div>
       <div class="agent-approval-question">{request.question}</div>
       {request.artifactRef !== null && request.artifactRef !== undefined && (
@@ -121,7 +153,8 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
               type="button"
               class="agent-approval-option"
               data-testid="agent-approval-option"
-              disabled={disabled}
+              disabled={dead}
+              aria-disabled={disabled}
               onClick={() => answer({ kind: 'option', optionId: option.id, label: option.label })}
             >
               <span class="agent-approval-option-label">{option.label}</span>
@@ -140,10 +173,11 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
           <input
             aria-label="Answer"
             value={text}
-            disabled={disabled}
+            disabled={dead}
+            aria-disabled={disabled}
             onInput={(event) => setText(event.currentTarget.value)}
           />
-          <button type="submit" class="agent-approval-confirm" disabled={disabled || !text.trim()}>
+          <button type="submit" class="agent-approval-confirm" disabled={dead || !text.trim()} aria-disabled={disabled || !text.trim()}>
             Submit answer
           </button>
         </form>
@@ -154,7 +188,8 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
             type="button"
             class="agent-approval-deny"
             data-testid="agent-approval-deny"
-            disabled={disabled}
+            disabled={dead}
+            aria-disabled={disabled}
             onClick={() => answer({ kind: 'denied' })}
           >
             Deny
@@ -163,7 +198,8 @@ export function ApprovalCard({ request, onAnswer }: ApprovalCardProps) {
             type="button"
             class="agent-approval-confirm"
             data-testid="agent-approval-confirm"
-            disabled={disabled}
+            disabled={dead}
+            aria-disabled={disabled}
             onClick={() => answer({ kind: 'confirmed' })}
           >
             Confirm

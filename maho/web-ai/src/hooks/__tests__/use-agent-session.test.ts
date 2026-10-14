@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { normalizeAgentEvent } from '../use-agent-session';
+import { act, renderHook } from '@testing-library/preact';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { MahoBridge } from '../../bridge/types';
+import { normalizeAgentEvent, useAgentSession } from '../use-agent-session';
 
 describe('normalizeAgentEvent', () => {
   it('parses token event data as the token delta', () => {
@@ -90,5 +92,57 @@ describe('normalizeAgentEvent', () => {
       kind: 'complete',
       fullText: 'plain response',
     });
+  });
+});
+
+describe('normalizeAgentEvent interaction_request parsing (W4, W10)', () => {
+  it('never produces a blind confirmation: falls back to tool name and args', () => {
+    const event = normalizeAgentEvent(JSON.stringify({
+      type: 'interaction_request',
+      data: { request_id: 'r1', kind: 'confirmation', tool_name: 'browser.click', args: JSON.stringify({ selector: '#buy' }) },
+    }));
+    expect(event).toMatchObject({ kind: 'interaction_request', id: 'r1', interactionKind: 'confirmation' });
+    const question = (event as { question: string }).question;
+    expect(question).toContain('browser.click');
+    expect(question).toContain('#buy');
+  });
+
+  it('prefers request_id over id as the kernel reply key', () => {
+    const event = normalizeAgentEvent(JSON.stringify({
+      type: 'interaction_request',
+      data: { id: 'wrong', request_id: 'right', kind: 'question', question: 'Which?' },
+    }));
+    expect(event).toMatchObject({ id: 'right' });
+  });
+});
+
+describe('useAgentSession transport failures (W1)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('reports a failed poll via onPollStatus only (no onEvent, no onDone) and keeps retrying', async () => {
+    let calls = 0;
+    const bridge = {
+      agentPollEvent: vi.fn().mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('bridge down');
+        return null;
+      }),
+    } as unknown as MahoBridge;
+    const onEvent = vi.fn();
+    const onDone = vi.fn();
+    const onPollStatus = vi.fn();
+    renderHook(() => useAgentSession({ bridge, handle: 'h1', onEvent, onDone, onPollStatus }));
+
+    for (let pump = 0; pump < 8 && calls < 3; pump++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+    }
+
+    expect(onPollStatus.mock.calls.map(([s]) => s)).toEqual([{ kind: 'poll_error', message: 'bridge down' }]);
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(onDone).not.toHaveBeenCalled();
   });
 });

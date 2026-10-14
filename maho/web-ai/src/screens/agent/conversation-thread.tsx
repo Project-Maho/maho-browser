@@ -3,7 +3,7 @@ import { useState } from 'preact/hooks';
 import { Icon } from '../../ui/icon';
 import { clsx } from '../../utils/clsx';
 import type { AgentMessage, AgentPhase } from './agent-types';
-import type { ArtifactInfo } from '../../bridge/types';
+import type { AgentHandle, ArtifactInfo } from '../../bridge/types';
 import { isRunActive } from './agent-types';
 import { MarkdownRenderer } from './markdown-renderer';
 import { ApprovalCard, type AgentInteractionAnswer } from './approval-card';
@@ -18,7 +18,11 @@ interface ConversationThreadProps {
   scrollRef: RefObject<HTMLDivElement>;
   onScroll: () => void;
   onShareArtifact: (artifactId: string) => Promise<boolean>;
-  onAnswerInteraction: (requestId: string, answer: AgentInteractionAnswer) => Promise<void>;
+  onAnswerInteraction: (
+    requestId: string,
+    answer: AgentInteractionAnswer,
+    handle: AgentHandle | null,
+  ) => Promise<void>;
 }
 
 export function ConversationThread({
@@ -61,7 +65,11 @@ export function ConversationThread({
 interface ConversationMessageProps {
   readonly message: AgentMessage;
   readonly onShareArtifact: (artifactId: string) => Promise<boolean>;
-  readonly onAnswerInteraction: (requestId: string, answer: AgentInteractionAnswer) => Promise<void>;
+  readonly onAnswerInteraction: (
+    requestId: string,
+    answer: AgentInteractionAnswer,
+    handle: AgentHandle | null,
+  ) => Promise<void>;
 }
 
 function ConversationMessage({ message, onShareArtifact, onAnswerInteraction }: ConversationMessageProps) {
@@ -130,6 +138,7 @@ function ConversationMessage({ message, onShareArtifact, onAnswerInteraction }: 
                     initialState: block.initialState,
                     status: block.status,
                     answerLabel: block.answerLabel,
+                    handle: block.handle,
                   }}
                   onAnswer={onAnswerInteraction}
                 />
@@ -227,7 +236,6 @@ function ToolExecution({ name, args, result, durationMs }: ToolExecutionProps) {
         class="agent-tool-call-header-btn"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
-        aria-label={expanded ? 'Collapse tool details' : 'Expand tool details'}
       >
         <Icon
           name={status === 'completed' ? 'arrow-right' : 'loader'}
@@ -252,7 +260,7 @@ function ToolExecution({ name, args, result, durationMs }: ToolExecutionProps) {
           {result !== undefined && (
             <div class="agent-tool-call-result">
               <span class="agent-tool-call-label">Output</span>
-              <MarkdownRenderer text={result} />
+              <MarkdownRenderer text={result} plainLinks />
             </div>
           )}
         </div>
