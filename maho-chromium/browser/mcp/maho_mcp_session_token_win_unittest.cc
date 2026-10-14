@@ -13,6 +13,8 @@
 #include <array>
 #include <vector>
 
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
@@ -77,7 +79,10 @@ TEST_F(MahoMcpSessionTokenWinTest, WriteThenDecryptRoundTrip) {
   ASSERT_EQ(output_blob.cbData, MahoMcpSessionToken::kTokenSize);
 
   auto raw = token->raw_token_for_testing();
-  EXPECT_EQ(memcmp(output_blob.pbData, raw.data(), raw.size()), 0);
+  // SAFETY: CryptUnprotectData returned |cbData| bytes at |pbData|.
+  auto decrypted = UNSAFE_BUFFERS(
+      base::span<const uint8_t>(output_blob.pbData, output_blob.cbData));
+  EXPECT_EQ(decrypted, raw);
 
   ::LocalFree(output_blob.pbData);
 }
