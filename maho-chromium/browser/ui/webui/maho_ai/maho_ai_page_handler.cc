@@ -2235,10 +2235,14 @@ void MahoAIPageHandler::SubmitPrompt(
       session_id, prompt, attach_browser_context, mode, std::move(attachments),
       chat_intent, Correlation{session_id, std::nullopt},
       base::BindOnce(
-          [](MahoCore* core, std::string session_id, std::string prompt,
+          // MahoCore is an opaque FFI type; binding a pointer to an incomplete
+          // type is rejected by base::Bind, so re-resolve it when the callback
+          // runs.
+          [](std::string session_id, std::string prompt,
              SubmitPromptCallback callback, bool dispatchable) {
+            MahoCore* core = maho::GetCore();
             const bool conversation_persisted =
-                dispatchable &&
+                dispatchable && core &&
                 maho_core_create_conversation(core, session_id.c_str(),
                                               DeriveTitle(prompt).c_str(),
                                               nullptr, nullptr);
@@ -2249,7 +2253,7 @@ void MahoAIPageHandler::SubmitPrompt(
             std::move(callback).Run(accepted);
             return accepted;
           },
-          core, session_id, prompt, std::move(callback)));
+          session_id, prompt, std::move(callback)));
 }
 
 void MahoAIPageHandler::ComposerDraftGet(const std::string& scope_json,
