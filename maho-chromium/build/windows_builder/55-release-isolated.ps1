@@ -45,7 +45,11 @@ if ((git -C $repo status --porcelain --untracked-files=no | Measure-Object).Coun
 $head = git -C $repo rev-parse HEAD
 Log "release ref $ref = $head version $(Get-Content $repo\maho\version.txt)"
 
-foreach ($pair in @(@('website','C:\src\maho-browser\website'), @('node_modules','C:\src\maho-browser\website\node_modules'), @('.secrets','C:\src\maho-browser\.secrets'), @('chromium', (Join-Path $Rel 'chromium')))) {
+# WebUI toolchain lives inside the release checkout (website\ + node_modules),
+# installed from the pinned bun.lock; never linked to the shared tree.
+& (Join-Path $PSScriptRoot '15-webui-deps.ps1') -Repo $repo
+if ($LASTEXITCODE -ne 0 -and -not $?) { throw 'webui deps failed' }
+foreach ($pair in @(@('.secrets','C:\src\maho-browser\.secrets'), @('chromium', (Join-Path $Rel 'chromium')))) {
   $link = Join-Path $repo $pair[0]
   if ($pair[0] -eq 'chromium') { New-Item -ItemType Directory -Force -Path $pair[1] | Out-Null }
   if (-not (Test-Path $link)) { cmd /c mklink /J "$link" "$($pair[1])" | Out-Null }
@@ -77,7 +81,7 @@ try {
   gclient runhooks
   if ($LASTEXITCODE -ne 0) { throw "gclient runhooks exit $LASTEXITCODE" }
 } finally { Pop-Location }
-$srcWebsite = Join-Path $chromium 'src\website'; if (-not (Test-Path $srcWebsite)) { cmd /c mklink /J "$srcWebsite" "C:\src\maho-browser\website" | Out-Null }
+$srcWebsite = Join-Path $chromium 'src\website'; if (-not (Test-Path $srcWebsite)) { cmd /c mklink /J "$srcWebsite" "$repo\website" | Out-Null }
 if (-not (Test-Path (Join-Path $repo 'maho-chromium\build\scripts\build_maho.py'))) { throw 'release checkout lost maho-chromium' }
 
 cmd /c "sccache --start-server >nul 2>&1"
