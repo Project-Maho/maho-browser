@@ -11,7 +11,7 @@ args = p.parse_args()
 
 _SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 _WORKSPACE_ROOT = os.path.normpath(os.path.join(_SCRIPT_DIR, '..', '..', '..'))
-_WEBSITE_ROOT = os.path.join(_WORKSPACE_ROOT, 'website')
+_WEBSITE_ROOT = os.environ.get('MAHO_WEBSITE_ROOT') or os.path.join(_WORKSPACE_ROOT, 'website')
 
 if args.depfile:
     input_dir = os.path.dirname(os.path.abspath(args.input))

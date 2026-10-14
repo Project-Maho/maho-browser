@@ -1759,17 +1759,25 @@ def build_chromium_app(out_dir, targets, extra_args):
         print('warning: no ninja targets requested; skipping chromium build')
         return
 
-    # When switching to or using siso, lingering .ninja_* files cause siso to fail.
-    # Clean them up safely before invoking autoninja.
+    # Lingering .ninja_lock causes ninja/siso to fail if a previous build was killed.
     out_dir_path = os.path.join(_CHROMIUM_SRC_ROOT, out_dir)
     if os.path.exists(out_dir_path):
-        for ninja_file in ('.ninja_log', '.ninja_deps', '.ninja_lock'):
-            target_file = os.path.join(out_dir_path, ninja_file)
-            if os.path.exists(target_file):
-                try:
-                    os.unlink(target_file)
-                except OSError:
-                    pass
+        target_file = os.path.join(out_dir_path, '.ninja_lock')
+        if os.path.exists(target_file):
+            try:
+                os.unlink(target_file)
+            except OSError:
+                pass
+        # GN's copy rule for directory bundles (e.g. Sparkle.framework) uses
+        # `mv -f dst.tmp dst`, which fails with "Directory not empty" if dst
+        # already exists. Sparkle is only staged on macOS.
+        if host_platform() == 'mac':
+            for framework_dir in ('Sparkle.framework', 'Sparkle.framework.tmp'):
+                fw_path = os.path.join(out_dir_path, framework_dir)
+                if os.path.islink(fw_path):
+                    os.unlink(fw_path)
+                elif os.path.isdir(fw_path):
+                    shutil.rmtree(fw_path)
 
     # One invocation for every target. ninja reloads the entire build graph per
     # run, and that fixed cost measures ~25s on out/Default (68% .ninja parse,

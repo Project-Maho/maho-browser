@@ -9112,14 +9112,14 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             new=(
                 "  } else if (browser_view_->GetIsNormalType() ||\n"
                 "             browser_view_->GetIsWebAppType() ||\n"
-                "             browser_view_->browser()->is_maho_mini()) {\n"
+                "             (browser_view_->browser() && static_cast<Browser*>(browser_view_->browser())->is_maho_mini())) {\n"
                 "    params->window_class = remote_cocoa::mojom::WindowClass::kBrowser;\n"
                 "    params->style_mask |= NSWindowStyleMaskFullSizeContentView;\n"
                 "\n"
                 "    // Ensure tabstrip/profile button are visible.\n"
                 "    params->titlebar_appears_transparent = true;\n"
                 "\n"
-                "    if (browser_view_->browser()->is_maho_mini()) {\n"
+                "    if (browser_view_->browser() && static_cast<Browser*>(browser_view_->browser())->is_maho_mini()) {\n"
                 "      params->window_title_hidden = true;\n"
                 "    } else if (browser_view_->GetIsWebAppType()) {\n"
                 "      params->window_title_hidden = true;\n"
@@ -9127,7 +9127,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "  } else {\n"
             ),
             description="Maho: Style Maho Mini window with transparent titlebar and full size content",
-            guard="browser_view_->browser()->is_maho_mini()",
+            guard="static_cast<Browser*>(browser_view_->browser())->is_maho_mini()",
         ),
         Replacement(
             old=(
@@ -9158,7 +9158,7 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
                 "    bool* override_titlebar_height,\n"
                 "    float* titlebar_height) {\n"
                 "  if (browser_view_ && browser_view_->browser() &&\n"
-                "      browser_view_->browser()->is_maho_mini()) {\n"
+                "      static_cast<Browser*>(browser_view_->browser())->is_maho_mini()) {\n"
                 "    // Maho: macOS centers the traffic lights within the titlebar\n"
                 "    // height reported here; report the 46dip Maho Mini top bar\n"
                 "    // height so they center on its midline, not near the top edge.\n"

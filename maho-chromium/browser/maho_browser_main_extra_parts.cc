@@ -474,13 +474,23 @@ std::string ExecuteMcpActionJsAllFramesBlocking(content::WebContents* wc,
   }
   base::WeakPtr<content::WebContents> wc_weak = wc->GetWeakPtr();
   std::string result;
-  std::vector<content::RenderFrameHost*> frames;
+  // Each iteration spins a nested RunLoop, during which frames can be
+  // navigated away or destroyed. Keep ids, not raw pointers, and re-resolve
+  // before every call.
+  std::vector<content::GlobalRenderFrameHostId> frame_ids;
   wc->ForEachRenderFrameHost([&](content::RenderFrameHost* rfh) {
     if (rfh && rfh->IsRenderFrameLive()) {
-      frames.push_back(rfh);
+      frame_ids.push_back(rfh->GetGlobalId());
     }
   });
-  for (content::RenderFrameHost* rfh : frames) {
+  for (const content::GlobalRenderFrameHostId& frame_id : frame_ids) {
+    if (!wc_weak) {
+      break;
+    }
+    content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(frame_id);
+    if (!rfh || !rfh->IsRenderFrameLive()) {
+      continue;
+    }
     base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
     std::string frame_result;
     rfh->ExecuteJavaScriptInIsolatedWorld(
