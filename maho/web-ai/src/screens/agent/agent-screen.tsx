@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'preact/hooks';
 import type { AgentEvent, AgentHandle, AgentRuntimeConfig, ComposerDraftScope, MahoBridge } from '../../bridge/types';
 import { useComposerDraft } from '../../storage/use-composer-draft';
-import { useAgentSession } from '../../hooks/use-agent-session';
+import { useAgentSession, wakeAgentSession, type AgentPollStatus } from '../../hooks/use-agent-session';
 import { useBridge } from '../../hooks/use-bridge';
 import { agentReducer, initialAgentState } from './agent-reducer';
 import {
@@ -163,6 +163,9 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
           return;
         }
         void acknowledgeDraft();
+        // The send queued kernel work: poll once now instead of waiting out the
+        // idle backoff.
+        wakeAgentSession(handle);
       } catch (error) {
         if (generationDead()) return;
         restoreUnsentDraft(prompt);
@@ -171,6 +174,10 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
     },
     [bridge, drafts, forceBottom, restoreUnsentDraft],
   );
+
+  const handlePollStatus = useCallback((status: AgentPollStatus) => {
+    dispatch({ type: 'POLL_ERROR', message: status.message });
+  }, []);
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.kind) {
@@ -217,6 +224,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
           options: event.options,
           artifactRef: event.artifactRef ?? null,
           initialState: event.state ?? null,
+          handle: handleRef.current,
           messageId: createId('assistant'),
           createdAt: new Date(),
         });
@@ -244,6 +252,7 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
     bridge,
     handle: state.handle,
     onEvent: handleAgentEvent,
+    onPollStatus: handlePollStatus,
   });
 
   useEffect(() => {
@@ -303,14 +312,17 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
     if (state.activeTurnId !== null) {
       cancelledTurnIdsRef.current.add(state.activeTurnId);
     }
-    const handle = handleRef.current;
-    if (handle !== null) {
-      await freeSessionForReset(bridge, handle);
-      handleRef.current = null;
+    const oldHandle = handleRef.current;
+    handleRef.current = null;
+    // Reset synchronously: the composer must never accept a submit against the
+    // old session while the native free / draft clear are still awaited.
+    const clearing = drafts.clear();
+    dispatch({ type: 'RESET' });
+    if (oldHandle !== null) {
+      await freeSessionForReset(bridge, oldHandle);
     }
     cancelledTurnIdsRef.current.clear();
-    await drafts.clear();
-    dispatch({ type: 'RESET' });
+    await clearing;
   }, [bridge, drafts, state.activeTurnId]);
 
   const handleOpenSettings = useCallback(() => {
@@ -335,9 +347,11 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
   // maho_agent_interaction_resolve session-handle call). Failures throw so the
   // approval card can surface them locally and stay retryable.
   const handleInteractionAnswer = useCallback(
-    async (requestId: string, answer: AgentInteractionAnswer): Promise<void> => {
+    async (requestId: string, answer: AgentInteractionAnswer, issuingHandle: AgentHandle | null): Promise<void> => {
+      // Answers go to the session that issued the request; a card from a
+      // replaced session must never resolve against the new one.
       const handle = handleRef.current;
-      if (handle === null) {
+      if (handle === null || (issuingHandle !== null && issuingHandle !== handle)) {
         throw new Error('Agent session is no longer available.');
       }
       if (!bridge.agentResolveInteraction) {
@@ -348,6 +362,8 @@ export function AgentScreen({ onBack, goal, bridge: bridgeProp, suggestionsEnabl
         throw new Error('The agent could not accept this answer. The request may have expired.');
       }
       dispatch({ type: 'INTERACTION_RESOLVE', requestId, answerLabel: agentInteractionAnswerLabel(answer) });
+      // The resolved kernel resumes: poll immediately for its continuation.
+      wakeAgentSession(handle);
     },
     [bridge],
   );

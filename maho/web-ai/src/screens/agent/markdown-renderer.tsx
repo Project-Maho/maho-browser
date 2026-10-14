@@ -1,10 +1,25 @@
 import type { ComponentChildren } from 'preact';
+import { useMemo } from 'preact/hooks';
 
 interface MarkdownRendererProps {
   text: string;
+  /**
+   * Tool output is untrusted page/tool content: links render as plain text so a
+   * misleading label can never hide its destination behind a click target.
+   */
+  plainLinks?: boolean;
 }
 
-export function MarkdownRenderer({ text }: MarkdownRendererProps) {
+/**
+ * Re-parses only when the text (or link mode) changes: a streamed token for a
+ * different block reuses this block's cached vnode. Deliberately not
+ * `preact/compat` memo — importing compat rewires onBlur/onFocus globally.
+ */
+export function MarkdownRenderer({ text, plainLinks = false }: MarkdownRendererProps) {
+  return useMemo(() => renderMarkdown(text, plainLinks), [text, plainLinks]);
+}
+
+function renderMarkdown(text: string, plainLinks: boolean) {
   const lines = text.replace(/\r\n/g, '\n').split('\n');
   const blocks: ComponentChildren[] = [];
 
@@ -15,8 +30,9 @@ export function MarkdownRenderer({ text }: MarkdownRendererProps) {
       continue;
     }
 
-    if (line.startsWith('```')) {
-      const result = collectCodeBlock(lines, index + 1);
+    const fence = openingFence(line);
+    if (fence !== null) {
+      const result = collectCodeBlock(lines, index + 1, fence);
       blocks.push(
         <pre key={`code-${blocks.length}`} class="agent-md-pre">
           <code>{result.code}</code>
@@ -27,19 +43,19 @@ export function MarkdownRenderer({ text }: MarkdownRendererProps) {
     }
 
     if (line.startsWith('## ')) {
-      blocks.push(<h2 key={`h2-${blocks.length}`}>{renderInline(line.slice(3), `h2-${blocks.length}`)}</h2>);
+      blocks.push(<h2 key={`h2-${blocks.length}`}>{renderInline(line.slice(3), `h2-${blocks.length}`, plainLinks)}</h2>);
       index += 1;
       continue;
     }
 
     if (line.startsWith('### ')) {
-      blocks.push(<h3 key={`h3-${blocks.length}`}>{renderInline(line.slice(4), `h3-${blocks.length}`)}</h3>);
+      blocks.push(<h3 key={`h3-${blocks.length}`}>{renderInline(line.slice(4), `h3-${blocks.length}`, plainLinks)}</h3>);
       index += 1;
       continue;
     }
 
     if (line.startsWith('#### ')) {
-      blocks.push(<h4 key={`h4-${blocks.length}`}>{renderInline(line.slice(5), `h4-${blocks.length}`)}</h4>);
+      blocks.push(<h4 key={`h4-${blocks.length}`}>{renderInline(line.slice(5), `h4-${blocks.length}`, plainLinks)}</h4>);
       index += 1;
       continue;
     }
@@ -48,8 +64,8 @@ export function MarkdownRenderer({ text }: MarkdownRendererProps) {
       const result = collectList(lines, index, '- ');
       blocks.push(
         <ul key={`ul-${blocks.length}`}>
-          {result.items.map((item) => (
-            <li key={item}>{renderInline(item, `ul-${blocks.length}-${item}`)}</li>
+          {result.items.map((item, itemIndex) => (
+            <li key={`item-${itemIndex}`}>{renderInline(item, `ul-${blocks.length}-${itemIndex}`, plainLinks)}</li>
           ))}
         </ul>,
       );
@@ -61,8 +77,8 @@ export function MarkdownRenderer({ text }: MarkdownRendererProps) {
       const result = collectOrderedList(lines, index);
       blocks.push(
         <ol key={`ol-${blocks.length}`}>
-          {result.items.map((item) => (
-            <li key={item}>{renderInline(item, `ol-${blocks.length}-${item}`)}</li>
+          {result.items.map((item, itemIndex) => (
+            <li key={`item-${itemIndex}`}>{renderInline(item, `ol-${blocks.length}-${itemIndex}`, plainLinks)}</li>
           ))}
         </ol>,
       );
@@ -73,7 +89,7 @@ export function MarkdownRenderer({ text }: MarkdownRendererProps) {
     if (line.startsWith('> ')) {
       blocks.push(
         <blockquote key={`quote-${blocks.length}`}>
-          {renderInline(line.slice(2), `quote-${blocks.length}`)}
+          {renderInline(line.slice(2), `quote-${blocks.length}`, plainLinks)}
         </blockquote>,
       );
       index += 1;
@@ -81,17 +97,29 @@ export function MarkdownRenderer({ text }: MarkdownRendererProps) {
     }
 
     const result = collectParagraph(lines, index);
-    blocks.push(<p key={`p-${blocks.length}`}>{renderInline(result.text, `p-${blocks.length}`)}</p>);
+    blocks.push(<p key={`p-${blocks.length}`}>{renderInline(result.text, `p-${blocks.length}`, plainLinks)}</p>);
     index = result.nextIndex;
   }
 
   return <div class="agent-md">{blocks}</div>;
 }
 
-function collectCodeBlock(lines: readonly string[], startIndex: number) {
+/** Opening fence: 3+ backticks; returns the fence marker so only a matching close ends the block. */
+function openingFence(line: string): string | null {
+  const match = /^(`{3,})/.exec(line);
+  return match === null ? null : (match[1] ?? null);
+}
+
+/** A closing fence is a line of only backticks (>= opening length), optionally padded. */
+function isClosingFence(line: string, fence: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.length >= fence.length && /^`+$/.test(trimmed);
+}
+
+function collectCodeBlock(lines: readonly string[], startIndex: number, fence: string) {
   const codeLines: string[] = [];
   let index = startIndex;
-  while (index < lines.length && !(lines[index] ?? '').startsWith('```')) {
+  while (index < lines.length && !isClosingFence(lines[index] ?? '', fence)) {
     codeLines.push(lines[index] ?? '');
     index += 1;
   }
@@ -129,10 +157,17 @@ function collectParagraph(lines: readonly string[], startIndex: number) {
 }
 
 function isParagraphLine(line: string): boolean {
-  return Boolean(line.trim()) && !line.startsWith('```') && !line.startsWith('- ') && !/^\d+\.\s/.test(line);
+  return (
+    Boolean(line.trim())
+    && openingFence(line) === null
+    && !line.startsWith('- ')
+    && !/^\d+\.\s/.test(line)
+    && !/^#{2,4} /.test(line)
+    && !line.startsWith('> ')
+  );
 }
 
-function renderInline(text: string, keyPrefix: string): ComponentChildren[] {
+function renderInline(text: string, keyPrefix: string, plainLinks: boolean): ComponentChildren[] {
   const parts: ComponentChildren[] = [];
   let remaining = text;
   let index = 0;
@@ -152,7 +187,7 @@ function renderInline(text: string, keyPrefix: string): ComponentChildren[] {
       remaining = remaining.slice(nextStart);
     }
 
-    const parsed = remaining.startsWith('`') ? parseCode(remaining) : parseLink(remaining);
+    const parsed = remaining.startsWith('`') ? parseCode(remaining) : parseLink(remaining, plainLinks);
     if (parsed === null) {
       parts.push(remaining.slice(0, 1));
       remaining = remaining.slice(1);
@@ -180,17 +215,36 @@ function parseCode(text: string) {
   return { length: end + 1, node: (prefix: string, index: number) => <code key={`${prefix}-code-${index}`}>{code}</code> };
 }
 
-function parseLink(text: string) {
+function parseLink(text: string, plainLinks: boolean) {
   const match = /^\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/.exec(text);
   if (match === null) return null;
   const label = match[1] ?? '';
   const href = match[2] ?? '';
+  if (plainLinks) {
+    // Untrusted content: show label and destination as inert text.
+    return { length: match[0].length, node: () => `${label} (${href})` };
+  }
+  const host = hostOf(href);
+  // When the label does not already name the destination, show the real host
+  // beside it so a deceptive label cannot masquerade as another site.
+  const showHost = host !== null && label.trim().toLowerCase() !== host;
   return {
     length: match[0].length,
     node: (prefix: string, index: number) => (
-      <a key={`${prefix}-link-${index}`} href={href} rel="noreferrer" target="_blank">
-        {label}
-      </a>
+      <span key={`${prefix}-link-${index}`}>
+        <a href={href} rel="noreferrer noopener" target="_blank">
+          {label}
+        </a>
+        {showHost && <span class="agent-md-link-host" data-testid="agent-md-link-host"> ({host})</span>}
+      </span>
     ),
   };
+}
+
+function hostOf(href: string): string | null {
+  try {
+    return new URL(href).host.toLowerCase();
+  } catch {
+    return null;
+  }
 }

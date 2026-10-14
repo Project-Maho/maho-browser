@@ -42,6 +42,8 @@ export type AgentBlock =
       readonly initialState: string | null;
       readonly status: 'pending' | 'resolved';
       readonly answerLabel: string | null;
+      /** Session handle that issued the request; answers must go to this handle. */
+      readonly handle: AgentHandle | null;
     };
 
 export type AgentMessage =
@@ -67,6 +69,14 @@ export interface AgentState {
   readonly activeTurnId: string | null;
   readonly errorMessage: string | null;
   readonly errorCredentialCode: CredentialErrorCode | null;
+  /**
+   * The error was a poll transport failure: the banner is shown and the
+   * running state ended, but the session is still attached and recoverable —
+   * the next successful stream event continues the same turn.
+   */
+  readonly pollFailed: boolean;
+  /** A user cancel was issued on a live session; its kernel echo is still due. */
+  readonly cancelEchoPending: boolean;
   readonly scrollRevision: number;
 }
 
@@ -93,12 +103,14 @@ export type AgentAction =
       readonly options: readonly AgentInteractionRequestOption[];
       readonly artifactRef: string | null;
       readonly initialState: string | null;
+      readonly handle?: AgentHandle | null;
       readonly messageId: string;
       readonly createdAt: Date;
     }
   | { readonly type: 'INTERACTION_RESOLVE'; readonly requestId: string; readonly answerLabel: string }
   | { readonly type: 'AGENT_COMPLETE'; readonly fullText: string; readonly messageId: string; readonly createdAt: Date }
   | { readonly type: 'AGENT_ERROR'; readonly message: string }
+  | { readonly type: 'POLL_ERROR'; readonly message: string }
   | { readonly type: 'CANCEL' }
   | { readonly type: 'RESET' };
 

@@ -1,4 +1,4 @@
-import type { AgentAction, AgentBlock, AgentMessage, AgentState } from './agent-types';
+import { isRunActive, type AgentAction, type AgentBlock, type AgentMessage, type AgentState } from './agent-types';
 import type { ArtifactInfo } from '../../bridge/types';
 import { parseCredentialErrorCode } from '../credential-error';
 
@@ -12,6 +12,8 @@ export function initialAgentState(): AgentState {
     handle: null,
     messages: [],
     phase: 'idle',
+    pollFailed: false,
+    cancelEchoPending: false,
     scrollRevision: 0,
   };
 }
@@ -28,6 +30,7 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
         draft: '',
         errorMessage: null,
         errorCredentialCode: null,
+        pollFailed: false,
         messages: [
           ...state.messages,
           { createdAt: action.createdAt, id: action.messageId, role: 'user', text: action.prompt },
@@ -37,55 +40,161 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
       };
     case 'SESSION_READY':
       return { ...state, handle: action.handle, phase: 'streaming' };
+    // Late stream actions never revive a finished run: only SUBMIT_PROMPT
+    // (phase 'creating') starts a new turn.
+    // A recoverable poll failure (pollFailed) is not locked: the next successful
+    // stream event clears the banner and continues the same turn.
     case 'AGENT_TOKEN':
-      return appendAssistantToken(state, action.token, action.messageId, action.createdAt);
+      if (isStreamLocked(state)) return state;
+      return appendAssistantToken(recoverFromPollFailure(state), action.token, action.messageId, action.createdAt);
     case 'AGENT_THINKING':
-      return appendAssistantThinking(state, action.thinking, action.messageId, action.createdAt);
+      if (isStreamLocked(state)) return state;
+      return appendAssistantThinking(recoverFromPollFailure(state), action.thinking, action.messageId, action.createdAt);
     case 'AGENT_TOOL_CALL':
-      return appendAssistantToolCall(state, action.id, action.name, action.args, action.messageId, action.createdAt);
+      if (isStreamLocked(state) || !action.id) return state;
+      return appendAssistantToolCall(
+        recoverFromPollFailure(state), action.id, action.name, action.args, action.messageId, action.createdAt,
+      );
     case 'AGENT_TOOL_RESULT':
-      return updateAssistantToolResult(state, action.id, action.name, action.result, action.messageId, action.createdAt);
+      if (isStreamLocked(state) || !action.id) return state;
+      return updateAssistantToolResult(
+        recoverFromPollFailure(state), action.id, action.name, action.result, action.messageId, action.createdAt,
+      );
     case 'AGENT_ARTIFACT':
-      return appendAssistantArtifact(state, action.artifact, action.messageId, action.createdAt);
-    case 'INTERACTION_REQUEST':
-      return upsertInteractionRequestBlock(state, {
+      if (isStreamLocked(state)) return state;
+      return appendAssistantArtifact(recoverFromPollFailure(state), action.artifact, action.messageId, action.createdAt);
+    case 'INTERACTION_REQUEST': {
+      // A request surfacing after the run was cancelled/failed can never be
+      // answered (the kernel is gone), so it is born terminal.
+      const runOver = state.phase === 'cancelled' || (state.phase === 'error' && !state.pollFailed);
+      return upsertInteractionRequestBlock(recoverFromPollFailure(state), {
         kind: 'interaction_request',
         id: action.requestId,
         interactionKind: action.interactionKind,
         question: action.question,
         options: action.options,
         artifactRef: action.artifactRef,
-        initialState: action.initialState,
+        initialState: runOver && !isTerminalState(action.initialState) ? 'cancelled' : action.initialState,
         status: 'pending',
         answerLabel: null,
+        handle: action.handle ?? null,
       }, action.messageId, action.createdAt);
+    }
     case 'INTERACTION_RESOLVE':
       return resolveInteractionRequest(state, action.requestId, action.answerLabel);
     case 'AGENT_COMPLETE':
-      return completeAssistantTurn(state, action.fullText, action.messageId, action.createdAt);
+      if (isStreamLocked(state)) return state;
+      return completeAssistantTurn(recoverFromPollFailure(state), action.fullText, action.messageId, action.createdAt);
     case 'AGENT_ERROR':
+      // A genuine kernel error supersedes a recoverable poll failure.
+      state = recoverFromPollFailure(state);
+      // The kernel echoes a user cancel as an error event carrying "Cancelled";
+      // that is a cancellation, never a red banner.
+      if (state.phase === 'cancelled') {
+        return state.cancelEchoPending && action.message === KERNEL_CANCEL_ECHO
+          ? { ...state, cancelEchoPending: false }
+          : state;
+      }
+      if (state.cancelEchoPending && action.message === KERNEL_CANCEL_ECHO) {
+        // A stale echo from a cancelled turn, arriving after a new submit.
+        return { ...state, cancelEchoPending: false };
+      }
+      if (isRunActive(state.phase) && action.message === KERNEL_CANCEL_ECHO) {
+        // The echo raced ahead of the local CANCEL dispatch.
+        return cancelRun(state);
+      }
       return {
         ...state,
         activeAssistantId: null,
         activeTurnId: null,
         errorMessage: action.message,
         errorCredentialCode: parseCredentialErrorCode(action.message),
+        messages: expirePendingInteractions(state.messages),
         phase: 'error',
         scrollRevision: state.scrollRevision + 1,
       };
-    case 'CANCEL':
+    case 'POLL_ERROR':
+      // Only a live run (or an already-failed poll) shows a poll failure; a
+      // finished/cancelled run has nothing to recover.
+      if (!isRunActive(state.phase) && !state.pollFailed) return state;
+      // Identical repeats are a no-op (no re-render, no scroll bump).
+      if (state.pollFailed && state.errorMessage === action.message) return state;
+      // Visible but recoverable: banner shown and running state ended, yet
+      // activeAssistantId/activeTurnId and pending approvals are kept so the
+      // next successful event continues the same assistant message.
       return {
         ...state,
-        activeAssistantId: null,
-        activeTurnId: null,
-        phase: 'cancelled',
-        scrollRevision: state.scrollRevision + 1,
+        errorCredentialCode: null,
+        errorMessage: action.message,
+        phase: 'error',
+        pollFailed: true,
+        scrollRevision: state.pollFailed ? state.scrollRevision : state.scrollRevision + 1,
       };
+    case 'CANCEL':
+      return cancelRun(state, isRunActive(state.phase) && state.handle !== null);
     case 'RESET':
       return initialAgentState();
     default:
       return assertNever(action);
   }
+}
+
+/** Kernel cancel-echo wire text (agent error display string for a user cancel). */
+const KERNEL_CANCEL_ECHO = 'Cancelled';
+
+function isStreamLocked(state: AgentState): boolean {
+  return state.phase === 'cancelled'
+    || state.phase === 'complete'
+    || (state.phase === 'error' && !state.pollFailed);
+}
+
+/** Leaves the recoverable poll-failure state: banner cleared, run streaming again. */
+function recoverFromPollFailure(state: AgentState): AgentState {
+  if (!state.pollFailed) return state;
+  return { ...state, errorCredentialCode: null, errorMessage: null, phase: 'streaming', pollFailed: false };
+}
+
+function cancelRun(state: AgentState, expectEcho = false): AgentState {
+  return {
+    ...state,
+    cancelEchoPending: expectEcho,
+    activeAssistantId: null,
+    activeTurnId: null,
+    // A cancel echo that raced ahead of CANCEL must not leave its banner behind.
+    errorCredentialCode: null,
+    errorMessage: null,
+    messages: expirePendingInteractions(state.messages),
+    phase: 'cancelled',
+    pollFailed: false,
+    scrollRevision: state.scrollRevision + 1,
+  };
+}
+
+/**
+ * Pending approval cards cannot be answered once the run is over (the kernel
+ * is no longer waiting) — mark them terminal so the card renders disabled.
+ */
+function expirePendingInteractions(messages: readonly AgentMessage[]): readonly AgentMessage[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.role !== 'assistant') return message;
+    let blocksChanged = false;
+    const blocks = message.blocks.map((block) => {
+      if (block.kind === 'interaction_request' && block.status === 'pending' && !isTerminalState(block.initialState)) {
+        blocksChanged = true;
+        return { ...block, initialState: 'cancelled' };
+      }
+      return block;
+    });
+    if (!blocksChanged) return message;
+    changed = true;
+    return { ...message, blocks };
+  });
+  return changed ? next : messages;
+}
+
+function isTerminalState(state: string | null): boolean {
+  return state !== null && state !== 'pending';
 }
 
 function finalizeLastThinkingBlock(
@@ -188,6 +297,14 @@ function appendAssistantToolCall(
       ...state,
       messages: state.messages.map((message) => {
         if (message.id === state.activeAssistantId && message.role === 'assistant') {
+          // Redelivery / result-before-call: upsert by id, keeping any result.
+          if (message.blocks.some((block) => block.kind === 'tool_call' && block.id === id)) {
+            return {
+              ...message,
+              blocks: message.blocks.map((block) =>
+                block.kind === 'tool_call' && block.id === id ? { ...block, name, args } : block),
+            };
+          }
           const finalizedBlocks = finalizeLastThinkingBlock(message.blocks, createdAt);
           return { ...message, blocks: [...finalizedBlocks, newBlock] };
         }
@@ -232,6 +349,13 @@ function appendAssistantArtifact(
       ...state,
       messages: state.messages.map((message) => {
         if (message.id === state.activeAssistantId && message.role === 'assistant') {
+          if (message.blocks.some((block) => block.kind === 'artifact' && block.id === newBlock.id)) {
+            return {
+              ...message,
+              blocks: message.blocks.map((block) =>
+                block.kind === 'artifact' && block.id === newBlock.id ? newBlock : block),
+            };
+          }
           const finalizedBlocks = finalizeLastThinkingBlock(message.blocks, createdAt);
           return { ...message, blocks: [...finalizedBlocks, newBlock] };
         }
@@ -289,6 +413,10 @@ function upsertInteractionRequestBlock(
             // card the user already answered — the local resolution wins.
             if (entry.status === 'resolved') {
               return { ...block, status: 'resolved' as const, answerLabel: entry.answerLabel };
+            }
+            // Likewise a card already expired locally (run cancelled/ended).
+            if (isTerminalState(entry.initialState) && !isTerminalState(block.initialState)) {
+              return entry;
             }
             return block;
           }),
@@ -489,7 +617,7 @@ function completeAssistantTurn(
     ...stateWithFinalizedThinking,
     activeAssistantId: null,
     activeTurnId: null,
-    messages,
+    messages: expirePendingInteractions(messages),
     phase: 'complete',
     scrollRevision: state.scrollRevision + 1,
   };

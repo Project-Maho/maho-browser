@@ -330,11 +330,10 @@ describe('AgentScreen CompactShell contract', () => {
 
     // 2. Send empty/whitespace thinking (should be suppressed at reducer level)
     act(() => mockCtx.enqueueEvent('thinking', '   '));
-    expect(screen.queryAllByTestId('agent-thinking-bubble')).toHaveLength(1);
-
-    // 3. Send text message token
+    // 3. Send text message token; once it renders, the queue has drained past the whitespace thinking
     act(() => mockCtx.enqueueEvent('token', 'Found 1 file.'));
     await waitFor(() => expect(screen.getByTestId('agent-message-assistant')).toHaveTextContent(/Found 1 file\./));
+    expect(screen.queryAllByTestId('agent-thinking-bubble')).toHaveLength(1);
 
     // 4. Send tool call
     act(() => mockCtx.enqueueEvent('tool_call', { id: 'call-1', name: 'search', args: '{"query": "antigravity"}' }));
@@ -346,7 +345,11 @@ describe('AgentScreen CompactShell contract', () => {
     await waitFor(() => expect(screen.getByTestId('agent-tool-call-block')).toHaveTextContent('Used search'));
 
     // Click to expand tool execution details
-    fireEvent.click(screen.getByRole('button', { name: 'Expand tool details' }));
+    // The visible tool name is the accessible name; aria-expanded carries the state.
+    const toolHeader = screen.getByRole('button', { name: /Used search/ });
+    expect(toolHeader).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toolHeader);
+    expect(toolHeader).toHaveAttribute('aria-expanded', 'true');
     // Verify tool details render result using markdown
     expect(screen.getByTestId('agent-tool-call-block')).toHaveTextContent('Found detailsSuccess!');
 
