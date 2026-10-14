@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -26,7 +27,9 @@
 #include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
 #include "base/time/time.h"
@@ -186,6 +189,11 @@ struct ChannelConfig {
   std::optional<std::string> account_id;
   std::optional<std::string> opaque_auth_handle;
   uint32_t poll_interval_seconds = 30;
+  // External sender ids allowed to trigger agent turns from this channel.
+  // Empty means no inbound event may trigger the agent (fail closed).
+  std::vector<std::string> allowed_sender_ids;
+
+  bool IsSenderAllowed(std::string_view sender_id) const;
 
   bool operator==(const ChannelConfig& other) const;
   bool operator!=(const ChannelConfig& other) const { return !(*this == other); }
@@ -276,6 +284,7 @@ struct InboundProcessOutcome {
     kMalformedEvent,
     kChannelNotFound,
     kChannelDisabled,
+    kSenderNotAllowed,
   };
 
   static InboundProcessOutcome Triggered(AgentSessionTrigger trigger);
@@ -283,6 +292,8 @@ struct InboundProcessOutcome {
   static InboundProcessOutcome MalformedEvent(std::string reason);
   static InboundProcessOutcome ChannelNotFound(std::string channel_id);
   static InboundProcessOutcome ChannelDisabled(std::string channel_id);
+  static InboundProcessOutcome SenderNotAllowed(std::string channel_id,
+                                                std::string sender_id);
 
   Status status = Status::kMalformedEvent;
   std::optional<AgentSessionTrigger> trigger;
@@ -295,6 +306,9 @@ struct InboundProcessOutcome {
   bool is_malformed() const { return status == Status::kMalformedEvent; }
   bool is_not_found() const { return status == Status::kChannelNotFound; }
   bool is_disabled() const { return status == Status::kChannelDisabled; }
+  bool is_sender_not_allowed() const {
+    return status == Status::kSenderNotAllowed;
+  }
 };
 
 /// Outbound message payload to be sent to a channel.
@@ -365,7 +379,15 @@ struct ChannelError {
 };
 
 /// Cursor comparison helper: compares numeric or single-alpha prefix (e.g. C5 vs C6).
+/// Returns zero for unordered opaque cursors; do not use it for deduplication.
 int CompareCursorPositions(std::string_view a, std::string_view b);
+
+/// Orders two cursors only when their position is known: equal strings, two
+/// in-range uint64 decimals, or two same-letter-prefixed uint64 decimals.
+/// Returns std::nullopt for opaque (or overflowing) cursors, whose ordering
+/// must not be inferred; callers dedupe those by the seen-cursor set only.
+std::optional<int> TryCompareCursorPositions(std::string_view a,
+                                             std::string_view b);
 
 /// Constructs a typed DirectApiOp for outbound message sending.
 /// Ensures credentials are not included in payload parameters and that
@@ -377,6 +399,9 @@ base::expected<DirectApiOp, ChannelError> SendViaDirectApi(
 /// Maps DirectApiOutcome results into typed OutboundSendReceipt or ChannelError.
 base::expected<OutboundSendReceipt, ChannelError> HandleDirectApiOutcome(
     const DirectApiExecutionOutcome& outcome);
+
+/// Upper bound on remembered cursors per channel for duplicate detection.
+inline constexpr size_t kMaxSeenCursorsPerChannel = 4096;
 
 /// Per-channel runtime state maintained in the registry.
 struct ChannelEntry {
@@ -390,8 +415,15 @@ struct ChannelEntry {
   ChannelConfig config;
   std::optional<std::string> last_cursor;
   std::optional<uint64_t> last_poll_timestamp;
+  // Set when the most recent poll failed; cleared by the next successful poll.
+  std::optional<std::string> last_poll_error;
   std::unordered_set<std::string> seen_cursors;
+  // Insertion order of `seen_cursors`, used to evict the oldest entry once
+  // kMaxSeenCursorsPerChannel is reached.
+  std::deque<std::string> seen_cursor_order;
   bool is_active = false;
+
+  void RememberCursor(const std::string& cursor);
 };
 
 /// Registry managing active channel registrations and their cursor deduplication state.
@@ -414,6 +446,8 @@ class ChannelRegistry {
   std::optional<std::string> GetLastCursor(const std::string& channel_id) const;
   void SetLastCursor(const std::string& channel_id, std::string cursor);
   void RecordPoll(const std::string& channel_id, uint64_t timestamp);
+  void RecordPollFailure(const std::string& channel_id, std::string error);
+  size_t SeenCursorCountForTesting(const std::string& channel_id) const;
 
   InboundProcessOutcome ProcessInboundEvent(const ChannelEvent& event);
 
@@ -514,6 +548,9 @@ class MahoAgentChannelGateway {
   void SetPollInterval(base::TimeDelta interval);
   void PollChannelOnce(const std::string& channel_id);
   void PollAllOnce();
+  bool IsPollTimerRunningForTesting() const { return poll_timer_.IsRunning(); }
+  // Runs `done` once every persistence write scheduled so far has finished.
+  void FlushPersistenceForTesting(base::OnceClosure done) const;
 
   // Test Injections
   void SetClockSourceForTesting(base::RepeatingCallback<uint64_t()> clock_source) {
@@ -538,6 +575,8 @@ class MahoAgentChannelGateway {
 
   SEQUENCE_CHECKER(sequence_checker_);
 
+  void StartPollTimer();
+
   ChannelRegistry registry_;
   std::unique_ptr<ChannelTransport> transport_;
   raw_ptr<MahoAuthenticatedServiceApiBroker> broker_ = nullptr;
@@ -546,12 +585,19 @@ class MahoAgentChannelGateway {
 
   base::FilePath persistence_path_;
   std::string persistence_path_str_;
+  // Sequenced MayBlock runner for atomic persistence writes off the owning
+  // (UI) sequence. Created when a persistence path is set.
+  scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
   uint64_t stale_threshold_secs_ = 30;
   base::TimeDelta poll_interval_;
   base::RepeatingTimer poll_timer_;
   base::RepeatingCallback<uint64_t()> clock_source_;
   std::set<std::string> active_channels_;
 
+  // Bound only into transport fetch callbacks; invalidated when the transport
+  // is replaced so in-flight fetches from the old transport are dropped without
+  // disturbing the poll timer (which binds `weak_factory_`).
+  base::WeakPtrFactory<MahoAgentChannelGateway> fetch_weak_factory_{this};
   base::WeakPtrFactory<MahoAgentChannelGateway> weak_factory_{this};
 };
 

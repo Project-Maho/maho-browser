@@ -49,6 +49,7 @@ bool MahoTraceRecorderClient::Start(content::WebContents* contents,
   }
 
   tab_id_ = tab_id;
+  redacted_fill_recorded_ = false;
   Observe(contents);
   AttachInputObserver();
 
@@ -100,6 +101,15 @@ void MahoTraceRecorderClient::RecordFill(
       recorder_, text.c_str(), selector ? selector->c_str() : nullptr);
 }
 
+void MahoTraceRecorderClient::RecordTypedText(const std::string& text) {
+  if (!recorder_ || text.empty() || redacted_fill_recorded_) {
+    return;
+  }
+  // `text` is deliberately discarded: it may be a password, OTP or card number.
+  redacted_fill_recorded_ = true;
+  RecordFill(kRedactedFillText, std::nullopt);
+}
+
 void MahoTraceRecorderClient::RecordNavigate(const std::string& url) {
   if (!recorder_) {
     return;
@@ -128,6 +138,11 @@ void MahoTraceRecorderClient::WebContentsDestroyed() {
   StopAndExportJson();
 }
 
+void MahoTraceRecorderClient::OnFocusChangedInPage(
+    const content::FocusedNodeDetails& details) {
+  redacted_fill_recorded_ = false;
+}
+
 void MahoTraceRecorderClient::OnInputEvent(
     const content::RenderWidgetHost& host,
     const blink::WebInputEvent& event,
@@ -151,9 +166,7 @@ void MahoTraceRecorderClient::OnInputEvent(
         base::UTF16ToUTF8(key.text.data(),
                           std::char_traits<char16_t>::length(key.text.data()),
                           &text);
-        if (!text.empty()) {
-          RecordFill(text, std::nullopt);
-        }
+        RecordTypedText(text);
       }
     }
   }

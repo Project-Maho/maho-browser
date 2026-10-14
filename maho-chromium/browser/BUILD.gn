@@ -535,7 +535,9 @@ test("maho_tab_borrow_chip_test") {
     "//testing/gtest",
     "//ui/views",
   ]
+    "//ui/accessibility",
 }
+    "//ui/views:test_support",
 
 test("maho_sync_relay_client_test") {
   sources = [
@@ -549,7 +551,9 @@ test("maho_sync_relay_client_test") {
     "//testing/gtest",
   ]
 }
+    "//ui/accessibility",
 
+    "//ui/views:test_support",
 source_set("maho_sync_relay_protocol") {
   sources = [
     "sync/maho_sync_relay_protocol.cc",

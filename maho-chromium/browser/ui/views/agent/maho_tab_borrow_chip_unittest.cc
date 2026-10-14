@@ -4,13 +4,20 @@
 
 #include "maho/browser/ui/views/agent/maho_tab_borrow_chip.h"
 
+#include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/events/event.h"
+#include "ui/gfx/geometry/point.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/layout/layout_provider.h"
+#include "ui/views/test/button_test_api.h"
 
 namespace maho {
 namespace {
@@ -110,6 +117,61 @@ TEST_F(MahoTabBorrowChipTest, RequestIdIsolatedBetweenRequests) {
 
   chip_->ShowRequest("req-2", "Tab 2");
   EXPECT_EQ(chip_->active_request_id(), "req-2");
+}
+
+class DeletingBorrowDelegate : public MahoTabBorrowChip::Delegate {
+ public:
+  void OnBorrowApproved(const std::string& request_id) override {
+    chip->reset();
+    last_request_id = request_id;
+  }
+  void OnBorrowDenied(const std::string& request_id) override {
+    chip->reset();
+    last_request_id = request_id;
+  }
+
+  std::string last_request_id;
+  raw_ptr<std::unique_ptr<MahoTabBorrowChip>> chip = nullptr;
+};
+
+void ClickButton(views::Button* button) {
+  // These views are not hosted in a Widget, so the click ink drop has no color
+  // provider; skip the animation and exercise only the click -> callback path.
+  button->SetHasInkDropActionOnClick(false);
+  views::test::ButtonTestApi(button).NotifyClick(
+      ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                     base::TimeTicks::Now(), 0, 0));
+}
+
+TEST_F(MahoTabBorrowChipTest, DelegateMayDeleteChipFromAllowCallback) {
+  DeletingBorrowDelegate deleting_delegate;
+  auto chip = std::make_unique<MahoTabBorrowChip>(&deleting_delegate);
+  deleting_delegate.chip = &chip;
+  chip->ShowRequest("req-1", "Example Domain");
+
+  ClickButton(chip->allow_button_for_testing());
+
+  EXPECT_EQ(chip, nullptr);
+  EXPECT_EQ(deleting_delegate.last_request_id, "req-1");
+}
+
+TEST_F(MahoTabBorrowChipTest, DelegateMayDeleteChipFromDenyCallback) {
+  DeletingBorrowDelegate deleting_delegate;
+  auto chip = std::make_unique<MahoTabBorrowChip>(&deleting_delegate);
+  deleting_delegate.chip = &chip;
+  chip->ShowRequest("req-2", "Another Tab");
+
+  ClickButton(chip->deny_button_for_testing());
+
+  EXPECT_EQ(chip, nullptr);
+  EXPECT_EQ(deleting_delegate.last_request_id, "req-2");
+}
+
+TEST_F(MahoTabBorrowChipTest, ClickWhileNotShowingDoesNotNotifyDelegate) {
+  ClickButton(chip_->allow_button_for_testing());
+  ClickButton(chip_->deny_button_for_testing());
+  EXPECT_FALSE(delegate_->approved);
+  EXPECT_FALSE(delegate_->denied);
 }
 
 }  // namespace

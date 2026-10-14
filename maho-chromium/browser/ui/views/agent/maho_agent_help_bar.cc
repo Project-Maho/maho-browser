@@ -24,21 +24,13 @@ MahoAgentHelpBar::MahoAgentHelpBar(Delegate* delegate) : delegate_(delegate) {
   layout->SetFlexForView(prompt_label_, 1);
 
   complete_button_ = AddChildView(std::make_unique<views::MdTextButton>(
-      base::BindRepeating(
-          [](MahoAgentHelpBar* bar) {
-            bar->delegate_->OnHelpCompleted(bar->active_request_id_);
-            bar->Dismiss();
-          },
-          base::Unretained(this)),
+      base::BindRepeating(&MahoAgentHelpBar::OnCompleteClicked,
+                          base::Unretained(this)),
       u"Complete"));
 
   cancel_button_ = AddChildView(std::make_unique<views::MdTextButton>(
-      base::BindRepeating(
-          [](MahoAgentHelpBar* bar) {
-            bar->delegate_->OnHelpCancelled(bar->active_request_id_);
-            bar->Dismiss();
-          },
-          base::Unretained(this)),
+      base::BindRepeating(&MahoAgentHelpBar::OnCancelClicked,
+                          base::Unretained(this)),
       u"Cancel"));
 
   SetVisible(false);
@@ -60,6 +52,26 @@ void MahoAgentHelpBar::Dismiss() {
   SetVisible(false);
   InvalidateLayout();
   PreferredSizeChanged();
+}
+
+void MahoAgentHelpBar::OnCompleteClicked() {
+  if (!is_showing()) {
+    return;
+  }
+  // The delegate may delete this view from inside its callback, so copy the id
+  // and finish all member access before notifying.
+  const std::string request_id = active_request_id_;
+  Dismiss();
+  delegate_->OnHelpCompleted(request_id);
+}
+
+void MahoAgentHelpBar::OnCancelClicked() {
+  if (!is_showing()) {
+    return;
+  }
+  const std::string request_id = active_request_id_;
+  Dismiss();
+  delegate_->OnHelpCancelled(request_id);
 }
 
 std::string MahoAgentHelpBar::GetClassName() const {

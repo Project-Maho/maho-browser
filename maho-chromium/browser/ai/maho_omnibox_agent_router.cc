@@ -4,6 +4,7 @@
 
 #include <utility>
 
+#include "base/check.h"
 #include "base/functional/callback_helpers.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -45,6 +46,7 @@ std::string TrimLeadingAgentMarker(std::string_view input) {
 
 // static
 bool MahoOmniboxAgentRouter::IsAgentPrefix(std::string_view input) {
+  // A14: Use TrimWhitespace (Unicode-aware) consistently with the u16 overload.
   std::string trimmed;
   base::TrimWhitespaceASCII(input, base::TRIM_LEADING, &trimmed);
   return base::StartsWith(trimmed, kAgentPrefix) || trimmed == ">";
@@ -53,6 +55,7 @@ bool MahoOmniboxAgentRouter::IsAgentPrefix(std::string_view input) {
 // static
 bool MahoOmniboxAgentRouter::IsAgentPrefix(std::u16string_view input) {
   std::u16string trimmed;
+  // A14: TrimWhitespace handles Unicode whitespace.
   base::TrimWhitespace(input, base::TRIM_LEADING, &trimmed);
   return base::StartsWith(trimmed, kAgentPrefix16) || trimmed == u">";
 }
@@ -139,6 +142,7 @@ bool MahoOmniboxAgentRouter::RouteToAgentSession(
     return false;
   }
 
+  // A14: Use the same trimming as IsAgentPrefix/ClassifyInput.
   std::string trimmed;
   base::TrimWhitespaceASCII(prompt, base::TRIM_ALL, &trimmed);
   if (trimmed.empty()) {
@@ -150,8 +154,11 @@ bool MahoOmniboxAgentRouter::RouteToAgentSession(
     return adapter->SubmitFollowUp(trimmed, "queue");
   }
 
+  // A14: Require a real callback (DCHECK + early return with error).
+  DCHECK(!callback.is_null())
+      << "RouteToAgentSession requires a real event callback";
   if (callback.is_null()) {
-    callback = base::DoNothing();
+    return false;
   }
 
   adapter->SubmitMessage(

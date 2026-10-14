@@ -2,6 +2,8 @@
 
 #include "maho/browser/ai/maho_agent_event_replay_buffer.h"
 
+#include <algorithm>
+
 namespace maho::ai {
 
 ReplayResult::ReplayResult(Status status,
@@ -17,8 +19,10 @@ ReplayResult& ReplayResult::operator=(const ReplayResult&) = default;
 ReplayResult& ReplayResult::operator=(ReplayResult&&) = default;
 ReplayResult::~ReplayResult() = default;
 
-MahoAgentEventReplayBuffer::MahoAgentEventReplayBuffer(size_t capacity)
-    : capacity_(capacity > 0 ? capacity : 1) {}
+MahoAgentEventReplayBuffer::MahoAgentEventReplayBuffer(size_t capacity,
+                                                       size_t max_bytes)
+    : capacity_(capacity > 0 ? capacity : 1),
+      max_bytes_(max_bytes > 0 ? max_bytes : 1) {}
 
 MahoAgentEventReplayBuffer::~MahoAgentEventReplayBuffer() = default;
 
@@ -39,28 +43,47 @@ bool MahoAgentEventReplayBuffer::Append(uint64_t seq, std::string payload) {
   highest_seq_seen_ = seq;
   has_seen_any_ = true;
 
-  // Enforce bounded ring capacity
-  if (buffer_.size() >= capacity_) {
-    buffer_.pop_front();
-  }
-
+  bytes_ += payload.size();
   buffer_.push_back(ReplayEvent{seq, std::move(payload)});
+
+  // Oversized events are consumed but evicted too, preserving a strict budget
+  // and reporting a gap to any reader that needs the omitted event.
+  while (!buffer_.empty() &&
+         (buffer_.size() > capacity_ || bytes_ > max_bytes_)) {
+    EvictOldest();
+  }
   return true;
 }
 
+void MahoAgentEventReplayBuffer::EvictOldest() {
+  const ReplayEvent& oldest = buffer_.front();
+  bytes_ -= oldest.payload.size();
+  highest_evicted_seq_ = std::max(highest_evicted_seq_, oldest.seq);
+  buffer_.pop_front();
+}
+
 ReplayResult MahoAgentEventReplayBuffer::ReplayAfter(uint64_t after_seq) const {
+  // A requester asking for events after `after_seq` needs every event with
+  // seq > after_seq. If any such event was evicted (or dropped by Clear()), the
+  // history is incomplete: return an explicit ReplayGap rather than a silent
+  // partial history. Events that were never appended (e.g. the stream's first
+  // seq is > 1) are not a gap.
+  if (highest_evicted_seq_ > after_seq) {
+    return ReplayResult::Gap(buffer_.empty() ? 0 : buffer_.front().seq);
+  }
+
   if (buffer_.empty()) {
+    if (after_seq > highest_seq_seen_) {
+      return ReplayResult::Gap(0);
+    }
     return ReplayResult::Ok({});
   }
 
-  const uint64_t oldest_retained = buffer_.front().seq;
-
-  // If the requester is asking for events after `after_seq`, they require events
-  // starting from `after_seq + 1`. If `after_seq + 1 < oldest_retained` (i.e.
-  // `after_seq < oldest_retained - 1`), an intermediate event was already evicted.
-  // We MUST return an explicit ReplayGap rather than a silent partial history.
-  if (oldest_retained > 0 && after_seq < oldest_retained - 1) {
-    return ReplayResult::Gap(oldest_retained);
+  // The requester's cursor is ahead of anything this buffer ever produced since
+  // it was last reset (e.g. the run restarted its sequence): tell them to
+  // resynchronise instead of returning an empty "caught up" result.
+  if (after_seq > buffer_.back().seq) {
+    return ReplayResult::Gap(buffer_.front().seq);
   }
 
   std::vector<ReplayEvent> replayed;
@@ -81,12 +104,24 @@ size_t MahoAgentEventReplayBuffer::capacity() const {
   return capacity_;
 }
 
+size_t MahoAgentEventReplayBuffer::max_bytes() const {
+  return max_bytes_;
+}
+
+size_t MahoAgentEventReplayBuffer::bytes() const {
+  return bytes_;
+}
+
 bool MahoAgentEventReplayBuffer::empty() const {
   return buffer_.empty();
 }
 
 void MahoAgentEventReplayBuffer::Clear() {
+  // Everything appended so far is dropped: later replay requests that still
+  // need those events must see a gap, not an empty "caught up" result.
+  highest_evicted_seq_ = std::max(highest_evicted_seq_, highest_seq_seen_);
   buffer_.clear();
+  bytes_ = 0;
   highest_seq_seen_ = 0;
   has_seen_any_ = false;
 }

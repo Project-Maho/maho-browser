@@ -38,9 +38,15 @@ class MahoTabBorrowChip : public views::View {
   const std::string& active_request_id() const { return active_request_id_; }
   bool is_showing() const { return !active_request_id_.empty(); }
 
+  views::MdTextButton* allow_button_for_testing() { return allow_button_; }
+  views::MdTextButton* deny_button_for_testing() { return deny_button_; }
+
   std::string GetClassName() const;
 
  private:
+  void OnAllowClicked();
+  void OnDenyClicked();
+
   raw_ptr<Delegate> delegate_ = nullptr;
   std::string active_request_id_;
   raw_ptr<views::Label> label_ = nullptr;

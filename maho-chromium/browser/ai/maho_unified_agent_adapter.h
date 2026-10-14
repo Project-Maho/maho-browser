@@ -87,6 +87,7 @@ struct PermissionCallState {
   std::string sensitivity = "sensitive";
   bool page_derived_justification = false;
   std::string consequence = "unknown";
+  base::OnceCallback<void(bool)> boundary_callback;
 };
 
 // One parked human-in-the-loop help request (browser_request_help). Tracks
@@ -271,6 +272,10 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
   static void NotifyAISettingsChanged(PrefService* prefs);
   static std::set<MahoUnifiedAgentAdapter*>& GetActiveAdapters();
   bool IsMailReadAllowedForTesting() const { return mail_read_allowed_; }
+  static MahoUnifiedAgentAdapter* FindForPrefs(PrefService* prefs);
+  void RequestBoundaryApproval(const std::string& tool_name,
+                               const std::string& redacted_details,
+                               base::OnceCallback<void(bool)> callback);
 
   // MahoAiRuntimeAdapter:
   std::string GetAdapterName() const override;
@@ -414,6 +419,8 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
     RAW_PTR_EXCLUSION void* callback_user_data = nullptr;
     std::shared_ptr<ByokSnapshot> byok_snapshot;
     std::unique_ptr<ByokBridge> byok_bridge;
+    // A2: Shared atomic for cross-thread generation snapshotting.
+    std::shared_ptr<std::atomic<uint64_t>> active_generation_atomic;
   };
 
   struct ActiveTurn {
@@ -686,6 +693,29 @@ class MahoUnifiedAgentAdapter : public MahoAiRuntimeAdapter {
 
   std::unique_ptr<maho::ai::MahoAuthenticatedServiceApiBroker> api_broker_;
   std::unique_ptr<maho::ai::MahoAgentChannelGateway> channel_gateway_;
+
+  // A2: Thread-safe snapshot of the active turn generation. Shared so that
+  // session-level FFI callbacks (which fire on Rust threads with generation=0)
+  // can read it atomically at callback entry, avoiding the owning-sequence
+  // fallback that races with turn replacement.
+  std::shared_ptr<std::atomic<uint64_t>> active_generation_atomic_ =
+      std::make_shared<std::atomic<uint64_t>>(0);
+
+  // A3: Maps run_id to the generation that was active when the run started.
+  // Events whose run_id maps to a generation that is no longer active are
+  // dropped.
+  std::unordered_map<std::string, uint64_t> run_id_to_generation_;
+
+  // A2: Combined bridge for session-level FFI callbacks that need both the
+  // FfiCallbackHandle user_data AND the active generation atomic for cross-
+  // thread generation snapshotting.
+  struct SessionCallbackBridge {
+    // RAW_PTR_EXCLUSION: see TurnFfiResources::callback_user_data; this is the
+    // FfiCallbackHandle user_data handed across the Rust FFI boundary.
+    RAW_PTR_EXCLUSION void* ffi_user_data = nullptr;
+    std::shared_ptr<std::atomic<uint64_t>> active_generation_atomic;
+  };
+  std::unique_ptr<SessionCallbackBridge> session_callback_bridge_;
 
   base::WeakPtrFactory<MahoUnifiedAgentAdapter> weak_factory_{this};
 

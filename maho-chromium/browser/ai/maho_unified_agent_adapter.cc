@@ -126,33 +126,19 @@ std::string ClassifyActionConsequence(const std::string& tool,
   if (!descriptor) {
     return "unclassified";
   }
-  if (descriptor->missing_policy !=
-      MahoBrowserToolRegistry::MissingPolicy::kFailClosed) {
-    return "unknown";
+  const auto* contract = maho::ai::FindBrowserActionContract(descriptor->tool_name);
+  if (maho::ai::CapabilityLeavesBrowserBoundary(descriptor->canonical_id) ||
+      (contract && maho::ai::RequiresApproval(*contract))) {
+    return "boundary";
   }
-  if (descriptor->mutability ==
-      MahoBrowserToolRegistry::Mutability::kReadOnly) {
-    return "ordinary";
+  if (descriptor->tool_name == "browser_type") {
+    auto parsed = base::JSONReader::ReadDict(arguments, base::JSON_PARSE_RFC);
+    if (parsed && parsed->FindBool("allow_credentials").value_or(false)) {
+      return "credential_fill";
+    }
   }
-  if (descriptor->required_broker == MahoBrowserToolRegistry::Broker::kVault ||
-      descriptor->sensitivity ==
-          MahoBrowserToolRegistry::Sensitivity::kCredential) {
-    return "credential_fill";
-  }
-
-  std::optional<base::DictValue> parsed =
-      base::JSONReader::ReadDict(arguments, base::JSON_PARSE_RFC);
-  if (!parsed) {
-    return "unknown";
-  }
-  if (descriptor->tool_name == "browser_scroll" ||
-      descriptor->tool_name == "browser_hover") {
-    return "ordinary";
-  }
-  if (descriptor->tool_name == "browser_navigate") {
-    return "new_origin";
-  }
-  return "unknown";
+  // Browser manipulation never needs approval, regardless of its target.
+  return "ordinary";
 }
 
 bool ExtractPageDerivedJustification(const char* arguments) {
@@ -406,6 +392,63 @@ std::set<MahoUnifiedAgentAdapter*>&
 MahoUnifiedAgentAdapter::GetActiveAdapters() {
   static base::NoDestructor<std::set<MahoUnifiedAgentAdapter*>> active_adapters;
   return *active_adapters;
+}
+
+MahoUnifiedAgentAdapter* MahoUnifiedAgentAdapter::FindForPrefs(
+    PrefService* prefs) {
+  base::AutoLock lock(GetActiveAdaptersLock());
+  for (auto* adapter : GetActiveAdapters()) {
+    DCHECK_CALLED_ON_VALID_SEQUENCE(adapter->sequence_checker_);
+    if (adapter->prefs_ == prefs &&
+        ((adapter->active_turn_ && !adapter->active_turn_->cancelled &&
+          adapter->active_turn_->on_event) ||
+         adapter->last_event_callback_)) {
+      return adapter;
+    }
+  }
+  return nullptr;
+}
+
+void MahoUnifiedAgentAdapter::RequestBoundaryApproval(
+    const std::string& tool_name,
+    const std::string& redacted_details,
+    base::OnceCallback<void(bool)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if ((!active_turn_ || active_turn_->cancelled || !active_turn_->on_event) &&
+      !last_event_callback_) {
+    std::move(callback).Run(false);
+    return;
+  }
+  auto state = std::make_shared<PermissionCallState>();
+  state->generation = active_turn_ ? active_turn_->generation : 0;
+  state->boundary_callback = std::move(callback);
+  state->consequence = "boundary";
+  const std::string id = GenerateApprovalId();
+  pending_approvals_[id] = state;
+  owning_task_runner_->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<MahoUnifiedAgentAdapter> adapter,
+             std::string id, std::shared_ptr<PermissionCallState> state) {
+            if (!adapter || !adapter->pending_approvals_.contains(id)) {
+              return;
+            }
+            state->cancelled.store(true);
+            adapter->RespondToApproval(id, false);
+          },
+          weak_factory_.GetWeakPtr(), id, state),
+      AgentCallWaitTimeout());
+  MahoAiRuntimeEvent event;
+  event.type = MahoAiRuntimeEventType::kApprovalRequest;
+  event.text = tool_name;
+  event.payload.Set("approval_id", id);
+  event.payload.Set("related_tool_name", tool_name);
+  event.payload.Set("description", redacted_details);
+  event.payload.Set("approval_policy", "prompt");
+  event.payload.Set("approval_state", "pending");
+  event.payload.Set("sensitivity", "sensitive");
+  event.payload.Set("consequence", "boundary");
+  EmitEvent(std::move(event));
 }
 
 void MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(const std::string& provider) {
@@ -699,6 +742,7 @@ void MahoUnifiedAgentAdapter::OnTurnFfiResourcesReleased(uint64_t generation) {
   if (active_turn_ && active_turn_->generation == generation) {
     DenyAllPendingApprovals();
     active_turn_.reset();
+    active_generation_atomic_->store(0, std::memory_order_release);
   }
 }
 
@@ -733,8 +777,6 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     maho_ai::mojom::InteractionMode mode,
     RuntimeEventCallback on_event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  last_event_callback_ = on_event;
 
   if (active_turn_) {
     if (agent_session_ && agent_ffi_->turn_submit) {
@@ -771,10 +813,22 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
   turn->ffi_resources->owning_task_runner = owning_task_runner_;
   turn->ffi_resources->adapter = weak_factory_.GetWeakPtr();
   if (!turn->conversation_task->StartStreaming()) {
+    // A7: Emit kError before returning so the caller's event sink is notified.
+    MahoAiRuntimeEvent err_event;
+    err_event.type = MahoAiRuntimeEventType::kError;
+    err_event.text = "Failed to start streaming for this turn.";
+    turn->on_event.Run(std::move(err_event));
     return;
   }
   const uint64_t generation = turn->generation;
   active_turn_ = std::move(turn);
+  // A2: Publish generation atomically so Rust-thread session-level callbacks
+  // can snapshot it without crossing onto the owning sequence.
+  active_generation_atomic_->store(generation, std::memory_order_release);
+  // A7: Assign last_event_callback_ only once a turn is successfully created,
+  // not unconditionally at entry (which would overwrite it on follow-up/error
+  // paths).
+  last_event_callback_ = active_turn_->on_event;
 
   std::optional<base::FilePath> artifact_root;
   if (artifact_root_resolver_) {
@@ -875,6 +929,9 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
     }
     RenewExpiringProviderOAuth(prefs_);
     session_resources->byok_bridge = std::make_unique<ByokBridge>();
+    // A2: Share the generation atomic with the session resources so that
+    // session-level FFI callbacks can snapshot it on the Rust thread.
+    session_resources->active_generation_atomic = active_generation_atomic_;
     session_resources->byok_bridge->snapshot = session_resources->byok_snapshot;
 
     // Wire permission + secure-storage callbacks. allow_insecure_key_storage
@@ -887,6 +944,15 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
                                 : bridge->GetActiveSpaceId();
     }
 
+    // A2: Create the session callback bridge that bundles the FfiCallbackHandle
+    // user_data with the active generation atomic. Permission and browser-tool
+    // callbacks use this bridge to snapshot the generation on the Rust thread.
+    session_callback_bridge_ = std::make_unique<SessionCallbackBridge>();
+    session_callback_bridge_->ffi_user_data =
+        session_resources->callback_user_data;
+    session_callback_bridge_->active_generation_atomic =
+        active_generation_atomic_;
+
     auto* session_release_data =
         new std::shared_ptr<SessionFfiResources>(session_resources);
     session_resources->callback_handle->HandOffToProducer();
@@ -894,11 +960,11 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
         core, session_id_.c_str(), nullptr,
         /*allow_insecure_key_storage=*/false,
         &MahoUnifiedAgentAdapter::OnAgentPermission,
-        session_resources->callback_user_data,
+        session_callback_bridge_.get(),
         &MahoUnifiedAgentAdapter::OnAgentSecureStorage,
         session_resources->byok_bridge.get(),
         &MahoUnifiedAgentAdapter::OnAgentBrowserTool,
-        session_resources->callback_user_data,
+        session_callback_bridge_.get(),
         active_space_id.empty() ? nullptr : active_space_id.c_str(),
         &MahoUnifiedAgentAdapter::ReleaseSessionFfiResources,
         session_release_data);
@@ -1046,6 +1112,9 @@ void MahoUnifiedAgentAdapter::CancelCurrentTurn() {
     active_turn_->cancelled = true;
     active_turn_->ffi_resources->callback_handle->Cancel();
   }
+  // A2: Clear the atomic generation so session-level callbacks arriving after
+  // cancel do not adopt a future turn.
+  active_generation_atomic_->store(0, std::memory_order_release);
 }
 
 // static
@@ -1109,7 +1178,9 @@ bool MahoUnifiedAgentAdapter::CancelHumanHelp(const std::string& request_id,
 
 void MahoUnifiedAgentAdapter::DenyAllPendingApprovals() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  for (auto& [id, state] : pending_approvals_) {
+  auto pending = std::move(pending_approvals_);
+  pending_approvals_.clear();
+  for (auto& [id, state] : pending) {
     if (!state) {
       continue;
     }
@@ -1117,8 +1188,10 @@ void MahoUnifiedAgentAdapter::DenyAllPendingApprovals() {
       state->decision = PromptDecision::kDeny;
     }
     state->event.Signal();
+    if (state->boundary_callback) {
+      std::move(state->boundary_callback).Run(false);
+    }
   }
-  pending_approvals_.clear();
 }
 
 void MahoUnifiedAgentAdapter::RespondToApproval(const std::string& approval_id,
@@ -1135,10 +1208,30 @@ void MahoUnifiedAgentAdapter::RespondToApproval(const std::string& approval_id,
   std::shared_ptr<PermissionCallState> state = std::move(it->second);
   pending_approvals_.erase(it);
 
-  if (!state || !IsActiveGeneration(state->generation)) {
+  if (!state || (!state->boundary_callback &&
+                 !IsActiveGeneration(state->generation))) {
     if (state) {
       state->decision = PromptDecision::kDeny;
       state->event.Signal();
+    }
+    return;
+  }
+
+  // A6: When the state was already cancelled (timeout expired), deny and
+  // report as expired rather than "approved".
+  if (state->cancelled.load()) {
+    state->decision = PromptDecision::kDeny;
+    state->event.Signal();
+
+    MahoAiRuntimeEvent event;
+    event.type = MahoAiRuntimeEventType::kApprovalResult;
+    event.payload.Set("approval_id", approval_id);
+    event.payload.Set("approved", false);
+    event.payload.Set("approval_state", "expired");
+    event.payload.Set("approval_decision", "deny");
+    EmitEvent(std::move(event));
+    if (state->boundary_callback) {
+      std::move(state->boundary_callback).Run(false);
     }
     return;
   }
@@ -1161,6 +1254,9 @@ void MahoUnifiedAgentAdapter::RespondToApproval(const std::string& approval_id,
   event.payload.Set("page_derived_justification",
                     state->page_derived_justification);
   EmitEvent(std::move(event));
+  if (state->boundary_callback) {
+    std::move(state->boundary_callback).Run(approved);
+  }
 }
 
 std::string MahoUnifiedAgentAdapter::GetRuntimeSessionId() const {
@@ -1202,6 +1298,10 @@ void MahoUnifiedAgentAdapter::ResetSessionInternal(
   session_id_ = session_id;
   pending_message_.clear();
   last_consumed_seq_per_run_.clear();
+  // A12: Clear session-scoped grants on reset.
+  session_grants_.clear();
+  // A3: Clear run_id -> generation map.
+  run_id_to_generation_.clear();
 }
 
 void MahoUnifiedAgentAdapter::Reset() {
@@ -1243,6 +1343,10 @@ void MahoUnifiedAgentAdapter::Reset() {
 
   session_id_.clear();
   pending_message_.clear();
+  // A12: Clear session-scoped grants on full reset.
+  session_grants_.clear();
+  // A3: Clear run_id -> generation map.
+  run_id_to_generation_.clear();
 }
 
 bool MahoUnifiedAgentAdapter::ConfigurePreferredProvider(uint64_t generation) {
@@ -1267,8 +1371,8 @@ class MahoAgentPermissionPromptDialogView : public views::DialogDelegate {
     SetButtons(static_cast<int>(ui::mojom::DialogButton::kOk) |
                static_cast<int>(ui::mojom::DialogButton::kCancel));
     SetModalType(ui::mojom::ModalType::kWindow);
-    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kOk));
-    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Always Allow");
+    SetDefaultButton(static_cast<int>(ui::mojom::DialogButton::kCancel));
+    SetButtonLabel(ui::mojom::DialogButton::kOk, u"Allow");
     SetButtonLabel(ui::mojom::DialogButton::kCancel, u"Deny");
 
     auto contents = std::make_unique<views::View>();
@@ -1363,6 +1467,17 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(
     return MahoAgentPermissionDecision_Deny;
   }
 
+  // A2: user_data points to a SessionCallbackBridge for session-level
+  // callbacks. Extract the FfiCallbackHandle user_data and snapshot the
+  // generation atomically on this (Rust worker) thread.
+  auto* bridge =
+      static_cast<MahoUnifiedAgentAdapter::SessionCallbackBridge*>(user_data);
+  void* ffi_user_data = bridge->ffi_user_data;
+  const uint64_t snapshotted_generation =
+      bridge->active_generation_atomic
+          ? bridge->active_generation_atomic->load(std::memory_order_acquire)
+          : 0;
+
   // Recover the adapter via the FfiCallbackHandle bridge (weak-lifetime),
   // never a raw `this`: this callback fires on a Rust worker thread and the
   // adapter may be destroyed mid-turn (e.g. the AI panel is closed while a
@@ -1371,20 +1486,28 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(
   // (prefs_, session_grants_, permission_extension_id_) are touched only on
   // the owning sequence inside the posted task.
   auto pointee =
-      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(
+          ffi_user_data);
   if (!pointee || pointee->cancelled.load()) {
     return MahoAgentPermissionDecision_Deny;
   }
 
   auto call_state = std::make_shared<PermissionCallState>();
-  call_state->generation = pointee->generation;
+  // A2: Use the snapshotted generation (from the atomic) instead of
+  // pointee->generation (which is 0 for session-level handles). This captures
+  // which turn was active at callback entry on the Rust thread, preventing
+  // late callbacks from adopting a newer turn.
+  call_state->generation =
+      pointee->generation != 0 ? pointee->generation : snapshotted_generation;
   const bool page_derived_justification =
       ExtractPageDerivedJustification(arguments);
   const std::string consequence =
       ClassifyActionConsequence(tool, arguments ? arguments : "{}");
+  const uint64_t effective_generation =
+      pointee->generation != 0 ? pointee->generation : snapshotted_generation;
   pointee->task_runner->PostTask(
       FROM_HERE, CreatePermissionDecisionTask(
-                     pointee->owner, pointee->generation, tool, call_state,
+                     pointee->owner, effective_generation, tool, call_state,
                      page_derived_justification, consequence));
 
   PromptDecision decision_val;
@@ -1393,6 +1516,28 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::OnAgentPermission(
   } else {
     call_state->cancelled.store(true);
     decision_val = PromptDecision::kDeny;
+    // A6: Post a task to remove the timed-out entry from pending_approvals_
+    // so a late RespondToApproval cannot emit a stale "approved" event.
+    pointee->task_runner->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](base::WeakPtr<MahoUnifiedAgentAdapter> adapter) {
+              if (!adapter) {
+                return;
+              }
+              // Scan and remove entries whose state is cancelled.
+              for (auto it = adapter->pending_approvals_.begin();
+                   it != adapter->pending_approvals_.end();) {
+                if (it->second && it->second->cancelled.load()) {
+                  it->second->decision = PromptDecision::kDeny;
+                  it->second->event.Signal();
+                  it = adapter->pending_approvals_.erase(it);
+                } else {
+                  ++it;
+                }
+              }
+            },
+            pointee->owner));
   }
 
   return decision_val == PromptDecision::kDeny
@@ -1411,10 +1556,10 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreatePermissionDecisionTask(
       [](base::WeakPtr<MahoUnifiedAgentAdapter> adapter, uint64_t generation,
          std::string tool, std::shared_ptr<PermissionCallState> state,
          bool page_derived_justification, std::string consequence) {
-        if (generation == 0 && adapter && adapter->active_turn_ &&
-            !adapter->active_turn_->cancelled) {
-          generation = adapter->active_turn_->generation;
-        }
+        // A2: generation is now snapshotted at callback entry on the Rust
+        // thread (via the atomic). The old generation=0 fallback that adopted
+        // the active turn on the owning sequence is removed to prevent
+        // cross-turn attribution.
         if (!adapter || !adapter->IsActiveGeneration(generation)) {
           state->decision = PromptDecision::kDeny;
           state->event.Signal();
@@ -1460,6 +1605,12 @@ std::optional<PromptDecision> MahoUnifiedAgentAdapter::EvaluatePermissionSync(
   // refuses shell_exec outright before this function ever runs.
 
   // 0. Global approval policy override.
+  if (consequence == "ordinary") {
+    return PromptDecision::kAllow;
+  }
+  if (consequence == "boundary" || consequence == "credential_fill") {
+    return std::nullopt;
+  }
   std::string global_policy;
   if (prefs_) {
     global_policy = prefs_->GetString(maho::ai_prefs::kApprovalPolicy);
@@ -1557,10 +1708,8 @@ void MahoUnifiedAgentAdapter::DecidePermissionOnUiThread(
   // Canonical WebUI approval broker: when a live runtime event consumer is
   // attached, park this request under an unguessable id and publish a safe
   // kApprovalRequest event (tool name only, never raw arguments). The worker
-  // stays blocked until RespondToApproval resolves it exactly once. No event
-  // consumer means the WebUI is not driving this turn, so fall through to the
-  // native Views dialog as the fallback consumer of the same broker path.
-  if (active_turn_) {
+  // stays blocked until RespondToApproval resolves it exactly once.
+  if (active_turn_ && active_turn_->on_event) {
     std::string approval_id = GenerateApprovalId();
     state->approval_policy = CurrentApprovalPolicyForPayload(prefs_);
     state->sensitivity = SensitivityForToolPayload(tool);
@@ -1583,45 +1732,9 @@ void MahoUnifiedAgentAdapter::DecidePermissionOnUiThread(
     return;
   }
 
-  // 3. Lazy dialog; persistence happens in the completion callback so it also
-  // runs on the UI thread.
-  ShowPermissionPromptOnUIThread(
-      extension_id, tool,
-      base::BindOnce(
-          [](base::WeakPtr<MahoUnifiedAgentAdapter> adapter, std::string tool,
-             std::string extension_id,
-             std::shared_ptr<PermissionCallState> state, uint64_t generation,
-             PromptDecision result) {
-            if (state->cancelled.load() || !adapter ||
-                !adapter->IsActiveGeneration(generation)) {
-              state->decision = PromptDecision::kDeny;
-              state->event.Signal();
-              return;
-            }
-            if (result == PromptDecision::kAllow && adapter->prefs_ &&
-                !extension_id.empty()) {
-              ScopedDictPrefUpdate update(adapter->prefs_,
-                                          maho::ai_prefs::kAgentToolGrants);
-              auto* tool_list = update->EnsureList(extension_id);
-              if (tool_list) {
-                bool exists = false;
-                for (const auto& item : *tool_list) {
-                  if (item.is_string() && item.GetString() == tool) {
-                    exists = true;
-                    break;
-                  }
-                }
-                if (!exists) {
-                  tool_list->Append(tool);
-                }
-              }
-            } else if (result == PromptDecision::kAllowOnce) {
-              adapter->session_grants_.insert(tool);
-            }
-            state->decision = result;
-            state->event.Signal();
-          },
-          weak_factory_.GetWeakPtr(), tool, extension_id, state, generation));
+  // No chat listener means denial, never an OS dialog.
+  state->decision = PromptDecision::kDeny;
+  state->event.Signal();
 }
 
 void MahoUnifiedAgentAdapter::ShowPermissionPromptOnUIThread(
@@ -1634,22 +1747,7 @@ void MahoUnifiedAgentAdapter::ShowPermissionPromptOnUIThread(
     return;
   }
 
-  BrowserWindowInterface* browser = ResolveBoundBrowser();
-  if (!browser || !browser->GetWindow()) {
-    std::move(callback).Run(PromptDecision::kDeny);
-    return;
-  }
-
-  auto delegate = std::make_unique<MahoAgentPermissionPromptDialogView>(
-      extension_id, tool_name, std::move(callback));
-  views::Widget* widget = views::DialogDelegate::CreateDialogWidget(
-      std::move(delegate), browser->GetWindow()->GetNativeWindow(),
-      gfx::NativeView());
-  if (widget) {
-    widget->Show();
-  } else {
-    std::move(callback).Run(PromptDecision::kDeny);
-  }
+  std::move(callback).Run(PromptDecision::kDeny);
 }
 
 MahoAgentPermissionDecision MahoUnifiedAgentAdapter::RunPermissionDialogForTest(
@@ -1665,6 +1763,13 @@ MahoAgentPermissionDecision MahoUnifiedAgentAdapter::RunPermissionDialogForTest(
 }
 
 namespace {
+
+// A13: Lock protecting g_byok_key_status annotation writes from arbitrary
+// threads (Rust worker threads call Set, FreeSecureKey calls Clear).
+static base::Lock& ByokAnnotationLockStorage() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
 
 // Annotation for tracking active secrets in memory. Crashpad reads this during
 // dumps.
@@ -1684,7 +1789,10 @@ void FreeSecureKey(char* ptr, uintptr_t len) {
     }
   }
   free(ptr);
-  g_byok_key_status.Clear();
+  {
+    base::AutoLock lock(ByokAnnotationLockStorage());
+    g_byok_key_status.Clear();
+  }
 }
 
 MahoAgentSecureKey AllocateSecureKeyFromPlaintext(
@@ -1756,7 +1864,7 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
     std::string plaintext_key;
     if (snapshot->encryptor->DecryptString(encrypted_bytes, &plaintext_key)) {
       MahoAgentSecureKey result = AllocateSecureKeyFromPlaintext(plaintext_key);
-      g_byok_key_status.Set("active");
+      { base::AutoLock lock(ByokAnnotationLockStorage()); g_byok_key_status.Set("active"); };
       volatile char* p = plaintext_key.data();
       for (size_t i = 0; i < plaintext_key.size(); ++i) {
         p[i] = 0;
@@ -1816,7 +1924,7 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
       result.model = strdup(snapshot->custom_model.c_str());
       result.cstring_free_fn = reinterpret_cast<void (*)(char*)>(&::free);
     }
-    g_byok_key_status.Set("active");
+    { base::AutoLock lock(ByokAnnotationLockStorage()); g_byok_key_status.Set("active"); };
     RecordSecureStorageOutcome(bridge, provider_str, std::nullopt);
     return result;
   }
@@ -1837,7 +1945,7 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
       result.model = strdup(snapshot->custom_model.c_str());
       result.cstring_free_fn = reinterpret_cast<void (*)(char*)>(&::free);
     }
-    g_byok_key_status.Set("active");
+    { base::AutoLock lock(ByokAnnotationLockStorage()); g_byok_key_status.Set("active"); };
     RecordSecureStorageOutcome(bridge, provider_str, std::nullopt);
     return result;
   }
@@ -1882,7 +1990,7 @@ MahoAgentSecureKey MahoUnifiedAgentAdapter::OnAgentSecureStorage(
         MahoAiRuntimeErrorCode::kCredentialDecryptFailed);
   }
   MahoAgentSecureKey result = AllocateSecureKeyFromPlaintext(plaintext);
-  g_byok_key_status.Set("active");
+  { base::AutoLock lock(ByokAnnotationLockStorage()); g_byok_key_status.Set("active"); };
   volatile char* p = plaintext.data();
   for (size_t i = 0; i < plaintext.size(); ++i) {
     p[i] = 0;
@@ -1947,13 +2055,26 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
   const std::string tool_name_str(tool_name);
   const std::string args_json_str(args_json ? args_json : "{}");
 
+  // A2: Extract bridge and snapshot generation atomically.
+  auto* bridge =
+      static_cast<MahoUnifiedAgentAdapter::SessionCallbackBridge*>(user_data);
+  void* ffi_user_data = bridge->ffi_user_data;
+  const uint64_t snapshotted_generation =
+      bridge->active_generation_atomic
+          ? bridge->active_generation_atomic->load(std::memory_order_acquire)
+          : 0;
+
   auto pointee =
-      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(user_data);
+      maho::FfiCallbackHandle<MahoUnifiedAgentAdapter>::FromUserData(
+          ffi_user_data);
   if (!pointee || pointee->cancelled.load()) {
     return MakeErrorToolResult("transport_unavailable",
                                "Agent tool sink is unavailable", true);
   }
-  const uint64_t generation = pointee->generation;
+  // A2: Use snapshotted generation for session-level callbacks.
+  const uint64_t generation = pointee->generation != 0
+                                  ? pointee->generation
+                                  : snapshotted_generation;
   auto preflight = std::make_shared<BrowserToolPreflightState>();
   base::OnceClosure preflight_task = CreateBrowserToolPreflightTask(
       pointee->owner, generation, tool_name_str, preflight);
@@ -1975,6 +2096,9 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
   if (tool_name_str == "tools/list") {
     return MakeJsonToolResult(preflight->result_json);
   }
+  preflight->requires_approval |=
+      ClassifyActionConsequence(preflight->executor_tool_name,
+                                args_json_str) == "credential_fill";
   if (preflight->requires_approval) {
     MahoAgentPermissionDecision permission =
         OnAgentPermission(user_data, preflight->executor_tool_name.c_str(),
@@ -2002,11 +2126,21 @@ MahoAgentToolResult MahoUnifiedAgentAdapter::OnAgentBrowserTool(
 
   auto call_state = std::make_shared<BrowserToolCallState>();
 
-  pointee->task_runner->PostTask(
-      FROM_HERE,
-      CreateBrowserToolTask(pointee->owner, generation,
-                            preflight->executor_tool_name, args_json_str,
-                            call_state, preflight->requires_approval));
+  // A5: If called on the owning sequence (e.g. from a synchronous test
+  // path), run the task inline instead of posting + TimedWait which would
+  // deadlock the UI thread for 30s.
+  if (pointee->task_runner->RunsTasksInCurrentSequence()) {
+    CreateBrowserToolTask(pointee->owner, generation,
+                          preflight->executor_tool_name, args_json_str,
+                          call_state, preflight->requires_approval)
+        .Run();
+  } else {
+    pointee->task_runner->PostTask(
+        FROM_HERE,
+        CreateBrowserToolTask(pointee->owner, generation,
+                              preflight->executor_tool_name, args_json_str,
+                              call_state, preflight->requires_approval));
+  }
 
   std::string result_json;
   std::string result_error;
@@ -2040,10 +2174,7 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolPreflightTask(
       [](base::WeakPtr<MahoUnifiedAgentAdapter> adapter, uint64_t generation,
          std::string capability_id,
          std::shared_ptr<BrowserToolPreflightState> state) {
-        if (generation == 0 && adapter && adapter->active_turn_ &&
-            !adapter->active_turn_->cancelled) {
-          generation = adapter->active_turn_->generation;
-        }
+        // A2: generation is now snapshotted at callback entry; no fallback.
         if (!adapter || !adapter->IsActiveGeneration(generation)) {
           state->error = "Agent browser tool callback is stale";
           state->error_code = "transport_unavailable";
@@ -2089,6 +2220,7 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolPreflightTask(
         const auto* contract =
             maho::ai::FindBrowserActionContract(state->executor_tool_name);
         state->requires_approval =
+            maho::ai::CapabilityLeavesBrowserBoundary(descriptor->canonical_id) ||
             (contract && maho::ai::RequiresApproval(*contract)) ||
             MahoBrowserToolExecutor::IsMailWriteTool(
                 state->executor_tool_name);
@@ -2119,15 +2251,7 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
           state->done.Signal();
           return;
         }
-        // The Rust session owns one browser-tool bridge for its lifetime, so
-        // its callback handle has no per-turn generation. Resolve that
-        // session-level sentinel only after crossing onto the adapter's
-        // owning sequence. Per-turn callbacks retain their explicit
-        // generation and still reject after Reset().
-        if (generation == 0 && adapter->active_turn_ &&
-            !adapter->active_turn_->cancelled) {
-          generation = adapter->active_turn_->generation;
-        }
+        // A2: generation is now snapshotted at callback entry; no fallback.
         if (!adapter->IsActiveGeneration(generation)) {
           if (!state->cancelled.load()) {
             state->result_error = "Agent browser tool callback is stale";
@@ -2295,7 +2419,6 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
             tool_name, args_dict,
             base::BindOnce(
                 [](std::shared_ptr<MahoBrowserToolExecutor> keep_alive,
-                   maho::ai::MahoControlActivityService* activity_service,
                    std::string activity_id,
                     base::WeakPtr<MahoUnifiedAgentAdapter> adapter,
                     uint64_t generation,
@@ -2306,6 +2429,19 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
                         MahoBrowserToolRegistry::ExecutionReceiptContext>
                         receipt_context,
                     base::DictValue result) {
+                  // A4: Re-resolve activity_service and browser inside the
+                  // completion callback instead of capturing raw pointers
+                  // across the async boundary.
+                  maho::ai::MahoControlActivityService* activity_service =
+                      nullptr;
+                  if (adapter) {
+                    Browser* browser = adapter->ResolveBoundBrowser();
+                    if (browser) {
+                      activity_service =
+                          maho::ai::MahoControlActivityService::GetForProfile(
+                              browser->GetProfile());
+                    }
+                  }
                   if (!state->cancelled.load() && adapter &&
                       adapter->IsActiveGeneration(generation)) {
                     std::string output_json;
@@ -2355,7 +2491,7 @@ base::OnceClosure MahoUnifiedAgentAdapter::CreateBrowserToolTask(
                   }
                   state->done.Signal();
                 },
-                executor, activity_service, activity_id, adapter, generation,
+                executor, activity_id, adapter, generation,
                 state, descriptor, std::move(receipt_context)));
       },
       std::move(adapter), generation, std::move(tool_name),
@@ -2533,13 +2669,33 @@ void MahoUnifiedAgentAdapter::OnTokenOnSequence(uint64_t generation,
 void MahoUnifiedAgentAdapter::OnCompleteOnSequence(uint64_t generation,
                                                    std::string full_text) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!IsActiveGeneration(generation) || !IsAiAllowed()) {
+  // A10: Always emit a terminal event and reset the turn, even when AI is
+  // denied or Complete() fails.
+  if (!IsActiveGeneration(generation)) {
+    return;
+  }
+  if (!IsAiAllowed()) {
+    std::unique_ptr<ActiveTurn> denied_turn = std::move(active_turn_);
+    active_generation_atomic_->store(0, std::memory_order_release);
+    MahoAiRuntimeEvent event;
+    event.type = MahoAiRuntimeEventType::kError;
+    event.text = "AI was disabled during this turn.";
+    denied_turn->on_event.Run(std::move(event));
     return;
   }
   if (!active_turn_->conversation_task->Complete()) {
+    // A10: Complete() failed (e.g. already completed/cancelled). Still emit
+    // a terminal event so the UI doesn't hang.
+    std::unique_ptr<ActiveTurn> failed_turn = std::move(active_turn_);
+    active_generation_atomic_->store(0, std::memory_order_release);
+    MahoAiRuntimeEvent event;
+    event.type = MahoAiRuntimeEventType::kTurnComplete;
+    event.text = full_text;
+    failed_turn->on_event.Run(std::move(event));
     return;
   }
   std::unique_ptr<ActiveTurn> completed_turn = std::move(active_turn_);
+  active_generation_atomic_->store(0, std::memory_order_release);
   last_event_callback_.Reset();
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kTurnComplete;
@@ -2679,7 +2835,17 @@ void MahoUnifiedAgentAdapter::OnArtifactCreatedOnSequence(
 void MahoUnifiedAgentAdapter::OnErrorOnSequence(uint64_t generation,
                                                 std::string error) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (!IsActiveGeneration(generation) || !IsAiAllowed()) {
+  // A10: Always emit a terminal kError and reset the turn.
+  if (!IsActiveGeneration(generation)) {
+    return;
+  }
+  if (!IsAiAllowed()) {
+    std::unique_ptr<ActiveTurn> denied_turn = std::move(active_turn_);
+    active_generation_atomic_->store(0, std::memory_order_release);
+    MahoAiRuntimeEvent event;
+    event.type = MahoAiRuntimeEventType::kError;
+    event.text = "AI was disabled during this turn.";
+    denied_turn->on_event.Run(std::move(event));
     return;
   }
   const CredentialEnvelopeParseResult envelope =
@@ -2693,6 +2859,7 @@ void MahoUnifiedAgentAdapter::OnErrorOnSequence(uint64_t generation,
   }
   active_turn_->conversation_task->Error(error);
   std::unique_ptr<ActiveTurn> failed_turn = std::move(active_turn_);
+  active_generation_atomic_->store(0, std::memory_order_release);
   last_event_callback_.Reset();
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kError;
@@ -2704,6 +2871,9 @@ void MahoUnifiedAgentAdapter::OnErrorOnSequence(uint64_t generation,
 void MahoUnifiedAgentAdapter::EmitEvent(MahoAiRuntimeEvent event) {
   if (active_turn_ && active_turn_->on_event) {
     active_turn_->on_event.Run(std::move(event));
+  } else if (last_event_callback_) {
+    // A8: Fall back to the session-level callback when no turn is active.
+    last_event_callback_.Run(std::move(event));
   }
 }
 
@@ -2728,7 +2898,16 @@ void MahoUnifiedAgentAdapter::TransitionToErrorForGeneration(
   if (!IsActiveGeneration(generation)) {
     return;
   }
+  // A9: Share the CancelCurrentTurn teardown: cancel the Rust run, deny
+  // pending approvals, and cancel pending interactions before moving the turn.
+  if (agent_session_) {
+    agent_ffi_->cancel(agent_session_);
+  }
+  DenyAllPendingApprovals();
+  CancelAllPendingInteractions();
+  active_turn_->ffi_resources->callback_handle->Cancel();
   std::unique_ptr<ActiveTurn> failed_turn = std::move(active_turn_);
+  active_generation_atomic_->store(0, std::memory_order_release);
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kError;
   event.text = message;
@@ -2742,6 +2921,7 @@ void MahoUnifiedAgentAdapter::TransitionToCredentialErrorForGeneration(
     return;
   }
   std::unique_ptr<ActiveTurn> failed_turn = std::move(active_turn_);
+  active_generation_atomic_->store(0, std::memory_order_release);
   MahoAiRuntimeEvent event;
   event.type = MahoAiRuntimeEventType::kError;
   event.text = kSafeCredentialFailureText;
@@ -2918,6 +3098,23 @@ void MahoUnifiedAgentAdapter::OnUnifiedEventOnSequence(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (!IsAiAllowed()) {
     return;
+  }
+
+  // A3: Track run_id -> generation at first sight. Drop events whose run_id
+  // is associated with a generation that is no longer the active turn.
+  if (!run_id.empty()) {
+    auto it = run_id_to_generation_.find(run_id);
+    if (it == run_id_to_generation_.end()) {
+      // First event for this run_id: associate with the current active turn.
+      if (active_turn_) {
+        run_id_to_generation_[run_id] = active_turn_->generation;
+      }
+    } else {
+      // Subsequent events: drop if the associated generation is stale.
+      if (!IsActiveGeneration(it->second)) {
+        return;
+      }
+    }
   }
 
   // Live deduplication by monotonic sequence per run.

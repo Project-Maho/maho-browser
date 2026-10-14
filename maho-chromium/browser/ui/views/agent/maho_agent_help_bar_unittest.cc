@@ -4,13 +4,20 @@
 
 #include "maho/browser/ui/views/agent/maho_agent_help_bar.h"
 
+#include <memory>
 #include <string>
 
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_mode.h"
 #include "ui/accessibility/platform/ax_platform.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/events/event.h"
+#include "ui/gfx/geometry/point.h"
+#include "ui/views/controls/button/md_text_button.h"
 #include "ui/views/layout/layout_provider.h"
+#include "ui/views/test/button_test_api.h"
 
 namespace {
 
@@ -107,6 +114,61 @@ TEST_F(MahoAgentHelpBarTest, RequestIdIsolatedBetweenRequests) {
   bar_->Dismiss();
   bar_->ShowRequest("req-2", "Second");
   EXPECT_EQ(bar_->active_request_id(), "req-2");
+}
+
+class DeletingHelpDelegate : public MahoAgentHelpBar::Delegate {
+ public:
+  void OnHelpCompleted(const std::string& request_id) override {
+    bar->reset();
+    last_request_id = request_id;
+  }
+  void OnHelpCancelled(const std::string& request_id) override {
+    bar->reset();
+    last_request_id = request_id;
+  }
+
+  std::string last_request_id;
+  raw_ptr<std::unique_ptr<MahoAgentHelpBar>> bar = nullptr;
+};
+
+void ClickButton(views::Button* button) {
+  // These views are not hosted in a Widget, so the click ink drop has no color
+  // provider; skip the animation and exercise only the click -> callback path.
+  button->SetHasInkDropActionOnClick(false);
+  views::test::ButtonTestApi(button).NotifyClick(
+      ui::MouseEvent(ui::EventType::kMousePressed, gfx::Point(), gfx::Point(),
+                     base::TimeTicks::Now(), 0, 0));
+}
+
+TEST_F(MahoAgentHelpBarTest, DelegateMayDeleteBarFromCompleteCallback) {
+  DeletingHelpDelegate deleting_delegate;
+  auto bar = std::make_unique<MahoAgentHelpBar>(&deleting_delegate);
+  deleting_delegate.bar = &bar;
+  bar->ShowRequest("req-1", "Solve the CAPTCHA");
+
+  ClickButton(bar->complete_button_for_testing());
+
+  EXPECT_EQ(bar, nullptr);
+  EXPECT_EQ(deleting_delegate.last_request_id, "req-1");
+}
+
+TEST_F(MahoAgentHelpBarTest, DelegateMayDeleteBarFromCancelCallback) {
+  DeletingHelpDelegate deleting_delegate;
+  auto bar = std::make_unique<MahoAgentHelpBar>(&deleting_delegate);
+  deleting_delegate.bar = &bar;
+  bar->ShowRequest("req-2", "Checkout");
+
+  ClickButton(bar->cancel_button_for_testing());
+
+  EXPECT_EQ(bar, nullptr);
+  EXPECT_EQ(deleting_delegate.last_request_id, "req-2");
+}
+
+TEST_F(MahoAgentHelpBarTest, ClickWhileNotShowingDoesNotNotifyDelegate) {
+  ClickButton(bar_->complete_button_for_testing());
+  ClickButton(bar_->cancel_button_for_testing());
+  EXPECT_FALSE(delegate_->completed);
+  EXPECT_FALSE(delegate_->cancelled);
 }
 
 }  // namespace

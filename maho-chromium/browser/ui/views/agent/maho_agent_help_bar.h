@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/memory/raw_ptr.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -42,10 +43,16 @@ class MahoAgentHelpBar : public views::View {
   const std::string& active_request_id() const { return active_request_id_; }
   bool is_showing() const { return !active_request_id_.empty(); }
 
+  views::MdTextButton* complete_button_for_testing() { return complete_button_; }
+  views::MdTextButton* cancel_button_for_testing() { return cancel_button_; }
+
   // views::View:
   std::string GetClassName() const;
 
  private:
+  void OnCompleteClicked();
+  void OnCancelClicked();
+
   raw_ptr<Delegate> delegate_ = nullptr;
   std::string active_request_id_;
   raw_ptr<views::Label> prompt_label_ = nullptr;
