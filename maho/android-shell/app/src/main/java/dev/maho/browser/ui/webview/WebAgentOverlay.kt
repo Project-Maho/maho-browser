@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -26,7 +25,9 @@ fun WebAgentOverlay(initialGoal: String?, onExit: () -> Unit) {
     val params = remember(initialGoal) {
         "goal=" + URLEncoder.encode(initialGoal.orEmpty(), "UTF-8")
     }
-    val hostState = remember { mutableStateOf<AiWebViewHost?>(null) }
+    // D12: the host is lifecycle bookkeeping, not UI state. A plain holder keeps the write in the
+    // AndroidView factory and the dispose callback (both Main) out of the Compose snapshot system.
+    val hostHolder = remember { arrayOfNulls<AiWebViewHost>(1) }
 
     BackHandler(enabled = true) {
         onExit()
@@ -36,15 +37,15 @@ fun WebAgentOverlay(initialGoal: String?, onExit: () -> Unit) {
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             AiWebViewFactory.createHost(ctx, "agent", params, onNavBack = onExit)
-                .also { hostState.value = it }
+                .also { hostHolder[0] = it }
                 .webView
         },
     )
 
     DisposableEffect(Unit) {
         onDispose {
-            hostState.value?.destroy()
-            hostState.value = null
+            hostHolder[0]?.destroy()
+            hostHolder[0] = null
         }
     }
 }

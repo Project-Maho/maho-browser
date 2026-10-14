@@ -8,8 +8,25 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+
+/** D8: cleartext emulator relay is a debug-build-only default; release talks to the production relay over TLS. */
+internal fun defaultAgentRelayUrl(debug: Boolean): String =
+    if (debug) "ws://10.0.2.2:8080/ws/agent" else "wss://relay.mahobrowser.com/ws/agent"
+
+/** D8: built with org.json so goal/url_seed (quotes, backslashes, newlines) are always escaped. */
+internal fun buildTaskSubmitJson(taskId: String, goal: String, urlSeed: String?): String =
+    JSONObject()
+        .put("type", "task_submit")
+        .put("task_id", taskId)
+        .put("goal", goal)
+        .put("url_seed", urlSeed ?: JSONObject.NULL)
+        .toString()
+
+internal fun buildTaskCancelJson(taskId: String): String =
+    JSONObject().put("type", "task_cancel").put("task_id", taskId).put("reason", "user").toString()
 
 data class AgentEvent(
     val taskId: String,
@@ -27,6 +44,9 @@ class AgentClient(private val wsUrl: String) {
 
     private var ws: WebSocket? = null
 
+    @Volatile
+    private var connectionGeneration = 0
+
     private val _events = MutableSharedFlow<AgentEvent>(
         replay = 0,
         extraBufferCapacity = 64,
@@ -41,14 +61,24 @@ class AgentClient(private val wsUrl: String) {
     )
     val connected: SharedFlow<Boolean> = _connected
 
+    @Synchronized
     fun connect() {
+        // D8: never leak the previous socket when connect() is called again.
+        ws?.cancel()
+        ws = null
+        val generation = ++connectionGeneration
         val req = Request.Builder().url(wsUrl).build()
         ws = client.newWebSocket(req, object : WebSocketListener() {
+            // Late callbacks from a replaced/closed socket must not flip the live connection state.
+            private fun isCurrent(@Suppress("UNUSED_PARAMETER") webSocket: WebSocket) =
+                generation == connectionGeneration
+
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                _connected.tryEmit(true)
+                if (isCurrent(webSocket)) _connected.tryEmit(true)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (!isCurrent(webSocket)) return
                 val event = parseEvent(text)
                 if (event != null) {
                     _events.tryEmit(event)
@@ -56,27 +86,24 @@ class AgentClient(private val wsUrl: String) {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                _connected.tryEmit(false)
+                if (isCurrent(webSocket)) _connected.tryEmit(false)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                _connected.tryEmit(false)
+                if (isCurrent(webSocket)) _connected.tryEmit(false)
             }
         })
     }
 
-    fun submitTask(goal: String, urlSeed: String? = null): String {
+    /** Returns the task id, or null when the socket is absent or refused the frame (not connected). */
+    fun submitTask(goal: String, urlSeed: String? = null): String? {
         val taskId = UUID.randomUUID().toString()
-        val urlField = if (urlSeed != null) "\"$urlSeed\"" else "null"
-        val escapedGoal = goal.replace("\\", "\\\\").replace("\"", "\\\"")
-        val msg = """{"type":"task_submit","task_id":"$taskId","goal":"$escapedGoal","url_seed":$urlField}"""
-        ws?.send(msg)
-        return taskId
+        val sent = ws?.send(buildTaskSubmitJson(taskId, goal, urlSeed)) ?: false
+        return if (sent) taskId else null
     }
 
     fun cancelTask(taskId: String) {
-        val msg = """{"type":"task_cancel","task_id":"$taskId","reason":"user"}"""
-        ws?.send(msg)
+        ws?.send(buildTaskCancelJson(taskId))
     }
 
     fun ping(seq: Long = System.currentTimeMillis()) {
@@ -84,9 +111,12 @@ class AgentClient(private val wsUrl: String) {
         ws?.send(msg)
     }
 
+    @Synchronized
     fun close() {
+        connectionGeneration++
         ws?.close(1000, "client closing")
         ws = null
+        _connected.tryEmit(false)
     }
 
     private fun parseEvent(raw: String): AgentEvent? {
