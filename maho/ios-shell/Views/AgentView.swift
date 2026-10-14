@@ -41,33 +41,53 @@ final class AgentViewModel: ObservableObject {
         taskState == .working
     }
 
+    /// Result of the off-main create+send handshake. The pointer is only ever
+    /// handed back to the bridge, which serializes access through its lease
+    /// registry.
+    private struct StartResult: @unchecked Sendable {
+        let ptr: OpaquePointer?
+        let failure: String?
+    }
+
+    static let maxLogEntries = 500
+
+    func appendLog(_ entry: String) {
+        eventLog.append(entry)
+        if eventLog.count > Self.maxLogEntries {
+            eventLog.removeFirst(eventLog.count - Self.maxLogEntries)
+        }
+    }
+
     func runAgent() {
         eventLog.removeAll()
         resultMessage = nil
         taskState = .working
 
         let sessionId = UUID().uuidString
-        guard let ptr = bridge.agentCreateSession(sessionId: sessionId) else {
-            taskState = .failed
-            eventLog.append("[error] Failed to create local agent session")
-            return
-        }
-
-        sessionPtr = ptr
-        activeSessionId = sessionId
-
         let trimmedGoal = goal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard bridge.agentSendMessage(ptr, message: trimmedGoal) else {
-            sessionPtr = nil
-            activeSessionId = nil
-            bridge.agentFreeSession(ptr)
-            taskState = .failed
-            eventLog.append("[error] Failed to start agent task")
-            return
-        }
+        activeSessionId = sessionId
 
         let bridgeRef = bridge
         pollTask = Task { @MainActor [weak self] in
+            // The native lease handshake fails when issued on Main, so create
+            // and send run off the main actor and only UI state hops back.
+            let started = await Task.detached(priority: .userInitiated) { () -> StartResult in
+                guard let ptr = bridgeRef.agentCreateSession(sessionId: sessionId) else {
+                    return StartResult(ptr: nil, failure: "Failed to create local agent session")
+                }
+                guard bridgeRef.agentSendMessage(ptr, message: trimmedGoal) else {
+                    bridgeRef.agentFreeSession(ptr)
+                    return StartResult(ptr: nil, failure: "Failed to start agent task")
+                }
+                return StartResult(ptr: ptr, failure: nil)
+            }.value
+
+            guard let ptr = self?.adoptStartedSession(started, sessionId: sessionId) else {
+                // Owner gone: release a session that never got adopted.
+                if self == nil, let orphan = started.ptr { bridgeRef.agentFreeSession(orphan) }
+                return
+            }
+
             defer {
                 if let self, self.activeSessionId == sessionId {
                     self.sessionPtr = nil
@@ -80,7 +100,9 @@ final class AgentViewModel: ObservableObject {
                   let self,
                   self.activeSessionId == sessionId,
                   self.taskState == .working {
-                if let eventJson = bridgeRef.agentPollEvent(ptr) {
+                // Drain everything queued so a token burst is not rate-limited
+                // to one event per tick.
+                while self.taskState == .working, let eventJson = bridgeRef.agentPollEvent(ptr) {
                     self.processEvent(eventJson)
                 }
                 do {
@@ -92,9 +114,29 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    private func adoptStartedSession(_ started: StartResult, sessionId: String) -> OpaquePointer? {
+        guard activeSessionId == sessionId, taskState == .working else {
+            // Cancelled or superseded while the session was starting.
+            if let ptr = started.ptr { bridge.agentFreeSession(ptr) }
+            return nil
+        }
+        guard let ptr = started.ptr else {
+            activeSessionId = nil
+            taskState = .failed
+            appendLog("[error] \(started.failure ?? "Failed to start agent task")")
+            return nil
+        }
+        sessionPtr = ptr
+        return ptr
+    }
+
     func cancelAgent() {
         if let ptr = sessionPtr {
-            _ = bridge.agentCancel(ptr)
+            let bridgeRef = bridge
+            let box = StartResult(ptr: ptr, failure: nil)
+            Task.detached(priority: .userInitiated) {
+                if let ptr = box.ptr { _ = bridgeRef.agentCancel(ptr) }
+            }
         }
         taskState = .cancelled
     }
@@ -109,7 +151,7 @@ final class AgentViewModel: ObservableObject {
         switch type {
         case "token":
             if let token = object["data"] as? String {
-                eventLog.append("[token] \(token)")
+                appendLog("[token] \(token)")
             }
         case "complete":
             if let payload = object["data"] as? [String: Any],
@@ -185,7 +227,7 @@ struct AgentView: View {
 
             if !viewModel.eventLog.isEmpty {
                 Section {
-                    ForEach(viewModel.eventLog.suffix(20), id: \.self) { entry in
+                    ForEach(Array(viewModel.eventLog.suffix(20).enumerated()), id: \.offset) { _, entry in
                         Text(entry)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)

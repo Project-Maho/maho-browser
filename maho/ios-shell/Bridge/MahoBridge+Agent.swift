@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Security
 
 // MARK: - FFI declarations
@@ -582,17 +583,24 @@ final class AgentSessionRegistry {
 
 // MARK: - Global Callback Functions
 
+/// Tools the native agent may run without a per-call prompt. Read-only tools
+/// only: `click_element`/`fill_input` mutate the page (descriptors mark them
+/// `always_ask`) and no native consent UI exists, so they are denied here.
+let agentAutoAllowedToolNames: Set<String> = [
+    "fs_read",
+    "web_search",
+    "get_page_elements",
+    "get_page_snapshot",
+    "scroll_page",
+]
+
 private func agentPermissionCallback(
     _ userData: UnsafeMutableRawPointer?,
     _ toolName: UnsafePointer<CChar>?,
     _ arguments: UnsafePointer<CChar>?
 ) -> Int32 {
     guard let toolName = toolName else { return 1 }
-    let tool = String(cString: toolName)
-    if tool == "fs_read" || tool == "web_search" || tool == "click_element" || tool == "fill_input" {
-        return 0
-    }
-    return 1
+    return agentAutoAllowedToolNames.contains(String(cString: toolName)) ? 0 : 1
 }
 
 private let freeSecureKey: @convention(c) (UnsafeMutablePointer<CChar>?, UInt) -> Void = { ptr, len in
@@ -695,11 +703,15 @@ private func agentSecureStorageCallback(
     // ("openai" is served when stored provider is "openai" or "openai-compatible").
     let familyMatches = storedProvider == providerStr || storedProvider == providerStr + "-compatible"
     if familyMatches,
-       let customKey = BYOKKeychain.get(provider: AiSettingsKeys.customApiKeyAccount),
+       let customKey = BYOKKeychain.getData(provider: AiSettingsKeys.customApiKeyAccount),
        !customKey.isEmpty {
-        let klen = customKey.utf8.count
+        let klen = customKey.count
         if let kbuf = malloc(klen)?.assumingMemoryBound(to: CChar.self) {
-            _ = customKey.withCString { memcpy(kbuf, $0, klen) }
+            customKey.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                if let base = raw.baseAddress {
+                    memcpy(kbuf, base, klen)
+                }
+            }
             let baseUrl = defaults.string(forKey: AiSettingsKeys.baseUrl) ?? ""
             let model = defaults.string(forKey: AiSettingsKeys.model) ?? ""
             return MahoAgentSecureKey(
@@ -803,12 +815,15 @@ private func onAgentArtifactCreated(
     _ userData: UnsafeMutableRawPointer?,
     _ artifactJSON: UnsafePointer<CChar>?
 ) {
-    guard let userData, let artifactJSON,
+    guard let userData else { return }
+    let context = Unmanaged<AgentSessionContext>.fromOpaque(userData).takeUnretainedValue()
+    guard let artifactJSON,
           let data = String(cString: artifactJSON).data(using: .utf8),
           let artifact = try? JSONDecoder().decode(AgentArtifactRecord.self, from: data) else {
+        os_log("agent artifact_created payload failed to decode", log: .default, type: .error)
+        context.enqueue(type: "error", data: "artifact_decode_failed")
         return
     }
-    let context = Unmanaged<AgentSessionContext>.fromOpaque(userData).takeUnretainedValue()
     context.enqueueArtifact(artifact)
 }
 
@@ -830,9 +845,9 @@ private func onAgentError(
     _ userData: UnsafeMutableRawPointer?,
     _ error: UnsafePointer<CChar>?
 ) {
-    guard let userData, let error else { return }
+    guard let userData else { return }
     let context = Unmanaged<AgentSessionContext>.fromOpaque(userData).takeUnretainedValue()
-    context.enqueue(type: "error", data: String(cString: error))
+    context.enqueue(type: "error", data: error.map { String(cString: $0) } ?? "unknown_native_error")
 }
 
 // MARK: - MahoBridge extension
