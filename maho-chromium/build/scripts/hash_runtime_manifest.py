@@ -4,6 +4,11 @@ import sys
 import hashlib
 import subprocess
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
     try:
@@ -15,7 +20,7 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 def get_active_attempt_dir():
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     evidence_root = os.path.join(workspace, '.omo', 'evidence', 'arc-parity-incognito-desktop')
     if os.path.exists(evidence_root):
         attempts = [d for d in os.listdir(evidence_root) if d.startswith('attempt-') and os.path.isdir(os.path.join(evidence_root, d))]
@@ -25,7 +30,7 @@ def get_active_attempt_dir():
     return None
 
 def main():
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     attempt_dir = get_active_attempt_dir()
 
     records = []

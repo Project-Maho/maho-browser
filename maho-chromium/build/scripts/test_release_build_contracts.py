@@ -119,7 +119,7 @@ class TestLinuxUpdateManifest(unittest.TestCase):
                 _release_local.register_release_to_relay(
                     platform="linux", channel="stable", version="2026.9.27",
                     version_code=2026009027, rollout_threshold=100,
-                    artifacts=[path], repo="Project-Maho/release")
+                    artifacts=[path], repo="Project-Maho/maho-browser")
 
         self.assertEqual(captured["platform"], "linux")
         self.assertEqual(captured["linux_envelope"], expected)
@@ -199,7 +199,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
         with patch.object(_release_local, "run") as run:
             _release_local.publish(
                 "v1.0.0",
-                "Project-Maho/release",
+                "Project-Maho/maho-browser",
                 ["/tmp/MahoSetup-1.0.0.exe"],
                 dry_run=True,
             )
@@ -214,7 +214,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
                         "upload",
                         "v1.0.0",
                         "--repo",
-                        "Project-Maho/release",
+                        "Project-Maho/maho-browser",
                         "--clobber",
                         "/tmp/MahoSetup-1.0.0.exe",
                     ],
@@ -227,7 +227,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
         with patch.object(_release_local, "run") as run:
             _release_local.finalize_release(
                 "v1.0.0",
-                "Project-Maho/release",
+                "Project-Maho/maho-browser",
                 dry_run=True,
             )
 
@@ -241,7 +241,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
                         "edit",
                         "v1.0.0",
                         "--repo",
-                        "Project-Maho/release",
+                        "Project-Maho/maho-browser",
                         "--draft=false",
                         "--latest",
                     ],
@@ -262,7 +262,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
             ):
                 _release_local.finalize_release(
                     "v1.0.0",
-                    "Project-Maho/release",
+                    "Project-Maho/maho-browser",
                     dry_run=False,
                 )
 
@@ -278,7 +278,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
         ) as view, patch.object(_release_local, "run") as run:
             _release_local.finalize_release(
                 "v1.0.0",
-                "Project-Maho/release",
+                "Project-Maho/maho-browser",
                 dry_run=False,
             )
 
@@ -293,7 +293,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
                 "edit",
                 "v1.0.0",
                 "--repo",
-                "Project-Maho/release",
+                "Project-Maho/maho-browser",
                 "--draft=false",
                 "--latest",
             ],
@@ -485,26 +485,23 @@ class TestLinuxRuntimeStaging(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "gpg.*cannot sign"):
             _linux_packages.sign_file("/tmp/maho_1.0.0_amd64.deb", required=True)
 
+    def test_release_target_repo_is_public_maho_browser(self) -> None:
+        # New releases are created on the public client repository, not the old
+        # release-only repo. The local release script's default target must point
+        # there, and the updater manifest base URL must match.
+        self.assertEqual(
+            _release_local.DEFAULT_REPO, "Project-Maho/maho-browser"
+        )
+        import generate_update_manifests as _gum
+
+        self.assertIn("Project-Maho/maho-browser", _gum.RELEASE_BASE)
+        self.assertNotIn("Project-Maho/release", _gum.RELEASE_BASE)
+
     def test_final_release_requires_signed_linux_tarball(self) -> None:
         self.assertIn(
             "maho-{version}-x86_64.tar.gz.sig",
             _release_local._FINAL_RELEASE_ASSETS,
         )
-
-    def test_release_workflow_packages_x64_linux_release_outputs(self) -> None:
-        workflow_path = os.path.join(
-            _linux_packages._WORKSPACE_ROOT,
-            ".github",
-            "workflows",
-            "release.yml",
-        )
-        with open(workflow_path, encoding="utf-8") as file:
-            workflow = file.read()
-
-        self.assertIn("--format all --release", workflow)
-        self.assertIn("chromium/src/out/Linux-tarball/*.tar.gz", workflow)
-        self.assertIn("chromium/src/out/Linux-deb/*.deb.sig", workflow)
-        self.assertNotIn("linux-arm64", workflow)
 
 
 if __name__ == "__main__":

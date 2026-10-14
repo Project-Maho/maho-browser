@@ -27,7 +27,7 @@ index 6fada0a2b1a1f4b5675fc657a3a7b2337e43c4a1..66fc41e2e7e6bd998fd429925451e084
 -	<true/>
 +	<false/>
 +	<key>SUFeedURL</key>
-+	<string>https://github.com/Project-Maho/release/releases/latest/download/appcast.xml</string>
++	<string>https://github.com/Project-Maho/maho-browser/releases/latest/download/appcast.xml</string>
 +	<key>SUPublicEDKey</key>
 +	<string>iwdrdct4loEJl8WbHsfhhHMNcUygZ54N6uIveroNTbw=</string>
 +	<key>SUEnableAutomaticChecks</key>

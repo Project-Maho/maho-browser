@@ -24,7 +24,6 @@ def main():
     depot_tools_paths = [
         os.path.join(src_dir, "third_party", "depot_tools"),
         os.path.expanduser("~/depot_tools"),
-        "/Users/indo/depot_tools"
     ]
     current_path = env.get("PATH", "")
     valid_paths = [p for p in depot_tools_paths if os.path.exists(p)]

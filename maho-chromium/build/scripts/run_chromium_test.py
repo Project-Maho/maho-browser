@@ -5,6 +5,11 @@ import os
 import subprocess
 import sys
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Chromium tests for a specific inventory group.")
     parser.add_argument("--inventory", required=True, help="Path to incognito_required_inventory.json")
@@ -30,7 +35,7 @@ def main():
 
     # Construct the binary path
     # Normally out-dir is relative to chromium/src
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     binary_path = os.path.join(workspace, "chromium", "src", args.out_dir, binary_name)
     if not os.path.exists(binary_path):
         # Fallback to absolute if it's absolute

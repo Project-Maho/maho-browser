@@ -5,6 +5,11 @@ import shutil
 import sqlite3
 import sys
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def backup_sqlite(db_path, backup_path):
     if not os.path.exists(db_path):
         return False
@@ -26,7 +31,7 @@ def main():
     parser.add_argument("--raw-output", required=True, help="Directory to save raw database backups")
     args = parser.parse_args()
 
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     profile_dir = os.path.join(workspace, "chromium/src/out/Default/profile") # default profile dir in E2E
 
     os.makedirs(args.raw_output, exist_ok=True)

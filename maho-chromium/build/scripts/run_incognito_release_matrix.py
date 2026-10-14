@@ -4,8 +4,13 @@ import os
 import subprocess
 import sys
 
+def _workspace_root():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.normpath(os.path.join(_script_dir, "..", "..", ".."))
+
+
 def get_active_attempt_num():
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     evidence_root = os.path.join(workspace, '.omo', 'evidence', 'arc-parity-incognito-desktop')
     if os.path.exists(evidence_root):
         attempts = [d for d in os.listdir(evidence_root) if d.startswith('attempt-') and os.path.isdir(os.path.join(evidence_root, d))]
@@ -20,7 +25,7 @@ def main():
     parser.add_argument("--skip-build", action="store_true", help="Skip building chrome/tests.")
     args = parser.parse_args()
 
-    workspace = "/Users/indo/code/project/maho-workspace"
+    workspace = _workspace_root()
     attempt_num = get_active_attempt_num()
 
     out_rel = f"out/IncognitoReleaseGate-attempt-{attempt_num:03d}"
