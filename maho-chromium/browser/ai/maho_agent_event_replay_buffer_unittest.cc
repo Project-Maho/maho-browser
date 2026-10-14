@@ -187,6 +187,58 @@ TEST(MahoAgentEventReplayBufferTest, InteractionRequestKind8PayloadsReplayLikeOt
   EXPECT_EQ(tail.events()[0].seq, 3u);
 }
 
+TEST(MahoAgentEventReplayBufferTest, FirstSeqAboveOneIsNotAGap) {
+  MahoAgentEventReplayBuffer buffer(10);
+  EXPECT_TRUE(buffer.Append(5, "e5"));
+  EXPECT_TRUE(buffer.Append(6, "e6"));
+
+  ReplayResult res = buffer.ReplayAfter(0);
+  EXPECT_TRUE(res.is_ok());
+  ASSERT_EQ(res.events().size(), 2u);
+  EXPECT_EQ(res.events()[0].seq, 5u);
+}
+
+TEST(MahoAgentEventReplayBufferTest, ClearThenReplayOldCursorIsGap) {
+  MahoAgentEventReplayBuffer buffer(10);
+  EXPECT_TRUE(buffer.Append(1, "e1"));
+  EXPECT_TRUE(buffer.Append(2, "e2"));
+  buffer.Clear();
+
+  EXPECT_TRUE(buffer.ReplayAfter(0).is_gap());
+  EXPECT_TRUE(buffer.ReplayAfter(1).is_gap());
+  EXPECT_TRUE(buffer.ReplayAfter(2).is_gap());
+  buffer.Clear();
+  EXPECT_TRUE(buffer.ReplayAfter(0).is_gap());
+}
+
+TEST(MahoAgentEventReplayBufferTest, CursorAheadOfNewestIsGap) {
+  MahoAgentEventReplayBuffer buffer(10);
+  EXPECT_TRUE(buffer.Append(1, "e1"));
+  EXPECT_TRUE(buffer.Append(2, "e2"));
+
+  EXPECT_TRUE(buffer.ReplayAfter(2).is_ok());
+  EXPECT_TRUE(buffer.ReplayAfter(3).is_gap());
+}
+
+TEST(MahoAgentEventReplayBufferTest, ByteBudgetEvictsOldest) {
+  MahoAgentEventReplayBuffer buffer(100, /*max_bytes=*/10);
+  EXPECT_TRUE(buffer.Append(1, std::string(4, 'a')));
+  EXPECT_TRUE(buffer.Append(2, std::string(4, 'b')));
+  EXPECT_EQ(buffer.size(), 2u);
+  EXPECT_EQ(buffer.bytes(), 8u);
+
+  EXPECT_TRUE(buffer.Append(3, std::string(4, 'c')));
+  EXPECT_EQ(buffer.size(), 2u);
+  EXPECT_LE(buffer.bytes(), buffer.max_bytes());
+  EXPECT_EQ(buffer.oldest_seq(), std::optional<uint64_t>(2u));
+  EXPECT_TRUE(buffer.ReplayAfter(0).is_gap());
+
+  EXPECT_TRUE(buffer.Append(4, std::string(50, 'd')));
+  EXPECT_TRUE(buffer.empty());
+  EXPECT_EQ(buffer.bytes(), 0u);
+  EXPECT_TRUE(buffer.ReplayAfter(3).is_gap());
+}
+
 }  // namespace maho::ai
 
 #else

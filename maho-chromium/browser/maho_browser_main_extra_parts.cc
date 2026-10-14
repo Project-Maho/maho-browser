@@ -104,6 +104,7 @@
 #include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -1924,12 +1925,37 @@ std::string FormatMailActionDetails(const std::string& action_name,
     if (mail_approval_presenter_for_testing_) {
       return mail_approval_presenter_for_testing_.Run(action_name, details);
     }
-    // OS-level synchronous modal message boxes are strictly forbidden as they
-    // block the main UI thread and stall automation/MCP sockets.
-    // Unconditional full allow for browser automation and tools.
-    VLOG(1) << "[maho-approval] ConfirmMailWriteAction full allow: "
-            << action_name << " details: " << details;
-    return true;
+    DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+    Profile* profile = GetMailProfile();
+    auto* adapter = profile
+                        ? MahoUnifiedAgentAdapter::FindForPrefs(profile->GetPrefs())
+                        : nullptr;
+    if (!adapter) {
+      VLOG(1) << "[maho-approval] denied without chat listener: " << action_name;
+      return false;
+    }
+    base::RunLoop run_loop(base::RunLoop::Type::kNestableTasksAllowed);
+    struct Decision {
+      bool approved = false;
+      base::OnceClosure quit;
+    };
+    auto decision = std::make_shared<Decision>();
+    decision->quit = run_loop.QuitClosure();
+    adapter->RequestBoundaryApproval(
+        action_name, "Approve this boundary action: " + action_name,
+        base::BindOnce([](std::shared_ptr<Decision> decision, bool approved) {
+          decision->approved = approved;
+          if (decision->quit) {
+            std::move(decision->quit).Run();
+          }
+        }, decision));
+    base::OneShotTimer timeout;
+    timeout.Start(FROM_HERE, base::Seconds(120), run_loop.QuitClosure());
+    run_loop.Run();
+    decision->quit.Reset();
+    VLOG(1) << "[maho-approval] " << action_name
+            << " approved=" << decision->approved;
+    return decision->approved;
   }
 
   maho::ai::MailAuthorizationContext GetMailAuthorizationContext() override {
@@ -1968,21 +1994,21 @@ std::string FormatMailActionDetails(const std::string& action_name,
   bool ConfirmCredentialTypingApproval(
       std::string_view tool_name,
       const maho::ResolvedMahoMcpTarget& target) override {
-    // Unconditional full allow for approved credential typing; never block UI with OS modals.
-    VLOG(1) << "[maho-approval] ConfirmCredentialTypingApproval full allow: "
-            << tool_name << " browser: " << target.browser_id
-            << " tab: " << target.tab_id;
-    return true;
+    const bool approved = ConfirmMailWriteAction(
+        std::string(tool_name), "Use credentials in the selected browser tab.");
+    VLOG(1) << "[maho-approval] credential typing approved=" << approved
+            << " browser: " << target.browser_id << " tab: " << target.tab_id;
+    return approved;
   }
 
   bool ConfirmBrowserActionApproval(
       std::string_view tool_name,
       const maho::ResolvedMahoMcpTarget& target) override {
-    // Unconditional full allow for browser actions; never show OS dialogs.
-    VLOG(1) << "[maho-approval] ConfirmBrowserActionApproval full allow: "
-            << tool_name << " browser: " << target.browser_id
-            << " tab: " << target.tab_id;
-    return true;
+    const bool approved = ConfirmMailWriteAction(
+        std::string(tool_name), "Perform the requested browser boundary action.");
+    VLOG(1) << "[maho-approval] boundary action approved=" << approved
+            << " browser: " << target.browser_id << " tab: " << target.tab_id;
+    return approved;
   }
 
   maho::MahoMcpFeatureGates GetFeatureGates() override {

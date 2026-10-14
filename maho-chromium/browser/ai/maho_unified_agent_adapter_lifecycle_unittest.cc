@@ -878,6 +878,10 @@ class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
 
   void OnEvent(MahoAiRuntimeEvent event) { events_.push_back(std::move(event)); }
 
+  void AttachSessionEventCallback() {
+    adapter_->last_event_callback_ = callback();
+  }
+
   // TEST_F bodies run in a derived class that does not inherit the fixture's
   // friend grant, so private-member access must go through a fixture helper.
   void SetAgentFfiForTesting(MahoUnifiedAgentAdapter* adapter,
@@ -1952,6 +1956,74 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, WebUiApproveResolvesOnce) {
   EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
 }
 
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalWithoutListenerDenies) {
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  EXPECT_FALSE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalUsesSessionListener) {
+  AttachSessionEventCallback();
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("artifact.export", "Export artifact", decision.GetCallback());
+  ASSERT_FALSE(decision.IsReady());
+  const std::string id = FirstApprovalId();
+  ASSERT_FALSE(id.empty());
+  adapter_->RespondToApproval(id, true);
+  EXPECT_TRUE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalResolvesOnce) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper, callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  ASSERT_FALSE(decision.IsReady());
+  const std::string id = FirstApprovalId();
+  ASSERT_FALSE(id.empty());
+  adapter_->RespondToApproval(id, true);
+  EXPECT_TRUE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+  adapter_->RespondToApproval(id, true);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalTimeoutDenies) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper, callback());
+  task_environment_.RunUntilIdle();
+  events_.clear();
+  SetAgentCallWaitTimeout(base::TimeDelta());
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  SetAgentCallWaitTimeout(base::Seconds(30));
+  const std::string id = FirstApprovalId();
+  ASSERT_FALSE(id.empty());
+  EXPECT_FALSE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+  const auto* result = LastEventOfType(MahoAiRuntimeEventType::kApprovalResult);
+  ASSERT_TRUE(result);
+  EXPECT_EQ(*result->payload.FindString("approval_state"), "expired");
+  adapter_->RespondToApproval(id, true);
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kApprovalResult), 1u);
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest, BoundaryApprovalCancelDenies) {
+  adapter_->SubmitMessage("Hello", maho_ai::mojom::ChatIntent::kFreeform, false,
+                         maho_ai::mojom::InteractionMode::kDeveloper, callback());
+  task_environment_.RunUntilIdle();
+  base::test::TestFuture<bool> decision;
+  adapter_->RequestBoundaryApproval("mail_send", "Send email", decision.GetCallback());
+  ASSERT_FALSE(decision.IsReady());
+  adapter_->CancelCurrentTurn();
+  EXPECT_FALSE(decision.Get());
+  EXPECT_EQ(PendingApprovalCount(adapter_.get()), 0u);
+}
+
 // Under the "prompt" (ask) policy, a sensitive desktop-agent tool with an empty
 // extension id (mail_send) must route to the interactive approval broker (chat
 // card) instead of a blanket deny, so the user can approve it from chat.
@@ -2137,15 +2209,23 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
             "ordinary");
   EXPECT_EQ(ClassifyActionConsequence("navigation.navigate",
                                       R"({"url":"https://other.example"})"),
-            "new_origin");
+            "ordinary");
   EXPECT_EQ(ClassifyActionConsequence("input.click", R"({"ref":2})"),
-            "unknown");
+            "ordinary");
   EXPECT_EQ(ClassifyActionConsequence(
                 "input.click",
                 R"({"ref":2,"validated_action_context":{"validated":true,"consequence":"submit"}})"),
-            "unknown");
+            "ordinary");
   EXPECT_EQ(ClassifyActionConsequence("not.a.capability", R"({})"),
             "unclassified");
+  EXPECT_EQ(ClassifyActionConsequence("browser_file_upload_select", R"({})"),
+            "boundary");
+  EXPECT_EQ(ClassifyActionConsequence("browser_visual_click", R"({})"),
+            "boundary");
+  EXPECT_EQ(ClassifyActionConsequence("browser_type", R"({"allow_credentials":true})"),
+            "credential_fill");
+  EXPECT_EQ(ClassifyActionConsequence("browser_type", R"({"text":"hello"})"),
+            "ordinary");
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
@@ -3034,5 +3114,113 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
   fake_agent_->sends[0].DeliverComplete("late full text");
   task_environment_.RunUntilIdle();
   EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kTurnComplete), 0u);
+}
+
+// A6: Permission timeout removes pending_approvals_ entry so late
+// RespondToApproval finds nothing instead of emitting "approved".
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       PermissionTimeoutCleansUpPendingApproval) {
+  auto prefs = CreateSecurePrefs();
+  prefs->SetString(maho::ai_prefs::kApprovalPolicy, "prompt");
+  adapter_.reset();
+  adapter_ = std::make_unique<MahoUnifiedAgentAdapter>(
+      prefs.get(), nullptr, base::RepeatingCallback<bool()>(),
+      base::RepeatingCallback<Browser*()>());
+  SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
+  // Use the override so the dialog doesn't try to show native UI.
+  adapter_->permission_prompt_override_for_testing_ = {};
+
+  adapter_->SubmitMessage("test", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // Drive a permission decision that parks in pending_approvals_.
+  auto state = std::make_shared<PermissionCallState>();
+  auto task = CapturePermissionDecisionTask(
+      adapter_.get(), fake_agent_->sends.front().user_data.get(),
+      "shell_exec", state);
+  std::move(task).Run();
+  task_environment_.RunUntilIdle();
+  EXPECT_GE(PendingApprovalCount(adapter_.get()), 1u);
+
+  std::string approval_id = FirstApprovalId();
+  ASSERT_FALSE(approval_id.empty());
+
+  // Simulate timeout: mark cancelled and signal.
+  state->cancelled.store(true);
+  state->event.Signal();
+  task_environment_.RunUntilIdle();
+
+  // The timeout cleanup task runs and removes cancelled entries.
+  task_environment_.RunUntilIdle();
+
+  // Late RespondToApproval after timeout should find nothing and emit no
+  // "approved" event.
+  events_.clear();
+  adapter_->RespondToApproval(approval_id, true);
+  // A6: If the entry was removed, RespondToApproval is a no-op.
+  // If the entry remains but state->cancelled, RespondToApproval reports
+  // "expired" instead of "approved".
+  for (const auto& ev : events_) {
+    if (ev.type == MahoAiRuntimeEventType::kApprovalResult) {
+      const std::string* as = ev.payload.FindString("approval_state");
+      ASSERT_TRUE(as);
+      EXPECT_NE(*as, "approved")
+          << "Late RespondToApproval after timeout must not report approved";
+    }
+  }
+
+  fake_agent_->sends.front().DeliverComplete("done");
+  task_environment_.RunUntilIdle();
+}
+
+// A3: Events for a stale run_id (from a cancelled turn) are dropped.
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       StaleRunIdEventsDroppedAfterTurnCancel) {
+  adapter_->SubmitMessage("turn 1", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(fake_agent_->unified_event_cb);
+  const uint64_t gen1 = ActiveGenerationForTesting(adapter_.get());
+  EXPECT_NE(gen1, 0u);
+
+  // Deliver an event for run "run-stale" during turn 1.
+  MahoUnifiedAgentEventEnvelope envelope;
+  envelope.abi_version = 2;
+  envelope.run_id = "run-stale";
+  envelope.event_seq = 1;
+  envelope.kind = MahoAgentEventKindV2::kToken;
+  envelope.payload_json = "{\"token\":\"hello\"}";
+  fake_agent_->DeliverUnifiedEvent(envelope);
+  task_environment_.RunUntilIdle();
+  size_t token_count_after_first =
+      CountEvents(MahoAiRuntimeEventType::kAssistantToken);
+  EXPECT_GE(token_count_after_first, 1u);
+
+  // Cancel turn 1, start turn 2.
+  adapter_->CancelCurrentTurn();
+  fake_agent_->sends.front().Release();
+  adapter_->SubmitMessage("turn 2", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kDeveloper,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_GE(fake_agent_->sends.size(), 2u);
+
+  // Deliver another event for "run-stale" (from cancelled turn 1).
+  // A3: This should be dropped because run-stale is associated with gen1
+  // which is no longer active.
+  envelope.event_seq = 2;
+  envelope.payload_json = "{\"token\":\"stale\"}";
+  fake_agent_->DeliverUnifiedEvent(envelope);
+  task_environment_.RunUntilIdle();
+  // Token count should not have increased.
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kAssistantToken),
+            token_count_after_first);
+
+  fake_agent_->sends.back().DeliverComplete("done");
+  task_environment_.RunUntilIdle();
 }
 

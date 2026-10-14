@@ -25,21 +25,13 @@ MahoTabBorrowChip::MahoTabBorrowChip(Delegate* delegate) : delegate_(delegate) {
   layout->SetFlexForView(label_, 1);
 
   allow_button_ = AddChildView(std::make_unique<views::MdTextButton>(
-      base::BindRepeating(
-          [](MahoTabBorrowChip* chip) {
-            chip->delegate_->OnBorrowApproved(chip->active_request_id_);
-            chip->Dismiss();
-          },
-          base::Unretained(this)),
+      base::BindRepeating(&MahoTabBorrowChip::OnAllowClicked,
+                          base::Unretained(this)),
       u"Allow"));
 
   deny_button_ = AddChildView(std::make_unique<views::MdTextButton>(
-      base::BindRepeating(
-          [](MahoTabBorrowChip* chip) {
-            chip->delegate_->OnBorrowDenied(chip->active_request_id_);
-            chip->Dismiss();
-          },
-          base::Unretained(this)),
+      base::BindRepeating(&MahoTabBorrowChip::OnDenyClicked,
+                          base::Unretained(this)),
       u"Deny"));
 
   SetVisible(false);
@@ -62,6 +54,26 @@ void MahoTabBorrowChip::Dismiss() {
   SetVisible(false);
   InvalidateLayout();
   PreferredSizeChanged();
+}
+
+void MahoTabBorrowChip::OnAllowClicked() {
+  if (!is_showing()) {
+    return;
+  }
+  // The delegate may delete this view from inside its callback, so copy the id
+  // and finish all member access before notifying.
+  const std::string request_id = active_request_id_;
+  Dismiss();
+  delegate_->OnBorrowApproved(request_id);
+}
+
+void MahoTabBorrowChip::OnDenyClicked() {
+  if (!is_showing()) {
+    return;
+  }
+  const std::string request_id = active_request_id_;
+  Dismiss();
+  delegate_->OnBorrowDenied(request_id);
 }
 
 std::string MahoTabBorrowChip::GetClassName() const {

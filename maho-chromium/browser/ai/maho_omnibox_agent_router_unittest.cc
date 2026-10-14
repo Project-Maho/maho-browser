@@ -122,7 +122,8 @@ TEST_F(MahoOmniboxAgentRouterTest, OmniboxFollowUpVsNewTurnRouting) {
   // Case 1: Inactive turn -> routes to SubmitMessage
   adapter.is_turn_active_ = false;
   EXPECT_TRUE(MahoOmniboxAgentRouter::RouteToAgentSession(
-      &adapter, "start new task"));
+      &adapter, "start new task", true,
+      base::BindRepeating([](MahoAiRuntimeEvent) {})));
   EXPECT_EQ(adapter.submitted_messages_.size(), 1u);
   EXPECT_EQ(adapter.submitted_messages_[0], "start new task");
   EXPECT_EQ(adapter.submitted_follow_ups_.size(), 0u);
@@ -135,6 +136,17 @@ TEST_F(MahoOmniboxAgentRouterTest, OmniboxFollowUpVsNewTurnRouting) {
   ASSERT_EQ(adapter.submitted_follow_ups_.size(), 1u);
   EXPECT_EQ(adapter.submitted_follow_ups_[0].first, "also check email");
   EXPECT_EQ(adapter.submitted_follow_ups_[0].second, "queue");
+}
+
+// A14: RouteToAgentSession with a null callback returns false.
+TEST_F(MahoOmniboxAgentRouterTest, NullCallbackRejectsRoute) {
+  FakeOmniboxAiRuntimeAdapter adapter;
+  adapter.is_turn_active_ = false;
+  // Passing a null callback should return false without calling SubmitMessage.
+  EXPECT_FALSE(MahoOmniboxAgentRouter::RouteToAgentSession(
+      &adapter, "should not route", true,
+      MahoAiRuntimeAdapter::RuntimeEventCallback()));
+  EXPECT_TRUE(adapter.submitted_messages_.empty());
 }
 
 }  // namespace

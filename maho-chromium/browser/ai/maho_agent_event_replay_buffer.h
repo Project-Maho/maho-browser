@@ -74,8 +74,10 @@ class ReplayResult {
 class MahoAgentEventReplayBuffer {
  public:
   static constexpr size_t kDefaultCapacity = 512;
+  static constexpr size_t kDefaultMaxBytes = 8 * 1024 * 1024;
 
-  explicit MahoAgentEventReplayBuffer(size_t capacity = kDefaultCapacity);
+  explicit MahoAgentEventReplayBuffer(size_t capacity = kDefaultCapacity,
+                                      size_t max_bytes = kDefaultMaxBytes);
   ~MahoAgentEventReplayBuffer();
 
   MahoAgentEventReplayBuffer(const MahoAgentEventReplayBuffer&) = delete;
@@ -86,17 +88,21 @@ class MahoAgentEventReplayBuffer {
   /// Appends an event to the ring buffer.
   /// Strictly enforces monotonic sequence order: if seq <= highest_seq_seen_,
   /// rejects with false (duplicate or out-of-order sequence).
-  /// When capacity is exceeded, the oldest retained event is evicted.
+  /// When the event-count capacity or the payload byte budget is exceeded, the
+  /// oldest retained events are evicted, including an oversized newest event.
   bool Append(uint64_t seq, std::string payload);
 
   /// Replays events with sequence number strictly greater than `after_seq`.
-  /// If `after_seq` is older than the oldest retained event sequence - 1 (meaning an event
-  /// with seq > after_seq was already evicted), returns ReplayGap{oldest_retained_seq}.
+  /// If an event with seq > after_seq was evicted or cleared, or `after_seq` is
+  /// ahead of the newest retained event, returns ReplayGap{oldest_retained_seq}.
+  /// A stream whose first seq is > 1 is not a gap.
   /// Otherwise returns ReplayResult::Ok with the events in sequence order.
   ReplayResult ReplayAfter(uint64_t after_seq) const;
 
   size_t size() const;
   size_t capacity() const;
+  size_t max_bytes() const;
+  size_t bytes() const;
   bool empty() const;
   void Clear();
 
@@ -104,7 +110,12 @@ class MahoAgentEventReplayBuffer {
   std::optional<uint64_t> newest_seq() const;
 
  private:
+  void EvictOldest();
+
   size_t capacity_;
+  size_t max_bytes_;
+  size_t bytes_ = 0;
+  uint64_t highest_evicted_seq_ = 0;
   std::deque<ReplayEvent> buffer_;
   uint64_t highest_seq_seen_ = 0;
   bool has_seen_any_ = false;

@@ -583,6 +583,24 @@ TEST_F(MahoRoutinesPageHandlerTest, TraceRecorderClientRecordsEventsAndExportsJs
   EXPECT_GE(steps->size(), 3u);
 }
 
+TEST_F(MahoRoutinesPageHandlerTest, TraceRecorderClientNeverStoresTypedText) {
+  auto* client = maho::MahoTraceRecorderClient::GetInstance();
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_TRUE(contents);
+  ASSERT_TRUE(client->Start(contents, 102));
+
+  for (const char* ch : {"h", "u", "n", "t", "e", "r", "2"}) {
+    client->RecordTypedText(ch);
+  }
+
+  std::string json = client->StopAndExportJson();
+  EXPECT_EQ(json.find("hunter2"), std::string::npos);
+  EXPECT_EQ(json.find("\"h\""), std::string::npos);
+  EXPECT_NE(json.find(maho::MahoTraceRecorderClient::kRedactedFillText),
+            std::string::npos);
+}
+
 TEST_F(MahoRoutinesPageHandlerTest, StartAndStopTraceRecordingViaHandler) {
   TestRoutinesPage page;
   auto handler = MakeHandler(page.TakeRemote());
