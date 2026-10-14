@@ -851,6 +851,58 @@ final class WebViewBridgeAgentTests: XCTestCase {
         XCTAssertEqual(popover?.permittedArrowDirections, [])
     }
 
+    func testBridgeSourceRejectsSubframesAndForeignOrigins() {
+        typealias C = WebViewBridgeController
+        XCTAssertTrue(C.isTrustedBridgeSource(isMainFrame: true, scheme: "file", host: "", port: 0, devMode: false))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: false, scheme: "file", host: "", port: 0, devMode: false))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "https", host: "evil.example", port: 443, devMode: false))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "http", host: "localhost", port: 5173, devMode: false))
+        XCTAssertTrue(C.isTrustedBridgeSource(isMainFrame: true, scheme: "http", host: "localhost", port: 5173, devMode: true))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "http", host: "localhost", port: 8080, devMode: true))
+    }
+
+    func testBundleNavigationAllowsOnlyBundleFiles() {
+        let root = URL(fileURLWithPath: "/tmp/maho-bundle", isDirectory: true)
+        typealias C = WebViewBridgeController
+        XCTAssertTrue(C.isBundleNavigationAllowed(url: URL(string: "file:///tmp/maho-bundle/web-ai/index.html#agent"), devMode: false, roots: [root]))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "file:///etc/passwd"), devMode: false, roots: [root]))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "https://example.com/"), devMode: false, roots: [root]))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: nil, devMode: false, roots: [root]))
+    }
+
+    func testAgentPermissionAllowlistIsReadOnlyOnly() {
+        for tool in ["get_page_elements", "get_page_snapshot", "scroll_page", "fs_read", "web_search"] {
+            XCTAssertTrue(agentAutoAllowedToolNames.contains(tool), tool)
+        }
+        for tool in ["click_element", "fill_input"] {
+            XCTAssertFalse(agentAutoAllowedToolNames.contains(tool), tool)
+        }
+    }
+
+    @MainActor
+    func testAgentViewModelLogIsCapped() {
+        let model = AgentViewModel(bridge: MahoBridge())
+        for index in 0..<(AgentViewModel.maxLogEntries + 50) {
+            model.appendLog("entry \(index)")
+        }
+        XCTAssertEqual(model.eventLog.count, AgentViewModel.maxLogEntries)
+        XCTAssertEqual(model.eventLog.last, "entry \(AgentViewModel.maxLogEntries + 49)")
+    }
+
+    @MainActor
+    func testAgentFreeSessionRemovesOwnedHandle() throws {
+        let bridge = try makeStorageBackedBridgeForTests()
+        defer { bridge.destroy() }
+        let host = WebViewBridgeController.makeAgenticWebView(bridge: bridge)
+        let create = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"agentCreateSession\",\"params\":[\"free-\(UUID().uuidString)\"]}"
+        let created = try rpcObject(host.controller.dispatchRPCForTesting(create))
+        let handle = try XCTUnwrap(created["result"] as? String)
+        XCTAssertTrue(host.controller.ownsAgentHandleForTesting(handle))
+        let free = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"agentFreeSession\",\"params\":[\"\(handle)\"]}"
+        _ = host.controller.dispatchRPCForTesting(free)
+        XCTAssertFalse(host.controller.ownsAgentHandleForTesting(handle))
+    }
+
     func testConcurrentRegisterGetUnregisterIsThreadSafe() {
         let registry = AgentHandleRegistry()
         let threadCount = 10

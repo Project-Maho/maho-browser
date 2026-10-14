@@ -245,6 +245,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     /// Attach to a webView after init. Called by the host view controller.
     func attach(to webView: WKWebView) {
         self.webView = webView
+        webView.navigationDelegate = self
 #if DEBUG
         if #available(iOS 16.4, *) {
             webView.isInspectable = true
@@ -254,10 +255,64 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
 
     // MARK: - WKScriptMessageHandler
 
+    /// The bundle is loaded from `file://` (or `http://localhost:5173` when the
+    /// `MahoWebAIDev` flag is on). Only the main frame of such a page may reach
+    /// native; sub-frames and every other origin are rejected.
+    static func isTrustedBridgeSource(
+        isMainFrame: Bool,
+        scheme: String,
+        host: String,
+        port: Int,
+        devMode: Bool
+    ) -> Bool {
+        guard isMainFrame else { return false }
+        switch scheme.lowercased() {
+        case "file":
+            return host.isEmpty
+        case "http":
+            return devMode && host == "localhost" && port == 5173
+        default:
+            return false
+        }
+    }
+
+    /// Navigation policy: only the bundled assets (file URLs under `roots`),
+    /// `about:blank`, and the dev server (dev mode) may load in the bridge view.
+    static func isBundleNavigationAllowed(url: URL?, devMode: Bool, roots: [URL]) -> Bool {
+        guard let url else { return false }
+        switch url.scheme?.lowercased() {
+        case "file":
+            let path = url.resolvingSymlinksInPath().path
+            return roots.contains { root in
+                let rootPath = root.resolvingSymlinksInPath().path
+                return path == rootPath || path.hasPrefix(rootPath + "/")
+            }
+        case "about":
+            return url.absoluteString == "about:blank"
+        case "http":
+            return devMode && url.host == "localhost" && url.port == 5173
+        default:
+            return false
+        }
+    }
+
+    private static var bundleRoots: [URL] {
+        [Bundle.main.bundleURL]
+            + FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+    }
+
     func userContentController(
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
+        let origin = message.frameInfo.securityOrigin
+        guard Self.isTrustedBridgeSource(
+            isMainFrame: message.frameInfo.isMainFrame,
+            scheme: origin.protocol,
+            host: origin.host,
+            port: origin.port,
+            devMode: UserDefaults.standard.bool(forKey: "MahoWebAIDev")
+        ) else { return }
         switch message.name {
         case "mahoBridge":
             guard let body = message.body as? String else { return }
@@ -288,6 +343,12 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         }
     }
 
+    func ownsAgentHandleForTesting(_ handle: String) -> Bool {
+        ownershipLock.lock()
+        defer { ownershipLock.unlock() }
+        return ownedAgentHandles.contains(handle)
+    }
+
     func dispatchRPCForTesting(_ requestJson: String) -> String {
         dispatch(requestJson)
     }
@@ -314,7 +375,9 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         let handles = ownedAgentHandles
         ownedAgentHandles.removeAll()
         ownershipLock.unlock()
-        print("PROBE_TEARDOWN handles=\(handles) closed=\(ownershipClosed)")
+#if DEBUG
+        print("PROBE_TEARDOWN handles=\(handles)")
+#endif
 
         for handle in handles {
             if let ptr = AgentHandleRegistry.shared.get(id: handle) {
@@ -429,7 +492,9 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             guard let chatHandle = chatRPC.handleForPointer(ptr) else {
                 throw BridgeError.operationFailed("chatSessionStart registration failed")
             }
+#if DEBUG
             print("PROBE_CHAT created handle=\(chatHandle)")
+#endif
             ownershipLock.lock()
             if ownershipClosed {
                 ownershipLock.unlock()
@@ -754,8 +819,10 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             }
             let handle = AgentHandleRegistry.shared.register(ptr: ptr)
             ownedAgentHandles.insert(handle)
+#if DEBUG
+            print("PROBE_OWN registered handle=\(handle) count=\(ownedAgentHandles.count)")
+#endif
             ownershipLock.unlock()
-            print("PROBE_OWN registered handle=\(handle) count=\(ownedAgentHandles.count) closed=\(ownershipClosed)")
             return handle
 
         case "agentSendMessage":
@@ -778,6 +845,9 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             }
             bridge.agentFreeSession(ptr)
             AgentHandleRegistry.shared.unregister(id: handle)
+            ownershipLock.lock()
+            ownedAgentHandles.remove(handle)
+            ownershipLock.unlock()
             return nil
 
         case "agentListTools":
@@ -1689,6 +1759,34 @@ extension WebViewBridgeController {
             targetURL = URL(string: bundleURL.absoluteString + hash) ?? bundleURL
         }
         webView.loadFileURL(targetURL, allowingReadAccessTo: accessURL)
+    }
+}
+
+// MARK: - WKNavigationDelegate (bundle-only navigation)
+
+extension WebViewBridgeController: WKNavigationDelegate {
+    @MainActor
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        let url = navigationAction.request.url
+        if Self.isBundleNavigationAllowed(
+            url: url,
+            devMode: UserDefaults.standard.bool(forKey: "MahoWebAIDev"),
+            roots: Self.bundleRoots
+        ) {
+            decisionHandler(.allow)
+            return
+        }
+        decisionHandler(.cancel)
+        if navigationAction.navigationType == .linkActivated,
+           let url,
+           let scheme = url.scheme?.lowercased(),
+           scheme == "http" || scheme == "https" {
+            UIApplication.shared.open(url)
+        }
     }
 }
 
