@@ -98,9 +98,10 @@ impl<F: Fn() -> Instant> TraceRecorder<F> {
         });
     }
 
-    /// Records typed text. Consecutive fills inside the coalesce window merge
-    /// into the previous fill (text concatenated); the merged step keeps the
-    /// FIRST fill's timestamp and selector.
+    /// Records typed text. Consecutive fills inside the coalesce window that
+    /// target the same selector (or carry no selector) merge into the previous
+    /// fill (text concatenated); the merged step keeps the FIRST fill's
+    /// timestamp and selector. A fill for a different field starts a new step.
     pub fn record_fill(&mut self, text: String, selector: Option<String>) {
         let now_ms = self.now_ms();
         if let Some(last) = self.steps.last_mut() {
@@ -111,7 +112,9 @@ impl<F: Fn() -> Instant> TraceRecorder<F> {
             {
                 let within = now_ms.saturating_sub(last.at_ms)
                     <= self.coalesce_window.as_millis() as u64;
-                if within {
+                let same_target =
+                    selector.is_none() || prev_selector.is_none() || *prev_selector == selector;
+                if within && same_target {
                     prev_text.push_str(&text);
                     if prev_selector.is_none() {
                         *prev_selector = selector;
@@ -128,8 +131,12 @@ impl<F: Fn() -> Instant> TraceRecorder<F> {
         self.pending_hover = PendingHover::None;
     }
 
+    /// Records a navigation. Query and fragment are stripped so OAuth codes,
+    /// tokens and other secrets carried in URLs never land in a trace.
     pub fn record_navigate(&mut self, url: String) {
-        self.push(TraceStep::Navigate { url });
+        self.push(TraceStep::Navigate {
+            url: redact_navigate_url(&url),
+        });
     }
 
     pub fn record_wait(&mut self, ms: u64) {
@@ -147,6 +154,19 @@ impl<F: Fn() -> Instant> TraceRecorder<F> {
             version: 3,
             steps: self.steps,
         }
+    }
+}
+
+/// Keeps scheme/host/path of a navigate URL and drops query + fragment.
+/// Unparseable input is cut at the first '?' or '#'.
+fn redact_navigate_url(raw: &str) -> String {
+    match reqwest::Url::parse(raw) {
+        Ok(mut url) => {
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        }
+        Err(_) => raw.split(['?', '#']).next().unwrap_or_default().to_string(),
     }
 }
 
@@ -276,5 +296,43 @@ mod tests {
         let trace = TraceRecorder::<fn() -> Instant>::with_window(400).finish();
         assert_eq!(trace.version, 3);
         let _ = base;
+    }
+
+    #[test]
+    fn navigate_strips_query_and_fragment_secrets() {
+        let base = Instant::now();
+        let mut recorder: TraceRecorder<_> = TraceRecorder {
+            steps: Vec::new(),
+            start: base,
+            now_fn: || base,
+            coalesce_window: Duration::from_millis(400),
+            pending_hover: PendingHover::None,
+        };
+        recorder.record_navigate(
+            "https://app.example/callback?code=SECRET&state=x#access_token=TOKEN".into(),
+        );
+        let trace = recorder.finish();
+        assert_eq!(
+            trace.steps[0].step,
+            TraceStep::Navigate {
+                url: "https://app.example/callback".into()
+            }
+        );
+    }
+
+    #[test]
+    fn fills_for_different_selectors_are_not_coalesced() {
+        let base = Instant::now();
+        let mut recorder: TraceRecorder<_> = TraceRecorder {
+            steps: Vec::new(),
+            start: base,
+            now_fn: || base,
+            coalesce_window: Duration::from_millis(400),
+            pending_hover: PendingHover::None,
+        };
+        recorder.record_fill("alice".into(), Some("#user".into()));
+        recorder.record_fill("hunter2".into(), Some("#pw".into()));
+        let trace = recorder.finish();
+        assert_eq!(trace.steps.len(), 2);
     }
 }

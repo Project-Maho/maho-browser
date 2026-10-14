@@ -24,7 +24,7 @@ impl CliToolExecutor {
         // 2. Parse command template and perform argument-level substitution
         let mut parts: Vec<String> = if self.tool.command_template.trim().starts_with('[') {
             serde_json::from_str(&self.tool.command_template)
-                .unwrap_or_else(|_| vec![self.tool.command_template.clone()])
+                .map_err(|e| anyhow!("Malformed JSON command template: {}", e))?
         } else {
             self.tool
                 .command_template
@@ -37,32 +37,19 @@ impl CliToolExecutor {
             return Err(anyhow!("Command template is empty"));
         }
 
-        let mut exec = parts.remove(0);
-        if let Value::Object(obj) = &args {
-            for (key, val) in obj {
-                let placeholder = format!("{{{}}}", key);
-                let val_str = match val {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                exec = exec.replace(&placeholder, &val_str);
-            }
+        // The program is never templated: a model-supplied value must not
+        // choose which binary runs.
+        let exec = parts.remove(0);
+        if exec.contains('{') {
+            return Err(anyhow!(
+                "Command template program must not contain placeholders"
+            ));
         }
 
-        let mut final_args = Vec::new();
-        for mut part in parts {
-            if let Value::Object(obj) = &args {
-                for (key, val) in obj {
-                    let placeholder = format!("{{{}}}", key);
-                    let val_str = match val {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    part = part.replace(&placeholder, &val_str);
-                }
-            }
-            final_args.push(part);
-        }
+        let final_args = parts
+            .iter()
+            .map(|part| substitute_placeholders(part, &args))
+            .collect::<Result<Vec<_>>>()?;
 
         // 3. Spawning the process with POSIX_SPAWN_SETSID sandbox (no shell wrapper)
         let mut cmd = tokio::process::Command::new(exec);
@@ -125,7 +112,21 @@ impl CliToolExecutor {
                 Ok(result)
             }
             Err(_) => {
-                let _ = child.kill().await;
+                // The child ran under setsid, so its pid is also its process
+                // group id; kill the whole group so grandchildren die too.
+                #[cfg(unix)]
+                if let Some(pid) = child.id() {
+                    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+                        tracing::warn!(
+                            pid,
+                            error = %std::io::Error::last_os_error(),
+                            "failed to SIGKILL CLI tool process group"
+                        );
+                    }
+                }
+                if let Err(error) = child.kill().await {
+                    tracing::warn!(%error, "failed to kill timed-out CLI tool process");
+                }
                 Err(anyhow!(
                     "CLI tool execution timed out after {:?}",
                     timeout_duration
@@ -230,5 +231,126 @@ impl CliToolExecutor {
             output.extend_from_slice(&buf[..n]);
         }
         Ok(output)
+    }
+}
+
+/// Replaces `{key}` placeholders in one template argument in a single pass,
+/// so substituted values are never re-scanned for placeholders. Values that
+/// start with '-' are rejected because they would be parsed as options by the
+/// target program (e.g. `rg --pre=/bin/sh`).
+fn substitute_placeholders(part: &str, args: &Value) -> Result<String> {
+    let mut out = String::with_capacity(part.len());
+    let mut rest = part;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push_str(&rest[open..]);
+            return Ok(out);
+        };
+        let key = &after[..close];
+        match args.get(key) {
+            Some(val) => {
+                let val_str = match val {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                if val_str.starts_with('-') {
+                    return Err(anyhow!(
+                        "Parameter {} must not start with '-' (option injection)",
+                        key
+                    ));
+                }
+                out.push_str(&val_str);
+            }
+            None => {
+                out.push('{');
+                out.push_str(key);
+                out.push('}');
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(command_template: &str, timeout_ms: u64) -> AiCliTool {
+        AiCliTool {
+            id: "t".into(),
+            workspace_id: "w".into(),
+            name: "t".into(),
+            description: String::new(),
+            command_template: command_template.into(),
+            parameters_schema: serde_json::json!({"type": "object"}),
+            sensitive: true,
+            timeout_ms,
+            output_cap_bytes: 4096,
+            working_directory: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn substitution_rejects_option_values_and_is_single_pass() {
+        let args = serde_json::json!({"q": "{p}", "p": "/etc/passwd", "bad": "--pre=/bin/sh"});
+        assert_eq!(substitute_placeholders("{q}", &args).unwrap(), "{p}");
+        assert!(substitute_placeholders("{bad}", &args).is_err());
+        assert_eq!(substitute_placeholders("x={p}", &args).unwrap(), "x=/etc/passwd");
+    }
+
+    #[tokio::test]
+    async fn cli_tool_rejects_templated_program_and_malformed_json() {
+        let exec = CliToolExecutor::new(tool("{bin} hello", 1000), None);
+        let err = exec
+            .execute(serde_json::json!({"bin": "/bin/sh"}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("placeholders"), "{err}");
+
+        let exec = CliToolExecutor::new(tool("[\"echo\", ", 1000), None);
+        let err = exec.execute(serde_json::json!({})).await.unwrap_err();
+        assert!(err.to_string().contains("Malformed JSON"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cli_tool_timeout_kills_grandchildren() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let template = serde_json::to_string(&vec![
+            "/bin/sh",
+            "-c",
+            "sleep 30 & echo $! > \"$0\"; wait",
+            "{pid_file}",
+        ])
+        .unwrap();
+        let exec = CliToolExecutor::new(tool(&template, 500), None);
+        let err = exec
+            .execute(serde_json::json!({"pid_file": pid_file.to_string_lossy()}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+
+        let pid: libc::pid_t = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // The grandchild was SIGKILLed synchronously; give init a bounded
+        // window to reap it rather than relying on a fixed sleep.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild {pid} survived the timeout kill"
+            );
+            tokio::task::yield_now().await;
+        }
     }
 }

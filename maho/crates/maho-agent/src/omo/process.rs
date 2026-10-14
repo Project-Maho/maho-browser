@@ -16,6 +16,21 @@ const READY_MARKER: &str = "rpc listening on";
 /// A runtime that neither reports readiness nor exits must not hang the caller.
 const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Bound on reaping a runtime that closed stderr without reporting readiness.
+const REAP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Parent-environment variables that configure an ambient omo/senpi/pi install and must
+/// not leak into Maho's isolated runtime. Matched as exact key prefixes so unrelated
+/// variables that merely contain "omo" (e.g. `TOMORROW`) survive.
+const AMBIENT_AGENT_ENV_PREFIXES: [&str; 3] = ["OMO_", "SENPI_", "PI_CODING_AGENT"];
+
+fn is_ambient_agent_env(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    AMBIENT_AGENT_ENV_PREFIXES
+        .iter()
+        .any(|prefix| upper.starts_with(prefix))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessError {
     #[error("failed to spawn omo runtime: {0}")]
@@ -85,16 +100,19 @@ impl OmoProcess {
         command.args(&argv);
 
         // Strip ambient omo/senpi environment variables from parent process
-        for (k, _) in std::env::vars() {
-            let lower = k.to_ascii_lowercase();
-            if lower.contains("senpi") || lower.contains("omo") || lower.contains("coding_agent") {
-                command.env_remove(&k);
+        for (k, _) in std::env::vars_os() {
+            if let Some(key) = k.to_str() {
+                if is_ambient_agent_env(key) {
+                    command.env_remove(key);
+                }
             }
         }
 
         command.envs(config.env_vars());
         command.stdin(Stdio::piped());
-        command.stdout(Stdio::piped());
+        // RPC runs over the unix socket and readiness over stderr; stdout is never read,
+        // so a piped stdout would block the runtime once the pipe buffer fills.
+        command.stdout(Stdio::null());
         command.stderr(Stdio::piped());
         command.kill_on_drop(true);
 
@@ -112,7 +130,7 @@ impl OmoProcess {
             let mut lines = BufReader::new(stderr).lines();
             let mut tx = Some(ready_tx);
             while let Ok(Some(line)) = lines.next_line().await {
-                eprintln!("[omo-stderr] {line}");
+                tracing::debug!(target: "maho_agent::omo", "[omo-stderr] {line}");
                 if line.contains(READY_MARKER) {
                     if let Some(tx) = tx.take() {
                         let _ = tx.send(true);
@@ -130,7 +148,13 @@ impl OmoProcess {
                 socket_path: socket_path.to_path_buf(),
             }),
             Ok(Ok(false)) => {
-                let status = child.wait().await.ok();
+                // stderr closed without the marker; the process may still be alive, so
+                // kill it rather than waiting on it indefinitely.
+                let _ = child.start_kill();
+                let status = tokio::time::timeout(REAP_TIMEOUT, child.wait())
+                    .await
+                    .ok()
+                    .and_then(Result::ok);
                 Err(ProcessError::ExitedEarly(
                     status.map_or_else(|| "unknown".to_string(), |s| s.to_string()),
                 ))
@@ -195,6 +219,59 @@ mod tests {
         assert_eq!(argv[3], "--no-builtin-tools");
         assert_eq!(argv[4], "--system-prompt");
         assert_eq!(argv[5], "/tmp/system_prompt.txt");
+    }
+
+    #[test]
+    fn env_scrub_matches_agent_prefixes_only() {
+        for key in ["OMO_CODING_AGENT_DIR", "SENPI_BRAND", "senpi_rpc_x", "PI_CODING_AGENT_DIR"] {
+            assert!(is_ambient_agent_env(key), "{key}");
+        }
+        for key in ["TOMORROW", "PROMO_CODE", "HOMEBREW_PREFIX", "MAHO_CODING_AGENT_DIR", "PATH"] {
+            assert!(!is_ambient_agent_env(key), "{key}");
+        }
+    }
+
+    fn scratch_config(dir: &Path) -> OmoLaunchConfig {
+        OmoLaunchConfig::builder(dir.join("agent"))
+            .runtime_binary("/bin/sh")
+            .rpc_entry(dir.join("runtime.sh"))
+            .socket_path(dir.join("rpc.sock"))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn heavy_stdout_does_not_block_readiness() {
+        let dir = tempfile::tempdir().unwrap();
+        // 256 KiB on stdout exceeds any pipe buffer before the ready marker is written.
+        std::fs::write(
+            dir.path().join("runtime.sh"),
+            "head -c 262144 /dev/zero\necho 'rpc listening on fake' >&2\nexec sleep 300\n",
+        )
+        .unwrap();
+        let config = scratch_config(dir.path());
+        let mut process = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            OmoProcess::spawn(config.runtime_binary(), config.rpc_entry(), config.socket_path(), &config),
+        )
+        .await
+        .expect("stdout output must not stall readiness")
+        .expect("runtime reports ready");
+        process.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn closed_stderr_without_ready_kills_instead_of_hanging() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("runtime.sh"), "exec 2>&-\nexec sleep 300\n").unwrap();
+        let config = scratch_config(dir.path());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            OmoProcess::spawn(config.runtime_binary(), config.rpc_entry(), config.socket_path(), &config),
+        )
+        .await
+        .expect("a live runtime with closed stderr must not hang spawn");
+        assert!(matches!(result, Err(ProcessError::ExitedEarly(_))));
     }
 
     #[test]

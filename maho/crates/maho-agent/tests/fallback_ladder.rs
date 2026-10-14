@@ -19,21 +19,25 @@ fn request(
 
 #[test]
 fn fallback_ladder_typed_success_does_not_downgrade() {
+    // Progress is recorded from the executed outcome, not from the decision: a typed
+    // decision alone (which may still fail) must not lock out lower tiers. Navigation
+    // is not used here because a successful navigation resets progress (new page).
     let mut ladder = FallbackLadderState::new("session-fallback-typed");
 
     let typed = ladder
         .decide(request(
-            "browser_navigate",
+            "read_current_page",
             FallbackTier::TypedDomainApi,
             ScreenshotCuaApproval::NotRequested,
         ))
         .expect("typed browser API decision is allowed");
     assert_eq!(typed.selected_tier, FallbackTier::TypedDomainApi);
     assert_eq!(typed.safety_state, FallbackSafetyState::Safe);
+    ladder.record_outcome("read_current_page", FallbackTier::TypedDomainApi, true);
 
     let downgrade = ladder
         .decide(request(
-            "browser_navigate",
+            "read_current_page",
             FallbackTier::DomRefLocator,
             ScreenshotCuaApproval::NotRequested,
         ))
@@ -46,6 +50,64 @@ fn fallback_ladder_typed_success_does_not_downgrade() {
         downgrade.decision().safety_state,
         FallbackSafetyState::Blocked
     );
+}
+
+#[test]
+fn fallback_ladder_failed_or_navigated_typed_attempt_does_not_block_downgrade() {
+    let mut ladder = FallbackLadderState::new("session-fallback-typed-failed");
+    let _ = ladder.decide(request(
+        "read_current_page",
+        FallbackTier::TypedDomainApi,
+        ScreenshotCuaApproval::NotRequested,
+    ));
+    ladder.record_outcome("read_current_page", FallbackTier::TypedDomainApi, false);
+    ladder
+        .decide(request(
+            "read_current_page",
+            FallbackTier::DomRefLocator,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect("a failed typed attempt leaves the ladder open");
+
+    // A success on the old page no longer applies after navigating.
+    ladder.record_outcome("read_current_page", FallbackTier::TypedDomainApi, true);
+    ladder.record_outcome("browser_navigate", FallbackTier::TypedDomainApi, true);
+    ladder
+        .decide(request(
+            "read_current_page",
+            FallbackTier::DomRefLocator,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect("navigation resets progress");
+
+    // Same for an origin change.
+    ladder.observe_origin("https://a.example");
+    ladder.record_outcome("read_current_page", FallbackTier::TypedDomainApi, true);
+    ladder.observe_origin("https://b.example");
+    ladder
+        .decide(request(
+            "read_current_page",
+            FallbackTier::DomRefLocator,
+            ScreenshotCuaApproval::NotRequested,
+        ))
+        .expect("origin change resets progress");
+}
+
+#[test]
+fn fallback_ladder_browser_tiers_follow_single_table() {
+    // Previously these disagreed with the action-class table.
+    let nav = browser_tool_fallback_request("browser_wait_for_navigation", "{}", ToolSensitivity::ReadOnly);
+    assert_eq!(nav.requested_tier, FallbackTier::TypedDomainApi);
+    let query = browser_tool_fallback_request("page_query_selector", "{}", ToolSensitivity::ReadOnly);
+    assert_eq!(query.requested_tier, FallbackTier::DomRefLocator);
+    // Unknown tools are no longer treated as the least restrictive typed tier.
+    let unknown = browser_tool_fallback_request("mystery_tool", "{}", ToolSensitivity::Sensitive);
+    assert_eq!(unknown.requested_tier, FallbackTier::AccessibilitySnapshot);
+    // Substring "cua" in an unrelated name is not a CUA tool; exact names are.
+    let not_cua = browser_tool_fallback_request("evacuate_tab", "{}", ToolSensitivity::ReadOnly);
+    assert_ne!(not_cua.requested_tier, FallbackTier::ScreenshotCua);
+    let shot = browser_tool_fallback_request("browser_screenshot_full", "{}", ToolSensitivity::ReadOnly);
+    assert_eq!(shot.requested_tier, FallbackTier::ScreenshotCua);
 }
 
 #[test]
@@ -195,6 +257,7 @@ fn fallback_ladder_page_adapter_tier_precedes_dom_tier() {
         FallbackDecisionReason::TypedDomainUnavailable
     );
     assert_eq!(decision.safety_state, FallbackSafetyState::Downgraded);
+    ladder.record_outcome("browser_type", FallbackTier::ExactOriginPageAdapter, true);
 
     // Later downgrade to DOM tier is blocked
     let err = ladder

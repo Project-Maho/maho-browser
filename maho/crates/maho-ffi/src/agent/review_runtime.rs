@@ -9,6 +9,9 @@ struct ReviewRuntime {
     prompt: Mutex<String>,
     messages: Mutex<Vec<String>>,
     fail: bool,
+    entered: Option<std::sync::mpsc::Sender<()>>,
+    pending: bool,
+    cancel_pending: bool,
 }
 
 #[async_trait::async_trait]
@@ -23,11 +26,23 @@ impl AgentRuntime for ReviewRuntime {
         if let ChatContent::Text(text) = message.content {
             self.messages.lock().unwrap().push(text);
         }
+        if let Some(entered) = &self.entered {
+            entered.send(()).unwrap();
+        }
+        if self.pending {
+            std::future::pending::<()>().await;
+        }
         if let Some(cb) = on_token {
             cb("fixture-token");
         }
         if let Some(cb) = on_event {
             cb(AgentStreamEvent::Thinking("fixture-thinking".into()));
+            cb(AgentStreamEvent::ToolCall {
+                id: "tool-1".into(), name: "fixture".into(), args: "{}".into(),
+            });
+            cb(AgentStreamEvent::ToolResult {
+                id: "tool-1".into(), name: "fixture".into(), result: "{}".into(), succeeded: true,
+            });
         }
         if self.fail {
             return Err(AgentError::ExecutionError("fixture-error".into()));
@@ -38,6 +53,9 @@ impl AgentRuntime for ReviewRuntime {
     }
 
     async fn cancel(&self, _: &str) -> Result<(), AgentError> {
+        if self.cancel_pending {
+            std::future::pending::<()>().await;
+        }
         Ok(())
     }
     async fn list_tools(&self) -> Result<Vec<maho_agent::ToolDefinition>, AgentError> {

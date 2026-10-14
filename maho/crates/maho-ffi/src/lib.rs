@@ -10493,6 +10493,7 @@ pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
 // ============================================================
 
 /// Catches panics at FFI boundaries and returns a fallback value.
+/// Release builds use `panic = "abort"`: panics abort instead of reaching this fallback.
 /// Usage: `ffi_safe!({ <expr> }, <fallback>)`
 #[macro_export]
 macro_rules! ffi_safe {
@@ -11438,7 +11439,7 @@ use maho_agent::{AgentRuntime, MutexAgentStorage, SessionRuntime};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use crate::agent::callback_lease::UnifiedEventCallbackRegistration;
+use crate::agent::callback_lease::{dispatch_unified_event, UnifiedEventCallbackRegistration};
 use crate::agent::session::{
     load_runtime_config_from_store, persist_runtime_config_to_store, AgentRuntimeConfig,
 };
@@ -11505,10 +11506,10 @@ pub struct MahoAgentSession {
     // `maho_agent_set_artifact_created_callback` (ABI-stable setter, not a
     // create/send param). Read during turn setup to add the ArtifactCreated
     // event arm. `user_data` stored as usize (raw pointer is not Send).
-    artifact_created_cb: Option<
-        unsafe extern "C" fn(user_data: *mut std::ffi::c_void, artifact_json: *const c_char),
-    >,
-    artifact_created_user_data: usize,
+    artifact_registration: Mutex<(
+        Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+        usize,
+    )>,
     // Unified runtime-event plumbing (agent::events FFI seam). These MUST live
     // on this struct — the only `MahoAgentSession` the exported create/send
     // symbols construct — so every exported session-taking symbol locks the
@@ -11751,7 +11752,9 @@ impl FfiBrowserToolBridge {
         let user_data = self.user_data.0 as *mut std::ffi::c_void;
         // SAFETY: the callback and user data remain owned by the session/turn
         // lease, and both C strings remain live for the duration of this call.
-        let result = unsafe { callback(user_data, request.as_ptr(), args.as_ptr()) };
+        let result = tokio::task::block_in_place(|| unsafe {
+            callback(user_data, request.as_ptr(), args.as_ptr())
+        });
 
         let read_and_free = |pointer: *mut c_char| {
             if pointer.is_null() {
@@ -12005,7 +12008,7 @@ mod ffi_browser_tool_bridge_tests {
         })
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_discovery_requests_tools_list_and_decodes_two_descriptors() {
         let (bridge, context) = bridge_with_responses([Ok(serde_json::json!({
             "tools": [
@@ -12030,7 +12033,7 @@ mod ffi_browser_tool_bridge_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_discovery_fails_closed_on_malformed_or_missing_metadata() {
         for malformed in [
             serde_json::json!({"tools": [descriptor("browser.tabs.list", "browser_list_tabs"), {"name": "missing_metadata"}]}),
@@ -12046,7 +12049,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_execution_uses_canonical_capability_id_and_preserves_typed_receipt() {
         let (bridge, context) = bridge_with_responses([Ok(serde_json::json!({
             "outputJson": "{\"ok\":true}",
@@ -12074,7 +12077,7 @@ mod ffi_browser_tool_bridge_tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_execution_rejects_receipt_mismatch_and_malformed_typed_metadata() {
         for (response, expected_code) in [
             (
@@ -12108,7 +12111,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_execution_wraps_legacy_raw_result_with_safe_boundary_receipt() {
         let (bridge, _context) =
             bridge_with_responses([Ok(serde_json::json!({"tabs": [{"id": 7}]}))]);
@@ -12173,7 +12176,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_callback_preserves_typed_error_kind_and_frees_every_field() {
         for (callback, expected_code, expected_retryable) in [
             (
@@ -12219,7 +12222,7 @@ mod ffi_browser_tool_bridge_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn desktop_callback_error_and_empty_result_fail_closed() {
         let (error_bridge, _context) =
             bridge_with_responses([Err("desktop callback unavailable".to_string())]);
@@ -12394,7 +12397,9 @@ unsafe fn maho_agent_create_session_impl(
                         .parent()
                         .map(|p| p.to_path_buf())
                         .unwrap_or_else(|| {
-                            std::env::var("HOME").map(std::path::PathBuf::from).unwrap_or(cwd)
+                            std::env::var("HOME")
+                                .map(std::path::PathBuf::from)
+                                .unwrap_or(cwd)
                         })
                 } else {
                     cwd
@@ -12458,23 +12463,12 @@ unsafe fn maho_agent_create_session_impl(
                         + 'static,
                 > = Box::new(move |req| {
                     let _ = &callback_lease;
-                    let cb = cb_sendable.0;
-                    let user_data = user_data_ptr.0 as *mut std::ffi::c_void;
-                    let tool_name_c = match CString::new(req.tool_name) {
-                        Ok(s) => s,
-                        Err(_) => CString::new("unknown").unwrap(),
-                    };
-                    let arguments_c = match CString::new(req.arguments) {
-                        Ok(s) => s,
-                        Err(_) => CString::new("{}").unwrap(),
-                    };
-                    let decision =
-                        unsafe { cb(user_data, tool_name_c.as_ptr(), arguments_c.as_ptr()) };
-                    let p_decision = if decision == MahoAgentPermissionDecision::Allow {
-                        maho_agent::PermissionDecision::Allow
-                    } else {
-                        maho_agent::PermissionDecision::Deny
-                    };
+                    let p_decision = crate::agent::secure_storage::invoke_permission(
+                        cb_sendable.0,
+                        user_data_ptr.0,
+                        req.tool_name,
+                        req.arguments,
+                    );
                     Box::pin(async move { p_decision })
                 });
                 callback
@@ -12516,6 +12510,7 @@ unsafe fn maho_agent_create_session_impl(
                         }
                     };
                     let secure_key = unsafe { cb(user_data, provider_c.as_ptr()) };
+                    let _strings = crate::agent::secure_storage::SecureKeyStrings(secure_key);
                     if secure_key.ptr.is_null() {
                         return Err(maho_agent::CredentialError::ProviderNotConfigured.into());
                     }
@@ -12555,11 +12550,7 @@ unsafe fn maho_agent_create_session_impl(
                         let s = unsafe { CStr::from_ptr(secure_key.base_url) }
                             .to_string_lossy()
                             .into_owned();
-                        if let Some(free_fn) = secure_key.cstring_free_fn {
-                            unsafe {
-                                free_fn(secure_key.base_url);
-                            }
-                        }
+
                         Some(s)
                     } else {
                         None
@@ -12569,11 +12560,7 @@ unsafe fn maho_agent_create_session_impl(
                         let s = unsafe { CStr::from_ptr(secure_key.model) }
                             .to_string_lossy()
                             .into_owned();
-                        if let Some(free_fn) = secure_key.cstring_free_fn {
-                            unsafe {
-                                free_fn(secure_key.model);
-                            }
-                        }
+
                         Some(s)
                     } else {
                         None
@@ -12629,8 +12616,7 @@ unsafe fn maho_agent_create_session_impl(
                 core: core_ptr,
                 workspace_root: session_workspace_root,
                 active_space_id,
-                artifact_created_cb: None,
-                artifact_created_user_data: 0,
+                artifact_registration: Mutex::new((None, 0)),
                 unified_event_registration: Arc::new(Mutex::new(None)),
                 turn_controller: Arc::new(Mutex::new(
                     maho_agent::turn_control::SessionTurnController::new(&sid),
@@ -12772,13 +12758,28 @@ pub unsafe extern "C" fn maho_agent_session_free(session: *mut MahoAgentSession)
             if !session.is_null() {
                 let session_ref = &*session;
                 session_ref.accepted_leased_turns.signal_current();
+                {
+                    let mut controller = session_ref
+                        .turn_controller
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    controller.queue.clear();
+                    if let Some(turn) = &controller.active_turn {
+                        turn.cancel();
+                    }
+                }
                 // SAFETY: the core pointer is required to outlive every agent session.
                 unsafe { session_ref.core.as_ref() }
                     .mark_conversation_session_inactive(&session_ref.session_id);
                 let runtime = Arc::clone(&session_ref.runtime);
                 let session_id = session_ref.session_id.clone();
                 let isolation = Arc::clone(&session_ref.isolation);
-                let _ = isolation.block_on(async move { runtime.cancel(&session_id).await });
+                if let Err(error) = isolation.block_on_with_timeout(
+                    async move { runtime.cancel(&session_id).await },
+                    std::time::Duration::from_secs(2),
+                ) {
+                    tracing::warn!(%error, "Agent session cancellation failed or timed out");
+                }
                 drop(Box::from_raw(session));
             }
         },
@@ -12831,6 +12832,16 @@ unsafe fn maho_agent_send_message_impl(
                 Ok(s) => s.to_string(),
                 Err(_) => return false,
             };
+            let spawn_handle = match session
+                .isolation
+                .block_on(async { tokio::runtime::Handle::current() })
+            {
+                Ok(handle) => handle,
+                Err(error) => {
+                    tracing::warn!(%error, "Agent runtime unavailable");
+                    return false;
+                }
+            };
             let runtime = Arc::clone(&session.runtime);
             let session_id = session.session_id.clone();
             apply_agent_skill_system_prompt(session, runtime.as_ref());
@@ -12844,65 +12855,177 @@ unsafe fn maho_agent_send_message_impl(
             } else {
                 runtime.set_allowed_tools(None);
             }
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            let turn_controller = Arc::clone(&session.turn_controller);
+            if turn_controller
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .start_turn(turn_id.clone())
+                .is_err()
+            {
+                return false;
+            }
             let turn_callback_lease = callback_release_policy
                 .map(|policy| Arc::new(TurnCallbackLease::new(policy.callback, policy.user_data)));
             let session_callback_lease = clone_callback_lease(&session.callback_lease);
 
-            let on_token_cb = on_token.map(|cb| {
-                let cb_sendable = SendableCallback(cb);
+            let unified_reg = session
+                .unified_event_registration
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+
+            let event_seq_counter = Arc::clone(&session.event_seq_counter);
+            let default_run_id = session_id.clone();
+
+            let on_token_cb = if on_token.is_some() || unified_reg.is_some() {
+                let on_token_sendable = SendableCallback(on_token);
                 let user_data_val = SendableUserData(user_data as usize);
                 let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
                 let session_callback_lease = clone_callback_lease(&session_callback_lease);
+                let unified_reg = unified_reg.clone();
+                let runtime_clone = Arc::clone(&runtime);
+                let session_id_clone = session_id.clone();
+                let event_seq_counter = Arc::clone(&event_seq_counter);
+                let default_run_id = default_run_id.clone();
+
                 let callback: Box<dyn Fn(&str) + Send + Sync> = Box::new(move |token| {
                     let _ = (&turn_callback_lease, &session_callback_lease);
-                    let cb = cb_sendable.0;
-                    let udata = user_data_val.0 as *mut std::ffi::c_void;
-                    let token_c = match CString::new(token) {
-                        Ok(s) => s,
-                        Err(_) => return,
-                    };
-                    unsafe {
-                        cb(udata, token_c.as_ptr());
+                    if let Some(cb) = on_token_sendable.0 {
+                        let udata = user_data_val.0 as *mut std::ffi::c_void;
+                        if let Ok(token_c) = CString::new(token) {
+                            unsafe {
+                                cb(udata, token_c.as_ptr());
+                            }
+                        }
+                    }
+                    if unified_reg.is_some() {
+                        let run_id = runtime_clone
+                            .latest_run_id(&session_id_clone)
+                            .map(|r| r.0)
+                            .unwrap_or_else(|| default_run_id.clone());
+                        let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                        let payload = serde_json::json!({ "token": token }).to_string();
+                        dispatch_unified_event(
+                            &unified_reg,
+                            &turn_callback_lease,
+                            &session_callback_lease,
+                            &run_id,
+                            seq,
+                            MahoAgentEventKindV2::Token,
+                            &payload,
+                        );
                     }
                 });
-                callback
-            });
+                Some(callback)
+            } else {
+                None
+            };
 
+            let (artifact_cb, artifact_user_data) = *session
+                .artifact_registration
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let on_event_cb = if on_tool_call.is_some()
                 || on_tool_result.is_some()
                 || on_thinking.is_some()
-                || session.artifact_created_cb.is_some()
+                || artifact_cb.is_some()
+                || unified_reg.is_some()
             {
                 let on_tool_call_sendable = SendableCallback(on_tool_call);
                 let on_tool_result_sendable = SendableCallback(on_tool_result);
                 let on_thinking_sendable = SendableCallback(on_thinking);
-                let artifact_cb_sendable = SendableCallback(session.artifact_created_cb);
-                let artifact_udata = SendableUserData(session.artifact_created_user_data);
+                let artifact_cb_sendable = SendableCallback(artifact_cb);
+                let artifact_udata = SendableUserData(artifact_user_data);
                 let user_data_val = SendableUserData(user_data as usize);
                 let turn_callback_lease = clone_callback_lease(&turn_callback_lease);
                 let session_callback_lease = clone_callback_lease(&session_callback_lease);
+                let unified_reg = unified_reg.clone();
+                let runtime_clone = Arc::clone(&runtime);
+                let session_id_clone = session_id.clone();
+                let event_seq_counter = Arc::clone(&event_seq_counter);
+                let default_run_id = default_run_id.clone();
+
                 let callback = move |event: maho_agent::AgentStreamEvent| {
                     let _ = (&turn_callback_lease, &session_callback_lease);
                     let udata = user_data_val.0 as *mut std::ffi::c_void;
+                    let run_id = runtime_clone
+                        .latest_run_id(&session_id_clone)
+                        .map(|r| r.0)
+                        .unwrap_or_else(|| default_run_id.clone());
+
                     match event {
                         maho_agent::AgentStreamEvent::Thinking(thinking) => {
                             if let Some(cb) = on_thinking_sendable.0 {
-                                if let Ok(thinking_c) = CString::new(thinking) {
+                                if let Ok(thinking_c) = CString::new(thinking.as_str()) {
                                     unsafe {
                                         cb(udata, thinking_c.as_ptr());
                                     }
                                 }
                             }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload =
+                                    serde_json::json!({ "thinking": thinking }).to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Thinking,
+                                    &payload,
+                                );
+                            }
                         }
                         maho_agent::AgentStreamEvent::ToolCall { id, name, args } => {
                             if let Some(cb) = on_tool_call_sendable.0 {
-                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) =
-                                    (CString::new(id), CString::new(name), CString::new(args))
-                                {
+                                if let (Ok(id_c), Ok(name_c), Ok(args_c)) = (
+                                    CString::new(id.as_str()),
+                                    CString::new(name.as_str()),
+                                    CString::new(args.as_str()),
+                                ) {
                                     unsafe {
                                         cb(udata, id_c.as_ptr(), name_c.as_ptr(), args_c.as_ptr());
                                     }
                                 }
+                            }
+                            if unified_reg.is_some() {
+                                if name == "ask_user_question"
+                                    || name == "request_action_confirmation"
+                                {
+                                    let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                    let payload = serde_json::json!({
+                                        "request_id": id,
+                                        "kind": if name == "ask_user_question" { "question" } else { "confirmation" },
+                                        "args": args,
+                                    }).to_string();
+                                    dispatch_unified_event(
+                                        &unified_reg,
+                                        &turn_callback_lease,
+                                        &session_callback_lease,
+                                        &run_id,
+                                        seq,
+                                        MahoAgentEventKindV2::InteractionRequest,
+                                        &payload,
+                                    );
+                                }
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "id": id,
+                                    "name": name,
+                                    "args": args,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::ToolCall,
+                                    &payload,
+                                );
                             }
                         }
                         maho_agent::AgentStreamEvent::ToolResult {
@@ -12912,9 +13035,11 @@ unsafe fn maho_agent_send_message_impl(
                             succeeded,
                         } => {
                             if let Some(cb) = on_tool_result_sendable.0 {
-                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) =
-                                    (CString::new(id), CString::new(name), CString::new(result))
-                                {
+                                if let (Ok(id_c), Ok(name_c), Ok(result_c)) = (
+                                    CString::new(id.as_str()),
+                                    CString::new(name.as_str()),
+                                    CString::new(result.as_str()),
+                                ) {
                                     unsafe {
                                         cb(
                                             udata,
@@ -12925,6 +13050,25 @@ unsafe fn maho_agent_send_message_impl(
                                         );
                                     }
                                 }
+                            }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "id": id,
+                                    "name": name,
+                                    "result": result,
+                                    "succeeded": succeeded,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::ToolResult,
+                                    &payload,
+                                );
                             }
                         }
                         maho_agent::AgentStreamEvent::ArtifactCreated { artifact } => {
@@ -12938,8 +13082,44 @@ unsafe fn maho_agent_send_message_impl(
                                     }
                                 }
                             }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::to_string(&artifact).unwrap_or_default();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::ArtifactCreated,
+                                    &payload,
+                                );
+                            }
                         }
-                        _ => {}
+                        maho_agent::AgentStreamEvent::Status {
+                            elapsed_secs,
+                            message,
+                        } => {
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "elapsed_secs": elapsed_secs,
+                                    "message": message,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Status,
+                                    &payload,
+                                );
+                            }
+                        }
+                        maho_agent::AgentStreamEvent::ProofOrReason { .. } => {}
+                        maho_agent::AgentStreamEvent::Token(_) => {}
                     }
                 };
                 Some(Arc::new(callback)
@@ -12963,53 +13143,149 @@ unsafe fn maho_agent_send_message_impl(
                 session_id.clone(),
             );
 
+            let on_token_cb = on_token_cb.map(Arc::from);
+            let failure_controller = Arc::clone(&turn_controller);
+            let failure_turn_id = turn_id.clone();
             let fut = async move {
                 let _active_guard = active_guard;
-                let user_chat_msg = maho_types::chat::ChatMessage::user(
-                    maho_types::chat::ChatContent::text(msg_str),
-                );
-                let result = runtime
-                    .run_turn(&session_id, user_chat_msg, on_token_cb, on_event_cb)
-                    .await;
-                invoke_with_turn_callback_lease(turn_callback_lease, || match result {
-                    Ok(response) => {
-                        let text = match &response.content {
-                            maho_types::chat::ChatContent::Text(t) => t.clone(),
-                            _ => String::new(),
-                        };
-                        let Some(text_c) = cstring_or_fallback(&text, "") else {
-                            return;
-                        };
-                        let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
-                            return;
-                        };
-                        if let Some(cb) = on_complete.0 {
-                            cb(
-                                user_data_val.0 as *mut std::ffi::c_void,
-                                text_c.as_ptr(),
-                                empty_json.as_ptr(),
-                            );
+                let mut turn_id = turn_id;
+                let mut message = msg_str;
+                loop {
+                    let cancellation = {
+                        let controller = turn_controller.lock().unwrap_or_else(|e| e.into_inner());
+                        controller
+                            .active_turn
+                            .as_ref()
+                            .filter(|turn| turn.turn_id == turn_id)
+                            .map(|turn| {
+                                (turn.cancellation_token(), Arc::clone(&turn.cancel_notify))
+                            })
+                    };
+                    let token_callback =
+                        on_token_cb
+                            .as_ref()
+                            .map(|callback: &Arc<dyn Fn(&str) + Send + Sync>| {
+                                let callback = Arc::clone(callback);
+                                Box::new(move |token: &str| callback(token))
+                                    as Box<dyn Fn(&str) + Send + Sync>
+                            });
+                    let user_chat_msg = maho_types::chat::ChatMessage::user(
+                        maho_types::chat::ChatContent::text(message),
+                    );
+                    let result = if let Some((cancelled, notify)) = cancellation {
+                        tokio::select! {
+                            biased;
+                            _ = async {
+                                if !cancelled.load(std::sync::atomic::Ordering::SeqCst) { notify.notified().await; }
+                            } => Err(maho_agent::AgentError::ExecutionError("Turn cancelled".to_string())),
+                            result = runtime.run_turn(&session_id, user_chat_msg, token_callback, on_event_cb.clone()) => result,
                         }
-                    }
-                    Err(e) => {
-                        let error_text = agent_error_callback_text(&e);
-                        let Some(err_c) = cstring_or_fallback(&error_text, "unknown error") else {
-                            return;
-                        };
-                        if let Some(cb) = on_error.0 {
-                            cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                    } else {
+                        Err(maho_agent::AgentError::ExecutionError(
+                            "Turn replaced".to_string(),
+                        ))
+                    };
+                    let run_id = runtime
+                        .latest_run_id(&session_id)
+                        .map(|r| r.0)
+                        .unwrap_or_else(|| default_run_id.clone());
+
+                    invoke_with_turn_callback_lease(turn_callback_lease.clone(), || match result {
+                        Ok(response) => {
+                            let text = match &response.content {
+                                maho_types::chat::ChatContent::Text(t) => t.clone(),
+                                _ => String::new(),
+                            };
+                            let Some(text_c) = cstring_or_fallback(&text, "") else {
+                                return;
+                            };
+                            let Some(empty_json) = cstring_or_fallback("[]", "[]") else {
+                                return;
+                            };
+                            if let Some(cb) = on_complete.0 {
+                                cb(
+                                    user_data_val.0 as *mut std::ffi::c_void,
+                                    text_c.as_ptr(),
+                                    empty_json.as_ptr(),
+                                );
+                            }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "full_text": text,
+                                    "tool_calls": "[]",
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Completed,
+                                    &payload,
+                                );
+                            }
                         }
-                    }
-                });
-                drop(on_complete);
-                drop(on_error);
+                        Err(e) => {
+                            let error_text = agent_error_callback_text(&e);
+                            let Some(err_c) = cstring_or_fallback(&error_text, "unknown error")
+                            else {
+                                return;
+                            };
+                            if let Some(cb) = on_error.0 {
+                                cb(user_data_val.0 as *mut std::ffi::c_void, err_c.as_ptr());
+                            }
+                            if unified_reg.is_some() {
+                                let seq = event_seq_counter.fetch_add(1, Ordering::SeqCst);
+                                let payload = serde_json::json!({
+                                    "error": error_text,
+                                })
+                                .to_string();
+                                dispatch_unified_event(
+                                    &unified_reg,
+                                    &turn_callback_lease,
+                                    &session_callback_lease,
+                                    &run_id,
+                                    seq,
+                                    MahoAgentEventKindV2::Error,
+                                    &payload,
+                                );
+                            }
+                        }
+                    });
+                    let next = {
+                        let mut controller =
+                            turn_controller.lock().unwrap_or_else(|e| e.into_inner());
+                        let next = controller.complete_turn(&turn_id);
+                        if let Some(next) = &next {
+                            if let Err(error) = controller.start_turn(next.id.clone()) {
+                                tracing::error!(%error, "Queued turn admission failed");
+                                break;
+                            }
+                        }
+                        next
+                    };
+                    let Some(next) = next else {
+                        break;
+                    };
+                    turn_id = next.id;
+                    message = next.message;
+                }
             };
 
-            let isolation = Arc::clone(&session.isolation);
-            let _handle = isolation.block_on(async move {
-                tokio::spawn(fut);
-            });
-            true
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| spawn_handle.spawn(fut)))
+            {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::warn!("Agent turn spawn failed: {:?}", error);
+                    failure_controller
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .complete_turn(&failure_turn_id);
+                    false
+                }
+            }
         },
         false
     )
@@ -13282,12 +13558,32 @@ pub unsafe extern "C" fn maho_agent_cancel(session: *mut MahoAgentSession) -> bo
             }
             let session = &*session;
             let accepted_leased_turn = session.accepted_leased_turns.signal_current();
+            let cancellation = {
+                let controller = session
+                    .turn_controller
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                controller
+                    .active_turn
+                    .as_ref()
+                    .map(|turn| (turn.cancellation_token(), Arc::clone(&turn.cancel_notify)))
+            };
             let runtime = Arc::clone(&session.runtime);
             let session_id = session.session_id.clone();
 
             let isolation = Arc::clone(&session.isolation);
-            let res = isolation.block_on(async move { runtime.cancel(&session_id).await });
-            accepted_leased_turn || res.is_ok()
+            let res = isolation.block_on_with_timeout(
+                async move { runtime.cancel(&session_id).await },
+                std::time::Duration::from_secs(2),
+            );
+            if let Err(error) = &res {
+                tracing::warn!(%error, "Agent cancellation failed or timed out");
+            }
+            if let Some((cancelled, notify)) = cancellation {
+                cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+                notify.notify_one();
+            }
+            accepted_leased_turn || matches!(res, Ok(Ok(())))
         },
         false
     )
@@ -13421,9 +13717,11 @@ pub unsafe extern "C" fn maho_agent_set_artifact_created_callback(
             if session.is_null() {
                 return;
             }
-            let session = &mut *session;
-            session.artifact_created_cb = cb;
-            session.artifact_created_user_data = user_data as usize;
+            let session = &*session;
+            *session
+                .artifact_registration
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = (cb, user_data as usize);
         },
         ()
     )

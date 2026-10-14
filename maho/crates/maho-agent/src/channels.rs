@@ -7,7 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+/// Maximum number of recent event cursors remembered per channel for deduplication.
+const MAX_SEEN_CURSORS: usize = 4096;
 
 use crate::direct_api::{
     DirectApiExecutionContext, DirectApiOperation, DirectApiOutcome, DirectApiServiceKind,
@@ -236,8 +239,24 @@ pub struct ChannelEntry {
     pub config: ChannelConfig,
     pub last_cursor: Option<String>,
     pub last_poll_timestamp: Option<u64>,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub seen_cursors: HashSet<String>,
+    /// Insertion order of `seen_cursors`, used to evict the oldest beyond the bound.
+    #[serde(default)]
+    seen_order: VecDeque<String>,
+}
+
+impl ChannelEntry {
+    fn remember_cursor(&mut self, cursor: &str) {
+        if self.seen_cursors.insert(cursor.to_string()) {
+            self.seen_order.push_back(cursor.to_string());
+        }
+        while self.seen_order.len() > MAX_SEEN_CURSORS {
+            if let Some(old) = self.seen_order.pop_front() {
+                self.seen_cursors.remove(&old);
+            }
+        }
+    }
 }
 
 /// Registry managing active channel registrations and their cursor deduplication state.
@@ -388,6 +407,7 @@ impl ChannelRegistry {
                     last_cursor: None,
                     last_poll_timestamp: None,
                     seen_cursors: HashSet::new(),
+                    seen_order: VecDeque::new(),
                 },
             );
         }
@@ -461,24 +481,27 @@ impl ChannelRegistry {
             };
         }
 
-        // Deduplication check: seen set or <= last_cursor
-        if entry.seen_cursors.contains(&event.cursor) {
+        // Deduplication: the cursor already consumed in this process, or exactly the last
+        // persisted cursor (the seen set is not persisted, so after a restart only the
+        // last cursor is known). An older-but-unseen cursor is an out-of-order delivery,
+        // not a duplicate, and must still trigger.
+        if entry.seen_cursors.contains(&event.cursor)
+            || entry.last_cursor.as_deref() == Some(event.cursor.as_str())
+        {
             return InboundProcessOutcome::DuplicateCursor {
                 cursor: event.cursor,
             };
         }
 
-        if let Some(ref last) = entry.last_cursor {
-            if compare_cursor_positions(&event.cursor, last) != Ordering::Greater {
-                return InboundProcessOutcome::DuplicateCursor {
-                    cursor: event.cursor,
-                };
-            }
+        // Update cursor tracking; last_cursor only ever advances.
+        entry.remember_cursor(&event.cursor);
+        let advances = entry
+            .last_cursor
+            .as_deref()
+            .map_or(true, |last| compare_cursor_positions(&event.cursor, last) == Ordering::Greater);
+        if advances {
+            entry.last_cursor = Some(event.cursor.clone());
         }
-
-        // Update cursor tracking
-        entry.seen_cursors.insert(event.cursor.clone());
-        entry.last_cursor = Some(event.cursor.clone());
         entry.last_poll_timestamp = Some(event.timestamp);
 
         InboundProcessOutcome::Triggered(AgentSessionTrigger {
@@ -685,6 +708,83 @@ mod tests {
             }
             other => panic!("Expected DuplicateCursor, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn out_of_order_unseen_cursor_is_delivered_and_last_cursor_is_max() {
+        let mut registry = ChannelRegistry::new();
+        let id = ChannelId::new("slack-ooo");
+        registry.register_channel(ChannelConfig {
+            id: id.clone(),
+            provider: ChannelProvider::Slack,
+            name: "ooo".to_string(),
+            enabled: true,
+            token: None,
+            account_id: None,
+            opaque_auth_handle: Some("h".to_string()),
+        });
+        let evt = |n: u64| ChannelEvent {
+            id: format!("evt-{n}"),
+            channel_id: id.clone(),
+            provider: ChannelProvider::Slack,
+            kind: ChannelEventKind::MessageReceived,
+            sender_id: "u".to_string(),
+            sender_name: None,
+            text: format!("m{n}"),
+            cursor: format!("C{n}"),
+            timestamp: 1700000000 + n,
+        };
+
+        assert!(matches!(
+            registry.process_inbound_event(evt(5)),
+            InboundProcessOutcome::Triggered(_)
+        ));
+        // C3 arrives late: older than last_cursor but never seen -> must be delivered.
+        assert!(matches!(
+            registry.process_inbound_event(evt(3)),
+            InboundProcessOutcome::Triggered(_)
+        ));
+        assert_eq!(registry.last_cursor(&id), Some("C5"));
+        // Replays of both are duplicates, including after a persistence round trip.
+        let json = serde_json::to_string(&registry).unwrap();
+        let mut reloaded: ChannelRegistry = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            reloaded.process_inbound_event(evt(3)),
+            InboundProcessOutcome::DuplicateCursor { .. }
+        ));
+        assert!(matches!(
+            reloaded.process_inbound_event(evt(5)),
+            InboundProcessOutcome::DuplicateCursor { .. }
+        ));
+    }
+
+    #[test]
+    fn seen_cursor_set_is_bounded() {
+        let mut registry = ChannelRegistry::new();
+        let id = ChannelId::new("slack-bound");
+        registry.register_channel(ChannelConfig {
+            id: id.clone(),
+            provider: ChannelProvider::Slack,
+            name: "bound".to_string(),
+            enabled: true,
+            token: None,
+            account_id: None,
+            opaque_auth_handle: Some("h".to_string()),
+        });
+        for n in 1..=(MAX_SEEN_CURSORS as u64 + 10) {
+            registry.process_inbound_event(ChannelEvent {
+                id: format!("evt-{n}"),
+                channel_id: id.clone(),
+                provider: ChannelProvider::Slack,
+                kind: ChannelEventKind::MessageReceived,
+                sender_id: "u".to_string(),
+                sender_name: None,
+                text: String::new(),
+                cursor: n.to_string(),
+                timestamp: 1700000000 + n,
+            });
+        }
+        assert_eq!(registry.channels[&id].seen_cursors.len(), MAX_SEEN_CURSORS);
     }
 
     #[test]

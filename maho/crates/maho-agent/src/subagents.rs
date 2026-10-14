@@ -17,6 +17,9 @@ use std::sync::Arc;
 /// Maximum active concurrently executing subagents per supervisor tree.
 pub const MAX_ACTIVE_SUBAGENTS: usize = 5;
 
+/// Maximum number of subagents that may wait in the spawn queue.
+pub const MAX_QUEUED_SUBAGENTS: usize = 64;
+
 /// Maximum allowable budget turns for any single subagent execution.
 pub const MAX_SUBAGENT_BUDGET_TURNS: u8 = 5;
 
@@ -121,6 +124,8 @@ pub enum SubagentError {
     Cancelled,
     #[error("Maximum active subagents limit reached ({0})")]
     ConcurrencyLimitReached(usize),
+    #[error("Subagent id '{0}' is already in use")]
+    DuplicateSubagentId(String),
     #[error("Journal error: {0}")]
     JournalError(String),
     #[error("Subagent execution failed: {0}")]
@@ -362,9 +367,70 @@ impl SubagentSupervisor {
         self.queued_specs.len()
     }
 
+    /// Returns true if `subagent_id` is active, queued, or already has a recorded result.
+    fn id_in_use(&self, subagent_id: &str) -> bool {
+        self.active_runs.contains_key(subagent_id)
+            || self.completed_results.contains_key(subagent_id)
+            || self
+                .queued_specs
+                .iter()
+                .any(|(queued_id, _, _)| queued_id == subagent_id)
+    }
+
+    /// Stores a terminal result and its completion order (exactly once per id).
+    fn record_result(&mut self, result: SubagentResult) {
+        let id = result.subagent_id.clone();
+        self.completed_results.insert(id.clone(), result);
+        if !self.completion_order.iter().any(|existing| existing == &id) {
+            self.completion_order.push(id);
+        }
+    }
+
+    /// Moves an active child to a terminal state: releases its tool slots, records the
+    /// terminal journal marker (logging, never dropping, a journal failure), stores the
+    /// typed result, and starts any queued subagent that now fits.
+    fn finalize_child(
+        &mut self,
+        subagent_id: &str,
+        status: SubagentStatus,
+        kind: RunCheckpointKind,
+        payload: serde_json::Value,
+        summary: String,
+    ) -> Option<SubagentResult> {
+        self.tool_registry.release_all_for_subagent(subagent_id);
+        let mut child = self.active_runs.remove(subagent_id)?;
+        child.status = status;
+        let run_id = AgentRunId::new(subagent_id);
+        // DEFERRED: the child journal is dropped with the child; persisting it needs a
+        // parent-side archive API. Until then a failure to record is at least visible.
+        if let Err(err) = child.journal.record_terminal(&run_id, kind, Some(payload)) {
+            tracing::warn!(subagent_id, error = %err, "failed to record subagent terminal marker");
+        }
+        let result = SubagentResult {
+            subagent_id: child.subagent_id,
+            parent_session_id: child.parent_session_id,
+            status,
+            summary,
+            artifacts: child.artifacts,
+            turns_used: child.turns_used,
+        };
+        self.record_result(result.clone());
+        self.pump_queue();
+        Some(result)
+    }
+
+    /// Shared cancel flag of an active subagent, so whoever drives the child can observe
+    /// parent cancellation between turns.
+    pub fn cancel_flag(&self, subagent_id: &str) -> Option<Arc<AtomicBool>> {
+        self.active_runs
+            .get(subagent_id)
+            .map(|child| Arc::clone(&child.cancel_flag))
+    }
+
     /// Spawns a subagent after validating permission subset boundaries.
     ///
-    /// If concurrency capacity is full, the subagent spec is queued.
+    /// If concurrency capacity is full, the subagent spec is queued (up to
+    /// [`MAX_QUEUED_SUBAGENTS`]). Ids already active, queued, or completed are rejected.
     pub fn spawn_subagent(
         &mut self,
         subagent_id: impl Into<String>,
@@ -377,14 +443,23 @@ impl SubagentSupervisor {
         // 1. Invariant: Child tools must be a strict subset of parent permissions
         spec.validate_permissions()?;
 
-        // 2. Concurrency limit check
+        // 2. Ids are unique for the supervisor's lifetime: reusing one would overwrite a
+        // running child or its recorded result.
+        if self.id_in_use(&subagent_id) {
+            return Err(SubagentError::DuplicateSubagentId(subagent_id));
+        }
+
+        // 3. Concurrency limit check
         if self.active_runs.len() >= self.max_active {
+            if self.queued_specs.len() >= MAX_QUEUED_SUBAGENTS {
+                return Err(SubagentError::ConcurrencyLimitReached(MAX_QUEUED_SUBAGENTS));
+            }
             self.queued_specs
                 .push_back((subagent_id.clone(), parent_session_id.clone(), spec));
             return Ok(SubagentStatus::Queued);
         }
 
-        // 3. Initialize dedicated isolated RunJournal for child
+        // 4. Initialize dedicated isolated RunJournal for child
         let mut journal = RunJournal::new();
         let run_id = AgentRunId::new(&subagent_id);
         journal.start_run(run_id.clone(), format!("subagent-{}", &subagent_id))?;
@@ -417,7 +492,8 @@ impl SubagentSupervisor {
 
     /// Records a step in the child's execution.
     ///
-    /// If the tool requested is not in `allowed_tools`, the step fails closed.
+    /// If the tool requested is not in `allowed_tools`, the step fails closed; the rejected
+    /// attempt still consumes a turn so a looping child cannot retry for free.
     /// If turns exceed `budget_turns`, the run fails closed with `BudgetExhausted`.
     pub fn execute_turn(
         &mut self,
@@ -431,49 +507,68 @@ impl SubagentSupervisor {
             .active_runs
             .get_mut(subagent_id)
             .ok_or_else(|| SubagentError::SubagentNotFound(subagent_id.to_string()))?;
+        let effective_budget = child.spec.effective_budget();
 
         // 1. Check parent cancellation propagation
         if child.cancel_flag.load(Ordering::SeqCst) || child.status == SubagentStatus::Cancelled {
-            child.status = SubagentStatus::Cancelled;
-            self.tool_registry.release_all_for_subagent(subagent_id);
-            let run_id = AgentRunId::new(subagent_id);
-            let _ = child.journal.record_terminal(
-                &run_id,
+            return Ok(self.finalize_child(
+                subagent_id,
+                SubagentStatus::Cancelled,
                 RunCheckpointKind::Cancelled,
-                Some(serde_json::json!({"reason": "cancelled_by_parent"})),
-            );
-            let result = SubagentResult {
-                subagent_id: child.subagent_id.clone(),
-                parent_session_id: child.parent_session_id.clone(),
-                status: SubagentStatus::Cancelled,
-                summary: summary
+                serde_json::json!({"reason": "cancelled_by_parent"}),
+                summary
                     .unwrap_or("Subagent cancelled by parent session")
                     .to_string(),
-                artifacts: child.artifacts.clone(),
-                turns_used: child.turns_used,
-            };
-            self.completed_results
-                .insert(subagent_id.to_string(), result.clone());
-            if !self.completion_order.iter().any(|id| id == subagent_id) {
-                self.completion_order.push(subagent_id.to_string());
-            }
-            self.active_runs.remove(subagent_id);
-            self.pump_queue();
-            return Ok(Some(result));
+            ));
         }
 
-        // 2. Validate tool permissions and acquire in-flight tool slot
+        // 2. Validate tool permissions and acquire in-flight tool slot. A rejected attempt
+        // is counted against the budget before the error is returned.
         if let Some(tool) = tool_call {
-            if !child.spec.allowed_tools.iter().any(|t| t == tool) {
-                return Err(SubagentError::PermissionViolation(tool.to_string()));
+            let rejection = if !child.spec.allowed_tools.iter().any(|t| t == tool) {
+                Some(SubagentError::PermissionViolation(tool.to_string()))
+            } else {
+                self.tool_registry.acquire_slot(subagent_id, tool).err()
+            };
+            if let Some(err) = rejection {
+                child.turns_used = child.turns_used.saturating_add(1);
+                let run_id = AgentRunId::new(subagent_id);
+                if let Err(journal_err) = child.journal.append_event(
+                    &run_id,
+                    "turn_rejected",
+                    serde_json::json!({
+                        "turn": child.turns_used,
+                        "tool_call": tool,
+                        "error": err.to_string(),
+                    })
+                    .to_string(),
+                ) {
+                    tracing::warn!(subagent_id, error = %journal_err, "failed to journal rejected turn");
+                }
+                if child.turns_used >= effective_budget {
+                    let turns_used = child.turns_used;
+                    self.finalize_child(
+                        subagent_id,
+                        SubagentStatus::BudgetExhausted,
+                        RunCheckpointKind::Failed,
+                        serde_json::json!({
+                            "reason": "budget_exhausted",
+                            "turns_used": turns_used,
+                            "budget": effective_budget,
+                        }),
+                        format!(
+                            "Subagent budget exhausted: reached maximum limit of {effective_budget} turns without finishing"
+                        ),
+                    );
+                }
+                return Err(err);
             }
-            self.tool_registry.acquire_slot(subagent_id, tool)?;
         }
 
         // 3. Increment turn count and append to child's isolated journal
         child.turns_used += 1;
         let run_id = AgentRunId::new(subagent_id);
-        let _ = child.journal.append_event(
+        if let Err(err) = child.journal.append_event(
             &run_id,
             "turn_progress",
             serde_json::json!({
@@ -482,7 +577,9 @@ impl SubagentSupervisor {
                 "tool_result": tool_result,
             })
             .to_string(),
-        );
+        ) {
+            tracing::warn!(subagent_id, error = %err, "failed to journal subagent turn");
+        }
 
         // If tool executed (result received) or completed, release the tool slot
         if let Some(tool) = tool_call {
@@ -491,69 +588,36 @@ impl SubagentSupervisor {
             }
         }
 
-        let effective_budget = child.spec.effective_budget();
-
         // 4. Completed path
         if is_completed {
-            child.status = SubagentStatus::Completed;
-            self.tool_registry.release_all_for_subagent(subagent_id);
-            let _ = child.journal.record_terminal(
-                &run_id,
+            return Ok(self.finalize_child(
+                subagent_id,
+                SubagentStatus::Completed,
                 RunCheckpointKind::Completed,
-                Some(serde_json::json!({ "summary": summary })),
-            );
-            let result = SubagentResult {
-                subagent_id: child.subagent_id.clone(),
-                parent_session_id: child.parent_session_id.clone(),
-                status: SubagentStatus::Completed,
-                summary: summary
+                serde_json::json!({ "summary": summary }),
+                summary
                     .unwrap_or("Subagent execution completed successfully")
                     .to_string(),
-                artifacts: child.artifacts.clone(),
-                turns_used: child.turns_used,
-            };
-            self.completed_results
-                .insert(subagent_id.to_string(), result.clone());
-            if !self.completion_order.iter().any(|id| id == subagent_id) {
-                self.completion_order.push(subagent_id.to_string());
-            }
-            self.active_runs.remove(subagent_id);
-            self.pump_queue();
-            return Ok(Some(result));
+            ));
         }
 
         // 5. Budget exhaustion check (fail-closed, no hang)
         if child.turns_used >= effective_budget {
-            child.status = SubagentStatus::BudgetExhausted;
-            self.tool_registry.release_all_for_subagent(subagent_id);
-            let _ = child.journal.record_terminal(
-                &run_id,
+            let turns_used = child.turns_used;
+            return Ok(self.finalize_child(
+                subagent_id,
+                SubagentStatus::BudgetExhausted,
                 RunCheckpointKind::Failed,
-                Some(serde_json::json!({
+                serde_json::json!({
                     "reason": "budget_exhausted",
-                    "turns_used": child.turns_used,
+                    "turns_used": turns_used,
                     "budget": effective_budget,
-                })),
-            );
-            let result = SubagentResult {
-                subagent_id: child.subagent_id.clone(),
-                parent_session_id: child.parent_session_id.clone(),
-                status: SubagentStatus::BudgetExhausted,
-                summary: format!(
+                }),
+                format!(
                     "Subagent budget exhausted: reached maximum limit of {} turns without finishing",
                     effective_budget
                 ),
-                artifacts: child.artifacts.clone(),
-                turns_used: child.turns_used,
-            };
-            self.completed_results
-                .insert(subagent_id.to_string(), result.clone());
-            if !self.completion_order.iter().any(|id| id == subagent_id) {
-                self.completion_order.push(subagent_id.to_string());
-            }
-            self.active_runs.remove(subagent_id);
-            self.pump_queue();
-            return Ok(Some(result));
+            ));
         }
 
         Ok(None)
@@ -566,40 +630,47 @@ impl SubagentSupervisor {
         }
     }
 
-    /// Cancels a subagent immediately.
+    /// Cancels an active or queued subagent immediately and records a `Cancelled` result.
+    ///
+    /// The shared cancel flag (see [`Self::cancel_flag`]) is set first so any holder of it
+    /// observes the cancellation.
     pub fn cancel_subagent(&mut self, subagent_id: &str) -> Option<SubagentResult> {
-        self.tool_registry.release_all_for_subagent(subagent_id);
-        if let Some(mut child) = self.active_runs.remove(subagent_id) {
+        if let Some(child) = self.active_runs.get(subagent_id) {
             child.cancel_flag.store(true, Ordering::SeqCst);
-            child.status = SubagentStatus::Cancelled;
-            let run_id = AgentRunId::new(subagent_id);
-            let _ = child.journal.record_terminal(
-                &run_id,
+            return self.finalize_child(
+                subagent_id,
+                SubagentStatus::Cancelled,
                 RunCheckpointKind::Cancelled,
-                Some(serde_json::json!({"reason": "explicit_cancel"})),
+                serde_json::json!({"reason": "explicit_cancel"}),
+                "Subagent cancelled by parent".to_string(),
             );
-            let result = SubagentResult {
-                subagent_id: child.subagent_id.clone(),
-                parent_session_id: child.parent_session_id.clone(),
-                status: SubagentStatus::Cancelled,
-                summary: "Subagent cancelled by parent".to_string(),
-                artifacts: child.artifacts,
-                turns_used: child.turns_used,
-            };
-            self.completed_results
-                .insert(subagent_id.to_string(), result.clone());
-            if !self.completion_order.iter().any(|id| id == subagent_id) {
-                self.completion_order.push(subagent_id.to_string());
-            }
-            self.pump_queue();
-            Some(result)
-        } else {
-            None
         }
+        let pos = self
+            .queued_specs
+            .iter()
+            .position(|(queued_id, _, _)| queued_id == subagent_id)?;
+        let (sub_id, parent_id, _spec) = self.queued_specs.remove(pos)?;
+        let result = SubagentResult {
+            subagent_id: sub_id,
+            parent_session_id: parent_id,
+            status: SubagentStatus::Cancelled,
+            summary: "Subagent cancelled while queued".to_string(),
+            artifacts: Vec::new(),
+            turns_used: 0,
+        };
+        self.record_result(result.clone());
+        Some(result)
     }
 
     /// Propagates cancellation to all active and queued subagents.
     pub fn cancel_all(&mut self) -> Vec<SubagentResult> {
+        // Drain the queue first so cancelling an active child cannot pump a queued one in.
+        let mut queued_results = Vec::new();
+        while let Some((sub_id, _parent_id, _spec)) = self.queued_specs.front().cloned() {
+            if let Some(res) = self.cancel_subagent(&sub_id) {
+                queued_results.push(res);
+            }
+        }
         let active_ids: Vec<String> = self.active_runs.keys().cloned().collect();
         let mut results = Vec::new();
         for id in active_ids {
@@ -607,21 +678,7 @@ impl SubagentSupervisor {
                 results.push(res);
             }
         }
-        while let Some((sub_id, parent_id, _spec)) = self.queued_specs.pop_front() {
-            let res = SubagentResult {
-                subagent_id: sub_id.clone(),
-                parent_session_id: parent_id,
-                status: SubagentStatus::Cancelled,
-                summary: "Subagent cancelled while queued".to_string(),
-                artifacts: Vec::new(),
-                turns_used: 0,
-            };
-            self.completed_results.insert(sub_id.clone(), res.clone());
-            if !self.completion_order.iter().any(|id| id == &sub_id) {
-                self.completion_order.push(sub_id.clone());
-            }
-            results.push(res);
-        }
+        results.extend(queued_results);
         results
     }
 
@@ -664,23 +721,13 @@ impl SubagentSupervisor {
     ) -> Result<Vec<SubagentResult>, SubagentError> {
         // 1. Verify existence of all requested subagents
         for id in subagent_ids {
-            if !self.active_runs.contains_key(id)
-                && !self.queued_specs.iter().any(|(q_id, _, _)| q_id == id)
-                && !self.completed_results.contains_key(id)
-                && !self
-                    .completion_checkpoints
-                    .iter()
-                    .any(|(_, c_id, _)| c_id == id)
-            {
+            if !self.id_in_use(id) {
                 return Err(SubagentError::SubagentNotFound(id.clone()));
             }
         }
 
         let effective_timeout = timeout_ms.unwrap_or(30_000).min(300_000);
-        let start_time = self.clock.now_millis();
-        let deadline = start_time.saturating_add(effective_timeout);
 
-        // Clock-based poll loop iterating through scheduled completion checkpoints
         loop {
             let all_done = subagent_ids
                 .iter()
@@ -705,33 +752,22 @@ impl SubagentSupervisor {
                 return Ok(results);
             }
 
-            // Find next eligible scheduled completion checkpoint <= deadline
-            if let Some(idx) = self
-                .completion_checkpoints
-                .iter()
-                .position(|(ts, _, _)| *ts <= deadline)
-            {
+            // Apply the next scheduled completion that is due now for a requested, running
+            // subagent. Checkpoints for other ids are left untouched, and queued ids never
+            // get a fabricated result: their checkpoint waits until they actually run.
+            let now = self.clock.now_millis();
+            let due = self.completion_checkpoints.iter().position(|(ts, id, _)| {
+                *ts <= now
+                    && subagent_ids.iter().any(|requested| requested == id)
+                    && self.active_runs.contains_key(id)
+            });
+            if let Some(idx) = due {
                 let (_, sub_id, summary) = self.completion_checkpoints.remove(idx);
-                if self.active_runs.contains_key(&sub_id) {
-                    let _ = self.execute_turn(&sub_id, None, None, true, summary.as_deref());
-                } else if !self.completed_results.contains_key(&sub_id) {
-                    let res = SubagentResult {
-                        subagent_id: sub_id.clone(),
-                        parent_session_id: "session".to_string(),
-                        status: SubagentStatus::Completed,
-                        summary: summary.unwrap_or_else(|| "Subagent completed".to_string()),
-                        artifacts: Vec::new(),
-                        turns_used: 1,
-                    };
-                    self.completed_results.insert(sub_id.clone(), res);
-                    if !self.completion_order.iter().any(|id| id == &sub_id) {
-                        self.completion_order.push(sub_id);
-                    }
-                }
+                self.execute_turn(&sub_id, None, None, true, summary.as_deref())?;
                 continue;
             }
 
-            // No eligible checkpoints before deadline -> timeout fail-closed
+            // Nothing is due -> timeout fail-closed
             return Err(SubagentError::WaitTimeout(effective_timeout));
         }
     }
@@ -752,10 +788,19 @@ impl SubagentSupervisor {
 
     fn pump_queue(&mut self) {
         while self.active_runs.len() < self.max_active {
-            if let Some((sub_id, parent_id, spec)) = self.queued_specs.pop_front() {
-                let _ = self.spawn_subagent(sub_id, parent_id, spec);
-            } else {
+            let Some((sub_id, parent_id, spec)) = self.queued_specs.pop_front() else {
                 break;
+            };
+            if let Err(err) = self.spawn_subagent(sub_id.clone(), parent_id.clone(), spec) {
+                // A queued spawn that cannot start must surface as a failed result, not vanish.
+                self.record_result(SubagentResult {
+                    subagent_id: sub_id,
+                    parent_session_id: parent_id,
+                    status: SubagentStatus::Failed,
+                    summary: format!("Queued subagent failed to start: {err}"),
+                    artifacts: Vec::new(),
+                    turns_used: 0,
+                });
             }
         }
     }
@@ -1292,8 +1337,16 @@ mod tests {
             .spawn_subagent("sub-sched", "session-parent", spec)
             .unwrap();
 
-        // Schedule completion at timestamp 1500 (within 2000ms deadline from start 1000)
+        // Schedule completion at timestamp 1500; it only fires once the clock reaches it.
         supervisor.schedule_completion(1500, "sub-sched", "Scheduled subagent completed");
+        assert_eq!(
+            supervisor
+                .wait_subagents(&["sub-sched".to_string()], Some(2000))
+                .unwrap_err(),
+            SubagentError::WaitTimeout(2000),
+            "a checkpoint in the future must not be consumed early"
+        );
+        clock.set(1500);
 
         let results = supervisor
             .wait_subagents(&["sub-sched".to_string()], Some(2000))
@@ -1318,5 +1371,123 @@ mod tests {
             .wait_subagents(&["sub-late".to_string()], Some(500))
             .unwrap_err();
         assert_eq!(timeout_err, SubagentError::WaitTimeout(500));
+    }
+
+    fn worker_spec() -> SubagentSpec {
+        SubagentSpec::new(
+            "Worker",
+            3,
+            vec!["web_search".into()],
+            vec!["web_search".into()],
+        )
+    }
+
+    #[test]
+    fn duplicate_ids_are_rejected_in_every_state() {
+        let mut supervisor = SubagentSupervisor::with_max_active(1);
+        supervisor.spawn_subagent("dup-run", "p", worker_spec()).unwrap();
+        supervisor.spawn_subagent("dup-queued", "p", worker_spec()).unwrap();
+        assert_eq!(
+            supervisor.spawn_subagent("dup-run", "p", worker_spec()),
+            Err(SubagentError::DuplicateSubagentId("dup-run".into()))
+        );
+        assert_eq!(
+            supervisor.spawn_subagent("dup-queued", "p", worker_spec()),
+            Err(SubagentError::DuplicateSubagentId("dup-queued".into()))
+        );
+        supervisor
+            .execute_turn("dup-run", None, None, true, Some("done"))
+            .unwrap();
+        assert_eq!(
+            supervisor.spawn_subagent("dup-run", "p", worker_spec()),
+            Err(SubagentError::DuplicateSubagentId("dup-run".into()))
+        );
+        assert_eq!(supervisor.get_result("dup-run").unwrap().summary, "done");
+    }
+
+    #[test]
+    fn queue_is_bounded() {
+        let mut supervisor = SubagentSupervisor::with_max_active(1);
+        supervisor.spawn_subagent("q-active", "p", worker_spec()).unwrap();
+        for i in 0..MAX_QUEUED_SUBAGENTS {
+            assert_eq!(
+                supervisor
+                    .spawn_subagent(format!("q-{i}"), "p", worker_spec())
+                    .unwrap(),
+                SubagentStatus::Queued
+            );
+        }
+        assert_eq!(
+            supervisor.spawn_subagent("q-overflow", "p", worker_spec()),
+            Err(SubagentError::ConcurrencyLimitReached(MAX_QUEUED_SUBAGENTS))
+        );
+    }
+
+    #[test]
+    fn cancel_sets_flag_and_records_cancelled_result() {
+        let mut supervisor = SubagentSupervisor::with_max_active(1);
+        supervisor.spawn_subagent("c-run", "p", worker_spec()).unwrap();
+        supervisor.spawn_subagent("c-queued", "p", worker_spec()).unwrap();
+        let flag = supervisor.cancel_flag("c-run").unwrap();
+        assert!(!flag.load(Ordering::SeqCst));
+
+        let result = supervisor.cancel_subagent("c-run").unwrap();
+        assert!(flag.load(Ordering::SeqCst), "holders of the flag must see the cancel");
+        assert_eq!(result.status, SubagentStatus::Cancelled);
+        assert_eq!(
+            supervisor.get_result("c-run").unwrap().status,
+            SubagentStatus::Cancelled
+        );
+        // The queued child was pumped in; cancelling it while still queued also records.
+        let mut other = SubagentSupervisor::with_max_active(1);
+        other.spawn_subagent("a", "p", worker_spec()).unwrap();
+        other.spawn_subagent("b", "p", worker_spec()).unwrap();
+        let queued = other.cancel_subagent("b").unwrap();
+        assert_eq!(queued.status, SubagentStatus::Cancelled);
+        assert_eq!(other.queued_count(), 0);
+        assert!(other.get_result("b").is_some());
+    }
+
+    #[test]
+    fn rejected_turns_consume_budget() {
+        let mut supervisor = SubagentSupervisor::new();
+        let spec = SubagentSpec::new(
+            "Worker",
+            2,
+            vec!["web_search".into()],
+            vec!["web_search".into(), "fs_write".into()],
+        );
+        supervisor.spawn_subagent("rej", "p", spec).unwrap();
+        assert_eq!(
+            supervisor.execute_turn("rej", Some("fs_write"), None, false, None),
+            Err(SubagentError::PermissionViolation("fs_write".into()))
+        );
+        assert_eq!(
+            supervisor.execute_turn("rej", Some("fs_write"), None, false, None),
+            Err(SubagentError::PermissionViolation("fs_write".into()))
+        );
+        let result = supervisor.get_result("rej").expect("budget exhausted by rejects");
+        assert_eq!(result.status, SubagentStatus::BudgetExhausted);
+        assert_eq!(result.turns_used, 2);
+        assert_eq!(supervisor.active_count(), 0);
+    }
+
+    #[test]
+    fn wait_ignores_other_ids_and_never_fabricates_queued_results() {
+        use crate::event_wait::MockClock;
+
+        let clock = Arc::new(MockClock::new(1000));
+        let mut supervisor = SubagentSupervisor::with_max_active_and_clock(1, clock.clone());
+        supervisor.spawn_subagent("w-run", "parent-1", worker_spec()).unwrap();
+        supervisor.spawn_subagent("w-queued", "parent-1", worker_spec()).unwrap();
+        supervisor.schedule_completion(1000, "w-queued", "fabricated?");
+        supervisor.schedule_completion(1000, "w-run", "run done");
+
+        // Waiting on w-run must not consume w-queued's checkpoint nor complete it.
+        let results = supervisor.wait_subagents(&["w-run".into()], Some(100)).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].parent_session_id, "parent-1");
+        assert!(supervisor.get_result("w-queued").is_none());
+        assert_eq!(supervisor.completion_checkpoints.len(), 1);
     }
 }

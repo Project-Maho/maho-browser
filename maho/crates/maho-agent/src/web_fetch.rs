@@ -328,10 +328,36 @@ fn is_non_public_ip(address: IpAddr) -> bool {
                 return is_non_public_ip(IpAddr::V4(address));
             }
             let segments = address.segments();
+            let octets = address.octets();
+            let embedded_v4 = |at: usize| {
+                IpAddr::V4(std::net::Ipv4Addr::new(
+                    octets[at],
+                    octets[at + 1],
+                    octets[at + 2],
+                    octets[at + 3],
+                ))
+            };
+            // NAT64 well-known prefix 64:ff9b::/96 carries the IPv4 target in
+            // the last 32 bits; re-check it against the IPv4 blocklist.
+            if segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+                return is_non_public_ip(embedded_v4(12));
+            }
+            // 6to4 2002::/16 embeds the IPv4 address in bits 16..48.
+            if segments[0] == 0x2002 {
+                return is_non_public_ip(embedded_v4(2));
+            }
+            // Local-use NAT64 64:ff9b:1::/48 and Teredo 2001::/32 tunnel to
+            // IPv4 targets that cannot be validated reliably; block outright.
+            if (segments[0] == 0x64 && segments[1] == 0xff9b && segments[2] == 1)
+                || (segments[0] == 0x2001 && segments[1] == 0)
+            {
+                return true;
+            }
             address.is_unspecified()
                 || address.is_loopback()
                 || (segments[0] & 0xfe00) == 0xfc00
                 || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xffc0) == 0xfec0
                 || (segments[0] & 0xff00) == 0xff00
                 || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         }
@@ -412,6 +438,27 @@ mod tests {
                 "expected {raw_url} to be blocked"
             );
         }
+    }
+
+    #[test]
+    fn validate_url_rejects_ipv6_forms_embedding_non_public_ipv4() {
+        for raw_url in [
+            "http://[64:ff9b::7f00:1]/",
+            "http://[64:ff9b::a9fe:a9fe]/",
+            "http://[64:ff9b:1::808:808]/",
+            "http://[2002:7f00:1::]/",
+            "http://[2002:c0a8:101::1]/",
+            "http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/",
+            "http://[fec0::1]/",
+        ] {
+            assert!(
+                matches!(validate_url(raw_url), Err(WebFetchError::BlockedAddress(_))),
+                "expected {raw_url} to be blocked"
+            );
+        }
+        // Public IPv4 targets behind NAT64/6to4 stay reachable.
+        assert!(validate_url("http://[64:ff9b::808:808]/").is_ok());
+        assert!(validate_url("http://[2002:808:808::1]/").is_ok());
     }
 
     #[tokio::test]

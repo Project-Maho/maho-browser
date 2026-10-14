@@ -6,8 +6,12 @@
 //! restart classification for execution continuity across reconnects.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+
+/// Maximum number of terminal runs retained in a journal; the oldest terminal runs are
+/// pruned first. Active (non-terminal) runs are never pruned.
+pub const MAX_TERMINAL_RUNS: usize = 256;
 
 /// Unique identifier for an agent execution run.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -134,6 +138,12 @@ pub enum RunJournalError {
 pub trait JournalStore: Send + Sync + std::fmt::Debug {
     fn save(&self, journal: &RunJournal) -> Result<(), RunJournalError>;
     fn load(&self) -> Result<RunJournal, RunJournalError>;
+
+    /// Moves unreadable persisted data aside so a fresh journal never silently overwrites it.
+    /// Stores without a movable backing artifact keep the no-op default.
+    fn quarantine_corrupt(&self) -> Result<(), RunJournalError> {
+        Ok(())
+    }
 }
 
 /// Filesystem JSON storage implementation for durable run journals.
@@ -154,12 +164,59 @@ impl FsJsonStore {
 
 impl JournalStore for FsJsonStore {
     fn save(&self, journal: &RunJournal) -> Result<(), RunJournalError> {
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        use std::io::Write;
+        let storage_err = |e: std::io::Error| RunJournalError::StorageError(e.to_string());
         let json = journal.to_json()?;
-        std::fs::write(&self.path, json)
+        let parent = self.path.parent().filter(|p| !p.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            std::fs::create_dir_all(parent).map_err(storage_err)?;
+        }
+        // Write a sibling temp file, fsync it, then rename over the target so readers
+        // only ever observe the previous or the new complete journal.
+        let file_name = self
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "journal".to_string());
+        let tmp_path = self
+            .path
+            .with_file_name(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
+        let write_result = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&tmp_path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&tmp_path, &self.path)
+        })();
+        if let Err(e) = write_result {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(storage_err(e));
+        }
+        if let Some(parent) = parent {
+            // Best-effort directory fsync so the rename itself is durable.
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+        Ok(())
+    }
+
+    fn quarantine_corrupt(&self) -> Result<(), RunJournalError> {
+        let file_name = self
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "journal".to_string());
+        let aside = self.path.with_file_name(format!(
+            "{file_name}.corrupt-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S%.3f")
+        ));
+        std::fs::rename(&self.path, &aside)
             .map_err(|e| RunJournalError::StorageError(e.to_string()))?;
+        tracing::error!(
+            path = %self.path.display(),
+            moved_to = %aside.display(),
+            "run journal was unreadable; moved aside and starting fresh"
+        );
         Ok(())
     }
 
@@ -255,6 +312,9 @@ pub struct LastCompactionInfo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunJournal {
     runs: HashMap<AgentRunId, RunRecord>,
+    /// Terminal runs in the order they became terminal (oldest first), for retention.
+    #[serde(default)]
+    terminal_order: VecDeque<AgentRunId>,
     #[serde(skip)]
     store: Option<Arc<dyn JournalStore>>,
     #[serde(skip)]
@@ -265,6 +325,7 @@ impl RunJournal {
     pub fn new() -> Self {
         Self {
             runs: HashMap::new(),
+            terminal_order: VecDeque::new(),
             store: None,
             is_persist_on_append: false,
         }
@@ -287,18 +348,7 @@ impl RunJournal {
     /// Constructs or loads a `RunJournal` from an `FsJsonStore` path, with write-through persistence enabled.
     pub fn from_fs_path_or_new(path: impl Into<std::path::PathBuf>) -> Self {
         let path = path.into();
-        let store: Arc<dyn JournalStore> = Arc::new(FsJsonStore::new(path));
-        match Self::load_from_store(Arc::clone(&store)) {
-            Ok(mut j) => {
-                j.set_persist_on_append(true);
-                j
-            }
-            Err(_) => {
-                let mut j = Self::new().with_store(store);
-                j.set_persist_on_append(true);
-                j
-            }
-        }
+        Self::from_store_or_new(Arc::new(FsJsonStore::new(path)))
     }
 
     /// Constructs or loads a `RunJournal` from an arbitrary `JournalStore`, with write-through persistence enabled.
@@ -308,7 +358,15 @@ impl RunJournal {
                 j.set_persist_on_append(true);
                 j
             }
-            Err(_) => {
+            Err(err) => {
+                // A missing journal is a normal first start. Anything that failed to
+                // parse is preserved aside before a fresh journal can overwrite it.
+                if let RunJournalError::SerializationError(_) = &err {
+                    tracing::error!(error = %err, "run journal failed to parse");
+                    if let Err(move_err) = store.quarantine_corrupt() {
+                        tracing::error!(error = %move_err, "failed to move corrupt run journal aside");
+                    }
+                }
                 let mut j = Self::new().with_store(store);
                 j.set_persist_on_append(true);
                 j
@@ -383,11 +441,62 @@ impl RunJournal {
             checkpoints: Vec::new(),
             terminal_kind: None,
         };
-        self.runs.insert(run_id, record);
+        let previous = self.runs.insert(run_id.clone(), record);
         if self.is_persist_on_append {
-            self.flush()?;
+            if let Err(e) = self.flush() {
+                match previous {
+                    Some(prev) => {
+                        self.runs.insert(run_id, prev);
+                    }
+                    None => {
+                        self.runs.remove(&run_id);
+                    }
+                }
+                return Err(e);
+            }
         }
         Ok(())
+    }
+
+    /// Records a run as terminal for retention and drops the oldest terminal runs beyond
+    /// [`MAX_TERMINAL_RUNS`]. Returns the pruned records so a failed flush can restore them.
+    fn track_terminal_and_prune(&mut self, run_id: &AgentRunId) -> Vec<(AgentRunId, RunRecord)> {
+        self.terminal_order.retain(|id| id != run_id);
+        // Journals persisted before retention existed carry terminal runs with no order.
+        let mut legacy: Vec<AgentRunId> = self
+            .runs
+            .iter()
+            .filter(|(id, r)| {
+                r.terminal_kind.is_some() && *id != run_id && !self.terminal_order.contains(id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        legacy.sort_by(|a, b| b.0.cmp(&a.0));
+        for id in legacy {
+            self.terminal_order.push_front(id);
+        }
+        self.terminal_order.push_back(run_id.clone());
+        let mut pruned = Vec::new();
+        while self.terminal_order.len() > MAX_TERMINAL_RUNS {
+            if let Some(old) = self.terminal_order.pop_front() {
+                if let Some(rec) = self.runs.remove(&old) {
+                    pruned.push((old, rec));
+                }
+            }
+        }
+        pruned
+    }
+
+    fn undo_terminal(
+        &mut self,
+        run_id: &AgentRunId,
+        pruned: Vec<(AgentRunId, RunRecord)>,
+    ) {
+        self.terminal_order.retain(|id| id != run_id);
+        for (id, rec) in pruned.into_iter().rev() {
+            self.terminal_order.push_front(id.clone());
+            self.runs.insert(id, rec);
+        }
     }
 
     /// Appends a new sequenced runtime event to the run journal.
@@ -420,7 +529,13 @@ impl RunJournal {
 
         run.entries.push(entry.clone());
         if self.is_persist_on_append {
-            self.flush()?;
+            if let Err(e) = self.flush() {
+                if let Some(run) = self.runs.get_mut(run_id) {
+                    run.entries.pop();
+                    run.next_seq = seq;
+                }
+                return Err(e);
+            }
         }
         Ok(entry)
     }
@@ -432,7 +547,8 @@ impl RunJournal {
             .get_mut(&checkpoint.run_id)
             .ok_or_else(|| RunJournalError::RunNotFound(checkpoint.run_id.clone()))?;
 
-        if checkpoint.kind.is_terminal() {
+        let is_terminal = checkpoint.kind.is_terminal();
+        if is_terminal {
             if run.terminal_kind.is_some() {
                 return Err(RunJournalError::DuplicateTerminalMarker(
                     checkpoint.run_id.clone(),
@@ -445,9 +561,26 @@ impl RunJournal {
             ));
         }
 
+        let run_id = checkpoint.run_id.clone();
         run.checkpoints.push(checkpoint);
+        let pruned = if is_terminal {
+            self.track_terminal_and_prune(&run_id)
+        } else {
+            Vec::new()
+        };
         if self.is_persist_on_append {
-            self.flush()?;
+            if let Err(e) = self.flush() {
+                if is_terminal {
+                    self.undo_terminal(&run_id, pruned);
+                }
+                if let Some(run) = self.runs.get_mut(&run_id) {
+                    run.checkpoints.pop();
+                    if is_terminal {
+                        run.terminal_kind = None;
+                    }
+                }
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -489,8 +622,16 @@ impl RunJournal {
         };
 
         run.checkpoints.push(checkpoint.clone());
+        let pruned = self.track_terminal_and_prune(run_id);
         if self.is_persist_on_append {
-            self.flush()?;
+            if let Err(e) = self.flush() {
+                self.undo_terminal(run_id, pruned);
+                if let Some(run) = self.runs.get_mut(run_id) {
+                    run.checkpoints.pop();
+                    run.terminal_kind = None;
+                }
+                return Err(e);
+            }
         }
         Ok(checkpoint)
     }
@@ -670,6 +811,116 @@ impl RunJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct FlakyStore {
+        fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl JournalStore for FlakyStore {
+        fn save(&self, _journal: &RunJournal) -> Result<(), RunJournalError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(RunJournalError::StorageError("disk full".to_string()))
+            } else {
+                Ok(())
+            }
+        }
+        fn load(&self) -> Result<RunJournal, RunJournalError> {
+            Ok(RunJournal::new())
+        }
+    }
+
+    #[test]
+    fn failed_flush_rolls_back_memory_state() {
+        let store = Arc::new(FlakyStore::default());
+        let mut journal = RunJournal::new().with_store(Arc::clone(&store) as Arc<dyn JournalStore>);
+        journal.persist_on_append();
+        let run_id = AgentRunId::new("run-flaky");
+        journal.start_run(run_id.clone(), "s").unwrap();
+        journal.append_event(&run_id, "status", "{}").unwrap();
+
+        store.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(journal.append_event(&run_id, "status", "{}").is_err());
+        assert!(journal
+            .record_terminal(&run_id, RunCheckpointKind::Completed, None)
+            .is_err());
+        assert!(journal.start_run(AgentRunId::new("run-new"), "s").is_err());
+        assert_eq!(journal.get_entries(&run_id).unwrap().len(), 1);
+        assert!(!journal.is_terminal(&run_id).unwrap());
+        assert!(journal.get_record(&AgentRunId::new("run-new")).is_none());
+
+        store.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        let e = journal.append_event(&run_id, "status", "{}").unwrap();
+        assert_eq!(e.event_seq, 2, "seq must not skip after a failed flush");
+        journal
+            .record_terminal(&run_id, RunCheckpointKind::Completed, None)
+            .unwrap();
+    }
+
+    #[test]
+    fn terminal_runs_are_pruned_to_retention_cap() {
+        let mut journal = RunJournal::new();
+        let active = AgentRunId::new("run-active");
+        journal.start_run(active.clone(), "s").unwrap();
+        for i in 0..(MAX_TERMINAL_RUNS + 5) {
+            let id = AgentRunId::new(format!("run-{i}"));
+            journal.start_run(id.clone(), "s").unwrap();
+            journal
+                .record_terminal(&id, RunCheckpointKind::Completed, None)
+                .unwrap();
+        }
+        let terminal = journal
+            .runs()
+            .values()
+            .filter(|r| r.terminal_kind.is_some())
+            .count();
+        assert_eq!(terminal, MAX_TERMINAL_RUNS);
+        assert!(journal.get_record(&active).is_some());
+        assert!(journal.get_record(&AgentRunId::new("run-0")).is_none());
+        assert!(journal
+            .get_record(&AgentRunId::new(format!("run-{}", MAX_TERMINAL_RUNS + 4)))
+            .is_some());
+    }
+
+    #[test]
+    fn corrupt_journal_is_moved_aside_not_overwritten() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("journal.json");
+        std::fs::write(&path, "{ not valid json").unwrap();
+
+        let mut journal = RunJournal::from_fs_path_or_new(&path);
+        let run_id = AgentRunId::new("run-fresh");
+        journal.start_run(run_id.clone(), "s").unwrap();
+
+        let aside: Vec<_> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(
+            std::fs::read_to_string(aside[0].path()).unwrap(),
+            "{ not valid json"
+        );
+        let reloaded = RunJournal::from_fs_path_or_new(&path);
+        assert!(reloaded.get_record(&run_id).is_some());
+        let leftovers = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(leftovers, 0, "atomic save must not leave temp files");
+    }
+
+    #[test]
+    fn save_propagates_create_dir_error() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let blocker = temp_dir.path().join("blocker");
+        std::fs::write(&blocker, "file").unwrap();
+        let store = FsJsonStore::new(blocker.join("nested").join("journal.json"));
+        let err = store.save(&RunJournal::new()).unwrap_err();
+        assert!(matches!(err, RunJournalError::StorageError(_)));
+    }
 
     #[test]
     fn test_new_run_monotonic_sequence_and_terminal_rejection() {

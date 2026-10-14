@@ -162,7 +162,7 @@ impl FallbackLadderError {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-enum FallbackActionClass {
+pub(crate) enum FallbackActionClass {
     Navigation,
     AccessibilitySnapshot,
     Click,
@@ -171,64 +171,151 @@ enum FallbackActionClass {
     Scroll,
     Hover,
     Keyboard,
+    /// Typed page reads (current page, tab listing, selected text, ...).
     PageRead,
+    /// Selector-based DOM reads; a distinct bucket so a typed read success does not
+    /// block the DOM tier these tools legitimately run at.
+    DomQuery,
+    /// Screenshot / computer-use tools.
+    ScreenshotCua,
+    /// Tool name not in the table. Isolated so it neither inherits nor poisons the
+    /// progress of a known class.
+    Unknown,
+}
+
+/// How a tool participates in the ladder: its progress bucket and its tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ToolProfile {
+    pub class: FallbackActionClass,
+    /// Tier the tool runs at. For `element_action` tools this is only the default;
+    /// the arguments (ref vs selector) may raise it to `DomRefLocator`.
+    pub tier: FallbackTier,
+    pub element_action: bool,
+}
+
+/// Single source of truth for tool classification; both the action class used for
+/// progress tracking and the requested tier are derived from this table.
+///
+/// Unknown tools get the most conservative profile: their own bucket at the
+/// `AccessibilitySnapshot` tier (never claimed as a typed-API success).
+/// Screenshot/CUA tools are matched by exact name only, never by substring.
+pub(crate) fn tool_profile(tool_name: &str) -> ToolProfile {
+    use FallbackActionClass as C;
+    use FallbackTier as T;
+    let (class, tier, element_action) = match tool_name {
+        "browser_navigate" | "browser_wait_for_navigation" => (C::Navigation, T::TypedDomainApi, false),
+        "browser_key_press" | "input.key_press" | "input_key_press" => {
+            (C::Keyboard, T::TypedDomainApi, false)
+        }
+        "read_current_page"
+        | "list_browser_tabs"
+        | "get_selected_text"
+        | "get_active_tab"
+        | "search_in_page"
+        | "extract_structured_page_context" => (C::PageRead, T::TypedDomainApi, false),
+        "page_query_selector"
+        | "page_get_text"
+        | "page_get_attribute"
+        | "page_wait_for_selector" => (C::DomQuery, T::DomRefLocator, false),
+        "browser_accessibility_snapshot"
+        | "page.accessibility_snapshot"
+        | "page.accessibility_snapshot_v2"
+        | "page_accessibility_snapshot_v2"
+        | "browser_accessibility_snapshot_v2" => {
+            (C::AccessibilitySnapshot, T::AccessibilitySnapshot, false)
+        }
+        "input.locator_click"
+        | "locator_click"
+        | "browser_locator_click"
+        | "input_locator_click"
+        | "browser_act_and_observe"
+        | "browser.act_and_observe" => (C::Click, T::DomRefLocator, false),
+        "input.locator_type" | "locator_type" | "browser_locator_type" | "input_locator_type" => {
+            (C::Type, T::DomRefLocator, false)
+        }
+        "browser_click" | "input.click" => (C::Click, T::AccessibilitySnapshot, true),
+        "browser_type" | "input.type" => (C::Type, T::AccessibilitySnapshot, true),
+        "browser_select" | "input.select" | "browser_file_upload_select"
+        | "input.file_upload_select" => (C::Select, T::AccessibilitySnapshot, true),
+        "browser_scroll" | "input.scroll" => (C::Scroll, T::AccessibilitySnapshot, true),
+        "browser_hover" | "input.hover" => (C::Hover, T::AccessibilitySnapshot, true),
+        "screenshot"
+        | "browser_screenshot"
+        | "page_screenshot"
+        | "take_screenshot"
+        | "browser_screenshot_full"
+        | "browser_screenshot_element"
+        | "screenshot_cua"
+        | "browser_screenshot_cua"
+        | "computer_use"
+        | "cua" => (C::ScreenshotCua, T::ScreenshotCua, false),
+        _ => (C::Unknown, T::AccessibilitySnapshot, false),
+    };
+    ToolProfile {
+        class,
+        tier,
+        element_action,
+    }
 }
 
 impl FallbackActionClass {
     fn for_tool_name(tool_name: &str) -> Self {
-        match tool_name {
-            "browser_navigate" | "browser_wait_for_navigation" => Self::Navigation,
-            "browser_key_press" | "input.key_press" | "input_key_press" => Self::Keyboard,
-            "read_current_page"
-            | "list_browser_tabs"
-            | "get_selected_text"
-            | "get_active_tab"
-            | "search_in_page"
-            | "extract_structured_page_context"
-            | "page_query_selector"
-            | "page_get_text"
-            | "page_get_attribute"
-            | "page_wait_for_selector"
-            | "browser_file_upload_select"
-            | "input.file_upload_select" => Self::PageRead,
-            "browser_accessibility_snapshot"
-            | "page.accessibility_snapshot"
-            | "page.accessibility_snapshot_v2"
-            | "page_accessibility_snapshot_v2"
-            | "browser_accessibility_snapshot_v2" => Self::AccessibilitySnapshot,
-            "browser_click"
-            | "input.click"
-            | "input.locator_click"
-            | "locator_click"
-            | "browser_locator_click"
-            | "input_locator_click"
-            | "browser_act_and_observe"
-            | "browser.act_and_observe" => Self::Click,
-            "browser_type"
-            | "input.type"
-            | "input.locator_type"
-            | "locator_type"
-            | "browser_locator_type"
-            | "input_locator_type" => Self::Type,
-            "browser_select" | "input.select" => Self::Select,
-            "browser_scroll" | "input.scroll" => Self::Scroll,
-            "browser_hover" | "input.hover" => Self::Hover,
-            _ => Self::PageRead,
-        }
+        tool_profile(tool_name).class
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FallbackLadderState {
     _session_id: String,
+    /// Tier last attempted per class; informs the decision reason only.
+    attempted_by_class: HashMap<FallbackActionClass, FallbackTier>,
+    /// Tier that actually succeeded per class; the only thing that blocks downgrades.
     progress_by_class: HashMap<FallbackActionClass, FallbackTier>,
+    last_origin: Option<String>,
 }
 
 impl FallbackLadderState {
     pub fn new(session_id: &str) -> Self {
         Self {
             _session_id: session_id.to_string(),
+            attempted_by_class: HashMap::new(),
             progress_by_class: HashMap::new(),
+            last_origin: None,
+        }
+    }
+
+    /// Records the result of executing a tool at `tier`. Only a success counts as
+    /// progress that forbids later downgrades; a failure leaves the ladder open. A
+    /// successful navigation invalidates all progress, since the page changed.
+    pub fn record_outcome(&mut self, tool_name: &str, tier: FallbackTier, ok: bool) {
+        let class = FallbackActionClass::for_tool_name(tool_name);
+        if !ok {
+            return;
+        }
+        if class == FallbackActionClass::Navigation {
+            self.reset_progress();
+            return;
+        }
+        let best = self
+            .progress_by_class
+            .get(&class)
+            .map_or(tier, |previous| (*previous).min(tier));
+        self.progress_by_class.insert(class, best);
+    }
+
+    /// Clears all recorded progress (new page / new origin).
+    pub fn reset_progress(&mut self) {
+        self.attempted_by_class.clear();
+        self.progress_by_class.clear();
+    }
+
+    /// Notes the origin the agent is operating on; a change resets progress.
+    pub fn observe_origin(&mut self, origin: &str) {
+        if self.last_origin.as_deref() != Some(origin) {
+            if self.last_origin.is_some() {
+                self.reset_progress();
+            }
+            self.last_origin = Some(origin.to_string());
         }
     }
 
@@ -238,6 +325,26 @@ impl FallbackLadderState {
     ) -> Result<FallbackDecision, FallbackLadderError> {
         let action_class = FallbackActionClass::for_tool_name(request.tool_name);
         let previous = self.progress_by_class.get(&action_class).copied();
+        let attempted = self
+            .attempted_by_class
+            .get(&action_class)
+            .copied()
+            .or(previous);
+        let result = self.decide_inner(action_class, request, previous, attempted);
+        if result.is_ok() {
+            self.attempted_by_class
+                .insert(action_class, request.requested_tier);
+        }
+        result
+    }
+
+    fn decide_inner(
+        &mut self,
+        action_class: FallbackActionClass,
+        request: FallbackSelectionRequest<'_>,
+        previous: Option<FallbackTier>,
+        attempted: Option<FallbackTier>,
+    ) -> Result<FallbackDecision, FallbackLadderError> {
         if previous == Some(FallbackTier::TypedDomainApi)
             && request.requested_tier != FallbackTier::TypedDomainApi
         {
@@ -264,21 +371,15 @@ impl FallbackLadderState {
         }
 
         match request.requested_tier {
-            FallbackTier::TypedDomainApi => {
-                self.progress_by_class
-                    .insert(action_class, FallbackTier::TypedDomainApi);
-                Ok(decision(
-                    FallbackTier::TypedDomainApi,
-                    FallbackTier::TypedDomainApi,
-                    FallbackDecisionReason::TypedDomainAvailable,
-                    FallbackSafetyState::Safe,
-                    false,
-                ))
-            }
+            FallbackTier::TypedDomainApi => Ok(decision(
+                FallbackTier::TypedDomainApi,
+                FallbackTier::TypedDomainApi,
+                FallbackDecisionReason::TypedDomainAvailable,
+                FallbackSafetyState::Safe,
+                false,
+            )),
             FallbackTier::ExactOriginPageAdapter => {
-                self.progress_by_class
-                    .insert(action_class, FallbackTier::ExactOriginPageAdapter);
-                let state = if previous.is_some() {
+                let state = if attempted.is_some() {
                     FallbackSafetyState::Safe
                 } else {
                     FallbackSafetyState::Downgraded
@@ -292,9 +393,7 @@ impl FallbackLadderState {
                 ))
             }
             FallbackTier::DomRefLocator => {
-                self.progress_by_class
-                    .insert(action_class, FallbackTier::DomRefLocator);
-                let state = if previous.is_some() {
+                let state = if attempted.is_some() {
                     FallbackSafetyState::Safe
                 } else {
                     FallbackSafetyState::Downgraded
@@ -307,21 +406,17 @@ impl FallbackLadderState {
                     false,
                 ))
             }
-            FallbackTier::AccessibilitySnapshot => {
-                self.progress_by_class
-                    .insert(action_class, FallbackTier::AccessibilitySnapshot);
-                Ok(decision(
-                    FallbackTier::DomRefLocator,
-                    FallbackTier::AccessibilitySnapshot,
-                    if previous == Some(FallbackTier::DomRefLocator) {
-                        FallbackDecisionReason::DomRefMissing
-                    } else {
-                        FallbackDecisionReason::AccessibilitySelected
-                    },
-                    FallbackSafetyState::Downgraded,
-                    false,
-                ))
-            }
+            FallbackTier::AccessibilitySnapshot => Ok(decision(
+                FallbackTier::DomRefLocator,
+                FallbackTier::AccessibilitySnapshot,
+                if attempted == Some(FallbackTier::DomRefLocator) {
+                    FallbackDecisionReason::DomRefMissing
+                } else {
+                    FallbackDecisionReason::AccessibilitySelected
+                },
+                FallbackSafetyState::Downgraded,
+                false,
+            )),
             FallbackTier::ScreenshotCua => self.decide_screenshot_cua(action_class, request),
         }
     }
@@ -352,22 +447,18 @@ impl FallbackLadderState {
 
     fn decide_screenshot_cua(
         &mut self,
-        action_class: FallbackActionClass,
+        _action_class: FallbackActionClass,
         request: FallbackSelectionRequest<'_>,
     ) -> Result<FallbackDecision, FallbackLadderError> {
         let approval_required = request.sensitivity == ToolSensitivity::Sensitive;
         match request.screenshot_cua_approval {
-            ScreenshotCuaApproval::Approved => {
-                self.progress_by_class
-                    .insert(action_class, FallbackTier::ScreenshotCua);
-                Ok(decision(
-                    FallbackTier::AccessibilitySnapshot,
-                    FallbackTier::ScreenshotCua,
-                    FallbackDecisionReason::ScreenshotCuaApproved,
-                    FallbackSafetyState::EscalationApproved,
-                    approval_required,
-                ))
-            }
+            ScreenshotCuaApproval::Approved => Ok(decision(
+                FallbackTier::AccessibilitySnapshot,
+                FallbackTier::ScreenshotCua,
+                FallbackDecisionReason::ScreenshotCuaApproved,
+                FallbackSafetyState::EscalationApproved,
+                approval_required,
+            )),
             ScreenshotCuaApproval::Denied => {
                 Err(FallbackLadderError::ScreenshotCuaDenied(decision(
                     FallbackTier::AccessibilitySnapshot,

@@ -2,7 +2,9 @@
 
 use futures_util::StreamExt;
 use std::ffi::{c_char, c_void, CString};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 
@@ -83,6 +85,10 @@ impl MahoChatEventSink {
 const MAX_HISTORY_MESSAGES: usize = 100;
 // Bound server-controlled sparse indices before allocating tool-call slots.
 const MAX_TOOL_CALLS: usize = 128;
+// A stream that stays silent this long is dead (keepalive comments reset it).
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_ERROR_CHARS: usize = 512;
+const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
 
 pub struct ChatSession {
     config: ChatConfig,
@@ -90,6 +96,8 @@ pub struct ChatSession {
     history: Vec<serde_json::Value>,
     active_task: Option<JoinHandle<()>>,
     event_sink: Option<MahoChatEventSink>,
+    /// Bumped on every cancel/new run; a run only emits while its id is current.
+    generation: Arc<AtomicU64>,
 }
 
 impl ChatSession {
@@ -107,6 +115,7 @@ impl ChatSession {
             history,
             active_task: None,
             event_sink: None,
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -237,6 +246,9 @@ impl ChatSession {
     }
 
     fn abort_and_join(&mut self) {
+        // Invalidate the outgoing run first: abort only lands at an await point,
+        // so a callback already in flight must not reach the sink afterwards.
+        self.generation.fetch_add(1, Ordering::SeqCst);
         if let Some(task) = self.active_task.take() {
             task.abort();
         }
@@ -272,8 +284,13 @@ impl ChatSession {
             .collect();
 
         let runtime = get_runtime();
+        let run_sink = RunSink {
+            sink,
+            generation: Arc::clone(&self.generation),
+            run_id: self.generation.load(Ordering::SeqCst),
+        };
         let handle = runtime.spawn(async move {
-            run_completion(config, messages, tools, sink).await;
+            run_completion(config, messages, tools, run_sink).await;
         });
 
         self.active_task = Some(handle);
@@ -292,11 +309,104 @@ fn get_runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| Runtime::new().expect("Failed to create tokio runtime"))
 }
 
+/// Event sink bound to a single completion run. Every callback is gated on the
+/// session's generation counter so a cancelled/superseded run can never emit
+/// into the run that replaced it.
+struct RunSink {
+    sink: MahoChatEventSink,
+    generation: Arc<AtomicU64>,
+    run_id: u64,
+}
+
+impl RunSink {
+    fn is_current(&self) -> bool {
+        self.generation.load(Ordering::SeqCst) == self.run_id
+    }
+
+    fn on_token(&self, token: &str) {
+        if self.is_current() {
+            self.sink.on_token(token);
+        }
+    }
+
+    fn on_thinking(&self, thinking: &str) {
+        if self.is_current() {
+            self.sink.on_thinking(thinking);
+        }
+    }
+
+    fn on_complete(&self, full_text: &str, tool_calls_json: &str) {
+        if self.is_current() {
+            self.sink.on_complete(full_text, tool_calls_json);
+        }
+    }
+
+    fn on_error(&self, error: String) {
+        if self.is_current() {
+            self.sink.on_error(error);
+        }
+    }
+}
+
+impl From<MahoChatEventSink> for RunSink {
+    fn from(sink: MahoChatEventSink) -> Self {
+        Self {
+            sink,
+            generation: Arc::new(AtomicU64::new(0)),
+            run_id: 0,
+        }
+    }
+}
+
+/// Redacts the token following every case-insensitive `marker` occurrence.
+fn redact_after(text: &str, marker: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(rel) = lower[cursor..].find(marker) {
+        let start = cursor + rel + marker.len();
+        out.push_str(&text[cursor..start]);
+        let end = text[start..]
+            .find(|c: char| {
+                c.is_whitespace() || matches!(c, '&' | '"' | '\'' | ',' | ';' | ')' | '>')
+            })
+            .map_or(text.len(), |i| start + i);
+        if end > start {
+            out.push_str("[REDACTED]");
+        }
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
+/// Bounds and scrubs upstream/transport error text before it reaches the UI:
+/// redacts `Bearer ` and `key=` credentials and caps the length.
+fn sanitize_error_text(text: &str) -> String {
+    let redacted = redact_after(&redact_after(text, "bearer "), "key=");
+    if redacted.chars().count() <= MAX_ERROR_CHARS {
+        return redacted;
+    }
+    let mut truncated: String = redacted.chars().take(MAX_ERROR_CHARS).collect();
+    truncated.push_str("...");
+    truncated
+}
+
 async fn run_completion(
     config: ChatConfig,
     messages: Vec<serde_json::Value>,
     tools: Vec<serde_json::Value>,
-    sink: MahoChatEventSink,
+    sink: impl Into<RunSink>,
+) {
+    run_completion_with_idle(config, messages, tools, sink.into(), STREAM_IDLE_TIMEOUT).await;
+}
+
+async fn run_completion_with_idle(
+    config: ChatConfig,
+    messages: Vec<serde_json::Value>,
+    tools: Vec<serde_json::Value>,
+    sink: RunSink,
+    idle_timeout: Duration,
 ) {
     let client = crate::http::shared_http_client();
     let mut req = client
@@ -322,15 +432,31 @@ async fn run_completion(
     let res = match req.json(&body).send().await {
         Ok(r) => r,
         Err(e) => {
-            sink.on_error(format!("Request failed: {}", e));
+            sink.on_error(format!(
+                "Request failed: {}",
+                sanitize_error_text(&e.without_url().to_string())
+            ));
             return;
         }
     };
 
     if !res.status().is_success() {
         let status = res.status();
-        let err_text = res.text().await.unwrap_or_default();
-        sink.on_error(format!("HTTP error {}: {}", status, err_text));
+        // Read at most a bounded prefix of the upstream error body.
+        let mut err_bytes = Vec::new();
+        let mut err_stream = res.bytes_stream();
+        while err_bytes.len() < MAX_ERROR_BODY_BYTES {
+            match err_stream.next().await {
+                Some(Ok(chunk)) => err_bytes.extend_from_slice(&chunk),
+                _ => break,
+            }
+        }
+        let err_text = String::from_utf8_lossy(&err_bytes);
+        sink.on_error(format!(
+            "HTTP error {}: {}",
+            status,
+            sanitize_error_text(&err_text)
+        ));
         return;
     }
 
@@ -339,12 +465,28 @@ async fn run_completion(
     let mut sse_buffer = String::new();
     let mut full_text = String::new();
     let mut tool_calls = Vec::<serde_json::Value>::new();
+    // A stream is complete only once it carried [DONE] or a finish_reason.
+    let mut done = false;
+    let mut finished = false;
 
-    while let Some(chunk_result) = stream.next().await {
+    'stream: loop {
+        let next = match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                sink.on_error(format!("Stream idle for more than {:?}", idle_timeout));
+                return;
+            }
+        };
+        let Some(chunk_result) = next else {
+            break;
+        };
         let chunk = match chunk_result {
             Ok(bytes) => bytes,
             Err(e) => {
-                sink.on_error(format!("Stream error: {}", e));
+                sink.on_error(format!(
+                    "Stream error: {}",
+                    sanitize_error_text(&e.without_url().to_string())
+                ));
                 return;
             }
         };
@@ -364,21 +506,43 @@ async fn run_completion(
             sse_buffer.drain(..pos + separator_len);
 
             for line in event_block.lines() {
+                // Comment/keepalive lines (": ping") and other fields are ignored.
                 if !line.starts_with("data:") {
                     continue;
                 }
                 let data = line["data:".len()..].trim();
+                if data.is_empty() {
+                    continue;
+                }
                 if data == "[DONE]" {
-                    break;
+                    done = true;
+                    break 'stream;
                 }
 
                 let json: serde_json::Value = match serde_json::from_str(data) {
                     Ok(val) => val,
-                    Err(_) => continue,
+                    Err(_) => {
+                        sink.on_error("Malformed stream frame".to_string());
+                        return;
+                    }
                 };
+
+                if let Some(err) = json.get("error").filter(|e| !e.is_null()) {
+                    let message = err
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .map(str::to_string)
+                        .or_else(|| err.as_str().map(str::to_string))
+                        .unwrap_or_else(|| err.to_string());
+                    sink.on_error(format!("Stream error: {}", sanitize_error_text(&message)));
+                    return;
+                }
 
                 if let Some(choices) = json.pointer("/choices").and_then(|v| v.as_array()) {
                     if let Some(choice) = choices.first() {
+                        if choice.get("finish_reason").is_some_and(|f| !f.is_null()) {
+                            finished = true;
+                        }
                         if let Some(delta) = choice.get("delta") {
                             // Reasoning/thinking deltas (OpenAI o-series & compatible:
                             // `reasoning_content`, Anthropic-style: `reasoning`).
@@ -403,11 +567,7 @@ async fn run_completion(
                                 delta.get("tool_calls").and_then(|tc| tc.as_array())
                             {
                                 for tc in delta_tool_calls {
-                                    let Some(index) = tc.get("index")
-                                        .map_or(Some(0), serde_json::Value::as_u64)
-                                        .and_then(|index| usize::try_from(index).ok())
-                                        .filter(|index| *index < MAX_TOOL_CALLS)
-                                    else {
+                                    let Some(index) = tool_call_slot(&tool_calls, tc) else {
                                         sink.on_error("Invalid tool-call index".to_string());
                                         return;
                                     };
@@ -465,6 +625,18 @@ async fn run_completion(
         return;
     }
 
+    if !done && !finished {
+        sink.on_error("stream ended unexpectedly".to_string());
+        return;
+    }
+
+    // Sparse slots and nameless fragments are not executable calls.
+    tool_calls.retain(|tc| {
+        tc.get("name")
+            .and_then(|n| n.as_str())
+            .is_some_and(|n| !n.is_empty())
+    });
+
     let tool_calls_json = if !tool_calls.is_empty() {
         let mapped_tool_calls: Vec<serde_json::Value> = tool_calls
             .into_iter()
@@ -484,6 +656,28 @@ async fn run_completion(
     };
 
     sink.on_complete(&full_text, &tool_calls_json);
+}
+
+/// Resolves the slot a streamed tool-call fragment belongs to. A usable integer
+/// `index` wins; when it is absent or not an integer, a new id opens a new
+/// slot (parallel calls) and an id-less fragment continues the latest slot.
+/// Returns `None` when the slot would exceed `MAX_TOOL_CALLS`.
+fn tool_call_slot(tool_calls: &[serde_json::Value], tc: &serde_json::Value) -> Option<usize> {
+    let index = match tc.get("index").and_then(serde_json::Value::as_u64) {
+        Some(index) => usize::try_from(index).ok()?,
+        None => match tc
+            .get("id")
+            .and_then(|id| id.as_str())
+            .filter(|id| !id.is_empty())
+        {
+            Some(id) => tool_calls
+                .iter()
+                .position(|slot| slot.get("id").and_then(|i| i.as_str()) == Some(id))
+                .unwrap_or(tool_calls.len()),
+            None => tool_calls.len().saturating_sub(1),
+        },
+    };
+    (index < MAX_TOOL_CALLS).then_some(index)
 }
 
 fn find_sse_separator(buffer: &str) -> Option<(usize, usize)> {
@@ -831,7 +1025,7 @@ mod tests {
     #[test]
     fn review_chat_utf8_spans_http_chunks() {
         for split in 1..4 {
-            let body = format!("data: {}\n\n", serde_json::json!({"choices":[{"delta":{"content":"\u{1f642}"}}]}));
+            let body = format!("data: {}\n\ndata: [DONE]\n\n", serde_json::json!({"choices":[{"delta":{"content":"\u{1f642}"}}]}));
             let boundary = body.find('\u{1f642}').unwrap() + split;
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -1046,5 +1240,137 @@ mod tests {
             })
         );
         server.join();
+    }
+
+    /// Serves one fixed HTTP/1.1 response body and returns the endpoint.
+    fn serve_raw(status: &'static str, body: String) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+            read_request(&mut socket).unwrap();
+            write!(
+                socket,
+                "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+            )
+            .unwrap();
+        });
+        (endpoint, server)
+    }
+
+    fn run_raw(status: &'static str, body: &str) -> Vec<CallbackEvent> {
+        let (endpoint, server) = serve_raw(status, body.to_string());
+        let (event_tx, _event_rx) = mpsc::channel();
+        let state = Box::new(CallbackState { events: Mutex::new(Vec::new()), event_tx });
+        let config = ChatConfig { api_key: String::new(), endpoint, model: "test".into(), system_instruction: String::new() };
+        let sink = MahoChatEventSink { on_token: Some(on_token), on_thinking: None, on_complete: Some(on_complete), on_error: Some(on_error), user_data: (&*state as *const CallbackState).cast_mut().cast() };
+        get_runtime().block_on(run_completion(config, vec![], vec![], sink));
+        server.join().unwrap();
+        let events = state.events.lock().unwrap().clone();
+        events
+    }
+
+    #[test]
+    fn review_truncated_stream_is_an_error_not_success() {
+        let events = run_raw("200 OK", "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n");
+        assert_eq!(events.last(), Some(&CallbackEvent::Error("stream ended unexpectedly".into())));
+        assert!(!events.iter().any(|e| matches!(e, CallbackEvent::Complete { .. })));
+    }
+
+    #[test]
+    fn review_finish_reason_without_done_completes_and_keepalives_are_ignored() {
+        let events = run_raw(
+            "200 OK",
+            ": keepalive\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        );
+        assert_eq!(events.last(), Some(&CallbackEvent::Complete { full_text: "ok".into(), tool_calls_json: String::new() }));
+    }
+
+    #[test]
+    fn review_midstream_error_frame_and_parse_failure_surface_on_error() {
+        let events = run_raw("200 OK", "data: {\"error\":{\"message\":\"overloaded\"}}\n\n");
+        assert_eq!(events, vec![CallbackEvent::Error("Stream error: overloaded".into())]);
+        let events = run_raw("200 OK", "data: {not json\n\n");
+        assert_eq!(events, vec![CallbackEvent::Error("Malformed stream frame".into())]);
+    }
+
+    #[test]
+    fn review_done_stops_the_whole_stream() {
+        let events = run_raw(
+            "200 OK",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"A\"}}]}\n\ndata: [DONE]\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"B\"}}]}\n\n",
+        );
+        assert_eq!(events.last(), Some(&CallbackEvent::Complete { full_text: "A".into(), tool_calls_json: String::new() }));
+    }
+
+    #[test]
+    fn review_parallel_tool_calls_without_index_get_separate_slots() {
+        let events = run_raw(
+            "200 OK",
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"c1\",\"function\":{\"name\":\"a\",\"arguments\":\"{}\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"c2\",\"function\":{\"name\":\"b\",\"arguments\":\"{}\"}}]}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":\"x\",\"function\":{\"arguments\":\"\"}}]}}]}\n\n",
+                "data: [DONE]\n\n",
+            ),
+        );
+        let Some(CallbackEvent::Complete { tool_calls_json, .. }) = events.last() else { panic!("{events:?}") };
+        let calls: Vec<serde_json::Value> = serde_json::from_str(tool_calls_json).unwrap();
+        let names: Vec<_> = calls.iter().map(|c| c["name"].as_str().unwrap()).collect();
+        assert_eq!(names, ["a", "b"]);
+    }
+
+    #[test]
+    fn review_http_error_is_redacted_and_bounded() {
+        let body = format!("bad key=sk-secret Bearer tok123 {}", "x".repeat(5000));
+        let events = run_raw("500 Internal Server Error", &body);
+        let [CallbackEvent::Error(message)] = events.as_slice() else { panic!("{events:?}") };
+        assert!(!message.contains("sk-secret") && !message.contains("tok123"), "{message}");
+        assert!(message.chars().count() < 600);
+    }
+
+    #[test]
+    fn review_sanitize_error_text_redacts_credentials() {
+        assert_eq!(sanitize_error_text("GET /v1?key=abc&x=1 failed"), "GET /v1?key=[REDACTED]&x=1 failed");
+        assert_eq!(sanitize_error_text("Authorization: Bearer abc.def"), "Authorization: Bearer [REDACTED]");
+    }
+
+    #[test]
+    fn review_stream_idle_timeout_reports_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+            read_request(&mut socket).unwrap();
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n").unwrap();
+            let _ = release_rx.recv_timeout(TEST_TIMEOUT);
+        });
+        let (event_tx, _event_rx) = mpsc::channel();
+        let state = Box::new(CallbackState { events: Mutex::new(Vec::new()), event_tx });
+        let config = ChatConfig { api_key: String::new(), endpoint, model: "test".into(), system_instruction: String::new() };
+        let sink = MahoChatEventSink { on_token: None, on_thinking: None, on_complete: Some(on_complete), on_error: Some(on_error), user_data: (&*state as *const CallbackState).cast_mut().cast() };
+        get_runtime().block_on(run_completion_with_idle(config, vec![], vec![], sink.into(), Duration::from_millis(100)));
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        let events = state.events.lock().unwrap().clone();
+        assert!(matches!(events.as_slice(), [CallbackEvent::Error(m)] if m.contains("idle")), "{events:?}");
+    }
+
+    #[test]
+    fn review_cancelled_generation_cannot_emit() {
+        let (event_tx, _event_rx) = mpsc::channel();
+        let state = Box::new(CallbackState { events: Mutex::new(Vec::new()), event_tx });
+        let sink = MahoChatEventSink { on_token: Some(on_token), on_thinking: None, on_complete: Some(on_complete), on_error: Some(on_error), user_data: (&*state as *const CallbackState).cast_mut().cast() };
+        let generation = Arc::new(AtomicU64::new(1));
+        let run = RunSink { sink, generation: Arc::clone(&generation), run_id: 1 };
+        run.on_token("live");
+        generation.fetch_add(1, Ordering::SeqCst);
+        run.on_token("stale");
+        run.on_error("stale".into());
+        run.on_complete("stale", "");
+        assert_eq!(*state.events.lock().unwrap(), vec![CallbackEvent::Token("live".into())]);
     }
 }

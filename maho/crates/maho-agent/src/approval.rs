@@ -1,5 +1,6 @@
 use crate::browser_action_contract::{canonical_browser_action_contracts, BrowserToolSensitivity};
 use crate::permission::PermissionDecision;
+use maho_types::tool::ToolProvenance;
 
 pub use crate::approval_audit::{emit_audit_record, ApprovalAuditEventKind, ApprovalAuditRecord};
 
@@ -43,8 +44,29 @@ impl ApprovalPolicy {
 
     pub fn immediate_decision(
         self,
-        tool_name: &str,
+        _tool_name: &str,
         sensitivity: ToolSensitivity,
+    ) -> Option<ApprovalDecisionMetadata> {
+        // Provenance unknown: AllowMcp must never trust a name prefix (a
+        // builtin or model-chosen name can start with `mcp_`), so it fails
+        // closed to the sensitive-deny branch.
+        self.decide(sensitivity, false)
+    }
+
+    /// Provenance-aware variant: `AllowMcp` auto-allows a sensitive tool only
+    /// when the registry recorded it as coming from an external MCP server.
+    pub fn immediate_decision_with_provenance(
+        self,
+        sensitivity: ToolSensitivity,
+        provenance: &ToolProvenance,
+    ) -> Option<ApprovalDecisionMetadata> {
+        self.decide(sensitivity, matches!(provenance, ToolProvenance::External(_)))
+    }
+
+    fn decide(
+        self,
+        sensitivity: ToolSensitivity,
+        is_external_mcp: bool,
     ) -> Option<ApprovalDecisionMetadata> {
         match (self, sensitivity) {
             (Self::DenyAll, _) => Some(ApprovalDecisionMetadata::new(
@@ -67,7 +89,7 @@ impl ApprovalPolicy {
                     ApprovalDecisionReason::PolicyDenySensitive,
                 ))
             }
-            (Self::AllowMcp, ToolSensitivity::Sensitive) if is_mcp_tool_name(tool_name) => {
+            (Self::AllowMcp, ToolSensitivity::Sensitive) if is_external_mcp => {
                 Some(ApprovalDecisionMetadata::new(
                     PermissionDecision::Allow,
                     self,
@@ -142,13 +164,21 @@ pub struct ToolSensitivityResolution {
 impl ToolSensitivityResolution {
     pub fn for_tool_name(tool_name: &str, fallback_sensitive: bool) -> Self {
         let fallback = ToolSensitivity::from_sensitive_flag(fallback_sensitive);
-        let raw_name = raw_tool_name(tool_name);
-        let canonical = match canonical_browser_action_contracts() {
+        let (raw_name, first_party) = raw_tool_name(tool_name);
+        let canonical_sensitivity = match canonical_browser_action_contracts() {
             Ok(contracts) => contracts
                 .iter()
                 .find(|contract| contract.tool_name == raw_name)
                 .map(|contract| ToolSensitivity::from_browser_contract(contract.sensitivity)),
             Err(_) => Option::None,
+        };
+        // Only bare (first-party builtin) names may resolve to a canonical
+        // contract. A namespaced foreign tool whose leaf impersonates a
+        // canonical name is forced Sensitive instead of inheriting it.
+        let canonical = if first_party {
+            canonical_sensitivity
+        } else {
+            canonical_sensitivity.map(|_| ToolSensitivity::Sensitive)
         };
         let effective = canonical.unwrap_or(fallback);
         let downgrade = match (fallback, effective, canonical) {
@@ -254,13 +284,60 @@ impl ApprovalDecisionMetadata {
     }
 }
 
-fn raw_tool_name(tool_name: &str) -> &str {
+/// `(leaf, first_party)`: builtin tools are registered bare; any namespaced
+/// (`server/tool`, `mcp:...`, `sh:...`) name is foreign.
+fn raw_tool_name(tool_name: &str) -> (&str, bool) {
     match tool_name.rsplit_once('/') {
-        Some((_, raw_name)) => raw_name,
-        Option::None => tool_name,
+        Some((_, raw_name)) => (raw_name, false),
+        Option::None => (tool_name, !tool_name.contains(':')),
     }
 }
 
-fn is_mcp_tool_name(tool_name: &str) -> bool {
-    tool_name.starts_with("mcp:") || tool_name.starts_with("mcp_")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allow_mcp_decides_on_provenance_not_name_prefix() {
+        // A name prefix is not provenance: without it AllowMcp fails closed.
+        for name in ["mcp_exfiltrate", "mcp:srv/tool"] {
+            let decision = ApprovalPolicy::AllowMcp
+                .immediate_decision(name, ToolSensitivity::Sensitive)
+                .expect("AllowMcp decides sensitive tools immediately");
+            assert_eq!(decision.decision, PermissionDecision::Deny, "{name}");
+        }
+        let external = ApprovalPolicy::AllowMcp
+            .immediate_decision_with_provenance(
+                ToolSensitivity::Sensitive,
+                &ToolProvenance::External("srv".into()),
+            )
+            .unwrap();
+        assert_eq!(external.decision, PermissionDecision::Allow);
+        assert_eq!(external.reason, ApprovalDecisionReason::PolicyAllowMcp);
+        for provenance in [ToolProvenance::BuiltinBrowser, ToolProvenance::AgentLocal] {
+            let decision = ApprovalPolicy::AllowMcp
+                .immediate_decision_with_provenance(ToolSensitivity::Sensitive, &provenance)
+                .unwrap();
+            assert_eq!(decision.decision, PermissionDecision::Deny, "{provenance:?}");
+        }
+    }
+
+    #[test]
+    fn namespaced_tool_cannot_inherit_canonical_low_sensitivity() {
+        for name in ["evil/browser_accessibility_snapshot", "mcp:evil/browser_observe"] {
+            let resolution = ToolSensitivityResolution::for_tool_name(name, false);
+            assert_eq!(resolution.effective, ToolSensitivity::Sensitive, "{name}");
+            assert_eq!(resolution.downgrade, None, "{name}");
+        }
+        assert_eq!(
+            ToolSensitivityResolution::for_tool_name("browser_accessibility_snapshot", true)
+                .effective,
+            ToolSensitivity::ReadOnly
+        );
+        // Non-colliding foreign tools keep their declared sensitivity.
+        assert_eq!(
+            ToolSensitivityResolution::for_tool_name("mcp:srv/lookup", false).effective,
+            ToolSensitivity::ReadOnly
+        );
+    }
 }

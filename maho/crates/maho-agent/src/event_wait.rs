@@ -7,9 +7,16 @@
 
 use crate::run_journal::AgentRunId;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use thiserror::Error;
+
+/// Maximum number of recent unmatched events buffered to close the gap between a run
+/// deciding to wait and its wait being registered.
+const MAX_BUFFERED_EVENTS: usize = 64;
+
+/// Unmatched events older than this are no longer replayed to a newly registered wait.
+const BUFFERED_EVENT_TTL_MS: u64 = 60_000;
 
 /// Unique handle identifying a pending wait registration.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -393,6 +400,8 @@ pub struct WaitRegistry {
     next_seq: u64,
     entries: HashMap<AgentRunId, WaitEntry>,
     handle_to_run: HashMap<WaitHandle, AgentRunId>,
+    /// Recent events that woke nobody, replayed to a matching wait at registration.
+    unmatched_events: VecDeque<WakeEvent>,
 }
 
 impl Default for WaitRegistry {
@@ -408,6 +417,7 @@ impl WaitRegistry {
             next_seq: 1,
             entries: HashMap::new(),
             handle_to_run: HashMap::new(),
+            unmatched_events: VecDeque::new(),
         }
     }
 
@@ -417,6 +427,7 @@ impl WaitRegistry {
             next_seq: 1,
             entries: HashMap::new(),
             handle_to_run: HashMap::new(),
+            unmatched_events: VecDeque::new(),
         }
     }
 
@@ -446,18 +457,39 @@ impl WaitRegistry {
         let handle = WaitHandle::from_u64(self.next_seq);
         self.next_seq += 1;
 
+        // Replay a recent event that arrived before this wait was registered, so a wakeup
+        // between "decide to wait" and "register" is not lost.
+        self.unmatched_events
+            .retain(|e| e.timestamp.saturating_add(BUFFERED_EVENT_TTL_MS) >= now);
+        let buffered = self
+            .unmatched_events
+            .iter()
+            .position(|e| e.run_id.as_ref().map_or(true, |r| r == &run_id) && filter.matches(e))
+            .and_then(|idx| self.unmatched_events.remove(idx));
+        let status = match buffered {
+            Some(event) => WaitStatus::Woken {
+                token: ResumeToken::new(run_id.clone(), handle.clone()),
+                event,
+            },
+            None => WaitStatus::Suspended {
+                handle: handle.clone(),
+                timeout_at: deadline,
+            },
+        };
+
         let entry = WaitEntry {
             handle: handle.clone(),
             run_id: run_id.clone(),
             filter,
             deadline,
             created_at: now,
-            status: WaitStatus::Suspended {
-                handle: handle.clone(),
-                timeout_at: deadline,
-            },
+            status,
         };
 
+        // A re-register replaces the run's previous (terminal) entry; drop its handle mapping.
+        if let Some(old) = self.entries.get(&run_id) {
+            self.handle_to_run.remove(&old.handle);
+        }
         self.handle_to_run.insert(handle.clone(), run_id.clone());
         self.entries.insert(run_id, entry);
 
@@ -527,6 +559,13 @@ impl WaitRegistry {
             }
         }
 
+        if woken.is_empty() {
+            if self.unmatched_events.len() >= MAX_BUFFERED_EVENTS {
+                self.unmatched_events.pop_front();
+            }
+            self.unmatched_events.push_back(event.clone());
+        }
+
         woken
     }
 
@@ -550,12 +589,32 @@ impl WaitRegistry {
 
     /// Cancel a pending wait by wait handle.
     pub fn cancel_handle(&mut self, handle: &WaitHandle) -> Result<WaitHandle, EventWaitError> {
+        let run_id = self.run_for_handle(handle)?;
+        self.cancel(&run_id)
+    }
+
+    /// Resolves a handle to its run, requiring that it is still the run's current wait.
+    fn run_for_handle(&self, handle: &WaitHandle) -> Result<AgentRunId, EventWaitError> {
         let run_id = self
             .handle_to_run
             .get(handle)
-            .cloned()
             .ok_or_else(|| EventWaitError::NotFound(handle.clone()))?;
-        self.cancel(&run_id)
+        match self.entries.get(run_id) {
+            Some(entry) if &entry.handle == handle => Ok(run_id.clone()),
+            _ => Err(EventWaitError::NotFound(handle.clone())),
+        }
+    }
+
+    /// Poll the run's wait and, once it is terminal (woken, timed out or cancelled),
+    /// remove the entry so the registry does not retain consumed waits.
+    pub fn consume(&mut self, run_id: &AgentRunId) -> Result<WaitStatus, EventWaitError> {
+        let status = self.poll(run_id)?;
+        if !status.is_suspended() {
+            if let Some(entry) = self.entries.remove(run_id) {
+                self.handle_to_run.remove(&entry.handle);
+            }
+        }
+        Ok(status)
     }
 
     /// Poll current status for a run, checking for deadline expirations against the clock.
@@ -580,11 +639,7 @@ impl WaitRegistry {
 
     /// Poll current status by wait handle.
     pub fn poll_handle(&mut self, handle: &WaitHandle) -> Result<WaitStatus, EventWaitError> {
-        let run_id = self
-            .handle_to_run
-            .get(handle)
-            .cloned()
-            .ok_or_else(|| EventWaitError::NotFound(handle.clone()))?;
+        let run_id = self.run_for_handle(handle)?;
         self.poll(&run_id)
     }
 
@@ -634,6 +689,72 @@ impl std::fmt::Debug for WaitRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reregister_drops_old_handle_and_consume_removes_terminal_entry() {
+        let clock = Arc::new(MockClock::new(1000));
+        let mut registry = WaitRegistry::with_clock(clock.clone());
+        let run_id = AgentRunId::new("run-rereg");
+        let filter = EventFilter::new(EventKind::RoutineTrigger);
+
+        let old = registry.register(run_id.clone(), filter.clone(), 2000).unwrap();
+        clock.advance(1500);
+        // Expiry is observed by polling; only then may the run register again.
+        assert!(registry.poll_handle(&old).unwrap().is_timed_out());
+        let new = registry.register(run_id.clone(), filter, 5000).unwrap();
+
+        assert!(matches!(
+            registry.poll_handle(&old),
+            Err(EventWaitError::NotFound(_))
+        ));
+        assert!(matches!(
+            registry.cancel_handle(&old),
+            Err(EventWaitError::NotFound(_))
+        ));
+        assert!(registry.poll_handle(&new).unwrap().is_suspended());
+
+        registry.cancel(&run_id).unwrap();
+        assert!(registry.consume(&run_id).unwrap().is_cancelled());
+        assert!(registry.is_empty());
+        assert!(matches!(
+            registry.poll_handle(&new),
+            Err(EventWaitError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn event_before_register_is_not_lost() {
+        let clock = Arc::new(MockClock::new(1000));
+        let mut registry = WaitRegistry::with_clock(clock);
+        let run_id = AgentRunId::new("run-early");
+
+        // Event arrives before the run registers its wait.
+        let early = WakeEvent::for_run(run_id.clone(), EventKind::Notification, 1000)
+            .with_sender("alice");
+        assert!(registry.wake(&early).is_empty());
+
+        // Unrelated untargeted event must not satisfy the wait.
+        let other = WakeEvent::new(EventKind::Webhook, 1000);
+        assert!(registry.wake(&other).is_empty());
+
+        let handle = registry
+            .register(run_id.clone(), EventFilter::notification(Some("alice")), 5000)
+            .unwrap();
+        match registry.poll_handle(&handle).unwrap() {
+            WaitStatus::Woken { token, event } => {
+                assert_eq!(token.run_id(), &run_id);
+                assert_eq!(event.sender.as_deref(), Some("alice"));
+            }
+            other => panic!("expected buffered event to wake the wait, got {other:?}"),
+        }
+
+        // The buffered event is consumed exactly once.
+        registry.consume(&run_id).unwrap();
+        let again = registry
+            .register(run_id, EventFilter::notification(Some("alice")), 6000)
+            .unwrap();
+        assert!(registry.poll_handle(&again).unwrap().is_suspended());
+    }
 
     #[test]
     fn test_suspend_wake_matching_event_returns_same_run_id_resume_token() {

@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 /// bad config can never turn the bounded loop into an unbounded one.
 pub const MAX_STEPS_CEILING: u32 = 20;
 
+/// Minimum time granted to the final synthesis even when the step budget is spent.
+const SYNTHESIS_GRACE: Duration = Duration::from_secs(5);
+
 /// Frontier model patterns that are never allowed in Maho-managed routing.
 /// Kept in sync with billing-proxy's `FORBIDDEN_FRONTIER_PATTERNS`.
 const FRONTIER_PATTERNS: &[&str] = &[
@@ -213,7 +216,14 @@ pub async fn run_deep_research(
             break StopReason::BudgetExceeded;
         }
 
-        match stepper.step(query, &citations, steps).await {
+        // A hung step must not outlive the wall-clock budget: bound it by what remains.
+        let remaining = budget.max_wall_clock.saturating_sub(start.elapsed());
+        let step_result =
+            match tokio::time::timeout(remaining, stepper.step(query, &citations, steps)).await {
+                Ok(result) => result,
+                Err(_elapsed) => break StopReason::Timeout,
+            };
+        match step_result {
             Ok(outcome) => {
                 cost += outcome.step_cost_usd.max(0.0);
                 citations.extend(outcome.citations);
@@ -224,13 +234,29 @@ pub async fn run_deep_research(
                 if outcome.done {
                     break StopReason::Completed;
                 }
+                // Cost is only known after a step; stop now rather than at the next
+                // iteration top so a final-step overrun is reported as the stop reason.
+                if cost >= budget.max_cost_usd {
+                    break StopReason::BudgetExceeded;
+                }
             }
             Err(DeepResearchError::ToolDenied) => break StopReason::ToolDenied,
             Err(other) => return Err(other),
         }
     };
 
-    let summary = stepper.synthesize(query, &citations, &evidence).await?;
+    // Synthesis is bounded by whatever wall-clock remains (at least a short grace period so
+    // a run that stopped on Timeout can still summarize what it gathered).
+    let synth_budget = budget
+        .max_wall_clock
+        .saturating_sub(start.elapsed())
+        .max(SYNTHESIS_GRACE);
+    let summary = tokio::time::timeout(
+        synth_budget,
+        stepper.synthesize(query, &citations, &evidence),
+    )
+    .await
+    .map_err(|_| DeepResearchError::Stepper("synthesis timed out".to_string()))??;
 
     Ok(DeepResearchReport {
         summary,
@@ -478,6 +504,45 @@ mod tests {
         let report = run_deep_research("q", &max_policy(false, "byok/model"), budget, &stepper)
             .await
             .expect("bounded report");
+        assert_eq!(report.stop_reason, StopReason::Timeout);
+        assert_eq!(report.steps_taken, 0);
+    }
+
+    struct HangingStepper;
+    #[async_trait]
+    impl ResearchStepper for HangingStepper {
+        async fn step(
+            &self,
+            _q: &str,
+            _p: &[Citation],
+            _i: u32,
+        ) -> Result<StepOutcome, DeepResearchError> {
+            std::future::pending().await
+        }
+        async fn synthesize(
+            &self,
+            _q: &str,
+            _c: &[Citation],
+            _e: &[String],
+        ) -> Result<String, DeepResearchError> {
+            Ok("partial".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn hung_step_is_cut_off_by_wall_clock_budget() {
+        let budget = ResearchBudget {
+            max_steps: 3,
+            max_wall_clock: Duration::from_millis(50),
+            max_cost_usd: 100.0,
+        };
+        let report = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_deep_research("q", &max_policy(false, "byok/model"), budget, &HangingStepper),
+        )
+        .await
+        .expect("a hung step must not hang the run")
+        .expect("bounded report");
         assert_eq!(report.stop_reason, StopReason::Timeout);
         assert_eq!(report.steps_taken, 0);
     }
