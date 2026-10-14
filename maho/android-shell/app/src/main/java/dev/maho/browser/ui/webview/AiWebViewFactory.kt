@@ -3,6 +3,9 @@ package dev.maho.browser.ui.webview
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.net.Uri
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
@@ -10,6 +13,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
@@ -46,6 +50,33 @@ class AiWebViewHost internal constructor(
 }
 
 /**
+ * D2: `addJavascriptInterface` exposes objects to every frame/origin the WebView
+ * ever shows, so each entry point re-checks that the page that is currently
+ * loaded is the trusted asset origin ([trusted] is main-thread-maintained and
+ * read from the JavaBridge thread). Calls from any other origin are dropped.
+ */
+internal class OriginGatedBridge(
+    private val trusted: () -> Boolean,
+    private val onRpc: (String) -> Unit,
+    private val onBackRequested: () -> Unit = {},
+) {
+    @JavascriptInterface
+    fun rpc(requestJson: String) {
+        if (!trusted()) {
+            Log.w("MahoWebAI", "rpc rejected: caller is not the trusted asset origin")
+            return
+        }
+        onRpc(requestJson)
+    }
+
+    @JavascriptInterface
+    fun onBack() {
+        if (!trusted()) return
+        onBackRequested()
+    }
+}
+
+/**
  * AiWebViewFactory — builds a WebView wired to [MahoNativeBridge] via
  * [WebViewBridge] (as `MahoBridgeAndroid`) and [NativeActionBridge] (as
  * `MahoBridgeNative`), then loads `web-ai/index.html#<screen>[?params]`.
@@ -58,7 +89,29 @@ class AiWebViewHost internal constructor(
 object AiWebViewFactory {
     private const val ASSET_HOST = "appassets.androidplatform.net"
     private const val APP_URL = "https://$ASSET_HOST/assets/web-ai/index.html"
-    private const val DEV_URL = "http://10.0.2.2:5173/"
+    private const val DEV_HOST = "10.0.2.2"
+    private const val DEV_PORT = 5173
+    private const val DEV_URL = "http://$DEV_HOST:$DEV_PORT/"
+
+    /** True only for the bundled asset origin (and the dev server when [allowDev], i.e. debug builds). */
+    internal fun isTrustedBridgeUrl(url: String?, allowDev: Boolean): Boolean {
+        if (url.isNullOrEmpty()) return false
+        val uri = Uri.parse(url)
+        val host = uri.host ?: return false
+        return when (uri.scheme?.lowercase()) {
+            "https" -> host.equals(ASSET_HOST, ignoreCase = true) && (uri.port == -1 || uri.port == 443)
+            "http" -> allowDev && host == DEV_HOST && uri.port == DEV_PORT
+            else -> false
+        }
+    }
+
+    private fun openExternally(context: Context, uri: Uri) {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure { Log.w("MahoWebAI", "no handler for external link", it) }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     fun createHost(
@@ -72,6 +125,8 @@ object AiWebViewFactory {
             .setDomain(ASSET_HOST)
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
             .build()
+
+        val bridgeTrusted = AtomicBoolean(false)
 
         val wv = WebView(context).apply {
             if (BuildConfig.DEBUG) {
@@ -106,11 +161,21 @@ object AiWebViewFactory {
                         BrowserThemeController.setTheme(theme)
                         return true
                     }
-                    return false
+                    // D2: the JS bridges must never reach a remote page. Only the asset
+                    // origin may load in this WebView; everything else is handed to the system.
+                    if (isTrustedBridgeUrl(request.url.toString(), BuildConfig.DEBUG)) return false
+                    if (request.isForMainFrame) openExternally(view.context, request.url)
+                    return true
+                }
+
+                override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    bridgeTrusted.set(isTrustedBridgeUrl(url, BuildConfig.DEBUG))
                 }
 
                 override fun onPageFinished(view: WebView, url: String?) {
                     super.onPageFinished(view, url)
+                    bridgeTrusted.set(isTrustedBridgeUrl(url, BuildConfig.DEBUG))
                     BrowserThemeController.applyToWebView(view)
                 }
 
@@ -144,9 +209,13 @@ object AiWebViewFactory {
             onCompleteOnboarding = onCompleteOnboarding,
             googleCredentialSource = (context as? Activity)?.let(::CredentialManagerGoogleSource),
         )
-        wv.addJavascriptInterface(rpcBridge, "MahoBridgeAndroid")
         wv.addJavascriptInterface(
-            NativeActionBridge(context) { js -> wv.post { wv.evaluateJavascript(js, null) } },
+            OriginGatedBridge(bridgeTrusted::get, rpcBridge::rpc, rpcBridge::onBack),
+            "MahoBridgeAndroid",
+        )
+        val nativeActions = NativeActionBridge(context) { js -> wv.post { wv.evaluateJavascript(js, null) } }
+        wv.addJavascriptInterface(
+            OriginGatedBridge(bridgeTrusted::get, nativeActions::rpc),
             "MahoBridgeNative",
         )
 
@@ -157,7 +226,8 @@ object AiWebViewFactory {
     }
 
     private fun buildUrl(context: Context, hash: String): String {
-        val isDev = context
+        // D2: the cleartext dev server is a debug-build-only affordance.
+        val isDev = BuildConfig.DEBUG && context
             .getSharedPreferences("maho_dev", Context.MODE_PRIVATE)
             .getBoolean("web_ai_dev", false)
         return if (isDev) "$DEV_URL$hash" else "$APP_URL$hash"

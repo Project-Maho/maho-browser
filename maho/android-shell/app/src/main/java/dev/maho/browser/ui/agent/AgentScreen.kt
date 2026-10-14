@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,10 +53,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.BuildConfig
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.support.AgentClient
 import dev.maho.browser.support.AgentEvent
+import dev.maho.browser.support.defaultAgentRelayUrl
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -70,14 +77,23 @@ private enum class AgentTaskState {
     Cancelled,
 }
 
+/**
+ * D6: native agent calls block (Rust `block_on`), so they never run on Main. Cleanup must
+ * outlive the composition scope (cancelled on dispose), hence an app-scoped IO scope.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+private val agentNativeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1)) // serial: cancel always precedes free
+
+private class LocalSessionStart(val ptr: Long, val sent: Boolean)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentScreen(
-    relayUrl: String = "ws://10.0.2.2:8080/ws/agent",
+    relayUrl: String = defaultAgentRelayUrl(BuildConfig.DEBUG),
     initialGoal: String? = null,
     onBack: () -> Unit,
 ) {
-    var goalInput by remember(initialGoal) { mutableStateOf(initialGoal.orEmpty()) }
+    var goalInput by rememberSaveable(initialGoal) { mutableStateOf(initialGoal.orEmpty()) }
     var urlSeedInput by remember { mutableStateOf("") }
     var taskState by remember { mutableStateOf(AgentTaskState.Idle) }
     var activeTaskId by remember { mutableStateOf<String?>(null) }
@@ -90,13 +106,14 @@ fun AgentScreen(
     var activeLocalSessionPtr by remember { mutableStateOf(0L) }
     var activeLocalSessionId by remember { mutableStateOf<String?>(null) }
 
+    // Set on dispose so the poll job's completion handler (the sole `agentFreeSession` owner)
+    // cancels the native session before freeing it, in order, off the Main thread.
+    val disposed = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
     DisposableEffect(client) {
         onDispose {
+            disposed.set(true)
             client.close()
-            // Single-owner free: polling Job's `invokeOnCompletion` is the sole `agentFreeSession` caller.
-            if (activeLocalSessionPtr != 0L) {
-                MahoBridge.agentCancel(activeLocalSessionPtr)
-            }
         }
     }
 
@@ -118,6 +135,13 @@ fun AgentScreen(
         client.connected.collectLatest { isConnected ->
             if (!runLocally && isConnected && taskState == AgentTaskState.Connecting) {
                 taskState = AgentTaskState.Idle
+            } else if (
+                !runLocally && !isConnected &&
+                (taskState == AgentTaskState.Connecting || taskState == AgentTaskState.Submitted || taskState == AgentTaskState.Working)
+            ) {
+                // D8: connection failure/closure must terminate the task instead of leaving it Submitted forever.
+                eventLog.add("[error] Relay connection lost")
+                taskState = AgentTaskState.Failed
             }
         }
     }
@@ -213,24 +237,33 @@ fun AgentScreen(
                             if (runLocally) {
                                 taskState = AgentTaskState.Working
                                 val sessionId = java.util.UUID.randomUUID().toString()
-                                val sessionPtr = MahoBridge.agentCreateSession(sessionId)
-                                if (sessionPtr == 0L) {
+                                val goal = goalInput
+                                // D6: native create/send block on IO. NonCancellable so a handle created
+                                // right as the composition leaves is still returned and freed by the poll job.
+                                val start = withContext(Dispatchers.IO + NonCancellable) {
+                                    val ptr = MahoBridge.agentCreateSession(sessionId)
+                                    if (ptr == 0L) {
+                                        LocalSessionStart(0L, false)
+                                    } else {
+                                        val ok = MahoBridge.agentSendMessage(ptr, goal)
+                                        if (!ok) MahoBridge.agentFreeSession(ptr)
+                                        LocalSessionStart(ptr, ok)
+                                    }
+                                }
+                                if (start.ptr == 0L) {
                                     taskState = AgentTaskState.Failed
                                     eventLog.add("[error] Failed to create local agent session")
                                     return@launch
                                 }
-                                activeLocalSessionPtr = sessionPtr
-                                activeLocalSessionId = sessionId
-                                val sent = MahoBridge.agentSendMessage(sessionPtr, goalInput)
-                                if (!sent) {
-                                    MahoBridge.agentFreeSession(sessionPtr)
-                                    activeLocalSessionPtr = 0L
-                                    activeLocalSessionId = null
+                                if (!start.sent) {
                                     taskState = AgentTaskState.Failed
                                     eventLog.add("[error] Failed to start agent task")
                                     return@launch
                                 }
-                                
+                                val sessionPtr = start.ptr
+                                activeLocalSessionPtr = sessionPtr
+                                activeLocalSessionId = sessionId
+
                                 val pollJob = scope.launch(Dispatchers.IO) {
                                     try {
                                         while (activeLocalSessionId == sessionId && taskState == AgentTaskState.Working) {
@@ -276,19 +309,36 @@ fun AgentScreen(
                                 // if a future refactor inserts one, parent-scope cancellation before registration
                                 // would leak the session pointer.
                                 pollJob.invokeOnCompletion {
-                                    if (activeLocalSessionId == sessionId) {
-                                        activeLocalSessionPtr = 0L
-                                        activeLocalSessionId = null
+                                    // D12: this runs on whichever thread finished the job; Compose state
+                                    // is only written from Main (skipped when the composition is gone).
+                                    scope.launch(Dispatchers.Main) {
+                                        if (activeLocalSessionId == sessionId) {
+                                            activeLocalSessionPtr = 0L
+                                            activeLocalSessionId = null
+                                        }
                                     }
-                                    MahoBridge.agentFreeSession(sessionPtr)
+                                    // D6: native cancel/free off Main, on a scope that outlives the composition.
+                                    agentNativeScope.launch {
+                                        if (disposed.get()) MahoBridge.agentCancel(sessionPtr)
+                                        MahoBridge.agentFreeSession(sessionPtr)
+                                    }
                                 }
                             } else {
                                 taskState = AgentTaskState.Connecting
                                 client.connect()
                                 kotlinx.coroutines.delay(500)
                                 val seed = urlSeedInput.ifBlank { null }
-                                activeTaskId = client.submitTask(goalInput, seed)
-                                taskState = AgentTaskState.Submitted
+                                val submitted = client.submitTask(goalInput, seed)
+                                if (submitted == null) {
+                                    // D8: socket absent/closed/failed -> terminal state, never "Submitted" forever.
+                                    if (taskState != AgentTaskState.Failed) {
+                                        eventLog.add("[error] Relay connection failed")
+                                        taskState = AgentTaskState.Failed
+                                    }
+                                } else if (taskState != AgentTaskState.Failed) {
+                                    activeTaskId = submitted
+                                    taskState = AgentTaskState.Submitted
+                                }
                             }
                         }
                     },
@@ -308,8 +358,9 @@ fun AgentScreen(
                     OutlinedButton(
                         onClick = {
                             if (runLocally) {
-                                if (activeLocalSessionPtr != 0L) {
-                                    MahoBridge.agentCancel(activeLocalSessionPtr)
+                                val ptr = activeLocalSessionPtr
+                                if (ptr != 0L) {
+                                    agentNativeScope.launch { MahoBridge.agentCancel(ptr) }
                                 }
                                 taskState = AgentTaskState.Cancelled
                             } else {

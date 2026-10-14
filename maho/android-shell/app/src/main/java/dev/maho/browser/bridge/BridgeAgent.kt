@@ -59,8 +59,19 @@ object BridgeAgent {
     @JvmStatic
     fun invokeAgentBrowserTool(toolName: String, argumentsJson: String): String? {
         if (toolName == "tools/list") return agenticBrowsingToolDescriptorsJson()
+        // D4: Rust already only dispatches discovered capability ids, but this entry point is the
+        // trust boundary into the live browser (navigate, close_tab, search_history, ...), so it
+        // admits only the advertised agentic browsing tools itself.
+        if (!isAdvertisedAgentBrowserTool(toolName)) {
+            return JSONObject().put("ok", false).put("error", "unknown_tool").toString()
+        }
         val args = runCatching { JSONObject(argumentsJson) }.getOrNull() ?: return null
         return BrowserToolExecutor().invoke(toolName, args).toString()
+    }
+
+    internal fun isAdvertisedAgentBrowserTool(toolName: String): Boolean {
+        val tools = JSONObject(agenticBrowsingToolDescriptorsJson()).getJSONArray("tools")
+        return (0 until tools.length()).any { tools.getJSONObject(it).optString("name") == toolName }
     }
 
     internal fun agentInstallDeterministicFsWriteModel(sessionHandle: Long): Boolean =
