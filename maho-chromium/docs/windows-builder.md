@@ -52,6 +52,9 @@ preserve nested quoting.
 | `30-configure` | puts sccache on the S3/MinIO backend, applies Chromium overrides, writes `args.gn`, `gn gen` | `sccache.env` |
 | `35-rust-prebuilt` | adds rustup `llvm-tools` and cbindgen 0.29.2, builds `maho_ffi.lib` and the other Rust prebuilts via `build_maho.py --skip-chromium` | Rust MSVC toolchain |
 | `40-compile` | `autoninja` on specific targets | `MAHO_COMPILE_TARGETS` |
+| `50-release` | official release build via `build_maho.py --release` into `out\Release` (`chrome`, `maho_mail_helper`, `mini_installer`); unsigned | steps 00-35 |
+| `55-release-isolated` | official release build of `MAHO_RELEASE_REF` in its own tree `C:\rel` (own clone + own `gclient sync`, objects shared from `C:\src`), verified clean before and after | `MAHO_RELEASE_REF`, `local.bundle` |
+| `60-release-bundle` | `release_local.py --skip-build --no-publish` from the step-55 tree: `MahoSetup-<v>.exe`, signed `update-win.json`, Store MSIX, `release-notes.html` | step 55, Sparkle seed |
 
 Run order on a fresh machine: `00` → `10` → `15` → `30` → `35` → `40`.
 `20` is only for verifying uncommitted work and can run any time after `10`.
@@ -101,9 +104,28 @@ server started without them silently falls back to local disk.
 `maho_mail_ffi` bakes the Google OAuth desktop client into the binary, so step
 35 needs `C:\src\maho-browser\.secrets\maho\google_desktop_oauth.json`
 (or `MAHO_GOOGLE_CLIENT_SECRET_WINDOWS` / `GMAIL_CLIENT_SECRET` in the
-environment). Copy it from the owner's vault with `scp`, restrict it with
+environment). Release builds (step 50) also need
+`.secrets\maho\google_chromium_api_key.env`. Copy it from the owner's vault with `scp`, restrict it with
 `icacls C:\src\maho-browser\.secrets /inheritance:r /grant:r <user>:(OI)(CI)F`,
 and never commit it: step 10 adds `.secrets/` to `.git/info/exclude`.
+
+## Release builds must not share the verification tree
+
+`C:\src\maho-browser` and `C:\src\chromium\src` are reused by every session
+that verifies uncommitted work (step 20, ad-hoc resync jobs). A job that
+resyncs or re-applies overrides there in the middle of a release build mixes
+uncommitted changes into the release and races the build's own output
+writes (`unable to rename temporary ... .obj.tmp`). Build releases with step
+55, which owns `C:\rel` exclusively, and bundle them from that tree.
+
+## Junctions and cleanup commands
+
+`git clean` and `gclient sync -D` follow NTFS junctions. A junction from
+`chromium\src\maho` into a checkout's `maho-chromium` therefore lets a clean of
+the Chromium tree delete the checkout's sources. Step 55 unlinks its
+junctions with `rmdir` (which removes only the link) before it cleans or
+syncs, never passes `-D`, and resets the release checkout at the start of
+every run.
 
 ## Pitfalls hit while bringing this up
 
@@ -125,4 +147,7 @@ and never commit it: step 10 adds `.secrets/` to `.git/info/exclude`.
 | WebUI bundles: `Could not resolve "sonner"` / `"codemirror"`, tailwind `Can't resolve 'tailwindcss'` | the WebUI imports packages (sonner, marked, codemirror + @codemirror/*, six @radix-ui primitives, tw-animate-css, @tailwindcss/cli, esbuild) that `website/package.json` does not declare; dev Macs have them from ad hoc installs | step 15 pins the reference-Mac versions; follow-up: declare them in a package |
 | step 15: `lockfile had changes, but lockfile is frozen` | bun re-resolves Windows-only optional packages in a macOS-written lock | step 15 installs without `--frozen-lockfile` |
 | `maho_ffi.lib ... missing` right after an overlay | `git clean` in step 20 deleted untracked build products | step 20 excludes `prebuilt/`, `website`, `node_modules` and `.secrets` from the clean |
+| step 50: `base patch does not apply to ...` after verifying an uncommitted overlay | `chromium\src` still carries the overlay's version of a base patch; `apply_chromium_src_overrides.py` only accepts pristine or exactly-patched files | `git -C C:\src\chromium\src checkout -- <file>` for that file, then `--dry-run` must exit 0 |
+| `can't open file ...\maho-chromium\build\scripts\build_maho.py` in `C:\rel` | `gclient sync -D` / `git clean` recursed through the `src\maho` junction and deleted the release checkout's `maho-chromium` | step 55 unlinks junctions first, drops `-D`, resets the checkout every run |
+| clang compiles never hit sccache (`Non-cacheable: -fmodules-cache-path`) | Chromium 154 enables explicit Clang modules by default; sccache cannot cache module compiles | every args template sets `use_clang_modules = false` |
 | step reports failure on success output | PowerShell 5 turns native stderr into a terminating error under `Stop` | scripts use `Continue` and check `$LASTEXITCODE` |
