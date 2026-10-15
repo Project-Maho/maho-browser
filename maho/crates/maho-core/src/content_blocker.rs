@@ -30,6 +30,11 @@ pub const MAX_ENABLED_FILTER_RULES: usize = 200_000;
 #[serde(rename_all = "camelCase")]
 pub struct CosmeticResourcesResponse {
     pub hide_selectors: Vec<String>,
+    /// JSON-encoded procedural or action filters (adblock `ProceduralOrActionFilter`)
+    /// that need in-page evaluation; sorted for a stable payload.
+    pub procedural_actions: Vec<String>,
+    /// Class/id selectors excepted from generic hiding on this URL; sorted.
+    pub exceptions: Vec<String>,
     pub injected_script: Option<String>,
     pub generichide: bool,
 }
@@ -1027,8 +1032,15 @@ impl ContentBlocker {
             return CosmeticResourcesResponse::default();
         }
         let resources: UrlSpecificResources = self.engine().url_cosmetic_resources(url);
+        let mut procedural_actions: Vec<String> =
+            resources.procedural_actions.into_iter().collect();
+        procedural_actions.sort();
+        let mut exceptions: Vec<String> = resources.exceptions.into_iter().collect();
+        exceptions.sort();
         CosmeticResourcesResponse {
             hide_selectors: resources.hide_selectors.into_iter().collect(),
+            procedural_actions,
+            exceptions,
             injected_script: if resources.injected_script.is_empty() {
                 None
             } else {

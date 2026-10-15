@@ -119,6 +119,38 @@ fn psl_exception_matching() {
 }
 
 #[test]
+fn cosmetic_resources_expose_procedural_actions_and_exceptions() {
+    let mut cb = ContentBlocker::new();
+    cb.update_filter_list_content(
+        "easylist",
+        "example.com##div:has-text(Sponsored)\n##.ad-banner\nexample.com#@#.ad-banner\n"
+            .to_string(),
+    )
+    .unwrap();
+    cb.rebuild_engine_sync();
+    cb.set_mode(ContentBlockingMode::Native);
+
+    let resources = cb.get_cosmetic_resources("https://example.com/article");
+    assert!(
+        resources
+            .procedural_actions
+            .iter()
+            .any(|action| action.contains("has-text") && action.contains("Sponsored")),
+        "procedural :has-text rule must reach the caller, got {:?}",
+        resources.procedural_actions
+    );
+    assert_eq!(resources.exceptions, vec![".ad-banner".to_string()]);
+
+    let other = cb.get_cosmetic_resources("https://other.test/");
+    assert!(other.procedural_actions.is_empty());
+    assert!(other.exceptions.is_empty());
+
+    let json = serde_json::to_value(&resources).expect("response serializes");
+    assert!(json.get("proceduralActions").is_some());
+    assert!(json.get("exceptions").is_some());
+}
+
+#[test]
 fn off_thread_compilation_and_generation_safety() {
     let mut cb = ContentBlocker::new();
     cb.update_filter_list_content("easylist", "||bad.com^\n".to_string())
