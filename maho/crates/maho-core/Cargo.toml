@@ -35,6 +35,11 @@ futures-util = "0.3"
 thiserror = { workspace = true }
 zeroize = { version = "1", features = ["zeroize_derive"] }
 tracing = { workspace = true }
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+candle-transformers = { version = "0.9", default-features = false }
+# fancy-regex instead of the default onig keeps the tokenizer pure Rust.
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 
 # TLS backend is platform-split so the desktop Chromium link stays satisfiable.
 # Linux resolves reqwest's crypto against Chromium's BoringSSL, which cannot
