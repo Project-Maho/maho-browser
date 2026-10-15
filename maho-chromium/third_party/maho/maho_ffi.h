@@ -843,6 +843,20 @@ char *maho_core_get_content_rules(struct MahoCore *ptr);
 char *maho_core_get_cosmetic_resources(struct MahoCore *ptr, const char *url);
 
 /**
+ * Returns the generic class/id hide selectors that match the page's classes
+ * and ids, as a JSON string array.
+ *
+ * `request_json` is `{"classes": string[], "ids": string[], "exceptions": string[]}`;
+ * `exceptions` comes from `maho_core_get_cosmetic_resources` for the same URL.
+ * Returns null on invalid input.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `request_json` must be a valid C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_hidden_class_id_selectors(struct MahoCore *ptr, const char *request_json);
+
+/**
  * # Safety
  * `ptr` must be from `maho_core_new`. `path` must be a valid null-terminated C string.
  */

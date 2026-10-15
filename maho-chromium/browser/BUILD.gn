@@ -1792,11 +1792,15 @@ test("maho_content_blocker_update_service_test") {
   sources = [
     "net/maho_content_blocker_update_service_unittest.cc",
     "net/maho_content_blocker_update_service_test_main.cc",
+    "net/maho_cosmetic_class_id_poller_unittest.cc",
+    "net/maho_cosmetic_filters_handler_unittest.cc",
   ]
   deps = [
     ":maho_content_blocker_update_service",
+    "//maho/browser/net",
     "//base",
     "//base/test:test_support",
+    "//chrome/test:test_support",
     "//content/test:test_support",
     "//mojo/core/embedder",
     "//net",
