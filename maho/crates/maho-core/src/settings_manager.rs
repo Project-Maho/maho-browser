@@ -308,6 +308,24 @@ impl SettingsManager {
                 self.settings.advanced.experimental_features = experimental_features;
             }
         }
+        if let Some(episodic) = changes.episodic_memory {
+            if let Some(enabled) = episodic.enabled {
+                self.settings.episodic_memory.enabled = enabled;
+            }
+            if let Some(paused) = episodic.paused {
+                self.settings.episodic_memory.paused = paused;
+            }
+            if let Some(domains) = episodic.excluded_domains {
+                let mut cleaned: Vec<String> = domains
+                    .into_iter()
+                    .map(|d| d.trim().trim_start_matches("*.").to_ascii_lowercase())
+                    .filter(|d| !d.is_empty())
+                    .collect();
+                cleaned.sort();
+                cleaned.dedup();
+                self.settings.episodic_memory.excluded_domains = cleaned;
+            }
+        }
         if let Some(notifications) = changes.notifications {
             if let Some(enabled) = notifications.enabled {
                 self.settings.notifications.enabled = enabled;

@@ -402,6 +402,19 @@ pub struct SettingsUpdate {
     pub advanced: Option<AdvancedSettingsUpdate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notifications: Option<NotificationSettingsUpdate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub episodic_memory: Option<EpisodicMemorySettingsUpdate>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EpisodicMemorySettingsUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excluded_domains: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

@@ -10917,6 +10917,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
     }
 
@@ -10938,6 +10939,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
     }
 
@@ -10961,6 +10963,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
         Ok(())
     }
@@ -10981,6 +10984,7 @@ impl MahoCore {
             autofill: None,
             advanced: None,
             notifications: None,
+            episodic_memory: None,
         });
     }
 
