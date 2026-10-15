@@ -35,6 +35,51 @@ source_set("maho_core_holder") {
   deps += [ "//maho/browser/mail_helper:maho_mail_helper" ]
 }
 
+source_set("maho_webauthn") {
+  sources = [
+    "webauthn/maho_vault_passkey_authenticator.cc",
+    "webauthn/maho_vault_passkey_authenticator.h",
+    "webauthn/maho_vault_passkey_discovery.cc",
+    "webauthn/maho_vault_passkey_discovery.h",
+  ]
+  deps = [
+    ":maho_core_holder",
+    "//base",
+    "//chrome/browser/profiles:profile",
+    "//components/cbor",
+    "//content/public/browser",
+    "//crypto",
+    "//device/fido",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//url",
+  ]
+}
+
+source_set("maho_webauthn_unittests") {
+  testonly = true
+  sources = [ "webauthn/maho_vault_passkey_authenticator_unittest.cc" ]
+  deps = [
+    ":maho_webauthn",
+    "//base",
+    "//base/test:test_support",
+    "//components/cbor",
+    "//crypto",
+    "//device/fido",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_webauthn_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_webauthn_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 
 
 source_set("maho_routines_scheduler") {
