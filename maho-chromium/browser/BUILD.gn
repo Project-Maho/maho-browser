@@ -616,13 +616,18 @@ test("maho_tab_borrow_chip_test") {
 test("maho_sync_relay_client_test") {
   sources = [
     "ai/maho_browser_tool_test_main.cc",
+    "sync/maho_site_session_cookie.cc",
+    "sync/maho_site_session_cookie.h",
+    "sync/maho_site_session_cookie_unittest.cc",
     "sync/maho_sync_relay_client_unittest.cc",
   ]
   deps = [
     ":maho_sync_relay_protocol",
     "//base",
     "//base/test:test_support",
+    "//net",
     "//testing/gtest",
+    "//url",
   ]
 }
 
@@ -1124,6 +1129,12 @@ source_set("maho_browser_main_extra_parts") {
     "ui/webui/maho_webui_private_boundary.h",
     "sync/maho_sync_relay_client.cc",
     "sync/maho_sync_relay_client.h",
+    "sync/maho_site_session_collector.cc",
+    "sync/maho_site_session_collector.h",
+    "sync/maho_site_session_applier.cc",
+    "sync/maho_site_session_applier.h",
+    "sync/maho_site_session_cookie.cc",
+    "sync/maho_site_session_cookie.h",
   ]
 
 
@@ -1148,6 +1159,12 @@ source_set("maho_browser_main_extra_parts") {
     "//chrome/browser/sessions:sessions",
     "//maho/browser/net",
     "//services/network/public/mojom",
+    "//components/services/storage/public/mojom",
+    "//content/public/browser",
+    "//net",
+    "//third_party/blink/public/common",
+    "//third_party/blink/public/mojom",
+    "//url",
 
     "//maho/browser/importer",
     "//maho/browser/mail_helper:maho_mail_notification_coordinator",

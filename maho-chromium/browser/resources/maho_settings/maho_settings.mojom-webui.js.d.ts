@@ -856,6 +856,8 @@ export class PageHandlerRemote {
   exportShortcuts(): Promise<{jsonData: string}>;
   importShortcuts(jsonData: string): Promise<{success: boolean}>;
   getSyncStatus(): Promise<{status: SyncStatus}>;
+  getSiteSessionOptedOrigins(): Promise<{origins: string[]}>;
+  setSiteSessionOptedOrigins(origins: string[]): Promise<{success: boolean; errorMessage: string}>;
   getSyncDevices(): Promise<{devices: SyncDeviceInfo[]}>;
   generateSyncKey(): Promise<{keyInfo: SyncKeyInfo}>;
   configureSyncEncryption(recoveryPhrase: string): Promise<{status: SyncStatus}>;

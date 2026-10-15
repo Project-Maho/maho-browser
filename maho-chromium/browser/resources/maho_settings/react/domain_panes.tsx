@@ -18,6 +18,7 @@ import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_sec
 import {ContentBlockerRulesCard} from './content_blocker_rules.js';
 import {ProfilesEditor} from './profiles_editor.js';
 import {MemorySettingsPane} from './memory_settings.js';
+import {SiteSessionsSection} from './site_sessions_section.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
 import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
@@ -507,12 +508,11 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       {accountSection}
       <div className="mt-6">
         <SyncConnectionSection store={store} />
+        <SiteSessionsSection handler={store.getHandler()} />
       </div>
     </PaneShell>
   );
 }
-
-
 
 export function PaneLoading({message}: {message: string}) {
   return <p className={STANDALONE_MESSAGE_CLASS}>{message}</p>;

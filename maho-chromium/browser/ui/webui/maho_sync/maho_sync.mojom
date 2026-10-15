@@ -35,6 +35,11 @@ interface PageHandler {
   GetConnectedDevices() => (array<DeviceInfo> devices);
 
   GenerateSyncKey() => (string sync_key, string room_id, string recovery_phrase);
+
+  GetSiteSessionOptedOrigins() => (array<string> origins);
+
+  SetSiteSessionOptedOrigins(array<string> origins) => (bool success,
+                                                        string error_message);
 };
 
 interface Page {
