@@ -10212,6 +10212,16 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
     ],
     "chrome/browser/renderer_context_menu/render_view_context_menu.cc": [
         Replacement(
+            old='#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"\n',
+            new=(
+                '#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"\n'
+                '#include "maho/browser/ai/maho_selection_ask_dispatch.h"\n'
+            ),
+            description="Maho: include the Ask Maho selection dispatcher",
+            guard='maho/browser/ai/maho_selection_ask_dispatch.h',
+            idempotent=True,
+        ),
+        Replacement(
             old=(
                 '#include "maho/browser/ui/views/little_'
                 'arc/maho_little_'
@@ -10248,6 +10258,67 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             ),
             description="Maho: route context-menu command through Maho Mini launch API",
             guard='maho::LaunchMahoMini(browser_context_',
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '  AppendGlicItems();\n'
+                '\n'
+                '  if (use_simplified_menu_for_text_selection &&'
+            ),
+            new=(
+                '  AppendGlicItems();\n'
+                '\n'
+                '  if (!params_.selection_text.empty() &&\n'
+                '      !params_.is_editable && params_.page_url.is_valid()) {\n'
+                '    menu_model_.AddItem(\n'
+                '        IDC_MAHO_ASK_ABOUT_SELECTION,\n'
+                '        u"Ask Maho about \\u201c" +\n'
+                '            gfx::TruncateString(params_.selection_text, 32,\n'
+                '                                gfx::CHARACTER_BREAK) +\n'
+                '            u"\\u201d");\n'
+                '  }\n'
+                '\n'
+                '  if (use_simplified_menu_for_text_selection &&'
+            ),
+            description="Maho: add Ask Maho action for selected page text",
+            guard="IDC_MAHO_ASK_ABOUT_SELECTION",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n'
+                '      return navigation_allowed && params_.link_url.is_valid() &&\n'
+            ),
+            new=(
+                '    case IDC_MAHO_ASK_ABOUT_SELECTION:\n'
+                '      return params_.page_url.is_valid() &&\n'
+                '             !params_.selection_text.empty() && !params_.is_editable;\n'
+                '    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n'
+                '      return navigation_allowed && params_.link_url.is_valid() &&\n'
+            ),
+            description="Maho: enable Ask Maho only for valid non-editable page selections",
+            guard="case IDC_MAHO_ASK_ABOUT_SELECTION:",
+            idempotent=True,
+        ),
+        Replacement(
+            old=(
+                '    case IDC_CONTENT_CONTEXT_TRANSLATE:\n'
+                '      ExecTranslate();\n'
+                '      break;'
+            ),
+            new=(
+                '    case IDC_MAHO_ASK_ABOUT_SELECTION:\n'
+                '      maho::AskMahoAboutSelection(\n'
+                '          GetBrowser(), embedder_web_contents_, params_.page_url,\n'
+                '          params_.selection_text);\n'
+                '      break;\n'
+                '    case IDC_CONTENT_CONTEXT_TRANSLATE:\n'
+                '      ExecTranslate();\n'
+                '      break;'
+            ),
+            description="Maho: dispatch Ask Maho selection through browser AI ingress",
+            guard="maho::AskMahoAboutSelection(\n          GetBrowser()",
             idempotent=True,
         ),
         Replacement(

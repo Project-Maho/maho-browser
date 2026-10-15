@@ -181,6 +181,31 @@ source_set("maho_otp_backend") {
   ]
 }
 
+source_set("maho_selection_ask_query") {
+  sources = [
+    "ai/maho_selection_ask_query.cc",
+    "ai/maho_selection_ask_query.h",
+  ]
+  deps = [ "//base", "//maho/browser:maho_ai_security_utils" ]
+}
+
+source_set("maho_selection_ask_dispatch") {
+  sources = [
+    "ai/maho_selection_ask_dispatch.cc",
+    "ai/maho_selection_ask_dispatch.h",
+  ]
+  deps = [
+    ":maho_selection_ask_query",
+    "//base",
+    "//chrome/browser/ui",
+    "//chrome/browser/ui/side_panel",
+    "//content/public/browser",
+    "//maho/browser/ui:maho_ai_ingress_coordinator",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//url",
+  ]
+}
+
 source_set("maho_ai_client") {
   sources = [
     "ai/maho_ai_llm_client.cc",
@@ -1151,6 +1176,7 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_tab_registry",
     ":maho_theme_support",
     ":maho_mcp_integration",
+    ":maho_selection_ask_dispatch",
     ":maho_sync_relay_protocol",
     ":maho_control_activity_service",
     "//base",
@@ -1550,6 +1576,28 @@ source_set("maho_agent_event_replay_buffer_unittests") {
     ":maho_agent_event_replay_buffer",
     "//base",
     "//base/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+source_set("maho_selection_ask_query_unittests") {
+  testonly = true
+  sources = [ "ai/maho_selection_ask_query_unittest.cc" ]
+  deps = [
+    ":maho_selection_ask_query",
+    "//base",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_selection_ask_query_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_selection_ask_query_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/test:test_support",
     "//testing/gtest",
   ]
 }

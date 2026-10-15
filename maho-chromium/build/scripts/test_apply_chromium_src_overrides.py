@@ -2326,6 +2326,67 @@ class MahoDesktopDefectRegressionTest(unittest.TestCase):
             self.assertFalse(changed_again)
 
 
+class RenderViewContextMenuAskMahoReplacementTest(unittest.TestCase):
+    _PATH = "chrome/browser/renderer_context_menu/render_view_context_menu.cc"
+
+    def test_ask_maho_selection_replacements_apply_and_are_idempotent(self):
+        replacements = [
+            r for r in REPLACEMENTS[self._PATH]
+            if "Ask Maho" in r.description
+        ]
+        self.assertEqual(len(replacements), 4)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "render_view_context_menu.cc"
+            target.write_text(
+                '#include "maho/browser/ui/context_menu/maho_context_menu_ids.h"\n'
+                "  AppendGlicItems();\n\n"
+                "  if (use_simplified_menu_for_text_selection &&\n"
+                "      !(params_.has_image_contents && !params_.link_url.is_empty())) {\n"
+                "    AppendRevisedTextSelectionSection();\n"
+                "  }\n"
+                "    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n"
+                "      return navigation_allowed && params_.link_url.is_valid() &&\n"
+                "             IsOpenLinkAllowedByDlp(params_.link_url);\n"
+                "    case IDC_CONTENT_CONTEXT_TRANSLATE:\n"
+                "      ExecTranslate();\n"
+                "      break;\n"
+            )
+            apply_replacements(target, replacements, relative_path=self._PATH)
+            output = target.read_text()
+            self.assertIn('#include "maho/browser/ai/maho_selection_ask_dispatch.h"', output)
+            self.assertIn("IDC_MAHO_ASK_ABOUT_SELECTION,", output)
+            self.assertEqual(output.count("case IDC_MAHO_ASK_ABOUT_SELECTION:"), 2)
+            self.assertIn("GetBrowser(), embedder_web_contents_", output)
+            changed_again, _ = apply_replacements(
+                target, replacements, relative_path=self._PATH)
+            self.assertFalse(changed_again)
+
+    def test_command_enable_and_execution_cases_match_pristine_154(self):
+        replacements = [
+            r for r in REPLACEMENTS[self._PATH]
+            if "Ask Maho" in r.description
+        ]
+        enable = next(r for r in replacements if "enable" in r.description)
+        execute = next(r for r in replacements
+                       if "through browser AI ingress" in r.description)
+        # Anchored on Maho's own Mini case: the upstream translate case is
+        # rewritten by an earlier Maho replacement.
+        self.assertEqual(
+            enable.old,
+            "    case IDC_MAHO_LINK_OPEN_MAHO_MINI:\n"
+            "      return navigation_allowed && params_.link_url.is_valid() &&\n",
+        )
+        self.assertIn("case IDC_MAHO_ASK_ABOUT_SELECTION:", enable.new)
+        self.assertIn("params_.page_url.is_valid()", enable.new)
+        self.assertEqual(
+            execute.old,
+            "    case IDC_CONTENT_CONTEXT_TRANSLATE:\n"
+            "      ExecTranslate();\n"
+            "      break;",
+        )
+        self.assertIn("maho::AskMahoAboutSelection", execute.new)
+
+
 class MahoSidebarFloatingLayoutTest(unittest.TestCase):
     """An auto-hide sidebar reserves no width but must stay laid out as a
     floating hover strip, or nothing on screen can receive the hover that
