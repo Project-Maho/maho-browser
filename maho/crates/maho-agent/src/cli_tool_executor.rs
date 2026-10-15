@@ -79,6 +79,32 @@ impl CliToolExecutor {
             )
         };
 
+        #[cfg(target_os = "macos")]
+        let (exec, final_args) = {
+            use crate::sandbox::{macos::MacSandbox, SandboxBackend, SandboxPolicy};
+            let mut denied_paths = Vec::new();
+            if let Some(home) = std::env::var_os("HOME") {
+                let home = PathBuf::from(home);
+                denied_paths.push(home.join(".ssh"));
+                denied_paths.push(home.join("Library/Keychains"));
+                denied_paths.push(home.join("Library/Application Support/Google/Chrome"));
+                denied_paths.push(home.join("Library/Application Support/Maho"));
+            }
+            let cwd = std::fs::canonicalize(&self.working_dir)
+                .map_err(|error| anyhow!("SandboxUnavailable: invalid cwd: {error}"))?;
+            let policy = SandboxPolicy {
+                writable_roots: vec![cwd],
+                readable_roots: Vec::new(),
+                denied_paths,
+                network: false,
+            };
+            let prepared = MacSandbox
+                .prepare(&policy)
+                .map_err(|error| anyhow!("SandboxUnavailable: {error}"))?;
+            let (program, args) = prepared.command_line(&exec, &final_args);
+            (program, args)
+        };
+
         // Windows: the command runs inside an AppContainer + kill-on-close job
         // (sandbox::windows::run_confined). stdout/stderr are redirected by
         // cmd.exe into files in a private directory that is the only other
