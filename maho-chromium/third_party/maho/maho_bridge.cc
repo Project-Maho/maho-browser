@@ -596,6 +596,24 @@ std::string VaultGeneratePasswordJson(MahoCore* core,
   return TakeAndFreeMahoJson(raw_json, /*sensitive=*/true);
 }
 
+std::string VaultPasskeyCreateJson(MahoCore* core,
+                                   const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_passkey_create_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
+std::string VaultPasskeyGetAssertionJson(MahoCore* core,
+                                         const char* request_json) {
+  if (!core || !request_json) {
+    return std::string();
+  }
+  char* raw_json = maho_vault_passkey_get_assertion_json(core, request_json);
+  return TakeAndFreeMahoJson(raw_json, /*sensitive=*/false);
+}
+
 std::string VaultPasswordStrengthJson(MahoCore* core,
                                       const char* request_json) {
   if (!core || !request_json) {

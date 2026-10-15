@@ -20,6 +20,12 @@ from apply_chromium_src_overrides import (
 _BROWSER_BUILD_PATH = "chrome/browser/BUILD.gn"
 _BROWSER_COMMAND_CONTROLLER_PATH = "chrome/browser/ui/browser_command_controller.cc"
 _CHROME_PAGES_CC_PATH = "chrome/browser/ui/chrome_pages.cc"
+_CHROME_AUTHENTICATOR_REQUEST_DELEGATE_H_PATH = (
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+)
+_CHROME_AUTHENTICATOR_REQUEST_DELEGATE_CC_PATH = (
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.cc"
+)
 
 _UPSTREAM_ADDED_TO_WIDGET = (
     "  views::ClientView::AddedToWidget();\n"
@@ -98,6 +104,35 @@ _UPSTREAM_RUN_FILE_CHOOSER = (
 
 
 class ApplyChromiumSrcOverridesTest(unittest.TestCase):
+
+    def test_vault_platform_discovery_is_wired_into_chrome_delegate(self):
+        header = "".join(
+            item.new
+            for item in REPLACEMENTS[
+                _CHROME_AUTHENTICATOR_REQUEST_DELEGATE_H_PATH
+            ]
+        )
+        source = "".join(
+            item.new
+            for item in REPLACEMENTS[
+                _CHROME_AUTHENTICATOR_REQUEST_DELEGATE_CC_PATH
+            ]
+        )
+        self.assertIn("CreatePlatformDiscoveries() override;", header)
+        self.assertIn("CreateVaultPasskeyDiscoveries(rfh)", source)
+        self.assertIn("IsOffTheRecord()", source)
+
+    def test_vault_webauthn_sources_are_injected_into_chrome_ui_sources(self):
+        from apply_chromium_src_overrides import _CHROME_BROWSER_UI_SOURCES
+
+        self.assertIn(
+            "//maho/browser/webauthn/maho_vault_passkey_authenticator.cc",
+            _CHROME_BROWSER_UI_SOURCES,
+        )
+        self.assertIn(
+            "//maho/browser/webauthn/maho_vault_passkey_discovery.cc",
+            _CHROME_BROWSER_UI_SOURCES,
+        )
     def test_macos_app_declares_bluetooth_for_hybrid_passkeys(self):
         import plistlib
 
