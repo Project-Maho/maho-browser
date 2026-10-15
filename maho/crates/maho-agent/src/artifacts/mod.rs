@@ -2,6 +2,7 @@
 
 mod docx;
 mod pdf;
+mod pptx;
 mod xlsx;
 
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +25,12 @@ pub const MAX_PDF_INPUT_BYTES: usize = 1_048_576;
 pub const MAX_PDF_BLOCKS: usize = 5_000;
 // Maximum number of pages a pdf may lay out to.
 pub const MAX_PDF_PAGES: usize = 500;
+// Maximum serialized presentation input accepted for pptx (images are inline base64).
+pub const MAX_PPTX_INPUT_BYTES: usize = 16 * 1_048_576;
+// Maximum number of slides in one presentation.
+pub const MAX_PPTX_SLIDES: usize = 200;
+// Maximum decoded size of one slide image.
+pub const MAX_PPTX_IMAGE_BYTES: usize = 5 * 1_048_576;
 
 /// Handle returned for a generated artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,7 +41,7 @@ pub struct ArtifactHandle {
     pub size_bytes: u64,
 }
 
-/// Creates a document artifact of `kind` ("xlsx", "docx" or "pdf") from its JSON
+/// Creates a document artifact of `kind` ("xlsx", "docx", "pdf" or "pptx") from its JSON
 /// input. Only a single filename within the artifact root is accepted, and
 /// an existing file is never overwritten.
 pub fn create(
@@ -67,6 +74,11 @@ pub fn create(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ),
         "pdf" => (".pdf", MAX_PDF_INPUT_BYTES, "application/pdf"),
+        "pptx" => (
+            ".pptx",
+            MAX_PPTX_INPUT_BYTES,
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
         _ => bail!("unsupported artifact kind: {kind}"),
     };
     if !relative_path.to_ascii_lowercase().ends_with(extension) {
@@ -80,7 +92,8 @@ pub fn create(
     let bytes = match kind {
         "xlsx" => xlsx::create(input)?,
         "docx" => docx::create(input)?,
-        _ => pdf::create(input)?,
+        "pdf" => pdf::create(input)?,
+        _ => pptx::create(input)?,
     };
     let target = artifact_root.join(relative_path);
     let mut file = std::fs::OpenOptions::new()

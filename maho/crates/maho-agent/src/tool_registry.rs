@@ -212,6 +212,29 @@ pub fn js_eval_definition() -> ToolDefinition {
     }
 }
 
+pub fn artifact_create_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "artifact_create".to_string(),
+        description: "Create a spreadsheet, document, PDF or slide deck file in the session artifact directory from structured JSON content".to_string(),
+        parameters_schema: serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "kind": { "type": "string", "enum": ["xlsx", "docx", "pdf", "pptx"] },
+                "relative_path": { "type": "string", "description": "Single file name ending with the kind's extension" },
+                "content": {
+                    "type": "object",
+                    "description": "xlsx: {sheets:[{name, rows}]}; docx/pdf: {blocks:[heading|paragraph|table]}; pptx: {slides:[title|bullets|image]}"
+                }
+            },
+            "required": ["kind", "relative_path", "content"]
+        }),
+        provenance: ToolProvenance::BuiltinBrowser,
+        sensitive: true,
+        permission: ToolPermission::AutoApprove,
+    }
+}
+
 /// Caps an MCP tool result: the first text item is truncated in place to keep
 /// structure readable, then the whole serialized result is ALWAYS checked
 /// against `output_cap` (other content items can still exceed it).
@@ -344,6 +367,7 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
             fs_write_definition(),
             composite_execute_definition(),
             js_eval_definition(),
+            artifact_create_definition(),
         ]
     }
 }
@@ -391,7 +415,7 @@ mod tests {
 
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            assert_eq!(tools.len(), 11);
+            assert_eq!(tools.len(), 12);
             assert!(tools.iter().any(|t| t.name == "fs_read"));
             assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(tools.iter().any(|t| t.name == "shell_exec"));
@@ -404,6 +428,7 @@ mod tests {
             assert!(tools.iter().any(|t| t.name == "subagent_wait"));
             assert!(tools.iter().any(|t| t.name == "composite_execute"));
             assert!(tools.iter().any(|t| t.name == "js_eval"));
+            assert!(tools.iter().any(|t| t.name == "artifact_create"));
             assert!(!tools.iter().any(|t| t.name == "camera"));
         }
     }

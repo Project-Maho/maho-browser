@@ -36,6 +36,7 @@ reqwest = { version = "0.12", default-features = false }
 rquickjs = { version = "0.14", default-features = false }
 rust_xlsxwriter = "0.99"
 docx-rs = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 # The default "html" feature pulls in the azul layout engine; artifacts are
 # laid out directly, so only the core writer is needed.
 printpdf = { version = "0.12", default-features = false }
@@ -50,8 +51,8 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 [dev-dependencies]
 tempfile = "3"
 calamine = "0.36"
-zip = { version = "8", default-features = false, features = ["deflate"] }
 lopdf = { version = "0.44", default-features = false }
+quick-xml = "0.41"
 axum = "0.8"
 tokio-stream = "0.1"
 hyper = { version = "1", features = ["full"] }
