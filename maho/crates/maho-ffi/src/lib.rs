@@ -3219,6 +3219,59 @@ pub unsafe extern "C" fn maho_core_get_cosmetic_resources(
     )
 }
 
+/// Returns the generic class/id hide selectors that match the page's classes
+/// and ids, as a JSON string array.
+///
+/// `request_json` is `{"classes": string[], "ids": string[], "exceptions": string[]}`;
+/// `exceptions` comes from `maho_core_get_cosmetic_resources` for the same URL.
+/// Returns null on invalid input.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `request_json` must be a valid C string.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_hidden_class_id_selectors(
+    ptr: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || request_json.is_null() {
+                return ptr::null_mut();
+            }
+            // SAFETY(H15): Reject call while import is active to prevent data race on MahoCore.
+            if import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            #[derive(serde::Deserialize)]
+            struct HiddenClassIdRequest {
+                #[serde(default)]
+                classes: Vec<String>,
+                #[serde(default)]
+                ids: Vec<String>,
+                #[serde(default)]
+                exceptions: Vec<String>,
+            }
+            let core = &*ptr;
+            let request: HiddenClassIdRequest = match CStr::from_ptr(request_json)
+                .to_str()
+                .ok()
+                .and_then(|s| serde_json::from_str(s).ok())
+            {
+                Some(request) => request,
+                None => return ptr::null_mut(),
+            };
+            let selectors = core.get_hidden_class_id_selectors(
+                &request.classes,
+                &request.ids,
+                &request.exceptions,
+            );
+            to_json_cstring(&selectors)
+        },
+        ptr::null_mut()
+    )
+}
+
 /// # Safety
 /// `ptr` must be from `maho_core_new`. `path` must be a valid null-terminated C string.
 #[no_mangle]

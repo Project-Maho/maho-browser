@@ -1050,6 +1050,26 @@ impl ContentBlocker {
         }
     }
 
+    /// Selectors of generic class/id hide rules that apply to the given page
+    /// classes and ids, minus the URL's cosmetic `exceptions` (from
+    /// `get_cosmetic_resources`). Returns nothing when native blocking is off.
+    pub fn hidden_class_id_selectors(
+        &self,
+        classes: &[String],
+        ids: &[String],
+        exceptions: &[String],
+    ) -> Vec<String> {
+        if !self.is_native() {
+            return Vec::new();
+        }
+        let exceptions: std::collections::HashSet<String> = exceptions.iter().cloned().collect();
+        let mut selectors = self
+            .engine()
+            .hidden_class_id_selectors(classes, ids, &exceptions);
+        selectors.sort();
+        selectors
+    }
+
     pub fn get_rule_count(&self) -> usize {
         self.filter_lists
             .iter()

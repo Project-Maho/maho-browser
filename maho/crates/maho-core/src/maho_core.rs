@@ -9697,6 +9697,16 @@ impl MahoCore {
         self.content_blocker.get_cosmetic_resources(url)
     }
 
+    pub fn get_hidden_class_id_selectors(
+        &self,
+        classes: &[String],
+        ids: &[String],
+        exceptions: &[String],
+    ) -> Vec<String> {
+        self.content_blocker
+            .hidden_class_id_selectors(classes, ids, exceptions)
+    }
+
     pub fn rebuild_content_rules(&mut self) {
         self.content_blocker.rebuild_engine_sync();
     }

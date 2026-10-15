@@ -151,6 +151,35 @@ fn cosmetic_resources_expose_procedural_actions_and_exceptions() {
 }
 
 #[test]
+fn hidden_class_id_selectors_match_generic_rules_and_honor_exceptions() {
+    let mut cb = ContentBlocker::new();
+    cb.update_filter_list_content(
+        "easylist",
+        "##.ad-banner\n###sponsor-box\nexample.com#@#.ad-banner\n".to_string(),
+    )
+    .unwrap();
+    cb.rebuild_engine_sync();
+    cb.set_mode(ContentBlockingMode::Native);
+
+    let classes = vec!["ad-banner".to_string(), "article".to_string()];
+    let ids = vec!["sponsor-box".to_string(), "main".to_string()];
+    assert_eq!(
+        cb.hidden_class_id_selectors(&classes, &ids, &[]),
+        vec!["#sponsor-box".to_string(), ".ad-banner".to_string()]
+    );
+
+    // The URL's cosmetic exceptions remove the excepted generic rule.
+    let exceptions = cb.get_cosmetic_resources("https://example.com/").exceptions;
+    assert_eq!(
+        cb.hidden_class_id_selectors(&classes, &ids, &exceptions),
+        vec!["#sponsor-box".to_string()]
+    );
+
+    cb.set_mode(ContentBlockingMode::Extension);
+    assert!(cb.hidden_class_id_selectors(&classes, &ids, &[]).is_empty());
+}
+
+#[test]
 fn off_thread_compilation_and_generation_safety() {
     let mut cb = ContentBlocker::new();
     cb.update_filter_list_content("easylist", "||bad.com^\n".to_string())
