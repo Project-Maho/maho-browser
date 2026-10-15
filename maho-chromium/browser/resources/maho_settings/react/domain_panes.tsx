@@ -15,6 +15,7 @@ import {MailBehaviorPane} from './mail_behavior.js';
 import {MailSecurityPane} from './mail_security.js';
 import {AiDevelopersPane} from './ai_developers.js';
 import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
+import {ContentBlockerRulesCard} from './content_blocker_rules.js';
 import {ProfilesEditor} from './profiles_editor.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
@@ -3398,6 +3399,11 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
               </div>
             </ManagedSettingRow>
           </SectionCard>
+          <ContentBlockerRulesCard
+            handler={handler}
+            disabled={state.data.stats.mode !== 0}
+            onChanged={() => void loadContentBlocker()}
+          />
         </>
       ) : null}
     </PaneShell>

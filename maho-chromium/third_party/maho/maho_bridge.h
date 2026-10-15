@@ -211,6 +211,16 @@ BlockResult CheckRequest(MahoCore* core,
 int GetContentBlockingMode(MahoCore* core);
 bool SetContentBlockingMode(MahoCore* core, int mode);
 std::string GetContentBlockerStateJson(MahoCore* core);
+// Content-blocker diagnostics and local rules. "{}" on bridge failure.
+std::string TestContentBlockerRequestJson(MahoCore* core,
+                                          const std::string& url,
+                                          const std::string& source_url,
+                                          const std::string& request_type);
+std::string GetCustomRulesJson(MahoCore* core);
+std::string SetCustomRulesJson(MahoCore* core, const std::string& rules);
+std::string ImportLocalFilterListJson(MahoCore* core,
+                                      const std::string& name,
+                                      const std::string& contents);
 // Episodic memory (opt-in, browser-only). Empty string / -1 on failure.
 std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json);
 int64_t ForgetEpisodeOrigin(MahoCore* core, const std::string& site);

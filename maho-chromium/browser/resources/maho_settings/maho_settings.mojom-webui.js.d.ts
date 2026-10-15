@@ -634,6 +634,18 @@ export interface ContentBlockerStats {
   lastUpdateTimestamp: bigint;
 }
 
+export interface ContentBlockerTestResult {
+  validRequest: boolean;
+  nativeMode: boolean;
+  siteExcepted: boolean;
+  blocked: boolean;
+  important: boolean;
+  matchedFilter: string | null;
+  exception: string | null;
+  listId: string | null;
+  redirect: string | null;
+}
+
 export interface ContentBlockerMutationResult {
   success: boolean;
   errorCode: string | null;
@@ -987,6 +999,17 @@ export class PageHandlerRemote {
     mutation: ContentBlockerMutationResult;
   }>;
   removeFilterList(id: string): Promise<{
+    success: boolean;
+    mutation: ContentBlockerMutationResult;
+  }>;
+  testContentBlockerRequest(url: string, sourceUrl: string, requestType: string):
+      Promise<{result: ContentBlockerTestResult}>;
+  getCustomFilterRules(): Promise<{rules: string}>;
+  saveCustomFilterRules(rules: string): Promise<{
+    success: boolean;
+    mutation: ContentBlockerMutationResult;
+  }>;
+  importLocalFilterList(name: string, content: string): Promise<{
     success: boolean;
     mutation: ContentBlockerMutationResult;
   }>;
