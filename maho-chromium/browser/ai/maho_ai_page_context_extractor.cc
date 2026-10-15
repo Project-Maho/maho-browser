@@ -4,6 +4,8 @@
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
@@ -33,6 +35,9 @@ MahoAiPageContextExtractor::MemoryBriefingFetcher*
 constexpr size_t kMaxMainTextLength = 50000;
 constexpr size_t kMaxHeadings = 50;
 constexpr size_t kMaxLinks = 20;
+constexpr size_t kMaxMemoryRecallChars = 4000;
+constexpr size_t kMaxMemoryRecallFactChars = 800;
+constexpr size_t kMaxMemoryRecallSourceChars = 64;
 
 const char kNoActiveTabMessage[] =
     "There is no active page to analyze right now.";
@@ -112,6 +117,47 @@ std::string NormalizeText(const std::string& text) {
 }
 
 }  // namespace
+
+// static
+std::string MahoAiPageContextExtractor::FormatMemoryRecall(
+    std::string_view query,
+    std::string_view results_json) {
+  if (NormalizeText(std::string(query)).empty()) {
+    return std::string();
+  }
+  std::optional<base::Value> parsed = base::JSONReader::Read(results_json);
+  const base::ListValue* results = parsed ? parsed->GetIfList() : nullptr;
+  if (!results) {
+    return std::string();
+  }
+  std::string content;
+  for (const base::Value& item : *results) {
+    const base::DictValue* dict = item.GetIfDict();
+    const std::string* fact = dict ? dict->FindString("fact") : nullptr;
+    if (!fact || fact->empty()) {
+      continue;
+    }
+    const std::string* source = dict->FindString("source");
+    std::string entry = base::StrCat(
+        {"- ", fact->substr(0, kMaxMemoryRecallFactChars), " (source: ",
+         source ? source->substr(0, kMaxMemoryRecallSourceChars)
+                : std::string("memory"),
+         ")"});
+    const size_t separator = content.empty() ? 0 : 1;
+    if (content.size() + separator + entry.size() > kMaxMemoryRecallChars) {
+      break;
+    }
+    if (separator) {
+      content.push_back('\n');
+    }
+    content += entry;
+  }
+  if (content.empty()) {
+    return std::string();
+  }
+  return base::StrCat(
+      {"[MEMORY RECALL]\n", maho::ai_security::WrapUntrusted(content)});
+}
 
 MahoAiPageContextExtractor::PageContextResult::PageContextResult() = default;
 MahoAiPageContextExtractor::PageContextResult::~PageContextResult() = default;

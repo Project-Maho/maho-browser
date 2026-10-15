@@ -289,7 +289,17 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
       std::string user_prompt,
       maho_ai::mojom::InteractionMode mode,
       maho_ai::mojom::ChatIntent chat_intent,
+      std::string memory_recall,
       MahoAiPageContextExtractor::PageContextResult ctx);
+
+  // Memory recall step of the |attach_browser_context| path: formats the
+  // hybrid search results for |user_prompt|, then extracts page context.
+  void OnMemoryRecallThenExtract(Correlation correlation,
+                                 base::OnceCallback<bool(bool)> dispatch_gate,
+                                 std::string user_prompt,
+                                 maho_ai::mojom::InteractionMode mode,
+                                 maho_ai::mojom::ChatIntent chat_intent,
+                                 std::string results_json);
 
   // Phase B picker path: called once context extraction completes for a
   // specific open tab chosen via |GetOpenTabs|. |tab_label| is the human-

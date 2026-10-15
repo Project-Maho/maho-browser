@@ -94,6 +94,7 @@ base::NoDestructor<std::set<MahoAIPageHandler*>> g_active_page_handlers;
 namespace ai = maho::ai_prefs;
 
 static constexpr size_t kMaxPageContextChars = 8000;
+static constexpr uint32_t kMemoryRecallTopK = 5;
 
 // Capped at 100 sessions to keep profile prefs loading fast on startup
 // while providing sufficient history size for regular usage.
@@ -2467,10 +2468,31 @@ void MahoAIPageHandler::SubmitPromptInternal(
   }
 
   if (attach_browser_context) {
+    // Query-scoped local memory recall first (untrusted context); an
+    // unavailable core or blank prompt goes straight to page extraction.
+    if (maho::GetCore() &&
+        !base::TrimWhitespaceASCII(prompt, base::TRIM_ALL).empty()) {
+      maho::PostCoreTask<std::string>(
+          FROM_HERE,
+          base::BindOnce(
+              [](std::string query) {
+                MahoCore* core = maho::GetCore();
+                return core ? maho::core::SearchMemoryHybridJson(
+                                  core, query, kMemoryRecallTopK)
+                            : std::string();
+              },
+              prompt),
+          base::BindOnce(&MahoAIPageHandler::OnMemoryRecallThenExtract,
+                         weak_factory_.GetWeakPtr(), std::move(correlation),
+                         std::move(dispatch_gate), prompt, mode,
+                         chat_intent));
+      return;
+    }
     page_context_extractor_->GetPageContext(
         base::BindOnce(&MahoAIPageHandler::OnContextExtractedThenSubmit,
                        weak_factory_.GetWeakPtr(), std::move(correlation),
-                       std::move(dispatch_gate), prompt, mode, chat_intent));
+                       std::move(dispatch_gate), prompt, mode, chat_intent,
+                       std::string()));
     return;
   }
 
@@ -2485,12 +2507,30 @@ void MahoAIPageHandler::SubmitPromptInternal(
                           correlation.request_id));
 }
 
+void MahoAIPageHandler::OnMemoryRecallThenExtract(
+    Correlation correlation,
+    base::OnceCallback<bool(bool)> dispatch_gate,
+    std::string user_prompt,
+    maho_ai::mojom::InteractionMode mode,
+    maho_ai::mojom::ChatIntent chat_intent,
+    std::string results_json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::string recall =
+      MahoAiPageContextExtractor::FormatMemoryRecall(user_prompt, results_json);
+  page_context_extractor_->GetPageContext(base::BindOnce(
+      &MahoAIPageHandler::OnContextExtractedThenSubmit,
+      weak_factory_.GetWeakPtr(), std::move(correlation),
+      std::move(dispatch_gate), std::move(user_prompt), mode, chat_intent,
+      std::move(recall)));
+}
+
 void MahoAIPageHandler::OnContextExtractedThenSubmit(
     Correlation correlation,
     base::OnceCallback<bool(bool)> dispatch_gate,
     std::string user_prompt,
     maho_ai::mojom::InteractionMode mode,
     maho_ai::mojom::ChatIntent chat_intent,
+    std::string memory_recall,
     MahoAiPageContextExtractor::PageContextResult ctx) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
@@ -2531,7 +2571,10 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
   if (!ctx.HasUsableContent()) {
     DVLOG(1) << "MahoAIPageHandler: page context extraction failed ("
              << ctx.GetExtractionStatusString() << "); sending original prompt";
-    final_prompt = user_prompt;
+    final_prompt =
+        memory_recall.empty()
+            ? user_prompt
+            : base::StrCat({memory_recall, "\n\nUser Question:\n", user_prompt});
     std::string status_str;
     switch (ctx.extraction_status) {
       case MahoAiPageContextExtractor::PageContextResult::Status::kNoActiveTab:
@@ -2559,7 +2602,9 @@ void MahoAIPageHandler::OnContextExtractedThenSubmit(
     final_prompt = base::StrCat({"[Current Page Context]\nTitle: ", ctx.title,
                                  "\nURL: ", ctx.url, "\nContent:\n",
                                  maho::ai_security::WrapUntrusted(clipped_text),
-                                 "\n\nUser Question:\n", user_prompt});
+                                 "\n\n", memory_recall,
+                                 memory_recall.empty() ? "" : "\n\n",
+                                 "User Question:\n", user_prompt});
     ctx_event.payload.Set("status", "injected");
     ctx_event.payload.Set("url", ctx.url);
     ctx_event.payload.Set("title", ctx.title);
