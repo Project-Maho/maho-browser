@@ -193,6 +193,25 @@ pub fn composite_execute_definition() -> ToolDefinition {
     }
 }
 
+pub fn js_eval_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "js_eval".to_string(),
+        description: "Evaluate a JavaScript expression with JSON input in an isolated, bounded runtime; returns JSON result and captured logs".to_string(),
+        parameters_schema: serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "code": { "type": "string", "maxLength": 262144 },
+                "input": {}
+            },
+            "required": ["code"]
+        }),
+        provenance: ToolProvenance::BuiltinBrowser,
+        sensitive: false,
+        permission: ToolPermission::AutoApprove,
+    }
+}
+
 /// Caps an MCP tool result: the first text item is truncated in place to keep
 /// structure readable, then the whole serialized result is ALWAYS checked
 /// against `output_cap` (other content items can still exceed it).
@@ -279,6 +298,7 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
             subagent_wait_definition(),
             fs_write_definition(),
             composite_execute_definition(),
+            js_eval_definition(),
         ]
     }
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -323,6 +343,7 @@ pub fn get_platform_tools() -> Vec<ToolDefinition> {
             subagent_wait_definition(),
             fs_write_definition(),
             composite_execute_definition(),
+            js_eval_definition(),
         ]
     }
 }
@@ -351,7 +372,7 @@ mod tests {
 
         #[cfg(any(target_os = "ios", target_os = "android"))]
         {
-            assert_eq!(tools.len(), 11);
+            assert_eq!(tools.len(), 12);
             assert!(tools.iter().any(|t| t.name == "camera"));
             assert!(tools.iter().any(|t| t.name == "photo_library"));
             assert!(tools.iter().any(|t| t.name == "clipboard"));
@@ -363,13 +384,14 @@ mod tests {
             assert!(tools.iter().any(|t| t.name == "subagent_wait"));
             assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(tools.iter().any(|t| t.name == "composite_execute"));
+            assert!(tools.iter().any(|t| t.name == "js_eval"));
             assert!(!tools.iter().any(|t| t.name == "fs_read"));
             assert!(!tools.iter().any(|t| t.name == "shell_exec"));
         }
 
         #[cfg(not(any(target_os = "ios", target_os = "android")))]
         {
-            assert_eq!(tools.len(), 10);
+            assert_eq!(tools.len(), 11);
             assert!(tools.iter().any(|t| t.name == "fs_read"));
             assert!(tools.iter().any(|t| t.name == "fs_write"));
             assert!(tools.iter().any(|t| t.name == "shell_exec"));
@@ -381,6 +403,7 @@ mod tests {
             assert!(tools.iter().any(|t| t.name == "skill_creator"));
             assert!(tools.iter().any(|t| t.name == "subagent_wait"));
             assert!(tools.iter().any(|t| t.name == "composite_execute"));
+            assert!(tools.iter().any(|t| t.name == "js_eval"));
             assert!(!tools.iter().any(|t| t.name == "camera"));
         }
     }
@@ -491,7 +514,9 @@ mod tests {
     // advertised as an (auto-approved) platform tool.
     #[test]
     fn web_fetch_is_not_advertised_without_a_dispatcher() {
-        assert!(!get_platform_tools().iter().any(|tool| tool.name == "web_fetch"));
+        assert!(!get_platform_tools()
+            .iter()
+            .any(|tool| tool.name == "web_fetch"));
     }
 
     #[test]
