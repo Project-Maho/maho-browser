@@ -25,6 +25,11 @@ use crate::protocol::{
     JsonRpcRequest, JsonRpcResponse, SessionInfo,
 };
 
+/// Pairing errors from the browser (controller-pairing protocol). -32010 and
+/// -32011 belong to action-not-applied / native-input-unavailable.
+pub const PAIRING_REQUIRED_ERROR: i32 = -32014;
+pub const PAIRING_REVOKED_ERROR: i32 = -32015;
+
 #[cfg(unix)]
 type WriterHalf = OwnedWriteHalf;
 #[cfg(windows)]
@@ -370,10 +375,10 @@ impl BrowserClient {
         }
 
         if let Some(err) = resp.error {
-            if err.code == -32010 {
+            if err.code == PAIRING_REQUIRED_ERROR {
                 return Err(McpBridgeError::ControllerNotPaired);
             }
-            if err.code == -32011 {
+            if err.code == PAIRING_REVOKED_ERROR {
                 if let Some(token) = &self.pairing_token {
                     let _ = std::fs::remove_file(&token.path);
                 }
@@ -527,6 +532,15 @@ impl BrowserClient {
         socket_path: &Path,
         controller_kind: ControllerKind,
     ) -> Option<PairingToken> {
+        // The browser writes tokens under its user-data dir. On Unix that is
+        // the socket's directory; a Windows named pipe has no directory, so
+        // use the platform user-data dir there.
+        #[cfg(windows)]
+        let user_data_dir = {
+            let _ = socket_path;
+            crate::paths::user_data_dir()
+        };
+        #[cfg(not(windows))]
         let user_data_dir = crate::paths::resolve_user_data_dir(Some(socket_path.to_str()?));
         let kind_dir = user_data_dir
             .join("controllers")

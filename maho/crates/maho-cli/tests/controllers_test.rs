@@ -146,7 +146,7 @@ fn token_is_attached_and_missing_pairing_has_exact_message_and_revocation_delete
     let missing_profile = tempfile::TempDir::new_in(dir.path()).unwrap();
     let missing = MockBrowser::start_in(
         missing_profile,
-        vec![json!({"__error":{"code":-32010,"message":"pairing required"}})],
+        vec![json!({"__error":{"code":-32014,"message":"pairing required"}})],
     );
     let out = run(
         &missing,
@@ -184,7 +184,7 @@ fn token_is_attached_and_missing_pairing_has_exact_message_and_revocation_delete
     write_token(&retained_other_kind_token, "other-kind-token-value", now);
     let revoked = MockBrowser::start_in(
         revoked_profile,
-        vec![json!({"__error":{"code":-32011,"message":"pairing revoked"}})],
+        vec![json!({"__error":{"code":-32015,"message":"pairing revoked"}})],
     );
     let out = run(
         &revoked,
