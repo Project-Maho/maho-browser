@@ -303,7 +303,28 @@ pub struct SiteSessionRecord {
     pub local_storage: std::collections::HashMap<String, String>,
 }
 
+/// Upper bounds for one origin's synced site data.
+pub const MAX_SITE_SESSION_COOKIES: usize = 200;
+pub const MAX_SITE_SESSION_STORAGE_KEYS: usize = 1_000;
+pub const MAX_SITE_SESSION_BYTES: usize = 512 * 1024;
+
 impl SiteSessionRecord {
+    pub fn validate_size(&self) -> Result<(), SiteSessionOriginError> {
+        let bytes: usize = self.cookies.iter().map(String::len).sum::<usize>()
+            + self
+                .local_storage
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>();
+        if self.cookies.len() > MAX_SITE_SESSION_COOKIES
+            || self.local_storage.len() > MAX_SITE_SESSION_STORAGE_KEYS
+            || bytes > MAX_SITE_SESSION_BYTES
+        {
+            return Err(SiteSessionOriginError::TooLarge);
+        }
+        Ok(())
+    }
+
     pub fn new(
         origin: &str,
         cookies: Vec<String>,
@@ -347,6 +368,8 @@ pub enum SiteSessionOriginError {
     HttpsRequired,
     #[error("site session origin must contain only a host and optional port")]
     InvalidOrigin,
+    #[error("site session data exceeds the per-origin limit")]
+    TooLarge,
 }
 
 /// Validate an HTTPS origin and canonicalize scheme and DNS host casing.

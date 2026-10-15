@@ -506,6 +506,9 @@ pub struct AgentRuntimeConfigRow {
     pub proactive_mode: bool,
 }
 
+/// One stored entity version: (entity_id, hlc_ts, device_id, payload_json).
+pub type EntityVersionRow = (String, u64, u32, Option<String>);
+
 /// SQLite storage for persistent data (history, bookmarks, settings)
 pub struct SqliteStorage {
     pub(crate) conn: Connection,
@@ -3496,6 +3499,20 @@ impl SqliteStorage {
         } else {
             Ok(None)
         }
+    }
+
+    /// Every stored version row of `entity_type`.
+    pub fn load_entity_versions_of_type(
+        &self,
+        entity_type: &str,
+    ) -> Result<Vec<EntityVersionRow>, StorageError> {
+        let mut statement = self.conn.prepare(
+            "SELECT entity_id, hlc_ts, device_id, payload_json FROM entity_versions WHERE entity_type = ?1",
+        )?;
+        let rows = statement.query_map(rusqlite::params![entity_type], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn load_local_sync_tombstones(&self) -> Result<Vec<(String, String, u64, u32, String)>, StorageError> {

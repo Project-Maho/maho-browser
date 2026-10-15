@@ -909,6 +909,52 @@ int64_t maho_core_episode_forget_origin(struct MahoCore *ptr, const char *site);
 char *maho_core_search_memory_hybrid_json(struct MahoCore *ptr, const char *query, uint32_t top_k);
 
 /**
+ * SiteSession sync (opt-in per https origin; cookies + localStorage only).
+ * All site-session functions must be called on the thread that owns `ptr`;
+ * returned strings are owned by the caller and freed with `maho_string_free`.
+ *
+ * Returns the active profile's opted-in origins as a JSON string array, or
+ * null on bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+char *maho_core_site_session_get_opted_origins_json(struct MahoCore *ptr);
+
+/**
+ * Replaces the opted-in origins with `origins_json` (a JSON string array).
+ * Returns false and changes nothing when any origin is not a valid https
+ * origin, or on bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `origins_json` a valid C string.
+ */
+bool maho_core_site_session_set_opted_origins_json(struct MahoCore *ptr, const char *origins_json);
+
+/**
+ * Origins whose cookies/localStorage the browser should collect and hand
+ * back with `maho_core_site_session_record_json`, as a JSON string array.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+char *maho_core_site_session_records_for_export_json(struct MahoCore *ptr);
+
+/**
+ * Records one collected SiteSessionRecord (`{"origin","cookies","localStorage"}`)
+ * for an opted-in origin. Returns false for non-opted origins, oversize or
+ * malformed records, or bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `record_json` a valid C string.
+ */
+bool maho_core_site_session_record_json(struct MahoCore *ptr, const char *record_json);
+
+/**
+ * Returns and clears the remote SiteSessionRecords accepted by sync that the
+ * browser must now apply, as a JSON array. Each record is handed out once.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+char *maho_core_site_session_take_applied_json(struct MahoCore *ptr);
+
+/**
  * Applies a FilterListUpdateResponse JSON to the content blocker.
  *
  * Returns `true` when a rebuild/compile is needed: a 200 response produced a
