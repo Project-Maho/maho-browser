@@ -15,6 +15,7 @@ source_set("maho_core_holder") {
   # (SetCoreForProfile / GetCoreOwnerProfile / IsPasswordManagerAllowedForProfile)
   # and the .cc calls Profile methods, so profiles:profile is a public_dep.
   public_deps = [
+    ":maho_core_watchdog_policy",
     "//chrome/browser/profiles:profile",
     "//maho/browser/mail_helper:maho_mail_launcher",
   ]
@@ -373,6 +374,8 @@ source_set("maho_browser_ai_tools") {
   sources = [
     "ai/maho_ai_page_context_extractor.cc",
     "ai/maho_ai_page_context_extractor.h",
+    "ai/maho_browse_episode_observer.cc",
+    "ai/maho_browse_episode_observer.h",
     "ai/maho_browser_tool_executor.cc",
     "ai/maho_browser_tool_executor.h",
     "ai/maho_capability_broker.cc",
@@ -389,10 +392,17 @@ source_set("maho_browser_ai_tools") {
     ":maho_browser_tool_registry",
     ":maho_page_adapter_registry",
     "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//components/sessions",
     "//content/public/browser",
     "//crypto",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_private_context_policy",
+    "//maho/browser:maho_tab_id_helper",
     "//maho/browser/mcp:maho_mcp",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//ui/accessibility",
     "//url",
   ]
@@ -402,6 +412,8 @@ source_set("maho_control_activity_service") {
   sources = [
     "ai/maho_control_activity_service.cc",
     "ai/maho_control_activity_service.h",
+    "ui/views/sidebar/maho_sidebar_agent_task_model.cc",
+    "ui/views/sidebar/maho_sidebar_agent_task_model.h",
   ]
   public_deps = [ "//base" ]
   deps = [
@@ -415,6 +427,7 @@ source_set("maho_browser_tool_executor_unittests") {
   testonly = true
   sources = [
     "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browse_episode_observer_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -436,6 +449,7 @@ source_set("maho_browser_tool_executor_unittests") {
 test("maho_browser_tool_executor_test") {
   sources = [
     "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browse_episode_observer_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -469,6 +483,7 @@ test("maho_control_activity_service_test") {
   sources = [
     "ai/maho_browser_tool_test_main.cc",
     "ai/maho_control_activity_service_unittest.cc",
+    "ui/views/sidebar/maho_sidebar_agent_task_model_unittest.cc",
   ]
   deps = [
     ":maho_control_activity_service",
@@ -1108,6 +1123,24 @@ source_set("maho_private_context_policy") {
   ]
 }
 
+source_set("maho_ntp_preload_policy") {
+  sources = [
+    "maho_ntp_preload_policy.cc",
+    "maho_ntp_preload_policy.h",
+  ]
+  deps = [
+    "//url",
+  ]
+}
+
+source_set("maho_core_watchdog_policy") {
+  sources = [
+    "maho_core_watchdog_policy.cc",
+    "maho_core_watchdog_policy.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 source_set("maho_settings_navigation") {
   sources = [
     "ui/maho_settings_navigation.cc",
@@ -1527,6 +1560,12 @@ source_set("maho_theme_io_unittests") {
     "ui/theme/maho_space_theme_io_unittest.cc",
     "ui/notifications/maho_notification_overlay_unittest.cc",
     "maho_tab_id_helper_unittest.cc",
+    "maho_ntp_preload_policy_unittest.cc",
+    "maho_core_watchdog_policy_unittest.cc",
+    "ui/views/sidebar/maho_core_recovery_policy.cc",
+    "ui/views/sidebar/maho_core_recovery_policy_unittest.cc",
+    "ui/views/sidebar/maho_core_recovery_banner_view.cc",
+    "ui/views/sidebar/maho_core_recovery_banner_view.h",
     "ui/maho_ai_ingress_coordinator_unittest.cc",
     "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
   ]
@@ -1537,21 +1576,27 @@ source_set("maho_theme_io_unittests") {
     ":maho_artifact_registry",
     ":maho_artifact_xlsx_processor",
     ":maho_tab_id_helper",
+    ":maho_ntp_preload_policy",
     ":maho_theme_support",
     ":maho_unified_agent_adapter",
     ":maho_ai_ingress_coordinator",
     ":maho_browser_tool_executor_unittests",
     ":maho_core_holder",
+    ":maho_core_watchdog_policy",
+    "//maho/browser/ui/views/sidebar:maho_sidebar_core",
     "//maho/browser/ui/webui/maho_ai:maho_ai_unittests",
     "//maho/browser/ui/webui/maho_space_config:maho_space_config",
     "//maho/browser/ui/views/space_create:maho_space_theme_picker_dialog",
     "//maho/browser/mcp:unittests",
     "//base",
     "//base/test:test_support",
+    "//chrome/browser/lifetime",
+    "//ui/views",
     "//chrome/test:test_support",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//maho/third_party/maho:maho_bridge",
     "//testing/gtest",
+    "//url",
     "//ui/views:test_support",
   ]
 }

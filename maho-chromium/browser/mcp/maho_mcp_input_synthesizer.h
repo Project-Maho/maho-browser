@@ -10,12 +10,15 @@
 #include <string>
 #include <vector>
 
+#include "maho/browser/mcp/maho_mcp_text_insertion_policy.h"
+
 #ifndef MAHO_STANDALONE_TEST
 #include "base/containers/span.h"
 #include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "build/build_config.h"
+#include "maho/browser/mcp/maho_mcp_text_insertion_policy.h"
 #include "maho/browser/ui/views/maho_action_marker_service.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -798,6 +801,22 @@ class MahoMcpInputSynthesizer {
                             const std::string& text,
                             TypingOptions options,
                             base::OnceCallback<void(bool)> callback);
+
+#ifndef MAHO_STANDALONE_TEST
+  static void InsertTextWithFallback(
+      content::WebContents* wc,
+      const std::string& text,
+      const std::string& element_kind,
+      const std::string& editor_hint,
+      base::OnceCallback<void(TextInsertionResult)> callback);
+
+  static void RunTextInsertionCascadeAsyncForTesting(
+      const std::vector<TextInsertionStrategy>& strategies,
+      base::RepeatingCallback<void(TextInsertionStrategy,
+                                   base::OnceCallback<void()>)> attempt,
+      base::RepeatingCallback<void(base::OnceCallback<void(bool)>)> readback,
+      base::OnceCallback<void(TextInsertionResult)> callback);
+#endif
 
 #ifndef MAHO_STANDALONE_TEST
   // Sine ease-in-out progress curve mapped to [0, 1]. Returns 0 for t <= 0 and

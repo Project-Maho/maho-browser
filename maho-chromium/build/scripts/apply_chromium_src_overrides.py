@@ -2862,6 +2862,26 @@ REPLACEMENTS: dict[str, list[Replacement]] = {
             guard="MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);",
         ),
         Replacement(
+            old='#include "maho/browser/maho_tab_id_helper.h"\n',
+            new=(
+                '#include "maho/browser/maho_tab_id_helper.h"\n'
+                '#include "maho/browser/ai/maho_browse_episode_observer.h"\n'
+            ),
+            description="Add MahoBrowseEpisodeObserver include to tab_helpers.cc",
+            guard='#include "maho/browser/ai/maho_browse_episode_observer.h"',
+        ),
+        Replacement(
+            old="  MahoTabIdHelper::CreateForWebContents(web_contents);\n",
+            new=(
+                "  MahoTabIdHelper::CreateForWebContents(web_contents);\n"
+                "  MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);\n"
+            ),
+            description=(
+                "Attach MahoBrowseEpisodeObserver in TabHelpers::AttachTabHelpers()"
+            ),
+            guard="MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);",
+        ),
+        Replacement(
             old='#include "maho/browser/ui/link_preview/maho_link_preview_manager.h"\n',
             new="",
             description="Maho: strip deleted link-preview manager include from tab_helpers.cc",
@@ -12665,6 +12685,10 @@ _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
     "//maho/browser/ui/webui/maho_live_folders/maho_live_folders_page_handler.h",
     "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.cc",
     "//maho/browser/ui/views/sidebar/maho_control_activity_indicator_view.h",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.cc",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.h",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.cc",
+    "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.h",
     "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.cc",
     "//maho/browser/ui/views/sidebar/maho_favorite_edit_dialog.h",
     "//maho/browser/ui/views/sidebar/maho_sidebar_container_view.cc",

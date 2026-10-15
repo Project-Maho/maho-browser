@@ -92,6 +92,8 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     void PostMainMessageLoopRun() override;
     void OnSuspend() override;
     void InitializeRegularServicesOnce(Profile* profile);
+    void StartCoreStartupAttempt(base::WeakPtr<Profile> profile,
+                                 int completed_attempts);
     void EnsureMailNotificationCoordinator(Profile* profile);
     void OnRegularStorageDirectoryReady(base::WeakPtr<Profile> profile,
                                         bool storage_directory_ready);
@@ -100,6 +102,8 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
     void OnCoreStartupComplete(base::WeakPtr<Profile> profile,
                                uint64_t generation,
                                CoreStartupResultPtr result);
+    void ScheduleCoreStartupRetry(base::WeakPtr<Profile> profile,
+                                  int completed_attempts);
     void MaybeLaunchMailHelper(Profile* profile);
     void OnMailHelperCrashpadReady(Profile* profile,
                                    const base::FilePath& crashpad_database,
@@ -116,6 +120,7 @@ class MahoBrowserMainExtraParts : public ChromeBrowserMainExtraParts,
      bool observing_power_suspend_ = false;
      StartupState startup_state_ = StartupState::kUninitialized;
      uint64_t startup_generation_ = 0;
+    int startup_attempts_ = 0;
 
     std::unique_ptr<maho::MahoRoutinesScheduler> routines_scheduler_;
     std::unique_ptr<maho::MahoMailNotificationCoordinatorRegistry>

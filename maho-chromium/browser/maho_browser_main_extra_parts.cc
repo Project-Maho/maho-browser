@@ -34,6 +34,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "base/trace_event/trace_event.h"
@@ -41,6 +42,8 @@
 #include "base/values.h"
 #include "build/build_config.h"
 #include "maho/browser/maho_private_context_policy.h"
+#include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
+#include "chrome/browser/lifetime/application_lifetime.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -106,6 +109,7 @@
 #include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ai/maho_unified_agent_adapter.h"
 #include "maho/browser/maho_core_holder.h"
+#include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
 #include "maho/browser/maho_routines_scheduler.h"
 #include "maho/browser/maho_space_profile_bridge.h"
 #include "maho/browser/maho_tab_id_helper.h"
@@ -6629,8 +6633,18 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
     return;
   }
   startup_state_ = StartupState::kLoading;
+  PublishCoreRecoveryState(CoreRecoveryBannerState::kHidden);
+  startup_attempts_ = 0;
   ++startup_generation_;
   EnsureMailNotificationCoordinator(profile);
+  core_health_subscription_ = maho::AddCoreHealthCallback(base::BindRepeating(
+      [](base::WeakPtr<MahoBrowserMainExtraParts>, CoreHealth health) {
+        PublishCoreRecoveryState(
+            health == CoreHealth::kDegraded
+                ? CoreRecoveryBannerState::kDegraded
+                : CoreRecoveryBannerState::kHidden);
+      },
+      weak_factory_.GetWeakPtr()));
 
   // Core initialization remains one-time; notification ownership is per
   // regular profile and is established independently above.
@@ -6649,11 +6663,21 @@ void MahoBrowserMainExtraParts::InitializeRegularServicesOnce(
   LOG(INFO) << "MAHO_INIT_AUDIT: class=regular, decision=allow, "
                "stage=core_init_begin";
 
+  StartCoreStartupAttempt(profile->GetWeakPtr(), 0);
+}
+
+void MahoBrowserMainExtraParts::StartCoreStartupAttempt(
+    base::WeakPtr<Profile> profile,
+    int completed_attempts) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  startup_state_ = StartupState::kLoading;
+  startup_attempts_ = completed_attempts;
+  ++startup_generation_;
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
       base::BindOnce(&CreateDirectoryOnThreadPool, storage_path_),
       base::BindOnce(&MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady,
-                     weak_factory_.GetWeakPtr(), profile->GetWeakPtr()));
+                     weak_factory_.GetWeakPtr(), profile));
 }
 
 void MahoBrowserMainExtraParts::EnsureMailNotificationCoordinator(
@@ -6699,12 +6723,14 @@ void MahoBrowserMainExtraParts::OnRegularStorageDirectoryReady(
   }
   if (!profile || !profile->IsRegularProfile()) {
     startup_state_ = StartupState::kFailed;
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
     return;
   }
   if (!storage_directory_ready) {
     LOG(WARNING) << "Maho storage directory creation failed: "
                  << storage_path_.value();
     startup_state_ = StartupState::kFailed;
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
     return;
   }
 
@@ -6742,6 +6768,7 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho storage key derivation/setting failed; password "
                   "manager/persistent storage will be disabled.";
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
     return;
   }
 
@@ -6803,7 +6830,33 @@ void MahoBrowserMainExtraParts::OnStorageKeySetupComplete(
   if (!posted) {
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho core startup task admission failed";
+    ScheduleCoreStartupRetry(profile, startup_attempts_);
   }
+}
+
+void MahoBrowserMainExtraParts::ScheduleCoreStartupRetry(
+    base::WeakPtr<Profile> profile,
+    int completed_attempts) {
+  const auto decision = DecideCoreStartupRetry(completed_attempts);
+  if (!decision.retry || !profile) {
+    startup_state_ = StartupState::kFailed;
+    PublishCoreRecoveryState(CoreRecoveryBannerState::kFailedWithRetry);
+    return;
+  }
+  startup_state_ = StartupState::kFailed;
+  base::SequencedTaskRunner::GetCurrentDefault()->PostDelayedTask(
+      FROM_HERE,
+      base::BindOnce(
+          [](base::WeakPtr<MahoBrowserMainExtraParts> parts,
+             base::WeakPtr<Profile> profile, int attempt) {
+            if (!parts || !profile ||
+                parts->startup_state_ != StartupState::kFailed) {
+              return;
+            }
+            parts->StartCoreStartupAttempt(profile, attempt);
+          },
+          weak_factory_.GetWeakPtr(), profile, decision.attempt),
+      decision.delay);
 }
 
 void MahoBrowserMainExtraParts::OnCoreStartupComplete(
@@ -6815,10 +6868,13 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
       generation != startup_generation_) {
     return;
   }
+  const bool retry_profile_alive = static_cast<bool>(weak_profile);
   Profile* profile = weak_profile.get();
-  if (!profile || !result->error.empty() || !result->core || !result->spaces) {
+  if (!retry_profile_alive || !result->error.empty() || !result->core ||
+      !result->spaces) {
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho core initialization failed: " << result->error;
+    ScheduleCoreStartupRetry(weak_profile, startup_attempts_);
     return;
   }
   auto* bridge = maho::MahoSpaceProfileBridge::GetInstance();
@@ -6826,12 +6882,14 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
                                    std::move(*result->spaces))) {
     startup_state_ = StartupState::kFailed;
     LOG(ERROR) << "Maho core startup snapshot publication failed";
+    PublishCoreRecoveryState(CoreRecoveryBannerState::kFailedWithRetry);
     return;
   }
   const auto changed_spaces =
       MahoSpaceThemeState::UpdateFromSnapshot(result->spaces_json);
   core_ = result->core.release();
   startup_state_ = StartupState::kReady;
+  PublishCoreRecoveryState(CoreRecoveryBannerState::kHidden);
   {
     maho::SetCoreForProfile(core_, profile, std::move(result->tab_facts));
     maho::core::InstallLogCallback();

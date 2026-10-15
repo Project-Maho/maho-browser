@@ -110,6 +110,10 @@ source_set("maho_sidebar_library") {
 
 source_set("maho_sidebar_core") {
   sources = [
+    "maho_core_recovery_banner_view.cc",
+    "maho_core_recovery_banner_view.h",
+    "maho_core_recovery_policy.cc",
+    "maho_core_recovery_policy.h",
     "maho_control_activity_indicator_view.cc",
     "maho_control_activity_indicator_view.h",
     "maho_favorite_edit_dialog.cc",
@@ -178,6 +182,7 @@ source_set("maho_sidebar_core") {
     ":maho_spaces_board_data",
     "//base",
     "//base:i18n",
+    "//maho/browser:maho_core_holder",
     "//cc/paint",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
@@ -226,6 +231,7 @@ source_set("maho_sidebar_core") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "maho_core_recovery_policy_unittest.cc",
     "maho_sidebar_dnd_dispatch_unittest.cc",
     "maho_sidebar_favorites_pref_unittest.cc",
     "maho_sidebar_mail_badge_unittest.cc",
@@ -260,6 +266,7 @@ source_set("unit_tests") {
     "//ui/views:test_support",
   ]
 }
+
 
 source_set("browser_tests") {
   testonly = true
