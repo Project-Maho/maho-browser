@@ -13,6 +13,7 @@ from apply_chromium_src_overrides import (
     apply_base_patch,
     apply_replacements,
     base_patch_targets,
+    default_chromium_src,
     normalize_peek_open_url_routing,
     normalize_startup_browser_creator_session_restore,
 )
@@ -2563,6 +2564,75 @@ class MahoAsideAdoptionBasePatchTest(unittest.TestCase):
             self.assertTrue(
                 (self._DIR.parents[1] / "chromium_base_reapply_migrations"
                  / self._DIR.name / f"{relative_path}.patch").is_file())
+
+
+class MahoAppMenuAnchorBasePatchTest(unittest.TestCase):
+    """Maho hides the toolbar, so AppMenuButton::GetAnchor() always takes the
+    fallback-anchor path; before the browser widget is shown that element is
+    absent, and the startup session-crashed bubble then CHECK-crashed every
+    launch after an unclean exit. The base patch must replace the CHECK with an
+    empty-anchor return when applied to pristine upstream."""
+
+    _REVISION = "f89f3a4363808e117c592adedcf9947882ac3b79"
+    _REL = "chrome/browser/ui/views/frame/app_menu_button.cc"
+
+    def test_base_patch_returns_empty_anchor_instead_of_check(self):
+        patch = (Path(__file__).resolve().parents[1] / "chromium_base_patches"
+                 / self._REVISION / f"{self._REL}.patch")
+        upstream = subprocess.run(
+            ["git", "-C", str(default_chromium_src()), "show",
+             f"{self._REVISION}:{self._REL}"],
+            capture_output=True)
+        if upstream.returncode != 0:
+            self.skipTest("Chromium 154 checkout is not available")
+        pristine = upstream.stdout.decode()
+        self.assertIn("  CHECK(element);\n", pristine)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            target = root / self._REL
+            target.parent.mkdir(parents=True)
+            target.write_text(pristine)
+            subprocess.run(["git", "-C", str(root), "apply", str(patch)],
+                           check=True, capture_output=True)
+            output = target.read_text()
+
+        anchor_body = output.split("AppMenuButton::GetAnchor() {", 1)[1]
+        anchor_body = anchor_body.split("\n}\n", 1)[0]
+        self.assertNotIn("CHECK(element);", anchor_body)
+        self.assertIn(
+            "  if (!element) {\n    return views::BubbleAnchor();\n  }\n"
+            "  return views::BubbleAnchor(element);", anchor_body)
+
+    def test_session_crashed_bubble_waits_for_fallback_anchor(self):
+        rel = "chrome/browser/ui/views/session_crashed_bubble_view.cc"
+        patch = (Path(__file__).resolve().parents[1] / "chromium_base_patches"
+                 / self._REVISION / f"{rel}.patch")
+        upstream = subprocess.run(
+            ["git", "-C", str(default_chromium_src()), "show",
+             f"{self._REVISION}:{rel}"],
+            capture_output=True)
+        if upstream.returncode != 0:
+            self.skipTest("Chromium 154 checkout is not available")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            target = root / rel
+            target.parent.mkdir(parents=True)
+            target.write_text(upstream.stdout.decode())
+            subprocess.run(["git", "-C", str(root), "apply", str(patch)],
+                           check=True, capture_output=True)
+            output = target.read_text()
+
+        show_bubble = output.split("SessionCrashedBubbleView::ShowBubble(", 1)[1]
+        defer = show_bubble.index("IsElementVisible(\n"
+                                  "            kFallbackPopupAnchorElementId")
+        get_anchor = show_bubble.index("control ? control->GetAnchor()")
+        self.assertLess(defer, get_anchor)
+        self.assertIn("AddElementShownCallback(\n"
+                      "              kFallbackPopupAnchorElementId", show_bubble)
 
 
 class MahoContentsHeaderSlotTest(unittest.TestCase):
