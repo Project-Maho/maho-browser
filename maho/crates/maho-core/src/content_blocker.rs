@@ -26,6 +26,38 @@ pub const MAX_ENABLED_FILTER_BYTES: usize = 32 * 1024 * 1024;
 // ad blocking silently did nothing while the pane only reported a health
 // error.
 pub const MAX_ENABLED_FILTER_RULES: usize = 200_000;
+/// Pseudo-list holding the user's hand-written rules. It is compiled with the
+/// other enabled lists and is never fetched.
+pub const CUSTOM_RULES_LIST_ID: &str = "maho-custom";
+/// Scheme of lists that live only in the profile (custom rules, imported
+/// files). The network updater never fetches these.
+pub const LOCAL_LIST_URL_PREFIX: &str = "maho-local://";
+
+pub fn is_local_filter_list_url(url: &str) -> bool {
+    url.starts_with(LOCAL_LIST_URL_PREFIX)
+}
+
+/// Diagnostic answer for "would this request be blocked, and by what?".
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestRequestResult {
+    /// False when the URL/source/type could not be parsed into a request.
+    pub valid_request: bool,
+    /// False when content blocking is not in native mode (nothing is blocked).
+    pub native_mode: bool,
+    /// True when the source site is on the user's exception list.
+    pub site_excepted: bool,
+    pub blocked: bool,
+    pub important: bool,
+    /// Raw text of the matched blocking rule, when one matched.
+    pub matched_filter: Option<String>,
+    /// Raw text of the matched exception rule, when one matched.
+    pub exception: Option<String>,
+    /// Id of the enabled list that contributed the deciding rule.
+    pub list_id: Option<String>,
+    pub redirect: Option<String>,
+    pub rewritten_url: Option<String>,
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -183,6 +215,24 @@ pub fn rule_breakdown(list_id: &str, body: &str) -> FilterListRuleBreakdown {
         }
     }
     breakdown
+}
+
+fn local_list_metadata(id: &str, name: &str) -> FilterListMetadata {
+    FilterListMetadata {
+        id: id.to_string(),
+        name: name.to_string(),
+        url: format!("{LOCAL_LIST_URL_PREFIX}{id}"),
+        enabled: true,
+        rule_count: 0,
+        etag: None,
+        last_modified: None,
+        sha256: None,
+        last_attempt_timestamp: None,
+        last_success_timestamp: None,
+        failure_count: 0,
+        last_status: None,
+        last_error: None,
+    }
 }
 
 fn is_secure_https_url(url: &str) -> bool {
@@ -651,6 +701,15 @@ impl ContentBlocker {
                 reason: format!("unknown filter list id: {}", resp.list_id),
             });
         }
+        if self
+            .filter_lists
+            .iter()
+            .any(|list| list.id == resp.list_id && is_local_filter_list_url(&list.url))
+        {
+            return Err(ContentBlockingError::InvalidUpdateBody {
+                reason: format!("local filter list is not updated from the network: {}", resp.list_id),
+            });
+        }
 
         let now = chrono::Utc::now().timestamp();
 
@@ -763,8 +822,34 @@ impl ContentBlocker {
         candidate_body: &str,
         candidate_rule_count: usize,
     ) -> Result<(), ContentBlockingError> {
+        self.validate_enabled_candidate_aggregate_with(
+            candidate_id,
+            candidate_body,
+            candidate_rule_count,
+            false,
+        )
+    }
+
+    /// `include_new` counts the candidate even when no enabled list with that
+    /// id exists yet (a list about to be added).
+    fn validate_enabled_candidate_aggregate_with(
+        &self,
+        candidate_id: &str,
+        candidate_body: &str,
+        candidate_rule_count: usize,
+        include_new: bool,
+    ) -> Result<(), ContentBlockingError> {
         let mut total_bytes = 0usize;
         let mut total_rules = 0usize;
+        if include_new
+            && !self
+                .filter_lists
+                .iter()
+                .any(|list| list.enabled && list.id == candidate_id)
+        {
+            total_bytes = candidate_body.len();
+            total_rules = candidate_rule_count;
+        }
         for list in self.filter_lists.iter().filter(|list| list.enabled) {
             let candidate = if list.id == candidate_id {
                 Some((candidate_body, candidate_rule_count))
@@ -1097,6 +1182,147 @@ impl ContentBlocker {
             .hidden_class_id_selectors(classes, ids, &exceptions);
         selectors.sort();
         selectors
+    }
+
+    /// Explains how the active configuration treats one request. The live
+    /// engine is compiled without rule text, so attribution recompiles each
+    /// enabled list in debug mode; this is a user-triggered diagnostic only.
+    pub fn test_request(&self, url: &str, source_url: &str, request_type: &str) -> TestRequestResult {
+        let mut result = TestRequestResult {
+            native_mode: self.is_native(),
+            ..TestRequestResult::default()
+        };
+        let request = match Request::new(url, source_url, request_type) {
+            Ok(request) => request,
+            Err(_) => return result,
+        };
+        result.valid_request = true;
+        if self.is_site_excepted(source_url) {
+            result.site_excepted = true;
+            return result;
+        }
+        if !result.native_mode {
+            return result;
+        }
+        let live = self.engine().check_network_request(&request);
+        result.blocked = live.matched;
+        result.important = live.important;
+        result.redirect = live.redirect;
+        result.rewritten_url = live.rewritten_url;
+        if !live.matched && live.exception.is_none() {
+            return result;
+        }
+        for list in self.filter_lists.iter().filter(|list| list.enabled) {
+            let Some(body) = self.filter_list_contents.get(&list.id) else {
+                continue;
+            };
+            let mut filter_set = FilterSet::new(true);
+            filter_set.add_filter_list(body, ParseOptions::default());
+            let probe = Engine::from_filter_set(filter_set, true).check_network_request(&request);
+            let decisive = if result.blocked { probe.filter } else { probe.exception };
+            if let Some(rule) = decisive {
+                if result.blocked {
+                    result.matched_filter = Some(rule);
+                } else {
+                    result.exception = Some(rule);
+                }
+                result.list_id = Some(list.id.clone());
+                break;
+            }
+        }
+        if result.blocked && result.list_id.is_none() && self.popup_blocking_enabled {
+            result.matched_filter = Some("||*$popup,third-party".to_string());
+        }
+        result
+    }
+
+    /// The user's custom rules, or an empty string when none are saved.
+    pub fn custom_rules(&self) -> &str {
+        self.filter_list_contents
+            .get(CUSTOM_RULES_LIST_ID)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    /// Replaces the custom rules. Blank text removes the pseudo-list. Rules are
+    /// validated (and checked against the aggregate budget) before anything is
+    /// changed, so a rejected save leaves the previous rules active.
+    pub fn set_custom_rules(&mut self, rules: &str) -> Result<(), ContentBlockingError> {
+        if rules.trim().is_empty() {
+            self.remove_filter_list(CUSTOM_RULES_LIST_ID);
+            return Ok(());
+        }
+        let candidate = validate_candidate_body(rules.to_string(), None)?;
+        let exists = self.filter_lists.iter().any(|list| list.id == CUSTOM_RULES_LIST_ID);
+        if !exists && self.filter_lists.len() >= MAX_FILTER_LISTS {
+            return Err(ContentBlockingError::TooManyFilterLists {
+                max: MAX_FILTER_LISTS as u32,
+                actual: self.filter_lists.len() as u32,
+            });
+        }
+        self.validate_enabled_candidate_aggregate_with(
+            CUSTOM_RULES_LIST_ID,
+            &candidate.body,
+            candidate.rule_count,
+            true,
+        )?;
+        let now = chrono::Utc::now().timestamp();
+        if !exists {
+            self.filter_lists.push(local_list_metadata(
+                CUSTOM_RULES_LIST_ID,
+                "Custom rules",
+            ));
+        }
+        if let Some(list) = self.filter_lists.iter_mut().find(|list| list.id == CUSTOM_RULES_LIST_ID) {
+            list.enabled = true;
+            list.rule_count = candidate.rule_count;
+            list.sha256 = Some(candidate.sha256);
+            list.last_success_timestamp = Some(now);
+        }
+        self.filter_list_contents
+            .insert(CUSTOM_RULES_LIST_ID.to_string(), candidate.body);
+        self.advance_generation();
+        self.update_health();
+        Ok(())
+    }
+
+    /// Adds a filter list from bytes the user picked in the file chooser.
+    /// Returns the new list id. Nothing changes unless every check passes.
+    pub fn import_local_list(&mut self, name: &str, bytes: &[u8]) -> Result<String, ContentBlockingError> {
+        if bytes.len() > MAX_LIST_BODY_BYTES {
+            return Err(ContentBlockingError::FilterBodyTooLarge {
+                max_bytes: u64::try_from(MAX_LIST_BODY_BYTES).unwrap_or(u64::MAX),
+                actual_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            });
+        }
+        let body = std::str::from_utf8(bytes)
+            .map_err(|_| candidate_body_error("filter list is not UTF-8 text"))?
+            .to_string();
+        let candidate = validate_candidate_body(body, None)?;
+        let id = format!("local-{}", &candidate.sha256[..12]);
+        if self.filter_lists.iter().any(|list| list.id == id) {
+            return Err(ContentBlockingError::DuplicateFilterListId { id });
+        }
+        if self.filter_lists.len() >= MAX_FILTER_LISTS {
+            return Err(ContentBlockingError::TooManyFilterLists {
+                max: MAX_FILTER_LISTS as u32,
+                actual: self.filter_lists.len() as u32,
+            });
+        }
+        self.validate_enabled_candidate_aggregate_with(&id, &candidate.body, candidate.rule_count, true)?;
+        let display_name = match name.trim() {
+            "" => "Imported list".to_string(),
+            trimmed => trimmed.chars().take(120).collect(),
+        };
+        let mut metadata = local_list_metadata(&id, &display_name);
+        metadata.rule_count = candidate.rule_count;
+        metadata.sha256 = Some(candidate.sha256);
+        metadata.last_success_timestamp = Some(chrono::Utc::now().timestamp());
+        self.filter_lists.push(metadata);
+        self.filter_list_contents.insert(id.clone(), candidate.body);
+        self.advance_generation();
+        self.update_health();
+        Ok(id)
     }
 
     pub fn get_rule_count(&self) -> usize {

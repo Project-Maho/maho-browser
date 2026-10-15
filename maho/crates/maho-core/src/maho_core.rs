@@ -9682,6 +9682,44 @@ impl MahoCore {
         self.content_blocker.is_site_excepted(origin)
     }
 
+    pub fn test_content_blocker_request(
+        &self,
+        url: &str,
+        source_url: &str,
+        request_type: &str,
+    ) -> crate::content_blocker::TestRequestResult {
+        self.content_blocker.test_request(url, source_url, request_type)
+    }
+
+    pub fn get_custom_filter_rules(&self) -> String {
+        self.content_blocker.custom_rules().to_string()
+    }
+
+    /// Persists only after the core accepted the rules; a rejected save leaves
+    /// both memory and storage unchanged.
+    pub fn set_custom_filter_rules(
+        &mut self,
+        rules: &str,
+    ) -> Result<(), maho_types::content_blocking::ContentBlockingError> {
+        self.content_blocker.set_custom_rules(rules)?;
+        self.persist_content_blocker_snapshot();
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        Ok(())
+    }
+
+    pub fn import_local_filter_list(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, maho_types::content_blocking::ContentBlockingError> {
+        let id = self.content_blocker.import_local_list(name, bytes)?;
+        self.persist_content_blocker_snapshot();
+        let state_change = self.content_blocker_state_change(None);
+        self.emit_updates(vec![CoreUpdate::ContentBlockerStateChanged(state_change)]);
+        Ok(id)
+    }
+
     pub fn update_filter_list_content(&mut self, id: &str, content: String) -> bool {
         if let Err(err) = self.content_blocker.update_filter_list_content(id, content) {
             eprintln!("[MahoCore] update_filter_list_content rejected for {id}: {err}");
