@@ -123,6 +123,12 @@ pub enum Commands {
         command: RoutineCommands,
     },
 
+    /// Install and manage the Maho browser skill for coding agents
+    Skills {
+        #[command(subcommand)]
+        command: skills::SkillsCommands,
+    },
+
     /// Delegate browser goals to Maho's built-in agent; task runs a separate CLI agent
     Agent {
         #[command(subcommand)]
@@ -1245,6 +1251,8 @@ async fn async_main() -> Result<()> {
 
         // ─── MCP server ───────────────────────────────────────────────────
         Commands::Mcp { command } => cmd_mcp(command, json_output).await,
+
+        Commands::Skills { command } => skills::run(command),
 
         // ─── Routine group ────────────────────────────────────────────────
         Commands::Routine { command } => match command {
