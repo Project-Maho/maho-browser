@@ -1,6 +1,8 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ai/maho_agent_channel_gateway.h"
+#include "maho/browser/ai/maho_agent_channel_telegram_transport.h"
+#include "maho/browser/ai/maho_agent_channel_protocols.h"
 
 #include <cassert>
 #include <cstdio>
@@ -10,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include "base/functional/bind.h"
 
 #ifndef MAHO_STANDALONE_TEST
 #include "base/files/file_util.h"
@@ -18,6 +21,8 @@
 #include "base/run_loop.h"
 #include "base/test/scoped_run_loop_timeout.h"
 #include "base/test/task_environment.h"
+#include "base/strings/stringprintf.h"
+#include "base/time/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace maho::ai {
@@ -78,11 +83,22 @@ class FakeChannelTransport : public ChannelTransport {
     std::move(callback).Run(std::move(events), std::nullopt);
   }
 
+  void SendText(const ChannelConfig&, std::string recipient, std::string text,
+                base::OnceCallback<void(bool)> callback) override {
+    sent_recipient_ = std::move(recipient);
+    sent_text_ = std::move(text);
+    std::move(callback).Run(true);
+  }
+
+  const std::string& sent_text() const { return sent_text_; }
+
  private:
   size_t fetch_count_ = 0;
   std::optional<std::string> last_fetch_cursor_;
   std::vector<ChannelEvent> queued_events_;
   std::optional<std::string> error_;
+  std::string sent_recipient_;
+  std::string sent_text_;
 };
 
 }  // namespace
@@ -97,6 +113,170 @@ TEST(MahoAgentChannelGatewayTest, CompareCursorPositionsOrdering) {
   EXPECT_GT(CompareCursorPositions("C6", "C5"), 0);
   EXPECT_EQ(CompareCursorPositions("A1", "B1"), 0);
   EXPECT_EQ(CompareCursorPositions("msg_b", "msg_a"), 0);
+}
+
+TEST(MahoAgentChannelGatewayTest, TelegramUpdateParsingAndOffset) {
+  ChannelConfig config("telegram-room", ChannelProvider::kTelegram, "Room");
+  std::vector<ChannelEvent> events;
+  std::string offset;
+  std::string error;
+  EXPECT_TRUE(ParseTelegramUpdates(
+      R"({"ok":true,"result":[{"update_id":41,"message":{"date":1700000000,"text":"hi","from":{"id":8,"username":"alice"},"chat":{"id":9}}}]})",
+      config, &events, &offset, &error));
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].sender_id, "8");
+  EXPECT_EQ(events[0].cursor, "41");
+  EXPECT_EQ(offset, "42");
+}
+
+TEST(MahoAgentChannelGatewayTest, ChannelBackoffCapsAndResets) {
+  ChannelBackoff backoff(base::Seconds(2), base::Seconds(5));
+  EXPECT_EQ(backoff.OnFailure(), base::Seconds(2));
+  EXPECT_EQ(backoff.OnFailure(), base::Seconds(4));
+  EXPECT_EQ(backoff.OnFailure(), base::Seconds(5));
+  backoff.OnSuccess();
+  EXPECT_EQ(backoff.current(), base::Seconds(2));
+}
+
+TEST(MahoAgentChannelGatewayTest, SlackEnvelopeAcknowledgedAndHelloParsed) {
+  SlackSocketProtocol slack;
+  EXPECT_TRUE(slack.OnHello(R"({"type":"hello","data":{"heartbeat_interval":30000}})"));
+  EXPECT_EQ(slack.heartbeat_interval_ms(), 30000u);
+  EXPECT_TRUE(slack.OnFrame(R"({"envelope_id":"env-1","payload":{"event":{"type":"message"}}})"));
+  auto acknowledgements = slack.TakeAcknowledgements();
+  ASSERT_EQ(acknowledgements.size(), 1u);
+  EXPECT_NE(acknowledgements[0].find("env-1"), std::string::npos);
+}
+
+TEST(MahoAgentChannelGatewayTest, DiscordHeartbeatAndResumeProtocol) {
+  DiscordGatewayProtocol discord("bot-token");
+  auto hello = discord.OnFrame(R"({"op":10,"d":{"heartbeat_interval":45000}})");
+  EXPECT_EQ(hello.outbound_frames.size(), 1u);
+  auto ready = discord.OnFrame(R"({"op":0,"s":17,"t":"READY","d":{"session_id":"session-1","resume_gateway_url":"wss://resume.test"}})");
+  EXPECT_TRUE(discord.should_resume());
+  discord.OnDisconnected();
+  auto reconnect = discord.OnFrame(R"({"op":7})");
+  EXPECT_TRUE(reconnect.reconnect);
+  EXPECT_EQ(discord.ResumeFrames().size(), 1u);
+}
+
+TEST(MahoAgentChannelGatewayTest, PairingCodesAreBoundToOnePrincipal) {
+  int next_code = 123456;
+  MahoAgentChannelPairing pairing([&next_code] {
+    return base::StringPrintf("%06d", next_code++);
+  });
+  const base::TimeTicks now = base::TimeTicks() + base::Seconds(1);
+  const std::string alice = pairing.IssueCode("room:alice", now);
+  const std::string bob = pairing.IssueCode("room:bob", now);
+  EXPECT_NE(alice, bob);
+  // Re-asking returns the live code instead of minting a new one.
+  EXPECT_EQ(pairing.IssueCode("room:alice", now), alice);
+  // Bob cannot use Alice's code.
+  EXPECT_EQ(pairing.Confirm("room:bob", alice, now),
+            MahoAgentChannelPairing::ConfirmResult::kWrongCode);
+  EXPECT_EQ(pairing.Confirm("room:alice", alice, now),
+            MahoAgentChannelPairing::ConfirmResult::kApproved);
+  EXPECT_TRUE(pairing.AuthorizeInbound("room:alice"));
+  EXPECT_FALSE(pairing.AuthorizeInbound("room:bob"));
+  EXPECT_TRUE(pairing.IssueCode("room:alice", now).empty());
+  pairing.Revoke("room:alice");
+  EXPECT_FALSE(pairing.AuthorizeInbound("room:alice"));
+}
+
+TEST(MahoAgentChannelGatewayTest, PairingCodeExpiresAndLimitsAttempts) {
+  MahoAgentChannelPairing pairing([] { return std::string("654321"); });
+  const base::TimeTicks now = base::TimeTicks() + base::Seconds(1);
+  const std::string code = pairing.IssueCode("room:late", now);
+  EXPECT_EQ(pairing.Confirm("room:late", code,
+                            now + MahoAgentChannelPairing::kCodeLifetime),
+            MahoAgentChannelPairing::ConfirmResult::kExpired);
+  pairing.IssueCode("room:guess", now);
+  for (int i = 1; i < MahoAgentChannelPairing::kMaxAttempts; ++i) {
+    EXPECT_EQ(pairing.Confirm("room:guess", "000000", now),
+              MahoAgentChannelPairing::ConfirmResult::kWrongCode);
+  }
+  EXPECT_EQ(pairing.Confirm("room:guess", "000000", now),
+            MahoAgentChannelPairing::ConfirmResult::kAttemptsExhausted);
+  // The exhausted code is gone; even the right value no longer pairs.
+  EXPECT_EQ(pairing.Confirm("room:guess", "654321", now),
+            MahoAgentChannelPairing::ConfirmResult::kExpired);
+  EXPECT_FALSE(pairing.AuthorizeInbound("room:guess"));
+}
+
+namespace {
+class RecordingTransport final : public ChannelTransport {
+ public:
+  struct Sent {
+    std::string recipient;
+    std::string text;
+  };
+  explicit RecordingTransport(std::vector<Sent>* sent) : sent_(sent) {}
+  void FetchEvents(const ChannelConfig&, const std::optional<std::string>&,
+                   FetchCallback callback) override {
+    std::move(callback).Run({}, std::nullopt);
+  }
+  void SendText(const ChannelConfig&, std::string recipient, std::string text,
+                base::OnceCallback<void(bool)> callback) override {
+    sent_->push_back({std::move(recipient), std::move(text)});
+    std::move(callback).Run(true);
+  }
+
+ private:
+  raw_ptr<std::vector<Sent>> sent_;
+};
+}  // namespace
+
+TEST(MahoAgentChannelGatewayTest, UnknownSenderGetsCodeApprovedSubmitsRevokedBlocked) {
+  base::test::TaskEnvironment task_environment;
+  MahoAgentChannelGateway gateway;
+  gateway.SetPairingRequired(true);
+  ChannelConfig config("telegram-room", ChannelProvider::kTelegram, "Room");
+  config.allowed_sender_ids = {"sender-7"};
+  gateway.RegisterChannel(config);
+  std::vector<RecordingTransport::Sent> sent;
+  gateway.SetProviderTransport("telegram-room",
+                               std::make_unique<RecordingTransport>(&sent));
+  int submitted = 0;
+  gateway.SetTriggerCallback(base::BindRepeating(
+      [](int* submitted, const AgentSessionTrigger&) {
+        ++*submitted;
+        return true;
+      },
+      &submitted));
+
+  ChannelEvent event;
+  event.id = "event-1";
+  event.cursor = "1";
+  event.channel_id = "telegram-room";
+  event.reply_channel_id = "chat-42";
+  event.provider = ChannelProvider::kTelegram;
+  event.sender_id = "sender-7";
+  event.text = "run this";
+
+  // Unknown sender: nothing is submitted, a code goes back to the chat.
+  EXPECT_TRUE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
+  EXPECT_EQ(submitted, 0);
+  ASSERT_EQ(sent.size(), 1u);
+  EXPECT_EQ(sent[0].recipient, "chat-42");
+  const size_t pos = sent[0].text.find("pairing code ");
+  ASSERT_NE(pos, std::string::npos);
+  const std::string code = sent[0].text.substr(pos + 13, 6);
+
+  // A wrong code does not pair; the right one does.
+  EXPECT_EQ(gateway.ApprovePairing("telegram-room", "sender-7", "999999"),
+            MahoAgentChannelPairing::ConfirmResult::kWrongCode);
+  EXPECT_EQ(gateway.ApprovePairing("telegram-room", "sender-7", code),
+            MahoAgentChannelPairing::ConfirmResult::kApproved);
+  EXPECT_TRUE(gateway.IsSenderPaired("telegram-room", "sender-7"));
+
+  event.id = "event-2";
+  event.cursor = "2";
+  EXPECT_FALSE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
+
+  gateway.RevokePairing("telegram-room", "sender-7");
+  event.id = "event-3";
+  event.cursor = "3";
+  EXPECT_TRUE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
 }
 
 TEST(MahoAgentChannelGatewayTest, OutboundSendViaDirectApiOp) {
@@ -519,6 +699,10 @@ TEST(MahoAgentChannelGatewayTest, WeakPtrInvalidationOnSetTransport) {
                      FetchCallback callback) override {
       *cb_holder_ = std::move(callback);
     }
+    void SendText(const ChannelConfig&, std::string, std::string,
+                  base::OnceCallback<void(bool)> callback) override {
+      std::move(callback).Run(true);
+    }
    private:
     std::shared_ptr<FetchCallback> cb_holder_;
   };
@@ -569,6 +753,10 @@ TEST(MahoAgentChannelGatewayTest, WeakPtrInvalidationOnGatewayDestruction) {
                      const std::optional<std::string>& cursor,
                      FetchCallback callback) override {
       *cb_holder_ = std::move(callback);
+    }
+    void SendText(const ChannelConfig&, std::string, std::string,
+                  base::OnceCallback<void(bool)> callback) override {
+      std::move(callback).Run(true);
     }
    private:
     std::shared_ptr<FetchCallback> cb_holder_;
@@ -1128,6 +1316,10 @@ int main() {
         events.push_back(ev);
         callback.Run(std::move(events), std::nullopt);
       }
+      void SendText(const ChannelConfig&, std::string, std::string,
+                    base::OnceCallback<void(bool)> callback) override {
+        callback.Run(true);
+      }
     };
 
     uint64_t mock_time = 1700000100;
@@ -1175,6 +1367,10 @@ int main() {
                        const std::optional<std::string>& cursor,
                        FetchCallback callback) override {
         *cb_holder_ = std::move(callback);
+      }
+      void SendText(const ChannelConfig&, std::string, std::string,
+                    base::OnceCallback<void(bool)> callback) override {
+        std::move(callback).Run(true);
       }
      private:
       std::shared_ptr<FetchCallback> cb_holder_;
@@ -1225,6 +1421,10 @@ int main() {
                        const std::optional<std::string>& cursor,
                        FetchCallback callback) override {
         *cb_holder_ = std::move(callback);
+      }
+      void SendText(const ChannelConfig&, std::string, std::string,
+                    base::OnceCallback<void(bool)> callback) override {
+        std::move(callback).Run(true);
       }
      private:
       std::shared_ptr<FetchCallback> cb_holder_;

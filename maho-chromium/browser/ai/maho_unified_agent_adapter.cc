@@ -656,8 +656,9 @@ MahoUnifiedAgentAdapter::MahoUnifiedAgentAdapter(
   Profile* profile = bound_browser ? bound_browser->GetProfile() : nullptr;
   api_broker_ =
       std::make_unique<maho::ai::MahoAuthenticatedServiceApiBroker>(profile);
-  channel_gateway_ =
-      std::make_unique<maho::ai::MahoAgentChannelGateway>(nullptr, api_broker_.get());
+  channel_gateway_ = std::make_unique<maho::ai::MahoAgentChannelGateway>(
+      nullptr, api_broker_.get());
+  channel_gateway_->ConfigureProductionTransports(profile);
 }
 
 bool MahoUnifiedAgentAdapter::IsAiAllowed() {

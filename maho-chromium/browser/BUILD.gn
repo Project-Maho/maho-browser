@@ -98,6 +98,10 @@ source_set("maho_password_provider") {
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
     "//components/prefs",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//url",
     "//maho/third_party/maho:maho_ffi_headers",
     "//maho/third_party/maho:maho_core_prebuilt",
   ]
@@ -285,6 +289,7 @@ source_set("maho_ffi_callback_handle_unittests") {
     "//base",
     "//base/test:test_support",
     "//testing/gtest",
+    "//testing/gmock",
   ]
 }
 
@@ -1374,6 +1379,12 @@ source_set("maho_agent_channel_gateway") {
   sources = [
     "ai/maho_agent_channel_gateway.cc",
     "ai/maho_agent_channel_gateway.h",
+    "ai/maho_agent_channel_telegram_transport.cc",
+    "ai/maho_agent_channel_telegram_transport.h",
+    "ai/maho_agent_channel_protocols.cc",
+    "ai/maho_agent_channel_protocols.h",
+    "ai/maho_agent_channel_websocket_transport.cc",
+    "ai/maho_agent_channel_websocket_transport.h",
   ]
   public_deps = [
     ":maho_authenticated_service_api_broker",
@@ -1382,6 +1393,12 @@ source_set("maho_agent_channel_gateway") {
   deps = [
     ":maho_ai_runtime_adapter_interface",
     "//components/prefs",
+    "//content/public/browser",
+    "//net",
+    "//services/network/public/cpp",
+    "//services/network/public/mojom",
+    "//url",
+    "//crypto",
   ]
 }
 
@@ -1404,6 +1421,7 @@ source_set("maho_ai_provider_oauth") {
     "//maho/third_party/maho:maho_ffi_headers",
     "//ui/base",
     "//url",
+    "//crypto",
   ]
 }
 
@@ -1537,6 +1555,9 @@ source_set("maho_agent_channel_gateway_unittests") {
   testonly = true
   sources = [
     "ai/maho_agent_channel_gateway_unittest.cc",
+    "ai/maho_agent_channel_telegram_transport_unittest.cc",
+    "ai/maho_agent_channel_protocols_unittest.cc",
+    "ai/maho_agent_channel_websocket_transport_unittest.cc",
   ]
   deps = [
     ":maho_agent_channel_gateway",
@@ -1544,6 +1565,11 @@ source_set("maho_agent_channel_gateway_unittests") {
     "//base",
     "//base/test:test_support",
     "//testing/gtest",
+    "//net:test_support",
+    "//services/network:test_support",
+    "//services/network/public/cpp",
+    "//url",
+    "//content/test:test_support",
   ]
 }
 
@@ -1586,7 +1612,6 @@ source_set("maho_contents_header_unittests") {
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
-    "ai/maho_agent_channel_gateway_unittest.cc",
     "ai/maho_artifact_html_sanitizer_unittest.cc",
     "ai/maho_artifact_pdf_processor_unittest.cc",
     "ai/maho_artifact_registry_unittest.cc",
@@ -1607,7 +1632,7 @@ source_set("maho_theme_io_unittests") {
     "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
   ]
   deps = [
-    ":maho_agent_channel_gateway",
+    ":maho_agent_channel_gateway_unittests",
     ":maho_artifact_html_sanitizer",
     ":maho_artifact_pdf_processor",
     ":maho_artifact_registry",
