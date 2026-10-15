@@ -13490,6 +13490,10 @@ impl MahoCore {
                             .insert((entity.entity_type.clone(), entity.entity_id.clone()));
                     }
                 }
+                // Site sessions have no core-side store: the sync manager keeps
+                // the record and the browser applies cookies/localStorage for
+                // opted-in origins.
+                SyncEntityType::SiteSession => {}
             }
         }
 

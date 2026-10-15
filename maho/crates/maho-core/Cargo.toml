@@ -17,6 +17,7 @@ toml = "0.8"
 lru = "0.12"
 psl = { workspace = true }
 idna = "1.0"
+url = "2.5"
 adblock = { version = "0.12.2", features = ["css-validation"] }
 aes-gcm = "0.10"
 argon2 = "0.5"
