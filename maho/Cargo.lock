@@ -2937,6 +2937,7 @@ dependencies = [
  "hyper",
  "landlock",
  "libc",
+ "lopdf",
  "maho-browser-mcp",
  "maho-core",
  "maho-storage",

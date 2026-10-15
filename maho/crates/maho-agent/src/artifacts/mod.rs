@@ -1,6 +1,7 @@
 //! Native document artifact authoring.
 
 mod docx;
+mod pdf;
 mod xlsx;
 
 use std::path::{Component, Path, PathBuf};
@@ -17,6 +18,12 @@ pub const MAX_XLSX_COLUMNS: usize = 100;
 pub const MAX_DOCX_INPUT_BYTES: usize = 1_048_576;
 // Maximum number of blocks (headings, paragraphs, tables) in one document.
 pub const MAX_DOCX_BLOCKS: usize = 5_000;
+// Maximum serialized document input accepted for pdf.
+pub const MAX_PDF_INPUT_BYTES: usize = 1_048_576;
+// Maximum number of blocks in one pdf document.
+pub const MAX_PDF_BLOCKS: usize = 5_000;
+// Maximum number of pages a pdf may lay out to.
+pub const MAX_PDF_PAGES: usize = 500;
 
 /// Handle returned for a generated artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,7 +34,7 @@ pub struct ArtifactHandle {
     pub size_bytes: u64,
 }
 
-/// Creates a document artifact of `kind` ("xlsx" or "docx") from its JSON
+/// Creates a document artifact of `kind` ("xlsx", "docx" or "pdf") from its JSON
 /// input. Only a single filename within the artifact root is accepted, and
 /// an existing file is never overwritten.
 pub fn create(
@@ -59,6 +66,7 @@ pub fn create(
             MAX_DOCX_INPUT_BYTES,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ),
+        "pdf" => (".pdf", MAX_PDF_INPUT_BYTES, "application/pdf"),
         _ => bail!("unsupported artifact kind: {kind}"),
     };
     if !relative_path.to_ascii_lowercase().ends_with(extension) {
@@ -71,7 +79,8 @@ pub fn create(
     std::fs::create_dir_all(artifact_root).context("create artifact root")?;
     let bytes = match kind {
         "xlsx" => xlsx::create(input)?,
-        _ => docx::create(input)?,
+        "docx" => docx::create(input)?,
+        _ => pdf::create(input)?,
     };
     let target = artifact_root.join(relative_path);
     let mut file = std::fs::OpenOptions::new()
