@@ -1189,7 +1189,7 @@ source_set("maho_browser_main_extra_parts") {
     "//content/public/browser",
     "//net",
     "//third_party/blink/public/common",
-    "//third_party/blink/public/mojom",
+    "//third_party/blink/public/mojom:mojom_platform",
     "//url",
 
     "//maho/browser/importer",
