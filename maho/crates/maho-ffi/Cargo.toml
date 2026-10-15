@@ -6,6 +6,11 @@ edition = "2021"
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
+[features]
+# Test-only exports (maho_core_debug_induce_panic). Official builds never
+# enable this feature.
+debug-test-hooks = []
+
 [dependencies]
 maho-core = { path = "../maho-core" }
 maho-types = { path = "../maho-types" }

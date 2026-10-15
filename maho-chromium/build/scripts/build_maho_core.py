@@ -230,9 +230,10 @@ def _cargo_build(command, cwd, rust_target, package=None, env=None):
     if package:
         args += ['-p', package]
     if _is_apple_target(rust_target):
-        rustflags = cargo_env.get('RUSTFLAGS', '')
-        cargo_env['RUSTFLAGS'] = f'{rustflags} -Cpanic=abort'.strip()
-        args += ['-Zbuild-std=std,panic_abort']
+        # build-std keeps std built for the deployment target. The workspace
+        # release profile unwinds so ffi_safe! can contain panics; forcing
+        # -Cpanic=abort here would turn every contained panic into a crash.
+        args += ['-Zbuild-std=std,panic_unwind']
         command = ['rustup', 'run', 'nightly', 'cargo']
     subprocess.run(command + args, cwd=cwd, check=True, env=cargo_env)
 

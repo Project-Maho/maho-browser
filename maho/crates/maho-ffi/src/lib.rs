@@ -1926,11 +1926,16 @@ pub unsafe extern "C" fn maho_core_search_passwords(
 /// Caller must free with `maho_string_free`.
 #[no_mangle]
 pub extern "C" fn maho_core_get_password_provider_registry() -> *mut c_char {
-    let registry = maho_types::passwords::get_provider_registry();
-    let json = serde_json::to_string(&registry).unwrap_or_else(|_| "[]".to_string());
-    CString::new(json)
-        .map(CString::into_raw)
-        .unwrap_or(ptr::null_mut())
+    ffi_safe!(
+        {
+            let registry = maho_types::passwords::get_provider_registry();
+            let json = serde_json::to_string(&registry).unwrap_or_else(|_| "[]".to_string());
+            CString::new(json)
+                .map(CString::into_raw)
+                .unwrap_or(ptr::null_mut())
+        },
+        ptr::null_mut()
+    )
 }
 
 /// # Safety
@@ -3833,11 +3838,15 @@ pub unsafe extern "C" fn maho_string_free(s: *mut c_char) {
 /// Returns null on interior-NUL byte in the URL (never panics across FFI).
 #[no_mangle]
 pub extern "C" fn maho_core_managed_proxy_url() -> *mut c_char {
-    let url = maho_agent::proxy_url();
-    match CString::new(url) {
-        Ok(cstr) => cstr.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
+    ffi_safe!(
+        {
+            match CString::new(maho_agent::proxy_url()) {
+                Ok(cstr) => cstr.into_raw(),
+                Err(_) => std::ptr::null_mut(),
+            }
+        },
+        std::ptr::null_mut()
+    )
 }
 
 /// # Safety
@@ -4062,6 +4071,7 @@ pub unsafe extern "C" fn maho_core_new_with_storage(path: *const c_char) -> *mut
                 Err(_) => return ptr::null_mut(),
             };
             let base_path = Path::new(path_str);
+            panic_record::set_profile_dir(base_path);
 
             let lmdb_path = base_path.join("state");
             if std::fs::create_dir_all(&lmdb_path).is_err() {
@@ -10670,19 +10680,138 @@ pub unsafe extern "C" fn maho_core_chat_append_assistant_message(
 // ffi_safe! — panic-catching macro for FFI boundary safety
 // ============================================================
 
-/// Catches panics at FFI boundaries and returns a fallback value.
-/// Release builds use `panic = "abort"`: panics abort instead of reaching this fallback.
+/// Catches panics at FFI boundaries and returns a fallback value. Every
+/// caught panic is appended to the profile's panic log (see `panic_record`).
+/// The workspace release profile unwinds, so this holds in release builds too.
 /// Usage: `ffi_safe!({ <expr> }, <fallback>)`
 #[macro_export]
 macro_rules! ffi_safe {
     ($body:block, $fallback:expr) => {{
         $crate::with_ffi_serialization(|| {
+            $crate::panic_record::install_hook();
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
                 Ok(val) => val,
-                Err(_) => $fallback,
+                Err(payload) => {
+                    $crate::panic_record::record(payload.as_ref());
+                    $fallback
+                }
             }
         })
     }};
+}
+
+/// Profile-local, bounded record of panics contained at the FFI boundary.
+pub mod panic_record {
+    use std::any::Any;
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Mutex, Once, OnceLock};
+
+    pub const LOG_FILE: &str = "core-panics.jsonl";
+    const MAX_LOG_BYTES: u64 = 256 * 1024;
+    const MAX_MESSAGE_CHARS: usize = 1_000;
+
+    static LOG_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    static HOOK: Once = Once::new();
+    static COUNT: AtomicU64 = AtomicU64::new(0);
+
+    thread_local! {
+        static LAST_LOCATION: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    fn log_path() -> &'static Mutex<Option<PathBuf>> {
+        LOG_PATH.get_or_init(|| Mutex::new(None))
+    }
+
+    /// Records future panics under `<profile_dir>/logs/core-panics.jsonl`.
+    pub fn set_profile_dir(profile_dir: &std::path::Path) {
+        *log_path().lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(profile_dir.join("logs").join(LOG_FILE));
+    }
+
+    /// The panic hook runs before unwinding and is the only place the source
+    /// location is reliably available; it stashes it for `record`.
+    pub fn install_hook() {
+        HOOK.call_once(|| {
+            let previous = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                let location = info
+                    .location()
+                    .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+                LAST_LOCATION.with(|slot| *slot.borrow_mut() = location);
+                previous(info);
+            }));
+        });
+    }
+
+    pub fn count() -> u64 {
+        COUNT.load(Ordering::Relaxed)
+    }
+
+    fn message(payload: &(dyn Any + Send)) -> String {
+        let text = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        text.chars().take(MAX_MESSAGE_CHARS).collect()
+    }
+
+    pub fn record(payload: &(dyn Any + Send)) {
+        COUNT.fetch_add(1, Ordering::Relaxed);
+        let location = LAST_LOCATION.with(|slot| slot.borrow_mut().take());
+        let line = serde_json::json!({
+            "ts_ms": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
+            "message": message(payload),
+            "location": location,
+            "thread": std::thread::current().name().map(str::to_string),
+        });
+        let guard = log_path().lock().unwrap_or_else(|e| e.into_inner());
+        let Some(path) = guard.as_ref() else {
+            return;
+        };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) >= MAX_LOG_BYTES {
+            let _ = std::fs::rename(path, path.with_extension("jsonl.1"));
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+/// Returns how many panics have been contained at the FFI boundary in this
+/// process.
+#[no_mangle]
+pub extern "C" fn maho_core_contained_panic_count() -> u64 {
+    std::panic::catch_unwind(panic_record::count).unwrap_or_default()
+}
+
+/// Test-only: panics inside `ffi_safe!` so a caller can prove containment.
+/// Compiled only with the `debug-test-hooks` feature, which official builds
+/// never enable.
+#[cfg(feature = "debug-test-hooks")]
+#[no_mangle]
+pub extern "C" fn maho_core_debug_induce_panic() -> bool {
+    ffi_safe!(
+        {
+            panic!("maho_core_debug_induce_panic");
+        },
+        false
+    )
 }
 
 // ============================================================
@@ -16041,9 +16170,14 @@ pub struct MahoTraceRecorder(pub maho_agent::trace_recorder::TraceRecorder<fn() 
 /// Caller must free with `maho_trace_recorder_destroy` or `maho_trace_recorder_finish_json`.
 #[no_mangle]
 pub unsafe extern "C" fn maho_trace_recorder_create() -> *mut MahoTraceRecorder {
-    Box::into_raw(Box::new(MahoTraceRecorder(
-        maho_agent::trace_recorder::TraceRecorder::new(),
-    )))
+    ffi_safe!(
+        {
+            Box::into_raw(Box::new(MahoTraceRecorder(
+                maho_agent::trace_recorder::TraceRecorder::new(),
+            )))
+        },
+        ptr::null_mut()
+    )
 }
 
 /// Destroys a `MahoTraceRecorder` without finishing.
@@ -16069,18 +16203,23 @@ pub unsafe extern "C" fn maho_trace_recorder_record_click(
     x: f64,
     y: f64,
 ) {
-    if recorder.is_null() {
-        return;
-    }
-    let target = if target_ref.is_null() {
-        None
-    } else {
-        CStr::from_ptr(target_ref)
-            .to_str()
-            .ok()
-            .map(|s| s.to_string())
-    };
-    (*recorder).0.record_click(target, x, y);
+    ffi_safe!(
+        {
+            if recorder.is_null() {
+                return;
+            }
+            let target = if target_ref.is_null() {
+                None
+            } else {
+                CStr::from_ptr(target_ref)
+                    .to_str()
+                    .ok()
+                    .map(|s| s.to_string())
+            };
+            (*recorder).0.record_click(target, x, y);
+        },
+        ()
+    )
 }
 
 /// Records typed text into a fill step (coalesced within 400ms window).
@@ -16095,22 +16234,27 @@ pub unsafe extern "C" fn maho_trace_recorder_record_fill(
     text: *const c_char,
     selector: *const c_char,
 ) {
-    if recorder.is_null() || text.is_null() {
-        return;
-    }
-    let text_str = match CStr::from_ptr(text).to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
-    };
-    let sel = if selector.is_null() {
-        None
-    } else {
-        CStr::from_ptr(selector)
-            .to_str()
-            .ok()
-            .map(|s| s.to_string())
-    };
-    (*recorder).0.record_fill(text_str, sel);
+    ffi_safe!(
+        {
+            if recorder.is_null() || text.is_null() {
+                return;
+            }
+            let text_str = match CStr::from_ptr(text).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return,
+            };
+            let sel = if selector.is_null() {
+                None
+            } else {
+                CStr::from_ptr(selector)
+                    .to_str()
+                    .ok()
+                    .map(|s| s.to_string())
+            };
+            (*recorder).0.record_fill(text_str, sel);
+        },
+        ()
+    )
 }
 
 /// Records page navigation.
@@ -16123,14 +16267,19 @@ pub unsafe extern "C" fn maho_trace_recorder_record_navigate(
     recorder: *mut MahoTraceRecorder,
     url: *const c_char,
 ) {
-    if recorder.is_null() || url.is_null() {
-        return;
-    }
-    let url_str = match CStr::from_ptr(url).to_str() {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
-    };
-    (*recorder).0.record_navigate(url_str);
+    ffi_safe!(
+        {
+            if recorder.is_null() || url.is_null() {
+                return;
+            }
+            let url_str = match CStr::from_ptr(url).to_str() {
+                Ok(s) => s.to_string(),
+                Err(_) => return,
+            };
+            (*recorder).0.record_navigate(url_str);
+        },
+        ()
+    )
 }
 
 /// Records a hover step.
@@ -16143,18 +16292,23 @@ pub unsafe extern "C" fn maho_trace_recorder_record_hover(
     recorder: *mut MahoTraceRecorder,
     target_ref: *const c_char,
 ) {
-    if recorder.is_null() {
-        return;
-    }
-    let target = if target_ref.is_null() {
-        None
-    } else {
-        CStr::from_ptr(target_ref)
-            .to_str()
-            .ok()
-            .map(|s| s.to_string())
-    };
-    (*recorder).0.record_hover(target);
+    ffi_safe!(
+        {
+            if recorder.is_null() {
+                return;
+            }
+            let target = if target_ref.is_null() {
+                None
+            } else {
+                CStr::from_ptr(target_ref)
+                    .to_str()
+                    .ok()
+                    .map(|s| s.to_string())
+            };
+            (*recorder).0.record_hover(target);
+        },
+        ()
+    )
 }
 
 /// Finishes recording and returns the TraceV3 JSON string.
@@ -16165,18 +16319,23 @@ pub unsafe extern "C" fn maho_trace_recorder_record_hover(
 pub unsafe extern "C" fn maho_trace_recorder_finish_json(
     recorder: *mut MahoTraceRecorder,
 ) -> *mut c_char {
-    if recorder.is_null() {
-        return ptr::null_mut();
-    }
-    let rec = Box::from_raw(recorder);
-    let trace = rec.0.finish();
-    match trace.to_json() {
-        Ok(json) => match CString::new(json) {
-            Ok(c) => c.into_raw(),
-            Err(_) => ptr::null_mut(),
+    ffi_safe!(
+        {
+            if recorder.is_null() {
+                return ptr::null_mut();
+            }
+            let rec = Box::from_raw(recorder);
+            let trace = rec.0.finish();
+            match trace.to_json() {
+                Ok(json) => match CString::new(json) {
+                    Ok(c) => c.into_raw(),
+                    Err(_) => ptr::null_mut(),
+                },
+                Err(_) => ptr::null_mut(),
+            }
         },
-        Err(_) => ptr::null_mut(),
-    }
+        ptr::null_mut()
+    )
 }
 
 /// Sets the available browser capabilities for skill activation and filtering.
