@@ -4513,6 +4513,31 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
+    /// Deletes every browsing-episode fact recorded for `origin` (exact
+    /// match on the canonical origin stored in the episode metadata) in one
+    /// transaction, together with its FTS rows. The index-change triggers
+    /// journal each deletion for the ANN index.
+    pub fn delete_episode_facts_for_origin(&self, origin: &str) -> Result<usize, StorageError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let ids: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM memory_facts \
+                 WHERE source = 'browse' AND json_extract(metadata, '$.origin') = ?1",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![origin], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for id in &ids {
+            tx.execute("DELETE FROM memory_facts WHERE id = ?1", rusqlite::params![id])?;
+            tx.execute(
+                "DELETE FROM memory_facts_fts WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(ids.len())
+    }
+
     pub fn insert_memory(&self, params: MemoryInsertParams<'_>) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO memory_facts \

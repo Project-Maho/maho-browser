@@ -881,6 +881,34 @@ bool maho_core_set_content_blocking_mode(struct MahoCore *ptr, int32_t mode_code
 char *maho_core_get_content_blocker_state_json(struct MahoCore *ptr);
 
 /**
+ * Records one browsing episode when the user's episodic-memory settings
+ * allow it. `episode_json` is `{"url","title","summary","is_private_context"}`.
+ * Returns `{"recorded":true,"id":...}` or `{"recorded":false,"reason":...}`,
+ * or null on bad arguments or a storage error.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `episode_json` a valid C string.
+ * Caller frees the result with `maho_string_free`.
+ */
+char *maho_core_episode_record_json(struct MahoCore *ptr, const char *episode_json);
+
+/**
+ * Deletes every recorded episode for the origin of `site` (a URL or an
+ * origin). Returns the number deleted, or -1 on bad arguments or error.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `site` a valid C string.
+ */
+int64_t maho_core_episode_forget_origin(struct MahoCore *ptr, const char *site);
+
+/**
+ * Hybrid (lexical + dense) memory search. Returns a JSON array of
+ * `{"id","fact","score","source"}`, or null on bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `query` a valid C string.
+ * Caller frees the result with `maho_string_free`.
+ */
+char *maho_core_search_memory_hybrid_json(struct MahoCore *ptr, const char *query, uint32_t top_k);
+
+/**
  * Applies a FilterListUpdateResponse JSON to the content blocker.
  *
  * Returns `true` when a rebuild/compile is needed: a 200 response produced a
