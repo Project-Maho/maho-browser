@@ -12433,33 +12433,43 @@ impl MahoCore {
             self.sync_manager = Some(crate::sync_manager::SyncManager::new(config));
         }
 
-        let snap: crate::snapshot::Snapshot =
-            if let Ok(parsed) = serde_json::from_str::<crate::snapshot::Snapshot>(snapshot_json) {
-                parsed
-            } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(snapshot_json) {
-                let blob_str = val
-                    .get("blob")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(snapshot_json);
-                use base64::Engine;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(blob_str)
-                    .map_err(|e| e.to_string())?;
-                let sync_key_opt = self
-                    .sync_manager
-                    .as_ref()
-                    .and_then(|sm| sm.encryption_key.as_ref());
-                let decrypted = match sync_key_opt {
-                    Some(key) => match crate::sync_crypto::decrypt_update(&bytes, key) {
-                        Ok(d) => d,
-                        Err(_) => bytes,
-                    },
-                    None => bytes,
-                };
-                serde_json::from_slice(&decrypted).map_err(|e| e.to_string())?
-            } else {
-                return Err("invalid snapshot JSON".to_string());
+        let sync_key_configured = self
+            .sync_manager
+            .as_ref()
+            .is_some_and(|sm| sm.encryption_key.is_some());
+
+        // With a sync key configured, only an AES-GCM-authenticated envelope is
+        // accepted: raw Snapshot JSON and bytes that fail authentication are
+        // rejected instead of being applied as plaintext.
+        let raw_snapshot = if sync_key_configured {
+            None
+        } else {
+            serde_json::from_str::<crate::snapshot::Snapshot>(snapshot_json).ok()
+        };
+        let snap: crate::snapshot::Snapshot = if let Some(parsed) = raw_snapshot {
+            parsed
+        } else if let Ok(val) = serde_json::from_str::<serde_json::Value>(snapshot_json) {
+            let blob_str = val
+                .get("blob")
+                .and_then(|v| v.as_str())
+                .unwrap_or(snapshot_json);
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(blob_str)
+                .map_err(|e| e.to_string())?;
+            let sync_key_opt = self
+                .sync_manager
+                .as_ref()
+                .and_then(|sm| sm.encryption_key.as_ref());
+            let decrypted = match sync_key_opt {
+                Some(key) => crate::sync_crypto::decrypt_update(&bytes, key)
+                    .map_err(|_| "snapshot authentication failed".to_string())?,
+                None => bytes,
             };
+            serde_json::from_slice(&decrypted).map_err(|e| e.to_string())?
+        } else {
+            return Err("invalid snapshot JSON".to_string());
+        };
 
         let mut ordered_entities = Vec::new();
 
