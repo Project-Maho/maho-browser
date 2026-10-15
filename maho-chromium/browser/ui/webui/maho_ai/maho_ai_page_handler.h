@@ -39,6 +39,7 @@ class MahoRoutinesPageHandler;
 
 namespace maho::ai {
 class MahoAiPendingSurface;
+class MahoAiFileAttachmentRegistry;
 }
 
 namespace network {

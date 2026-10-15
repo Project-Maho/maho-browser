@@ -4,6 +4,7 @@
 #define MAHO_BROWSER_UI_VIEWS_COMMAND_MAHO_COMMAND_ACTION_HANDLER_H_
 
 #include <string>
+#include <vector>
 
 class Browser;
 
@@ -47,7 +48,11 @@ class MahoCommandActionHandler {
   static bool OnQuerySubmitted(Browser* browser,
                                const std::string& query,
                                PaletteAction action,
-                               MahoPrivateContextClass context_class);
+                               MahoPrivateContextClass context_class,
+                               std::vector<maho_ai::mojom::ContextAttachmentPtr>
+                                   attachments = {},
+                               maho_ai::mojom::InteractionMode mode =
+                                   maho_ai::mojom::InteractionMode::kAssistant);
 };
 
 }  // namespace maho

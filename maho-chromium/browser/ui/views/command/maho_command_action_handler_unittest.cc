@@ -188,6 +188,48 @@ TEST_F(MahoCommandActionHandlerTest,
             dispatches[0].context_intent);
   EXPECT_FALSE(dispatches[0].target_session_id.has_value());
   EXPECT_FALSE(dispatches[0].request_id.empty());
+  EXPECT_TRUE(dispatches[0].attachments.empty());
+}
+
+TEST_F(MahoCommandActionHandlerTest,
+       OnQuerySubmittedCarriesExplicitTabAttachments) {
+  auto* coordinator =
+      MahoAiIngressCoordinator::GetOrCreateForBrowser(browser());
+  std::vector<maho_ai::mojom::AskMahoDispatch> dispatches;
+  auto sub = coordinator->RegisterConsumer(
+      MahoAiIngressCoordinator::ConsumerType::kSidebar,
+      base::BindRepeating(
+          [](std::vector<maho_ai::mojom::AskMahoDispatch>* out,
+             const maho_ai::mojom::AskMahoDispatch& dispatch,
+             uint64_t,
+             MahoAiIngressCoordinator::AcceptanceCallback accept) {
+            out->push_back(dispatch);
+            std::move(accept).Run("session");
+          },
+          &dispatches));
+  std::vector<maho_ai::mojom::ContextAttachmentPtr> attachments;
+  auto another = maho_ai::mojom::ContextAttachment::New();
+  another->kind = maho_ai::mojom::ContextSourceKind::kOpenTab;
+  another->tab_id = 42;
+  another->label = "Research";
+  another->url = "";
+  attachments.push_back(std::move(another));
+  auto other = maho_ai::mojom::ContextAttachment::New();
+  other->kind = maho_ai::mojom::ContextSourceKind::kOpenTab;
+  other->tab_id = 43;
+  other->label = "Notes";
+  other->url = "";
+  attachments.push_back(std::move(other));
+
+  EXPECT_TRUE(MahoCommandActionHandler::OnQuerySubmitted(
+      browser(), "hello", PaletteAction::kAskMaho,
+      MahoPrivateContextClass::kRegular, std::move(attachments)));
+  ASSERT_EQ(1u, dispatches.size());
+  ASSERT_EQ(2u, dispatches[0].attachments.size());
+  EXPECT_EQ(maho_ai::mojom::ContextSourceKind::kOpenTab,
+            dispatches[0].attachments[0]->kind);
+  EXPECT_EQ(42, dispatches[0].attachments[0]->tab_id);
+  EXPECT_EQ(43, dispatches[0].attachments[1]->tab_id);
 }
 
 // The attach-browser-context pref governs overlay behavior, not this dispatch.

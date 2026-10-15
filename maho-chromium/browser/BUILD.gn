@@ -211,6 +211,41 @@ source_set("maho_artifact_registry") {
   ]
 }
 
+source_set("maho_ai_file_attachment_registry") {
+  sources = [
+    "ai/maho_ai_file_attachment_registry.cc",
+    "ai/maho_ai_file_attachment_registry.h",
+  ]
+  public_deps = [
+    "//base",
+    "//chrome/browser/profiles:profile",
+  ]
+}
+
+source_set("maho_ai_file_attachment_registry_unittests") {
+  testonly = true
+  sources = [ "ai/maho_ai_file_attachment_registry_unittest.cc" ]
+  deps = [
+    ":maho_ai_file_attachment_registry",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
+test("maho_ai_file_attachment_registry_test") {
+  sources = [ "run_all_maho_unittests_main.cc" ]
+  deps = [
+    ":maho_ai_file_attachment_registry_unittests",
+    "//base",
+    "//base/test:test_support",
+    "//chrome/browser:browser",
+    "//chrome/test:test_support",
+    "//testing/gtest",
+  ]
+}
+
 source_set("maho_tab_tidy_orchestrator") {
   sources = [
     "ai/maho_tab_tidy_orchestrator.cc",
