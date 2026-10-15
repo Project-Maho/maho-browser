@@ -20,6 +20,13 @@ if (-not $env:SPARKLE_ED_PRIVATE_KEY) {
   if (-not (Test-Path $pem)) { throw "missing Sparkle seed: $pem" }
   $env:SPARKLE_ED_PRIVATE_KEY = (Get-Content $pem -Raw).Trim()
 }
+# generate_update_manifests.py signs update-win.json with Ed25519 via the
+# 'cryptography' package; package_msix.py needs no extra modules.
+python -c "import cryptography" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  python -m pip install --user --disable-pip-version-check cryptography 2>&1 | Write-Output
+  python -c "import cryptography"; if ($LASTEXITCODE -ne 0) { throw 'cryptography is not importable' }
+}
 Push-Location $repo
 try {
   python maho-chromium\build\scripts\release_local.py --out-dir out/Release --skip-build --no-publish
