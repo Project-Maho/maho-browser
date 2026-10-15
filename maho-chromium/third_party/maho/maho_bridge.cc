@@ -658,6 +658,32 @@ std::string GetContentBlockerStateJson(MahoCore* core) {
   return ret;
 }
 
+std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json) {
+  char* result = maho_core_episode_record_json(core, episode_json.c_str());
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
+int64_t ForgetEpisodeOrigin(MahoCore* core, const std::string& site) {
+  return maho_core_episode_forget_origin(core, site.c_str());
+}
+
+std::string SearchMemoryHybridJson(MahoCore* core,
+                                   const std::string& query,
+                                   uint32_t top_k) {
+  char* result = maho_core_search_memory_hybrid_json(core, query.c_str(), top_k);
+  if (!result) {
+    return std::string();
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
 std::string AddFilterListResultJson(MahoCore* core,
                                     const char* id,
                                     const char* name,

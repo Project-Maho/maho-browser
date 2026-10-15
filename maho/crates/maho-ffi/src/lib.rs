@@ -3400,6 +3400,131 @@ pub unsafe extern "C" fn maho_core_get_content_blocker_state_json(
     )
 }
 
+#[derive(serde::Deserialize)]
+struct EpisodeRecordRequest {
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    is_private_context: bool,
+}
+
+/// Records one browsing episode when the user's episodic-memory settings
+/// allow it. `episode_json` is `{"url","title","summary","is_private_context"}`.
+/// Returns `{"recorded":true,"id":...}` or `{"recorded":false,"reason":...}`,
+/// or null on bad arguments or a storage error.
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `episode_json` a valid C string.
+/// Caller frees the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_episode_record_json(
+    ptr: *mut MahoCore,
+    episode_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || episode_json.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let Some(storage) = core.storage_ref() else {
+                return ptr::null_mut();
+            };
+            let Ok(text) = CStr::from_ptr(episode_json).to_str() else {
+                return ptr::null_mut();
+            };
+            let Ok(request) = serde_json::from_str::<EpisodeRecordRequest>(text) else {
+                return ptr::null_mut();
+            };
+            let input = maho_core::memory::episodic::EpisodeInput {
+                url: &request.url,
+                title: &request.title,
+                summary: &request.summary,
+                is_private_context: request.is_private_context,
+            };
+            let settings = &core.get_settings().episodic_memory;
+            match maho_core::memory::episodic::record_episode(storage, settings, &input) {
+                Ok(Ok(id)) => to_json_cstring(&serde_json::json!({"recorded": true, "id": id})),
+                Ok(Err(reason)) => to_json_cstring(
+                    &serde_json::json!({"recorded": false, "reason": format!("{reason:?}")}),
+                ),
+                Err(_) => ptr::null_mut(),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Deletes every recorded episode for the origin of `site` (a URL or an
+/// origin). Returns the number deleted, or -1 on bad arguments or error.
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `site` a valid C string.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_episode_forget_origin(
+    ptr: *mut MahoCore,
+    site: *const c_char,
+) -> i64 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || site.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            let core = &*ptr;
+            let Some(storage) = core.storage_ref() else {
+                return -1;
+            };
+            let Ok(site) = CStr::from_ptr(site).to_str() else {
+                return -1;
+            };
+            match maho_core::memory::episodic::forget_origin(storage, site) {
+                Ok(count) => count as i64,
+                Err(_) => -1,
+            }
+        },
+        -1
+    )
+}
+
+/// Hybrid (lexical + dense) memory search. Returns a JSON array of
+/// `{"id","fact","score","source"}`, or null on bad arguments.
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `query` a valid C string.
+/// Caller frees the result with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_search_memory_hybrid_json(
+    ptr: *mut MahoCore,
+    query: *const c_char,
+    top_k: u32,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || query.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            let Ok(query) = CStr::from_ptr(query).to_str() else {
+                return ptr::null_mut();
+            };
+            let results: Vec<serde_json::Value> = core
+                .search_memory_hybrid(query, top_k.clamp(1, 50) as usize)
+                .into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "fact": r.fact,
+                        "score": r.score,
+                        "source": r.source,
+                    })
+                })
+                .collect();
+            to_json_cstring(&results)
+        },
+        ptr::null_mut()
+    )
+}
+
 /// Applies a FilterListUpdateResponse JSON to the content blocker.
 ///
 /// Returns `true` when a rebuild/compile is needed: a 200 response produced a

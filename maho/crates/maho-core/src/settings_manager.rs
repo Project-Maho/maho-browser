@@ -113,6 +113,7 @@ impl SettingsManager {
             autofill: AutofillSettings::default(),
             advanced: AdvancedSettings::default(),
             notifications: NotificationSettings::default(),
+            episodic_memory: Default::default(),
         }
     }
 
