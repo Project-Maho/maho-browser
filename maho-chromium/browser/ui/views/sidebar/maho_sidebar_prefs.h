@@ -24,6 +24,8 @@ extern const char kFavoritesDragHintDismissed[];
 extern const char kLiveFolders[];
 extern const char kSpacesFullViewport[];
 extern const char kMahoMiniGlobalShortcutEnabled[];
+extern const char kMahoMiniGlobalShortcut[];
+extern const char kMahoMiniGlobalShortcutError[];
 extern const char kMahoMiniClickOverrideEnabled[];
 extern const char kOpenExternalLinksInMahoMini[];
 extern const char kPeekEnabled[];

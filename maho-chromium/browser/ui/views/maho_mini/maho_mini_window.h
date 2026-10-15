@@ -6,6 +6,7 @@
 #include <string>
 
 #include "base/functional/callback_forward.h"
+#include "maho/browser/ui/views/maho_mini/maho_mini_state_policy.h"
 #include "url/gurl.h"
 
 class Browser;
@@ -40,6 +41,8 @@ void DecideLinkDestination(
     base::OnceCallback<void(LinkDestinationResult)> callback);
 
 void RegisterGlobalShortcut(Profile* profile);
+void SetMahoMiniState(Browser* browser, MahoMiniState state);
+MahoMiniState GetMahoMiniState(Browser* browser);
 
 // Returns the space id that was active in the originating (last active tabbed)
 // browser when the most recent Maho Mini window launched. Empty if none was

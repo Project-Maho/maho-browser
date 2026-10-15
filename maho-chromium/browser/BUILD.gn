@@ -839,6 +839,10 @@ if (is_mac) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -860,6 +864,10 @@ if (is_win) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -882,6 +890,10 @@ if (is_linux) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -1612,6 +1624,8 @@ source_set("maho_contents_header_unittests") {
 source_set("maho_theme_io_unittests") {
   testonly = true
   sources = [
+    "ui/views/maho_mini/maho_mini_shortcut_unittest.cc",
+    "ui/views/maho_mini/maho_mini_state_policy_unittest.cc",
     "ai/maho_artifact_html_sanitizer_unittest.cc",
     "ai/maho_artifact_pdf_processor_unittest.cc",
     "ai/maho_artifact_registry_unittest.cc",
@@ -1632,6 +1646,7 @@ source_set("maho_theme_io_unittests") {
     "ui/webui/maho_space_config/maho_space_config_page_handler_unittest.cc",
   ]
   deps = [
+    ":maho_mini",
     ":maho_agent_channel_gateway_unittests",
     ":maho_artifact_html_sanitizer",
     ":maho_artifact_pdf_processor",
