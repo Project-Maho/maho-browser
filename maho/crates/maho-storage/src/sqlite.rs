@@ -959,6 +959,20 @@ impl SqliteStorage {
                     INSERT INTO memory_index_changes(fact_id) VALUES (OLD.id);
                 END;",
         )?;
+        let has_embedding_model = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('memory_facts') WHERE name='embedding_model'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_embedding_model {
+            self.conn.execute(
+                "ALTER TABLE memory_facts ADD COLUMN embedding_model TEXT",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -4543,10 +4557,60 @@ impl SqliteStorage {
 
     pub fn update_memory_embedding(&self, fact_id: &str, bytes: &[u8]) -> Result<(), StorageError> {
         self.conn.execute(
-            "UPDATE memory_facts SET embedding = ?1 WHERE id = ?2",
+            "UPDATE memory_facts SET embedding = ?1, embedding_model = NULL WHERE id = ?2",
             rusqlite::params![bytes, fact_id],
         )?;
         Ok(())
+    }
+
+    /// Stores an embedding together with the model generation that produced it.
+    pub fn update_memory_embedding_with_model(
+        &self,
+        fact_id: &str,
+        bytes: &[u8],
+        model: &str,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE memory_facts SET embedding = ?1, embedding_model = ?2 WHERE id = ?3",
+            rusqlite::params![bytes, model, fact_id],
+        )?;
+        Ok(())
+    }
+
+    /// Facts whose stored vector was not produced by `current_model`: no
+    /// embedding, an untagged (legacy) embedding, another model's embedding, or
+    /// an all-zero placeholder. Ordered by id so batches are deterministic.
+    pub fn memory_facts_needing_embedding(
+        &self,
+        current_model: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, StorageError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, fact, embedding, embedding_model FROM memory_facts ORDER BY id")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<Vec<u8>>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut stale = Vec::new();
+        for row in rows {
+            let (id, fact, embedding, model) = row?;
+            let current = model.as_deref() == Some(current_model)
+                && embedding
+                    .as_deref()
+                    .is_some_and(|bytes| bytes.iter().any(|b| *b != 0));
+            if !current {
+                stale.push((id, fact));
+                if stale.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(stale)
     }
 
     pub fn load_all_memories(&self) -> Result<Vec<MemoryRecord>, StorageError> {
