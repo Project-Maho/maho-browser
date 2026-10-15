@@ -51,7 +51,35 @@ impl CliToolExecutor {
             .map(|part| substitute_placeholders(part, &args))
             .collect::<Result<Vec<_>>>()?;
 
-        // 3. Spawning the process with POSIX_SPAWN_SETSID sandbox (no shell wrapper)
+        // 3. Prepare isolation before process creation. Policy is captured here
+        // and applied in pre_exec so the child and its descendants inherit it.
+        #[cfg(target_os = "linux")]
+        let prepared_sandbox = {
+            use crate::sandbox::{linux::LinuxSandbox, SandboxBackend, SandboxPolicy};
+            let mut denied_paths = Vec::new();
+            if let Some(home) = std::env::var_os("HOME") {
+                let home = PathBuf::from(home);
+                denied_paths.push(home.join(".ssh"));
+                denied_paths.push(home.join(".local/share/keyrings"));
+                denied_paths.push(home.join(".config/google-chrome"));
+                denied_paths.push(home.join(".config/chromium"));
+            }
+            let cwd = std::fs::canonicalize(&self.working_dir)
+                .map_err(|error| anyhow!("SandboxUnavailable: invalid cwd: {error}"))?;
+            let policy = SandboxPolicy {
+                writable_roots: vec![cwd],
+                readable_roots: Vec::new(),
+                denied_paths,
+                network: false,
+            };
+            Some(
+                LinuxSandbox
+                    .prepare(&policy)
+                    .map_err(|error| anyhow!("SandboxUnavailable: {error}"))?,
+            )
+        };
+
+        // 4. Spawn without a shell wrapper.
         let mut cmd = tokio::process::Command::new(exec);
         cmd.args(&final_args);
         cmd.current_dir(&self.working_dir);
@@ -61,8 +89,18 @@ impl CliToolExecutor {
         #[cfg(unix)]
         {
             unsafe {
-                cmd.pre_exec(|| {
-                    libc::setsid();
+                #[cfg(target_os = "linux")]
+                let prepared_sandbox = prepared_sandbox;
+                cmd.pre_exec(move || {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    #[cfg(target_os = "linux")]
+                    if let Some(sandbox) = &prepared_sandbox {
+                        sandbox.apply().map_err(|error| {
+                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, error)
+                        })?;
+                    }
                     Ok(())
                 });
             }
@@ -81,7 +119,7 @@ impl CliToolExecutor {
             .take()
             .ok_or_else(|| anyhow!("Failed to open stderr"))?;
 
-        // 4. Timeout after timeout_ms (capped at 60s) -> SIGKILL
+        // 5. Timeout after timeout_ms (capped at 60s) -> SIGKILL
         let timeout_ms = self.tool.timeout_ms.min(60_000);
         let timeout_duration = Duration::from_millis(timeout_ms);
 
@@ -89,7 +127,7 @@ impl CliToolExecutor {
         let stderr_fut = self.read_with_limit(stderr);
         let wait_fut = child.wait();
 
-        // 5. Read stdout/stderr concurrently with waiting to prevent pipe deadlock
+        // 6. Read stdout/stderr concurrently with waiting to prevent pipe deadlock
         match tokio::time::timeout(timeout_duration, async {
             tokio::join!(stdout_fut, stderr_fut, wait_fut)
         })
