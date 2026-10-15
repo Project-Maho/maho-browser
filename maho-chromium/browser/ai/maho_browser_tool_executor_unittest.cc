@@ -21,6 +21,7 @@
 #include "maho/browser/ai/maho_page_adapter_registry.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "url/gurl.h"
@@ -194,6 +195,9 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
     return {};
   }
   int capture_full_page_count = 0;
+  int capture_viewport_count = 0;
+  int capture_area_count = 0;
+  gfx::Rect screenshot_area;
   std::string screenshot_b64 = "fake_screenshot_png_base64_data";
   void CaptureFullPagePngBase64(
       int tab_id,
@@ -208,6 +212,23 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
       ui::AXNodeID ax_id,
       base::OnceCallback<void(std::string)> callback) override {
     std::move(callback).Run({});
+  }
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> callback)
+      override {
+    ++capture_viewport_count;
+    std::move(callback).Run(
+        {screenshot_b64, std::nullopt});
+  }
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> callback)
+      override {
+    ++capture_area_count;
+    screenshot_area = area;
+    std::move(callback).Run({screenshot_b64, std::nullopt});
   }
 
   bool Scroll(int tab_id,
@@ -1876,6 +1897,37 @@ TEST_F(MahoBrowserToolExecutorParityTest,
   EXPECT_EQ(*result.FindString("data"), delegate_.screenshot_b64);
   EXPECT_EQ(delegate_.capture_full_page_count, 1);
   EXPECT_TRUE(lease_registry_.IsHeldBy(7, "agent-session"));
+}
+
+TEST_F(MahoBrowserToolExecutorParityTest,
+       ViewportAndAreaScreenshotDispatchToMatchingCapturePaths) {
+  auto executor = MakeExecutor(base::BindRepeating(&ApproveAction));
+  base::DictValue viewport_arguments;
+  base::DictValue viewport_result = Execute(
+      executor, "browser_screenshot_viewport", std::move(viewport_arguments));
+  EXPECT_TRUE(viewport_result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.capture_viewport_count, 1);
+
+  base::DictValue area_arguments;
+  area_arguments.Set("x", 4);
+  area_arguments.Set("y", 7);
+  area_arguments.Set("width", 10);
+  area_arguments.Set("height", 12);
+  base::DictValue area_result = Execute(
+      executor, "browser_screenshot_area", std::move(area_arguments));
+  EXPECT_TRUE(area_result.FindBool("ok").value_or(false));
+  EXPECT_EQ(delegate_.capture_area_count, 1);
+  EXPECT_EQ(delegate_.screenshot_area, gfx::Rect(4, 7, 10, 12));
+
+  base::DictValue invalid_arguments;
+  invalid_arguments.Set("x", 4);
+  invalid_arguments.Set("y", 7);
+  invalid_arguments.Set("width", 0);
+  invalid_arguments.Set("height", 12);
+  base::DictValue invalid_result = Execute(
+      executor, "browser_screenshot_area", std::move(invalid_arguments));
+  EXPECT_FALSE(invalid_result.FindBool("ok").value_or(true));
+  EXPECT_EQ(delegate_.capture_area_count, 1);
 }
 
 TEST_F(MahoBrowserToolExecutorParityTest,

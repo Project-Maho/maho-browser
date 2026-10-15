@@ -167,6 +167,8 @@ test("maho_mcp_accessibility_handler_test") {
     "//base/test:test_support",
     "//testing/gtest",
     "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
   ]
 }
 

@@ -33,6 +33,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
 
 namespace maho {
@@ -491,6 +492,8 @@ void MahoMcpPipeServer::PumpRequests(uint64_t connection_id) {
   const bool large =
       tool_name && (*tool_name == "browser_screenshot_full" ||
                     *tool_name == "browser_screenshot_element" ||
+                    *tool_name == "browser_screenshot_viewport" ||
+                    *tool_name == "browser_screenshot_area" ||
                     *tool_name == "browser_network_stop_capture" ||
                     *tool_name == "browser_network_get_har");
   const size_t reservation =

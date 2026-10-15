@@ -34,6 +34,7 @@
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
 #include "url/gurl.h"
@@ -780,6 +781,8 @@ void MahoBrowserToolExecutor::ExecuteBrowserAction(
       tool_name == "browser_click" || tool_name == "browser_type" ||
       tool_name == "browser_select" ||
       tool_name == "browser_screenshot_element" ||
+      tool_name == "browser_screenshot_viewport" ||
+      tool_name == "browser_screenshot_area" ||
       tool_name == "browser_scroll" || tool_name == "browser_hover";
   if (consumes_ref && arguments.FindInt("ref").has_value()) {
     const std::optional<std::string> origin =
@@ -1194,9 +1197,78 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
     }
   }
 
-  delegate->CaptureFullPagePngBase64(
-      tab_id,
-      base::BindOnce(
+  if (tool_name == "browser_screenshot_area") {
+    const std::optional<int> x = arguments.FindInt("x");
+    const std::optional<int> y = arguments.FindInt("y");
+    const std::optional<int> width = arguments.FindInt("width");
+    const std::optional<int> height = arguments.FindInt("height");
+    if (!x || !y || !width || !height ||
+        !maho::IsValidScreenshotArea(gfx::Rect(*x, *y, *width, *height))) {
+      std::move(callback).Run(BuildBrowserActionErrorResult(
+          tool_name, kInvalidParamsError,
+          "Invalid area: x, y, width and height must define a positive area"));
+      return;
+    }
+  }
+  if (tool_name == "browser_screenshot_viewport") {
+    delegate->CaptureViewportPngBase64(
+        tab_id,
+        base::BindOnce(
+            [](std::string tool_name, ToolResultCallback callback,
+               maho::MahoMcpScreenshotResult capture) {
+              if (capture.error.has_value() || capture.png_base64.empty()) {
+                std::move(callback).Run(BuildBrowserActionErrorResult(
+                    tool_name, kActionFailedError,
+                    "Screenshot capture failed."));
+                return;
+              }
+              base::DictValue result;
+              result.Set("content_type", "image/png");
+              result.Set("data", std::move(capture.png_base64));
+              std::move(callback).Run(BuildBrowserActionSuccessResult(
+                  tool_name, std::move(result)));
+            },
+            tool_name,
+            std::move(callback)));
+    return;
+  }
+  if (tool_name == "browser_screenshot_area") {
+    const std::optional<int> x = arguments.FindInt("x");
+    const std::optional<int> y = arguments.FindInt("y");
+    const std::optional<int> width = arguments.FindInt("width");
+    const std::optional<int> height = arguments.FindInt("height");
+    const gfx::Rect area(x.value_or(-1), y.value_or(-1),
+                         width.value_or(0), height.value_or(0));
+    if (!x || !y || !width || !height ||
+        !maho::IsValidScreenshotArea(area)) {
+      std::move(callback).Run(BuildBrowserActionErrorResult(
+          tool_name, kActionFailedError,
+          "Invalid screenshot area: x, y, width, and height are required."));
+      return;
+    }
+    delegate->CaptureAreaPngBase64(
+        tab_id, area,
+        base::BindOnce(
+            [](std::string tool_name, ToolResultCallback callback,
+               maho::MahoMcpScreenshotResult capture) {
+              if (capture.error.has_value() || capture.png_base64.empty()) {
+                std::move(callback).Run(BuildBrowserActionErrorResult(
+                    tool_name, kActionFailedError,
+                    "Screenshot capture failed."));
+                return;
+              }
+              base::DictValue result;
+              result.Set("content_type", "image/png");
+              result.Set("data", std::move(capture.png_base64));
+              std::move(callback).Run(BuildBrowserActionSuccessResult(
+                  tool_name, std::move(result)));
+            },
+            tool_name,
+            std::move(callback)));
+    return;
+  }
+
+  auto on_capture = base::BindOnce(
           [](std::string tool_name, ToolResultCallback cb, std::string b64,
              std::optional<maho::MahoMcpCaptureMetrics> /*metrics*/) {
             base::DictValue result;
@@ -1206,7 +1278,8 @@ void MahoBrowserToolExecutor::ExecuteScreenshotProof(
                 BuildBrowserActionSuccessResult(tool_name, std::move(result));
             std::move(cb).Run(std::move(success));
           },
-          tool_name, std::move(callback)));
+          tool_name, std::move(callback));
+  delegate->CaptureFullPagePngBase64(tab_id, std::move(on_capture));
 }
 
 void MahoBrowserToolExecutor::ExecuteBrowserObserve(

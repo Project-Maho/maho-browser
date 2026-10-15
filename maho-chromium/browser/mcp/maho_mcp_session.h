@@ -36,6 +36,7 @@
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 
 class GURL;
@@ -403,9 +404,7 @@ class MahoMcpSession {
   }
 
  private:
-  // Visual-frame capture path: minted only from a real delegate capture that
-  // carried real geometry. See MahoMcpCaptureMetrics and the screenshot_full
-  // tool handler.
+  // Visual-frame capture path: minted only from real delegate metrics.
   void OnFullScreenshotCaptured(
       std::optional<base::Value> message_id,
       DeferredResponseSender deferred_sender,
@@ -724,6 +723,14 @@ class MahoMcpBrowserDelegate {
       int tab_id,
       ui::AXNodeID ax_id,
       base::OnceCallback<void(std::string)> callback) = 0;
+
+  virtual void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) = 0;
+  virtual void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) = 0;
 
   virtual bool Scroll(int tab_id,
                       const std::string& direction,

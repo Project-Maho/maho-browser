@@ -404,7 +404,9 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
       "browser_routines_run",
       "browser_same_origin_fetch",
       "browser_screenshot_element",
+      "browser_screenshot_area",
       "browser_screenshot_full",
+      "browser_screenshot_viewport",
       "browser_scroll",
       "browser_search_in_page",
       "browser_select",
@@ -443,14 +445,14 @@ TEST(MahoBrowserToolRegistryTest, BrowserMcpProjectionIsTheExactExistingSet) {
     EXPECT_TRUE(actual.insert(std::string(descriptor->tool_name)).second)
         << descriptor->tool_name;
   }
-  EXPECT_EQ(capabilities.size(), 57u);
+  EXPECT_EQ(capabilities.size(), 59u);
   EXPECT_EQ(actual, expected);
 }
 
 TEST(MahoBrowserToolRegistryTest, PublicAndControlSchemasAreClosed) {
   base::ListValue public_tools =
       MahoBrowserToolRegistry::SerializePublicMcpCapabilities();
-  ASSERT_EQ(public_tools.size(), 57u);
+  ASSERT_EQ(public_tools.size(), 59u);
 
   auto expect_closed_schema = [](const base::DictValue &tool) {
     const std::string *name = tool.FindString("name");
@@ -514,6 +516,36 @@ TEST(MahoBrowserToolRegistryTest, CatalogSchemasMatchRuntimeArguments) {
   EXPECT_EQ(PropertyNames(element), std::set<std::string>({"ref", "tab_id"}));
   EXPECT_EQ(StringSet(*element.FindList("required")),
             std::set<std::string>({"ref"}));
+
+  const base::DictValue& screenshot_viewport =
+      PublicSchema(tools, "browser_screenshot_viewport");
+  EXPECT_EQ(PropertyNames(screenshot_viewport), std::set<std::string>({"tab_id"}));
+  EXPECT_TRUE(StringSet(*screenshot_viewport.FindList("required")).empty());
+
+  const base::DictValue& screenshot_area =
+      PublicSchema(tools, "browser_screenshot_area");
+  EXPECT_EQ(PropertyNames(screenshot_area),
+            std::set<std::string>({"height", "tab_id", "width", "x", "y"}));
+  EXPECT_EQ(StringSet(*screenshot_area.FindList("required")),
+            std::set<std::string>({"height", "width", "x", "y"}));
+  for (const char* coordinate : {"x", "y"}) {
+    const base::DictValue* coordinate_schema =
+        screenshot_area.FindDictByDottedPath(
+            std::string("properties.") + coordinate);
+    ASSERT_TRUE(coordinate_schema) << coordinate;
+    const std::string* description = coordinate_schema->FindString("description");
+    ASSERT_TRUE(description) << coordinate;
+    EXPECT_THAT(*description,
+                testing::HasSubstr("CSS viewport pixels at 100% zoom"));
+  }
+
+  for (const char* coordinate : {"x", "y", "width", "height"}) {
+    const base::DictValue* coordinate_schema =
+        screenshot_area.FindDictByDottedPath(
+            std::string("properties.") + coordinate);
+    ASSERT_TRUE(coordinate_schema) << coordinate;
+    EXPECT_EQ(*coordinate_schema->FindString("type"), "integer");
+  }
 
   const base::DictValue &viewport =
       PublicSchema(tools, "browser_set_viewport_size");
@@ -651,7 +683,7 @@ TEST(MahoBrowserToolRegistryTest, FeatureGatesFilterSurfaceProjection) {
       MahoBrowserToolRegistry::kBrowserMcp);
   const auto gated = MahoBrowserToolRegistry::GetCapabilitiesForSurface(
       MahoBrowserToolRegistry::kBrowserMcp, false, false, false);
-  EXPECT_EQ(all.size(), 57u);
+  EXPECT_EQ(all.size(), 59u);
   EXPECT_EQ(gated.size(), 43u);
   for (const auto *descriptor : gated) {
     EXPECT_EQ(descriptor->feature_gate,

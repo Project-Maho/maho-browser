@@ -541,6 +541,22 @@ public:
       base::OnceCallback<void(std::string)> callback) override {
     std::move(callback).Run(std::string());
   }
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) override {
+    std::move(callback).Run(
+        MahoMcpScreenshotResult{next_screenshot_png_b64, std::nullopt});
+  }
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) override {
+    last_screenshot_area = area;
+    std::move(callback).Run(MahoMcpScreenshotResult{
+        next_screenshot_png_b64, next_screenshot_error});
+  }
+  gfx::Rect last_screenshot_area;
+  std::optional<MahoMcpScreenshotError> next_screenshot_error;
   bool Scroll(int tab_id, const std::string &direction, int pixels,
               std::optional<ui::AXNodeID> ax_id) override {
     return false;
@@ -3350,8 +3366,8 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
   ASSERT_TRUE(surfaces);
   const auto *public_mcp = surfaces->FindDict("publicMcp");
   ASSERT_TRUE(public_mcp);
-  EXPECT_EQ(public_mcp->FindInt("count"), 57);
-  EXPECT_EQ(public_mcp->FindList("ids")->size(), 57u);
+  EXPECT_EQ(public_mcp->FindInt("count"), 59);
+  EXPECT_EQ(public_mcp->FindList("ids")->size(), 59u);
 
   const auto *tools = result->FindList("tools");
   ASSERT_TRUE(tools);
@@ -3407,6 +3423,8 @@ TEST_F(MahoMcpSessionTest, ToolSetsAreExactAndEvaluateJsStaysDenied) {
       "mail_flag",
       "browser_screenshot_full",
       "browser_screenshot_element",
+      "browser_screenshot_viewport",
+      "browser_screenshot_area",
       "browser_network_start_capture",
       "browser_network_stop_capture",
       "browser_network_get_har",
@@ -3534,6 +3552,8 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
       "browser_set_viewport_size",
       "browser_screenshot_full",
       "browser_screenshot_element",
+      "browser_screenshot_viewport",
+      "browser_screenshot_area",
       "browser_network_start_capture",
       "browser_network_stop_capture",
       "browser_network_get_har",
@@ -3578,6 +3598,87 @@ TEST_F(MahoMcpSessionTest, EveryTargetedToolUsesStableResolution) {
   CallToolRaw("browser_get_blocked_domains", "{}", id++);
   EXPECT_EQ(delegate_->resolve_tab_calls, tab_before);
   EXPECT_EQ(delegate_->resolve_profile_calls, prof_before);
+}
+
+TEST_F(MahoMcpSessionTest, ScreenshotAreaRejectsInvalidGeometry) {
+  InitResolvingSession(true);
+  const std::string response = CallToolLine(
+      "browser_screenshot_area",
+      R"({"x":-1,"y":0,"width":10,"height":10})", 901);
+  auto parsed = base::JSONReader::Read(response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  const base::DictValue* error = parsed->GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), -32602);
+}
+
+TEST_F(MahoMcpSessionTest, ScreenshotAreaRejectsZeroDimensions) {
+  InitResolvingSession(true);
+  const std::string response = CallToolLine(
+      "browser_screenshot_area",
+      R"({"x":0,"y":0,"width":0,"height":10})", 902);
+  auto parsed = base::JSONReader::Read(response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  const base::DictValue* error = parsed->GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), -32602);
+}
+
+TEST_F(MahoMcpSessionTest, ScreenshotAreaRejectsMissingCoordinates) {
+  InitResolvingSession(true);
+  const std::string response = CallToolLine(
+      "browser_screenshot_area", R"({"x":0,"y":0,"width":10})", 904);
+  auto parsed = base::JSONReader::Read(response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  const base::DictValue* error = parsed->GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), -32602);
+}
+
+TEST_F(MahoMcpSessionTest, ScreenshotViewportUsesViewportCaptureDelegate) {
+  InitResolvingSession(true);
+  delegate_->next_screenshot_png_b64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+"
+      "M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const std::string response =
+      CallToolLine("browser_screenshot_viewport", "{}", 903);
+  auto parsed = base::JSONReader::Read(response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  const base::DictValue* result = parsed->GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->FindString("data"),
+            delegate_->next_screenshot_png_b64);
+  EXPECT_EQ(result->FindString("content_type"), "image/png");
+}
+
+TEST_F(MahoMcpSessionTest, ScreenshotAreaUsesAreaCaptureDelegate) {
+  InitResolvingSession(true);
+  delegate_->next_screenshot_png_b64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+"
+      "M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const std::string response = CallToolLine(
+      "browser_screenshot_area",
+      R"({"x":5,"y":8,"width":12,"height":14})", 905);
+  auto parsed = base::JSONReader::Read(response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  const base::DictValue* result = parsed->GetDict().FindDict("result");
+  ASSERT_TRUE(result);
+  EXPECT_EQ(result->FindString("data"), delegate_->next_screenshot_png_b64);
+  EXPECT_EQ(result->FindString("content_type"), "image/png");
+  EXPECT_EQ(delegate_->last_screenshot_area, gfx::Rect(5, 8, 12, 14));
+}
+
+TEST_F(MahoMcpSessionTest, ScreenshotAreaPropagatesTypedCaptureError) {
+  InitResolvingSession(true);
+  delegate_->next_screenshot_error = MahoMcpScreenshotError::kOutsideViewport;
+  const std::string response = CallToolLine(
+      "browser_screenshot_area",
+      R"({"x":5,"y":8,"width":12,"height":14})", 906);
+  auto parsed = base::JSONReader::Read(response, base::JSON_PARSE_RFC);
+  ASSERT_TRUE(parsed);
+  const base::DictValue* error = parsed->GetDict().FindDict("error");
+  ASSERT_TRUE(error);
+  EXPECT_EQ(error->FindInt("code"), -32602);
 }
 
 // Todo 6: input/navigation mutators require an active tab lease held by this

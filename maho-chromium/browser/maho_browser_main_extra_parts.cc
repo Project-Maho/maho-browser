@@ -4356,6 +4356,126 @@ std::string FormatMailActionDetails(const std::string& action_name,
     }
   }
 
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done) override {
+    content::WebContents* wc =
+        tab_id == 0 ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    content::RenderWidgetHostView* view =
+        wc ? wc->GetRenderWidgetHostView() : nullptr;
+    if (!view) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+      return;
+    }
+    CaptureAreaPngBase64(
+        tab_id, gfx::Rect(view->GetVisibleViewportSize()), std::move(done));
+  }
+
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done) override {
+    content::WebContents* wc =
+        tab_id == 0 ? GetActiveWebContents() : GetWebContentsForTabId(tab_id);
+    if (!wc) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+      return;
+    }
+    content::RenderWidgetHostView* view = wc->GetRenderWidgetHostView();
+    if (!view || !view->IsSurfaceAvailableForCopy()) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+      return;
+    }
+    if (!area.IsEmpty() && !maho::IsValidScreenshotArea(area)) {
+      std::move(done).Run({{}, maho::MahoMcpScreenshotError::kEmptyArea});
+      return;
+    }
+    gfx::Rect capture_bounds;
+    if (!area.IsEmpty()) {
+      maho::MahoMcpScreenshotError error;
+      if (!maho::ValidateAndClampScreenshotArea(
+              maho::MahoMcpScreenshotMode::kArea, &area,
+              view->GetVisibleViewportSize(), &capture_bounds, &error)) {
+        std::move(done).Run({{}, error});
+        return;
+      }
+    }
+    const bool was_hidden = wc->GetVisibility() == content::Visibility::HIDDEN;
+    if (was_hidden) {
+      wc->WasShown();
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
+          FROM_HERE,
+          base::BindOnce(&MahoMcpBrowserDelegateImpl::CaptureAreaPngBase64,
+                         weak_factory_.GetWeakPtr(), tab_id, area,
+                         std::move(done)),
+          base::Milliseconds(300));
+      return;
+    }
+    view->CopyFromSurface(
+        capture_bounds, gfx::Size(), base::Seconds(5),
+        base::BindOnce(
+            [](base::WeakPtr<MahoMcpBrowserDelegateImpl> delegate,
+               int tab_id, bool was_hidden, gfx::Rect area,
+              base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done,
+               const content::CopyFromSurfaceResult& result) {
+              if (was_hidden) {
+                if (content::WebContents* wc =
+                        delegate ? delegate->GetWebContentsForTabId(tab_id)
+                                 : nullptr) {
+                  wc->WasHidden();
+                }
+              }
+              if (!delegate || !result.has_value() ||
+                  result.value().bitmap.drawsNothing()) {
+                std::move(done).Run(
+                    {{}, maho::MahoMcpScreenshotError::kCaptureFailed});
+                return;
+              }
+              content::WebContents* wc = delegate->GetWebContentsForTabId(tab_id);
+              ui::AXTreeUpdate update;
+              if (wc) {
+                update = delegate->SnapshotAXTree(wc);
+              }
+              ui::AXTree tree;
+              const ui::AXTree* ax_tree =
+                  tree.Unserialize(update) ? &tree : nullptr;
+              if (area.IsEmpty()) {
+                maho::MahoMcpScreenshotHandler::CaptureViewport(
+                    result.value().bitmap, ax_tree,
+                    base::BindOnce(
+                        [](base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done,
+                           std::vector<uint8_t> bytes) {
+                          std::move(done).Run({
+                              bytes.empty()
+                                  ? std::string()
+                                  : base::Base64Encode(
+                                        base::span<const uint8_t>(bytes)),
+                              bytes.empty()
+                                  ? std::optional<maho::MahoMcpScreenshotError>(
+                                        maho::MahoMcpScreenshotError::kCaptureFailed)
+                                  : std::nullopt});
+                        }, std::move(done)));
+                return;
+              }
+              maho::MahoMcpScreenshotHandler::CaptureArea(
+                  result.value().bitmap, ax_tree, area,
+                  base::BindOnce(
+                      [](base::OnceCallback<void(maho::MahoMcpScreenshotResult)> done,
+                         std::vector<uint8_t> bytes) {
+                        std::move(done).Run({
+                            bytes.empty()
+                                ? std::string()
+                                : base::Base64Encode(
+                                      base::span<const uint8_t>(bytes)),
+                            bytes.empty()
+                                ? std::optional<maho::MahoMcpScreenshotError>(
+                                      maho::MahoMcpScreenshotError::kCaptureFailed)
+                                : std::nullopt});
+                      }, std::move(done)), true);
+            }, weak_factory_.GetWeakPtr(), tab_id, was_hidden, capture_bounds,
+            std::move(done)));
+  }
+
   void CaptureVisibleViewFromTabForElement(
       int tab_id,
       bool was_hidden,
