@@ -33,6 +33,13 @@ type WriterHalf = crate::win_transport::WriterHalf;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(90);
 const EXPECTED_SERVER_NAME: &str = "maho-browser";
 
+#[derive(Debug)]
+struct PairingToken {
+    token: String,
+    controller_id: String,
+    path: PathBuf,
+}
+
 /// A response received over the wire together with wire byte count.
 #[derive(Debug)]
 struct PendingResponse {
@@ -97,6 +104,7 @@ pub struct BrowserClient {
     timeout: Duration,
     controller_kind: ControllerKind,
     autonomous: bool,
+    pairing_token: Option<PairingToken>,
     session_info: Mutex<Option<SessionInfo>>,
     connect_duration: Mutex<Duration>,
     handshake_duration: Mutex<Duration>,
@@ -155,6 +163,7 @@ impl BrowserClient {
             timeout,
             controller_kind,
             autonomous,
+            pairing_token: Self::load_pairing_token(path, controller_kind),
             session_info: Mutex::new(None),
             connect_duration: Mutex::new(connect_duration),
             handshake_duration: Mutex::new(Duration::ZERO),
@@ -250,6 +259,11 @@ impl BrowserClient {
             controller_kind: self.controller_kind,
             autonomous: self.autonomous,
             auth_token,
+            pairing_token: self.pairing_token.as_ref().map(|token| token.token.clone()),
+            controller_id: self
+                .pairing_token
+                .as_ref()
+                .map(|token| token.controller_id.clone()),
         };
         let result_value = self
             .call_no_retry("initialize", serde_json::to_value(&init_params)?)
@@ -356,6 +370,15 @@ impl BrowserClient {
         }
 
         if let Some(err) = resp.error {
+            if err.code == -32010 {
+                return Err(McpBridgeError::ControllerNotPaired);
+            }
+            if err.code == -32011 {
+                if let Some(token) = &self.pairing_token {
+                    let _ = std::fs::remove_file(&token.path);
+                }
+                return Err(McpBridgeError::ControllerPairingRevoked);
+            }
             return Err(McpBridgeError::Rpc {
                 code: err.code,
                 message: err.message,
@@ -498,6 +521,42 @@ impl BrowserClient {
         self.pending.lock().await.clear();
         self.read_task.lock().await.abort();
         shutdown_result
+    }
+
+    fn load_pairing_token(
+        socket_path: &Path,
+        controller_kind: ControllerKind,
+    ) -> Option<PairingToken> {
+        let user_data_dir = crate::paths::resolve_user_data_dir(Some(socket_path.to_str()?));
+        let kind_dir = user_data_dir
+            .join("controllers")
+            .join(controller_kind.client_name());
+        let entries = std::fs::read_dir(kind_dir).ok()?;
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("token") {
+                    return None;
+                }
+                let controller_id = path.file_stem()?.to_str()?.to_owned();
+                let token = std::fs::read_to_string(&path).ok()?;
+                let token = token.trim();
+                if token.is_empty() {
+                    return None;
+                }
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((
+                    modified,
+                    PairingToken {
+                        token: token.to_owned(),
+                        controller_id,
+                        path,
+                    },
+                ))
+            })
+            .max_by_key(|(modified, _)| *modified)
+            .map(|(_, token)| token)
     }
 
     /// Load the DPAPI session token on Windows, base64-encode it.

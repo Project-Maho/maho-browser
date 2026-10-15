@@ -117,6 +117,12 @@ pub enum Commands {
         command: Option<McpCommands>,
     },
 
+    /// Manage locally paired browser controllers.
+    Controllers {
+        #[command(subcommand)]
+        command: controllers::ControllersCommands,
+    },
+
     /// Manage and run routines
     Routine {
         #[command(subcommand)]
@@ -1251,6 +1257,10 @@ async fn async_main() -> Result<()> {
 
         // ─── MCP server ───────────────────────────────────────────────────
         Commands::Mcp { command } => cmd_mcp(command, json_output).await,
+
+        Commands::Controllers { command } => {
+            controllers::run(command, socket_path.as_deref(), json_output).await
+        }
 
         Commands::Skills { command } => skills::run(command),
 
