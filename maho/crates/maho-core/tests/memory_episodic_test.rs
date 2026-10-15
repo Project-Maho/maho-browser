@@ -245,3 +245,42 @@ fn canonical_origin_normalizes_case_and_default_ports() {
     );
     assert_eq!(canonical_origin("ftp://bread.example"), None);
 }
+
+#[test]
+fn settings_update_applies_episodic_memory_fields_and_normalizes_domains() {
+    use maho_core::maho_core::MahoCore;
+    use maho_types::settings::{EpisodicMemorySettingsUpdate, SettingsUpdate};
+    let mut core = MahoCore::new();
+    assert!(!core.get_settings().episodic_memory.enabled);
+    core.update_settings(SettingsUpdate {
+        episodic_memory: Some(EpisodicMemorySettingsUpdate {
+            enabled: Some(true),
+            paused: None,
+            excluded_domains: Some(vec![
+                " *.Bread.Example ".into(),
+                "bread.example".into(),
+                "".into(),
+                "news.example".into(),
+            ]),
+        }),
+        ..Default::default()
+    });
+    let settings = &core.get_settings().episodic_memory;
+    assert!(settings.enabled);
+    assert!(!settings.paused);
+    assert_eq!(settings.excluded_domains, ["bread.example", "news.example"]);
+
+    core.update_settings(SettingsUpdate {
+        episodic_memory: Some(EpisodicMemorySettingsUpdate {
+            paused: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let settings = &core.get_settings().episodic_memory;
+    assert!(
+        settings.enabled && settings.paused,
+        "untouched fields are kept"
+    );
+    assert_eq!(settings.excluded_domains.len(), 2);
+}
