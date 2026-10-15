@@ -1,5 +1,6 @@
 //! Native document artifact authoring.
 
+mod docx;
 mod xlsx;
 
 use std::path::{Component, Path, PathBuf};
@@ -12,6 +13,10 @@ pub const MAX_XLSX_INPUT_BYTES: usize = 1_048_576;
 pub const MAX_XLSX_ROWS: usize = 10_000;
 // Maximum number of columns in one worksheet.
 pub const MAX_XLSX_COLUMNS: usize = 100;
+// Maximum serialized document input accepted for docx.
+pub const MAX_DOCX_INPUT_BYTES: usize = 1_048_576;
+// Maximum number of blocks (headings, paragraphs, tables) in one document.
+pub const MAX_DOCX_BLOCKS: usize = 5_000;
 
 /// Handle returned for a generated artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,8 +27,9 @@ pub struct ArtifactHandle {
     pub size_bytes: u64,
 }
 
-/// Creates an XLSX from JSON containing named sheets and rows of scalar cells.
-/// Only a single filename within the artifact root is accepted.
+/// Creates a document artifact of `kind` ("xlsx" or "docx") from its JSON
+/// input. Only a single filename within the artifact root is accepted, and
+/// an existing file is never overwritten.
 pub fn create(
     artifact_root: &Path,
     relative_path: &str,
@@ -42,30 +48,44 @@ pub fn create(
     {
         bail!("artifact path must be a single filename within the artifact root");
     }
-    if kind != "xlsx" {
-        bail!("unsupported artifact kind: {kind}");
+    let (extension, max_input, mime_type): (&str, usize, &'static str) = match kind {
+        "xlsx" => (
+            ".xlsx",
+            MAX_XLSX_INPUT_BYTES,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        "docx" => (
+            ".docx",
+            MAX_DOCX_INPUT_BYTES,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        _ => bail!("unsupported artifact kind: {kind}"),
+    };
+    if !relative_path.to_ascii_lowercase().ends_with(extension) {
+        bail!("{kind} artifact path must end with {extension}");
     }
-    if !relative_path.to_ascii_lowercase().ends_with(".xlsx") {
-        bail!("xlsx artifact path must end with .xlsx");
-    }
-    if input.len() > MAX_XLSX_INPUT_BYTES {
-        bail!("xlsx input exceeds {MAX_XLSX_INPUT_BYTES} bytes");
+    if input.len() > max_input {
+        bail!("{kind} input exceeds {max_input} bytes");
     }
 
     std::fs::create_dir_all(artifact_root).context("create artifact root")?;
-    let bytes = xlsx::create(input)?;
+    let bytes = match kind {
+        "xlsx" => xlsx::create(input)?,
+        _ => docx::create(input)?,
+    };
     let target = artifact_root.join(relative_path);
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&target)
-        .context("create xlsx artifact")?;
+        .with_context(|| format!("create {kind} artifact"))?;
     use std::io::Write;
-    file.write_all(&bytes).context("write xlsx artifact")?;
+    file.write_all(&bytes)
+        .with_context(|| format!("write {kind} artifact"))?;
     Ok(ArtifactHandle {
         storage_rel_path: relative_path.to_string(),
         display_name: relative_path.to_string(),
-        mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime_type,
         size_bytes: bytes.len() as u64,
     })
 }

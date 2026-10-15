@@ -50,6 +50,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 [dev-dependencies]
 tempfile = "3"
 calamine = "0.36"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 axum = "0.8"
 tokio-stream = "0.1"
 hyper = { version = "1", features = ["full"] }
