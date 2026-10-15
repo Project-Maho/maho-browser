@@ -122,7 +122,7 @@ use crate::vault_manager::{
 };
 use crate::vault_runtime::VaultRuntime;
 
-mod vault_items;
+pub mod vault_items;
 
 fn private_tab_ids_from_tabs<'a, I>(tabs: I) -> HashSet<TabId>
 where

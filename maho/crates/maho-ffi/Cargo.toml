@@ -25,6 +25,7 @@ chrono = { workspace = true }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
 zeroize = "1.8"
+base64 = "0.22"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

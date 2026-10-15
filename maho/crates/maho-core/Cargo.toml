@@ -22,6 +22,7 @@ adblock = { version = "0.12.2", features = ["css-validation"] }
 aes-gcm = "0.10"
 argon2 = "0.5"
 rand = "0.8"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 bip39 = "2.1"
 pbkdf2 = "0.12"
 sha1 = "0.10"

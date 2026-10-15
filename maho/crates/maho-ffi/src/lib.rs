@@ -19776,6 +19776,183 @@ pub unsafe extern "C" fn maho_vault_status_json(core: *mut MahoCore) -> *mut c_c
     )
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultPasskeyCreateRequest {
+    rp_id: String,
+    user_id_b64url: String,
+    user_name: String,
+    display_name: String,
+    require_uv: bool,
+    uv_performed: bool,
+}
+
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VaultPasskeyAssertionRequest {
+    rp_id: String,
+    client_data_hash: String,
+    #[serde(default)]
+    allow_credential_ids: Vec<String>,
+    require_uv: bool,
+    uv_performed: bool,
+}
+
+
+
+
+/// Creates a Vault-backed passkey (P-256, ES256) for a WebAuthn
+/// registration. Request: {rpId, userIdB64url, userName, displayName,
+/// requireUv, uvPerformed}; response data: {credentialId, publicKeyCose,
+/// itemId} (binary fields base64url without padding). Errors: uv_required,
+/// invalid_request, locked.
+///
+/// # Safety
+/// `core` must be valid and `request_json` a NUL-terminated UTF-8 JSON string.
+/// The returned string is freed with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_passkey_create_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = (unsafe { vault_core(core) }) else {
+                return ptr::null_mut();
+            };
+            let request =
+                match unsafe { vault_parse_json::<VaultPasskeyCreateRequest>(request_json) } {
+                    Ok(request) => request,
+                    Err(response) => return response,
+                };
+            let rp_id = match maho_types::vault::PasskeyRpId::try_from(request.rp_id) {
+                Ok(value) => value,
+                Err(_) => return vault_error_code("invalid_request", "invalid RP ID"),
+            };
+            match core.vault_passkey_create(
+                rp_id,
+                request.user_id_b64url,
+                request.user_name,
+                request.display_name,
+                request.require_uv,
+                request.uv_performed,
+            ) {
+                Ok(result) => {
+                    use base64::Engine;
+                    vault_ok(serde_json::json!({
+                        "credentialId": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result.credential_id),
+                        "coseKey": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result.cose_key),
+                        "itemId": result.item_id,
+                    }))
+                }
+                Err(error) => passkey_ffi_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Signs a WebAuthn assertion with a Vault passkey bound to `rpId`.
+/// Request: {rpId, clientDataHash, allowCredentialIds?, requireUv,
+/// uvPerformed}; response data: {credentialId, authenticatorData, signature,
+/// userHandle} (base64url). The sign counter is incremented and persisted.
+/// Errors: uv_required, not_found, locked, rp_mismatch, invalid_request.
+///
+/// # Safety
+/// `core` must be valid and `request_json` a NUL-terminated UTF-8 JSON string.
+/// The returned string is freed with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_vault_passkey_get_assertion_json(
+    core: *mut MahoCore,
+    request_json: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            let Some(core) = (unsafe { vault_core(core) }) else {
+                return ptr::null_mut();
+            };
+            let request =
+                match unsafe { vault_parse_json::<VaultPasskeyAssertionRequest>(request_json) } {
+                    Ok(request) => request,
+                    Err(response) => return response,
+                };
+            use base64::Engine;
+            let decode =
+                |value: &str| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(value);
+            let hash = match decode(&request.client_data_hash)
+                .ok()
+                .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            {
+                Some(hash) => hash,
+                None => {
+                    return vault_error_code(
+                        "invalid_request",
+                        "clientDataHash must be 32 bytes of unpadded base64url",
+                    )
+                }
+            };
+            let allow = match request
+                .allow_credential_ids
+                .iter()
+                .map(|id| decode(id))
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(ids) => ids,
+                Err(_) => {
+                    return vault_error_code("invalid_request", "invalid credential identifier")
+                }
+            };
+            let rp_id = match maho_types::vault::PasskeyRpId::try_from(request.rp_id) {
+                Ok(value) => value,
+                Err(_) => return vault_error_code("invalid_request", "invalid RP ID"),
+            };
+            match core.vault_passkey_get_assertion(
+                rp_id,
+                hash,
+                allow,
+                request.require_uv,
+                request.uv_performed,
+            ) {
+                Ok(result) => vault_ok(serde_json::json!({
+                    "credentialId": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result.credential_id),
+                    "authenticatorData": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result.authenticator_data),
+                    "signature": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result.signature),
+                    "userHandle": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(result.user_handle),
+                })),
+                Err(error) => passkey_ffi_error(error),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+
+
+/// Passkey errors use their own stable string codes (uv_required, not_found,
+/// locked, rp_mismatch, invalid_request) in the usual Vault response shape.
+fn vault_error_code(code: &str, message: impl Into<String>) -> *mut c_char {
+    to_json_cstring(&serde_json::json!({
+        "ok": false,
+        "data": null,
+        "error": { "code": code, "message": message.into() },
+    }))
+}
+
+fn passkey_ffi_error(
+    error: maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError,
+) -> *mut c_char {
+    let code = match error {
+        maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError::UserVerificationRequired => "uv_required",
+        maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError::NotFound => "not_found",
+        maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError::Locked => "locked",
+        maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError::RpMismatch => "rp_mismatch",
+        maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError::InvalidRequest => "invalid_request",
+        maho_core::maho_core::vault_items::passkey_authenticator::PasskeyError::Vault(_) => "invalid_request",
+    };
+    vault_error_code(code, error.to_string())
+}
+
 /// Returns the effective default agent Vault policy from durable storage.
 ///
 /// # Safety
