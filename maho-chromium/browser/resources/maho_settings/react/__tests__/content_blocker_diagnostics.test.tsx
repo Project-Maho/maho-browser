@@ -29,6 +29,7 @@ afterEach(() => {
 describe('content blocker diagnostics', () => {
   it('shows per-list accepted counts and rejected samples from health data', async () => {
     const handler = {
+      getCustomFilterRules: vi.fn().mockResolvedValue({rules: ''}),
       getFilterLists: vi.fn().mockResolvedValue({lists: [{
         id: 'easy-list',
         name: 'EasyList',
