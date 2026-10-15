@@ -79,98 +79,166 @@ impl CliToolExecutor {
             )
         };
 
-        // 4. Spawn without a shell wrapper.
-        let mut cmd = tokio::process::Command::new(exec);
-        cmd.args(&final_args);
-        cmd.current_dir(&self.working_dir);
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        #[cfg(unix)]
+        // Windows: the command runs inside an AppContainer + kill-on-close job
+        // (sandbox::windows::run_confined). stdout/stderr are redirected by
+        // cmd.exe into files in a private directory that is the only other
+        // writable root, then read back and capped like the Unix path.
+        #[cfg(target_os = "windows")]
         {
-            unsafe {
-                #[cfg(target_os = "linux")]
-                let prepared_sandbox = prepared_sandbox;
-                cmd.pre_exec(move || {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    #[cfg(target_os = "linux")]
-                    if let Some(sandbox) = &prepared_sandbox {
-                        sandbox.apply().map_err(|error| {
-                            std::io::Error::new(std::io::ErrorKind::PermissionDenied, error)
-                        })?;
-                    }
-                    Ok(())
-                });
-            }
+            self.execute_confined_windows(&exec, &final_args).await
         }
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| anyhow!("Failed to spawn CLI subprocess: {:?}", e))?;
+        // 4. Spawn without a shell wrapper.
+        #[cfg(not(target_os = "windows"))]
+        {
+            let mut cmd = tokio::process::Command::new(exec);
+            cmd.args(&final_args);
+            cmd.current_dir(&self.working_dir);
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::piped());
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("Failed to open stdout"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow!("Failed to open stderr"))?;
+            #[cfg(unix)]
+            {
+                unsafe {
+                    #[cfg(target_os = "linux")]
+                    let prepared_sandbox = prepared_sandbox;
+                    cmd.pre_exec(move || {
+                        if libc::setsid() == -1 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        #[cfg(target_os = "linux")]
+                        if let Some(sandbox) = &prepared_sandbox {
+                            sandbox.apply().map_err(|error| {
+                                std::io::Error::new(std::io::ErrorKind::PermissionDenied, error)
+                            })?;
+                        }
+                        Ok(())
+                    });
+                }
+            }
 
-        // 5. Timeout after timeout_ms (capped at 60s) -> SIGKILL
-        let timeout_ms = self.tool.timeout_ms.min(60_000);
-        let timeout_duration = Duration::from_millis(timeout_ms);
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| anyhow!("Failed to spawn CLI subprocess: {:?}", e))?;
 
-        let stdout_fut = self.read_with_limit(stdout);
-        let stderr_fut = self.read_with_limit(stderr);
-        let wait_fut = child.wait();
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| anyhow!("Failed to open stdout"))?;
+            let stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| anyhow!("Failed to open stderr"))?;
 
-        // 6. Read stdout/stderr concurrently with waiting to prevent pipe deadlock
-        match tokio::time::timeout(timeout_duration, async {
-            tokio::join!(stdout_fut, stderr_fut, wait_fut)
+            // 5. Timeout after timeout_ms (capped at 60s) -> SIGKILL
+            let timeout_ms = self.tool.timeout_ms.min(60_000);
+            let timeout_duration = Duration::from_millis(timeout_ms);
+
+            let stdout_fut = self.read_with_limit(stdout);
+            let stderr_fut = self.read_with_limit(stderr);
+            let wait_fut = child.wait();
+
+            // 6. Read stdout/stderr concurrently with waiting to prevent pipe deadlock
+            match tokio::time::timeout(timeout_duration, async {
+                tokio::join!(stdout_fut, stderr_fut, wait_fut)
+            })
+            .await
+            {
+                Ok((stdout_res, stderr_res, status_res)) => {
+                    let stdout_bytes = stdout_res?;
+                    let stderr_bytes = stderr_res?;
+                    let status = status_res?;
+
+                    let stdout_str = String::from_utf8_lossy(&stdout_bytes).to_string();
+                    let stderr_str = String::from_utf8_lossy(&stderr_bytes).to_string();
+
+                    let result = serde_json::json!({
+                        "stdout": stdout_str,
+                        "stderr": stderr_str,
+                        "exit_code": status.code(),
+                    });
+
+                    Ok(result)
+                }
+                Err(_) => {
+                    // The child ran under setsid, so its pid is also its process
+                    // group id; kill the whole group so grandchildren die too.
+                    #[cfg(unix)]
+                    if let Some(pid) = child.id() {
+                        if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+                            tracing::warn!(
+                                pid,
+                                error = %std::io::Error::last_os_error(),
+                                "failed to SIGKILL CLI tool process group"
+                            );
+                        }
+                    }
+                    if let Err(error) = child.kill().await {
+                        tracing::warn!(%error, "failed to kill timed-out CLI tool process");
+                    }
+                    Err(anyhow!(
+                        "CLI tool execution timed out after {:?}",
+                        timeout_duration
+                    ))
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    async fn execute_confined_windows(&self, exec: &str, args: &[String]) -> Result<Value> {
+        use crate::sandbox::{windows::run_confined, SandboxPolicy};
+
+        let cwd = std::fs::canonicalize(&self.working_dir)
+            .map_err(|error| anyhow!("SandboxUnavailable: invalid cwd: {error}"))?;
+        struct CaptureDir(PathBuf);
+        impl Drop for CaptureDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let capture = CaptureDir(std::env::temp_dir().join(format!(
+            "maho-agent-shell-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        )));
+        std::fs::create_dir(&capture.0)
+            .map_err(|error| anyhow!("SandboxUnavailable: capture dir: {error}"))?;
+        let stdout_path = capture.0.join("stdout.txt");
+        let stderr_path = capture.0.join("stderr.txt");
+        let command_line = windows_confined_command_line(exec, args, &stdout_path, &stderr_path)?;
+        let policy = SandboxPolicy {
+            writable_roots: vec![cwd.clone(), capture.0.clone()],
+            readable_roots: Vec::new(),
+            denied_paths: Vec::new(),
+            network: false,
+        };
+        let timeout = Duration::from_millis(self.tool.timeout_ms.min(60_000));
+        let exit = tokio::task::spawn_blocking(move || {
+            run_confined(&command_line, &cwd, &policy, timeout)
         })
         .await
-        {
-            Ok((stdout_res, stderr_res, status_res)) => {
-                let stdout_bytes = stdout_res?;
-                let stderr_bytes = stderr_res?;
-                let status = status_res?;
-
-                let stdout_str = String::from_utf8_lossy(&stdout_bytes).to_string();
-                let stderr_str = String::from_utf8_lossy(&stderr_bytes).to_string();
-
-                let result = serde_json::json!({
-                    "stdout": stdout_str,
-                    "stderr": stderr_str,
-                    "exit_code": status.code(),
-                });
-
-                Ok(result)
-            }
-            Err(_) => {
-                // The child ran under setsid, so its pid is also its process
-                // group id; kill the whole group so grandchildren die too.
-                #[cfg(unix)]
-                if let Some(pid) = child.id() {
-                    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) } != 0 {
-                        tracing::warn!(
-                            pid,
-                            error = %std::io::Error::last_os_error(),
-                            "failed to SIGKILL CLI tool process group"
-                        );
-                    }
-                }
-                if let Err(error) = child.kill().await {
-                    tracing::warn!(%error, "failed to kill timed-out CLI tool process");
-                }
-                Err(anyhow!(
-                    "CLI tool execution timed out after {:?}",
-                    timeout_duration
-                ))
-            }
+        .map_err(|error| anyhow!("SandboxUnavailable: {error}"))?
+        .map_err(|error| anyhow!("SandboxUnavailable: {error}"))?;
+        if exit.timed_out {
+            return Err(anyhow!("CLI tool execution timed out after {:?}", timeout));
         }
+        let cap = self.tool.output_cap_bytes;
+        let read_capped = |path: &std::path::Path| -> Result<String> {
+            let bytes = std::fs::read(path).unwrap_or_default();
+            if bytes.len() > cap {
+                return Err(anyhow!("Output exceeded output_cap_bytes ({cap})"));
+            }
+            Ok(String::from_utf8_lossy(&bytes).to_string())
+        };
+        Ok(serde_json::json!({
+            "stdout": read_capped(&stdout_path)?,
+            "stderr": read_capped(&stderr_path)?,
+            "exit_code": exit.exit_code,
+        }))
     }
 
     fn validate_args(&self, args: &Value) -> Result<()> {
@@ -313,8 +381,87 @@ fn substitute_placeholders(part: &str, args: &Value) -> Result<String> {
     Ok(out)
 }
 
+/// Builds `cmd.exe /d /s /c ""prog" "arg" ... 1>"out" 2>"err""` for the
+/// Windows confined runner. Arguments are quoted, and characters cmd.exe
+/// treats specially are rejected instead of escaped: a model-supplied value
+/// must never be able to chain another command.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn windows_confined_command_line(
+    exec: &str,
+    args: &[String],
+    stdout_path: &std::path::Path,
+    stderr_path: &std::path::Path,
+) -> Result<String> {
+    fn check(value: &str) -> Result<()> {
+        if value.chars().any(|c| matches!(c, '"' | '%' | '^' | '&' | '|' | '<' | '>' | '\n' | '\r' | '!')) {
+            return Err(anyhow!(
+                "Argument contains characters that cannot be passed safely to cmd.exe"
+            ));
+        }
+        Ok(())
+    }
+    // Quote only when needed: cmd.exe treats a quoted first token as a path,
+    // so built-ins (echo, dir, copy) must stay bare.
+    fn quote(value: &str) -> Result<String> {
+        check(value)?;
+        if value.is_empty() || value.chars().any(|c| c.is_whitespace()) {
+            Ok(format!("\"{value}\""))
+        } else {
+            Ok(value.to_string())
+        }
+    }
+    if exec.is_empty() || exec.chars().any(|c| c.is_whitespace()) {
+        return Err(anyhow!("Program name must be a single token"));
+    }
+    check(exec)?;
+    let mut parts = vec![exec.to_string()];
+    for arg in args {
+        parts.push(quote(arg)?);
+    }
+    check(&stdout_path.to_string_lossy())?;
+    check(&stderr_path.to_string_lossy())?;
+    Ok(format!(
+        "cmd.exe /d /s /c \"{} 1>\"{}\" 2>\"{}\"\"",
+        parts.join(" "),
+        stdout_path.display(),
+        stderr_path.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_command_line_quotes_args_and_rejects_cmd_metacharacters() {
+        let out = std::path::Path::new(r"C:\cap\stdout.txt");
+        let err = std::path::Path::new(r"C:\cap\stderr.txt");
+        let line = super::windows_confined_command_line(
+            "git",
+            &["status".to_string(), "--short".to_string()],
+            out,
+            err,
+        )
+        .unwrap();
+        assert_eq!(
+            line,
+            r#"cmd.exe /d /s /c "git status --short 1>"C:\cap\stdout.txt" 2>"C:\cap\stderr.txt"""#
+        );
+        let spaced = super::windows_confined_command_line(
+            "cmd.exe",
+            &["/c".to_string(), "echo hi there".to_string()],
+            out,
+            err,
+        )
+        .unwrap();
+        assert!(spaced.contains(r#"cmd.exe /c "echo hi there" 1>"#), "{spaced}");
+        assert!(super::windows_confined_command_line("a b", &[], out, err).is_err());
+        for bad in ["a&b", "a|b", "a>b", "a<b", "a^b", "%PATH%", "a\"b", "!x!", "a\nb"] {
+            assert!(
+                super::windows_confined_command_line("git", &[bad.to_string()], out, err).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
     use super::*;
 
     fn tool(command_template: &str, timeout_ms: u64) -> AiCliTool {
