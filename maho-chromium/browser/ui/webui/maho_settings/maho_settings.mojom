@@ -611,6 +611,10 @@ struct FilterListInfo {
   int64? last_attempt_timestamp;
   int64? last_success_timestamp;
   uint32 failure_count;
+  uint32 accepted_network_rule_count;
+  uint32 accepted_cosmetic_rule_count;
+  uint32 rejected_rule_count;
+  array<string> rejected_rule_samples;
   uint16? last_status;
   string? last_error;
   int64? next_retry_timestamp;
@@ -955,6 +959,10 @@ interface PageHandler {
   DeleteAutofillPayment(string id) => (bool success);
 
   GetFilterLists() => (array<FilterListInfo> lists);
+  SetEpisodicMemory(bool enabled,
+                    bool paused,
+                    array<string> excluded_domains) => (bool success);
+  ForgetEpisodeSite(string site) => (int64 deleted_count);
   // `success` mirrors mutation.success for existing JS callers. The structured
   // result carries the bridge error and scheduling truth without optimistic
   // fallback behavior.

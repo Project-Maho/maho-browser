@@ -1716,6 +1716,23 @@ BuildFilterListsOnUIThread() {
     fl->last_success_timestamp = FindInt64(*dict, "lastSuccessTimestamp");
     fl->failure_count =
         static_cast<uint32_t>(dict->FindInt("failureCount").value_or(0));
+    const base::DictValue* breakdown = dict->FindDict("ruleBreakdown");
+    if (breakdown) {
+      fl->accepted_network_rule_count = static_cast<uint32_t>(
+          breakdown->FindInt("acceptedNetwork").value_or(0));
+      fl->accepted_cosmetic_rule_count = static_cast<uint32_t>(
+          breakdown->FindInt("acceptedCosmetic").value_or(0));
+      fl->rejected_rule_count = static_cast<uint32_t>(
+          breakdown->FindInt("rejected").value_or(0));
+      if (const base::ListValue* samples =
+              breakdown->FindList("rejectedSamples")) {
+        for (const base::Value& sample : *samples) {
+          if (const std::string* text = sample.GetIfString()) {
+            fl->rejected_rule_samples.push_back(*text);
+          }
+        }
+      }
+    }
     fl->last_status = FindUint16(*dict, "lastStatus");
     if (const std::string* last_error = dict->FindString("lastError")) {
       fl->last_error = *last_error;
@@ -3636,6 +3653,30 @@ void MahoSettingsPageHandler::AppendFfiSettings(
     s->value = val;
     settings.push_back(std::move(s));
   };
+
+  const base::DictValue* episodic_memory = root.FindDict("episodicMemory");
+  if (episodic_memory) {
+    base::DictValue memory_snapshot;
+    memory_snapshot.Set("enabled",
+                        episodic_memory->FindBool("enabled").value_or(false));
+    memory_snapshot.Set("paused",
+                        episodic_memory->FindBool("paused").value_or(false));
+    base::ListValue excluded_domains;
+    if (const base::ListValue* domains =
+            episodic_memory->FindList("excludedDomains")) {
+      for (const base::Value& domain : *domains) {
+        if (domain.is_string()) {
+          excluded_domains.Append(domain.GetString());
+        }
+      }
+    }
+    memory_snapshot.Set("excludedDomains", std::move(excluded_domains));
+    std::string memory_json;
+    if (base::JSONWriter::Write(base::Value(std::move(memory_snapshot)),
+                                &memory_json)) {
+      add("memory.episodic", memory_json);
+    }
+  }
 
   const int32_t policy =
       maho_core_get_conversation_auto_archive_policy(core);
@@ -6472,6 +6513,55 @@ void MahoSettingsPageHandler::TriggerFilterUpdate(
     }
   }
   std::move(callback).Run(accepted, std::move(mutation));
+}
+
+void MahoSettingsPageHandler::SetEpisodicMemory(
+    bool enabled,
+    bool paused,
+    const std::vector<std::string>& excluded_domains,
+    SetEpisodicMemoryCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  base::DictValue episodic_memory;
+  episodic_memory.Set("enabled", enabled);
+  episodic_memory.Set("paused", paused);
+  base::ListValue domains;
+  for (const std::string& domain : excluded_domains) {
+    domains.Append(domain);
+  }
+  episodic_memory.Set("excludedDomains", std::move(domains));
+  base::DictValue update;
+  update.Set("episodicMemory", std::move(episodic_memory));
+  std::string json;
+  if (!base::JSONWriter::Write(base::Value(std::move(update)), &json)) {
+    std::move(callback).Run(false);
+    return;
+  }
+  maho_core_update_settings(core, json.c_str());
+  ScheduleNotify();
+  std::move(callback).Run(true);
+}
+
+void MahoSettingsPageHandler::ForgetEpisodeSite(
+    const std::string& site,
+    ForgetEpisodeSiteCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<int64_t>(
+      FROM_HERE,
+      base::BindOnce([](std::string domain) {
+        MahoCore* core = maho::GetCore();
+        return core ? maho::core::ForgetEpisodeOrigin(core, domain) : -1;
+      }, site),
+      base::BindOnce(
+          [](ForgetEpisodeSiteCallback cb, int64_t count) {
+            std::move(cb).Run(count);
+          },
+          std::move(callback)));
 }
 
 void MahoSettingsPageHandler::OpenExtensionsPage() {

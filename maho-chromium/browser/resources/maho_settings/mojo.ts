@@ -28,6 +28,7 @@ export type {
   AutofillPayment,
   BrowserVersionInfo,
   ContentBlockerStats,
+  FilterListInfo,
   MailBehaviorSnapshot,
   MailBehaviorUpdateResult,
   FilterListInfo,

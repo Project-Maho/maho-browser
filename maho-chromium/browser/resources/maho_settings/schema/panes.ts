@@ -343,6 +343,17 @@ const PRODUCTIVITY_PANES: PaneDefinition[] = [
 
 const PROTECTION_PANES: PaneDefinition[] = [
   {
+    key: 'episodic-memory',
+    scope: 'core-global',
+    selectedProfileSupport: 'not-applicable',
+    symbol: 'MEM',
+    navTitle: 'Memory',
+    title: 'Memory',
+    kind: 'live',
+    domain: 'protection',
+    contentKind: 'episodic-memory',
+  },
+  {
     key: 'content-blocker',
     scope: 'process',
     selectedProfileSupport: 'partial',
