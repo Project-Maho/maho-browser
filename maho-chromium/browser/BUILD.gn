@@ -186,7 +186,7 @@ source_set("maho_selection_ask_query") {
     "ai/maho_selection_ask_query.cc",
     "ai/maho_selection_ask_query.h",
   ]
-  deps = [ "//base", "//maho/browser:maho_ai_security_utils" ]
+  deps = [ "//base" ]
 }
 
 source_set("maho_selection_ask_dispatch") {
@@ -200,7 +200,7 @@ source_set("maho_selection_ask_dispatch") {
     "//chrome/browser/ui",
     "//chrome/browser/ui/side_panel",
     "//content/public/browser",
-    "//maho/browser/ui:maho_ai_ingress_coordinator",
+    ":maho_ai_ingress_coordinator",
     "//maho/browser/ui/webui/maho_ai:mojo_bindings",
     "//url",
   ]
