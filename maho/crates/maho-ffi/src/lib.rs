@@ -3405,6 +3405,176 @@ pub unsafe extern "C" fn maho_core_get_content_blocker_state_json(
     )
 }
 
+unsafe fn content_blocker_c_str(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    CStr::from_ptr(value).to_str().ok().map(str::to_string)
+}
+
+/// Explains how the active content blocker treats one request:
+/// `{validRequest,nativeMode,siteExcepted,blocked,important,matchedFilter,
+/// exception,listId,redirect,rewrittenUrl}`. Read-only diagnostic.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`; strings must be valid null-terminated UTF-8.
+/// Caller must free the returned string with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_content_blocker_test_request_json(
+    ptr: *mut MahoCore,
+    url: *const c_char,
+    source_url: *const c_char,
+    request_type: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let (Some(url), Some(source_url), Some(request_type)) = (
+                content_blocker_c_str(url),
+                content_blocker_c_str(source_url),
+                content_blocker_c_str(request_type),
+            ) else {
+                return ptr::null_mut();
+            };
+            let core = &*ptr;
+            to_json_cstring(&core.test_content_blocker_request(&url, &source_url, &request_type))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Returns `{"rules": "<text>"}` with the user's custom filter rules.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`. Caller frees with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_get_custom_rules_json(ptr: *mut MahoCore) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return ptr::null_mut();
+            }
+            let core = &*ptr;
+            to_json_cstring(&serde_json::json!({ "rules": core.get_custom_filter_rules() }))
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Replaces the custom filter rules. Returns a content-blocker mutation
+/// result; a rejected save leaves the previous rules active.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `rules` must be valid null-terminated UTF-8.
+/// Caller frees with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_set_custom_rules_json(
+    ptr: *mut MahoCore,
+    rules: *const c_char,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return to_json_cstring(&content_blocker_result(
+                    None,
+                    false,
+                    Some(content_blocker_error(
+                        "core_unavailable",
+                        "content blocker is unavailable",
+                    )),
+                    false,
+                ));
+            }
+            let core = &mut *ptr;
+            let Some(rules) = content_blocker_c_str(rules) else {
+                return to_json_cstring(&content_blocker_result(
+                    Some(core),
+                    false,
+                    Some(content_blocker_error("invalid_argument", "rules must be UTF-8 text")),
+                    false,
+                ));
+            };
+            match core.set_custom_filter_rules(&rules) {
+                Ok(()) => to_json_cstring(&content_blocker_result(Some(core), true, None, true)),
+                Err(error) => to_json_cstring(&content_blocker_result(
+                    Some(core),
+                    false,
+                    Some(content_blocker_error_from_core(&error)),
+                    false,
+                )),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
+/// Imports a filter list from bytes the user chose in the file picker. The
+/// browser never passes a path. Returns a mutation result plus `listId`.
+///
+/// # Safety
+/// `ptr` must be from `maho_core_new`; `name` must be valid null-terminated
+/// UTF-8; `bytes` must point to `len` readable bytes (may be null when `len` is 0).
+/// Caller frees with `maho_string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_import_local_filter_list_json(
+    ptr: *mut MahoCore,
+    name: *const c_char,
+    bytes: *const u8,
+    len: usize,
+) -> *mut c_char {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return to_json_cstring(&content_blocker_result(
+                    None,
+                    false,
+                    Some(content_blocker_error(
+                        "core_unavailable",
+                        "content blocker is unavailable",
+                    )),
+                    false,
+                ));
+            }
+            let core = &mut *ptr;
+            let name = content_blocker_c_str(name).unwrap_or_default();
+            let data: &[u8] = if len == 0 {
+                &[]
+            } else if bytes.is_null() {
+                return to_json_cstring(&content_blocker_result(
+                    Some(core),
+                    false,
+                    Some(content_blocker_error("invalid_argument", "bytes must be non-null")),
+                    false,
+                ));
+            } else {
+                std::slice::from_raw_parts(bytes, len)
+            };
+            match core.import_local_filter_list(&name, data) {
+                Ok(list_id) => {
+                    let mut value = serde_json::to_value(content_blocker_result(
+                        Some(core),
+                        true,
+                        None,
+                        true,
+                    ))
+                    .unwrap_or_default();
+                    value["listId"] = serde_json::Value::String(list_id);
+                    to_json_cstring(&value)
+                }
+                Err(error) => to_json_cstring(&content_blocker_result(
+                    Some(core),
+                    false,
+                    Some(content_blocker_error_from_core(&error)),
+                    false,
+                )),
+            }
+        },
+        ptr::null_mut()
+    )
+}
+
 #[derive(serde::Deserialize)]
 struct EpisodeRecordRequest {
     url: String,

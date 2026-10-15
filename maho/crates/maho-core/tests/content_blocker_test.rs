@@ -1,6 +1,6 @@
 use maho_core::content_blocker::{
-    compile_engine_snapshot, normalize_site_exception_key, ContentBlocker, FilterUpdateOutcome,
-    MAX_LIST_BODY_BYTES,
+    compile_engine_snapshot, is_local_filter_list_url, normalize_site_exception_key,
+    ContentBlocker, FilterUpdateOutcome, CUSTOM_RULES_LIST_ID, MAX_LIST_BODY_BYTES,
 };
 use maho_types::content_blocking::{
     ContentBlockingError, ContentBlockingMode, FilterHealthStatus, FilterListUpdateResponse,
@@ -572,4 +572,112 @@ fn select_compile_snapshot_prefers_pending_candidate_then_active() {
         .iter()
         .any(|c| c.contains("candidate.example")));
     assert!(!post.raw_contents.iter().any(|c| c.contains("good.example")));
+}
+
+fn blocker_with_list(id: &str, body: &str) -> ContentBlocker {
+    let mut blocker = ContentBlocker::new();
+    blocker
+        .add_filter_list(id.into(), id.into(), format!("https://example.com/{id}.txt"))
+        .unwrap();
+    blocker.update_filter_list_content(id, body.to_string()).unwrap();
+    blocker.rebuild_engine_sync();
+    blocker
+}
+
+#[test]
+fn test_request_reports_matching_filter() {
+    let blocker = blocker_with_list("ads", "! comment\n||127.0.0.1/ads/\n@@||127.0.0.1/ads/ok.js\n");
+    let hit = blocker.test_request("http://127.0.0.1/ads/banner.js", "https://example.com/", "script");
+    assert!(hit.valid_request && hit.native_mode && hit.blocked, "{hit:?}");
+    assert_eq!(hit.matched_filter.as_deref(), Some("||127.0.0.1/ads/"));
+    assert_eq!(hit.list_id.as_deref(), Some("ads"));
+
+    let allowed = blocker.test_request("http://127.0.0.1/ads/ok.js", "https://example.com/", "script");
+    assert!(!allowed.blocked, "{allowed:?}");
+    assert_eq!(allowed.exception.as_deref(), Some("@@||127.0.0.1/ads/ok.js"));
+    assert_eq!(allowed.list_id.as_deref(), Some("ads"));
+
+    let miss = blocker.test_request("https://cdn.example.org/app.js", "https://example.com/", "script");
+    assert!(!miss.blocked && miss.matched_filter.is_none() && miss.list_id.is_none());
+
+    let invalid = blocker.test_request("not a url", "https://example.com/", "script");
+    assert!(!invalid.valid_request && !invalid.blocked);
+
+    let mut excepted = blocker_with_list("ads", "||127.0.0.1/ads/\n");
+    excepted.add_site_exception("example.com");
+    let skipped = excepted.test_request("http://127.0.0.1/ads/banner.js", "https://example.com/", "script");
+    assert!(skipped.site_excepted && !skipped.blocked);
+}
+
+#[test]
+fn custom_rules_compile_and_block() {
+    let mut blocker = ContentBlocker::new();
+    let generation = blocker.generation();
+    blocker.set_custom_rules("||tracker.example.net^\n").unwrap();
+    assert!(blocker.generation() > generation);
+    assert_eq!(blocker.custom_rules(), "||tracker.example.net^\n");
+    let list = blocker
+        .get_filter_lists()
+        .iter()
+        .find(|list| list.id == CUSTOM_RULES_LIST_ID)
+        .expect("custom pseudo-list");
+    assert!(list.enabled && list.rule_count == 1 && is_local_filter_list_url(&list.url));
+    blocker.rebuild_engine_sync();
+    assert!(blocker.should_block_request("https://tracker.example.net/p.gif", "https://example.com", "image"));
+    let explained = blocker.test_request("https://tracker.example.net/p.gif", "https://example.com", "image");
+    assert_eq!(explained.list_id.as_deref(), Some(CUSTOM_RULES_LIST_ID));
+
+    // A rejected save keeps the previous rules (atomic).
+    let before = blocker.generation();
+    assert!(blocker.set_custom_rules("<html>not rules</html>").is_err());
+    assert_eq!(blocker.custom_rules(), "||tracker.example.net^\n");
+    assert_eq!(blocker.generation(), before);
+
+    // Custom rules are never updated from the network.
+    let err = blocker
+        .apply_update_response(resp(CUSTOM_RULES_LIST_ID, 200, Some("||evil.example^")))
+        .unwrap_err();
+    assert!(matches!(err, ContentBlockingError::InvalidUpdateBody { .. }));
+    assert_eq!(blocker.custom_rules(), "||tracker.example.net^\n");
+
+    // Blank text removes the pseudo-list.
+    blocker.set_custom_rules("   ").unwrap();
+    assert!(blocker.get_filter_lists().iter().all(|list| list.id != CUSTOM_RULES_LIST_ID));
+    blocker.rebuild_engine_sync();
+    assert!(!blocker.should_block_request("https://tracker.example.net/p.gif", "https://example.com", "image"));
+}
+
+#[test]
+fn import_local_list_validates() {
+    let mut blocker = ContentBlocker::new();
+    let lists_before = blocker.get_filter_lists().len();
+    let generation = blocker.generation();
+
+    for bad in [&b""[..], b"<!doctype html><html></html>", b"! only a comment\n", &[0xff, 0xfe, 0x00][..]] {
+        assert!(blocker.import_local_list("bad", bad).is_err(), "{bad:?}");
+    }
+    let oversize = vec![b'a'; MAX_LIST_BODY_BYTES + 1];
+    assert!(matches!(
+        blocker.import_local_list("big", &oversize),
+        Err(ContentBlockingError::FilterBodyTooLarge { .. })
+    ));
+    assert_eq!(blocker.get_filter_lists().len(), lists_before);
+    assert_eq!(blocker.generation(), generation);
+
+    let id = blocker
+        .import_local_list("  My list  ", b"\xef\xbb\xbf||local-ads.example^\n")
+        .unwrap();
+    assert!(id.starts_with("local-"));
+    let list = blocker.get_filter_lists().iter().find(|list| list.id == id).unwrap();
+    assert_eq!(list.name, "My list");
+    assert!(is_local_filter_list_url(&list.url) && list.enabled && list.rule_count == 1);
+    blocker.rebuild_engine_sync();
+    assert!(blocker.should_block_request("https://local-ads.example/a.js", "https://example.com", "script"));
+
+    // Same bytes twice is a duplicate, not a second list.
+    assert!(matches!(
+        blocker.import_local_list("again", b"||local-ads.example^\n"),
+        Err(ContentBlockingError::DuplicateFilterListId { .. })
+    ));
+    assert!(blocker.apply_update_response(resp(&id, 200, Some("||x.example^"))).is_err());
 }
