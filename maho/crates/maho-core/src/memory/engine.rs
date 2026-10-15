@@ -40,18 +40,17 @@ pub struct DefaultEmbeddingEngine;
 impl EmbeddingEngine for DefaultEmbeddingEngine {
     fn descriptor(&self) -> EmbeddingModelDescriptor {
         EmbeddingModelDescriptor {
-            model_id: "all-MiniLM-L6-v2".to_string(),
-            model_version: "1.0.0".to_string(),
+            model_id: crate::embedding::EMBEDDING_MODEL_ID.to_string(),
+            model_version: crate::embedding::EMBEDDING_MODEL_REVISION.to_string(),
             model_sha256: None,
         }
     }
 
     fn embed_single(&self, text: &str) -> Result<Vec<f32>, CoreError> {
-        let res = crate::embedding::embed(&[text.to_string()])?;
-        Ok(res
+        crate::embedding::embed(&[text.to_string()])?
             .into_iter()
             .next()
-            .unwrap_or_else(|| vec![0.0; EMBED_DIM]))
+            .ok_or_else(|| CoreError::Embedding("model returned no vector".into()))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
