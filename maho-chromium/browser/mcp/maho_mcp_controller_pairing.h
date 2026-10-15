@@ -15,12 +15,12 @@ class MahoMcpControllerPairing {
  public:
   static constexpr char kPrefName[] = "maho.mcp.controller_token_hashes";
 
-  static std::string Issue(base::Value::Dict& prefs);
+  static std::string Issue(base::DictValue& prefs);
 
-  static bool Verify(const base::Value::Dict& prefs,
+  static bool Verify(const base::DictValue& prefs,
                      const std::string& token);
 
-  static bool Revoke(base::Value::Dict& prefs, const std::string& token);
+  static bool Revoke(base::DictValue& prefs, const std::string& token);
 };
 
 }  // namespace maho

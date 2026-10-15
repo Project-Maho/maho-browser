@@ -30,21 +30,21 @@ bool DigestEquals(const std::string& a, const std::string& b) {
 
 }  // namespace
 
-std::string MahoMcpControllerPairing::Issue(base::Value::Dict& prefs) {
+std::string MahoMcpControllerPairing::Issue(base::DictValue& prefs) {
   std::array<uint8_t, kTokenSize> token_bytes = {};
   crypto::RandBytes(token_bytes);
   std::string token = base::HexEncode(token_bytes);
-  base::Value::List* hashes = prefs.FindList(kPrefName);
+  base::ListValue* hashes = prefs.FindList(kPrefName);
   if (!hashes) {
-    hashes = &prefs.Set(kPrefName, base::Value::List())->GetList();
+    hashes = &prefs.Set(kPrefName, base::ListValue())->GetList();
   }
   hashes->Append(HashToken(token));
   return token;
 }
 
-bool MahoMcpControllerPairing::Verify(const base::Value::Dict& prefs,
+bool MahoMcpControllerPairing::Verify(const base::DictValue& prefs,
                                       const std::string& token) {
-  const base::Value::List* hashes = prefs.FindList(kPrefName);
+  const base::ListValue* hashes = prefs.FindList(kPrefName);
   if (!hashes || token.empty()) {
     return false;
   }
@@ -58,9 +58,9 @@ bool MahoMcpControllerPairing::Verify(const base::Value::Dict& prefs,
   return false;
 }
 
-bool MahoMcpControllerPairing::Revoke(base::Value::Dict& prefs,
+bool MahoMcpControllerPairing::Revoke(base::DictValue& prefs,
                                       const std::string& token) {
-  base::Value::List* hashes = prefs.FindList(kPrefName);
+  base::ListValue* hashes = prefs.FindList(kPrefName);
   if (!hashes || token.empty()) {
     return false;
   }

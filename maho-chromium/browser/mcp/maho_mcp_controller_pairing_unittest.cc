@@ -11,12 +11,12 @@ namespace maho {
 namespace {
 
 TEST(MahoMcpControllerPairingTest, IssueVerifyAndPersistDigestOnly) {
-  base::Value::Dict prefs;
+  base::DictValue prefs;
   const std::string token = MahoMcpControllerPairing::Issue(prefs);
 
   ASSERT_EQ(token.size(), 64u);
   EXPECT_TRUE(MahoMcpControllerPairing::Verify(prefs, token));
-  const base::Value::List* hashes =
+  const base::ListValue* hashes =
       prefs.FindList(MahoMcpControllerPairing::kPrefName);
   ASSERT_TRUE(hashes);
   ASSERT_EQ(hashes->size(), 1u);
@@ -27,7 +27,7 @@ TEST(MahoMcpControllerPairingTest, IssueVerifyAndPersistDigestOnly) {
 }
 
 TEST(MahoMcpControllerPairingTest, RejectsForgedAndRevokedTokens) {
-  base::Value::Dict prefs;
+  base::DictValue prefs;
   const std::string token = MahoMcpControllerPairing::Issue(prefs);
 
   EXPECT_FALSE(MahoMcpControllerPairing::Verify(prefs, token + "00"));
@@ -38,7 +38,7 @@ TEST(MahoMcpControllerPairingTest, RejectsForgedAndRevokedTokens) {
 }
 
 TEST(MahoMcpControllerPairingTest, MissingOrMalformedPreferenceFailsClosed) {
-  base::Value::Dict prefs;
+  base::DictValue prefs;
   EXPECT_FALSE(MahoMcpControllerPairing::Verify(prefs, "token"));
   EXPECT_FALSE(MahoMcpControllerPairing::Revoke(prefs, "token"));
 

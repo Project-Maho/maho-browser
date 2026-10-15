@@ -207,7 +207,7 @@ void MahoBrowseEpisodeObserver::OnPageContextExtracted(
 void MahoBrowseEpisodeObserver::RecordEpisode(std::string title,
                                              std::string url,
                                              std::string summary) {
-  base::Value::Dict episode;
+  base::DictValue episode;
   episode.Set("url", url);
   episode.Set("title", std::move(title));
   episode.Set("summary", summary);
