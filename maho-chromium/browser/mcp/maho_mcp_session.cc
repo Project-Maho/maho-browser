@@ -464,6 +464,28 @@ std::string AttachExecutionReceipt(
   return serialized;
 }
 
+base::DictValue PairingOutcomeToValue(
+    const MahoMcpPairingCoordinator::Outcome& outcome) {
+  base::DictValue result;
+  switch (outcome.status) {
+    case MahoMcpPairingCoordinator::Status::kApproved:
+      result.Set("status", "approved");
+      result.Set("controllerId", outcome.controller_id);
+      break;
+    case MahoMcpPairingCoordinator::Status::kExpired:
+      result.Set("status", "expired");
+      break;
+    case MahoMcpPairingCoordinator::Status::kPending:
+      result.Set("status", "pending");
+      break;
+    case MahoMcpPairingCoordinator::Status::kDenied:
+    case MahoMcpPairingCoordinator::Status::kUnknown:
+      result.Set("status", "denied");
+      break;
+  }
+  return result;
+}
+
 std::string RedactJsonRpcLine(std::string line) {
   std::optional<base::Value> response =
       base::JSONReader::Read(line, base::JSON_PARSE_RFC);
@@ -1889,6 +1911,35 @@ void MahoMcpSession::HandleInitialize(const McpJsonRpcMessage& msg,
     controller_display_label_ = "Maho Agent";
   }
 
+  pairing_kind_ = MahoMcpControllerPairing::SanitizeKind(
+      controller_hint ? std::string_view(*controller_hint)
+                      : std::string_view(identity.wire_kind));
+  const base::DictValue* client_info = params.FindDict("clientInfo");
+  const std::string* client_name =
+      client_info ? client_info->FindString("name") : nullptr;
+  pairing_name_ = client_name && !client_name->empty()
+                      ? client_name->substr(0, 64)
+                      : controller_display_label_;
+  if (pairing_coordinator_ && pairing_coordinator_->enabled() &&
+      !pairing_exempt_) {
+    const std::string* pairing_token = params.FindString("pairingToken");
+    const std::string* controller_id = params.FindString("controllerId");
+    if (pairing_token && controller_id) {
+      switch (pairing_coordinator_->Verify(*controller_id, pairing_kind_,
+                                           *pairing_token)) {
+        case MahoMcpControllerPairing::VerifyResult::kPaired:
+          pairing_paired_ = true;
+          pairing_controller_id_ = *controller_id;
+          break;
+        case MahoMcpControllerPairing::VerifyResult::kRevoked:
+          pairing_revoked_ = true;
+          break;
+        case MahoMcpControllerPairing::VerifyResult::kUnknown:
+          break;
+      }
+    }
+  }
+
   base::DictValue server_info;
   server_info.Set("name", kServerName);
   server_info.Set("version", kServerVersion);
@@ -1928,11 +1979,17 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
     }
     return;
   }
+  if (HandlePairingMethod(msg, responses)) {
+    return;
+  }
   if (msg.method == "maho/control/list") {
     HandleControlList(msg, responses);
     return;
   }
   if (msg.method == "maho/control/call") {
+    if (GateToolCallForPairing(msg, responses)) {
+      return;
+    }
     HandleControlCall(msg, responses);
     return;
   }
@@ -1988,6 +2045,9 @@ void MahoMcpSession::HandleActiveMethod(const McpJsonRpcMessage& msg,
   }
 
   if (msg.method == "tools/call") {
+    if (GateToolCallForPairing(msg, responses)) {
+      return;
+    }
     HandleToolCall(msg, responses);
     return;
   }
@@ -2030,6 +2090,160 @@ void MahoMcpSession::HandleControlList(
   result.Set("surface", "control_plane");
   responses.push_back(
       framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result))));
+}
+
+bool MahoMcpSession::GateToolCallForPairing(
+    const McpJsonRpcMessage& msg,
+    std::vector<std::string>& responses) {
+  const bool gate_enabled = pairing_coordinator_ &&
+                            pairing_coordinator_->enabled() &&
+                            !pairing_exempt_;
+  const base::DictValue* params =
+      msg.params && msg.params->is_dict() ? &msg.params->GetDict() : nullptr;
+  const std::string* name = params ? params->FindString("name") : nullptr;
+  const auto* descriptor =
+      name ? MahoBrowserToolRegistry::FindCapability(*name) : nullptr;
+  switch (DecideMahoMcpPairingGate(gate_enabled, pairing_paired_,
+                                   pairing_revoked_, descriptor)) {
+    case MahoMcpPairingGateDecision::kAllow:
+      return false;
+    case MahoMcpPairingGateDecision::kRevoked:
+      if (msg.id.has_value()) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, kMahoMcpErrorPairingRevoked, "pairing revoked"));
+      }
+      return true;
+    case MahoMcpPairingGateDecision::kPairingRequired:
+      break;
+  }
+  const MahoMcpPairingCoordinator::Outcome previous =
+      pairing_request_id_.empty()
+          ? MahoMcpPairingCoordinator::Outcome()
+          : pairing_coordinator_->GetOutcome(pairing_request_id_);
+  if (previous.status == MahoMcpPairingCoordinator::Status::kApproved) {
+    // The user approved this very connection's request; the token file is
+    // for later connections.
+    pairing_paired_ = true;
+    pairing_controller_id_ = previous.controller_id;
+    return false;
+  }
+  if (previous.status != MahoMcpPairingCoordinator::Status::kPending) {
+    pairing_request_id_ =
+        pairing_coordinator_->RequestPairing(pairing_kind_, pairing_name_);
+  }
+  if (msg.id.has_value()) {
+    base::DictValue data;
+    data.Set("pairing", "pending");
+    data.Set("requestId", pairing_request_id_);
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, kMahoMcpErrorPairingRequired, "pairing required",
+        base::Value(std::move(data))));
+  }
+  return true;
+}
+
+bool MahoMcpSession::HandlePairingMethod(const McpJsonRpcMessage& msg,
+                                         std::vector<std::string>& responses) {
+  if (!base::StartsWith(msg.method, "maho/pairing/") &&
+      !base::StartsWith(msg.method, "maho/controllers/")) {
+    return false;
+  }
+  if (!msg.id.has_value()) {
+    return true;
+  }
+  const base::DictValue* params =
+      msg.params && msg.params->is_dict() ? &msg.params->GetDict() : nullptr;
+  const bool enabled = pairing_coordinator_ && pairing_coordinator_->enabled();
+  if (msg.method == "maho/pairing/status") {
+    base::DictValue result;
+    result.Set("required", enabled && !pairing_exempt_);
+    result.Set("paired", pairing_paired_ || pairing_exempt_);
+    result.Set("revoked", pairing_revoked_);
+    if (pairing_paired_) {
+      result.Set("controllerId", pairing_controller_id_);
+    }
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result))));
+    return true;
+  }
+  if (msg.method == "maho/pairing/await") {
+    const std::string* request_id =
+        params ? params->FindString("requestId") : nullptr;
+    if (!enabled || !request_id || *request_id != pairing_request_id_) {
+      responses.push_back(
+          framer_.BuildErrorResponse(msg.id, -32602, "unknown requestId"));
+      return true;
+    }
+    const MahoMcpPairingCoordinator::Outcome current =
+        pairing_coordinator_->GetOutcome(*request_id);
+    if (current.status != MahoMcpPairingCoordinator::Status::kPending ||
+        !deferred_response_sender_) {
+      // Settled (or no async channel): answer inline with the current state.
+      responses.push_back(framer_.BuildSuccessResponse(
+          msg.id, base::Value(PairingOutcomeToValue(current))));
+      return true;
+    }
+    pairing_coordinator_->Await(
+        *request_id,
+        base::BindOnce(&MahoMcpSession::OnPairingAwaited,
+                       weak_factory_.GetWeakPtr(), msg.id->Clone()));
+    return true;
+  }
+  // maho/controllers/* is browser control: only paired controllers (or the
+  // browser itself) may list or revoke pairings.
+  if (!enabled) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id, -32601, "Controller pairing is unavailable"));
+    return true;
+  }
+  if (!pairing_paired_ && !pairing_exempt_) {
+    responses.push_back(framer_.BuildErrorResponse(
+        msg.id,
+        pairing_revoked_ ? kMahoMcpErrorPairingRevoked
+                         : kMahoMcpErrorPairingRequired,
+        pairing_revoked_ ? "pairing revoked" : "pairing required"));
+    return true;
+  }
+  if (msg.method == "maho/controllers/list") {
+    responses.push_back(framer_.BuildSuccessResponse(
+        msg.id, base::Value(pairing_coordinator_->List())));
+    return true;
+  }
+  if (msg.method == "maho/controllers/revoke") {
+    const std::string* controller_id =
+        params ? params->FindString("controllerId") : nullptr;
+    if (!controller_id) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32602, "controllerId required"));
+      return true;
+    }
+    const bool revoked = pairing_coordinator_->Revoke(*controller_id);
+    base::DictValue result;
+    result.Set("revoked", revoked);
+    responses.push_back(
+        framer_.BuildSuccessResponse(msg.id, base::Value(std::move(result))));
+    if (revoked && *controller_id == pairing_controller_id_) {
+      // Revoking our own pairing ends this session after the reply.
+      pairing_paired_ = false;
+      pairing_revoked_ = true;
+      state_ = State::kClosed;
+    }
+    return true;
+  }
+  responses.push_back(
+      framer_.BuildErrorResponse(msg.id, -32601, "Method not found"));
+  return true;
+}
+
+void MahoMcpSession::OnPairingAwaited(
+    std::optional<base::Value> message_id,
+    const MahoMcpPairingCoordinator::Outcome& outcome) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!deferred_response_sender_) {
+    return;
+  }
+  deferred_response_sender_.Run(RedactJsonRpcLine(framer_.BuildSuccessResponse(
+      message_id, base::Value(PairingOutcomeToValue(outcome)))));
 }
 
 void MahoMcpSession::HandleControlCall(

@@ -49,6 +49,7 @@ source_set("maho_mcp") {
 
   deps = [
     "//base",
+    "//components/prefs",
     "//content/public/browser",
     "//crypto",
     "//maho/browser:maho_browser_tool_registry",
@@ -134,6 +135,7 @@ test("maho_mcp_session_test") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    "//components/prefs:test_support",
     "//maho/browser:maho_mcp_integration",
     "//testing/gtest",
   ]
