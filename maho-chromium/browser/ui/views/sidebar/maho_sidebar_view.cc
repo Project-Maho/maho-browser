@@ -1,6 +1,8 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.h"
 #include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
 #include "build/build_config.h"
@@ -54,6 +56,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "maho/browser/maho_tab_id_helper.h"
+#include "components/sessions/content/session_tab_helper.h"
 #include "maho/browser/maho_tab_registry.h"
 #include "maho/browser/ui/views/frame/maho_contents_header_view.h"
 #include "maho/browser/ui/views/frame/maho_tab_controlled_banner_overlay.h"
@@ -88,6 +91,8 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_archive_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_create_space_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_top_bar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_grain_overlay_view.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_themed_background.h"
@@ -605,6 +610,14 @@ void MahoSidebarView::BuildUi() {
   top_region->SetBorder(nullptr);
   top_region->SetProperty(views::kMarginsKey, gfx::Insets());
 
+  if (browser_ && browser_->GetProfile() &&
+      !browser_->GetProfile()->IsOffTheRecord()) {
+    agent_tasks_view_ = tabs_surface_->AddChildView(
+        std::make_unique<MahoSidebarAgentTasksView>(
+            browser_, base::BindRepeating(&MahoSidebarView::ActivateTaskTab,
+                                          weak_factory_.GetWeakPtr())));
+  }
+
   favorites_view_ =
       top_region->AddChildView(std::make_unique<MahoSidebarFavoritesGridView>(browser_));
   space_header_view_ =
@@ -765,6 +778,25 @@ void MahoSidebarView::BuildUi() {
 
   grain_overlay_ = AddChildView(std::make_unique<MahoSidebarGrainOverlayView>());
   grain_overlay_->SetProperty(views::kViewIgnoredByLayoutKey, true);
+}
+
+void MahoSidebarView::ActivateTaskTab(int64_t focus_tab_id) {
+  if (!browser_ || focus_tab_id <= 0 || !tab_list_view_) {
+    return;
+  }
+  TabStripModel* tab_strip = browser_->GetTabStripModel();
+  for (int index = 0; tab_strip && index < tab_strip->count(); ++index) {
+    content::WebContents* contents = tab_strip->GetWebContentsAt(index);
+    auto* helper = contents
+                       ? sessions::SessionTabHelper::FromWebContents(contents)
+                       : nullptr;
+    auto* tab_id_helper =
+        contents ? MahoTabIdHelper::FromWebContents(contents) : nullptr;
+    if (helper && tab_id_helper && helper->session_id().id() == focus_tab_id) {
+      tab_list_view_->ActivateTabById(tab_id_helper->stable_tab_id());
+      return;
+    }
+  }
 }
 
 void MahoSidebarView::Layout(PassKey pass_key) {

@@ -80,6 +80,7 @@ class MahoSidebarTabListView;
 class MahoSidebarUpdateNotificationController;
 class MahoSidebarUpdateNotificationView;
 class MahoSidebarTopBarView;
+class MahoSidebarAgentTasksView;
 class MahoSidebarSpacesView;
 class MahoSpacesOverlayBoardView;
 
@@ -262,6 +263,7 @@ class MahoSidebarView
   }
 
   void ActivateTabById(const std::string& tab_id);
+  void ActivateTaskTab(int64_t focus_tab_id);
   static bool ActivateSpaceAndTab(Browser* browser, const std::string& space_id);
 
   bool ActivateFavoriteByIndex(size_t index);
@@ -399,6 +401,7 @@ class MahoSidebarView
   raw_ptr<MahoSpacesOverlayBoardView> spaces_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
+  raw_ptr<MahoSidebarAgentTasksView> agent_tasks_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<views::View> space_header_view_ = nullptr;
