@@ -2680,6 +2680,21 @@ void maho_core_chat_append_assistant_message(struct ChatSession *ptr,
                                              const char *tool_calls_json);
 
 /**
+ * Returns how many panics have been contained at the FFI boundary in this
+ * process.
+ */
+uint64_t maho_core_contained_panic_count(void);
+
+#if defined(MAHO_FFI_DEBUG_TEST_HOOKS)
+/**
+ * Test-only: panics inside `ffi_safe!` so a caller can prove containment.
+ * Compiled only with the `debug-test-hooks` feature, which official builds
+ * never enable.
+ */
+bool maho_core_debug_induce_panic(void);
+#endif
+
+/**
  * Create a new conversation. Returns true on success.
  * All pointer args except `core` may be null (treated as None/empty).
  *
