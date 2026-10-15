@@ -1,9 +1,11 @@
 mod auth;
 mod browser;
 pub mod config;
+mod controllers;
 mod credits;
 mod doctor;
 mod platform;
+mod skills;
 
 use maho_cli::browser_pipe;
 

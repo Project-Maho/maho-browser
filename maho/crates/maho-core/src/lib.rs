@@ -18,6 +18,7 @@ pub mod conversation_manager;
 pub mod download_manager;
 pub mod easel_manager;
 pub mod embedding;
+pub mod embedding_model_store;
 pub mod error;
 pub mod event_dispatcher;
 pub mod extension_bridge;
