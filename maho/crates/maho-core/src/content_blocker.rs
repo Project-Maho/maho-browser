@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use adblock::cosmetic_filter_cache::UrlSpecificResources;
-use adblock::lists::{parse_filter, FilterSet, ParseOptions};
+use adblock::lists::{parse_filter, FilterParseError, FilterSet, ParseOptions, ParsedFilter};
 use adblock::request::Request;
 use adblock::Engine;
 
 use maho_types::content_blocking::{
     CanonicalSiteException, ContentBlockerStateDto, ContentBlockingError, ContentBlockingMode,
-    FilterHealthStatus, FilterListHealth, FilterListMetadata, FilterListUpdateResponse,
+    FilterHealthStatus, FilterListHealth, FilterListMetadata, FilterListRuleBreakdown,
+    FilterListUpdateResponse, MAX_REJECTED_RULE_SAMPLES,
 };
 
 pub const MAX_LIST_BODY_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
@@ -154,6 +155,34 @@ fn validate_candidate_body(
         rule_count,
         sha256,
     })
+}
+
+/// Classifies every non-comment, non-blank line of a filter list body.
+/// Lines the parser deliberately skips (comments, unsupported option sets)
+/// are not counted as rejections; only genuine parse failures are.
+pub fn rule_breakdown(list_id: &str, body: &str) -> FilterListRuleBreakdown {
+    let mut breakdown = FilterListRuleBreakdown {
+        list_id: list_id.to_string(),
+        ..FilterListRuleBreakdown::default()
+    };
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('!') || line.starts_with('[') {
+            continue;
+        }
+        match parse_filter(line, false, ParseOptions::default()) {
+            Ok(ParsedFilter::Network(_)) => breakdown.accepted_network += 1,
+            Ok(ParsedFilter::Cosmetic(_)) => breakdown.accepted_cosmetic += 1,
+            Err(FilterParseError::Empty) | Err(FilterParseError::Unsupported) => {}
+            Err(_) => {
+                breakdown.rejected += 1;
+                if breakdown.rejected_samples.len() < MAX_REJECTED_RULE_SAMPLES {
+                    breakdown.rejected_samples.push(line.to_string());
+                }
+            }
+        }
+    }
+    breakdown
 }
 
 fn is_secure_https_url(url: &str) -> bool {
@@ -1124,6 +1153,16 @@ impl ContentBlocker {
             )
         };
 
+        let rule_breakdown = self
+            .filter_lists
+            .iter()
+            .filter_map(|list| {
+                self.filter_list_contents
+                    .get(&list.id)
+                    .map(|body| rule_breakdown(&list.id, body))
+            })
+            .collect();
+
         self.health = FilterListHealth {
             total_lists,
             active_lists,
@@ -1131,6 +1170,7 @@ impl ContentBlocker {
             last_update_timestamp,
             health_status: status,
             overall_error,
+            rule_breakdown,
         };
     }
 
