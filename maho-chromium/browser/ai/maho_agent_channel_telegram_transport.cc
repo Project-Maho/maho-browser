@@ -44,15 +44,23 @@ net::NetworkTrafficAnnotationTag TrafficAnnotation() {
     })");
 }
 
-std::string TelegramUrl(const ChannelConfig& config, std::string_view method) {
-  return "https://api.telegram.org/bot" + config.token->expose_secret() + "/" +
+constexpr char kTelegramApiBase[] = "https://api.telegram.org";
+
+std::string TelegramUrl(std::string_view api_base,
+                        const ChannelConfig& config,
+                        std::string_view method) {
+  return std::string(api_base) + "/bot" + config.token->expose_secret() + "/" +
          std::string(method);
 }
-
 }
 
 TelegramChannelHttpTransport::TelegramChannelHttpTransport(Requester requester)
-    : requester_(std::move(requester)) {}
+    : TelegramChannelHttpTransport(std::move(requester), kTelegramApiBase) {}
+
+TelegramChannelHttpTransport::TelegramChannelHttpTransport(
+    Requester requester,
+    std::string api_base)
+    : requester_(std::move(requester)), api_base_(std::move(api_base)) {}
 TelegramChannelHttpTransport::~TelegramChannelHttpTransport() = default;
 
 void TelegramChannelHttpTransport::FetchEvents(
@@ -63,7 +71,7 @@ void TelegramChannelHttpTransport::FetchEvents(
     std::move(callback).Run({}, "Telegram credentials or network unavailable");
     return;
   }
-  std::string url = TelegramUrl(config, "getUpdates?timeout=25&allowed_updates=%5B%22message%22%5D");
+  std::string url = TelegramUrl(api_base_, config, "getUpdates?timeout=25&allowed_updates=%5B%22message%22%5D");
   if (cursor && !cursor->empty()) url += "&offset=" + *cursor;
   requester_.Run(GURL(url), {}, base::BindOnce(
       [](base::WeakPtr<TelegramChannelHttpTransport> self, ChannelConfig config,
@@ -105,7 +113,7 @@ void TelegramChannelHttpTransport::SendMessage(
     std::move(callback).Run(false);
     return;
   }
-  requester_.Run(GURL(TelegramUrl(config, "sendMessage")), std::move(body),
+  requester_.Run(GURL(TelegramUrl(api_base_, config, "sendMessage")), std::move(body),
       base::BindOnce([](base::OnceCallback<void(bool)> callback, int status,
                         std::optional<std::string> response) {
         std::move(callback).Run(status == 200 && response.has_value());

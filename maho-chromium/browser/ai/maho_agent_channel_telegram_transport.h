@@ -20,6 +20,10 @@ class TelegramChannelHttpTransport final : public ChannelTransport {
       const GURL&, std::string, Completion)>;
 
   explicit TelegramChannelHttpTransport(Requester requester);
+  // Test seam: route requests to a local fake Bot API (e.g.
+  // "http://127.0.0.1:8080") instead of api.telegram.org. Production code
+  // uses the one-argument constructor; there is no runtime switch.
+  TelegramChannelHttpTransport(Requester requester, std::string api_base);
   ~TelegramChannelHttpTransport() override;
   void FetchEvents(const ChannelConfig& config,
                    const std::optional<std::string>& cursor,
@@ -37,6 +41,7 @@ class TelegramChannelHttpTransport final : public ChannelTransport {
 
  private:
   Requester requester_;
+  std::string api_base_;
   ChannelBackoff backoff_;
   base::WeakPtrFactory<TelegramChannelHttpTransport> weak_factory_{this};
 };
