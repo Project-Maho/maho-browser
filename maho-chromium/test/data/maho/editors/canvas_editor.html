@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Canvas Editor Test Fixture (accepts paste only)</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 40px auto;
+      max-width: 700px;
+      padding: 0 20px;
+    }
+    #editor-canvas {
+      border: 2px solid #2563eb;
+      border-radius: 6px;
+      background: #ffffff;
+      cursor: text;
+      outline: none;
+      display: block;
+    }
+    #editor-canvas:focus {
+      border-color: #1d4ed8;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+    }
+    .status-panel {
+      margin-top: 20px;
+      padding: 16px;
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    .field-label {
+      font-weight: 600;
+      color: #166534;
+    }
+    .value {
+      font-family: monospace;
+      padding: 2px 6px;
+      background: #dcfce7;
+      border-radius: 4px;
+      color: #14532d;
+    }
+    #events-log {
+      margin-top: 15px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 150px;
+      overflow-y: auto;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      padding: 10px;
+      border-radius: 4px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Canvas Editor Fixture</h1>
+  <p>Canvas-based editor that rejects keyboard typing and accepts <strong>only paste</strong> operations.</p>
+  <canvas id="editor-canvas" width="650" height="200" tabindex="0"></canvas>
+
+  <div class="status-panel">
+    <p><span class="field-label">Observed Strategy:</span> <span id="strategy" class="value">none</span></p>
+    <p><span class="field-label">Typed Text:</span> <span id="typed-text" class="value"></span></p>
+    <div id="events-log"></div>
+  </div>
+
+  <script>
+    window.__editorState = {
+      strategy: "none",
+      text: ""
+    };
+
+    const canvas = document.getElementById("editor-canvas");
+    const ctx = canvas.getContext("2d");
+    const strategyEl = document.getElementById("strategy");
+    const textEl = document.getElementById("typed-text");
+    const logEl = document.getElementById("events-log");
+
+    function renderCanvas() {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#94a3b8";
+      ctx.font = "14px monospace";
+      ctx.fillText("Canvas Editor Surface (Focus and Paste text)", 20, 30);
+
+      ctx.strokeStyle = "#e2e8f0";
+      ctx.beginPath();
+      ctx.moveTo(20, 45);
+      ctx.lineTo(canvas.width - 20, 45);
+      ctx.stroke();
+
+      if (window.__editorState.text) {
+        ctx.fillStyle = "#0f172a";
+        ctx.font = "18px monospace";
+        ctx.fillText(window.__editorState.text, 20, 90);
+      }
+    }
+
+    renderCanvas();
+
+    function logEvent(name, detail) {
+      logEl.textContent += `[${name}] ${detail}\n`;
+    }
+
+    canvas.addEventListener("keydown", (e) => {
+      logEvent("keydown", `key=${e.key} (rejected)`);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    canvas.addEventListener("beforeinput", (e) => {
+      logEvent("beforeinput", `inputType=${e.inputType} (rejected)`);
+      e.preventDefault();
+      e.stopPropagation();
+    });
+
+    canvas.addEventListener("paste", (e) => {
+      const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+      logEvent("paste", `accepted paste text=${text}`);
+      e.preventDefault();
+
+      window.__editorState.strategy = "paste";
+      window.__editorState.text = text;
+      strategyEl.textContent = "paste";
+      textEl.textContent = text;
+
+      renderCanvas();
+    });
+  </script>
+</body>
+</html>
