@@ -25,6 +25,8 @@ source_set("maho_mcp") {
     "maho_mcp_screenshot_handler.h",
     "maho_mcp_session.cc",
     "maho_mcp_session.h",
+    "maho_mcp_text_insertion_policy.cc",
+    "maho_mcp_text_insertion_policy.h",
   ]
 
   if (!is_win) {
@@ -218,6 +220,7 @@ test("maho_mcp_input_synthesizer_test") {
   sources = [
     "maho_mcp_firewall_test_main.cc",
     "maho_mcp_input_synthesizer_unittest.cc",
+    "maho_mcp_text_insertion_policy_unittest.cc",
   ]
   deps = [
     "//maho/browser:maho_mcp_integration",

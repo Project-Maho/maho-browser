@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 #include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
+#include "maho/browser/mcp/maho_mcp_text_insertion_policy.h"
+#include "maho/browser/mcp/maho_mcp_text_insertion_policy.h"
 
 #include <cassert>
 #include <iostream>
@@ -10,12 +12,72 @@
 
 #ifndef MAHO_STANDALONE_TEST
 #include "base/functional/bind.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/task_environment.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 namespace maho {
+
+TEST(MahoMcpInputSynthesizerTest, InsertionCascadeKeyboardSucceedsFirst) {
+  const std::vector<TextInsertionStrategy> strategies =
+      ChooseInsertionStrategies("input", "");
+  std::vector<TextInsertionStrategy> attempted;
+  const TextInsertionResult result = ExecuteTextInsertionCascade(
+      strategies,
+      [&attempted](TextInsertionStrategy strategy) {
+        attempted.push_back(strategy);
+      },
+      [] { return true; });
+
+  EXPECT_EQ(result, TextInsertionResult::kKeyboard);
+  EXPECT_EQ(attempted,
+            (std::vector<TextInsertionStrategy>{TextInsertionStrategy::kKeyboard}));
+}
+
+TEST(MahoMcpInputSynthesizerTest, InsertionCascadeFallsBackToPaste) {
+  const std::vector<TextInsertionStrategy> strategies =
+      ChooseInsertionStrategies("input", "");
+  std::vector<TextInsertionStrategy> attempted;
+  const TextInsertionResult result = ExecuteTextInsertionCascade(
+      strategies,
+      [&attempted](TextInsertionStrategy strategy) {
+        attempted.push_back(strategy);
+      },
+      [&attempted] {
+        return !attempted.empty() &&
+               attempted.back() == TextInsertionStrategy::kPaste;
+      });
+
+  EXPECT_EQ(result, TextInsertionResult::kPaste);
+  EXPECT_EQ(attempted,
+            (std::vector<TextInsertionStrategy>{TextInsertionStrategy::kKeyboard,
+                                                TextInsertionStrategy::kBeforeInput,
+                                                TextInsertionStrategy::kPaste}));
+}
+
+TEST(MahoMcpInputSynthesizerTest, InsertionCascadeAllStrategiesFail) {
+  const std::vector<TextInsertionStrategy> strategies =
+      ChooseInsertionStrategies("input", "");
+  std::vector<TextInsertionStrategy> attempted;
+  const TextInsertionResult result = ExecuteTextInsertionCascade(
+      strategies,
+      [&attempted](TextInsertionStrategy strategy) {
+        attempted.push_back(strategy);
+      },
+      [] { return false; });
+
+  EXPECT_EQ(result, TextInsertionResult::kInsertionNotObserved);
+  EXPECT_EQ(attempted, strategies);
+}
+
+TEST(MahoMcpInputSynthesizerTest, ContentEditableInsertionStartsWithBeforeInput) {
+  const std::vector<TextInsertionStrategy> strategies =
+      ChooseInsertionStrategies("contenteditable", "");
+  ASSERT_FALSE(strategies.empty());
+  EXPECT_EQ(strategies.front(), TextInsertionStrategy::kBeforeInput);
+}
 
 TEST(MahoMcpInputSynthesizerTest, KeyStringToKeyCode_NamedKeys) {
   EXPECT_EQ(MahoMcpInputSynthesizer::KeyStringToKeyCode("Enter"),
@@ -154,6 +216,57 @@ TEST(MahoMcpInputSynthesizerTest,
   EXPECT_FALSE(completion_result);
   task_environment.RunUntilIdle();
   EXPECT_EQ(completion_count, 1);
+}
+
+TEST(MahoMcpInputSynthesizerTest, AsyncInsertionCascadeUsesFakeCallbacks) {
+  base::test::TaskEnvironment task_environment;
+  const std::vector<TextInsertionStrategy> strategies =
+      ChooseInsertionStrategies("input", "");
+  std::vector<TextInsertionStrategy> attempted;
+  int readback_count = 0;
+  bool completed = false;
+  TextInsertionResult result = TextInsertionResult::kInsertionNotObserved;
+
+  MahoMcpInputSynthesizer::RunTextInsertionCascadeAsyncForTesting(
+      strategies,
+      base::BindRepeating(
+          [](std::vector<TextInsertionStrategy>* attempted,
+             TextInsertionStrategy strategy,
+             base::OnceCallback<void()> done) {
+            attempted->push_back(strategy);
+            base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE, std::move(done));
+          },
+          &attempted),
+      base::BindRepeating(
+          [](int* readback_count, base::OnceCallback<void(bool)> done) {
+            const bool observed = ++*readback_count == 3;
+            base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+                FROM_HERE,
+                base::BindOnce(
+                    [](base::OnceCallback<void(bool)> done, bool observed) {
+                      std::move(done).Run(observed);
+                    },
+                    std::move(done), observed));
+          },
+          &readback_count),
+      base::BindOnce(
+          [](bool* completed, TextInsertionResult* result,
+             TextInsertionResult value) {
+            *completed = true;
+            *result = value;
+          },
+          &completed, &result));
+
+  EXPECT_FALSE(completed);
+  task_environment.RunUntilIdle();
+  EXPECT_TRUE(completed);
+  EXPECT_EQ(result, TextInsertionResult::kPaste);
+  EXPECT_EQ(attempted,
+            (std::vector<TextInsertionStrategy>{TextInsertionStrategy::kKeyboard,
+                                                TextInsertionStrategy::kBeforeInput,
+                                                TextInsertionStrategy::kPaste}));
+  EXPECT_EQ(readback_count, 3);
 }
 
 // -----------------------------------------------------------------------------
