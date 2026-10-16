@@ -58,16 +58,16 @@ const VAULT_POLICY_FROM_VALUE = {
   always_allow: VaultAgentPolicy.kAlwaysAllow,
 } as const satisfies Record<VaultPolicyBackendValue, VaultAgentPolicy>;
 
-const VAULT_POLICY_OPTIONS: readonly {
+export const VAULT_POLICY_OPTIONS: readonly {
   readonly description: string;
   readonly label: string;
   readonly value: VaultPolicyBackendValue;
 }[] = [
-  {label: 'Deny', value: 'deny', description: 'Default fail-closed policy.'},
-  {label: 'Ask every use', value: 'ask_every_use', description: 'Require a fresh decision for each request.'},
-  {label: 'Allow for task', value: 'allow_for_task', description: 'Persist the task-scoped preference only.'},
-  {label: 'While unlocked', value: 'while_unlocked', description: 'Permit while this Vault session stays unlocked.'},
-  {label: 'Always allow', value: 'always_allow', description: 'Persist the broadest default policy.'},
+  {label: 'Deny', value: 'deny', description: 'Do not issue agent credential grants.'},
+  {label: 'Ask every use', value: 'ask_every_use', description: 'Require approval for every grant request.'},
+  {label: 'Allow for task', value: 'allow_for_task', description: 'Allow grants only for the current task.'},
+  {label: 'While unlocked', value: 'while_unlocked', description: 'Allow grants only while the Vault is unlocked.'},
+  {label: 'Always allow', value: 'always_allow', description: 'Allow grant requests regardless of Vault lock state.'},
 ];
 
 export function PasswordsPane(
@@ -179,6 +179,7 @@ function PasswordSettingsCard(
      setVaultDeviceAuthOverride, store}:
         PasswordSettingsCardProps) {
   const handler = store.getHandler();
+  const [vaultPolicyError, setVaultPolicyError] = useState('');
 
   return (
     <SectionCard
@@ -253,7 +254,7 @@ function PasswordSettingsCard(
       </ManagedSettingRow>
       <ManagedSettingRow
         description={data.policyStatus.isAvailable
-            ? 'Default policy for future Vault agent requests. Agent grants are not implemented in this build.'
+            ? 'Default rule used when deciding whether an agent may receive a credential grant.'
             : data.policyStatus.unavailableReason || 'Vault policy backend unavailable.'}
         title="Vault agent policy">
         {data.policyStatus.isAvailable ? (
@@ -262,10 +263,17 @@ function PasswordSettingsCard(
             options={[...VAULT_POLICY_OPTIONS]}
             value={VAULT_POLICY_VALUES[data.policyStatus.policy]}
             onChange={async nextValue => {
-              const {status} = await handler.setVaultPolicy(
-                  VAULT_POLICY_FROM_VALUE[nextValue], null, null, null);
-              if (status.isAvailable) {
-                void loadPasswordSettings(false);
+              setVaultPolicyError('');
+              try {
+                const {status} = await handler.setVaultPolicy(
+                    VAULT_POLICY_FROM_VALUE[nextValue], null, null, null);
+                if (status.isAvailable) {
+                  void loadPasswordSettings(false);
+                } else {
+                  setVaultPolicyError(status.unavailableReason || 'Failed to save Vault agent policy.');
+                }
+              } catch (error) {
+                setVaultPolicyError(error instanceof Error ? error.message : 'Failed to save Vault agent policy.');
               }
             }}
           />
@@ -273,6 +281,9 @@ function PasswordSettingsCard(
           <div className="text-sm text-muted-foreground">Policy controls unavailable.</div>
         )}
       </ManagedSettingRow>
+      {vaultPolicyError ? (
+        <div role="alert" className="mx-6 text-sm text-destructive">{vaultPolicyError}</div>
+      ) : null}
       {data.providerStatus.provider !== PasswordProviderKind.kMahoNative &&
       !data.providerStatus.isAvailable ? (
         <div className="mx-6 my-4 p-4 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive flex flex-col gap-2">
