@@ -224,11 +224,16 @@ def _weaken_macho_symbols(lib_path, symbols):
     print(f'  weakened {len(changed)} symbols in {os.path.basename(lib_path)}')
 
 
-def _cargo_build(command, cwd, rust_target, package=None, env=None):
+def _cargo_build(command, cwd, rust_target, package=None, env=None, features=None):
     cargo_env = (env or os.environ).copy()
     args = ['build', '--release', '--target', rust_target]
     if package:
         args += ['-p', package]
+    if features:
+        if isinstance(features, (list, tuple)):
+            args += ['--features', ','.join(features)]
+        else:
+            args += ['--features', str(features)]
     if _is_apple_target(rust_target):
         # build-std keeps std built for the deployment target. The workspace
         # release profile unwinds so ffi_safe! can contain panics; forcing
@@ -619,7 +624,7 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def build_rust_prebuilt(target=None, incremental=False):
+def build_rust_prebuilt(target=None, incremental=False, is_release=False):
     rust_target, cpu_dir, lib_name = get_target_triple(target)
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -659,7 +664,8 @@ def build_rust_prebuilt(target=None, incremental=False):
                 print(f'WARNING: {_tool} not found on PATH; the vendored OpenSSL '
                       'build (bundled-sqlcipher-vendored-openssl) will fail. '
                       'Install it (e.g. Strawberry Perl / NASM).')
-    _cargo_build(['cargo'], MAHO_ROOT, rust_target, 'maho-ffi', cargo_env)
+    ffi_features = [] if is_release else ['debug-test-hooks']
+    _cargo_build(['cargo'], MAHO_ROOT, rust_target, 'maho-ffi', cargo_env, features=ffi_features)
 
     target_dir = effective_cargo_target_dir(MAHO_ROOT, rust_target)
     src_lib = os.path.join(target_dir, 'release', lib_name)
@@ -728,15 +734,17 @@ def main():
     parser.add_argument('--target', help='Explicit Rust target triple for cross-compilation.')
     parser.add_argument('--mail-only', action='store_true',
                         help='Build only the standalone Mail FFI prebuilt.')
+    parser.add_argument('--release', action='store_true',
+                        help='Build for release without debug test hooks.')
     args = parser.parse_args()
 
     with build_lock():
-        run_build(args.target, args.mail_only)
+        run_build(args.target, args.mail_only, is_release=args.release)
 
 
-def run_build(target, mail_only):
+def run_build(target, mail_only, is_release=False):
     if not mail_only:
-        build_rust_prebuilt(target)
+        build_rust_prebuilt(target, is_release=is_release)
         return
 
     rust_target, cpu_dir, _ = get_target_triple(target)

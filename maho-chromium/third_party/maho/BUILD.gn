@@ -1,10 +1,14 @@
 # Copyright 2026 Maho Browser. All rights reserved.
 # Prebuilt maho-core Rust static library.
 
+import("//build/config/chrome_build.gni")
 import("//build/config/compiler/compiler.gni")
 
 config("maho_include_config") {
   include_dirs = [ "." ]
+  if (!is_official_build) {
+    defines = [ "MAHO_FFI_DEBUG_TEST_HOOKS" ]
+  }
 }
 
 source_set("maho_ffi_headers") {

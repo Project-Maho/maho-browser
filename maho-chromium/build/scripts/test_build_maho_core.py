@@ -249,8 +249,10 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
 
         linux_env.assert_called_once()
         self.assertEqual(linux_env.call_args.args[0], target)
+        # Non-release builds compile maho-ffi with its debug test hooks.
         cargo_build.assert_called_once_with(
-            ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env)
+            ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env,
+            features=['debug-test-hooks'])
 
     def test_mail_only_build_skips_main_rust_prebuilt(self):
         with patch.object(_module, 'build_mail_ffi_prebuilt') as build_mail:

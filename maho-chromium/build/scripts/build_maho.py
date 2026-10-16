@@ -2120,7 +2120,11 @@ def main():
         ensure_webui_dependencies(_WORKSPACE_ROOT)
         # Narrow builds link the existing Rust prebuilt; only full builds rebuild it.
         if not args.skip_rust and build_class != 'narrow':
-            build_maho_core.build_rust_prebuilt(args.target, incremental=not args.release)
+            build_maho_core.build_rust_prebuilt(
+                args.target,
+                incremental=not args.release,
+                is_release=args.release,
+            )
         if not args.skip_chromium:
             ensure_overlay_mount(_CHROMIUM_SRC_ROOT, args.skip_overlay_mount)
             ensure_args_gn(
