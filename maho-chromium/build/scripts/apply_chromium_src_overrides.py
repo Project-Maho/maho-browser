@@ -12420,6 +12420,15 @@ _UPDATED154_LAYOUT_SHA256: Final[dict[str, str]] = {
 _UPDATED154_REAPPLY_SHA256: Final[dict[str, str]] = {
     "chrome/browser/ui/browser_command_controller.cc":
         "a2a18c212978494b311f4a2b4f412b9d26d5a078677a31f72b3a62518aaf210c",
+    # Aside adoption: chrome/browser/ui:ui gains the new Maho sources, tab
+    # helpers attach the browse-episode observer, and the context menu gains
+    # Ask Maho about selection.
+    "chrome/browser/ui/BUILD.gn":
+        "428c439a6ceda26c03c27d9556ef78c4dc90b1cb469e224263e0a4319bfacf5e",
+    "chrome/browser/ui/tab_helpers.cc":
+        "12b5641335472e0ade1109c4df5d92989d3f28f8b4f092db1803a9ca29711ccf",
+    "chrome/browser/renderer_context_menu/render_view_context_menu.cc":
+        "7f81524f97a842fb179fd05928946af3269413528721cc75daf995ff4bc709ed",
 }
 
 

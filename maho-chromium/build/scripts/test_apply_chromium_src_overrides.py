@@ -8,6 +8,7 @@ from apply_chromium_src_overrides import (
     _MAHO_FOCUS_ACCELERATOR_REGISTRATION,
     _MAHO_SIDEBAR_RAIL_LAYOUT,
     _MAHO_SIDEBAR_RAIL_LAYOUT_V1,
+    _UPDATED154_REAPPLY_SHA256,
     REPLACEMENTS,
     apply_base_patch,
     apply_replacements,
@@ -2500,6 +2501,68 @@ class MahoArcLayoutBasePatchTest(unittest.TestCase):
     def test_base_patch_mirrors_contents_corners_in_rtl(self):
         self.assertIn("gfx::RoundedCornersF(12.0f, 0.0f, 0.0f, 12.0f)",
                       self._added_lines())
+
+
+class MahoAsideAdoptionBasePatchTest(unittest.TestCase):
+    """f89f3a43 rebuilds these files from whole-file base patches and skips
+    REPLACEMENTS, so the aside-adoption hooks must live in the patches."""
+
+    _DIR = (
+        Path(__file__).resolve().parents[1] / "chromium_base_patches"
+        / "f89f3a4363808e117c592adedcf9947882ac3b79")
+
+    def _added_lines(self, relative_path):
+        patch = self._DIR / f"{relative_path}.patch"
+        return "\n".join(
+            line[1:] for line in patch.read_text().splitlines()
+            if line.startswith("+") and not line.startswith("+++"))
+
+    def test_ui_target_compiles_new_maho_sources(self):
+        added = self._added_lines("chrome/browser/ui/BUILD.gn")
+        for source in (
+            "//maho/browser/ui/views/maho_mini/maho_mini_shortcut.cc",
+            "//maho/browser/ui/views/maho_mini/maho_mini_state_policy.cc",
+            "//maho/browser/ui/views/sidebar/maho_core_recovery_policy.cc",
+            "//maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.cc",
+            "//maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.cc",
+            "//maho/browser/sync/maho_site_session_collector.cc",
+            "//maho/browser/sync/maho_site_session_applier.cc",
+            "//maho/browser/ai/maho_selection_ask_dispatch.cc",
+        ):
+            self.assertIn(f'"{source}"', added)
+        self.assertIn('"//maho/browser:maho_webauthn"', added)
+
+    def test_tab_helpers_attach_browse_episode_observer(self):
+        self.assertIn(
+            "MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);",
+            self._added_lines("chrome/browser/ui/tab_helpers.cc"))
+
+    def test_context_menu_offers_ask_maho_about_selection(self):
+        added = self._added_lines(
+            "chrome/browser/renderer_context_menu/render_view_context_menu.cc")
+        self.assertIn("IDC_MAHO_ASK_ABOUT_SELECTION", added)
+        self.assertIn("maho::AskMahoAboutSelection(", added)
+
+    def test_webauthn_delegate_creates_vault_discovery(self):
+        self.assertIn(
+            "CreatePlatformDiscoveries() override;",
+            self._added_lines(
+                "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"))
+        self.assertIn(
+            "maho::CreateVaultPasskeyDiscoveries(rfh)",
+            self._added_lines(
+                "chrome/browser/webauthn/chrome_authenticator_request_delegate.cc"))
+
+    def test_previous_base_patch_states_migrate_forward(self):
+        for relative_path in (
+            "chrome/browser/ui/BUILD.gn",
+            "chrome/browser/ui/tab_helpers.cc",
+            "chrome/browser/renderer_context_menu/render_view_context_menu.cc",
+        ):
+            self.assertIn(relative_path, _UPDATED154_REAPPLY_SHA256)
+            self.assertTrue(
+                (self._DIR.parents[1] / "chromium_base_reapply_migrations"
+                 / self._DIR.name / f"{relative_path}.patch").is_file())
 
 
 class MahoContentsHeaderSlotTest(unittest.TestCase):
