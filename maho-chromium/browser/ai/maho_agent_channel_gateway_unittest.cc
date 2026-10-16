@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 
 #ifndef MAHO_STANDALONE_TEST
 #include "base/files/file_util.h"
@@ -47,7 +48,7 @@ class TriggerRecorder {
   }
 
  private:
-  std::vector<AgentSessionTrigger>* sink_;
+  raw_ptr<std::vector<AgentSessionTrigger>> sink_;
 };
 
 class FakeChannelTransport : public ChannelTransport {
@@ -824,7 +825,7 @@ class StopChannelsRecorder {
   }
 
  private:
-  MahoAgentChannelGateway* gateway_;
+  raw_ptr<MahoAgentChannelGateway> gateway_;
 };
 
 }  // namespace
