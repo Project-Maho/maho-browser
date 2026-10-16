@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Maho WebAuthn Test Fixture</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 40px auto;
+      max-width: 650px;
+      padding: 0 20px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 20px;
+    }
+    button {
+      padding: 10px 16px;
+      font-size: 14px;
+      margin-right: 10px;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 20px;
+      padding: 12px;
+      background: #f0f0f0;
+      border-radius: 6px;
+      font-weight: 600;
+      min-height: 24px;
+    }
+    #log {
+      margin-top: 15px;
+      padding: 12px;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Maho WebAuthn Passkey Test Fixture</h1>
+  <p>RP ID: <code>localhost</code></p>
+  <div>
+    <button id="btn-register" onclick="registerPasskey()">1. Register Passkey</button>
+    <button id="btn-signin" onclick="signInPasskey()">2. Sign In with Passkey</button>
+  </div>
+  <div id="status">ready</div>
+  <div id="log"></div>
+
+  <script>
+    window.__registeredCredential = null;
+    window.__assertion_verified = false;
+
+    function appendLog(msg) {
+      const el = document.getElementById("log");
+      el.textContent += msg + "\n";
+    }
+
+    function setStatus(text) {
+      document.getElementById("status").textContent = text;
+      appendLog("[status] " + text);
+    }
+
+    function decodeCbor(bytes) {
+      let offset = 0;
+      function read() {
+        if (offset >= bytes.length) throw new Error("Unexpected EOF in CBOR");
+        const initial = bytes[offset++];
+        const major = initial >> 5;
+        const additional = initial & 0x1f;
+        let value;
+        if (additional < 24) {
+          value = additional;
+        } else if (additional === 24) {
+          value = bytes[offset++];
+        } else if (additional === 25) {
+          value = (bytes[offset++] << 8) | bytes[offset++];
+        } else if (additional === 26) {
+          value = ((bytes[offset++] << 24) | (bytes[offset++] << 16) | (bytes[offset++] << 8) | bytes[offset++]) >>> 0;
+        } else {
+          throw new Error("Unsupported CBOR length: " + additional);
+        }
+
+        if (major === 0) return value;
+        if (major === 1) return -1 - value;
+        if (major === 2) {
+          const slice = bytes.slice(offset, offset + value);
+          offset += value;
+          return slice;
+        }
+        if (major === 3) {
+          const slice = bytes.slice(offset, offset + value);
+          offset += value;
+          return new TextDecoder().decode(slice);
+        }
+        if (major === 4) {
+          const list = [];
+          for (let i = 0; i < value; i++) list.push(read());
+          return list;
+        }
+        if (major === 5) {
+          const map = new Map();
+          for (let i = 0; i < value; i++) {
+            const k = read();
+            const v = read();
+            map.set(k, v);
+          }
+          return map;
+        }
+        throw new Error("Unsupported CBOR major type: " + major);
+      }
+      return read();
+    }
+
+    function derToP1363(derBytes) {
+      let offset = 0;
+      if (derBytes[offset++] !== 0x30) throw new Error("Expected sequence (0x30)");
+      let seqLen = derBytes[offset++];
+      if (seqLen & 0x80) {
+        const lenBytes = seqLen & 0x7f;
+        seqLen = 0;
+        for (let i = 0; i < lenBytes; i++) seqLen = (seqLen << 8) | derBytes[offset++];
+      }
+      if (derBytes[offset++] !== 0x02) throw new Error("Expected integer for r (0x02)");
+      const rLen = derBytes[offset++];
+      let r = derBytes.slice(offset, offset + rLen);
+      offset += rLen;
+
+      if (derBytes[offset++] !== 0x02) throw new Error("Expected integer for s (0x02)");
+      const sLen = derBytes[offset++];
+      let s = derBytes.slice(offset, offset + sLen);
+      offset += sLen;
+
+      while (r.length > 32 && r[0] === 0) r = r.slice(1);
+      while (s.length > 32 && s[0] === 0) s = s.slice(1);
+
+      const raw = new Uint8Array(64);
+      raw.set(r, 32 - r.length);
+      raw.set(s, 64 - s.length);
+      return raw;
+    }
+
+    async function extractP256PublicKeyFromAttestation(attestationObject) {
+      const decoded = decodeCbor(new Uint8Array(attestationObject));
+      const authData = decoded.get("authData");
+      if (!authData || authData.length < 55) {
+        throw new Error("Invalid authData in attestationObject");
+      }
+      const flags = authData[32];
+      if ((flags & 0x40) === 0) {
+        throw new Error("Attested credential data flag (AT) missing in authData");
+      }
+      const credIdLen = (authData[53] << 8) | authData[54];
+      const coseStart = 55 + credIdLen;
+      const coseBytes = authData.slice(coseStart);
+      const coseMap = decodeCbor(coseBytes);
+
+      const x = coseMap.get(-2);
+      const y = coseMap.get(-3);
+      if (!x || !y || x.length !== 32 || y.length !== 32) {
+        throw new Error("Invalid EC2 P-256 coordinates in COSE key");
+      }
+
+      const rawPoint = new Uint8Array(65);
+      rawPoint[0] = 0x04;
+      rawPoint.set(x, 1);
+      rawPoint.set(y, 33);
+
+      return window.crypto.subtle.importKey(
+        "raw",
+        rawPoint,
+        { name: "ECDSA", namedCurve: "P-256" },
+        true,
+        ["verify"]
+      );
+    }
+
+    async function registerPasskey() {
+      try {
+        setStatus("registering...");
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+        const userId = new Uint8Array([1, 2, 3, 4]);
+
+        const credential = await navigator.credentials.create({
+          publicKey: {
+            rp: { name: "Local Test RP", id: "localhost" },
+            user: { id: userId, name: "testuser@localhost", displayName: "Test User" },
+            challenge: challenge,
+            pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+            authenticatorSelection: {
+              residentKey: "preferred",
+              userVerification: "preferred"
+            },
+            timeout: 60000
+          }
+        });
+
+        if (!credential) {
+          throw new Error("Credential creation returned null");
+        }
+
+        const publicKey = await extractP256PublicKeyFromAttestation(credential.response.attestationObject);
+        window.__registeredCredential = {
+          rawId: credential.rawId,
+          id: credential.id,
+          publicKey: publicKey
+        };
+
+        setStatus("registered");
+        appendLog("Credential ID: " + credential.id);
+        return true;
+      } catch (err) {
+        setStatus(err.name || "Error");
+        appendLog("Registration error: " + err.message);
+        return false;
+      }
+    }
+
+    async function signInPasskey() {
+      try {
+        if (!window.__registeredCredential) {
+          setStatus("Error: Must register first");
+          return false;
+        }
+
+        setStatus("signing in...");
+        const challenge = new Uint8Array(32);
+        window.crypto.getRandomValues(challenge);
+
+        const assertion = await navigator.credentials.get({
+          publicKey: {
+            rpId: "localhost",
+            challenge: challenge,
+            allowCredentials: [{
+              type: "public-key",
+              id: window.__registeredCredential.rawId
+            }],
+            userVerification: "preferred",
+            timeout: 60000
+          }
+        });
+
+        if (!assertion) {
+          throw new Error("Credential get returned null");
+        }
+
+        const authData = new Uint8Array(assertion.response.authenticatorData);
+        const clientDataJSON = new Uint8Array(assertion.response.clientDataJSON);
+        const clientHash = new Uint8Array(await window.crypto.subtle.digest("SHA-256", clientDataJSON));
+
+        const signedData = new Uint8Array(authData.length + clientHash.length);
+        signedData.set(authData, 0);
+        signedData.set(clientHash, authData.length);
+
+        const derSignature = new Uint8Array(assertion.response.signature);
+        const rawSignature = derToP1363(derSignature);
+
+        const isValid = await window.crypto.subtle.verify(
+          { name: "ECDSA", hash: { name: "SHA-256" } },
+          window.__registeredCredential.publicKey,
+          rawSignature,
+          signedData
+        );
+
+        if (!isValid) {
+          throw new Error("Cryptographic signature verification failed");
+        }
+
+        window.__assertion_verified = true;
+        setStatus("assertion verified");
+        console.log("assertion verified");
+        return true;
+      } catch (err) {
+        setStatus(err.name || "Error");
+        appendLog("Assertion error: " + err.message);
+        return false;
+      }
+    }
+  </script>
+</body>
+</html>
