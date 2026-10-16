@@ -402,6 +402,8 @@ source_set("maho_control_activity_service") {
   sources = [
     "ai/maho_control_activity_service.cc",
     "ai/maho_control_activity_service.h",
+    "ui/views/sidebar/maho_sidebar_agent_task_model.cc",
+    "ui/views/sidebar/maho_sidebar_agent_task_model.h",
   ]
   public_deps = [ "//base" ]
   deps = [
@@ -469,6 +471,8 @@ test("maho_control_activity_service_test") {
   sources = [
     "ai/maho_browser_tool_test_main.cc",
     "ai/maho_control_activity_service_unittest.cc",
+    "ui/views/sidebar/maho_sidebar_agent_task_model_unittest.cc",
+    "ui/views/sidebar/maho_sidebar_agent_tasks_policy_unittest.cc",
   ]
   deps = [
     ":maho_control_activity_service",
