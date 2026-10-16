@@ -12,10 +12,19 @@
 #include "base/files/file_util.h"
 #include "base/files/important_file_writer.h"
 #include "base/functional/callback_helpers.h"
+#include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/task/thread_pool.h"
+#include "maho/browser/ai/maho_agent_channel_telegram_transport.h"
+#include "maho/browser/ai/maho_agent_channel_websocket_transport.h"
+#if !defined(MAHO_STANDALONE_TEST)
+#include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/browser_context.h"
+#include "content/public/browser/storage_partition.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#endif
 #if !defined(MAHO_STANDALONE_TEST)
 #include "maho/browser/ai/maho_ai_runtime_adapter.h"
 #include "maho/browser/ai/maho_credential_redaction.h"
@@ -1005,25 +1014,9 @@ base::expected<ChannelRegistry, std::string> ChannelRegistry::DeserializeFromJso
   return reg;
 }
 
-// DefaultChannelHttpTransport Stub Implementation
-DefaultChannelHttpTransport::DefaultChannelHttpTransport() = default;
-DefaultChannelHttpTransport::~DefaultChannelHttpTransport() = default;
-
-void DefaultChannelHttpTransport::FetchEvents(
-    const ChannelConfig& config,
-    const std::optional<std::string>& cursor,
-    FetchCallback callback) {
-  // TODO: Wire real HTTP transport with network::SharedURLLoaderFactory
-  // when external provider endpoints are configured for live traffic.
-  std::vector<ChannelEvent> empty_events;
-  std::move(callback).Run(std::move(empty_events), std::nullopt);
-}
-
 // MahoAgentChannelGateway Implementation
 MahoAgentChannelGateway::MahoAgentChannelGateway()
-    : MahoAgentChannelGateway(std::make_unique<DefaultChannelHttpTransport>(),
-                              nullptr,
-                              {}) {}
+    : MahoAgentChannelGateway(nullptr, nullptr, {}) {}
 
 MahoAgentChannelGateway::MahoAgentChannelGateway(
     std::unique_ptr<ChannelTransport> transport,
@@ -1133,6 +1126,15 @@ void MahoAgentChannelGateway::SetAiRuntimeAdapter(::MahoAiRuntimeAdapter* adapte
 InboundProcessOutcome MahoAgentChannelGateway::ProcessEventDirect(
     const ChannelEvent& event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (pairing_required_) {
+    const std::string principal = PairingPrincipal(event.channel_id,
+                                                   event.sender_id);
+    if (!pairing_.AuthorizeInbound(principal)) {
+      SendPairingCode(event, principal);
+      return InboundProcessOutcome::SenderNotAllowed(event.channel_id,
+                                                     event.sender_id);
+    }
+  }
   InboundProcessOutcome outcome = registry_.ProcessInboundEvent(event);
   if (outcome.is_triggered() && outcome.trigger.has_value()) {
     if (trigger_callback_) {
@@ -1299,6 +1301,128 @@ void MahoAgentChannelGateway::SetTransport(
   transport_ = std::move(transport);
 }
 
+void MahoAgentChannelGateway::SetProviderTransport(
+    std::string channel_id,
+    std::unique_ptr<ChannelTransport> transport) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  provider_transports_[std::move(channel_id)] = std::move(transport);
+}
+
+void MahoAgentChannelGateway::SetProviderTransportFactory(
+    ProviderTransportFactory factory) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  provider_factory_ = std::move(factory);
+}
+
+#if !defined(MAHO_STANDALONE_TEST)
+void MahoAgentChannelGateway::ConfigureProductionTransports(Profile* profile) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  pairing_required_ = true;
+  if (!profile) {
+    provider_factory_.Reset();
+    return;
+  }
+  scoped_refptr<network::SharedURLLoaderFactory> loader_factory =
+      profile->GetDefaultStoragePartition()
+          ->GetURLLoaderFactoryForBrowserProcess();
+  provider_factory_ = base::BindRepeating(
+      [](Profile* profile,
+         scoped_refptr<network::SharedURLLoaderFactory> loader_factory,
+         ChannelProvider provider,
+         const ChannelConfig& config) -> std::unique_ptr<ChannelTransport> {
+        if (!config.token) {
+          return nullptr;
+        }
+        switch (provider) {
+          case ChannelProvider::kTelegram:
+            return CreateTelegramChannelTransport(loader_factory);
+          case ChannelProvider::kSlack:
+            return CreateSlackSocketModeTransport(profile, *config.token);
+          case ChannelProvider::kDiscord:
+            return CreateDiscordGatewayTransport(profile, *config.token);
+          case ChannelProvider::kCustom:
+            return nullptr;
+        }
+        return nullptr;
+      },
+      profile, std::move(loader_factory));
+}
+#endif
+
+ChannelTransport* MahoAgentChannelGateway::TransportForChannel(
+    const ChannelConfig& config) {
+  auto it = provider_transports_.find(config.id);
+  if (it == provider_transports_.end() && provider_factory_) {
+    std::unique_ptr<ChannelTransport> created =
+        provider_factory_.Run(config.provider, config);
+    if (created) {
+      it = provider_transports_.emplace(config.id, std::move(created)).first;
+    }
+  }
+  if (it != provider_transports_.end() && it->second) {
+    return it->second.get();
+  }
+  return transport_.get();
+}
+
+// static
+std::string MahoAgentChannelGateway::PairingPrincipal(
+    const std::string& channel_id,
+    const std::string& sender_id) {
+  return channel_id + ":" + sender_id;
+}
+
+void MahoAgentChannelGateway::SendPairingCode(const ChannelEvent& event,
+                                              const std::string& principal) {
+  const ChannelConfig* config = registry_.GetChannel(event.channel_id);
+  if (!config) {
+    return;
+  }
+  const std::string code =
+      pairing_.IssueCode(principal, base::TimeTicks::Now());
+  if (code.empty()) {
+    return;
+  }
+  // Telegram replies go to the chat the update came from; Slack and Discord
+  // to the conversation the message was posted in.
+  const std::string recipient =
+      event.reply_channel_id.empty() ? event.sender_id : event.reply_channel_id;
+  if (ChannelTransport* transport = TransportForChannel(*config)) {
+    transport->SendText(
+        *config, recipient,
+        "To let this account message Maho, open Maho and approve pairing "
+        "code " + code + ".",
+        base::DoNothing());
+  }
+}
+
+void MahoAgentChannelGateway::SetPairingRequired(bool required) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  pairing_required_ = required;
+}
+
+MahoAgentChannelPairing::ConfirmResult MahoAgentChannelGateway::ApprovePairing(
+    const std::string& channel_id,
+    const std::string& sender_id,
+    std::string_view code) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return pairing_.Confirm(PairingPrincipal(channel_id, sender_id), code,
+                          base::TimeTicks::Now());
+}
+
+void MahoAgentChannelGateway::RevokePairing(const std::string& channel_id,
+                                            const std::string& sender_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  pairing_.Revoke(PairingPrincipal(channel_id, sender_id));
+}
+
+bool MahoAgentChannelGateway::IsSenderPaired(
+    const std::string& channel_id,
+    const std::string& sender_id) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  return pairing_.IsPaired(PairingPrincipal(channel_id, sender_id));
+}
+
 void MahoAgentChannelGateway::SetPollInterval(base::TimeDelta interval) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   poll_interval_ = interval;
@@ -1311,11 +1435,13 @@ void MahoAgentChannelGateway::SetPollInterval(base::TimeDelta interval) {
 void MahoAgentChannelGateway::PollChannelOnce(const std::string& channel_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   const ChannelConfig* config = registry_.GetChannel(channel_id);
-  if (!config || !config->enabled || !transport_) {
+  if (!config || !config->enabled) {
     return;
   }
   auto last_cursor = registry_.GetLastCursor(channel_id);
-  transport_->FetchEvents(
+  ChannelTransport* transport = TransportForChannel(*config);
+  if (!transport) return;
+  transport->FetchEvents(
       *config,
       last_cursor,
       base::BindOnce(&MahoAgentChannelGateway::OnEventsFetched,
