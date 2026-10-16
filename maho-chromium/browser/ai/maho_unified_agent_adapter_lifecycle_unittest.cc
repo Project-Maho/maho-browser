@@ -841,6 +841,9 @@ const MahoAgentFfi kFakeFfi = {
 
 class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
  public:
+  static void ClearPermissionPromptOverride(MahoUnifiedAgentAdapter* adapter) {
+    adapter->permission_prompt_override_for_testing_.Reset();
+  }
   static void ConfigureMailIntegrationAdapter(MahoUnifiedAgentAdapter* adapter) {
     adapter->set_agent_ffi_for_testing(&kFakeFfi);
   }
@@ -3128,7 +3131,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
       base::RepeatingCallback<Browser*()>());
   SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
   // Use the override so the dialog doesn't try to show native UI.
-  adapter_->permission_prompt_override_for_testing_ = {};
+  ClearPermissionPromptOverride(adapter_.get());
 
   adapter_->SubmitMessage("test", maho_ai::mojom::ChatIntent::kFreeform,
                           false, maho_ai::mojom::InteractionMode::kDeveloper,
