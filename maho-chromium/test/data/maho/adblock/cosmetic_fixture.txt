@@ -1,0 +1,14 @@
+! Title: Maho cosmetic parity fixture
+! Served from http://127.0.0.1:8765/ by python -m http.server on the QA host.
+! Generic cosmetic rules
+##.ad-banner
+##.ad-sidebar
+! Procedural rules (site-specific; need adblock css-validation)
+127.0.0.1##.promo-card:has-text(Sponsored)
+127.0.0.1##.upward-marker:upward(2)
+! Cosmetic exception: keep .ad-sidebar on 127.0.0.1 although the generic rule matches
+127.0.0.1#@#.ad-sidebar
+! Site-specific rule that must still apply on the generichide page
+127.0.0.1##.site-specific
+! generichide only for the generichide fixture page
+@@||127.0.0.1^*/generichide_fixture.html$generichide

@@ -150,6 +150,59 @@ fn cosmetic_resources_expose_procedural_actions_and_exceptions() {
     assert!(json.get("exceptions").is_some());
 }
 
+/// The committed cosmetic parity fixture list (todo 10) must compile into
+/// exactly the behavior the fixture pages assert, so a runtime QA failure can
+/// only mean the browser side, never a malformed list.
+#[test]
+fn cosmetic_parity_fixture_list_compiles_to_the_expected_rules() {
+    let list =
+        include_str!("../../../../maho-chromium/test/data/maho/adblock/cosmetic_fixture.txt");
+    let mut cb = ContentBlocker::new();
+    cb.update_filter_list_content("easylist", list.to_string())
+        .unwrap();
+    cb.rebuild_engine_sync();
+    cb.set_mode(ContentBlockingMode::Native);
+
+    let page = cb.get_cosmetic_resources("http://127.0.0.1:8765/cosmetic_fixture.html");
+    assert!(!page.generichide);
+    assert!(
+        page.procedural_actions
+            .iter()
+            .any(|a| a.contains("has-text") && a.contains("Sponsored")),
+        "{:?}",
+        page.procedural_actions
+    );
+    assert!(
+        page.procedural_actions.iter().any(|a| a.contains("upward")),
+        "{:?}",
+        page.procedural_actions
+    );
+    assert_eq!(page.exceptions, vec![".ad-sidebar".to_string()]);
+    let classes = vec![
+        "ad-banner".to_string(),
+        "ad-sidebar".to_string(),
+        "promo-card".to_string(),
+    ];
+    assert_eq!(
+        cb.hidden_class_id_selectors(&classes, &[], &page.exceptions),
+        vec![".ad-banner".to_string()]
+    );
+
+    let generichide = cb.get_cosmetic_resources("http://127.0.0.1:8765/generichide_fixture.html");
+    assert!(
+        generichide.generichide,
+        "generichide page must disable generic rules"
+    );
+    assert!(
+        generichide
+            .hide_selectors
+            .iter()
+            .any(|s| s == ".site-specific"),
+        "site-specific rules still apply under generichide: {:?}",
+        generichide.hide_selectors
+    );
+}
+
 #[test]
 fn hidden_class_id_selectors_match_generic_rules_and_honor_exceptions() {
     let mut cb = ContentBlocker::new();
