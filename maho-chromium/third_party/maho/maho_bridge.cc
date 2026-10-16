@@ -839,6 +839,21 @@ std::string GetCosmeticResources(MahoCore* core, const char* url) {
   return ret;
 }
 
+std::string GetHiddenClassIdSelectors(MahoCore* core,
+                                      const char* request_json) {
+  if (!core || !request_json) {
+    return "[]";
+  }
+  char* result =
+      maho_core_get_hidden_class_id_selectors(core, request_json);
+  if (!result) {
+    return "[]";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+
 std::string GetBoostInjectionCss(MahoCore* core, const char* url) {
   if (!core || !url) {
     return std::string();

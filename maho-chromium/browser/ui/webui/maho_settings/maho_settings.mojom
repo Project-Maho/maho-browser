@@ -611,6 +611,10 @@ struct FilterListInfo {
   int64? last_attempt_timestamp;
   int64? last_success_timestamp;
   uint32 failure_count;
+  uint32 accepted_network_rule_count;
+  uint32 accepted_cosmetic_rule_count;
+  uint32 rejected_rule_count;
+  array<string> rejected_rule_samples;
   uint16? last_status;
   string? last_error;
   int64? next_retry_timestamp;

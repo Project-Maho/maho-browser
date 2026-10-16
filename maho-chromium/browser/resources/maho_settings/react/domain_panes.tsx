@@ -3364,6 +3364,22 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
                          async () => (await handler.removeFilterList(filterList.id)).success)
                          .then(() => undefined)}
                   />
+                  <div className="text-xs text-muted-foreground" data-testid={`filter-diagnostics-${filterList.id}`}>
+                    {filterList.acceptedNetworkRuleCount.toLocaleString()} network rules accepted ·{' '}
+                    {filterList.acceptedCosmeticRuleCount.toLocaleString()} cosmetic rules accepted ·{' '}
+                    {filterList.rejectedRuleCount.toLocaleString()} rules rejected
+                    {filterList.rejectedRuleSamples.length > 0 ? (
+                      <details className="mt-1">
+                        <summary>Show rejected rule samples ({filterList.rejectedRuleSamples.length})</summary>
+                        <ul className="mt-1 list-disc pl-5">
+                          {filterList.rejectedRuleSamples.map((sample, index) => (
+                            <li className="break-all font-mono" key={`${index}-${sample}`}>{sample}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </div>
+                  {hasListError ? <ActionError message={actionError.message} /> : null}
                 </ManagedSettingRow>
               );
             })}

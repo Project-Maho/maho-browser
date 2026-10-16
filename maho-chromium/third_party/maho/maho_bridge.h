@@ -247,6 +247,8 @@ bool SaveContentEngineCache(MahoCore* core, const char* path);
 bool LoadContentEngineCache(MahoCore* core, const char* path);
 
 std::string GetCosmeticResources(MahoCore* core, const char* url);
+std::string GetHiddenClassIdSelectors(MahoCore* core,
+                                      const char* request_json);
 
 std::string GetBoostInjectionCss(MahoCore* core, const char* url);
 

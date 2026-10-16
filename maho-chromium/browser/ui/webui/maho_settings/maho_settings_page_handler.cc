@@ -1716,6 +1716,23 @@ BuildFilterListsOnUIThread() {
     fl->last_success_timestamp = FindInt64(*dict, "lastSuccessTimestamp");
     fl->failure_count =
         static_cast<uint32_t>(dict->FindInt("failureCount").value_or(0));
+    const base::DictValue* breakdown = dict->FindDict("ruleBreakdown");
+    if (breakdown) {
+      fl->accepted_network_rule_count = static_cast<uint32_t>(
+          breakdown->FindInt("acceptedNetwork").value_or(0));
+      fl->accepted_cosmetic_rule_count = static_cast<uint32_t>(
+          breakdown->FindInt("acceptedCosmetic").value_or(0));
+      fl->rejected_rule_count = static_cast<uint32_t>(
+          breakdown->FindInt("rejected").value_or(0));
+      if (const base::ListValue* samples =
+              breakdown->FindList("rejectedSamples")) {
+        for (const base::Value& sample : *samples) {
+          if (const std::string* text = sample.GetIfString()) {
+            fl->rejected_rule_samples.push_back(*text);
+          }
+        }
+      }
+    }
     fl->last_status = FindUint16(*dict, "lastStatus");
     if (const std::string* last_error = dict->FindString("lastError")) {
       fl->last_error = *last_error;
