@@ -4,11 +4,13 @@
 #define MAHO_BROWSER_UI_VIEWS_COMMAND_MAHO_COMMAND_ACTION_HANDLER_H_
 
 #include <string>
+#include <vector>
 
 class Browser;
 
 #include "maho/browser/maho_private_context_policy.h"  // nogncheck
 #include "maho/browser/ui/views/command/maho_command_model.h"
+#include "maho/browser/ui/webui/maho_ai/maho_ai.mojom.h"
 #include "ui/base/window_open_disposition.h"
 
 namespace maho {
@@ -47,7 +49,11 @@ class MahoCommandActionHandler {
   static bool OnQuerySubmitted(Browser* browser,
                                const std::string& query,
                                PaletteAction action,
-                               MahoPrivateContextClass context_class);
+                               MahoPrivateContextClass context_class,
+                               std::vector<maho_ai::mojom::ContextAttachmentPtr>
+                                   attachments = {},
+                               maho_ai::mojom::InteractionMode mode =
+                                   maho_ai::mojom::InteractionMode::kAssistant);
 };
 
 }  // namespace maho

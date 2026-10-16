@@ -77,6 +77,8 @@ source_set("maho_ai") {
     "//maho/browser:maho_artifact_xlsx_processor",
     "//maho/browser:maho_browser_ai_tools",
     "//maho/browser:maho_ai_provider_oauth",
+    "//maho/browser:maho_ai_file_attachment_registry",
+    "//maho/browser:maho_artifact_pdf_processor",
     "//maho/browser:maho_auth_utils",
     "//maho/browser:maho_core_holder",
     "//maho/browser/resources/maho_ai:resources",
@@ -117,6 +119,7 @@ source_set("maho_ai_unittests") {
     "//chrome/test:test_support",
     "//content/test:test_support",
     "//maho/browser/ui/webui/maho_routines:routine_page_handler",
+    "//maho/browser:maho_ai_file_attachment_registry_unittests",
     "//testing/gtest",
   ]
 }

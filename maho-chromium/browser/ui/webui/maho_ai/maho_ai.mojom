@@ -21,6 +21,7 @@ enum ContextSourceKind {
   kHistory,
   kBookmark,
   kFile,
+  kLocalFile,
 };
 
 // A single browser history item returned by SearchHistory.
@@ -95,6 +96,7 @@ struct ContextAttachment {
   string label;
   // URL associated with this attachment. May be empty for non-tab sources.
   string url;
+  string? file_token;
 };
 
 enum ChatIntent {
@@ -129,6 +131,7 @@ struct AskMahoDispatch {
   InteractionMode mode;
   AskMahoContextIntent context_intent;
   string? target_session_id;
+  array<ContextAttachment> attachments;
 };
 
 enum ViewMode {
