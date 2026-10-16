@@ -784,6 +784,12 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                              DeleteAutofillPaymentCallback callback) override;
 
   void GetFilterLists(GetFilterListsCallback callback) override;
+  void SetEpisodicMemory(bool enabled,
+                         bool paused,
+                         const std::vector<std::string>& excluded_domains,
+                         SetEpisodicMemoryCallback callback) override;
+  void ForgetEpisodeSite(const std::string& site,
+                        ForgetEpisodeSiteCallback callback) override;
   void AddFilterList(const std::string& id,
                      const std::string& name,
                      const std::string& url,

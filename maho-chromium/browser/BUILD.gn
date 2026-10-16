@@ -433,6 +433,8 @@ source_set("maho_browser_ai_tools") {
   sources = [
     "ai/maho_ai_page_context_extractor.cc",
     "ai/maho_ai_page_context_extractor.h",
+    "ai/maho_browse_episode_observer.cc",
+    "ai/maho_browse_episode_observer.h",
     "ai/maho_browser_tool_executor.cc",
     "ai/maho_browser_tool_executor.h",
     "ai/maho_capability_broker.cc",
@@ -449,10 +451,17 @@ source_set("maho_browser_ai_tools") {
     ":maho_browser_tool_registry",
     ":maho_page_adapter_registry",
     "//base",
+    "//chrome/browser/profiles:profile",
+    "//chrome/browser/ui/browser_window",
     "//chrome/browser/ui/tabs:tab_strip",
+    "//components/sessions",
     "//content/public/browser",
     "//crypto",
+    "//maho/browser:maho_core_holder",
+    "//maho/browser:maho_private_context_policy",
+    "//maho/browser:maho_tab_id_helper",
     "//maho/browser/mcp:maho_mcp",
+    "//maho/third_party/maho:maho_ffi_headers",
     "//ui/accessibility",
     "//url",
   ]
@@ -477,6 +486,7 @@ source_set("maho_browser_tool_executor_unittests") {
   testonly = true
   sources = [
     "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browse_episode_observer_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",
@@ -498,6 +508,7 @@ source_set("maho_browser_tool_executor_unittests") {
 test("maho_browser_tool_executor_test") {
   sources = [
     "ai/maho_ai_page_context_extractor_unittest.cc",
+    "ai/maho_browse_episode_observer_unittest.cc",
     "ai/maho_browser_tool_executor_unittest.cc",
     "ai/maho_browser_tool_registry_unittest.cc",
     "ai/maho_capability_broker_unittest.cc",

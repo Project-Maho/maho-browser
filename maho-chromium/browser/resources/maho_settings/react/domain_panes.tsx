@@ -17,6 +17,8 @@ import {AiDevelopersPane} from './ai_developers.js';
 import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
 import {ContentBlockerRulesCard} from './content_blocker_rules.js';
 import {ProfilesEditor} from './profiles_editor.js';
+import {MemorySettingsPane} from './memory_settings.js';
+import {SiteSessionsSection} from './site_sessions_section.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
 import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
@@ -339,6 +341,8 @@ export function DomainPaneContent(
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
       return <ContentBlockerPane pane={pane} settings={settings} store={store} />;
+    case 'episodic-memory':
+      return <MemorySettingsPane pane={pane} settings={settings} store={store} />;
     case 'maho-mini':
       return <MahoMiniPane pane={pane} store={store} />;
     case 'mail-signatures':

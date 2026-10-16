@@ -996,6 +996,11 @@ export class PageHandlerRemote {
       cardholderName: string): Promise<{payment?: AutofillPayment | null}>;
   deleteAutofillPayment(id: string): Promise<{success: boolean}>;
   getFilterLists(): Promise<{lists: FilterListInfo[]}>;
+  setEpisodicMemory(
+      enabled: boolean,
+      paused: boolean,
+      excludedDomains: string[]): Promise<{success: boolean}>;
+  forgetEpisodeSite(site: string): Promise<{deletedCount: bigint}>;
   addFilterList(id: string, name: string, url: string): Promise<{
     success: boolean;
     mutation: ContentBlockerMutationResult;

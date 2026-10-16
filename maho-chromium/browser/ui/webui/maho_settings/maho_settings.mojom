@@ -959,6 +959,10 @@ interface PageHandler {
   DeleteAutofillPayment(string id) => (bool success);
 
   GetFilterLists() => (array<FilterListInfo> lists);
+  SetEpisodicMemory(bool enabled,
+                    bool paused,
+                    array<string> excluded_domains) => (bool success);
+  ForgetEpisodeSite(string site) => (int64 deleted_count);
   // `success` mirrors mutation.success for existing JS callers. The structured
   // result carries the bridge error and scheduling truth without optimistic
   // fallback behavior.
