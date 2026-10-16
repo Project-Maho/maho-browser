@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
@@ -44,9 +45,31 @@ net::NetworkTrafficAnnotationTag TrafficAnnotation() {
     })");
 }
 
+#if !defined(OFFICIAL_BUILD)
+constexpr char kMahoTestTelegramBaseUrlSwitch[] = "maho-test-telegram-base-url";
+#endif
+
 std::string TelegramUrl(const ChannelConfig& config, std::string_view method) {
-  return "https://api.telegram.org/bot" + config.token->expose_secret() + "/" +
-         std::string(method);
+  std::string base_url = "https://api.telegram.org/bot";
+#if !defined(OFFICIAL_BUILD)
+  const auto* cmdline = base::CommandLine::ForCurrentProcess();
+  if (cmdline && cmdline->HasSwitch(kMahoTestTelegramBaseUrlSwitch)) {
+    std::string custom =
+        cmdline->GetSwitchValueASCII(kMahoTestTelegramBaseUrlSwitch);
+    if (!custom.empty()) {
+      if (custom.ends_with("/bot")) {
+        base_url = custom;
+      } else if (custom.ends_with("/bot/")) {
+        base_url = custom.substr(0, custom.size() - 1);
+      } else if (custom.ends_with("/")) {
+        base_url = custom + "bot";
+      } else {
+        base_url = custom + "/bot";
+      }
+    }
+  }
+#endif
+  return base_url + config.token->expose_secret() + "/" + std::string(method);
 }
 
 }
