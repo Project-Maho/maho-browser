@@ -1111,6 +1111,22 @@ BuildCatalogInputSchema(const CapabilityDescriptor &descriptor) {
     properties.Set("ref", BuildIntegerSchema("Accessibility element ref."));
     return BuildObjectSchema(std::move(properties), {"ref"});
   }
+  if (name == "browser_screenshot_viewport") {
+    AddOptionalTabId(properties);
+    return BuildObjectSchema(std::move(properties), {});
+  }
+  if (name == "browser_screenshot_area") {
+    AddOptionalTabId(properties);
+    properties.Set("x", BuildIntegerSchema(
+                             "Area origin x in CSS viewport pixels at 100% zoom, relative to the visible viewport's top-left."));
+    properties.Set("y", BuildIntegerSchema(
+                             "Area origin y in CSS viewport pixels at 100% zoom, relative to the visible viewport's top-left."));
+    properties.Set("width", BuildIntegerSchema(
+                                 "Area width in CSS viewport pixels at 100% zoom."));
+    properties.Set("height", BuildIntegerSchema(
+                                  "Area height in CSS viewport pixels at 100% zoom."));
+    return BuildObjectSchema(std::move(properties), {"x", "y", "width", "height"});
+  }
   if (name == "browser_console_messages") {
     AddOptionalTabId(properties);
     properties.Set("limit",

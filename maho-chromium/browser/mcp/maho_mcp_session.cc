@@ -43,6 +43,7 @@
 #include "maho/browser/mcp/maho_mcp_browser_action_handler.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN)
@@ -886,6 +887,8 @@ bool IsTabTargetTool(std::string_view tool_name) {
       "browser_set_viewport_size",
       "browser_screenshot_full",
       "browser_screenshot_element",
+      "browser_screenshot_viewport",
+      "browser_screenshot_area",
       "browser_network_start_capture",
       "browser_network_stop_capture",
       "browser_network_get_har",
@@ -919,6 +922,8 @@ bool IsRefConsumingTool(std::string_view tool_name) {
   return tool_name == "browser_click" || tool_name == "browser_type" ||
          tool_name == "browser_select" ||
          tool_name == "browser_screenshot_element" ||
+         tool_name == "browser_screenshot_viewport" ||
+         tool_name == "browser_screenshot_area" ||
          tool_name == "browser_scroll" || tool_name == "browser_hover" ||
          tool_name == "vault_fill_credential" ||
          tool_name == "vault_fill_totp";
@@ -991,6 +996,8 @@ bool IsSensitiveReadTool(std::string_view tool_name) {
          tool_name == "browser_page_context" ||
          tool_name == "browser_screenshot_full" ||
          tool_name == "browser_screenshot_element" ||
+         tool_name == "browser_screenshot_viewport" ||
+         tool_name == "browser_screenshot_area" ||
          tool_name == "browser_accessibility_snapshot" ||
          tool_name == "page.accessibility_snapshot_v2" ||
          tool_name == "page_accessibility_snapshot_v2" ||
@@ -5572,6 +5579,75 @@ void MahoMcpSession::HandleToolCall(const McpJsonRpcMessage& msg,
     std::string resp =
         framer_.BuildSuccessResponse(msg.id, redacted.get().Clone());
     responses.push_back(std::move(resp));
+    return;
+  }
+
+  if (*tool_name == "browser_screenshot_viewport" ||
+      *tool_name == "browser_screenshot_area") {
+    const bool is_area = *tool_name == "browser_screenshot_area";
+    gfx::Rect requested_area;
+    if (is_area) {
+      const std::optional<int> x = arguments ? arguments->FindInt("x") : std::nullopt;
+      const std::optional<int> y = arguments ? arguments->FindInt("y") : std::nullopt;
+      const std::optional<int> width = arguments ? arguments->FindInt("width") : std::nullopt;
+      const std::optional<int> height = arguments ? arguments->FindInt("height") : std::nullopt;
+      if (!x || !y || !width || !height ||
+          !IsValidScreenshotArea(gfx::Rect(
+              x.value_or(-1), y.value_or(-1), width.value_or(0),
+              height.value_or(0)))) {
+        responses.push_back(framer_.BuildErrorResponse(
+            msg.id, -32602, "Invalid area: x, y, width and height must define a positive area"));
+        return;
+      }
+      requested_area = gfx::Rect(*x, *y, *width, *height);
+    }
+    const int tab_id = use_resolved_target
+                           ? resolved_tab_id
+                           : arguments->FindInt("tab_id").value_or(active_tab_id_);
+    if (!g_browser_delegate || !deferred_response_sender_) {
+      responses.push_back(framer_.BuildErrorResponse(
+          msg.id, -32000, "Screenshot capture unavailable"));
+      return;
+    }
+    DeferredResponseSender sender = terminal_deferred_sender;
+    auto on_capture = base::BindOnce(
+        [](std::optional<base::Value> id, DeferredResponseSender sender,
+           MahoMcpScreenshotResult capture_result) {
+          std::string b64 = std::move(capture_result.png_base64);
+          if (b64.empty() || capture_result.error.has_value()) {
+            const bool invalid_area =
+                capture_result.error == MahoMcpScreenshotError::kEmptyArea ||
+                capture_result.error == MahoMcpScreenshotError::kMissingArea ||
+                capture_result.error == MahoMcpScreenshotError::kOutsideViewport ||
+                capture_result.error == MahoMcpScreenshotError::kInvalidViewport;
+            const int code = invalid_area ? -32602 : -32000;
+            sender.Run(BuildJsonRpcErrorLine(
+                std::move(id), code,
+                code == -32602 ? "Invalid screenshot area"
+                               : "Screenshot capture failed"));
+            return;
+          }
+          base::DictValue result;
+          result.Set("content_type", "image/png");
+          result.Set("data", std::move(b64));
+          auto redacted = MahoMcpFirewall::Wrap(base::Value(std::move(result)));
+          base::DictValue response;
+          response.Set("jsonrpc", "2.0");
+          response.Set("id", id.has_value() ? id->Clone() : base::Value());
+          response.Set("result", redacted.get().Clone());
+          std::string out;
+          base::JSONWriter::Write(base::Value(std::move(response)), &out);
+          out.push_back('\n');
+          sender.Run(std::move(out));
+        },
+        CloneMessageId(msg.id), std::move(sender));
+    if (is_area) {
+      g_browser_delegate->CaptureAreaPngBase64(
+          tab_id, requested_area, std::move(on_capture));
+    } else {
+      g_browser_delegate->CaptureViewportPngBase64(tab_id,
+                                                   std::move(on_capture));
+    }
     return;
   }
 

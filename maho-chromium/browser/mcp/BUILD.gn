@@ -162,6 +162,8 @@ test("maho_mcp_accessibility_handler_test") {
     "//base/test:test_support",
     "//testing/gtest",
     "//ui/accessibility",
+    "//ui/gfx/codec",
+    "//ui/gfx/geometry",
   ]
 }
 
@@ -174,9 +176,16 @@ test("maho_mcp_screenshot_handler_test") {
     ":maho_mcp",
     "//base",
     "//base/test:test_support",
+    # :maho_mcp's session code calls into the input synthesizer and the core
+    # holder; link them the same way maho_mcp_session_test does.
+    "//maho/browser:maho_mcp_integration",
+    "//maho/browser:maho_core_holder",
+    "//maho/third_party/maho:maho_core_prebuilt",
+    "//chrome/test:test_support",
     "//skia",
     "//testing/gtest",
     "//ui/accessibility",
+    "//ui/gfx:test_support",
     "//ui/gfx/codec",
     "//ui/gfx/geometry",
   ]
