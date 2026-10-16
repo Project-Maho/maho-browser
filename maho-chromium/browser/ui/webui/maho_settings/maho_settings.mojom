@@ -630,6 +630,18 @@ struct ContentBlockerStats {
   int64 last_update_timestamp;
 };
 
+struct ContentBlockerTestResult {
+  bool valid_request;
+  bool native_mode;
+  bool site_excepted;
+  bool blocked;
+  bool important;
+  string? matched_filter;
+  string? exception;
+  string? list_id;
+  string? redirect;
+};
+
 struct ContentBlockerMutationResult {
   bool success;
   string? error_code;
@@ -957,6 +969,21 @@ interface PageHandler {
       => (bool success, ContentBlockerMutationResult mutation);
 
   RemoveFilterList(string id)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Explains how the active rules treat one request (diagnostic only).
+  TestContentBlockerRequest(string url, string source_url, string request_type)
+      => (ContentBlockerTestResult result);
+
+  // The user's hand-written rules (pseudo-list "maho-custom"). Saving blank
+  // text removes them; a rejected save keeps the previous rules.
+  GetCustomFilterRules() => (string rules);
+  SaveCustomFilterRules(string rules)
+      => (bool success, ContentBlockerMutationResult mutation);
+
+  // Imports a filter list from the text of a file the user picked in the
+  // page's file chooser. The browser never reads a user-typed path.
+  ImportLocalFilterList(string name, string content)
       => (bool success, ContentBlockerMutationResult mutation);
 
   // Success means compile/install was accepted or coalesced. `stats` is the

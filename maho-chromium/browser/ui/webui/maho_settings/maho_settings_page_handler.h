@@ -791,6 +791,17 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void ToggleFilterList(const std::string& id,
                         bool enabled,
                         ToggleFilterListCallback callback) override;
+  void TestContentBlockerRequest(
+      const std::string& url,
+      const std::string& source_url,
+      const std::string& request_type,
+      TestContentBlockerRequestCallback callback) override;
+  void GetCustomFilterRules(GetCustomFilterRulesCallback callback) override;
+  void SaveCustomFilterRules(const std::string& rules,
+                             SaveCustomFilterRulesCallback callback) override;
+  void ImportLocalFilterList(const std::string& name,
+                             const std::string& content,
+                             ImportLocalFilterListCallback callback) override;
   void RemoveFilterList(const std::string& id,
                         RemoveFilterListCallback callback) override;
   void RebuildContentRules(RebuildContentRulesCallback callback) override;

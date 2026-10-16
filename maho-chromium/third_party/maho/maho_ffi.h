@@ -895,6 +895,52 @@ bool maho_core_set_content_blocking_mode(struct MahoCore *ptr, int32_t mode_code
 char *maho_core_get_content_blocker_state_json(struct MahoCore *ptr);
 
 /**
+ * Explains how the active content blocker treats one request:
+ * `{validRequest,nativeMode,siteExcepted,blocked,important,matchedFilter,
+ * exception,listId,redirect,rewrittenUrl}`. Read-only diagnostic.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; strings must be valid null-terminated UTF-8.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_content_blocker_test_request_json(struct MahoCore *ptr,
+                                                  const char *url,
+                                                  const char *source_url,
+                                                  const char *request_type);
+
+/**
+ * Returns `{"rules": "<text>"}` with the user's custom filter rules.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. Caller frees with `maho_string_free`.
+ */
+char *maho_core_get_custom_rules_json(struct MahoCore *ptr);
+
+/**
+ * Replaces the custom filter rules. Returns a content-blocker mutation
+ * result; a rejected save leaves the previous rules active.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `rules` must be valid null-terminated UTF-8.
+ * Caller frees with `maho_string_free`.
+ */
+char *maho_core_set_custom_rules_json(struct MahoCore *ptr, const char *rules);
+
+/**
+ * Imports a filter list from bytes the user chose in the file picker. The
+ * browser never passes a path. Returns a mutation result plus `listId`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `name` must be valid null-terminated
+ * UTF-8; `bytes` must point to `len` readable bytes (may be null when `len` is 0).
+ * Caller frees with `maho_string_free`.
+ */
+char *maho_core_import_local_filter_list_json(struct MahoCore *ptr,
+                                              const char *name,
+                                              const uint8_t *bytes,
+                                              uintptr_t len);
+
+/**
  * Records one browsing episode when the user's episodic-memory settings
  * allow it. `episode_json` is `{"url","title","summary","is_private_context"}`.
  * Returns `{"recorded":true,"id":...}` or `{"recorded":false,"reason":...}`,

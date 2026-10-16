@@ -658,6 +658,42 @@ std::string GetContentBlockerStateJson(MahoCore* core) {
   return ret;
 }
 
+namespace {
+std::string TakeContentBlockerJson(char* result) {
+  if (!result) {
+    return "{}";
+  }
+  std::string ret(result);
+  maho_string_free(result);
+  return ret;
+}
+}  // namespace
+
+std::string TestContentBlockerRequestJson(MahoCore* core,
+                                          const std::string& url,
+                                          const std::string& source_url,
+                                          const std::string& request_type) {
+  return TakeContentBlockerJson(maho_core_content_blocker_test_request_json(
+      core, url.c_str(), source_url.c_str(), request_type.c_str()));
+}
+
+std::string GetCustomRulesJson(MahoCore* core) {
+  return TakeContentBlockerJson(maho_core_get_custom_rules_json(core));
+}
+
+std::string SetCustomRulesJson(MahoCore* core, const std::string& rules) {
+  return TakeContentBlockerJson(
+      maho_core_set_custom_rules_json(core, rules.c_str()));
+}
+
+std::string ImportLocalFilterListJson(MahoCore* core,
+                                      const std::string& name,
+                                      const std::string& contents) {
+  return TakeContentBlockerJson(maho_core_import_local_filter_list_json(
+      core, name.c_str(), base::as_byte_span(contents).data(),
+      contents.size()));
+}
+
 std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json) {
   char* result = maho_core_episode_record_json(core, episode_json.c_str());
   if (!result) {

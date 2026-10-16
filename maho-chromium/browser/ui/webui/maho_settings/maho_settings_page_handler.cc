@@ -6281,6 +6281,90 @@ void MahoSettingsPageHandler::RemoveFilterList(
   std::move(callback).Run(success, std::move(mutation));
 }
 
+void MahoSettingsPageHandler::TestContentBlockerRequest(
+    const std::string& url,
+    const std::string& source_url,
+    const std::string& request_type,
+    TestContentBlockerRequestCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto result = maho_settings::mojom::ContentBlockerTestResult::New();
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+  std::optional<base::Value> parsed = base::JSONReader::Read(
+      maho::core::TestContentBlockerRequestJson(core, url, source_url,
+                                                request_type),
+      base::JSON_PARSE_RFC);
+  if (parsed && parsed->is_dict()) {
+    const base::DictValue& dict = parsed->GetDict();
+    result->valid_request = dict.FindBool("validRequest").value_or(false);
+    result->native_mode = dict.FindBool("nativeMode").value_or(false);
+    result->site_excepted = dict.FindBool("siteExcepted").value_or(false);
+    result->blocked = dict.FindBool("blocked").value_or(false);
+    result->important = dict.FindBool("important").value_or(false);
+    auto optional_string =
+        [&dict](const char* key) -> std::optional<std::string> {
+      const std::string* value = dict.FindString(key);
+      return value ? std::optional<std::string>(*value) : std::nullopt;
+    };
+    result->matched_filter = optional_string("matchedFilter");
+    result->exception = optional_string("exception");
+    result->list_id = optional_string("listId");
+    result->redirect = optional_string("redirect");
+  }
+  std::move(callback).Run(std::move(result));
+}
+
+void MahoSettingsPageHandler::GetCustomFilterRules(
+    GetCustomFilterRulesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  std::string rules;
+  if (core) {
+    std::optional<base::Value> parsed = base::JSONReader::Read(
+        maho::core::GetCustomRulesJson(core), base::JSON_PARSE_RFC);
+    const std::string* value =
+        parsed && parsed->is_dict() ? parsed->GetDict().FindString("rules")
+                                    : nullptr;
+    if (value) {
+      rules = *value;
+    }
+  }
+  std::move(callback).Run(rules);
+}
+
+void MahoSettingsPageHandler::SaveCustomFilterRules(
+    const std::string& rules,
+    SaveCustomFilterRulesCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  auto mutation =
+      core ? ParseMutationResult(maho::core::SetCustomRulesJson(core, rules))
+           : MutationFailure("core_unavailable",
+                             "content blocker core is unavailable");
+  ScheduleMutationCompile(mutation.get());
+  const bool success = mutation->success;
+  std::move(callback).Run(success, std::move(mutation));
+}
+
+void MahoSettingsPageHandler::ImportLocalFilterList(
+    const std::string& name,
+    const std::string& content,
+    ImportLocalFilterListCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  auto mutation =
+      core ? ParseMutationResult(
+                 maho::core::ImportLocalFilterListJson(core, name, content))
+           : MutationFailure("core_unavailable",
+                             "content blocker core is unavailable");
+  ScheduleMutationCompile(mutation.get());
+  const bool success = mutation->success;
+  std::move(callback).Run(success, std::move(mutation));
+}
+
 void MahoSettingsPageHandler::RebuildContentRules(
     RebuildContentRulesCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
