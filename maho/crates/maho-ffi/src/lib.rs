@@ -3492,7 +3492,10 @@ pub unsafe extern "C" fn maho_core_set_custom_rules_json(
                 return to_json_cstring(&content_blocker_result(
                     Some(core),
                     false,
-                    Some(content_blocker_error("invalid_argument", "rules must be UTF-8 text")),
+                    Some(content_blocker_error(
+                        "invalid_argument",
+                        "rules must be UTF-8 text",
+                    )),
                     false,
                 ));
             };
@@ -3545,7 +3548,10 @@ pub unsafe extern "C" fn maho_core_import_local_filter_list_json(
                 return to_json_cstring(&content_blocker_result(
                     Some(core),
                     false,
-                    Some(content_blocker_error("invalid_argument", "bytes must be non-null")),
+                    Some(content_blocker_error(
+                        "invalid_argument",
+                        "bytes must be non-null",
+                    )),
                     false,
                 ));
             } else {
@@ -3553,13 +3559,9 @@ pub unsafe extern "C" fn maho_core_import_local_filter_list_json(
             };
             match core.import_local_filter_list(&name, data) {
                 Ok(list_id) => {
-                    let mut value = serde_json::to_value(content_blocker_result(
-                        Some(core),
-                        true,
-                        None,
-                        true,
-                    ))
-                    .unwrap_or_default();
+                    let mut value =
+                        serde_json::to_value(content_blocker_result(Some(core), true, None, true))
+                            .unwrap_or_default();
                     value["listId"] = serde_json::Value::String(list_id);
                     to_json_cstring(&value)
                 }
@@ -19787,7 +19789,6 @@ struct VaultPasskeyCreateRequest {
     uv_performed: bool,
 }
 
-
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct VaultPasskeyAssertionRequest {
@@ -19798,9 +19799,6 @@ struct VaultPasskeyAssertionRequest {
     require_uv: bool,
     uv_performed: bool,
 }
-
-
-
 
 /// Creates a Vault-backed passkey (P-256, ES256) for a WebAuthn
 /// registration. Request: {rpId, userIdB64url, userName, displayName,
@@ -19926,8 +19924,6 @@ pub unsafe extern "C" fn maho_vault_passkey_get_assertion_json(
         ptr::null_mut()
     )
 }
-
-
 
 /// Passkey errors use their own stable string codes (uv_required, not_found,
 /// locked, rp_mismatch, invalid_request) in the usual Vault response shape.

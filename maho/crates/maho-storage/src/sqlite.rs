@@ -4545,7 +4545,10 @@ impl SqliteStorage {
             rows.collect::<Result<_, _>>()?
         };
         for id in &ids {
-            tx.execute("DELETE FROM memory_facts WHERE id = ?1", rusqlite::params![id])?;
+            tx.execute(
+                "DELETE FROM memory_facts WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
             tx.execute(
                 "DELETE FROM memory_facts_fts WHERE id = ?1",
                 rusqlite::params![id],

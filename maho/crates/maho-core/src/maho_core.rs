@@ -8109,7 +8109,8 @@ impl MahoCore {
     #[doc(hidden)]
     pub fn adopt_profile_for_sync_test(&mut self, profile: maho_types::profile::ProfileConfig) {
         let id = profile.id.clone();
-        self.profile_manager.restore_profiles(vec![profile], Some(id.clone()));
+        self.profile_manager
+            .restore_profiles(vec![profile], Some(id.clone()));
         if let Some(sm) = self.sync_manager.as_mut() {
             sm.set_active_profile_id(Some(id.to_string()));
         }
@@ -9688,7 +9689,8 @@ impl MahoCore {
         source_url: &str,
         request_type: &str,
     ) -> crate::content_blocker::TestRequestResult {
-        self.content_blocker.test_request(url, source_url, request_type)
+        self.content_blocker
+            .test_request(url, source_url, request_type)
     }
 
     pub fn get_custom_filter_rules(&self) -> String {
@@ -12516,7 +12518,10 @@ impl MahoCore {
         let previous = self.site_session_opted_origins();
         let storage = self.storage.as_ref().ok_or("storage is not open")?;
         storage
-            .set_setting(&key, &serde_json::to_string(&next).map_err(|e| e.to_string())?)
+            .set_setting(
+                &key,
+                &serde_json::to_string(&next).map_err(|e| e.to_string())?,
+            )
             .map_err(|e| e.to_string())?;
         let removed: Vec<String> = previous
             .origins()
@@ -12586,7 +12591,8 @@ impl MahoCore {
                 continue;
             };
             let Some(payload) = payload else { continue };
-            let Ok(record) = serde_json::from_str::<crate::sync_models::SiteSessionRecord>(&payload)
+            let Ok(record) =
+                serde_json::from_str::<crate::sync_models::SiteSessionRecord>(&payload)
             else {
                 continue;
             };
@@ -12626,10 +12632,14 @@ impl MahoCore {
         let Ok(record) =
             serde_json::from_str::<crate::sync_models::SiteSessionRecord>(&entity.payload_json)
         else {
-            eprintln!("[sync] Rejected malformed site session {}", entity.entity_id);
+            eprintln!(
+                "[sync] Rejected malformed site session {}",
+                entity.entity_id
+            );
             return;
         };
-        let Ok(canonical) = crate::sync_models::canonical_site_session_origin(&record.origin) else {
+        let Ok(canonical) = crate::sync_models::canonical_site_session_origin(&record.origin)
+        else {
             eprintln!("[sync] Rejected site session with invalid origin");
             return;
         };
@@ -12647,7 +12657,11 @@ impl MahoCore {
 
     /// Hands the accepted remote site sessions to the browser exactly once.
     pub fn take_site_session_applies(&mut self) -> Vec<crate::sync_models::SiteSessionRecord> {
-        let mut records: Vec<_> = self.pending_site_session_applies.drain().map(|(_, r)| r).collect();
+        let mut records: Vec<_> = self
+            .pending_site_session_applies
+            .drain()
+            .map(|(_, r)| r)
+            .collect();
         records.sort_by(|a, b| a.origin.cmp(&b.origin));
         records
     }
