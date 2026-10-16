@@ -10,6 +10,7 @@
 #include <string_view>
 #include <utility>
 
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -23,6 +24,7 @@
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/thread_annotations.h"
+#include "base/threading/platform_thread.h"
 #include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
@@ -33,6 +35,17 @@
 #include "maho/third_party/maho/maho_ffi.h"
 
 struct MahoCore;
+
+#if !defined(OFFICIAL_BUILD)
+// maho_core_debug_induce_panic is declared by maho_ffi.h under
+// MAHO_FFI_DEBUG_TEST_HOOKS, which third_party/maho/BUILD.gn defines for every
+// non-official build (matching the debug-test-hooks cargo feature).
+#if !defined(MAHO_FFI_DEBUG_TEST_HOOKS)
+#error "non-official builds must define MAHO_FFI_DEBUG_TEST_HOOKS"
+#endif
+constexpr char kMahoTestCorePanicSwitch[] = "maho-test-core-panic";
+constexpr char kMahoTestCoreHangSwitch[] = "maho-test-core-hang";
+#endif
 
 namespace maho {
 
@@ -306,6 +319,31 @@ void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
     }
     g_core.store(core, std::memory_order_release);
   }
+#if !defined(OFFICIAL_BUILD)
+  if (core) {
+    static std::atomic<bool> s_test_switches_checked{false};
+    if (!s_test_switches_checked.exchange(true)) {
+      const auto* cmdline = base::CommandLine::ForCurrentProcess();
+      if (cmdline && cmdline->HasSwitch(kMahoTestCorePanicSwitch)) {
+        GetCoreTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce([]() {
+              LOG(WARNING) << "Maho: executing --maho-test-core-panic";
+              maho_core_debug_induce_panic();
+            }));
+      }
+      if (cmdline && cmdline->HasSwitch(kMahoTestCoreHangSwitch)) {
+        const uint64_t watchdog_task_id =
+            BeginWatchedCoreTask(CoreOperationClass::kInteractive);
+        GetCoreTaskRunner()->PostTask(
+            FROM_HERE, base::BindOnce([](uint64_t task_id) {
+              LOG(WARNING) << "Maho: executing --maho-test-core-hang (sleeping 200s)";
+              base::PlatformThread::Sleep(base::Seconds(200));
+              EndWatchedCoreTask(task_id);
+            }, watchdog_task_id));
+      }
+    }
+  }
+#endif
   auto publish = base::BindOnce(
       [](uint64_t generation, bool ready, std::vector<CoreTabFacts> facts) {
         if (generation != GetCoreGeneration()) {
