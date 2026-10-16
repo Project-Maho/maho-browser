@@ -504,6 +504,7 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       {accountSection}
       <div className="mt-6">
         <SyncConnectionSection store={store} />
+        <SiteSessionsSection handler={store.getHandler()} />
       </div>
     </PaneShell>
   );
