@@ -31,7 +31,6 @@ export type {
   FilterListInfo,
   MailBehaviorSnapshot,
   MailBehaviorUpdateResult,
-  FilterListInfo,
   GeneratedPasswordResult,
   PasswordGeneratorOptions,
   PasswordImportOperationResult,
