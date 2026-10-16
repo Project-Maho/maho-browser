@@ -822,6 +822,10 @@ if (is_mac) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -843,6 +847,10 @@ if (is_win) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
@@ -865,6 +873,10 @@ if (is_linux) {
       "ui/views/maho_mini/maho_mini_window.h",
       "ui/views/maho_mini/maho_mini_top_bar_view.cc",
       "ui/views/maho_mini/maho_mini_top_bar_view.h",
+      "ui/views/maho_mini/maho_mini_shortcut.cc",
+      "ui/views/maho_mini/maho_mini_shortcut.h",
+      "ui/views/maho_mini/maho_mini_state_policy.cc",
+      "ui/views/maho_mini/maho_mini_state_policy.h",
     ]
     deps = [
       "//base",
