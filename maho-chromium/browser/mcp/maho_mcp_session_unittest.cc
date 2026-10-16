@@ -26,6 +26,10 @@
 #include "base/test/task_environment.h"
 #include "base/values.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
+#include "maho/browser/mcp/maho_mcp_controller_pairing.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
+#include "components/prefs/testing_pref_service.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -3652,9 +3656,12 @@ TEST_F(MahoMcpSessionTest, ScreenshotViewportUsesViewportCaptureDelegate) {
   const base::Value output = ParseExecutionOutput(response);
   const base::DictValue* result = output.GetIfDict();
   ASSERT_TRUE(result);
-  EXPECT_EQ(result->FindString("data"),
-            delegate_->next_screenshot_png_b64);
-  EXPECT_EQ(result->FindString("content_type"), "image/png");
+  const std::string* data = result->FindString("data");
+  ASSERT_TRUE(data);
+  EXPECT_EQ(*data, delegate_->next_screenshot_png_b64);
+  const std::string* content_type = result->FindString("content_type");
+  ASSERT_TRUE(content_type);
+  EXPECT_EQ(*content_type, "image/png");
 }
 
 TEST_F(MahoMcpSessionTest, ScreenshotAreaUsesAreaCaptureDelegate) {
@@ -7405,6 +7412,241 @@ TEST_F(MahoMcpSessionTest, BrowserObserveAcceptsPaginationArgs) {
   const std::string* text = result->FindString("text");
   ASSERT_TRUE(text);
   EXPECT_FALSE(text->empty());
+}
+
+// ---------------------------------------------------------------------------
+// Todo 67: controller pairing gate on the MCP session.
+// ---------------------------------------------------------------------------
+
+class MahoMcpSessionControllerPairingGateTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    ASSERT_TRUE(dir_.CreateUniqueTempDir());
+    MahoMcpPairingCoordinator::RegisterLocalStatePrefs(prefs_.registry());
+    coordinator_.Configure(
+        &prefs_, dir_.GetPath(),
+        base::BindRepeating(
+            [](MahoMcpSessionControllerPairingGateTest* self,
+               const std::string&, const std::string&,
+               base::OnceCallback<void(bool)> decision) {
+              ++self->prompts_;
+              self->decision_ = std::move(decision);
+            },
+            base::Unretained(this)));
+  }
+
+  std::unique_ptr<MahoMcpSession> Connect(bool browser_owned,
+                                          const std::string& extra_params) {
+    auto session = MakeTrustedCliTestSession();
+    session->SetPairing(&coordinator_, browser_owned);
+    session->SetDeferredResponseSender(base::BindRepeating(
+        [](std::vector<std::string>* out, std::string line) {
+          out->push_back(std::move(line));
+        },
+        &deferred_));
+    const auto responses = session->ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"initialize","id":1,)"
+        R"("params":{"protocolVersion":"2025-03-26","controllerKind":"maho-cli",)"
+        R"("clientInfo":{"name":"maho","version":"1"}%s}})"
+        "\n",
+        extra_params.c_str()));
+    EXPECT_EQ(responses.size(), 1u);
+    return session;
+  }
+
+  static base::DictValue Parse(const std::string& line) {
+    std::optional<base::Value> value = base::JSONReader::Read(line,
+        base::JSON_PARSE_RFC);
+    CHECK(value && value->is_dict()) << line;
+    return std::move(value->GetDict());
+  }
+
+  static std::optional<int> ErrorCode(const std::string& line) {
+    const base::DictValue dict = Parse(line);
+    const base::DictValue* error = dict.FindDict("error");
+    return error ? error->FindInt("code") : std::nullopt;
+  }
+
+  std::vector<std::string> Call(MahoMcpSession& session,
+                                const char* method,
+                                const char* params,
+                                int id) {
+    return session.ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"%s","id":%d,"params":%s})"
+        "\n",
+        method, id, params));
+  }
+
+  std::vector<std::string> CallTool(MahoMcpSession& session,
+                                    const char* name,
+                                    int id) {
+    return session.ProcessData(base::StringPrintf(
+        R"({"jsonrpc":"2.0","method":"tools/call","id":%d,)"
+        R"("params":{"name":"%s","arguments":{"tab_id":7,"url":"https://e.test"}}})"
+        "\n",
+        id, name));
+  }
+
+  // Approves a pairing for the maho-cli kind and returns (id, token).
+  std::pair<std::string, std::string> PairOnce() {
+    auto session = Connect(false, "");
+    const auto required = CallTool(*session, "browser_navigate", 2);
+    EXPECT_EQ(ErrorCode(required.at(0)), kMahoMcpErrorPairingRequired);
+    std::move(decision_).Run(true);
+    task_environment_.RunUntilIdle();
+    const base::ListValue list = coordinator_.List();
+    CHECK_EQ(list.size(), 1u);
+    const std::string id = *list.front().GetDict().FindString("controllerId");
+    std::string token;
+    CHECK(base::ReadFileToString(MahoMcpControllerPairing::TokenFilePath(
+                                     dir_.GetPath(), "maho-cli", id),
+                                 &token));
+    return {id, token};
+  }
+
+  base::test::TaskEnvironment task_environment_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  base::ScopedTempDir dir_;
+  TestingPrefServiceSimple prefs_;
+  MahoMcpPairingCoordinator coordinator_;
+  int prompts_ = 0;
+  base::OnceCallback<void(bool)> decision_;
+  std::vector<std::string> deferred_;
+};
+
+TEST_F(MahoMcpSessionControllerPairingGateTest,
+       UnpairedControlCallIsRejectedAndPromptsOnce) {
+  auto session = Connect(false, "");
+  const auto first = CallTool(*session, "browser_navigate", 2);
+  ASSERT_EQ(first.size(), 1u);
+  EXPECT_EQ(ErrorCode(first[0]), kMahoMcpErrorPairingRequired);
+  const base::DictValue first_response = Parse(first[0]);
+  const base::DictValue* data =
+      first_response.FindDict("error")->FindDict("data");
+  ASSERT_TRUE(data);
+  EXPECT_EQ(*data->FindString("pairing"), "pending");
+  const std::string request_id = *data->FindString("requestId");
+  // A retry while pending does not open a second prompt.
+  const auto second = CallTool(*session, "browser_navigate", 3);
+  EXPECT_EQ(ErrorCode(second.at(0)), kMahoMcpErrorPairingRequired);
+  EXPECT_EQ(prompts_, 1);
+  // Discovery stays available while unpaired.
+  const auto list = Call(*session, "tools/list", "{}", 4);
+  EXPECT_FALSE(ErrorCode(list.at(0)).has_value());
+  // Await resolves through the deferred channel once the user decides.
+  const auto pending = Call(
+      *session, "maho/pairing/await",
+      base::StringPrintf(R"({"requestId":"%s"})", request_id.c_str()).c_str(),
+      5);
+  EXPECT_TRUE(pending.empty());
+  std::move(decision_).Run(true);
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(deferred_.size(), 1u);
+  const base::DictValue awaited = Parse(deferred_[0]);
+  EXPECT_EQ(*awaited.FindDict("result")->FindString("status"), "approved");
+  // The token itself never travels over MCP.
+  EXPECT_EQ(deferred_[0].find("token"), std::string::npos);
+  // The approved connection itself is now paired without a second prompt.
+  for (const std::string& line : CallTool(*session, "browser_navigate", 6)) {
+    EXPECT_NE(ErrorCode(line), kMahoMcpErrorPairingRequired);
+  }
+  EXPECT_TRUE(session->pairing_paired_for_testing());
+  EXPECT_EQ(prompts_, 1);
+}
+
+TEST_F(MahoMcpSessionControllerPairingGateTest, DeniedAndTimedOutStayUnpaired) {
+  auto session = Connect(false, "");
+  const auto denied = CallTool(*session, "browser_navigate", 2);
+  const std::string denied_id = *Parse(denied.at(0))
+                                     .FindDict("error")
+                                     ->FindDict("data")
+                                     ->FindString("requestId");
+  std::move(decision_).Run(false);
+  task_environment_.RunUntilIdle();
+  const auto status = Call(
+      *session, "maho/pairing/await",
+      base::StringPrintf(R"({"requestId":"%s"})", denied_id.c_str()).c_str(),
+      3);
+  EXPECT_EQ(*Parse(status.at(0)).FindDict("result")->FindString("status"),
+            "denied");
+
+  // A new control call starts a new request; leaving it unanswered expires it.
+  const auto retry = CallTool(*session, "browser_navigate", 4);
+  const std::string expired_id = *Parse(retry.at(0))
+                                      .FindDict("error")
+                                      ->FindDict("data")
+                                      ->FindString("requestId");
+  EXPECT_NE(expired_id, denied_id);
+  task_environment_.FastForwardBy(MahoMcpPairingCoordinator::kPendingTimeout);
+  const auto expired = Call(
+      *session, "maho/pairing/await",
+      base::StringPrintf(R"({"requestId":"%s"})", expired_id.c_str()).c_str(),
+      5);
+  EXPECT_EQ(*Parse(expired.at(0)).FindDict("result")->FindString("status"),
+            "expired");
+  EXPECT_EQ(ErrorCode(CallTool(*session, "browser_navigate", 6).at(0)),
+            kMahoMcpErrorPairingRequired);
+  EXPECT_TRUE(coordinator_.List().empty());
+}
+
+TEST_F(MahoMcpSessionControllerPairingGateTest,
+       PairedControllerPassesGateAndCanListAndRevoke) {
+  const auto [id, token] = PairOnce();
+  auto session = Connect(
+      false, base::StringPrintf(R"(,"pairingToken":"%s","controllerId":"%s")",
+                                token.c_str(), id.c_str()));
+  EXPECT_TRUE(session->pairing_paired_for_testing());
+  // The gate lets the call through (the tool itself may fail without a
+  // browser delegate, but never with a pairing error).
+  const auto call = CallTool(*session, "browser_navigate", 2);
+  for (const std::string& line : call) {
+    EXPECT_NE(ErrorCode(line), kMahoMcpErrorPairingRequired);
+    EXPECT_NE(ErrorCode(line), kMahoMcpErrorPairingRevoked);
+  }
+  const auto list = Call(*session, "maho/controllers/list", "{}", 3);
+  const base::DictValue list_response = Parse(list.at(0));
+  const base::ListValue* controllers = list_response.FindList("result");
+  ASSERT_TRUE(controllers);
+  ASSERT_EQ(controllers->size(), 1u);
+  EXPECT_EQ(list[0].find(token), std::string::npos);
+
+  const auto revoke = Call(
+      *session, "maho/controllers/revoke",
+      base::StringPrintf(R"({"controllerId":"%s"})", id.c_str()).c_str(), 4);
+  EXPECT_EQ(*Parse(revoke.at(0)).FindDict("result")->FindBool("revoked"),
+            true);
+  // Revoking our own pairing closes the session.
+  EXPECT_EQ(session->state(), MahoMcpSession::State::kClosed);
+
+  // Reconnecting with the revoked token reports -32015 on control calls.
+  auto again = Connect(
+      false, base::StringPrintf(R"(,"pairingToken":"%s","controllerId":"%s")",
+                                token.c_str(), id.c_str()));
+  EXPECT_EQ(ErrorCode(CallTool(*again, "browser_navigate", 2).at(0)),
+            kMahoMcpErrorPairingRevoked);
+}
+
+TEST_F(MahoMcpSessionControllerPairingGateTest, ForgedTokenIsNotPaired) {
+  const auto [id, token] = PairOnce();
+  auto session = Connect(
+      false,
+      base::StringPrintf(R"(,"pairingToken":"%s","controllerId":"%s")",
+                         std::string(64, '0').c_str(), id.c_str()));
+  EXPECT_FALSE(session->pairing_paired_for_testing());
+  EXPECT_EQ(ErrorCode(CallTool(*session, "browser_navigate", 2).at(0)),
+            kMahoMcpErrorPairingRequired);
+  EXPECT_EQ(ErrorCode(Call(*session, "maho/controllers/list", "{}", 3).at(0)),
+            kMahoMcpErrorPairingRequired);
+}
+
+TEST_F(MahoMcpSessionControllerPairingGateTest,
+       BrowserOwnedAgentIsExemptFromPairing) {
+  auto session = Connect(true, "");
+  const auto call = CallTool(*session, "browser_navigate", 2);
+  for (const std::string& line : call) {
+    EXPECT_NE(ErrorCode(line), kMahoMcpErrorPairingRequired);
+  }
+  EXPECT_EQ(prompts_, 0);
 }
 
 } // namespace
