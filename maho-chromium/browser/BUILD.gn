@@ -1051,6 +1051,7 @@ source_set("maho_space_profile_bridge") {
     "//base",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
+    "//maho/browser/mcp:maho_mcp",
   ]
 }
 

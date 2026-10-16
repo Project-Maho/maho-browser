@@ -43,6 +43,8 @@
 #include "maho/browser/maho_private_context_policy.h"
 #include "maho/browser/ui/views/maho_mini/maho_mini_window.h"
 
+#include "maho/browser/mcp/maho_mcp_controller_pairing.h"
+
 #if BUILDFLAG(IS_WIN)
 #include "maho/browser/mcp/maho_mcp_pipe_server_win.h"
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
@@ -56,6 +58,7 @@
 #include "base/containers/span.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
+#include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/browser_process.h"
@@ -85,6 +88,7 @@
 #include "chrome/browser/ui/tabs/tab_enums.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/browser/ui/browser_window/public/global_browser_collection.h"  // nogncheck
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/bookmarks/common/bookmark_pref_names.h"
@@ -6445,6 +6449,42 @@ std::string FormatMailActionDetails(const std::string& action_name,
   base::WeakPtrFactory<MahoMcpBrowserDelegateImpl> weak_factory_{this};
 };
 
+// Asks the user to approve a local MCP controller. Uses a native question
+// box parented to the last active browser window so it works without an open
+// AI panel; the coordinator times the request out after 120 s.
+void PresentMcpControllerPairingApproval(
+    const std::string& kind,
+    const std::string& name,
+    base::OnceCallback<void(bool)> decision) {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  BrowserWindowInterface* last_active = nullptr;
+  if (GlobalBrowserCollection* collection =
+          GlobalBrowserCollection::GetInstance()) {
+    last_active = collection->GetLastActiveBrowser();
+  }
+  Browser* browser = static_cast<Browser*>(last_active);
+  if (!browser || !browser->GetWindow()) {
+    // No window to ask in: fail closed.
+    std::move(decision).Run(false);
+    return;
+  }
+  const std::u16string message = base::UTF8ToUTF16(base::StrCat(
+      {"\"", name, "\" (", kind,
+       ") wants to control Maho on this computer: open tabs, click, type and "
+       "read pages. Allow it? You can revoke it later with "
+       "\"maho controllers revoke\"."}));
+  chrome::ShowQuestionMessageBoxAsync(
+      browser->GetWindow()->GetNativeWindow(), u"Allow local controller?",
+      message,
+      base::BindOnce(
+          [](base::OnceCallback<void(bool)> decision,
+             chrome::MessageBoxResult result) {
+            std::move(decision).Run(result ==
+                                    chrome::MESSAGE_BOX_RESULT_YES);
+          },
+          std::move(decision)));
+}
+
 MahoMcpBrowserDelegateImpl* GetMcpBrowserDelegate() {
   static base::NoDestructor<MahoMcpBrowserDelegateImpl> mcp_delegate;
   return mcp_delegate.get();
@@ -6565,6 +6605,7 @@ void MahoBrowserMainExtraParts::PostProfileInit(Profile* profile,
 }
 
 void MahoBrowserMainExtraParts::PostMainMessageLoopRun() {
+  maho::MahoMcpPairingCoordinator::Get()->Reset();
 #if BUILDFLAG(IS_WIN)
   if (mcp_pipe_server_) {
     content::GetIOThreadTaskRunner({})->PostTask(
@@ -7146,6 +7187,20 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
   if (p && p->IsDefaultValue()) {
     SessionStartupPref::SetStartupPref(
         profile, SessionStartupPref(SessionStartupPref::LAST));
+  }
+
+  // MCP controller pairing (todo 67): local controllers other than the
+  // browser's own agent must be approved once by the user. Tokens live under
+  // <user-data-dir>/controllers/<kind>/ where maho-browser-mcp looks for them.
+  {
+    base::FilePath pairing_user_data_dir;
+    if (g_browser_process && g_browser_process->local_state() &&
+        base::PathService::Get(chrome::DIR_USER_DATA,
+                               &pairing_user_data_dir)) {
+      maho::MahoMcpPairingCoordinator::Get()->Configure(
+          g_browser_process->local_state(), pairing_user_data_dir,
+          base::BindRepeating(&PresentMcpControllerPairingApproval));
+    }
   }
 
   // MCP server
