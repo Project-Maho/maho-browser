@@ -3829,6 +3829,32 @@ char *maho_vault_password_strength_json(struct MahoCore *core, const char *reque
 char *maho_vault_status_json(struct MahoCore *core);
 
 /**
+ * Creates a Vault-backed passkey (P-256, ES256) for a WebAuthn
+ * registration. Request: {rpId, userIdB64url, userName, displayName,
+ * requireUv, uvPerformed}; response data: {credentialId, publicKeyCose,
+ * itemId} (binary fields base64url without padding). Errors: uv_required,
+ * invalid_request, locked.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` a NUL-terminated UTF-8 JSON string.
+ * The returned string is freed with `maho_string_free`.
+ */
+char *maho_vault_passkey_create_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Signs a WebAuthn assertion with a Vault passkey bound to `rpId`.
+ * Request: {rpId, clientDataHash, allowCredentialIds?, requireUv,
+ * uvPerformed}; response data: {credentialId, authenticatorData, signature,
+ * userHandle} (base64url). The sign counter is incremented and persisted.
+ * Errors: uv_required, not_found, locked, rp_mismatch, invalid_request.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` a NUL-terminated UTF-8 JSON string.
+ * The returned string is freed with `maho_string_free`.
+ */
+char *maho_vault_passkey_get_assertion_json(struct MahoCore *core, const char *request_json);
+
+/**
  * Returns the effective default agent Vault policy from durable storage.
  *
  * # Safety

@@ -531,6 +531,55 @@ _MAHO_TRANSLATE_BUBBLE_COMMENT_TAIL: Final[str] = (
 
 
 REPLACEMENTS: dict[str, list[Replacement]] = {
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.h": [
+        Replacement(
+            old=(
+                "  // content::AuthenticatorRequestClientDelegate:\n"
+                "  void SetRelyingPartyId(const std::string& rp_id) override;\n"
+            ),
+            new=(
+                "  // content::AuthenticatorRequestClientDelegate:\n"
+                "  std::vector<std::unique_ptr<device::FidoDiscoveryBase>>\n"
+                "  CreatePlatformDiscoveries() override;\n"
+                "  void SetRelyingPartyId(const std::string& rp_id) override;\n"
+            ),
+            description="Maho: declare Vault WebAuthn platform discovery override",
+            guard="  CreatePlatformDiscoveries() override;\n",
+        ),
+    ],
+    "chrome/browser/webauthn/chrome_authenticator_request_delegate.cc": [
+        Replacement(
+            old=(
+                '#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"\n'
+            ),
+            new=(
+                '#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"\n'
+                '#include "maho/browser/webauthn/maho_vault_passkey_discovery.h"\n'
+            ),
+            description="Maho: include Vault WebAuthn discovery in Chrome delegate",
+            guard='#include "maho/browser/webauthn/maho_vault_passkey_discovery.h"',
+        ),
+        Replacement(
+            old=(
+                "void ChromeAuthenticatorRequestDelegate::SetRelyingPartyId(\n"
+            ),
+            new=(
+                "std::vector<std::unique_ptr<device::FidoDiscoveryBase>>\n"
+                "ChromeAuthenticatorRequestDelegate::CreatePlatformDiscoveries() {\n"
+                "  std::vector<std::unique_ptr<device::FidoDiscoveryBase>> discoveries;\n"
+                "  auto* rfh = GetRenderFrameHost();\n"
+                "  if (rfh && !rfh->GetBrowserContext()->IsOffTheRecord()) {\n"
+                "    discoveries = maho::CreateVaultPasskeyDiscoveries(rfh);\n"
+                "  }\n"
+                "  return discoveries;\n"
+                "}\n"
+                "\n"
+                "void ChromeAuthenticatorRequestDelegate::SetRelyingPartyId(\n"
+            ),
+            description="Maho: provide Vault-backed platform discovery",
+            guard="ChromeAuthenticatorRequestDelegate::CreatePlatformDiscoveries()",
+        ),
+    ],
     # ── Xcode 27 rejects Mach-O whose LINKEDIT string pool is misaligned ───────
     # Chromium links with llvm-strip -x -S. When the indirect symbol count is
     # odd, stroff ends up 4-byte aligned (e.g. Maho Framework at 0x0F9260CC), and
@@ -12672,6 +12721,10 @@ def normalize_gn_stale_deps(text: str, relative_path: str = "") -> tuple[str, in
 
 
 _CHROME_BROWSER_UI_SOURCES: Final[tuple[str, ...]] = (
+    "//maho/browser/webauthn/maho_vault_passkey_authenticator.cc",
+    "//maho/browser/webauthn/maho_vault_passkey_authenticator.h",
+    "//maho/browser/webauthn/maho_vault_passkey_discovery.cc",
+    "//maho/browser/webauthn/maho_vault_passkey_discovery.h",
     "//maho/browser/maho_browser_main_extra_parts.cc",
     "//maho/browser/maho_browser_main_extra_parts.h",
     "//maho/browser/maho_routines_scheduler.cc",
