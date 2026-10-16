@@ -198,7 +198,9 @@ fn shell_exec_runs_inside_the_app_container_and_captures_output() {
         cli_tool(r#"["cmd.exe", "/c", "echo", "confined-ok"]"#),
         Some(workdir.path().to_path_buf()),
     );
-    let result = runtime.block_on(echo.execute(serde_json::json!({}))).unwrap();
+    let result = runtime
+        .block_on(echo.execute(serde_json::json!({})))
+        .unwrap();
     assert!(
         result["stdout"].as_str().unwrap().contains("confined-ok"),
         "{result}"
@@ -225,7 +227,10 @@ fn shell_exec_runs_inside_the_app_container_and_captures_output() {
         .block_on(copy.execute(serde_json::json!({"path": outside_file.to_string_lossy()})))
         .unwrap();
     assert_ne!(result["exit_code"], 0, "{result}");
-    assert!(!outside_file.exists(), "confined shell_exec wrote outside its root");
+    assert!(
+        !outside_file.exists(),
+        "confined shell_exec wrote outside its root"
+    );
 
     // The same copy into the working directory succeeds.
     let inside_file = workdir.path().join("inside.txt");

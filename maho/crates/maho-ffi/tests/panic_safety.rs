@@ -135,7 +135,8 @@ fn debug_induce_panic_export_is_contained() {
 
 #[test]
 fn release_profile_unwinds() {
-    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml")).unwrap();
+    let manifest =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml")).unwrap();
     let release = manifest
         .split("[profile.release]")
         .nth(1)
@@ -145,7 +146,10 @@ fn release_profile_unwinds() {
         .unwrap();
     assert!(release.contains("panic = \"unwind\""), "{release}");
     if !cfg!(debug_assertions) {
-        assert!(cfg!(panic = "unwind"), "this release test binary was built with panic=abort");
+        assert!(
+            cfg!(panic = "unwind"),
+            "this release test binary was built with panic=abort"
+        );
     }
 }
 
@@ -155,7 +159,8 @@ fn release_profile_unwinds() {
 /// of trivially panic-free exports below.
 #[test]
 fn every_no_mangle_export_contains_panics() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
+    let source =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs")).unwrap();
     let unwrapped = unwrapped_exports(&source);
     assert!(
         unwrapped.is_empty(),
@@ -166,7 +171,10 @@ fn every_no_mangle_export_contains_panics() {
 #[test]
 fn audit_flags_an_unwrapped_export() {
     let fixture = "#[no_mangle]\npub extern \"C\" fn maho_new_unwrapped() -> bool {\n    true\n}\n";
-    assert_eq!(unwrapped_exports(fixture), vec!["maho_new_unwrapped".to_string()]);
+    assert_eq!(
+        unwrapped_exports(fixture),
+        vec!["maho_new_unwrapped".to_string()]
+    );
 }
 
 const REVIEWED_PANIC_FREE: &[&str] = &[

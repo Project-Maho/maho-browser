@@ -707,7 +707,10 @@ impl ContentBlocker {
             .any(|list| list.id == resp.list_id && is_local_filter_list_url(&list.url))
         {
             return Err(ContentBlockingError::InvalidUpdateBody {
-                reason: format!("local filter list is not updated from the network: {}", resp.list_id),
+                reason: format!(
+                    "local filter list is not updated from the network: {}",
+                    resp.list_id
+                ),
             });
         }
 
@@ -1187,7 +1190,12 @@ impl ContentBlocker {
     /// Explains how the active configuration treats one request. The live
     /// engine is compiled without rule text, so attribution recompiles each
     /// enabled list in debug mode; this is a user-triggered diagnostic only.
-    pub fn test_request(&self, url: &str, source_url: &str, request_type: &str) -> TestRequestResult {
+    pub fn test_request(
+        &self,
+        url: &str,
+        source_url: &str,
+        request_type: &str,
+    ) -> TestRequestResult {
         let mut result = TestRequestResult {
             native_mode: self.is_native(),
             ..TestRequestResult::default()
@@ -1219,7 +1227,11 @@ impl ContentBlocker {
             let mut filter_set = FilterSet::new(true);
             filter_set.add_filter_list(body, ParseOptions::default());
             let probe = Engine::from_filter_set(filter_set, true).check_network_request(&request);
-            let decisive = if result.blocked { probe.filter } else { probe.exception };
+            let decisive = if result.blocked {
+                probe.filter
+            } else {
+                probe.exception
+            };
             if let Some(rule) = decisive {
                 if result.blocked {
                     result.matched_filter = Some(rule);
@@ -1253,7 +1265,10 @@ impl ContentBlocker {
             return Ok(());
         }
         let candidate = validate_candidate_body(rules.to_string(), None)?;
-        let exists = self.filter_lists.iter().any(|list| list.id == CUSTOM_RULES_LIST_ID);
+        let exists = self
+            .filter_lists
+            .iter()
+            .any(|list| list.id == CUSTOM_RULES_LIST_ID);
         if !exists && self.filter_lists.len() >= MAX_FILTER_LISTS {
             return Err(ContentBlockingError::TooManyFilterLists {
                 max: MAX_FILTER_LISTS as u32,
@@ -1268,12 +1283,14 @@ impl ContentBlocker {
         )?;
         let now = chrono::Utc::now().timestamp();
         if !exists {
-            self.filter_lists.push(local_list_metadata(
-                CUSTOM_RULES_LIST_ID,
-                "Custom rules",
-            ));
+            self.filter_lists
+                .push(local_list_metadata(CUSTOM_RULES_LIST_ID, "Custom rules"));
         }
-        if let Some(list) = self.filter_lists.iter_mut().find(|list| list.id == CUSTOM_RULES_LIST_ID) {
+        if let Some(list) = self
+            .filter_lists
+            .iter_mut()
+            .find(|list| list.id == CUSTOM_RULES_LIST_ID)
+        {
             list.enabled = true;
             list.rule_count = candidate.rule_count;
             list.sha256 = Some(candidate.sha256);
@@ -1288,7 +1305,11 @@ impl ContentBlocker {
 
     /// Adds a filter list from bytes the user picked in the file chooser.
     /// Returns the new list id. Nothing changes unless every check passes.
-    pub fn import_local_list(&mut self, name: &str, bytes: &[u8]) -> Result<String, ContentBlockingError> {
+    pub fn import_local_list(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<String, ContentBlockingError> {
         if bytes.len() > MAX_LIST_BODY_BYTES {
             return Err(ContentBlockingError::FilterBodyTooLarge {
                 max_bytes: u64::try_from(MAX_LIST_BODY_BYTES).unwrap_or(u64::MAX),
@@ -1309,7 +1330,12 @@ impl ContentBlocker {
                 actual: self.filter_lists.len() as u32,
             });
         }
-        self.validate_enabled_candidate_aggregate_with(&id, &candidate.body, candidate.rule_count, true)?;
+        self.validate_enabled_candidate_aggregate_with(
+            &id,
+            &candidate.body,
+            candidate.rule_count,
+            true,
+        )?;
         let display_name = match name.trim() {
             "" => "Imported list".to_string(),
             trimmed => trimmed.chars().take(120).collect(),

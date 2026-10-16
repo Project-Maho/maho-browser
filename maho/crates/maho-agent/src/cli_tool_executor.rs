@@ -419,7 +419,12 @@ pub(crate) fn windows_confined_command_line(
     stderr_path: &std::path::Path,
 ) -> Result<String> {
     fn check(value: &str) -> Result<()> {
-        if value.chars().any(|c| matches!(c, '"' | '%' | '^' | '&' | '|' | '<' | '>' | '\n' | '\r' | '!')) {
+        if value.chars().any(|c| {
+            matches!(
+                c,
+                '"' | '%' | '^' | '&' | '|' | '<' | '>' | '\n' | '\r' | '!'
+            )
+        }) {
             return Err(anyhow!(
                 "Argument contains characters that cannot be passed safely to cmd.exe"
             ));
@@ -478,9 +483,14 @@ mod tests {
             err,
         )
         .unwrap();
-        assert!(spaced.contains(r#"cmd.exe /c "echo hi there" 1>"#), "{spaced}");
+        assert!(
+            spaced.contains(r#"cmd.exe /c "echo hi there" 1>"#),
+            "{spaced}"
+        );
         assert!(super::windows_confined_command_line("a b", &[], out, err).is_err());
-        for bad in ["a&b", "a|b", "a>b", "a<b", "a^b", "%PATH%", "a\"b", "!x!", "a\nb"] {
+        for bad in [
+            "a&b", "a|b", "a>b", "a<b", "a^b", "%PATH%", "a\"b", "!x!", "a\nb",
+        ] {
             assert!(
                 super::windows_confined_command_line("git", &[bad.to_string()], out, err).is_err(),
                 "{bad:?} must be rejected"
