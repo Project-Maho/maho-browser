@@ -1,12 +1,17 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/views/sidebar/maho_sidebar_view.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_agent_tasks_view.h"
+#include "maho/browser/ai/maho_control_activity_service.h"
+#include "maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.h"
+#include "maho/browser/ui/views/sidebar/maho_core_recovery_policy.h"
 #include "build/build_config.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_drag_util.h"
 #include "ui/views/widget/widget.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_now_playing_view.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_container_view.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
 #include "maho/browser/ui/views/split_view/maho_split_view_controller.h"
@@ -558,6 +563,17 @@ void MahoSidebarView::BuildUi() {
 
   top_bar_view_ =
       AddChildView(std::make_unique<MahoSidebarTopBarView>(browser_));
+  core_recovery_banner_ = AddChildView(
+      std::make_unique<MahoCoreRecoveryBannerView>());
+  core_recovery_subscription_ = maho::AddCoreRecoveryStateCallback(
+      base::BindRepeating(
+          [](base::WeakPtr<MahoSidebarView> sidebar,
+             CoreRecoveryBannerState state) {
+            if (sidebar && sidebar->core_recovery_banner_) {
+              sidebar->core_recovery_banner_->SetState(state);
+            }
+          },
+          weak_factory_.GetWeakPtr()));
 
   body_host_ = AddChildView(std::make_unique<views::View>());
   auto* body_layout = body_host_->SetLayoutManager(

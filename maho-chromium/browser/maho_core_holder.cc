@@ -22,6 +22,8 @@
 #include "base/synchronization/lock.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
+#include "base/thread_annotations.h"
+#include "base/time/time.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
@@ -64,6 +66,21 @@ base::Lock& GetVaultBackendCreationLock() {
 // sequence in unit tests); they are never touched from the core task runner.
 VaultLockStateCallbackList& GetVaultLockStateCallbackList() {
   static base::NoDestructor<VaultLockStateCallbackList> callbacks;
+  return *callbacks;
+}
+
+struct WatchdogState {
+  base::Lock lock;
+  CoreWatchdogPolicy policy GUARDED_BY(lock);
+};
+
+WatchdogState& GetWatchdogState() {
+  static base::NoDestructor<WatchdogState> state;
+  return *state;
+}
+
+CoreHealthCallbackList& GetCoreHealthCallbackList() {
+  static base::NoDestructor<CoreHealthCallbackList> callbacks;
   return *callbacks;
 }
 
@@ -307,6 +324,35 @@ void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
   } else {
     content::GetUIThreadTaskRunner({})->PostTask(FROM_HERE, std::move(publish));
   }
+}
+
+uint64_t BeginWatchedCoreTask(CoreOperationClass operation) {
+  WatchdogState& state = GetWatchdogState();
+  base::AutoLock lock(state.lock);
+  return state.policy.OnTaskStarted(operation, base::TimeTicks::Now());
+}
+
+void EndWatchedCoreTask(uint64_t task_id) {
+  WatchdogState& state = GetWatchdogState();
+  base::AutoLock lock(state.lock);
+  state.policy.OnTaskFinished(task_id);
+}
+
+void EvaluateCoreWatchdog(base::TimeTicks now) {
+  std::optional<CoreHealth> changed;
+  {
+    WatchdogState& state = GetWatchdogState();
+    base::AutoLock lock(state.lock);
+    changed = state.policy.Evaluate(now);
+  }
+  if (changed) {
+    GetCoreHealthCallbackList().Notify(*changed);
+  }
+}
+
+base::CallbackListSubscription AddCoreHealthCallback(
+    base::RepeatingCallback<void(CoreHealth health)> callback) {
+  return GetCoreHealthCallbackList().Add(std::move(callback));
 }
 
 base::CallbackListSubscription AddCoreReadyCallback(
