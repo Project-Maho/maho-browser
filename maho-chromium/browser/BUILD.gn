@@ -1588,6 +1588,7 @@ source_set("maho_theme_io_unittests") {
     ":maho_artifact_registry",
     ":maho_artifact_xlsx_processor",
     ":maho_tab_id_helper",
+    ":maho_ntp_preload_policy",
     ":maho_theme_support",
     ":maho_unified_agent_adapter",
     ":maho_ai_ingress_coordinator",
