@@ -88,6 +88,9 @@ std::string VaultSetLoginTotpJson(MahoCore* core, const char* request_json);
 std::string VaultTotpCodeJson(MahoCore* core, const char* request_json);
 std::string VaultHealthReportJson(MahoCore* core);
 std::string VaultGeneratePasswordJson(MahoCore* core, const char* request_json);
+std::string VaultPasskeyCreateJson(MahoCore* core, const char* request_json);
+std::string VaultPasskeyGetAssertionJson(MahoCore* core,
+                                         const char* request_json);
 std::string VaultPasswordStrengthJson(MahoCore* core, const char* request_json);
 
 
