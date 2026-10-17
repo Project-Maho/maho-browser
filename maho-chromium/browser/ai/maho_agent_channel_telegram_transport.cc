@@ -91,9 +91,13 @@ void TelegramChannelHttpTransport::FetchEvents(
           return;
         }
         self->backoff_.OnSuccess();
-        for (auto& event : events) event.cursor = offset;
         std::move(callback).Run(std::move(events), std::nullopt);
-      }, weak_factory_.GetWeakPtr(), config, std::move(callback)));
+      }, weak_factory_.GetWeakPtr(), [&config] {
+        ChannelConfig metadata = config;
+        metadata.token.reset();
+        metadata.outbound_token.reset();
+        return metadata;
+      }(), std::move(callback)));
 }
 
 void TelegramChannelHttpTransport::SendMessage(

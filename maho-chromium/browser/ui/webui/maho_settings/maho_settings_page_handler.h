@@ -580,6 +580,19 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void ToggleATCRule(const std::string& rule_id, bool enabled) override;
 
   void GetAISettings(GetAISettingsCallback callback) override;
+  void ListAgentChannels(ListAgentChannelsCallback callback) override;
+  void SendAgentChannelReply(const std::string& id, const std::string& reply_id,
+                            SendAgentChannelReplyCallback callback) override;
+  void ConfigureAgentChannel(const std::string& config_json,
+                             ConfigureAgentChannelCallback callback) override;
+  void RemoveAgentChannel(const std::string& id,
+                          RemoveAgentChannelCallback callback) override;
+  void ApproveAgentChannelPairing(const std::string& id,
+      const std::string& sender, const std::string& code,
+      ApproveAgentChannelPairingCallback callback) override;
+  void RevokeAgentChannelPairing(const std::string& id,
+      const std::string& sender,
+      RevokeAgentChannelPairingCallback callback) override;
   void GetAIModelsSettings(GetAIModelsSettingsCallback callback) override;
   maho_settings::mojom::AIModelsSettingsPtr BuildAIModelsSettings();
   void OnAIModelsSettingsPrefsChanged();

@@ -249,6 +249,7 @@ TEST(MahoAgentChannelGatewayTest, UnknownSenderGetsCodeApprovedSubmitsRevokedBlo
   ChannelEvent event;
   event.id = "event-1";
   event.cursor = "1";
+  event.timestamp = 1;
   event.channel_id = "telegram-room";
   event.reply_channel_id = "chat-42";
   event.provider = ChannelProvider::kTelegram;
@@ -279,6 +280,58 @@ TEST(MahoAgentChannelGatewayTest, UnknownSenderGetsCodeApprovedSubmitsRevokedBlo
   event.id = "event-3";
   event.cursor = "3";
   EXPECT_TRUE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
+}
+
+TEST(MahoAgentChannelGatewayTest, PairingCodesGoOnlyToAllowlistedNewEvents) {
+  base::test::TaskEnvironment task_environment;
+  MahoAgentChannelGateway gateway;
+  gateway.SetPairingRequired(true);
+  ChannelConfig config("telegram-room", ChannelProvider::kTelegram, "Room");
+  config.allowed_sender_ids = {"sender-7"};
+  gateway.RegisterChannel(config);
+  std::vector<RecordingTransport::Sent> sent;
+  gateway.SetProviderTransport("telegram-room",
+                               std::make_unique<RecordingTransport>(&sent));
+
+  ChannelEvent event;
+  event.id = "event-1";
+  event.cursor = "1";
+  event.timestamp = 1;
+  event.channel_id = "telegram-room";
+  event.reply_channel_id = "chat-42";
+  event.provider = ChannelProvider::kTelegram;
+  event.sender_id = "stranger";
+  event.text = "hi";
+
+  // A sender outside the allowlist never receives a pairing code.
+  EXPECT_TRUE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
+  EXPECT_TRUE(sent.empty());
+
+  // A redelivered event is a duplicate, not a second code request.
+  event.sender_id = "sender-7";
+  event.id = "event-2";
+  event.cursor = "2";
+  EXPECT_TRUE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
+  ASSERT_EQ(sent.size(), 1u);
+  EXPECT_FALSE(gateway.ProcessEventDirect(event).is_sender_not_allowed());
+  EXPECT_EQ(sent.size(), 1u);
+}
+
+TEST(MahoAgentChannelGatewayTest, OutboundSendTargetsTheReplyDestination) {
+  ChannelConfig channel("telegram-room", ChannelProvider::kTelegram, "Room");
+  channel.opaque_auth_handle = "vault-note";
+  OutboundChannelMessage msg;
+  msg.channel_id = "telegram-room";
+  msg.provider = ChannelProvider::kTelegram;
+  msg.destination_id = "chat-42";
+  msg.text = "done";
+  auto op = SendViaDirectApi(channel, msg);
+  ASSERT_TRUE(op.has_value());
+  EXPECT_TRUE(op->requires_confirmation);
+  EXPECT_FALSE(op->operation.read_only);
+  EXPECT_NE(op->operation.parameters_json.find("\"destination_id\":\"chat-42\""),
+            std::string::npos);
+  EXPECT_EQ(op->context.opaque_auth_handle, "vault-note");
 }
 
 TEST(MahoAgentChannelGatewayTest, OutboundSendViaDirectApiOp) {

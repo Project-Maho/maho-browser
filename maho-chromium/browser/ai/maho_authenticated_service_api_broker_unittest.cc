@@ -497,6 +497,93 @@ TEST(MahoAuthenticatedServiceApiBrokerTest, AdversarialMalformedInputHandling) {
   }
 }
 
+// Channel replies use provider-owned endpoints; secrets never enter the body.
+TEST(MahoAuthenticatedServiceApiBrokerTest, ChannelSendMessageProviderRequests) {
+  struct Case {
+    DirectApiServiceKind service;
+    std::string secret;
+    std::string url;
+    std::string authorization;
+    std::string destination_key;
+  };
+  const Case cases[] = {
+      {DirectApiServiceKind::kSlack, "xoxb-slack",
+       "https://slack.com/api/chat.postMessage", "Bearer xoxb-slack",
+       "\"channel\":\"C123\""},
+      {DirectApiServiceKind::kDiscord, "discord-bot",
+       "https://discord.com/api/v10/channels/C123/messages",
+       "Bot discord-bot", ""},
+      {DirectApiServiceKind::kTelegram, "123:tg-bot",
+       "https://api.telegram.org/bot123:tg-bot/sendMessage", "",
+       "\"chat_id\":\"C123\""},
+  };
+  for (const auto& c : cases) {
+    auto vault = std::make_shared<InMemoryCredentialVault>();
+    auto approval_store = std::make_shared<InMemoryApprovalTokenStore>();
+    auto transport = std::make_unique<InMemoryDirectApiTransport>();
+    auto* transport_ptr = transport.get();
+    vault->StoreCredential("channel-handle", VaultCredential::Bearer(c.secret));
+    MahoAuthenticatedServiceApiBroker broker(
+        nullptr, vault, approval_store,
+        std::make_shared<InMemoryScopeRegistry>(), std::move(transport));
+    DirectApiOpDescriptor op(
+        c.service, "channels.send_message",
+        "{\"destination_id\":\"C123\",\"text\":\"hi\"}",
+        /*read_only=*/false);
+    DirectApiExecutionContext ctx("channel-session");
+    ctx.opaque_auth_handle = "channel-handle";
+    const std::string token =
+        approval_store->IssueToken(std::string(ServiceKindToString(c.service)) +
+                                   ":channels.send_message");
+    broker.ExecuteOp(op, ctx, token,
+                     base::BindOnce([](DirectApiExecutionOutcome) {}));
+
+    auto sent = transport_ptr->GetSentRequests();
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].url, c.url);
+    auto auth = sent[0].headers.find("Authorization");
+    if (c.authorization.empty()) {
+      EXPECT_EQ(auth, sent[0].headers.end());
+    } else {
+      ASSERT_NE(auth, sent[0].headers.end());
+      EXPECT_EQ(auth->second, c.authorization);
+    }
+    EXPECT_EQ(sent[0].body.find(c.secret), std::string::npos);
+    EXPECT_NE(sent[0].body.find("hi"), std::string::npos);
+    if (!c.destination_key.empty()) {
+      EXPECT_NE(sent[0].body.find(c.destination_key), std::string::npos);
+    }
+  }
+}
+
+TEST(MahoAuthenticatedServiceApiBrokerTest, ChannelSendRejectsPathDestination) {
+  auto vault = std::make_shared<InMemoryCredentialVault>();
+  auto approval_store = std::make_shared<InMemoryApprovalTokenStore>();
+  auto transport = std::make_unique<InMemoryDirectApiTransport>();
+  auto* transport_ptr = transport.get();
+  vault->StoreCredential("channel-handle", VaultCredential::Bearer("bot"));
+  MahoAuthenticatedServiceApiBroker broker(
+      nullptr, vault, approval_store, std::make_shared<InMemoryScopeRegistry>(),
+      std::move(transport));
+  DirectApiOpDescriptor op(
+      DirectApiServiceKind::kDiscord, "channels.send_message",
+      "{\"destination_id\":\"../users/@me\",\"text\":\"hi\"}",
+      /*read_only=*/false);
+  DirectApiExecutionContext ctx("channel-session");
+  ctx.opaque_auth_handle = "channel-handle";
+  DirectApiExecutionOutcome out;
+  broker.ExecuteOp(
+      op, ctx, approval_store->IssueToken("discord:channels.send_message"),
+      base::BindOnce(
+          [](DirectApiExecutionOutcome* o, DirectApiExecutionOutcome res) {
+            *o = std::move(res);
+          },
+          &out));
+  EXPECT_EQ(out.status, DirectApiOutcomeStatus::kTypedError);
+  EXPECT_EQ(out.error_code, DirectApiErrorCode::kBadRequest);
+  EXPECT_EQ(transport_ptr->SentCount(), 0u);
+}
+
 }  // namespace maho::ai
 
 #else  // MAHO_STANDALONE_TEST

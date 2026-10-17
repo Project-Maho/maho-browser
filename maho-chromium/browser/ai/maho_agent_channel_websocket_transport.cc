@@ -406,7 +406,11 @@ class SlackTransport final : public ChannelTransport {
     auto request = std::make_unique<network::ResourceRequest>();
     request->url = GURL("https://slack.com/api/chat.postMessage");
     request->method = "POST";
-    request->headers.SetHeader("Authorization", "Bearer " + token_.expose_secret());
+    if (!config.outbound_token) {
+      std::move(callback).Run(false);
+      return;
+    }
+    request->headers.SetHeader("Authorization", "Bearer " + config.outbound_token->expose_secret());
     request->headers.SetHeader("Content-Type", "application/json; charset=utf-8");
     base::DictValue payload;
     payload.Set("channel", std::move(recipient));

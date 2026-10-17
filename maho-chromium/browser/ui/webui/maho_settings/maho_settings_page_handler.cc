@@ -1,6 +1,7 @@
 // Copyright 2026 Maho Browser. All rights reserved.
 
 #include "maho/browser/ui/webui/maho_settings/maho_settings_page_handler.h"
+#include "maho/browser/ai/maho_agent_channel_service.h"
 #include "maho/browser/ui/webui/maho_subscription_checkout.h"
 
 #include <algorithm>
@@ -4122,6 +4123,51 @@ void MahoSettingsPageHandler::ToggleATCRule(const std::string& rule_id,
 }
 
 // ── AI domain ──
+
+void MahoSettingsPageHandler::ListAgentChannels(ListAgentChannelsCallback callback) {
+  auto* service = maho::ai::MahoAgentChannelService::GetForProfile(profile_);
+  std::move(callback).Run(service ? service->ListChannels() :
+      R"({"channels":[],"locked":true})");
+}
+void MahoSettingsPageHandler::SendAgentChannelReply(
+    const std::string& id, const std::string& reply_id,
+    SendAgentChannelReplyCallback callback) {
+  auto* service = maho::ai::MahoAgentChannelService::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(R"({"success":false,"error":"Profile unavailable"})");
+    return;
+  }
+  service->SendReply(id, reply_id, std::move(callback));
+}
+void MahoSettingsPageHandler::ConfigureAgentChannel(
+    const std::string& json, ConfigureAgentChannelCallback callback) {
+  auto* service = maho::ai::MahoAgentChannelService::GetForProfile(profile_);
+  if (!service) {
+    std::move(callback).Run(R"({"success":false,"error":"Profile unavailable"})");
+    return;
+  }
+  service->ConfigureChannel(json, std::move(callback));
+}
+void MahoSettingsPageHandler::RemoveAgentChannel(
+    const std::string& id, RemoveAgentChannelCallback callback) {
+  auto* service = maho::ai::MahoAgentChannelService::GetForProfile(profile_);
+  std::move(callback).Run(service ? service->RemoveChannel(id) :
+      R"({"success":false,"error":"Profile unavailable"})");
+}
+void MahoSettingsPageHandler::ApproveAgentChannelPairing(
+    const std::string& id, const std::string& sender, const std::string& code,
+    ApproveAgentChannelPairingCallback callback) {
+  auto* service = maho::ai::MahoAgentChannelService::GetForProfile(profile_);
+  std::move(callback).Run(service ? service->ApprovePairing(id, sender, code) :
+      R"({"success":false,"error":"Profile unavailable"})");
+}
+void MahoSettingsPageHandler::RevokeAgentChannelPairing(
+    const std::string& id, const std::string& sender,
+    RevokeAgentChannelPairingCallback callback) {
+  auto* service = maho::ai::MahoAgentChannelService::GetForProfile(profile_);
+  std::move(callback).Run(service ? service->RevokePairing(id, sender) :
+      R"({"success":false,"error":"Profile unavailable"})");
+}
 
 void MahoSettingsPageHandler::GetAISettings(GetAISettingsCallback callback) {
   auto settings = maho_settings::mojom::AISettings::New();

@@ -741,6 +741,12 @@ interface PageHandlerFactory {
 };
 
 interface PageHandler {
+  ListAgentChannels() => (string json);
+  ConfigureAgentChannel(string config_json) => (string json);
+  RemoveAgentChannel(string id) => (string json);
+  ApproveAgentChannelPairing(string id, string sender, string code) => (string json);
+  RevokeAgentChannelPairing(string id, string sender) => (string json);
+  SendAgentChannelReply(string id, string reply_id) => (string json);
   GetSettings() => (array<SettingValue> settings);
   SetSetting(string key, string value) => (bool success);
   GetSearchEngines() => (array<SearchEngineInfo> engines);

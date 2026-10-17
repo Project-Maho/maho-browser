@@ -1210,6 +1210,7 @@ source_set("maho_browser_main_extra_parts") {
 
 
   deps = [
+    ":maho_agent_channel_service",
     ":maho_core_holder",
     ":maho_content_blocker_update_service",
     ":maho_content_blocker_update_service_factory",
@@ -1472,6 +1473,28 @@ source_set("maho_authenticated_service_api_broker") {
     "//net",
     "//services/network/public/cpp",
     "//url",
+  ]
+}
+
+source_set("maho_agent_channel_service") {
+  sources = [
+    "ai/maho_agent_channel_service.cc",
+    "ai/maho_agent_channel_service.h",
+  ]
+  public_deps = [
+    ":maho_agent_channel_gateway",
+    ":maho_ai_runtime_adapter_interface",
+    "//base",
+    "//components/keyed_service/core",
+  ]
+  deps = [
+    ":maho_core_holder",
+    ":maho_unified_agent_adapter",
+    "//chrome/browser/profiles:profile",
+    "//content/public/browser",
+    "//maho/browser/ui/webui/maho_ai:mojo_bindings",
+    "//maho/third_party/maho:maho_bridge",
+    "//services/network/public/cpp",
   ]
 }
 
@@ -1754,6 +1777,7 @@ source_set("maho_theme_io_unittests") {
   deps = [
     ":maho_mini",
     ":maho_agent_channel_gateway_unittests",
+    ":maho_authenticated_service_api_broker_unittests",
     ":maho_artifact_html_sanitizer",
     ":maho_artifact_pdf_processor",
     ":maho_artifact_registry",

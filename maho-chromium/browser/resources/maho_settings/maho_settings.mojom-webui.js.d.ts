@@ -765,6 +765,12 @@ export class PageCallbackRouter {
 }
 
 export class PageHandlerRemote {
+  listAgentChannels(): Promise<{json: string}>;
+  sendAgentChannelReply(id: string, replyId: string): Promise<{json: string}>;
+  configureAgentChannel(configJson: string): Promise<{json: string}>;
+  removeAgentChannel(id: string): Promise<{json: string}>;
+  approveAgentChannelPairing(id: string, sender: string, code: string): Promise<{json: string}>;
+  revokeAgentChannelPairing(id: string, sender: string): Promise<{json: string}>;
   $: {
     bindNewPipeAndPassReceiver(): unknown;
   };

@@ -336,7 +336,7 @@ export function DomainPaneContent(
     case 'ai':
       return <AiPane pane={pane} store={store} />;
     case 'ai-developers':
-      return <AiDevelopersPane pane={pane} />;
+      return <AiDevelopersPane pane={pane} store={store} />;
     case 'billing':
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':

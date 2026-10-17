@@ -661,6 +661,8 @@ base::expected<DirectApiOp, ChannelError> SendViaDirectApi(
 
   base::DictValue params;
   params.Set("channel_id", message.channel_id);
+  params.Set("destination_id", message.destination_id.empty()
+                                    ? message.channel_id : message.destination_id);
   params.Set("text", message.text);
   if (message.reply_to_event_id.has_value() && !message.reply_to_event_id->empty()) {
     params.Set("reply_to_event_id", *message.reply_to_event_id);
@@ -885,6 +887,7 @@ InboundProcessOutcome ChannelRegistry::ProcessInboundEvent(
 
   AgentSessionTrigger trigger;
   trigger.channel_id = event.channel_id;
+  trigger.reply_channel_id = event.reply_channel_id;
   trigger.provider = event.provider;
   trigger.sender_id = event.sender_id;
   trigger.sender_name = event.sender_name;
@@ -1053,6 +1056,10 @@ std::optional<ChannelConfig> MahoAgentChannelGateway::UnregisterChannel(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   StopChannel(channel_id);
   auto res = registry_.UnregisterChannel(channel_id);
+  if (res) {
+    for (const auto& sender : res->allowed_sender_ids)
+      RevokePairing(channel_id, sender);
+  }
   SavePersistence();
   return res;
 }
@@ -1083,6 +1090,7 @@ bool MahoAgentChannelGateway::StartChannel(const std::string& channel_id) {
 
 bool MahoAgentChannelGateway::StopChannel(const std::string& channel_id) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  provider_transports_.erase(channel_id);
   active_channels_.erase(channel_id);
   if (active_channels_.empty() && poll_timer_.IsRunning()) {
     poll_timer_.Stop();
@@ -1104,8 +1112,18 @@ void MahoAgentChannelGateway::StartAll() {
 
 void MahoAgentChannelGateway::StopAll() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  fetch_weak_factory_.InvalidateWeakPtrs();
+  provider_transports_.clear();
   active_channels_.clear();
   poll_timer_.Stop();
+}
+
+void MahoAgentChannelGateway::ClearCredentials() {
+  StopAll();
+  for (const auto& config : registry_.GetAllChannels()) {
+    registry_.GetChannelMutable(config.id)->token.reset();
+    registry_.GetChannelMutable(config.id)->outbound_token.reset();
+  }
 }
 
 bool MahoAgentChannelGateway::IsChannelRunning(const std::string& channel_id) const {
@@ -1126,22 +1144,21 @@ void MahoAgentChannelGateway::SetAiRuntimeAdapter(::MahoAiRuntimeAdapter* adapte
 InboundProcessOutcome MahoAgentChannelGateway::ProcessEventDirect(
     const ChannelEvent& event) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  InboundProcessOutcome outcome = registry_.ProcessInboundEvent(event);
+  // Only allowlisted, new, well-formed events may ask for a pairing code.
+  if (!outcome.is_triggered()) {
+    return outcome;
+  }
   if (pairing_required_) {
     const std::string principal = PairingPrincipal(event.channel_id,
                                                    event.sender_id);
     if (!pairing_.AuthorizeInbound(principal)) {
-      // Consume the event so the transport does not redeliver it on every
-      // poll (and the sender is not sent a fresh code each time).
-      if (!event.cursor.empty()) {
-        registry_.SetLastCursor(event.channel_id, event.cursor);
-      }
       SendPairingCode(event, principal);
       SavePersistence();
       return InboundProcessOutcome::SenderNotAllowed(event.channel_id,
                                                      event.sender_id);
     }
   }
-  InboundProcessOutcome outcome = registry_.ProcessInboundEvent(event);
   if (outcome.is_triggered() && outcome.trigger.has_value()) {
     if (trigger_callback_) {
       trigger_callback_.Run(*outcome.trigger);

@@ -108,6 +108,7 @@
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_agent_channel_service.h"
 #include "maho/browser/ai/maho_ai_settings_migration.h"
 #include "maho/browser/ai/maho_artifact_registry.h"
 #include "maho/browser/ai/maho_control_activity_service.h"
@@ -7218,6 +7219,8 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
   sync_relay_client_->StartPolling();
 
   maho::MigrateAiSettings(profile);
+  // Restores configured external channels; a profile with none stays idle.
+  maho::ai::MahoAgentChannelService::GetForProfile(profile);
 
   maho::MahoTabIdSessionHelper::GetForProfile(profile);
 

@@ -187,6 +187,7 @@ struct ChannelConfig {
   std::string name;
   bool enabled = true;
   std::optional<ChannelToken> token;
+  std::optional<ChannelToken> outbound_token;
   std::optional<std::string> account_id;
   std::optional<std::string> opaque_auth_handle;
   uint32_t poll_interval_seconds = 30;
@@ -258,6 +259,7 @@ struct AgentSessionTrigger {
   AgentSessionTrigger& operator=(AgentSessionTrigger&&) noexcept;
 
   std::string channel_id;
+  std::string reply_channel_id;
   ChannelProvider provider = ChannelProvider::kSlack;
   std::string sender_id;
   std::optional<std::string> sender_name;
@@ -517,6 +519,7 @@ class MahoAgentChannelGateway {
   bool StopChannel(const std::string& channel_id);
   void StartAll();
   void StopAll();
+  void ClearCredentials();
   bool IsChannelRunning(const std::string& channel_id) const;
 
   // Inbound Turn-Submission Integration
