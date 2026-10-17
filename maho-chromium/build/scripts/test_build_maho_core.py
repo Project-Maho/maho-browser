@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import call, patch
@@ -408,6 +409,7 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
                     maps.append(f.read())
             elif cmd[:2] == ['ar', 'x']:
                 Path(kwargs['cwd'], 'member.o').write_bytes(b'obj')
+            return subprocess.CompletedProcess(cmd, 0, '', '')
 
         with patch.object(
                  _module, '_find_llvm_tools',
@@ -421,6 +423,28 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
 
         # GNU objcopy rejects a final map line without a newline.
         self.assertEqual(maps, ['rust_eh_personality mahoffi_rust_eh_personality\n'])
+
+    def test_privatize_reports_objcopy_stderr(self):
+        def run(cmd, **kwargs):
+            if cmd[:2] == ['ar', 'x']:
+                Path(kwargs['cwd'], 'member.o').write_bytes(b'obj')
+            if cmd[0] == 'objcopy':
+                return subprocess.CompletedProcess(cmd, 1, '', 'bad map line 7\n')
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+
+        with patch.object(
+                 _module, '_find_llvm_tools',
+                 return_value=('nm', 'ar', 'objcopy')), \
+             patch.object(_module, '_bundled_c_staticlibs', return_value=[]), \
+             patch.object(
+                 _module, '_defined_extern_symbols',
+                 return_value={'rust_eh_personality'}), \
+             patch.object(_module.subprocess, 'run', side_effect=run):
+            with self.assertRaises(SystemExit) as raised:
+                _module.privatize_rust_staticlib('lib.a', 'release', 'mahoffi')
+
+        self.assertIn('member.o', str(raised.exception))
+        self.assertIn('bad map line 7', str(raised.exception))
 
     def test_linux_mail_helper_denies_arbitrary_unix_ipc_without_secret_service(self):
         overlay = Path(__file__).parents[2]

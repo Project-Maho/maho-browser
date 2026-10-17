@@ -613,8 +613,13 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
                 if n.lower().endswith(('.o', '.obj'))]
         done = []
         for o in objs:
-            subprocess.run([objcopy, f'--redefine-syms={map_path}', o],
-                           check=True, capture_output=True, text=True)
+            result = subprocess.run(
+                [objcopy, f'--redefine-syms={map_path}', o],
+                capture_output=True, text=True)
+            if result.returncode != 0:
+                # capture_output hides the reason; surface it in the build log.
+                sys.exit(f'{objcopy} failed on {os.path.basename(o)} '
+                         f'(exit {result.returncode}): {result.stderr.strip()}')
             done.append(o)
         for i in range(0, len(done), 200):
             subprocess.run([ar, 'r', lib_path] + done[i:i + 200],
