@@ -315,8 +315,8 @@ def _atomic_place_lib(src_lib, dst_lib, release_dir=None, private_prefix=None):
                 try:
                     map_path = os.path.join(workdir, 'redefine.txt')
                     with open(map_path, 'w') as f:
-                        f.write('\n'.join(
-                            f'{symbol} {private_prefix}_{symbol}'
+                        f.write(''.join(
+                            f'{symbol} {private_prefix}_{symbol}\n'
                             for symbol in sorted(bundled_c_symbols)))
                     subprocess.run(
                         [objcopy, f'--redefine-syms={map_path}', tmp],
@@ -604,7 +604,8 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
     try:
         map_path = os.path.join(workdir, 'redefine.txt')
         with open(map_path, 'w') as f:
-            f.write('\n'.join(f'{k} {v}' for k, v in rename.items()))
+            # GNU objcopy 2.47 rejects a final line without a newline.
+            f.write(''.join(f'{k} {v}\n' for k, v in rename.items()))
         extdir = os.path.join(workdir, 'ext')
         os.makedirs(extdir)
         subprocess.run([ar, 'x', lib_path], cwd=extdir, check=True)

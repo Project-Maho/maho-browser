@@ -399,6 +399,29 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             check=True,
         ))
 
+    def test_privatize_redefine_map_ends_every_line(self):
+        maps = []
+
+        def run(cmd, **kwargs):
+            if cmd[0] == 'objcopy':
+                with open(cmd[1].split('=', 1)[1], encoding='utf-8') as f:
+                    maps.append(f.read())
+            elif cmd[:2] == ['ar', 'x']:
+                Path(kwargs['cwd'], 'member.o').write_bytes(b'obj')
+
+        with patch.object(
+                 _module, '_find_llvm_tools',
+                 return_value=('nm', 'ar', 'objcopy')), \
+             patch.object(_module, '_bundled_c_staticlibs', return_value=[]), \
+             patch.object(
+                 _module, '_defined_extern_symbols',
+                 return_value={'rust_eh_personality'}), \
+             patch.object(_module.subprocess, 'run', side_effect=run):
+            _module.privatize_rust_staticlib('lib.a', 'release', 'mahoffi')
+
+        # GNU objcopy rejects a final map line without a newline.
+        self.assertEqual(maps, ['rust_eh_personality mahoffi_rust_eh_personality\n'])
+
     def test_linux_mail_helper_denies_arbitrary_unix_ipc_without_secret_service(self):
         overlay = Path(__file__).parents[2]
         helper_dir = overlay / 'browser' / 'mail_helper'
