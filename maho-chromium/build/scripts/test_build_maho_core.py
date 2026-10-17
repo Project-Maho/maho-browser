@@ -272,6 +272,20 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env,
             features=[])
 
+    def test_windows_main_prebuilt_embeds_vendored_openssl_debug_info(self):
+        target = 'x86_64-pc-windows-msvc'
+        with patch.dict(_module.os.environ, {'__CNF_CFLAGS': '/DKEEP'}), \
+             patch.object(
+                 _module, 'get_target_triple',
+                 return_value=(target, 'x64', 'maho_ffi.lib')), \
+             patch.object(_module, '_cargo_build') as cargo_build, \
+             patch.object(_module.os.path, 'exists', return_value=False):
+            with self.assertRaises(SystemExit):
+                _module.build_rust_prebuilt(target)
+
+        cargo_env = cargo_build.call_args.args[4]
+        self.assertEqual(cargo_env['__CNF_CFLAGS'], '/DKEEP /Z7')
+
     def test_mail_only_build_skips_main_rust_prebuilt(self):
         with patch.object(_module, 'build_mail_ffi_prebuilt') as build_mail:
             with patch.object(_module, 'build_rust_prebuilt') as build_main:

@@ -144,20 +144,8 @@ config("maho_core_prebuilt_config") {
   }
 }
 
-# The vendored OpenSSL objects inside maho_ffi.lib reference PDBs that do not
-# ship with the lib, so a debug link reports LNK4099 (fatal under /WX). GN
-# forwards libs from a dependency's config to the final link but not ldflags,
-# so the suppression must be applied to every dependent that links the lib
-# (chrome.dll, the test executables).
-config("maho_core_prebuilt_link_config") {
-  if (is_win) {
-    ldflags = [ "/ignore:4099" ]
-  }
-}
-
 source_set("maho_core_prebuilt") {
   public_configs = [ ":maho_core_prebuilt_config" ]
-  all_dependent_configs = [ ":maho_core_prebuilt_link_config" ]
   if (is_linux) {
     deps = [ ":maho_glibc_compat" ]
   }

@@ -659,6 +659,13 @@ def build_rust_prebuilt(target=None, incremental=False, is_release=False):
         cargo_env['LIBSQLITE3_FLAGS'] = f'{existing} {rename_flags}'.strip()
         rustflags = cargo_env.get('RUSTFLAGS', '')
         cargo_env['RUSTFLAGS'] = f'{rustflags} -C target-feature=+crt-static'.strip()
+        # Vendored OpenSSL compiles its static libs with /Zi /Fdossl_static.pdb,
+        # and openssl-src deletes that build dir after install, so the shipped
+        # .lib points at a missing PDB (LNK4099 at the Chromium link). /Z7
+        # comes later on the cl line (CNF_CFLAGS) and embeds the debug info
+        # in each object instead.
+        cnf_cflags = cargo_env.get('__CNF_CFLAGS', '')
+        cargo_env['__CNF_CFLAGS'] = f'{cnf_cflags} /Z7'.strip()
         for _tool in ('perl', 'nasm'):
             if shutil.which(_tool) is None:
                 print(f'WARNING: {_tool} not found on PATH; the vendored OpenSSL '
