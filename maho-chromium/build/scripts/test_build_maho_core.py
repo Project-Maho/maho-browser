@@ -254,6 +254,24 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env,
             features=['debug-test-hooks'])
 
+    def test_release_main_prebuilt_excludes_debug_test_hooks(self):
+        target = 'x86_64-unknown-linux-gnu'
+        toolchain_env = {'CC_x86_64_unknown_linux_gnu': '/chromium/clang'}
+        with patch.object(
+                 _module, 'get_target_triple',
+                 return_value=(target, 'x64', 'libmaho_ffi.a')), \
+             patch.object(
+                 _module, 'chromium_linux_toolchain_env',
+                 return_value=toolchain_env), \
+             patch.object(_module, '_cargo_build') as cargo_build, \
+             patch.object(_module.os.path, 'exists', return_value=False):
+            with self.assertRaises(SystemExit):
+                _module.build_rust_prebuilt(target, is_release=True)
+
+        cargo_build.assert_called_once_with(
+            ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env,
+            features=[])
+
     def test_mail_only_build_skips_main_rust_prebuilt(self):
         with patch.object(_module, 'build_mail_ffi_prebuilt') as build_mail:
             with patch.object(_module, 'build_rust_prebuilt') as build_main:
