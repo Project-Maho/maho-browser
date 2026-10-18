@@ -240,6 +240,7 @@ source_set("maho_selection_ask_dispatch") {
     "ai/maho_selection_ask_dispatch.h",
   ]
   deps = [
+    ":maho_ai_file_attachment_registry",
     ":maho_selection_ask_query",
     "//base",
     "//chrome/browser/ui",

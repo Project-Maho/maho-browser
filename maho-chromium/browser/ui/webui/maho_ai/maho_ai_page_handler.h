@@ -338,7 +338,16 @@ class MahoAIPageHandler : public maho_ai::mojom::PageHandler,
     base::OnceCallback<bool(bool)> dispatch_gate;
     std::vector<AttachmentSlot> slots;
     size_t completed_count = 0;
+    // PNG resolved from a kCapturedImage token; staged on the adapter right
+    // before the prompt is submitted.
+    std::optional<std::vector<uint8_t>> captured_image;
   };
+
+  // Stages |batch|'s captured image (if any) on |adapter|. On failure reports
+  // the error, closes the dispatch gate and returns false; the caller must
+  // then not submit the prompt.
+  bool StageBatchImage(MahoAiRuntimeAdapter* adapter,
+                       PendingAttachmentBatch& batch);
 
   void OnAttachmentSlotCompleted(
       std::shared_ptr<PendingAttachmentBatch> batch,

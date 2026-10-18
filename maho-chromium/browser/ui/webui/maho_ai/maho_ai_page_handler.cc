@@ -2456,8 +2456,27 @@ void MahoAIPageHandler::SubmitPromptInternal(
             MahoAiPageContextExtractor::PageContextResult::Status::kSuccess;
         slot.result.title = att->label;
         slot.result.main_text = std::move(file_text);
-        slot.completed = true;
         batch->slots.push_back(std::move(slot));
+      } else if (att->kind ==
+                 maho_ai::mojom::ContextSourceKind::kCapturedImage) {
+        if (browser_->GetProfile()->IsOffTheRecord()) {
+          reject_file_attachment(
+              "Captured images are unavailable in private windows.");
+          return;
+        }
+        auto* registry =
+            maho::ai::GetMahoAiFileAttachmentRegistry(browser_->GetProfile());
+        std::optional<std::vector<uint8_t>> png =
+            registry && !batch->captured_image
+                ? registry->TakeCapturedImage(att->file_token.value_or(""))
+                : std::nullopt;
+        if (!png) {
+          LOG(WARNING) << "Rejected invalid or extra AI captured-image token";
+          rejected_attachment_error =
+              "The captured image is no longer available.";
+          break;
+        }
+        batch->captured_image = std::move(png);
       } else if (att->kind == maho_ai::mojom::ContextSourceKind::kHistory) {
         slot.header_tag = base::StrCat({"History Context: ", att->label});
         batch->slots.push_back(std::move(slot));
@@ -2473,6 +2492,9 @@ void MahoAIPageHandler::SubmitPromptInternal(
     }
 
     if (batch->slots.empty()) {
+      if (!StageBatchImage(adapter, *batch)) {
+        return;
+      }
       if (batch->dispatch_gate && !std::move(batch->dispatch_gate).Run(true)) {
         return;
       }
@@ -2500,7 +2522,9 @@ void MahoAIPageHandler::SubmitPromptInternal(
                            weak_factory_.GetWeakPtr(), batch, slot_idx));
       } else if (att->kind ==
                  maho_ai::mojom::ContextSourceKind::kLocalFile) {
-        ++idx;
+        size_t slot_idx = idx++;
+        OnAttachmentSlotCompleted(batch, slot_idx,
+                                  std::move(batch->slots[slot_idx].result));
       } else if (att->kind == maho_ai::mojom::ContextSourceKind::kHistory) {
         size_t slot_idx = idx++;
         std::string redacted_url = maho::ai_security::RedactUrlForAi(att->url);
@@ -2781,6 +2805,28 @@ void MahoAIPageHandler::OnTabContextExtractedThenSubmit(
                           correlation.request_id));
 }
 
+bool MahoAIPageHandler::StageBatchImage(MahoAiRuntimeAdapter* adapter,
+                                        PendingAttachmentBatch& batch) {
+  if (!batch.captured_image) {
+    return true;
+  }
+  if (adapter->StageUserImage(*std::exchange(batch.captured_image,
+                                             std::nullopt))) {
+    return true;
+  }
+  if (batch.dispatch_gate) {
+    std::move(batch.dispatch_gate).Run(false);
+  }
+  MahoAiRuntimeEvent error_event;
+  error_event.type = MahoAiRuntimeEventType::kError;
+  error_event.text =
+      "The current AI runtime cannot read images, so the capture was not sent.";
+  OnRuntimeEventForSession(batch.correlation.session_id,
+                           batch.correlation.request_id,
+                           std::move(error_event));
+  return false;
+}
+
 void MahoAIPageHandler::OnAttachmentSlotCompleted(
     std::shared_ptr<PendingAttachmentBatch> batch,
     size_t slot_index,
@@ -2871,6 +2917,9 @@ void MahoAIPageHandler::OnAttachmentSlotCompleted(
         {combined_context, "User Question:\n", batch->user_prompt});
   }
 
+  if (!StageBatchImage(adapter, *batch)) {
+    return;
+  }
   if (batch->dispatch_gate && !std::move(batch->dispatch_gate).Run(true)) {
     return;
   }

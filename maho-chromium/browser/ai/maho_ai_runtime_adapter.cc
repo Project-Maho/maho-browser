@@ -17,6 +17,10 @@ MahoAiRuntimeConfig& MahoAiRuntimeConfig::operator=(
     const MahoAiRuntimeConfig&) = default;
 MahoAiRuntimeConfig::~MahoAiRuntimeConfig() = default;
 
+bool MahoAiRuntimeAdapter::StageUserImage(std::vector<uint8_t> png_bytes) {
+  return false;
+}
+
 void MahoAiRuntimeAdapter::RespondToInteraction(
     const std::string& interaction_id,
     const std::string& answer_json) {}

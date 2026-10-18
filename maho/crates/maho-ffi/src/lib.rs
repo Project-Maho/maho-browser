@@ -12124,6 +12124,44 @@ pub struct MahoAgentSession {
     pub(crate) event_seq_counter: Arc<AtomicU64>,
     pub(crate) notification_permission_granted: Arc<AtomicBool>,
     runtime_config: Mutex<AgentRuntimeConfig>,
+    // One image staged by `maho_agent_stage_user_image` for the next turn the
+    // browser submits; taken (and cleared) when that turn is built.
+    pub(crate) staged_user_image: Mutex<Option<StagedUserImage>>,
+}
+
+/// An image the user attached to their next message (e.g. a page capture).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct StagedUserImage {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+/// Largest image the browser may attach to one message.
+pub(crate) const MAX_STAGED_USER_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Accepts only PNG bytes (the browser's capture format) within the size cap.
+pub(crate) fn validate_staged_user_image(mime: &str, data: &[u8]) -> bool {
+    const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+    mime == "image/png"
+        && data.len() <= MAX_STAGED_USER_IMAGE_BYTES
+        && data.starts_with(&PNG_SIGNATURE)
+}
+
+/// The user message for a turn: plain text, or text plus the staged image.
+pub(crate) fn user_message_content(
+    text: String,
+    image: Option<StagedUserImage>,
+) -> maho_types::chat::ChatContent {
+    match image {
+        None => maho_types::chat::ChatContent::text(text),
+        Some(image) => maho_types::chat::ChatContent::Mixed(vec![
+            maho_types::chat::ChatContentPart::Text(text),
+            maho_types::chat::ChatContentPart::Image {
+                mime: image.mime,
+                data: image.data,
+            },
+        ]),
+    }
 }
 
 struct ActiveConversationGuard {
@@ -13226,6 +13264,7 @@ unsafe fn maho_agent_create_session_impl(
                 event_seq_counter: Arc::new(AtomicU64::new(1)),
                 notification_permission_granted: Arc::new(AtomicBool::new(true)),
                 runtime_config: Mutex::new(runtime_config),
+                staged_user_image: Mutex::new(None),
             });
             if let Some(callback_lease) = session.callback_lease.as_ref() {
                 callback_lease.arm();
@@ -13747,6 +13786,13 @@ unsafe fn maho_agent_send_message_impl(
             let on_token_cb = on_token_cb.map(Arc::from);
             let failure_controller = Arc::clone(&turn_controller);
             let failure_turn_id = turn_id.clone();
+            // The staged image belongs to this message only; queued follow-ups
+            // that run in the same loop below are text.
+            let mut staged_image = session
+                .staged_user_image
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
             let fut = async move {
                 let _active_guard = active_guard;
                 let mut turn_id = turn_id;
@@ -13771,7 +13817,7 @@ unsafe fn maho_agent_send_message_impl(
                                     as Box<dyn Fn(&str) + Send + Sync>
                             });
                     let user_chat_msg = maho_types::chat::ChatMessage::user(
-                        maho_types::chat::ChatContent::text(message),
+                        user_message_content(message, staged_image.take()),
                     );
                     let result = if let Some((cancelled, notify)) = cancellation {
                         tokio::select! {
@@ -14386,6 +14432,50 @@ pub unsafe extern "C" fn maho_agent_list_tools(session: *mut MahoAgentSession) -
             }
         },
         std::ptr::null_mut()
+    )
+}
+
+/// # Safety
+/// `session` must be a valid pointer returned by a `maho_agent_create_session*`
+/// function. `mime` must be a null-terminated UTF-8 string and `data` must point
+/// to `len` readable bytes (or be null when `len` is 0).
+/// Stages one image for the next `maho_agent_send_message*` call on this
+/// session, replacing any image staged before. Only PNG up to 10 MiB is
+/// accepted; returns false (and stages nothing) otherwise.
+#[no_mangle]
+pub unsafe extern "C" fn maho_agent_stage_user_image(
+    session: *mut MahoAgentSession,
+    mime: *const c_char,
+    data: *const u8,
+    len: u32,
+) -> bool {
+    ffi_safe!(
+        {
+            if session.is_null() || mime.is_null() || data.is_null() || len == 0 {
+                return false;
+            }
+            let session = &*session;
+            let Ok(mime) = CStr::from_ptr(mime).to_str() else {
+                return false;
+            };
+            let len = len as usize;
+            if len > MAX_STAGED_USER_IMAGE_BYTES {
+                return false;
+            }
+            let bytes = std::slice::from_raw_parts(data, len);
+            if !validate_staged_user_image(mime, bytes) {
+                return false;
+            }
+            *session
+                .staged_user_image
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(StagedUserImage {
+                mime: mime.to_string(),
+                data: bytes.to_vec(),
+            });
+            true
+        },
+        false
     )
 }
 
@@ -17388,6 +17478,50 @@ impl GoogleSignInSink {
                     callback(self.user_data, ptr::null(), ptr::null(), message.as_ptr());
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod staged_user_image_tests {
+    use super::*;
+
+    const PNG: [u8; 12] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', 0, 0, 0, 13];
+
+    #[test]
+    fn only_png_within_the_cap_is_accepted() {
+        assert!(validate_staged_user_image("image/png", &PNG));
+        assert!(!validate_staged_user_image("image/jpeg", &PNG));
+        assert!(!validate_staged_user_image("image/png", b"not a png"));
+        let mut oversize = PNG.to_vec();
+        oversize.resize(MAX_STAGED_USER_IMAGE_BYTES + 1, 0);
+        assert!(!validate_staged_user_image("image/png", &oversize));
+    }
+
+    #[test]
+    fn a_staged_image_becomes_an_image_part_after_the_text() {
+        let image = StagedUserImage { mime: "image/png".into(), data: PNG.to_vec() };
+        assert_eq!(
+            user_message_content("what is this?".into(), Some(image)),
+            maho_types::chat::ChatContent::Mixed(vec![
+                maho_types::chat::ChatContentPart::Text("what is this?".into()),
+                maho_types::chat::ChatContentPart::Image {
+                    mime: "image/png".into(),
+                    data: PNG.to_vec(),
+                },
+            ])
+        );
+        assert_eq!(
+            user_message_content("plain".into(), None),
+            maho_types::chat::ChatContent::text("plain")
+        );
+    }
+
+    #[test]
+    fn stage_rejects_null_and_invalid_input() {
+        // SAFETY: null session/mime/data are the documented rejected inputs.
+        unsafe {
+            assert!(!maho_agent_stage_user_image(ptr::null_mut(), ptr::null(), ptr::null(), 0));
         }
     }
 }

@@ -27,6 +27,32 @@ TEST(MahoAiFileAttachmentRegistryTest, IssuesAndConsumesOpaqueTokenOnce) {
   EXPECT_FALSE(registry.Resolve(token).has_value());
 }
 
+TEST(MahoAiFileAttachmentRegistryTest, CapturedImageTokenIsSingleUsePngOnly) {
+  const std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n',
+                                    0x1a, '\n', 0,    0,   0,    13};
+  MahoAiFileAttachmentRegistry registry;
+  const std::string token = registry.IssueCapturedImageToken(png);
+  ASSERT_FALSE(token.empty());
+  EXPECT_EQ(registry.TakeCapturedImage(token), png);
+  EXPECT_FALSE(registry.TakeCapturedImage(token).has_value());
+  EXPECT_FALSE(registry.TakeCapturedImage("unknown-token").has_value());
+  EXPECT_TRUE(registry.IssueCapturedImageToken({'G', 'I', 'F', '8'}).empty());
+  std::vector<uint8_t> oversize = png;
+  oversize.resize(MahoAiFileAttachmentRegistry::kMaxFileBytes + 1);
+  EXPECT_TRUE(registry.IssueCapturedImageToken(std::move(oversize)).empty());
+}
+
+TEST(MahoAiFileAttachmentRegistryTest, CapturedImageTokenExpires) {
+  base::test::TaskEnvironment task_environment(
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME);
+  MahoAiFileAttachmentRegistry registry;
+  const std::string token = registry.IssueCapturedImageToken(
+      {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0});
+  ASSERT_FALSE(token.empty());
+  task_environment.FastForwardBy(base::Minutes(30));
+  EXPECT_FALSE(registry.TakeCapturedImage(token).has_value());
+}
+
 TEST(MahoAiFileAttachmentRegistryTest, RejectsUnknownToken) {
   MahoAiFileAttachmentRegistry registry;
   EXPECT_FALSE(registry.Resolve("unknown-token").has_value());

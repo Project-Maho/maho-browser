@@ -22,6 +22,10 @@ enum ContextSourceKind {
   kBookmark,
   kFile,
   kLocalFile,
+  // An image the browser captured for this message (the screenshot dialog's
+  // "Ask Maho"). |file_token| carries a single-use browser-issued token for
+  // the PNG; the bytes never cross the renderer.
+  kCapturedImage,
 };
 
 // A single browser history item returned by SearchHistory.

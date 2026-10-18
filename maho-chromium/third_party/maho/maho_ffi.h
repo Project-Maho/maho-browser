@@ -3184,6 +3184,20 @@ char *maho_agent_list_tools(struct MahoAgentSession *session);
 /**
  * # Safety
  * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `mime` must be a null-terminated UTF-8 string and `data` must point
+ * to `len` readable bytes (or be null when `len` is 0).
+ * Stages one image for the next `maho_agent_send_message*` call on this
+ * session, replacing any image staged before. Only PNG up to 10 MiB is
+ * accepted; returns false (and stages nothing) otherwise.
+ */
+bool maho_agent_stage_user_image(struct MahoAgentSession *session,
+                                 const char *mime,
+                                 const uint8_t *data,
+                                 uint32_t len);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
  * function. `path` must be a null-terminated UTF-8 string, or null to clear.
  * Sets the session's artifact storage root; the fs_write tool and artifact
  * index resolve relative paths against it.

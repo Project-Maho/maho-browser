@@ -2,6 +2,8 @@
 
 #include "maho/browser/ai/maho_ai_file_attachment_registry.h"
 
+#include <algorithm>
+#include <iterator>
 #include <optional>
 
 #include "base/files/file_util.h"
@@ -66,6 +68,31 @@ bool MahoAiFileAttachmentRegistry::CanResolve(
          IsWithinSizeLimit(it->second.path);
 }
 
+std::string MahoAiFileAttachmentRegistry::IssueCapturedImageToken(
+    std::vector<uint8_t> png_bytes) {
+  if (png_bytes.size() > static_cast<size_t>(kMaxFileBytes) ||
+      !IsPngImage(png_bytes)) {
+    return {};
+  }
+  const std::string token = base::UnguessableToken::Create().ToString();
+  images_[token] = {std::move(png_bytes), base::Time::Now() + kTokenLifetime};
+  return token;
+}
+
+std::optional<std::vector<uint8_t>>
+MahoAiFileAttachmentRegistry::TakeCapturedImage(const std::string& token) {
+  auto it = images_.find(token);
+  if (it == images_.end()) {
+    return std::nullopt;
+  }
+  ImageEntry entry = std::move(it->second);
+  images_.erase(it);
+  if (entry.expires_at <= base::Time::Now()) {
+    return std::nullopt;
+  }
+  return std::move(entry.png_bytes);
+}
+
 bool MahoAiFileAttachmentRegistry::IsValidToken(
     const std::string& token) const {
   return HasToken(token);
@@ -93,6 +120,14 @@ bool IsAllowedAiFileAttachment(const base::FilePath& path) {
          path.MatchesExtension(FILE_PATH_LITERAL(".md")) ||
          path.MatchesExtension(FILE_PATH_LITERAL(".csv")) ||
          path.MatchesExtension(FILE_PATH_LITERAL(".json"));
+}
+
+bool IsPngImage(const std::vector<uint8_t>& bytes) {
+  static constexpr uint8_t kSignature[] = {0x89, 'P', 'N', 'G',
+                                           '\r', '\n', 0x1a, '\n'};
+  return bytes.size() > std::size(kSignature) &&
+         std::equal(std::begin(kSignature), std::end(kSignature),
+                    bytes.begin());
 }
 
 }  // namespace maho::ai

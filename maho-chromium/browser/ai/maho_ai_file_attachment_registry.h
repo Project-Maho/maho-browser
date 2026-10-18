@@ -34,12 +34,24 @@ class MahoAiFileAttachmentRegistry {
   bool HasToken(const std::string& token) const;
   bool IsValidToken(const std::string& token) const;
 
+  // Page captures the browser itself took (e.g. the screenshot dialog's
+  // "Ask Maho"). Only PNG bytes up to kMaxFileBytes are accepted; the token is
+  // single-use and never handed to the renderer.
+  std::string IssueCapturedImageToken(std::vector<uint8_t> png_bytes);
+  std::optional<std::vector<uint8_t>> TakeCapturedImage(
+      const std::string& token);
+
  private:
   struct Entry {
     base::FilePath path;
     base::Time expires_at;
   };
+  struct ImageEntry {
+    std::vector<uint8_t> png_bytes;
+    base::Time expires_at;
+  };
   std::map<std::string, Entry> entries_;
+  std::map<std::string, ImageEntry> images_;
 };
 
 class MahoAiFileAttachmentRegistryUserData
@@ -50,6 +62,7 @@ class MahoAiFileAttachmentRegistryUserData
 
 MahoAiFileAttachmentRegistry* GetMahoAiFileAttachmentRegistry(Profile* profile);
 bool IsAllowedAiFileAttachment(const base::FilePath& path);
+bool IsPngImage(const std::vector<uint8_t>& bytes);
 
 }  // namespace maho::ai
 
