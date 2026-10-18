@@ -415,6 +415,10 @@ def build_maho_cli(target: str | None) -> str:
         cwd=os.path.join(_WORKSPACE_ROOT, 'maho'),
         check=True,
     )
+    target_dir = build_maho_core.effective_cargo_target_dir(
+        os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target)
+    build_maho_core._place_windows_openssl_pdbs(
+        os.path.join(target_dir, 'release'))
     cli_path = os.path.join(
         build_maho_core.effective_cargo_target_dir(
             os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target),

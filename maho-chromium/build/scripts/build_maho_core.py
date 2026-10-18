@@ -578,6 +578,28 @@ def _bundled_c_staticlibs(release_dir):
     return libraries
 
 
+def _place_windows_openssl_pdbs(release_dir):
+    """Copy OpenSSL's installed PDB next to the deleted build-dir path it embeds.
+
+    Vendored OpenSSL on MSVC compiles with `/Zi /Fdossl_static.pdb` inside
+    `out/openssl-build/build/src`, copies `ossl_static.pdb` to
+    `out/openssl-build/install/lib` during `install_dev`, and then `openssl-src`
+    deletes `out/openssl-build/build`. Each object in `libcrypto.lib` still
+    records the `build/src/ossl_static.pdb` path, so `lld-link` fails with
+    LNK4099 unless that path exists at link time.
+    """
+    if sys.platform != 'win32' or not release_dir:
+        return
+    for out_dir in _cargo_build_output_dirs(release_dir, 'openssl-sys'):
+        installed_pdb = os.path.join(
+            out_dir, 'openssl-build', 'install', 'lib', 'ossl_static.pdb')
+        if not os.path.isfile(installed_pdb):
+            continue
+        embedded_dir = os.path.join(out_dir, 'openssl-build', 'build', 'src')
+        os.makedirs(embedded_dir, exist_ok=True)
+        shutil.copy2(installed_pdb, os.path.join(embedded_dir, 'ossl_static.pdb'))
+
+
 def privatize_rust_staticlib(lib_path, release_dir, prefix):
     """Rename embedded Rust runtime symbols to a per-library private prefix.
 
@@ -628,6 +650,7 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
               f'{os.path.basename(lib_path)}')
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+    _place_windows_openssl_pdbs(release_dir)
 
 
 def build_rust_prebuilt(target=None, incremental=False, is_release=False):
@@ -665,13 +688,7 @@ def build_rust_prebuilt(target=None, incremental=False, is_release=False):
         cargo_env['LIBSQLITE3_FLAGS'] = f'{existing} {rename_flags}'.strip()
         rustflags = cargo_env.get('RUSTFLAGS', '')
         cargo_env['RUSTFLAGS'] = f'{rustflags} -C target-feature=+crt-static'.strip()
-        # Vendored OpenSSL compiles its static libs with /Zi /Fdossl_static.pdb,
-        # and openssl-src deletes that build dir after install, so the shipped
-        # .lib points at a missing PDB (LNK4099 at the Chromium link). /Z7
-        # comes later on the cl line (CNF_CFLAGS) and embeds the debug info
-        # in each object instead.
-        cnf_cflags = cargo_env.get('__CNF_CFLAGS', '')
-        cargo_env['__CNF_CFLAGS'] = f'{cnf_cflags} /Z7'.strip()
+
         for _tool in ('perl', 'nasm'):
             if shutil.which(_tool) is None:
                 print(f'WARNING: {_tool} not found on PATH; the vendored OpenSSL '
