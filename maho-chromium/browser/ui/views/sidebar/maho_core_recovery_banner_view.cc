@@ -2,12 +2,14 @@
 
 #include "maho/browser/ui/views/sidebar/maho_core_recovery_banner_view.h"
 
-#include "ui/views/controls/label.h"
-#include "ui/views/controls/button/md_text_button.h"
-#include "ui/views/layout/box_layout.h"
-#include "ui/base/metadata/metadata_impl_macros.h"
 #include "base/functional/bind.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
+#include "ui/accessibility/ax_enums.mojom.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/views/accessibility/view_accessibility.h"
+#include "ui/views/controls/button/md_text_button.h"
+#include "ui/views/controls/label.h"
+#include "ui/views/layout/box_layout.h"
 
 namespace maho {
 
@@ -15,6 +17,7 @@ BEGIN_METADATA(MahoCoreRecoveryBannerView)
 END_METADATA
 
 MahoCoreRecoveryBannerView::MahoCoreRecoveryBannerView() {
+  GetViewAccessibility().SetRole(ax::mojom::Role::kStatus);
   SetLayoutManager(std::make_unique<views::BoxLayout>(
       views::BoxLayout::Orientation::kHorizontal));
   AddChildView(std::make_unique<views::Label>());
@@ -27,7 +30,7 @@ MahoCoreRecoveryBannerView::MahoCoreRecoveryBannerView() {
       base::BindRepeating([] { chrome::AttemptRestart(); }), u"Restart Maho"));
   state_subscription_ = AddCoreRecoveryStateCallback(base::BindRepeating(
       &MahoCoreRecoveryBannerView::SetState, base::Unretained(this)));
-  SetState(CoreRecoveryBannerState::kHidden);
+  SetState(GetCoreRecoveryState());
 }
 
 MahoCoreRecoveryBannerView::~MahoCoreRecoveryBannerView() = default;
@@ -43,11 +46,16 @@ void MahoCoreRecoveryBannerView::SetState(CoreRecoveryBannerState state) {
       break;
     case CoreRecoveryBannerState::kDegraded:
       label->SetText(u"Some Maho features are temporarily unavailable.");
+      GetViewAccessibility().SetName(
+          u"Some Maho features are temporarily unavailable.");
       restart->SetVisible(false);
       SetVisible(true);
       break;
     case CoreRecoveryBannerState::kFailedWithRetry:
-      label->SetText(u"Maho core startup failed. Restart Maho to restore features.");
+      label->SetText(
+          u"Maho core startup failed. Restart Maho to restore features.");
+      GetViewAccessibility().SetName(
+          u"Maho core startup failed. Restart Maho to restore features.");
       restart->SetVisible(true);
       SetVisible(true);
       break;
@@ -56,6 +64,12 @@ void MahoCoreRecoveryBannerView::SetState(CoreRecoveryBannerState state) {
                       CoreRecoveryBannerState::kHidden);
   restart->SetVisible(CoreRecoveryBannerHasRestartAction(state) &&
                       !dismissed_);
+  PreferredSizeChanged();
+  InvalidateLayout();
+  if (parent()) {
+    parent()->InvalidateLayout();
+    parent()->DeprecatedLayoutImmediately();
+  }
 }
 
 void MahoCoreRecoveryBannerView::SetDismissed(bool dismissed) {

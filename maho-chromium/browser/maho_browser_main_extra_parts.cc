@@ -7271,11 +7271,17 @@ void MahoBrowserMainExtraParts::OnCoreStartupComplete(
 #if BUILDFLAG(IS_WIN)
   mcp_session_token_ = maho::MahoMcpSessionToken::Create();
   if (mcp_session_token_) {
-    base::FilePath token_path =
-        maho::MahoMcpSessionToken::GetSessionTokenPath();
-    if (!token_path.empty()) {
-      mcp_session_token_->WriteEncryptedToDisk(token_path);
-    }
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+        base::BindOnce(
+            [](maho::MahoMcpSessionToken* token) {
+              base::FilePath token_path =
+                  maho::MahoMcpSessionToken::GetSessionTokenPath();
+              if (!token_path.empty()) {
+                token->WriteEncryptedToDisk(token_path);
+              }
+            },
+            base::Unretained(mcp_session_token_.get())));
   }
   mcp_pipe_server_ =
       std::make_unique<maho::MahoMcpPipeServer>(mcp_session_token_.get());

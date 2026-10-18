@@ -825,6 +825,10 @@ bool FakeResolveModel(MahoAgentSession*,
   return true;
 }
 
+void FakeFreeString(char* s) {
+  free(s);
+}
+
 bool FakeStageUserImage(MahoAgentSession*,
                         const char* mime,
                         const uint8_t* data,
@@ -861,6 +865,7 @@ const MahoAgentFfi kFakeFfi = {
     &FakeWaitWake,
     &FakeResolveModel,
     &FakeStageUserImage,
+    &FakeFreeString,
 };
 
 }  // namespace

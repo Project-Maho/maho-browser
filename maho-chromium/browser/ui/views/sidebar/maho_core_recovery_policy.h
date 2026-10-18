@@ -30,6 +30,7 @@ using CoreRecoveryStateCallbackList =
 base::CallbackListSubscription AddCoreRecoveryStateCallback(
     base::RepeatingCallback<void(CoreRecoveryBannerState state)> callback);
 void PublishCoreRecoveryState(CoreRecoveryBannerState state);
+CoreRecoveryBannerState GetCoreRecoveryState();
 
 }  // namespace maho
 

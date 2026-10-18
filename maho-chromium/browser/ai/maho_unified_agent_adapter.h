@@ -252,6 +252,7 @@ struct MahoAgentFfi {
                            const char* mime,
                            const uint8_t* data,
                            uint32_t len);
+  void (*free_string)(char* s);
 };
 
 const MahoAgentFfi* GetProductionMahoAgentFfi();

@@ -12,6 +12,7 @@
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
 #include "base/json/json_reader.h"
@@ -365,15 +366,34 @@ void SetCoreForProfile(::MahoCore* core, Profile* owner_profile,
 }
 
 uint64_t BeginWatchedCoreTask(CoreOperationClass operation) {
-  WatchdogState& state = GetWatchdogState();
-  base::AutoLock lock(state.lock);
-  return state.policy.OnTaskStarted(operation, base::TimeTicks::Now());
+  uint64_t id = 0;
+  {
+    WatchdogState& state = GetWatchdogState();
+    base::AutoLock lock(state.lock);
+    id = state.policy.OnTaskStarted(operation, base::TimeTicks::Now());
+  }
+  if (const auto deadline = CoreOperationDeadline(operation);
+      deadline &&
+      content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI)) {
+    content::GetUIThreadTaskRunner({})->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce([]() { EvaluateCoreWatchdog(base::TimeTicks::Now()); }),
+        *deadline + base::Milliseconds(50));
+  }
+  return id;
 }
 
 void EndWatchedCoreTask(uint64_t task_id) {
-  WatchdogState& state = GetWatchdogState();
-  base::AutoLock lock(state.lock);
-  state.policy.OnTaskFinished(task_id);
+  {
+    WatchdogState& state = GetWatchdogState();
+    base::AutoLock lock(state.lock);
+    state.policy.OnTaskFinished(task_id);
+  }
+  if (content::BrowserThread::IsThreadInitialized(content::BrowserThread::UI)) {
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
+        base::BindOnce([]() { EvaluateCoreWatchdog(base::TimeTicks::Now()); }));
+  }
 }
 
 void EvaluateCoreWatchdog(base::TimeTicks now) {
@@ -385,6 +405,27 @@ void EvaluateCoreWatchdog(base::TimeTicks now) {
   }
   if (changed) {
     GetCoreHealthCallbackList().Notify(*changed);
+    if (Profile* profile = GetCoreOwnerProfile()) {
+      const base::FilePath profile_path = profile->GetPath();
+      const char* state_str =
+          (*changed == CoreHealth::kDegraded) ? "degraded" : "healthy";
+      base::ThreadPool::PostTask(
+          FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+          base::BindOnce(
+              [](base::FilePath root, const char* health_str) {
+                for (const base::FilePath& base_dir : {root.DirName(), root}) {
+                  const base::FilePath logs_dir =
+                      base_dir.AppendASCII("MahoCore").AppendASCII("logs");
+                  if (base::CreateDirectory(logs_dir)) {
+                    const std::string line =
+                        std::string("{\"health\":\"") + health_str + "\"}\n";
+                    base::WriteFile(
+                        logs_dir.AppendASCII("core-watchdog.jsonl"), line);
+                  }
+                }
+              },
+              profile_path, state_str));
+    }
   }
 }
 

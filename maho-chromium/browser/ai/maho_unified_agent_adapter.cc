@@ -335,7 +335,19 @@ const MahoAgentFfi kProductionFfi = {
     &maho_agent_wait_wake,
     &maho_agent_resolve_model,
     &maho_agent_stage_user_image,
+    &maho_core_free_string,
 };
+
+void FreeAgentFfiString(const MahoAgentFfi* ffi, char* s) {
+  if (!s) {
+    return;
+  }
+  if (ffi && ffi->free_string) {
+    ffi->free_string(s);
+  } else {
+    maho_core_free_string(s);
+  }
+}
 }  // namespace
 
 const MahoAgentFfi* GetProductionMahoAgentFfi() {
@@ -1068,7 +1080,7 @@ void MahoUnifiedAgentAdapter::SubmitMessage(
         agent_session_, category, nullptr, nullptr, &out_json);
     if (ok && out_json) {
       std::string res_json(out_json);
-      maho_core_free_string(out_json);
+      FreeAgentFfiString(agent_ffi_, out_json);
       std::optional<base::DictValue> parsed =
           base::JSONReader::ReadDict(res_json, base::JSON_PARSE_RFC);
       if (parsed) {
@@ -3419,7 +3431,7 @@ bool MahoUnifiedAgentAdapter::ReplayAfter(const std::string& run_id,
   }
 
   std::string json_str(out_json);
-  maho_core_free_string(out_json);
+  FreeAgentFfiString(agent_ffi_, out_json);
 
   std::optional<base::DictValue> parsed =
       base::JSONReader::ReadDict(json_str, base::JSON_PARSE_RFC);
@@ -3594,7 +3606,7 @@ std::string MahoUnifiedAgentAdapter::RegisterWait(
     return "";
   }
   std::string handle(handle_c);
-  maho_core_free_string(handle_c);
+  FreeAgentFfiString(agent_ffi_, handle_c);
   return handle;
 }
 

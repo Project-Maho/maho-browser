@@ -7,6 +7,9 @@
 namespace maho {
 
 namespace {
+CoreRecoveryBannerState g_current_recovery_state =
+    CoreRecoveryBannerState::kHidden;
+
 CoreRecoveryStateCallbackList& GetCoreRecoveryStateCallbacks() {
   static base::NoDestructor<CoreRecoveryStateCallbackList> callbacks;
   return *callbacks;
@@ -19,7 +22,12 @@ base::CallbackListSubscription AddCoreRecoveryStateCallback(
 }
 
 void PublishCoreRecoveryState(CoreRecoveryBannerState state) {
+  g_current_recovery_state = state;
   GetCoreRecoveryStateCallbacks().Notify(state);
+}
+
+CoreRecoveryBannerState GetCoreRecoveryState() {
+  return g_current_recovery_state;
 }
 
 CoreStartupRetryDecision DecideCoreStartupRetry(int completed_attempts) {
