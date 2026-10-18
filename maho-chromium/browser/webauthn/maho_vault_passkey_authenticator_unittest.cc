@@ -54,12 +54,14 @@ TEST_F(VaultPasskeyAuthenticatorTest, MapsUvRequiredToMissingVerification) {
 
 TEST_F(VaultPasskeyAuthenticatorTest, DecodesBase64UrlBinaryFields) {
   const auto response = base::JSONReader::Read(
-      R"({"ok":true,"data":{"credentialId":"AQID","publicKeyCose":"pQECAyYgASFYIA","itemId":"item"}})",
+      R"({"ok":true,"data":{"credentialId":"AQID","coseKey":"pQECAyYgASFYIA","itemId":"item"}})",
          base::JSON_PARSE_RFC);
   ASSERT_TRUE(response);
   const auto credential_id = DecodeBase64UrlForTesting(*response,
                                                         "data.credentialId");
+  const auto cose_key = DecodeBase64UrlForTesting(*response, "data.coseKey");
   ASSERT_TRUE(credential_id);
+  ASSERT_TRUE(cose_key);
   EXPECT_EQ((std::vector<uint8_t>{1, 2, 3}), *credential_id);
 }
 

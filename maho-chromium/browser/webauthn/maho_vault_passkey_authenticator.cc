@@ -172,7 +172,10 @@ void VaultPasskeyAuthenticator::MakeCredential(
               return;
             }
             auto credential_id = DecodeBase64Url(*response, "data.credentialId");
-            auto public_key = DecodeBase64Url(*response, "data.publicKeyCose");
+            auto public_key = DecodeBase64Url(*response, "data.coseKey");
+            if (!public_key) {
+              public_key = DecodeBase64Url(*response, "data.publicKeyCose");
+            }
             if (!credential_id || !public_key) {
               std::move(callback).Run(
                   device::MakeCredentialStatus::kAuthenticatorResponseInvalid,
@@ -301,7 +304,21 @@ void VaultPasskeyAuthenticator::GetAssertion(
           weak, std::move(callback)));
 }
 
+void VaultPasskeyAuthenticator::GetPlatformCredentialInfoForRequest(
+    const device::CtapGetAssertionRequest& request,
+    const device::CtapGetAssertionOptions& options,
+    GetPlatformCredentialInfoForRequestCallback callback) {
+  std::move(callback).Run(
+      /*credentials=*/{},
+      device::FidoRequestHandlerBase::RecognizedCredential::
+          kHasRecognizedCredential);
+}
+
 void VaultPasskeyAuthenticator::Cancel() { weak_factory_.InvalidateWeakPtrs(); }
+
+device::AuthenticatorType VaultPasskeyAuthenticator::GetType() const {
+  return device::AuthenticatorType::kEnclave;
+}
 
 std::string VaultPasskeyAuthenticator::GetId() const { return id_; }
 

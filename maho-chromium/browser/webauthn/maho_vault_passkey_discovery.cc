@@ -31,7 +31,7 @@ class VaultPasskeyDiscovery final : public device::FidoDiscoveryBase {
                                   weak));
   }
 
-  void Stop() override { authenticator_.reset(); }
+  void Stop() override { weak_factory_.InvalidateWeakPtrs(); }
 
  private:
   void StartOnSequence() {
