@@ -122,7 +122,7 @@ pub(crate) fn build_profile(policy: &SandboxPolicy) -> Result<String, SandboxErr
          (allow sysctl-read)\n\
          (allow file-read-metadata)\n",
     );
-    let mut read_rule = String::from("(allow file-read*");
+    let mut read_rule = String::from("(allow file-read* (literal \"/\")");
     for root in SYSTEM_READ_ROOTS {
         read_rule.push_str(&format!(" (subpath {})", sbpl_string(Path::new(root))?));
     }
