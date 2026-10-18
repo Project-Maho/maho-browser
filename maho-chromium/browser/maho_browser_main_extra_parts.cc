@@ -811,6 +811,7 @@ void MahoBrowserMainExtraParts::PostEarlyInitialization() {
   // ChromeBrowserMainExtraPartsProfiles::PreProfileInit() seals the topology.
   maho::ai::EnsureMahoArtifactRegistryFactoryBuilt();
   maho::ai::EnsureMahoControlActivityServiceFactoryBuilt();
+  maho::ai::EnsureMahoAgentChannelServiceFactoryBuilt();
   maho::InstallMahoMailNotificationPermissionCallbacks();
 
   base::FilePath user_data_dir;

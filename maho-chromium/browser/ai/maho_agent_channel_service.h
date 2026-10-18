@@ -15,6 +15,8 @@
 class Profile;
 class MahoUnifiedAgentAdapter;
 namespace maho::ai {
+void EnsureMahoAgentChannelServiceFactoryBuilt();
+
 // Profile-owned, never borrowed from the personal AI panel.
 class MahoAgentChannelService : public KeyedService {
  public:

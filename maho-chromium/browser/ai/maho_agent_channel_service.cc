@@ -61,6 +61,10 @@ class ChannelServiceFactory : public ProfileKeyedServiceFactory {
 };
 }  // namespace
 
+void EnsureMahoAgentChannelServiceFactoryBuilt() {
+  ChannelServiceFactory::GetInstance();
+}
+
 MahoAgentChannelService* MahoAgentChannelService::GetForProfile(Profile* profile) {
   if (!profile || profile->IsOffTheRecord()) return nullptr;
   return ChannelServiceFactory::GetInstance()->Get(profile);
