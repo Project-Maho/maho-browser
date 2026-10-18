@@ -505,6 +505,7 @@ class TestBuildMahoCliArtifactPath(unittest.TestCase):
              patch.object(core, '_is_apple_target', create=True, return_value=False), \
              patch.object(core, 'effective_cargo_target_dir', create=True,
                           side_effect=effective_cargo_target_dir), \
+             patch.object(core, '_place_windows_openssl_pdbs', create=True), \
              patch.object(_bm.subprocess, 'run'):
             return _bm.build_maho_cli('x86_64-pc-windows-msvc')
 
