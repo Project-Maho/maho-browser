@@ -20,6 +20,7 @@ if (-not $env:vs2026_install) { $env:vs2026_install = [Environment]::GetEnvironm
 if (-not $env:vs2026_install) { throw 'vs2026_install is not set; run 00-prerequisites.ps1' }
 $env:CARGO_TARGET_DIR = Join-Path $Root 'cargo-target'
 $env:SCCACHE_SERVER_PORT = '4228'
+if (-not $env:MAHO_NINJA_JOBS) { $env:MAHO_NINJA_JOBS = '8' }
 cmd /c "sccache --start-server >nul 2>&1"
 $loc = (sccache --show-stats | Select-String 'Cache location').Line
 if ($loc -notmatch 's3') { throw "sccache is not on S3: $loc" }

@@ -24,6 +24,7 @@ $env:Path = "C:\src\depot_tools;$env:Path"; $env:DEPOT_TOOLS_WIN_TOOLCHAIN = '0'
 if (-not $env:vs2026_install) { $env:vs2026_install = [Environment]::GetEnvironmentVariable('vs2026_install','User') }
 $env:CARGO_TARGET_DIR = Join-Path $Rel 'cargo-target'
 $env:SCCACHE_SERVER_PORT = '4228'
+if (-not $env:MAHO_NINJA_JOBS) { $env:MAHO_NINJA_JOBS = '8' }
 function Log($m) { "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $m }
 New-Item -ItemType Directory -Force -Path $Rel | Out-Null
 if ((Get-MpPreference).ExclusionPath -notcontains $Rel) { Add-MpPreference -ExclusionPath $Rel }
