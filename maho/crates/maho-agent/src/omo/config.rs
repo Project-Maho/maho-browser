@@ -613,9 +613,6 @@ impl OmoLaunchConfigBuilder {
         env_vars.insert(agent_dir_key, self.agent_dir.to_string_lossy().to_string());
         env_vars.insert(session_dir_key, session_dir.to_string_lossy().to_string());
 
-        let dir_str = self.agent_dir.to_string_lossy().to_string();
-        env_vars.insert("SENPI_CODING_AGENT_DIR".to_string(), dir_str.clone());
-        env_vars.insert("OMO_CODING_AGENT_DIR".to_string(), dir_str);
         // omo/senpi builtin brand prefix fallback: rpc-entry scrubs SENPI_BRAND before
         // the engine reads it, falling back to the OMO brand prefix. We emit OMO_CODING_AGENT_DIR
         // and SENPI_CODING_AGENT_DIR pointing to our isolated agent_dir so omo's globalPath
