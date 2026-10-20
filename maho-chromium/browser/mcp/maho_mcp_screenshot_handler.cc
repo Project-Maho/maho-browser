@@ -25,6 +25,75 @@
 
 namespace maho {
 
+bool IsValidScreenshotArea(const gfx::Rect& area) {
+  return area.x() >= 0 && area.y() >= 0 && area.width() > 0 &&
+         area.height() > 0 && area.right() > area.x() &&
+         area.bottom() > area.y();
+}
+
+bool IsScreenshotAreaWithinViewport(const gfx::Rect& area,
+                                    const gfx::Size& viewport_size) {
+  return IsValidScreenshotArea(area) && !viewport_size.IsEmpty() &&
+         area.x() < viewport_size.width() && area.y() < viewport_size.height();
+}
+
+bool ValidateAndClampScreenshotArea(MahoMcpScreenshotMode mode,
+                                    const gfx::Rect* requested_area,
+                                    const gfx::Size& viewport_size,
+                                    gfx::Rect* clamped_area,
+                                    MahoMcpScreenshotError* error) {
+  auto fail = [error](MahoMcpScreenshotError value) {
+    if (error) {
+      *error = value;
+    }
+    return false;
+  };
+  if (!clamped_area) {
+    return fail(MahoMcpScreenshotError::kInvalidMode);
+  }
+  *clamped_area = gfx::Rect();
+  if (viewport_size.IsEmpty()) {
+    return fail(MahoMcpScreenshotError::kInvalidViewport);
+  }
+
+  if (error) {
+    *error = MahoMcpScreenshotError::kInvalidMode;
+  }
+
+  switch (mode) {
+    case MahoMcpScreenshotMode::kFullPage:
+    case MahoMcpScreenshotMode::kElement:
+      *clamped_area = gfx::Rect();
+      if (error) {
+        *error = MahoMcpScreenshotError::kNone;
+      }
+      return true;
+    case MahoMcpScreenshotMode::kViewport:
+      *clamped_area = gfx::Rect(viewport_size);
+      if (error) {
+        *error = MahoMcpScreenshotError::kNone;
+      }
+      return true;
+    case MahoMcpScreenshotMode::kArea:
+      if (!requested_area) {
+        return fail(MahoMcpScreenshotError::kMissingArea);
+      }
+      if (!IsValidScreenshotArea(*requested_area)) {
+        return fail(MahoMcpScreenshotError::kEmptyArea);
+      }
+      *clamped_area = *requested_area;
+      clamped_area->Intersect(gfx::Rect(viewport_size));
+      if (clamped_area->IsEmpty()) {
+        return fail(MahoMcpScreenshotError::kOutsideViewport);
+      }
+      if (error) {
+        *error = MahoMcpScreenshotError::kNone;
+      }
+      return true;
+  }
+  return fail(MahoMcpScreenshotError::kInvalidMode);
+}
+
 // static
 void MahoMcpScreenshotHandler::CaptureFullPage(
     const SkBitmap& bitmap,
@@ -45,6 +114,86 @@ void MahoMcpScreenshotHandler::CaptureFullPage(
   // Encode to PNG.
   std::vector<uint8_t> png_bytes = EncodePng(redacted_bitmap);
   std::move(callback).Run(std::move(png_bytes));
+}
+
+// static
+void MahoMcpScreenshotHandler::CaptureViewport(
+    const SkBitmap& bitmap,
+    const ui::AXTree* ax_tree,
+    base::OnceCallback<void(std::vector<uint8_t> png)> callback) {
+  gfx::Rect viewport;
+  if (!ValidateAndClampScreenshotArea(
+          MahoMcpScreenshotMode::kViewport, nullptr,
+          gfx::Size(bitmap.width(), bitmap.height()), &viewport)) {
+    std::move(callback).Run({});
+    return;
+  }
+  CaptureArea(bitmap, ax_tree, viewport, std::move(callback));
+}
+
+// static
+bool MahoMcpScreenshotHandler::CaptureArea(
+    const SkBitmap& bitmap,
+    const ui::AXTree* ax_tree,
+    const gfx::Rect& requested_area,
+    base::OnceCallback<void(std::vector<uint8_t> png)> callback,
+    bool bitmap_is_cropped,
+    MahoMcpScreenshotError* error) {
+  if (error) {
+    *error = MahoMcpScreenshotError::kCaptureFailed;
+  }
+  gfx::Rect area;
+  if (bitmap_is_cropped) {
+    area = requested_area;
+  } else if (!ValidateAndClampScreenshotArea(
+                 MahoMcpScreenshotMode::kArea, &requested_area,
+                 gfx::Size(bitmap.width(), bitmap.height()), &area, error)) {
+    std::move(callback).Run({});
+    return false;
+  }
+
+  SkBitmap cropped;
+  if (bitmap_is_cropped) {
+    cropped = bitmap;
+  } else {
+    if (!bitmap.extractSubset(
+            &cropped, SkIRect::MakeXYWH(area.x(), area.y(), area.width(),
+                                       area.height()))) {
+      std::move(callback).Run({});
+      return false;
+    }
+  }
+
+  SkBitmap owned_crop;
+  owned_crop.setInfo(cropped.info());
+  if (!owned_crop.tryAllocPixels(cropped.info()) ||
+      !owned_crop.writePixels(cropped.pixmap())) {
+    std::move(callback).Run({});
+    return false;
+  }
+
+  if (ax_tree) {
+    std::vector<gfx::Rect> translated_rects;
+    for (gfx::Rect rect : FindPasswordFieldBounds(ax_tree)) {
+      rect.Offset(-area.x(), -area.y());
+      rect.Intersect(gfx::Rect(owned_crop.width(), owned_crop.height()));
+      if (!rect.IsEmpty()) {
+        translated_rects.push_back(rect);
+      }
+    }
+    ApplyPasswordRedaction(owned_crop, translated_rects);
+  }
+
+  std::vector<uint8_t> png = EncodePng(owned_crop);
+  if (png.empty()) {
+    std::move(callback).Run({});
+    return false;
+  }
+  if (error) {
+    *error = MahoMcpScreenshotError::kNone;
+  }
+  std::move(callback).Run(std::move(png));
+  return true;
 }
 
 // static

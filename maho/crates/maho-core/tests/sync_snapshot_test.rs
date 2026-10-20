@@ -229,6 +229,67 @@ fn test_sync_snapshot_encrypted_round_trip() {
 }
 
 #[test]
+fn apply_sync_snapshot_rejects_well_formed_plaintext_when_a_key_is_configured() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+    use base64::Engine;
+
+    // Given: an attacker builds a structurally valid Snapshot on a keyless core.
+    // Unlike a hand-written payload, this one deserializes as
+    // `crate::snapshot::Snapshot`, so only authentication can stop it.
+    let mut attacker = MahoCore::new().with_storage(":memory:");
+    attacker.create_space(
+        "Injected By Attacker",
+        SpaceColor {
+            hue: 0.0,
+            saturation: 0.0,
+            brightness: 0.0,
+            grain: 0.0,
+        },
+        ProfileId::new("profile-1"),
+    );
+    let forged = attacker
+        .build_raw_snapshot()
+        .expect("attacker can build a raw snapshot");
+    let forged_json = serde_json::to_string(&forged).expect("snapshot serializes");
+    let forged_envelope = serde_json::json!({
+        "hlc_ts_ceiling": forged.hlc_ts_ceiling,
+        "blob": base64::engine::general_purpose::STANDARD.encode(forged_json.as_bytes()),
+    })
+    .to_string();
+
+    // And: the victim has a configured sync key.
+    let mut victim = MahoCore::new().with_storage(":memory:");
+    let seed_b64 = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
+    victim
+        .configure_sync_encryption_from_bootstrap("https://relay.mahobrowser.com", &seed_b64)
+        .expect("configure bootstrap should succeed");
+
+    // Then: neither raw Snapshot JSON nor an envelope whose blob is the same
+    // plaintext (it fails AES-GCM authentication) may be applied.
+    let raw_result = victim.apply_sync_snapshot(&forged_json);
+    assert!(
+        raw_result.is_err(),
+        "raw Snapshot JSON must be rejected while a sync key is configured, got {raw_result:?}"
+    );
+    let envelope_result = victim.apply_sync_snapshot(&forged_envelope);
+    assert_eq!(
+        envelope_result,
+        Err("snapshot authentication failed".to_string()),
+        "an unauthenticated envelope must fail authentication"
+    );
+
+    let names: Vec<String> = victim
+        .get_space_view_models()
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
+    assert!(
+        !names.contains(&"Injected By Attacker".to_string()),
+        "forged snapshot state must not be applied, spaces were {names:?}"
+    );
+}
+
+#[test]
 fn apply_sync_snapshot_rejects_forged_plaintext_when_a_key_is_configured() {
     let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
 

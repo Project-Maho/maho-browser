@@ -21,6 +21,7 @@
 #include "maho/browser/ai/maho_page_adapter_registry.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 #include "url/gurl.h"
@@ -194,6 +195,9 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
     return {};
   }
   int capture_full_page_count = 0;
+  int capture_viewport_count = 0;
+  int capture_area_count = 0;
+  gfx::Rect screenshot_area;
   std::string screenshot_b64 = "fake_screenshot_png_base64_data";
   void CaptureFullPagePngBase64(
       int tab_id,
@@ -208,6 +212,23 @@ class FakeBrowserActionDelegate : public maho::MahoMcpBrowserDelegate {
       ui::AXNodeID ax_id,
       base::OnceCallback<void(std::string)> callback) override {
     std::move(callback).Run({});
+  }
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> callback)
+      override {
+    ++capture_viewport_count;
+    std::move(callback).Run(
+        {screenshot_b64, std::nullopt});
+  }
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(maho::MahoMcpScreenshotResult)> callback)
+      override {
+    ++capture_area_count;
+    screenshot_area = area;
+    std::move(callback).Run({screenshot_b64, std::nullopt});
   }
 
   bool Scroll(int tab_id,

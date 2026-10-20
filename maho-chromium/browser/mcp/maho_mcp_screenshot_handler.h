@@ -5,6 +5,8 @@
 #ifndef MAHO_BROWSER_MCP_MAHO_MCP_SCREENSHOT_HANDLER_H_
 #define MAHO_BROWSER_MCP_MAHO_MCP_SCREENSHOT_HANDLER_H_
 
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "base/functional/callback.h"
@@ -13,8 +15,42 @@
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 
 namespace maho {
+
+enum class MahoMcpScreenshotMode {
+  kFullPage,
+  kElement,
+  kViewport,
+  kArea,
+};
+
+enum class MahoMcpScreenshotError {
+  kNone,
+  kInvalidMode,
+  kMissingArea,
+  kEmptyArea,
+  kOutsideViewport,
+  kInvalidViewport,
+  kCaptureFailed,
+};
+
+struct MahoMcpScreenshotResult {
+  std::string png_base64;
+  std::optional<MahoMcpScreenshotError> error;
+};
+
+bool ValidateAndClampScreenshotArea(MahoMcpScreenshotMode mode,
+                                    const gfx::Rect* requested_area,
+                                    const gfx::Size& viewport_size,
+                                    gfx::Rect* clamped_area,
+                                    MahoMcpScreenshotError* error = nullptr);
+
+bool IsValidScreenshotArea(const gfx::Rect& area);
+
+bool IsScreenshotAreaWithinViewport(const gfx::Rect& area,
+                                    const gfx::Size& viewport_size);
 
 // Screenshot capture handler for the MCP server.
 //
@@ -37,6 +73,19 @@ class MahoMcpScreenshotHandler {
       const SkBitmap& bitmap,
       const ui::AXTree* ax_tree,
       base::OnceCallback<void(std::vector<uint8_t> png)> callback);
+
+  static void CaptureViewport(
+      const SkBitmap& bitmap,
+      const ui::AXTree* ax_tree,
+      base::OnceCallback<void(std::vector<uint8_t> png)> callback);
+
+  static bool CaptureArea(
+      const SkBitmap& bitmap,
+      const ui::AXTree* ax_tree,
+      const gfx::Rect& requested_area,
+      base::OnceCallback<void(std::vector<uint8_t> png)> callback,
+      bool bitmap_is_cropped = false,
+      MahoMcpScreenshotError* error = nullptr);
 
   // Captures an element identified by AXNodeID. Crops the bitmap to the
   // element's bounding box before encoding.

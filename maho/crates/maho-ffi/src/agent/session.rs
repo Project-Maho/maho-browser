@@ -202,6 +202,7 @@ impl MahoAgentSession {
             event_seq_counter: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             notification_permission_granted: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             runtime_config: Mutex::new(runtime_config),
+            staged_user_image: Mutex::new(None),
         })
     }
 }

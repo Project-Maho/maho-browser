@@ -73,6 +73,17 @@
 
 namespace maho {
 
+class MahoMiniStateToggleButton : public views::ImageButton {
+ public:
+  explicit MahoMiniStateToggleButton(PressedCallback callback)
+      : views::ImageButton(std::move(callback)) {}
+
+  METADATA_HEADER(MahoMiniStateToggleButton, views::ImageButton)
+};
+
+BEGIN_METADATA(MahoMiniStateToggleButton)
+END_METADATA
+
 namespace {
 
 constexpr int kMahoMiniTopBarHeight = 46;
@@ -358,6 +369,19 @@ MahoMiniTopBarView::MahoMiniTopBarView(Browser* browser,
       ->SetMode(views::InkDropHost::InkDropMode::ON);
 
   promote_button_ = AddChildView(std::make_unique<MahoMiniPromoteButton>(this));
+  auto state_toggle = std::make_unique<MahoMiniStateToggleButton>(
+      base::BindRepeating(&MahoMiniTopBarView::ToggleMiniState,
+                          base::Unretained(this)));
+  state_toggle_button_ = AddChildView(std::move(state_toggle));
+  state_toggle_button_->SetPreferredSize(gfx::Size(28, 28));
+  state_toggle_button_->SetTooltipText(u"Compact Mini window");
+  state_toggle_button_->SetAccessibleName(u"Compact Mini window");
+  state_toggle_button_->SetImageModel(
+      views::Button::STATE_NORMAL,
+      ui::ImageModel::FromVectorIcon(vector_icons::kCaretDownOldIcon,
+                                     kMahoColorMiniSecondaryText, 12));
+  views::InkDrop::Get(state_toggle_button_)
+      ->SetMode(views::InkDropHost::InkDropMode::ON);
 
   auto address_field = std::make_unique<MahoMiniAddressField>();
   auto* address_field_raw = address_field.get();
@@ -433,6 +457,7 @@ void MahoMiniTopBarView::AddedToWidget() {
   if (GetWidget() && !widget_observation_.IsObserving()) {
     widget_observation_.Observe(GetWidget());
     last_widget_size_ = GetWidget()->GetWindowBoundsInScreen().size();
+    last_expanded_size_ = last_widget_size_;
   }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&MahoMiniTopBarView::FocusAddressFieldIfBlank,
@@ -459,29 +484,89 @@ bool MahoMiniTopBarView::AcceleratorPressed(
   return false;
 }
 
+void MahoMiniTopBarView::ToggleMiniState() {
+  const MahoMiniState next =
+      GetMahoMiniState(browser_) == MahoMiniState::kCompact
+          ? MahoMiniState::kExpanded
+          : MahoMiniState::kCompact;
+  if (GetWidget()) {
+    if (next == MahoMiniState::kCompact) {
+      last_expanded_size_ = GetWidget()->GetWindowBoundsInScreen().size();
+    }
+  }
+  SetMahoMiniState(browser_, next);
+  if (next == MahoMiniState::kExpanded && GetWidget()) {
+    GetWidget()->SetSize(last_expanded_size_);
+  }
+  state_toggle_button_->SetAccessibleName(
+      next == MahoMiniState::kCompact ? u"Expand Mini window"
+                                      : u"Compact Mini window");
+  state_toggle_button_->SetTooltipText(
+      next == MahoMiniState::kCompact ? u"Expand Mini window"
+                                      : u"Compact Mini window");
+}
+
 void MahoMiniTopBarView::Layout(PassKey pass_key) {
   LayoutSuperclass<views::View>(this);
 
   if (width() <= 0 || !space_pill_ || !address_field_ || !copy_button_ ||
-      !promote_button_) {
+      !promote_button_ || !state_toggle_button_) {
     return;
   }
 
-  const int promote_width = std::min(kPromoteControlWidth,
-                                     std::max(0, width() - 2 * kBarOuterInset));
+  const bool compact = GetMahoMiniState(browser_) == MahoMiniState::kCompact;
+  space_pill_->SetVisible(!compact);
+  copy_button_->SetVisible(!compact);
+  promote_button_->SetVisible(!compact);
+  if (compact) {
+    promote_button_->SetBounds(0, 0, 0, 0);
+  }
+  if (compact) {
+    state_toggle_button_->SetAccessibleName(u"Expand Mini window");
+  } else {
+    state_toggle_button_->SetAccessibleName(u"Compact Mini window");
+  }
+
+  const int toggle_width =
+      std::min(28, std::max(0, width() - 2 * kBarOuterInset));
+  const int toggle_x = width() - kBarOuterInset - toggle_width;
+  state_toggle_button_->SetBounds(toggle_x, kPromoteControlY, toggle_width,
+                                  kPromoteButtonHeight);
+  const int promote_width =
+      std::min(kPromoteControlWidth,
+               std::max(0, toggle_x - kZoneGap - 2 * kBarOuterInset));
   const int promote_x =
-      std::max(kBarOuterInset, width() - kBarOuterInset - promote_width);
-  promote_button_->SetBounds(promote_x, kPromoteControlY, promote_width,
-                             kPromoteButtonHeight);
+      std::max(kBarOuterInset, toggle_x - kZoneGap - promote_width);
+  if (!compact) {
+    promote_button_->SetBounds(promote_x, kPromoteControlY, promote_width,
+                               kPromoteButtonHeight);
+  }
 
   int integrated_x = kBarOuterInset;
 #if BUILDFLAG(IS_MAC)
   integrated_x += kTrafficLightsReservation + kZoneGap;
 #endif
-  const int integrated_right = std::max(integrated_x, promote_x - kZoneGap);
+  const int integrated_right =
+      std::max(integrated_x,
+               (compact ? toggle_x : promote_x) - kZoneGap);
   integrated_surface_bounds_ =
       gfx::Rect(integrated_x, kIntegratedSurfaceY,
                 integrated_right - integrated_x, kIntegratedSurfaceHeight);
+
+  if (compact) {
+    space_pill_->SetBounds(integrated_x, 0, 0, 0);
+    copy_button_->SetBounds(integrated_x, 0, 0, 0);
+    const int address_x = integrated_x + kBarOuterInset;
+    const int address_width =
+        std::max(0, toggle_x - kZoneGap - address_x - kBarOuterInset);
+    integrated_surface_bounds_ =
+        gfx::Rect(address_x, (height() - kAddressFieldHeight) / 2,
+                  address_width, kAddressFieldHeight);
+    address_field_->SetBounds(
+        address_x, (height() - kAddressFieldHeight) / 2, address_width,
+        kAddressFieldHeight);
+    return;
+  }
 
   if (integrated_surface_bounds_.IsEmpty()) {
     space_pill_->SetBounds(integrated_x, 0, 0, 0);
@@ -549,7 +634,8 @@ void MahoMiniTopBarView::OnThemeChanged() {
 bool MahoMiniTopBarView::IsPositionInWindowCaption(
     const gfx::Point& point) const {
   const views::View* interactive[] = {address_field_.get(), copy_button_.get(),
-                                      promote_button_.get()};
+                                      promote_button_.get(),
+                                      state_toggle_button_.get()};
   for (const views::View* child : interactive) {
     if (child && child->GetVisible()) {
       gfx::Point point_in_child = point;
@@ -587,7 +673,7 @@ void MahoMiniTopBarView::OnWidgetBoundsChanged(views::Widget* widget,
   }
   last_widget_size_ = size;
   PrefService* prefs = browser_->GetProfile()->GetPrefs();
-  if (prefs) {
+  if (prefs && GetMahoMiniState(browser_) == MahoMiniState::kExpanded) {
     prefs->SetInteger(sidebar_prefs::kMahoMiniWindowWidth, size.width());
     prefs->SetInteger(sidebar_prefs::kMahoMiniWindowHeight, size.height());
   }
@@ -611,33 +697,14 @@ void MahoMiniTopBarView::OnWidgetDestroying(views::Widget* widget) {
   can_persist_widget_size_ = false;
 }
 
-void MahoMiniTopBarView::OnTabStripModelChanged(
-    TabStripModel* tab_strip_model,
-    const TabStripModelChange& change,
-    const TabStripSelectionChange& selection) {
-  if (selection.active_tab_changed()) {
-    Observe(tab_strip_model->GetActiveWebContents());
-    UpdateHostname();
-  }
-}
-
-void MahoMiniTopBarView::DidFinishNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (navigation_handle->IsInPrimaryMainFrame() &&
-      navigation_handle->HasCommitted()) {
-    UpdateHostname();
-  }
-}
-
-void MahoMiniTopBarView::OnSpaceProfileBridgeChanged() {
-  UpdateSpacePill();
-}
-
-void MahoMiniTopBarView::OnSpaceProfileBridgeChanged(bool is_structural) {
-  UpdateSpacePill();
-}
-
 void MahoMiniTopBarView::PromoteToSpace(const std::string& space_id) {
+  SetMahoMiniState(browser_, TransitionMahoMiniState(
+                                 GetMahoMiniState(browser_),
+                                 MahoMiniStateEvent::kPromote));
+  if (GetWidget()) {
+    GetWidget()->SetSize(last_expanded_size_);
+  }
+
   auto* bridge = MahoSpaceProfileBridge::GetInstance();
   if (!bridge) {
     return;
@@ -657,11 +724,11 @@ void MahoMiniTopBarView::PromoteToSpace(const std::string& space_id) {
     g_browser_process->profile_manager()->LoadProfileByPath(
         absolute_path, false,
         base::BindOnce(
-            [](base::WeakPtr<BrowserWindowInterface> weak_popup_browser, std::string space_id,
-               Profile* target_profile) {
+            [](base::WeakPtr<BrowserWindowInterface> weak_popup_browser,
+               std::string space_id, Profile* target_profile) {
               if (weak_popup_browser && target_profile) {
-                ExecuteTabPromotion(static_cast<Browser*>(weak_popup_browser.get()), target_profile,
-                                    space_id);
+                ExecuteTabPromotion(static_cast<Browser*>(weak_popup_browser.get()),
+                                    target_profile, space_id);
               }
             },
             browser_->GetWeakPtr(), space_id));
@@ -669,6 +736,42 @@ void MahoMiniTopBarView::PromoteToSpace(const std::string& space_id) {
   }
 
   ExecuteTabPromotion(browser_, target_profile, space_id);
+}
+
+void MahoMiniTopBarView::OnTabStripModelChanged(
+    TabStripModel* tab_strip_model,
+    const TabStripModelChange& change,
+    const TabStripSelectionChange& selection) {
+  if (selection.active_tab_changed()) {
+    Observe(tab_strip_model->GetActiveWebContents());
+    UpdateHostname();
+  }
+}
+
+void MahoMiniTopBarView::DidFinishNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->HasCommitted() &&
+      GetMahoMiniState(browser_) == MahoMiniState::kCompact) {
+    SetMahoMiniState(browser_, TransitionMahoMiniState(
+                                   GetMahoMiniState(browser_),
+                                   MahoMiniStateEvent::kNavigation));
+    if (GetWidget()) {
+      GetWidget()->SetSize(last_expanded_size_);
+    }
+  }
+  if (navigation_handle->IsInPrimaryMainFrame() &&
+      navigation_handle->HasCommitted()) {
+    UpdateHostname();
+  }
+}
+
+void MahoMiniTopBarView::OnSpaceProfileBridgeChanged() {
+  UpdateSpacePill();
+}
+
+void MahoMiniTopBarView::OnSpaceProfileBridgeChanged(bool is_structural) {
+  UpdateSpacePill();
 }
 
 SkColor MahoMiniTopBarView::ResolveSpaceColorWithAlpha() {

@@ -3,6 +3,7 @@
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 
 #include <algorithm>
+#include <string>
 
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
@@ -20,6 +21,9 @@ const char kLiveFolders[] = "maho.live_folders";
 const char kSpacesFullViewport[] = "maho.spaces.full_viewport";
 const char kMahoMiniGlobalShortcutEnabled[] =
     "maho.maho_mini.global_shortcut_enabled";
+const char kMahoMiniGlobalShortcut[] = "maho.maho_mini.global_shortcut";
+const char kMahoMiniGlobalShortcutError[] =
+    "maho.maho_mini.global_shortcut_error";
 const char kMahoMiniClickOverrideEnabled[] =
     "maho.maho_mini.click_override_enabled";
 const char kOpenExternalLinksInMahoMini[] =
@@ -78,6 +82,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterListPref(kLiveFolders);
   registry->RegisterBooleanPref(kSpacesFullViewport, true);
   registry->RegisterBooleanPref(kMahoMiniGlobalShortcutEnabled, true);
+  registry->RegisterStringPref(kMahoMiniGlobalShortcut, std::string());
+  registry->RegisterStringPref(kMahoMiniGlobalShortcutError, std::string());
   registry->RegisterBooleanPref(kMahoMiniClickOverrideEnabled, true);
   registry->RegisterBooleanPref(kOpenExternalLinksInMahoMini, false);
   registry->RegisterBooleanPref(kPeekEnabled, true);

@@ -580,6 +580,19 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void ToggleATCRule(const std::string& rule_id, bool enabled) override;
 
   void GetAISettings(GetAISettingsCallback callback) override;
+  void ListAgentChannels(ListAgentChannelsCallback callback) override;
+  void SendAgentChannelReply(const std::string& id, const std::string& reply_id,
+                            SendAgentChannelReplyCallback callback) override;
+  void ConfigureAgentChannel(const std::string& config_json,
+                             ConfigureAgentChannelCallback callback) override;
+  void RemoveAgentChannel(const std::string& id,
+                          RemoveAgentChannelCallback callback) override;
+  void ApproveAgentChannelPairing(const std::string& id,
+      const std::string& sender, const std::string& code,
+      ApproveAgentChannelPairingCallback callback) override;
+  void RevokeAgentChannelPairing(const std::string& id,
+      const std::string& sender,
+      RevokeAgentChannelPairingCallback callback) override;
   void GetAIModelsSettings(GetAIModelsSettingsCallback callback) override;
   maho_settings::mojom::AIModelsSettingsPtr BuildAIModelsSettings();
   void OnAIModelsSettingsPrefsChanged();
@@ -784,6 +797,12 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                              DeleteAutofillPaymentCallback callback) override;
 
   void GetFilterLists(GetFilterListsCallback callback) override;
+  void SetEpisodicMemory(bool enabled,
+                         bool paused,
+                         const std::vector<std::string>& excluded_domains,
+                         SetEpisodicMemoryCallback callback) override;
+  void ForgetEpisodeSite(const std::string& site,
+                        ForgetEpisodeSiteCallback callback) override;
   void AddFilterList(const std::string& id,
                      const std::string& name,
                      const std::string& url,
@@ -791,6 +810,17 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void ToggleFilterList(const std::string& id,
                         bool enabled,
                         ToggleFilterListCallback callback) override;
+  void TestContentBlockerRequest(
+      const std::string& url,
+      const std::string& source_url,
+      const std::string& request_type,
+      TestContentBlockerRequestCallback callback) override;
+  void GetCustomFilterRules(GetCustomFilterRulesCallback callback) override;
+  void SaveCustomFilterRules(const std::string& rules,
+                             SaveCustomFilterRulesCallback callback) override;
+  void ImportLocalFilterList(const std::string& name,
+                             const std::string& content,
+                             ImportLocalFilterListCallback callback) override;
   void RemoveFilterList(const std::string& id,
                         RemoveFilterListCallback callback) override;
   void RebuildContentRules(RebuildContentRulesCallback callback) override;

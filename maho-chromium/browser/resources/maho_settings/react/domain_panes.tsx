@@ -15,7 +15,10 @@ import {MailBehaviorPane} from './mail_behavior.js';
 import {MailSecurityPane} from './mail_security.js';
 import {AiDevelopersPane} from './ai_developers.js';
 import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
+import {ContentBlockerRulesCard} from './content_blocker_rules.js';
 import {ProfilesEditor} from './profiles_editor.js';
+import {MemorySettingsPane} from './memory_settings.js';
+import {SiteSessionsSection} from './site_sessions_section.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
 import type {PlanTier} from '../../maho_common/react/ui/plan-picker.js';
@@ -333,11 +336,13 @@ export function DomainPaneContent(
     case 'ai':
       return <AiPane pane={pane} store={store} />;
     case 'ai-developers':
-      return <AiDevelopersPane pane={pane} />;
+      return <AiDevelopersPane pane={pane} store={store} />;
     case 'billing':
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
       return <ContentBlockerPane pane={pane} settings={settings} store={store} />;
+    case 'episodic-memory':
+      return <MemorySettingsPane pane={pane} settings={settings} store={store} />;
     case 'maho-mini':
       return <MahoMiniPane pane={pane} store={store} />;
     case 'mail-signatures':
@@ -503,12 +508,11 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
       {accountSection}
       <div className="mt-6">
         <SyncConnectionSection store={store} />
+        <SiteSessionsSection handler={store.getHandler()} />
       </div>
     </PaneShell>
   );
 }
-
-
 
 export function PaneLoading({message}: {message: string}) {
   return <p className={STANDALONE_MESSAGE_CLASS}>{message}</p>;
@@ -3231,12 +3235,7 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
           <SectionCard title="Content Blocking Mode" className="mb-6">
             <ManagedSettingRow
               controlClassName={SETTING_CONTROL_STACKED_CLASS}
-              description={
-                <div>
-                  <div>Select how ad blocking and privacy protection are handled in Maho.</div>
-                  {actionError?.action === 'mode' ? <ActionError message={actionError.message} /> : null}
-                </div>
-              }
+              description="Select how ad blocking and privacy protection are handled in Maho."
               title="Blocking Mode">
               <div className="mt-2 flex flex-col gap-2" role="radiogroup" aria-label="Content blocking mode">
                 {CONTENT_BLOCKING_MODE_OPTIONS.map(option => (
@@ -3256,6 +3255,7 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
                   />
                 ))}
               </div>
+              {actionError?.action === 'mode' ? <ActionError message={actionError.message} /> : null}
               {state.data.stats.mode === 1 ? (
                 <div className="mt-3 p-3 bg-muted/40 rounded-md border text-xs text-muted-foreground">
                   <p className="mb-2">Extensions manage content blocking via Declarative Net Request. Open extension management to configure installed blockers.</p>
@@ -3287,21 +3287,17 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
           <SectionCard title="Engine Health & Status" className="mb-6">
             <ManagedSettingRow
               controlClassName={SETTING_ACTIONS_CLASS}
-              description={
-                <div>
-                  <div>{state.data.stats.totalRuleCount.toLocaleString()} rules active · {state.data.stats.filterListCount} filter list(s) · Gen #{state.data.stats.engineGeneration}</div>
-                  {state.data.stats.healthStatus ? (
-                    <div className="text-xs text-muted-foreground mt-1">Health: {state.data.stats.healthStatus}</div>
-                  ) : null}
-                  {state.data.stats.overallError ? (
-                    <div className="text-xs text-destructive mt-1">Error: {state.data.stats.overallError}</div>
-                  ) : null}
-                  {actionError?.action === 'update' || actionError?.action === 'rebuild' ? (
-                    <ActionError message={actionError.message} />
-                  ) : null}
-                </div>
-              }
+              description={`${state.data.stats.totalRuleCount.toLocaleString()} rules active · ${state.data.stats.filterListCount} filter list(s) · Gen #${state.data.stats.engineGeneration}`}
               title="Engine status">
+              {state.data.stats.healthStatus ? (
+                <div className="text-xs text-muted-foreground mt-1">Health: {state.data.stats.healthStatus}</div>
+              ) : null}
+              {state.data.stats.overallError ? (
+                <div className="text-xs text-destructive mt-1">Error: {state.data.stats.overallError}</div>
+              ) : null}
+              {actionError?.action === 'update' || actionError?.action === 'rebuild' ? (
+                <ActionError message={actionError.message} />
+              ) : null}
               <div className="flex gap-2">
                 <ActionButton
                   label={busyActions.has('update') ? "Updating..." : "Check for Updates"}
@@ -3338,12 +3334,7 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
                 <ManagedSettingRow
                   key={filterList.id}
                   controlClassName={SETTING_ACTIONS_CLASS}
-                  description={
-                    <div>
-                      <div>{[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}</div>
-                      {hasListError ? <ActionError message={actionError.message} /> : null}
-                    </div>
-                  }
+                  description={[filterList.url, `${filterList.ruleCount.toLocaleString()} rules`, filterList.enabled ? 'Enabled' : 'Disabled'].filter(Boolean).join(' · ')}
                   title={filterListLabel}>
                   <Toggle
                     disabled={state.data.stats.mode !== 0 || busyActions.has('toggle')}
@@ -3364,23 +3355,35 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
                          async () => (await handler.removeFilterList(filterList.id)).success)
                          .then(() => undefined)}
                   />
+                  <div className="text-xs text-muted-foreground" data-testid={`filter-diagnostics-${filterList.id}`}>
+                    {filterList.acceptedNetworkRuleCount.toLocaleString()} network rules accepted ·{' '}
+                    {filterList.acceptedCosmeticRuleCount.toLocaleString()} cosmetic rules accepted ·{' '}
+                    {filterList.rejectedRuleCount.toLocaleString()} rules rejected
+                    {filterList.rejectedRuleSamples.length > 0 ? (
+                      <details className="mt-1">
+                        <summary>Show rejected rule samples ({filterList.rejectedRuleSamples.length})</summary>
+                        <ul className="mt-1 list-disc pl-5">
+                          {filterList.rejectedRuleSamples.map((sample, index) => (
+                            <li className="break-all font-mono" key={`${index}-${sample}`}>{sample}</li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                  </div>
+                  {hasListError ? <ActionError message={actionError.message} /> : null}
                 </ManagedSettingRow>
               );
             })}
             <ManagedSettingRow
               controlClassName={SETTING_CONTROL_STACKED_CLASS}
-              description={
-                  <div>
-                    <div>Add a custom filter list by name and source URL.</div>
-                    {actionError?.action === 'add' ? <ActionError message={actionError.message} /> : null}
-                  </div>
-              }
+              description="Add a custom filter list by name and source URL."
               title="Add filter list">
               <div className={SETTING_CONTROL_STACK_CLASS}>
                 <TextFieldShell ariaLabel="Filter list name" disabled={state.data.stats.mode !== 0} placeholder="Filter list name" value={form.name} onChange={value => setForm(current => ({...current, name: value}))} />
                 <TextFieldShell ariaLabel="Filter list URL" disabled={state.data.stats.mode !== 0} placeholder="https://example.com/filters.txt" value={form.url} onChange={value => setForm(current => ({...current, url: value}))} />
               </div>
               <div className={SETTING_ACTIONS_CLASS}>
+                {actionError?.action === 'add' ? <ActionError message={actionError.message} /> : null}
                 <ActionButton disabled={state.data.stats.mode !== 0 || busyActions.has('add')} label="Add filter list" onClick={async () => {
                   const name = form.name.trim();
                   const url = form.url.trim();
@@ -3398,6 +3401,11 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
               </div>
             </ManagedSettingRow>
           </SectionCard>
+          <ContentBlockerRulesCard
+            handler={handler}
+            disabled={state.data.stats.mode !== 0}
+            onChanged={() => void loadContentBlocker()}
+          />
         </>
       ) : null}
     </PaneShell>

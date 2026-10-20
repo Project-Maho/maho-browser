@@ -1549,3 +1549,52 @@ fn content_blocker_first_candidate_install_is_durable_after_exactly_one_install(
         "the first successful candidate promotion must be the durable snapshot"
     );
 }
+
+#[test]
+fn content_blocker_custom_rules_and_imported_list_survive_restart() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key(CB_KEY);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let db = cb_db_path(&dir, "cb-custom.db");
+    let imported_id;
+    {
+        let mut core = MahoCore::new().with_storage(&db);
+        core.set_content_blocking_mode(ContentBlockingMode::Native);
+        core.set_custom_filter_rules("||custom.evil.example^\n")
+            .expect("custom rules accepted");
+        imported_id = core
+            .import_local_filter_list("Imported", b"||imported.evil.example^\n")
+            .expect("local list accepted");
+        assert!(core.set_custom_filter_rules("<html></html>").is_err());
+        core.rebuild_content_rules();
+        assert!(core.should_block_request(
+            "https://custom.evil.example/x",
+            "https://news.test",
+            "script"
+        ));
+        assert!(core.should_block_request(
+            "https://imported.evil.example/x",
+            "https://news.test",
+            "script"
+        ));
+    }
+
+    let core = MahoCore::new().with_storage(&db);
+    assert_eq!(core.get_custom_filter_rules(), "||custom.evil.example^\n");
+    assert!(core.get_filter_lists_json().contains(&imported_id));
+    assert!(core.should_block_request(
+        "https://custom.evil.example/x",
+        "https://news.test",
+        "script"
+    ));
+    assert!(core.should_block_request(
+        "https://imported.evil.example/x",
+        "https://news.test",
+        "script"
+    ));
+    let explained = core.test_content_blocker_request(
+        "https://imported.evil.example/x",
+        "https://news.test",
+        "script",
+    );
+    assert_eq!(explained.list_id.as_deref(), Some(imported_id.as_str()));
+}

@@ -110,6 +110,10 @@ source_set("maho_sidebar_library") {
 
 source_set("maho_sidebar_core") {
   sources = [
+    "maho_core_recovery_banner_view.cc",
+    "maho_core_recovery_banner_view.h",
+    "maho_core_recovery_policy.cc",
+    "maho_core_recovery_policy.h",
     "maho_control_activity_indicator_view.cc",
     "maho_control_activity_indicator_view.h",
     "maho_favorite_edit_dialog.cc",
@@ -131,6 +135,10 @@ source_set("maho_sidebar_core") {
     "maho_sidebar_tab_list_view.cc",
     "maho_sidebar_tab_list_view.h",
     "maho_sidebar_tab_row_modifiers.h",
+    "maho_sidebar_agent_tasks_policy.cc",
+    "maho_sidebar_agent_tasks_policy.h",
+    "maho_sidebar_agent_tasks_view.cc",
+    "maho_sidebar_agent_tasks_view.h",
     "maho_sidebar_visibility_manager.cc",
     "maho_sidebar_visibility_manager.h",
     "maho_sidebar_folder_hover_popup_view.cc",
@@ -178,6 +186,8 @@ source_set("maho_sidebar_core") {
     ":maho_spaces_board_data",
     "//base",
     "//base:i18n",
+    "//maho/browser:maho_control_activity_service",
+    "//maho/browser:maho_core_holder",
     "//cc/paint",
     "//chrome/browser:browser_process",
     "//chrome/browser/profiles:profile",
@@ -226,6 +236,7 @@ source_set("maho_sidebar_core") {
 source_set("unit_tests") {
   testonly = true
   sources = [
+    "maho_core_recovery_policy_unittest.cc",
     "maho_sidebar_dnd_dispatch_unittest.cc",
     "maho_sidebar_favorites_pref_unittest.cc",
     "maho_sidebar_mail_badge_unittest.cc",
@@ -237,6 +248,8 @@ source_set("unit_tests") {
     "maho_sidebar_update_notification_view_unittest.cc",
     "maho_sidebar_processing_placeholder_view_unittest.cc",
     "maho_sidebar_tab_row_modifiers_unittest.cc",
+    "maho_sidebar_agent_task_model_unittest.cc",
+    "maho_sidebar_agent_tasks_policy_unittest.cc",
     "maho_now_playing_coordinator_unittest.cc",
   ]
 
@@ -260,6 +273,7 @@ source_set("unit_tests") {
     "//ui/views:test_support",
   ]
 }
+
 
 source_set("browser_tests") {
   testonly = true

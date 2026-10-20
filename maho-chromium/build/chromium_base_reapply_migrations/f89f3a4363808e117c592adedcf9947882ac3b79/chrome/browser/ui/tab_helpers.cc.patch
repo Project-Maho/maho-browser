@@ -1,0 +1,20 @@
+diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
+index edb7217..0a8aae4 100644
+--- a/chrome/browser/ui/tab_helpers.cc
++++ b/chrome/browser/ui/tab_helpers.cc
+@@ -13,6 +13,7 @@
+ #include "base/feature_list.h"
+ #include "base/logging.h"
+ #include "maho/browser/maho_tab_id_helper.h"
++#include "maho/browser/ai/maho_browse_episode_observer.h"
+ #include "maho/browser/net/maho_webstore_rebrand_handler.h"
+ #include "maho/browser/maho_tab_id_helper.h"
+ #include "maho/browser/net/maho_boost_injection_handler.h"
+@@ -488,6 +489,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents,
+   MahoBoostInjectionHandler::CreateForWebContents(web_contents);
+   MahoCosmeticFiltersHandler::CreateForWebContents(web_contents);
+   MahoTabIdHelper::CreateForWebContents(web_contents);
++  MahoBrowseEpisodeObserver::CreateForWebContents(web_contents);
+   MahoWebStoreRebrandHandler::CreateForWebContents(web_contents);
+   if (auto* metrics_services_manager =
+           g_browser_process->GetMetricsServicesManager()) {

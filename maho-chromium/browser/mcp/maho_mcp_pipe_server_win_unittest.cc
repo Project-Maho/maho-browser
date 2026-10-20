@@ -98,6 +98,17 @@ class FakePipeDelegate : public MahoMcpBrowserDelegate {
   BookmarkInfo CreateBookmark(const std::string& title, const GURL& url,
                               const std::string& folder) override { return {}; }
   std::vector<HistoryEntry> SearchHistory(const std::string& query, size_t maximum) override { return {}; }
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) override {
+    std::move(callback).Run(MahoMcpScreenshotResult{});
+  }
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) override {
+    std::move(callback).Run(MahoMcpScreenshotResult{});
+  }
   void CaptureElementPngBase64(int tab_id, ui::AXNodeID node,
       base::OnceCallback<void(std::string)> callback) override {
     std::move(callback).Run({});

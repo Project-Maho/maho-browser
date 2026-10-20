@@ -415,6 +415,10 @@ def build_maho_cli(target: str | None) -> str:
         cwd=os.path.join(_WORKSPACE_ROOT, 'maho'),
         check=True,
     )
+    target_dir = build_maho_core.effective_cargo_target_dir(
+        os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target)
+    build_maho_core._place_windows_openssl_pdbs(
+        os.path.join(target_dir, 'release'))
     cli_path = os.path.join(
         build_maho_core.effective_cargo_target_dir(
             os.path.join(_WORKSPACE_ROOT, 'maho'), rust_target),
@@ -2120,7 +2124,11 @@ def main():
         ensure_webui_dependencies(_WORKSPACE_ROOT)
         # Narrow builds link the existing Rust prebuilt; only full builds rebuild it.
         if not args.skip_rust and build_class != 'narrow':
-            build_maho_core.build_rust_prebuilt(args.target, incremental=not args.release)
+            build_maho_core.build_rust_prebuilt(
+                args.target,
+                incremental=not args.release,
+                is_release=args.release,
+            )
         if not args.skip_chromium:
             ensure_overlay_mount(_CHROMIUM_SRC_ROOT, args.skip_overlay_mount)
             ensure_args_gn(

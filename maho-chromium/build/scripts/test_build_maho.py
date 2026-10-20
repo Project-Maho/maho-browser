@@ -505,6 +505,7 @@ class TestBuildMahoCliArtifactPath(unittest.TestCase):
              patch.object(core, '_is_apple_target', create=True, return_value=False), \
              patch.object(core, 'effective_cargo_target_dir', create=True,
                           side_effect=effective_cargo_target_dir), \
+             patch.object(core, '_place_windows_openssl_pdbs', create=True), \
              patch.object(_bm.subprocess, 'run'):
             return _bm.build_maho_cli('x86_64-pc-windows-msvc')
 
@@ -713,6 +714,25 @@ class TestArgsTemplateSelection(unittest.TestCase):
                 self.assertIn('symbol_level = 1', config)
                 self.assertIn('blink_symbol_level = 0', config)
                 self.assertIn('strip_debug_info = true', config)
+
+    def test_every_template_disables_clang_modules_for_sccache(self):
+        # sccache treats -fmodules-cache-path (added by use_clang_modules) as
+        # non-cacheable, so a template that leaves modules on silently builds
+        # with zero cache hits.
+        config_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'config',
+        )
+        templates = sorted(
+            name for name in os.listdir(config_dir)
+            if name.startswith('args_') and name.endswith('.gn')
+        )
+        self.assertTrue(templates)
+        for name in templates:
+            with self.subTest(template=name):
+                with open(os.path.join(config_dir, name), encoding='utf-8') as f:
+                    config = f.read()
+                self.assertRegex(config, r'(?m)^use_clang_modules = false$')
 
     def test_release_syncs_local_google_api_key_into_default_args(self):
         with tempfile.TemporaryDirectory() as temp_dir:

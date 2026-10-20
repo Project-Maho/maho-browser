@@ -14,6 +14,7 @@
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/maho_space_profile_hydration.h"
 #include "maho/browser/maho_tab_registry.h"
+#include "maho/browser/mcp/maho_mcp_controller_pairing.h"
 #include "maho/browser/ui/theme/maho_space_theme_state.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
@@ -49,6 +50,8 @@ MahoSpaceProfileBridge* MahoSpaceProfileBridge::GetInstance() {
 void MahoSpaceProfileBridge::RegisterLocalStatePrefs(
     PrefRegistrySimple* registry) {
   registry->RegisterDictionaryPref(kProfileRegistryPref);
+  // MCP controller pairings (todo 67) are browser-wide like the socket.
+  MahoMcpPairingCoordinator::RegisterLocalStatePrefs(registry);
 }
 
 MahoSpaceProfileBridge::MahoSpaceProfileBridge() {

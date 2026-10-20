@@ -29,6 +29,7 @@ class Widget;
 namespace maho {
 
 class MahoMiniPromoteButton;
+class MahoMiniStateToggleButton;
 
 class MahoMiniTopBarView : public views::View,
                            public views::TextfieldController,
@@ -92,6 +93,7 @@ class MahoMiniTopBarView : public views::View,
   void AcceptAddressInput();
   void FocusAddressFieldIfBlank();
   SkColor ResolveSpaceColorWithAlpha();
+  void ToggleMiniState();
 
   const raw_ptr<Browser> browser_;
   const raw_ptr<BrowserView> browser_view_;
@@ -102,6 +104,8 @@ class MahoMiniTopBarView : public views::View,
   raw_ptr<views::Textfield> address_field_ = nullptr;
   raw_ptr<views::ImageButton> copy_button_ = nullptr;
   raw_ptr<MahoMiniPromoteButton> promote_button_ = nullptr;
+  raw_ptr<MahoMiniStateToggleButton> state_toggle_button_ = nullptr;
+  gfx::Size last_expanded_size_{600, 760};
 
   gfx::Rect integrated_surface_bounds_;
 

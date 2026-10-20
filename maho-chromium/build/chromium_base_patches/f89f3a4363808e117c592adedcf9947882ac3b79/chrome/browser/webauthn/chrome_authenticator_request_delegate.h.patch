@@ -1,0 +1,13 @@
+diff --git c/chrome/browser/webauthn/chrome_authenticator_request_delegate.h w/chrome/browser/webauthn/chrome_authenticator_request_delegate.h
+index 3e9a3666accf99595e115ae86577adae2df1f273..efbdf7d324763dbb2eb06fd79b93eca41f3b33be 100644
+--- c/chrome/browser/webauthn/chrome_authenticator_request_delegate.h
++++ w/chrome/browser/webauthn/chrome_authenticator_request_delegate.h
+@@ -129,6 +129,8 @@ class ChromeAuthenticatorRequestDelegate
+   GPMEnclaveController* enclave_controller_for_testing() const;
+ 
+   // content::AuthenticatorRequestClientDelegate:
++  std::vector<std::unique_ptr<device::FidoDiscoveryBase>>
++  CreatePlatformDiscoveries() override;
+   void SetRelyingPartyId(const std::string& rp_id) override;
+   void SetUIPresentation(UIPresentation ui_presentation) override;
+   bool DoesBlockRequestOnFailure(InterestingFailureReason reason) override;

@@ -3,6 +3,9 @@
 import React, {useEffect, useState} from 'react';
 
 import {Button} from '@ui/button';
+import {Input} from '@ui/input';
+import type {MahoSettingsStore} from './store.js';
+import type {PageHandlerRemote} from '../mojo.js';
 import {Check, Code, Copy} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {MCP_AGENT_GUIDANCE_COMMAND} from '../../maho_common/react/mcp-agent-guidance-copy.js';
@@ -134,10 +137,14 @@ function CommandRow(
   );
 }
 
-export function AiDevelopersPane({pane}: {readonly pane: PaneDefinition}) {
+export function AiDevelopersPane({pane, store}: {
+  readonly pane: PaneDefinition;
+  readonly store: MahoSettingsStore;
+}) {
   return (
     <PaneShell pane={pane}>
       <div className="space-y-6">
+        <AgentChannels handler={store.getHandler()} />
         <section className="space-y-3">
           <h3 className="px-1 text-base font-semibold tracking-tight text-foreground">CLI</h3>
           <CliHeroCard />
@@ -178,4 +185,161 @@ export function AiDevelopersPane({pane}: {readonly pane: PaneDefinition}) {
       </div>
     </PaneShell>
   );
+}
+
+type ChannelView = {
+  readonly id: string;
+  readonly provider: string;
+  readonly name: string;
+  readonly enabled: boolean;
+  readonly opaque_auth_handle: string;
+  readonly allowed_sender_ids: readonly string[];
+  readonly paired_sender_ids: readonly string[];
+  readonly running: boolean;
+  readonly result: string;
+  readonly reply_id: string;
+};
+
+export function parseChannelList(json: string): {channels: ChannelView[]; locked: boolean} {
+  const value: unknown = JSON.parse(json);
+  if (!value || typeof value !== 'object' || !('channels' in value) ||
+      !Array.isArray(value.channels) || !('locked' in value) || typeof value.locked !== 'boolean') {
+    throw new TypeError('Invalid channel response');
+  }
+  const channels = value.channels.map((item: unknown): ChannelView => {
+    if (!item || typeof item !== 'object' ||
+        !('id' in item) || typeof item.id !== 'string' ||
+        !('provider' in item) || typeof item.provider !== 'string' ||
+        !('name' in item) || typeof item.name !== 'string' ||
+        !('enabled' in item) || typeof item.enabled !== 'boolean' ||
+        !('opaque_auth_handle' in item) || typeof item.opaque_auth_handle !== 'string' ||
+        !('allowed_sender_ids' in item) || !Array.isArray(item.allowed_sender_ids) ||
+        !('paired_sender_ids' in item) || !Array.isArray(item.paired_sender_ids) ||
+        !('running' in item) || typeof item.running !== 'boolean') {
+      throw new TypeError('Invalid channel metadata');
+    }
+    return {
+      id: item.id, provider: item.provider, name: item.name, enabled: item.enabled,
+      opaque_auth_handle: item.opaque_auth_handle, running: item.running,
+      allowed_sender_ids: item.allowed_sender_ids.filter((id: unknown): id is string => typeof id === 'string'),
+      paired_sender_ids: item.paired_sender_ids.filter((id: unknown): id is string => typeof id === 'string'),
+      result: 'result' in item && typeof item.result === 'string' ? item.result : '',
+      reply_id: 'reply_id' in item && typeof item.reply_id === 'string' ? item.reply_id : '',
+    };
+  });
+  return {channels, locked: value.locked};
+}
+
+type ChannelHandler = Pick<PageHandlerRemote, 'listAgentChannels' | 'configureAgentChannel' |
+  'removeAgentChannel' | 'approveAgentChannelPairing' | 'revokeAgentChannelPairing' | 'sendAgentChannelReply'>;
+
+export function AgentChannels({handler}: {readonly handler: ChannelHandler}) {
+  const [channels, setChannels] = useState<readonly ChannelView[]>([]);
+  const [locked, setLocked] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [id, setId] = useState('');
+  const [provider, setProvider] = useState('telegram');
+  const [name, setName] = useState('');
+  const [note, setNote] = useState('');
+  const [senders, setSenders] = useState('');
+  const [enabled, setEnabled] = useState(true);
+  const [sender, setSender] = useState('');
+  const [code, setCode] = useState('');
+
+  const refresh = async () => {
+    const response = parseChannelList((await handler.listAgentChannels()).json);
+    setChannels(response.channels);
+    setLocked(response.locked);
+  };
+  const run = async (operation: () => Promise<{json: string}>) => {
+    setBusy(true);
+    setError('');
+    try {
+      const result: unknown = JSON.parse((await operation()).json);
+      if (!result || typeof result !== 'object' || !('success' in result) || result.success !== true) {
+        setError(result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+          ? result.error : 'Channel operation failed. Refresh and try again.');
+      }
+      await refresh();
+    } catch (failure) {
+      if (!(failure instanceof Error)) throw failure;
+      setError(failure.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    let active = true;
+    handler.listAgentChannels().then(({json}) => {
+      if (!active) return;
+      const result = parseChannelList(json);
+      setChannels(result.channels);
+      setLocked(result.locked);
+    }).catch((failure: unknown) => {
+      if (!(failure instanceof Error)) throw failure;
+      if (active) setError(failure.message);
+    });
+    return () => { active = false; };
+  }, [handler]);
+
+  return <SectionCard title="Messaging channels" description="Connect allowlisted senders to separate agent conversations. Pairing never approves tools or sends.">
+    <div className="space-y-4 px-4 py-4 sm:px-6">
+      <p className="text-sm text-muted-foreground">Create a secure note in Vault containing the bot token, then enter its item ID here. Slack requires an app token and bot token in the note as JSON. Credentials are cleared and channels stop when Vault locks.</p>
+      {locked && <p role="status">Unlock Vault to configure or pair channels.</p>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <Button variant="outline" disabled={busy} onClick={() => void run(async () => {
+        await refresh(); return {json: '{"success":true}'};
+      })}>Refresh channels and replies</Button>
+      {channels.length === 0 && <p className="text-sm text-muted-foreground">No channels configured.</p>}
+      <ul className="divide-y divide-border">
+        {channels.map(channel => <li key={channel.id} className="space-y-3 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="min-w-0 break-all font-medium">{channel.name || channel.id} ({channel.provider})</span>
+            <span className="text-sm text-muted-foreground">{channel.running ? 'Running' : 'Stopped'}</span>
+            <Button variant="outline" disabled={busy} onClick={() => {
+              setId(channel.id); setName(channel.name); setProvider(channel.provider);
+              setNote(channel.opaque_auth_handle); setSenders(channel.allowed_sender_ids.join(', '));
+              setEnabled(channel.enabled);
+            }}>Edit {channel.id}</Button>
+            <Button variant="outline" disabled={busy} onClick={() => void run(() => handler.removeAgentChannel(channel.id))}>Remove {channel.id}</Button>
+          </div>
+          <p className="text-sm">Paired senders: {channel.paired_sender_ids.join(', ') || 'None'}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" disabled={busy || locked || !sender || !code}
+              onClick={() => void run(() => handler.approveAgentChannelPairing(channel.id, sender, code))}>Approve pairing for {channel.id}</Button>
+            <Button variant="outline" disabled={busy || !sender}
+              onClick={() => void run(() => handler.revokeAgentChannelPairing(channel.id, sender))}>Revoke pairing for {channel.id}</Button>
+          </div>
+          {channel.result && <pre className="whitespace-pre-wrap break-words text-sm">{channel.result}</pre>}
+          {channel.reply_id && <Button disabled={busy || locked}
+            onClick={() => void run(() => handler.sendAgentChannelReply(channel.id, channel.reply_id))}>Confirm and send this reply to {channel.id}</Button>}
+        </li>)}
+      </ul>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1 text-sm">Sender ID to pair or revoke<Input value={sender} onChange={event => setSender(event.target.value)} /></label>
+        <label className="space-y-1 text-sm">Pairing code<Input value={code} autoComplete="off" onChange={event => setCode(event.target.value)} /></label>
+      </div>
+      <form className="space-y-3 border-t border-border pt-4" onSubmit={event => {
+        event.preventDefault();
+        void run(() => handler.configureAgentChannel(JSON.stringify({
+          id, provider, name, enabled, opaque_auth_handle: note,
+          allowed_sender_ids: senders.split(',').map(value => value.trim()).filter(Boolean),
+        })));
+      }}>
+        <h4 className="font-medium">Configure channel</h4>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-sm">Channel ID<Input required value={id} onChange={event => setId(event.target.value)} /></label>
+          <label className="space-y-1 text-sm">Name<Input value={name} onChange={event => setName(event.target.value)} /></label>
+          <label className="space-y-1 text-sm">Provider<select className="w-full rounded-md border border-input bg-background p-2" value={provider} onChange={event => setProvider(event.target.value)}>
+            <option value="telegram">Telegram</option><option value="slack">Slack</option><option value="discord">Discord</option>
+          </select></label>
+          <label className="space-y-1 text-sm">Vault secure-note item ID<Input required value={note} onChange={event => setNote(event.target.value)} /></label>
+          <label className="space-y-1 text-sm sm:col-span-2">Allowed sender IDs, comma separated<Input required value={senders} onChange={event => setSenders(event.target.value)} /></label>
+        </div>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />Enabled</label>
+        <Button type="submit" disabled={busy || locked}>{busy ? 'Saving...' : 'Save channel'}</Button>
+      </form>
+    </div>
+  </SectionCard>;
 }

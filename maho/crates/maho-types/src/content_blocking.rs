@@ -244,7 +244,26 @@ pub struct FilterListHealth {
     pub health_status: FilterHealthStatus,
     #[serde(default)]
     pub overall_error: Option<String>,
+    /// Per-list parse accounting for the active content of each list.
+    #[serde(default)]
+    pub rule_breakdown: Vec<FilterListRuleBreakdown>,
 }
+
+/// How many lines of one filter list parsed as network or cosmetic rules and
+/// how many were rejected by the parser (comments and blank lines excluded).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterListRuleBreakdown {
+    pub list_id: String,
+    pub accepted_network: usize,
+    pub accepted_cosmetic: usize,
+    pub rejected: usize,
+    /// The first rejected lines, at most `MAX_REJECTED_RULE_SAMPLES`.
+    #[serde(default)]
+    pub rejected_samples: Vec<String>,
+}
+
+pub const MAX_REJECTED_RULE_SAMPLES: usize = 20;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

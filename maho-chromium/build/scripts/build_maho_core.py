@@ -224,15 +224,21 @@ def _weaken_macho_symbols(lib_path, symbols):
     print(f'  weakened {len(changed)} symbols in {os.path.basename(lib_path)}')
 
 
-def _cargo_build(command, cwd, rust_target, package=None, env=None):
+def _cargo_build(command, cwd, rust_target, package=None, env=None, features=None):
     cargo_env = (env or os.environ).copy()
     args = ['build', '--release', '--target', rust_target]
     if package:
         args += ['-p', package]
+    if features:
+        if isinstance(features, (list, tuple)):
+            args += ['--features', ','.join(features)]
+        else:
+            args += ['--features', str(features)]
     if _is_apple_target(rust_target):
-        rustflags = cargo_env.get('RUSTFLAGS', '')
-        cargo_env['RUSTFLAGS'] = f'{rustflags} -Cpanic=abort'.strip()
-        args += ['-Zbuild-std=std,panic_abort']
+        # build-std keeps std built for the deployment target. The workspace
+        # release profile unwinds so ffi_safe! can contain panics; forcing
+        # -Cpanic=abort here would turn every contained panic into a crash.
+        args += ['-Zbuild-std=std,panic_unwind']
         command = ['rustup', 'run', 'nightly', 'cargo']
     subprocess.run(command + args, cwd=cwd, check=True, env=cargo_env)
 
@@ -309,8 +315,8 @@ def _atomic_place_lib(src_lib, dst_lib, release_dir=None, private_prefix=None):
                 try:
                     map_path = os.path.join(workdir, 'redefine.txt')
                     with open(map_path, 'w') as f:
-                        f.write('\n'.join(
-                            f'{symbol} {private_prefix}_{symbol}'
+                        f.write(''.join(
+                            f'{symbol} {private_prefix}_{symbol}\n'
                             for symbol in sorted(bundled_c_symbols)))
                     subprocess.run(
                         [objcopy, f'--redefine-syms={map_path}', tmp],
@@ -572,6 +578,28 @@ def _bundled_c_staticlibs(release_dir):
     return libraries
 
 
+def _place_windows_openssl_pdbs(release_dir):
+    """Copy OpenSSL's installed PDB next to the deleted build-dir path it embeds.
+
+    Vendored OpenSSL on MSVC compiles with `/Zi /Fdossl_static.pdb` inside
+    `out/openssl-build/build/src`, copies `ossl_static.pdb` to
+    `out/openssl-build/install/lib` during `install_dev`, and then `openssl-src`
+    deletes `out/openssl-build/build`. Each object in `libcrypto.lib` still
+    records the `build/src/ossl_static.pdb` path, so `lld-link` fails with
+    LNK4099 unless that path exists at link time.
+    """
+    if sys.platform != 'win32' or not release_dir:
+        return
+    for out_dir in _cargo_build_output_dirs(release_dir, 'openssl-sys'):
+        installed_pdb = os.path.join(
+            out_dir, 'openssl-build', 'install', 'lib', 'ossl_static.pdb')
+        if not os.path.isfile(installed_pdb):
+            continue
+        embedded_dir = os.path.join(out_dir, 'openssl-build', 'build', 'src')
+        os.makedirs(embedded_dir, exist_ok=True)
+        shutil.copy2(installed_pdb, os.path.join(embedded_dir, 'ossl_static.pdb'))
+
+
 def privatize_rust_staticlib(lib_path, release_dir, prefix):
     """Rename embedded Rust runtime symbols to a per-library private prefix.
 
@@ -598,7 +626,8 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
     try:
         map_path = os.path.join(workdir, 'redefine.txt')
         with open(map_path, 'w') as f:
-            f.write('\n'.join(f'{k} {v}' for k, v in rename.items()))
+            # GNU objcopy 2.47 rejects a final line without a newline.
+            f.write(''.join(f'{k} {v}\n' for k, v in rename.items()))
         extdir = os.path.join(workdir, 'ext')
         os.makedirs(extdir)
         subprocess.run([ar, 'x', lib_path], cwd=extdir, check=True)
@@ -606,8 +635,13 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
                 if n.lower().endswith(('.o', '.obj'))]
         done = []
         for o in objs:
-            subprocess.run([objcopy, f'--redefine-syms={map_path}', o],
-                           check=True, capture_output=True, text=True)
+            result = subprocess.run(
+                [objcopy, f'--redefine-syms={map_path}', o],
+                capture_output=True, text=True)
+            if result.returncode != 0:
+                # capture_output hides the reason; surface it in the build log.
+                sys.exit(f'{objcopy} failed on {os.path.basename(o)} '
+                         f'(exit {result.returncode}): {result.stderr.strip()}')
             done.append(o)
         for i in range(0, len(done), 200):
             subprocess.run([ar, 'r', lib_path] + done[i:i + 200],
@@ -616,9 +650,10 @@ def privatize_rust_staticlib(lib_path, release_dir, prefix):
               f'{os.path.basename(lib_path)}')
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+    _place_windows_openssl_pdbs(release_dir)
 
 
-def build_rust_prebuilt(target=None, incremental=False):
+def build_rust_prebuilt(target=None, incremental=False, is_release=False):
     rust_target, cpu_dir, lib_name = get_target_triple(target)
     output_dir = os.path.join(PREBUILT_DIR, cpu_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -653,12 +688,14 @@ def build_rust_prebuilt(target=None, incremental=False):
         cargo_env['LIBSQLITE3_FLAGS'] = f'{existing} {rename_flags}'.strip()
         rustflags = cargo_env.get('RUSTFLAGS', '')
         cargo_env['RUSTFLAGS'] = f'{rustflags} -C target-feature=+crt-static'.strip()
+
         for _tool in ('perl', 'nasm'):
             if shutil.which(_tool) is None:
                 print(f'WARNING: {_tool} not found on PATH; the vendored OpenSSL '
                       'build (bundled-sqlcipher-vendored-openssl) will fail. '
                       'Install it (e.g. Strawberry Perl / NASM).')
-    _cargo_build(['cargo'], MAHO_ROOT, rust_target, 'maho-ffi', cargo_env)
+    ffi_features = [] if is_release else ['debug-test-hooks']
+    _cargo_build(['cargo'], MAHO_ROOT, rust_target, 'maho-ffi', cargo_env, features=ffi_features)
 
     target_dir = effective_cargo_target_dir(MAHO_ROOT, rust_target)
     src_lib = os.path.join(target_dir, 'release', lib_name)
@@ -727,15 +764,17 @@ def main():
     parser.add_argument('--target', help='Explicit Rust target triple for cross-compilation.')
     parser.add_argument('--mail-only', action='store_true',
                         help='Build only the standalone Mail FFI prebuilt.')
+    parser.add_argument('--release', action='store_true',
+                        help='Build for release without debug test hooks.')
     args = parser.parse_args()
 
     with build_lock():
-        run_build(args.target, args.mail_only)
+        run_build(args.target, args.mail_only, is_release=args.release)
 
 
-def run_build(target, mail_only):
+def run_build(target, mail_only, is_release=False):
     if not mail_only:
-        build_rust_prebuilt(target)
+        build_rust_prebuilt(target, is_release=is_release)
         return
 
     rust_target, cpu_dir, _ = get_target_triple(target)

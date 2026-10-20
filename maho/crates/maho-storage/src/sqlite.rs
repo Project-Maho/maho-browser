@@ -506,6 +506,9 @@ pub struct AgentRuntimeConfigRow {
     pub proactive_mode: bool,
 }
 
+/// One stored entity version: (entity_id, hlc_ts, device_id, payload_json).
+pub type EntityVersionRow = (String, u64, u32, Option<String>);
+
 /// SQLite storage for persistent data (history, bookmarks, settings)
 pub struct SqliteStorage {
     pub(crate) conn: Connection,
@@ -959,6 +962,20 @@ impl SqliteStorage {
                     INSERT INTO memory_index_changes(fact_id) VALUES (OLD.id);
                 END;",
         )?;
+        let has_embedding_model = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM pragma_table_info('memory_facts') WHERE name='embedding_model'",
+                [],
+                |_| Ok(true),
+            )
+            .unwrap_or(false);
+        if !has_embedding_model {
+            self.conn.execute(
+                "ALTER TABLE memory_facts ADD COLUMN embedding_model TEXT",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -3484,6 +3501,20 @@ impl SqliteStorage {
         }
     }
 
+    /// Every stored version row of `entity_type`.
+    pub fn load_entity_versions_of_type(
+        &self,
+        entity_type: &str,
+    ) -> Result<Vec<EntityVersionRow>, StorageError> {
+        let mut statement = self.conn.prepare(
+            "SELECT entity_id, hlc_ts, device_id, payload_json FROM entity_versions WHERE entity_type = ?1",
+        )?;
+        let rows = statement.query_map(rusqlite::params![entity_type], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn load_local_sync_tombstones(&self) -> Result<Vec<(String, String, u64, u32, String)>, StorageError> {
         let mut statement = self.conn.prepare(
             "SELECT entity_type, entity_id, hlc_ts, device_id, payload_json FROM entity_versions
@@ -4499,6 +4530,34 @@ impl SqliteStorage {
         Ok(affected > 0)
     }
 
+    /// Deletes every browsing-episode fact recorded for `origin` (exact
+    /// match on the canonical origin stored in the episode metadata) in one
+    /// transaction, together with its FTS rows. The index-change triggers
+    /// journal each deletion for the ANN index.
+    pub fn delete_episode_facts_for_origin(&self, origin: &str) -> Result<usize, StorageError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let ids: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM memory_facts \
+                 WHERE source = 'browse' AND json_extract(metadata, '$.origin') = ?1",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![origin], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        for id in &ids {
+            tx.execute(
+                "DELETE FROM memory_facts WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
+            tx.execute(
+                "DELETE FROM memory_facts_fts WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(ids.len())
+    }
+
     pub fn insert_memory(&self, params: MemoryInsertParams<'_>) -> Result<(), StorageError> {
         self.conn.execute(
             "INSERT OR REPLACE INTO memory_facts \
@@ -4543,10 +4602,60 @@ impl SqliteStorage {
 
     pub fn update_memory_embedding(&self, fact_id: &str, bytes: &[u8]) -> Result<(), StorageError> {
         self.conn.execute(
-            "UPDATE memory_facts SET embedding = ?1 WHERE id = ?2",
+            "UPDATE memory_facts SET embedding = ?1, embedding_model = NULL WHERE id = ?2",
             rusqlite::params![bytes, fact_id],
         )?;
         Ok(())
+    }
+
+    /// Stores an embedding together with the model generation that produced it.
+    pub fn update_memory_embedding_with_model(
+        &self,
+        fact_id: &str,
+        bytes: &[u8],
+        model: &str,
+    ) -> Result<(), StorageError> {
+        self.conn.execute(
+            "UPDATE memory_facts SET embedding = ?1, embedding_model = ?2 WHERE id = ?3",
+            rusqlite::params![bytes, model, fact_id],
+        )?;
+        Ok(())
+    }
+
+    /// Facts whose stored vector was not produced by `current_model`: no
+    /// embedding, an untagged (legacy) embedding, another model's embedding, or
+    /// an all-zero placeholder. Ordered by id so batches are deterministic.
+    pub fn memory_facts_needing_embedding(
+        &self,
+        current_model: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, StorageError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, fact, embedding, embedding_model FROM memory_facts ORDER BY id")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<Vec<u8>>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut stale = Vec::new();
+        for row in rows {
+            let (id, fact, embedding, model) = row?;
+            let current = model.as_deref() == Some(current_model)
+                && embedding
+                    .as_deref()
+                    .is_some_and(|bytes| bytes.iter().any(|b| *b != 0));
+            if !current {
+                stale.push((id, fact));
+                if stale.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(stale)
     }
 
     pub fn load_all_memories(&self) -> Result<Vec<MemoryRecord>, StorageError> {

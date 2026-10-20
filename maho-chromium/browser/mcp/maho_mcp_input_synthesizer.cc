@@ -4,30 +4,34 @@
 
 #include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
 
-#include <cctype>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <string>
 
 #ifndef MAHO_STANDALONE_TEST
 #include "base/functional/bind.h"
+#include "base/json/json_writer.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "components/input/native_web_keyboard_event.h"
+#include "base/values.h"
 #include "build/build_config.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/web_contents.h"
+#include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/mcp/maho_mcp_text_insertion_policy.h"
 #if BUILDFLAG(IS_MAC)
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
 #include "ui/latency/latency_info.h"
 #endif
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/render_widget_host.h"
-#include "content/public/browser/render_widget_host_view.h"
-#include "content/public/browser/web_contents.h"
 #include "third_party/blink/public/common/input/web_keyboard_event.h"
 #include "third_party/blink/public/common/input/web_mouse_event.h"
 #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
@@ -72,6 +76,122 @@ ClickMotionProfile& ClickMotionProfile::operator=(ClickMotionProfile&&) noexcept
 ClickMotionProfile::~ClickMotionProfile() = default;
 
 namespace {
+
+constexpr int kTextInsertionIsolatedWorldId =
+    content::ISOLATED_WORLD_ID_CONTENT_END + 10;
+
+std::string JsonString(const std::string& text) {
+  std::string json;
+  base::JSONWriter::Write(base::Value(text), &json);
+  return json;
+}
+
+class AsyncTextInsertionCascade {
+ public:
+  using Attempt = base::RepeatingCallback<void(
+      TextInsertionStrategy,
+      base::OnceCallback<void()>)>;
+  using Readback =
+      base::RepeatingCallback<void(base::OnceCallback<void(bool)>)>;
+
+  AsyncTextInsertionCascade(std::vector<TextInsertionStrategy> strategies,
+                            Attempt attempt,
+                            Readback readback,
+                            base::OnceCallback<void(TextInsertionResult)> done)
+      : strategies_(std::move(strategies)),
+        attempt_(std::move(attempt)),
+        readback_(std::move(readback)),
+        done_(std::move(done)) {}
+
+  void Start() { Step(); }
+
+ private:
+  void Step() {
+    if (index_ == strategies_.size()) {
+      Finish(TextInsertionResult::kInsertionNotObserved);
+      return;
+    }
+    attempt_.Run(strategies_[index_],
+                 base::BindOnce(&AsyncTextInsertionCascade::Read,
+                                weak_factory_.GetWeakPtr()));
+  }
+
+  void Read() {
+    readback_.Run(base::BindOnce(&AsyncTextInsertionCascade::OnReadback,
+                                 weak_factory_.GetWeakPtr()));
+  }
+
+  void OnReadback(bool observed) {
+    if (observed) {
+      switch (strategies_[index_]) {
+        case TextInsertionStrategy::kKeyboard:
+          Finish(TextInsertionResult::kKeyboard);
+          return;
+        case TextInsertionStrategy::kBeforeInput:
+          Finish(TextInsertionResult::kBeforeInput);
+          return;
+        case TextInsertionStrategy::kPaste:
+          Finish(TextInsertionResult::kPaste);
+          return;
+        case TextInsertionStrategy::kExecCommand:
+          Finish(TextInsertionResult::kExecCommand);
+          return;
+      }
+    }
+    ++index_;
+    Step();
+  }
+
+  void Finish(TextInsertionResult result) {
+    auto done = std::move(done_);
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE,
+        base::BindOnce(
+            [](AsyncTextInsertionCascade* self,
+               base::OnceCallback<void(TextInsertionResult)> callback,
+               TextInsertionResult value) {
+              std::move(callback).Run(value);
+              delete self;
+            },
+            base::Unretained(this), std::move(done), result));
+  }
+
+  std::vector<TextInsertionStrategy> strategies_;
+  Attempt attempt_;
+  Readback readback_;
+  base::OnceCallback<void(TextInsertionResult)> done_;
+  size_t index_ = 0;
+  base::WeakPtrFactory<AsyncTextInsertionCascade> weak_factory_{this};
+};
+
+std::string BuildInsertionScript(TextInsertionStrategy strategy,
+                                 const std::string& text) {
+  const std::string value = JsonString(text);
+  switch (strategy) {
+    case TextInsertionStrategy::kBeforeInput:
+      return "(()=>{const e=document.activeElement;if(!e)return;const v=" +
+             value +
+             ";e.dispatchEvent(new InputEvent('beforeinput',{bubbles:true,"
+             "inputType:'insertText',data:v}));if('value'in e)e.value+=v;"
+             "else e.textContent+=v;e.dispatchEvent(new InputEvent('input',"
+             "{bubbles:true,inputType:'insertText',data:v}));})()";
+    case TextInsertionStrategy::kPaste:
+      return "(()=>{const e=document.activeElement;if(!e)return;const d="
+             "new DataTransfer();d.setData('text/plain'," + value +
+             ");e.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,"
+             "cancelable:true,clipboardData:d}));})()";
+    case TextInsertionStrategy::kExecCommand:
+      return "document.execCommand('insertText',false," + value + ")";
+    case TextInsertionStrategy::kKeyboard:
+      return std::string();
+  }
+}
+
+std::string BuildInsertionReadbackScript(const std::string& text) {
+  return "(()=>{const e=document.activeElement;if(!e)return false;const v=" +
+         JsonString(text) +
+         ";return ('value'in e?e.value:e.textContent)===v})()";
+}
 
 // pi is needed for the ease-in-out click trajectory; this Chromium tree's
 // base/numerics/math_constants.h does not carry a pi constant.
@@ -655,6 +775,88 @@ bool MahoMcpInputSynthesizer::TypeText(content::WebContents* wc,
     }
   }
   return true;
+}
+
+void MahoMcpInputSynthesizer::RunTextInsertionCascadeAsyncForTesting(
+    const std::vector<TextInsertionStrategy>& strategies,
+    base::RepeatingCallback<void(TextInsertionStrategy,
+                                 base::OnceCallback<void()>)> attempt,
+    base::RepeatingCallback<void(base::OnceCallback<void(bool)>)> readback,
+    base::OnceCallback<void(TextInsertionResult)> callback) {
+  auto* cascade = new AsyncTextInsertionCascade(
+      strategies,
+      std::move(attempt),
+      std::move(readback),
+      std::move(callback));
+  cascade->Start();
+}
+
+void MahoMcpInputSynthesizer::InsertTextWithFallback(
+    content::WebContents* wc,
+    const std::string& text,
+    const std::string& element_kind,
+    const std::string& editor_hint,
+    base::OnceCallback<void(TextInsertionResult)> callback) {
+  if (!wc || !wc->GetFocusedFrame()) {
+    std::move(callback).Run(TextInsertionResult::kInsertionNotObserved);
+    return;
+  }
+  base::WeakPtr<content::WebContents> weak_contents = wc->GetWeakPtr();
+  const auto strategies =
+      ChooseInsertionStrategies(element_kind, editor_hint);
+  auto attempt = base::BindRepeating(
+      [](base::WeakPtr<content::WebContents> contents,
+         const std::string& value, TextInsertionStrategy strategy,
+         base::OnceCallback<void()> done) {
+        if (!contents) {
+          std::move(done).Run();
+          return;
+        }
+        if (strategy == TextInsertionStrategy::kKeyboard) {
+          MahoMcpInputSynthesizer::TypeText(contents.get(), value);
+          std::move(done).Run();
+          return;
+        }
+        content::RenderFrameHost* frame = contents->GetFocusedFrame();
+        if (!frame || !frame->IsRenderFrameLive()) {
+          std::move(done).Run();
+          return;
+        }
+        frame->ExecuteJavaScriptInIsolatedWorld(
+            base::UTF8ToUTF16(BuildInsertionScript(strategy, value)),
+            base::BindOnce(
+                [](base::OnceCallback<void()> done, base::Value) {
+                  std::move(done).Run();
+                },
+                std::move(done)),
+            kTextInsertionIsolatedWorldId);
+      },
+      weak_contents, text);
+  auto readback = base::BindRepeating(
+      [](base::WeakPtr<content::WebContents> contents,
+         const std::string& expected, base::OnceCallback<void(bool)> done) {
+        if (!contents) {
+          std::move(done).Run(false);
+          return;
+        }
+        content::RenderFrameHost* frame = contents->GetFocusedFrame();
+        if (!frame || !frame->IsRenderFrameLive()) {
+          std::move(done).Run(false);
+          return;
+        }
+        frame->ExecuteJavaScriptInIsolatedWorld(
+            base::UTF8ToUTF16(BuildInsertionReadbackScript(expected)),
+            base::BindOnce(
+                [](base::OnceCallback<void(bool)> done, base::Value result) {
+                  std::move(done).Run(result.is_bool() && result.GetBool());
+                },
+                std::move(done)),
+            kTextInsertionIsolatedWorldId);
+      },
+      weak_contents, text);
+  RunTextInsertionCascadeAsyncForTesting(
+      strategies, std::move(attempt), std::move(readback),
+      std::move(callback));
 }
 
 namespace {
