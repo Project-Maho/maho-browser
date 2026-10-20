@@ -55,8 +55,16 @@ struct ErrorBody {
     error: Option<String>,
 }
 
+/// Upper bound for one relay auth request. Without it a relay that accepts the
+/// connection but never answers hangs `maho login`/`whoami` forever.
+const RELAY_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn relay_client() -> Result<Client> {
+    Ok(Client::builder().timeout(RELAY_REQUEST_TIMEOUT).build()?)
+}
+
 pub async fn login(relay_url: &str, email: &str, password: &str) -> Result<AuthResponse> {
-    let client = Client::new();
+    let client = relay_client()?;
     let url = format!("{}/auth/login", relay_url);
     let resp = client
         .post(&url)
@@ -82,7 +90,7 @@ pub async fn login(relay_url: &str, email: &str, password: &str) -> Result<AuthR
 }
 
 pub async fn signup(relay_url: &str, email: &str, password: &str) -> Result<AuthResponse> {
-    let client = Client::new();
+    let client = relay_client()?;
     let url = format!("{}/auth/signup", relay_url);
     let resp = client
         .post(&url)
@@ -114,7 +122,7 @@ pub async fn whoami(relay_url: &str, config: &CliConfig) -> Result<MeResponse> {
         bail!("not logged in — run `maho login` first");
     }
 
-    let client = Client::new();
+    let client = relay_client()?;
     let url = format!("{}/auth/me", relay_url);
     let resp = client.get(&url).bearer_auth(token).send().await?;
 
@@ -126,4 +134,35 @@ pub async fn whoami(relay_url: &str, config: &CliConfig) -> Result<MeResponse> {
 
     let me: MeResponse = resp.json().await?;
     Ok(me)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A relay that accepts the TCP connection but never answers must fail
+    /// with a timeout instead of hanging `maho login` forever.
+    #[tokio::test]
+    async fn login_against_silent_relay_times_out() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hold = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let outcome = tokio::time::timeout(
+            RELAY_REQUEST_TIMEOUT + std::time::Duration::from_secs(10),
+            login(&format!("http://{addr}"), "a@example.com", "pw"),
+        )
+        .await
+        .expect("login must be bounded by the relay request timeout");
+        let Err(err) = outcome else {
+            panic!("silent relay must not yield a session");
+        };
+        assert!(
+            err.downcast_ref::<reqwest::Error>().is_some_and(reqwest::Error::is_timeout),
+            "expected a request timeout, got: {err:#}"
+        );
+        hold.abort();
+    }
 }
