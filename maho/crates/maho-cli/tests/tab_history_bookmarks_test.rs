@@ -272,3 +272,122 @@ async fn tab_info_fails_when_no_browser() {
         "unexpected stderr: {stderr}"
     );
 }
+
+// ─── Tab Navigate lease path ─────────────────────────────────────────────────
+
+/// Serves initialize, then answers each request with `reply(method, name)` and
+/// records "<method> <name>" so tests can assert the exact call sequence.
+async fn make_recording_server(
+    reply: fn(&str, &str) -> Result<Value, (i64, &'static str)>,
+) -> (
+    tempfile::TempDir,
+    PathBuf,
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let sock_path = dir.path().join("test.sock");
+    let listener = UnixListener::bind(&sock_path).unwrap();
+    let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let calls_task = std::sync::Arc::clone(&calls);
+
+    let handle = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                break;
+            }
+            let req: Value = serde_json::from_str(&line).unwrap();
+            let id = req["id"].clone();
+            let method = req["method"].as_str().unwrap_or_default().to_string();
+            let resp = if method == "initialize" {
+                json!({"jsonrpc": "2.0", "id": id, "result": {
+                    "protocolVersion": "2025-03-26",
+                    "serverInfo": {"name": "maho-browser", "version": "0.1.0"},
+                    "capabilities": {"tools": {}}
+                }})
+            } else {
+                let name = req["params"]["name"].as_str().unwrap_or_default().to_string();
+                calls_task.lock().unwrap().push(format!("{method} {name}"));
+                match reply(&method, &name) {
+                    Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": {
+                        "content": [{"type": "text", "text": result.to_string()}]
+                    }}),
+                    Err((code, message)) => json!({"jsonrpc": "2.0", "id": id,
+                        "error": {"code": code, "message": message}}),
+                }
+            };
+            let mut buf = serde_json::to_vec(&resp).unwrap();
+            buf.push(b'\n');
+            writer.write_all(&buf).await.unwrap();
+        }
+    });
+
+    (dir, sock_path, handle, calls)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tab_navigate_acquires_lease_on_the_control_plane() {
+    // The browser rejects lease capabilities on tools/call (-32601) and gates
+    // browser_navigate on a held lease, so the lease must go through control/call.
+    let (_dir, sock_path, server, calls) = make_recording_server(|method, name| {
+        match (method, name) {
+            ("maho/control/call", "browser_acquire_lease") => Ok(json!({"acquired": true})),
+            ("tools/call", "browser_navigate") => Ok(json!({"navigated": true})),
+            _ => Err((-32601, "unknown tool")),
+        }
+    })
+    .await;
+
+    let output = run_cli(
+        &["tab", "navigate", "7", "--url", "https://example.com"],
+        &sock_path,
+    );
+    server.abort();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        calls.lock().unwrap().as_slice(),
+        [
+            "maho/control/call browser_acquire_lease",
+            "tools/call browser_navigate"
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tab_navigate_stops_when_the_lease_is_refused() {
+    let (_dir, sock_path, server, calls) = make_recording_server(|_, name| {
+        if name == "browser_acquire_lease" {
+            Err((-32003, "lease held by another session"))
+        } else {
+            Ok(json!({"navigated": true}))
+        }
+    })
+    .await;
+
+    let output = run_cli(
+        &["tab", "navigate", "7", "--url", "https://example.com"],
+        &sock_path,
+    );
+    server.abort();
+
+    assert!(!output.status.success());
+    assert!(
+        !calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.ends_with("browser_navigate")),
+        "navigate must not run without a lease: {:?}",
+        calls.lock().unwrap()
+    );
+}

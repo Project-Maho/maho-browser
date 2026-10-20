@@ -1648,12 +1648,14 @@ async fn cmd_tab(command: TabCommands, socket_path: Option<&str>, json_output: b
         TabCommands::Navigate { tab_id, url } => {
             let client = browser::connect(socket_path).await?;
             let tab_id_i64 = tab_id.parse::<i64>().unwrap_or(0);
-            let _ = browser::send_tool_call(
+            // Leases are control-plane capabilities: the browser rejects them on the
+            // public tools/call surface, and browser_navigate is lease-gated.
+            browser::send_control_call(
                 &client,
                 "browser_acquire_lease",
                 serde_json::json!({ "tab_id": tab_id_i64, "ttl_seconds": 60 }),
             )
-            .await;
+            .await?;
             let result = browser::send_tool_call(
                 &client,
                 "browser_navigate",
@@ -1796,9 +1798,13 @@ async fn cmd_history(
         HistoryCommands::List {
             since,
             domain,
+            space,
             limit,
-            ..
         } => {
+            if space.is_some() {
+                eprintln!("Error: --space option is not supported.");
+                std::process::exit(2);
+            }
             let client = browser::connect(socket_path).await?;
 
             let since_seconds = match &since {
@@ -1806,16 +1812,12 @@ async fn cmd_history(
                 None => None,
             };
 
-            let domain_filter: Option<String> = if domain {
-                None // group-by-domain mode, no filter
-            } else {
-                None
-            };
-
+            // --domain only groups the output client-side; the browser has no
+            // domain filter, so none is sent.
             let args = serde_json::json!({
                 "query": null,
                 "since_seconds": since_seconds,
-                "domain": domain_filter,
+                "domain": serde_json::Value::Null,
                 "max_results": limit.unwrap_or(50),
             });
 
@@ -1881,11 +1883,16 @@ async fn cmd_history(
             url_substring,
             title_substring,
             referrer_domain,
+            space,
             since,
             ..
         } => {
             if referrer_domain.is_some() {
                 eprintln!("Error: --referrer-domain option is not supported.");
+                std::process::exit(2);
+            }
+            if space.is_some() {
+                eprintln!("Error: --space option is not supported.");
                 std::process::exit(2);
             }
             let client = browser::connect(socket_path).await?;
@@ -5568,6 +5575,10 @@ async fn cmd_headless(
         }
     };
 
+    // Reject unknown extractors before any browser is launched or tab opened, so a
+    // typo never leaves a spawned headless browser running.
+    validate_headless_extractors(&args.extract)?;
+
     let mut spawned: Option<SpawnedBrowser> = None;
 
     let client = match browser::connect(socket_path).await {
@@ -5603,6 +5614,20 @@ async fn cmd_headless(
     }
 
     result
+}
+
+const HEADLESS_EXTRACTORS: [&str; 5] = ["title", "text", "links", "meta", "html"];
+
+fn validate_headless_extractors(extract: &str) -> Result<()> {
+    for extractor in extract.split(',').map(str::trim) {
+        if !HEADLESS_EXTRACTORS.contains(&extractor) {
+            bail!(
+                "Unknown extractor: {extractor}. Valid: {}",
+                HEADLESS_EXTRACTORS.join(", ")
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn open_tab_and_wait(
@@ -5720,8 +5745,13 @@ async fn run_headless_extraction(
                 println!("{text}");
             }
             other => {
-                eprintln!("Unknown extractor: {other}. Valid: title, text, links, meta, html");
-                std::process::exit(1);
+                let _ = browser::send_tool_call(
+                    client,
+                    "browser_tab_close",
+                    serde_json::json!({ "tab_id": tab_id }),
+                )
+                .await;
+                bail!("Unknown extractor: {other}. Valid: {}", HEADLESS_EXTRACTORS.join(", "));
             }
         }
     }

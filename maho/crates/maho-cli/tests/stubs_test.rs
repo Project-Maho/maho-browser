@@ -70,3 +70,13 @@ fn test_headless_wait_stub() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--wait option is not supported"));
 }
+
+#[test]
+fn test_history_space_filter_stub() {
+    for subcommand in ["list", "search"] {
+        let output = run_cli(&["history", subcommand, "--space", "Work"]);
+        assert_eq!(output.status.code(), Some(2), "history {subcommand}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("--space option is not supported"), "{stderr}");
+    }
+}
