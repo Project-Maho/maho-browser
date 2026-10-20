@@ -5,9 +5,6 @@
 #include "build/build_config.h"
 #include "ui/base/accelerators/command.h"
 #include "ui/events/event_constants.h"
-#if BUILDFLAG(IS_MAC)
-#include "ui/events/keycodes/keyboard_code_conversion_mac.h"
-#endif
 #include "ui/events/keycodes/keyboard_codes.h"
 
 namespace maho {

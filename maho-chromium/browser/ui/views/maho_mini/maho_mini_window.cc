@@ -20,7 +20,8 @@
 #include <Carbon/Carbon.h>
 
 #include "chrome/browser/ui/browser_window.h"
-#include "ui/events/keycodes/keyboard_code_conversion_mac.h"
+#include "ui/events/keycodes/dom/keycode_converter.h"
+#include "ui/events/keycodes/keyboard_code_conversion.h"
 #else
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/accelerators/global_accelerator_listener/global_accelerator_listener.h"
@@ -417,9 +418,9 @@ void RegisterGlobalShortcut(Profile* profile) {
     if (parsed.accelerator.IsCtrlDown()) modifiers |= controlKey;
     if (parsed.accelerator.IsAltDown()) modifiers |= optionKey;
     if (parsed.accelerator.IsShiftDown()) modifiers |= shiftKey;
-    const int key_code = ui::MacKeyCodeForWindowsKeyCode(
-        parsed.accelerator.key_code(), 0, nullptr, nullptr);
-    if (key_code < 0) {
+    const int key_code = ui::KeycodeConverter::DomCodeToNativeKeycode(
+        ui::UsLayoutKeyboardCodeToDomCode(parsed.accelerator.key_code()));
+    if (key_code == ui::KeycodeConverter::InvalidNativeKeycode()) {
       const std::string error = "Shortcut key is not supported by Carbon.";
       prefs->SetString(maho::sidebar_prefs::kMahoMiniGlobalShortcutError,
                        error);
