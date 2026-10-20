@@ -155,6 +155,7 @@ pub fn user_data_dir() -> PathBuf {
     PathBuf::from(home).join(".config/maho")
 }
 
+/// Returns the Maho user-data directory (`%LOCALAPPDATA%\Maho\User Data`).
 #[cfg(target_os = "windows")]
 pub fn user_data_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -465,6 +466,7 @@ mod tests {
         unsafe { std::env::remove_var(ENV_SOCKET_PATH) };
         let path = default_socket_path();
         let path_str = path.to_string_lossy();
+        assert!(!path_str.is_empty());
 
         #[cfg(target_os = "macos")]
         assert!(

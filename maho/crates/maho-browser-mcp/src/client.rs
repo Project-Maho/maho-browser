@@ -58,8 +58,10 @@ pub struct PerfTrace<'a> {
 }
 
 #[cfg(test)]
-static TEST_TRACE_SINK: std::sync::Mutex<Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>> =
-    std::sync::Mutex::new(None);
+type TestTraceSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+#[cfg(test)]
+static TEST_TRACE_SINK: std::sync::Mutex<Option<TestTraceSink>> = std::sync::Mutex::new(None);
 
 fn is_perf_trace_enabled() -> bool {
     std::env::var("MAHO_BROWSER_PERF_TRACE")
@@ -217,15 +219,13 @@ where
                 Ok(0) => break,
                 Ok(bytes_read) => {
                     if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&line) {
-                        if let Some(ref id) = resp.id {
-                            if let JsonRpcId::Num(n) = id {
-                                let mut map = pending.lock().await;
-                                if let Some(tx) = map.remove(n) {
-                                    let _ = tx.send(PendingResponse {
-                                        response: resp,
-                                        wire_bytes_in: bytes_read,
-                                    });
-                                }
+                        if let Some(JsonRpcId::Num(n)) = resp.id {
+                            let mut map = pending.lock().await;
+                            if let Some(tx) = map.remove(&n) {
+                                let _ = tx.send(PendingResponse {
+                                    response: resp,
+                                    wire_bytes_in: bytes_read,
+                                });
                             }
                         }
                     }

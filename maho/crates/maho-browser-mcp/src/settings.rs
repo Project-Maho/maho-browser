@@ -82,11 +82,11 @@ fn public_mcp_enabled_in_db(db_path: &Path) -> bool {
 /// (the construction reads the setting synchronously). Distinct from
 /// `REGISTRY_KEY_TEST_LOCK`, which `open_registry` takes inside itself; the
 /// only nesting order is env lock → key lock, so no deadlock is possible.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) static SETTINGS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Opens a registry DB at an explicit path for fixture setup.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn open_registry_for_test(db_path: &Path) -> Option<SqliteStorage> {
     open_registry(db_path)
 }

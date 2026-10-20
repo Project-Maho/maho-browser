@@ -16,6 +16,9 @@
 // `uds_handshake_test.rs` so the global core-update callback state does not
 // interleave across the two suites.
 
+// These tests serve a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 

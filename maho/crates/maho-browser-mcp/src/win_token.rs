@@ -54,7 +54,7 @@ pub fn load_session_token() -> Result<Vec<u8>> {
         ));
     }
 
-    let mut input_blob = CRYPT_INTEGER_BLOB {
+    let input_blob = CRYPT_INTEGER_BLOB {
         cbData: ciphertext.len() as u32,
         pbData: ciphertext.as_ptr() as *mut u8,
     };
@@ -68,7 +68,7 @@ pub fn load_session_token() -> Result<Vec<u8>> {
     // pointers and handle the output allocation via LocalFree.
     let ok = unsafe {
         CryptUnprotectData(
-            &mut input_blob,
+            &input_blob,
             ptr::null_mut(), // ppszDataDescr
             ptr::null_mut(), // pOptionalEntropy
             ptr::null_mut(), // pvReserved

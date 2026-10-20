@@ -113,25 +113,12 @@ impl MahoBrowserMcpServer {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn new_with_client(client: Arc<BrowserClient>) -> Self {
         Self {
             client,
             mutation_approval: None,
             browser_approval_delegated: std::env::var("MAHO_MCP_APPROVAL").ok().as_deref() == Some("browser"),
-            public_mcp_enabled: public_mcp_enabled(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_with_client_and_approval(
-        client: Arc<BrowserClient>,
-        mutation_approval: Option<MutationApprovalCallback>,
-    ) -> Self {
-        Self {
-            client,
-            mutation_approval,
-            browser_approval_delegated: false,
             public_mcp_enabled: public_mcp_enabled(),
         }
     }

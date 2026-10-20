@@ -6,6 +6,9 @@
 // "2025-03-26", EXACT match, close-on-mismatch). Framing is newline-delimited
 // JSON-RPC on both sides, identical to the production transport.
 
+// These tests serve a Unix domain socket; Windows uses a named pipe.
+#![cfg(unix)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
