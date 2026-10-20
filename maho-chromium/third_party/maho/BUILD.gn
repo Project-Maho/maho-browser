@@ -133,12 +133,6 @@ config("maho_core_prebuilt_config") {
         "resolv",
         "c++",
       ]
-      # maho-ffi is built with panic=unwind so ffi_safe! can contain panics.
-      # That adds _rust_eh_personality next to base::apple's, C++'s and
-      # ObjC's personality routines, and Apple ld can encode at most three in
-      # compact unwind ("Too many personality routines"). Unwind via DWARF
-      # eh_frame instead.
-      ldflags = [ "-Wl,-no_compact_unwind" ]
     } else if (is_linux) {
       libs += [
         "dl",
@@ -150,8 +144,21 @@ config("maho_core_prebuilt_config") {
   }
 }
 
+# maho-ffi is built with panic=unwind so ffi_safe! can contain panics. That
+# adds _rust_eh_personality next to base::apple's, C++'s and ObjC's personality
+# routines, and Apple ld can encode at most three in compact unwind ("Too many
+# personality routines"). Unwind via DWARF eh_frame instead. ldflags do not
+# propagate through public_configs to an indirect linking target (the chrome
+# framework), so this must be an all_dependent_config.
+config("maho_core_prebuilt_link_config") {
+  if (is_mac) {
+    ldflags = [ "-Wl,-no_compact_unwind" ]
+  }
+}
+
 source_set("maho_core_prebuilt") {
   public_configs = [ ":maho_core_prebuilt_config" ]
+  all_dependent_configs = [ ":maho_core_prebuilt_link_config" ]
   if (is_linux) {
     deps = [ ":maho_glibc_compat" ]
   }
