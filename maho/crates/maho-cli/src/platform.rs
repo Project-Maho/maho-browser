@@ -58,6 +58,45 @@ pub fn error_to_json(err: &PlatformError) -> serde_json::Value {
     }
 }
 
+/// Runs `desktop ocr`. With no `--output`, the live screen is captured into a
+/// temp file that is deleted after OCR (success or failure) and never reported:
+/// the redacted payload must not leave a full screenshot behind on disk. An
+/// explicit `--output` image is caller-owned, kept, and echoed back.
+fn ocr_payload_with(
+    output: Option<std::path::PathBuf>,
+    full: bool,
+    capture: impl FnOnce() -> Result<maho_platform::grounding::CaptureInfo, PlatformError>,
+    ocr: impl FnOnce(
+        &std::path::Path,
+    ) -> Result<Vec<maho_platform::grounding::TextBlock>, PlatformError>,
+) -> Result<serde_json::Value, PlatformError> {
+    let Some(image_path) = output else {
+        let capture_path = std::path::PathBuf::from(capture()?.path);
+        let result = ocr(&capture_path);
+        std::fs::remove_file(&capture_path).map_err(|error| {
+            PlatformError::Io(format!(
+                "failed to remove screen capture: {error}; OCR error: {:?}",
+                result.as_ref().err()
+            ))
+        })?;
+        let blocks = result?;
+        // Privacy contract: live-screen OCR exposes coordinates only unless
+        // --full is passed.
+        return Ok(if full {
+            json!({ "text_redacted": false, "blocks": blocks })
+        } else {
+            json!({
+                "text_redacted": true,
+                "blocks": blocks.iter().map(|b| json!({
+                    "x": b.x, "y": b.y, "w": b.w, "h": b.h,
+                })).collect::<Vec<_>>(),
+            })
+        });
+    };
+    let blocks = ocr(&image_path)?;
+    Ok(json!({ "image": image_path, "text_redacted": false, "blocks": blocks }))
+}
+
 pub fn print_platform_result<T: Serialize>(res: Result<T, PlatformError>) -> Result<()> {
     match res {
         Ok(data) => {
@@ -172,34 +211,13 @@ pub async fn cmd_desktop(command: DesktopCommands) -> Result<()> {
                 },
                 None => None,
             };
-            // Default source: live screen capture into a temp file. An explicit
-            // --output names an image file to OCR instead of capturing.
-            let (image_path, screen_source) = match output {
-                Some(ref p) => (p.clone(), false),
-                None => match maho_platform::capture::capture_screen(None) {
-                    Ok(info) => (std::path::PathBuf::from(info.path), true),
-                    Err(err) => return print_platform_result::<serde_json::Value>(Err(err)),
-                },
-            };
-            let blocks = match maho_platform::ocr::ocr_image(&image_path, region_parsed) {
-                Ok(blocks) => blocks,
-                Err(err) => return print_platform_result::<serde_json::Value>(Err(err)),
-            };
-            // Privacy contract: live-screen OCR exposes coordinates only unless
-            // --full is passed; explicit file sources always include text.
-            let payload = if screen_source && !full {
-                json!({
-                    "image": image_path,
-                    "text_redacted": true,
-                    "blocks": blocks.iter().map(|b| json!({
-                        "x": b.x, "y": b.y, "w": b.w, "h": b.h,
-                    })).collect::<Vec<_>>(),
-                })
-            } else {
-                json!({ "image": image_path, "text_redacted": false, "blocks": blocks })
-            };
-            println!("{}", serde_json::to_string_pretty(&payload)?);
-            return Ok(());
+            let payload = ocr_payload_with(
+                output,
+                full,
+                || maho_platform::capture::capture_screen(None),
+                |path| maho_platform::ocr::ocr_image(path, region_parsed),
+            );
+            return print_platform_result(payload);
         }
         DesktopCommands::Elements { app, role, output } => {
             let app_target = match app {
@@ -291,4 +309,58 @@ pub async fn cmd_desktop(command: DesktopCommands) -> Result<()> {
         dry_run,
     };
     print_platform_result(maho_platform::desktop::perform_input(req))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maho_platform::grounding::{CaptureInfo, TextBlock};
+
+    fn block() -> TextBlock {
+        TextBlock { text: "secret".into(), x: 1, y: 2, w: 3, h: 4, confidence: 1.0 }
+    }
+
+    fn capture_into(path: &std::path::Path) -> Result<CaptureInfo, PlatformError> {
+        std::fs::write(path, b"screen").unwrap();
+        Ok(CaptureInfo { path: path.to_string_lossy().into_owned(), width: 1, height: 1 })
+    }
+
+    #[test]
+    fn live_screen_ocr_deletes_capture_after_success_and_failure() {
+        for fail in [false, true] {
+            let path = std::env::temp_dir()
+                .join(format!("maho-cli-ocr-cleanup-{}-{fail}.png", std::process::id()));
+            let result = ocr_payload_with(None, false, || capture_into(&path), |_| {
+                if fail { Err(PlatformError::Io("ocr failed".into())) } else { Ok(vec![block()]) }
+            });
+            let leaked = path.exists();
+            let _ = std::fs::remove_file(&path);
+            assert!(!leaked, "live-screen capture was left on disk (fail={fail})");
+            assert_eq!(result.is_err(), fail);
+            if let Ok(payload) = result {
+                assert_eq!(payload["text_redacted"], true);
+                assert!(payload.get("image").is_none());
+                assert!(!payload.to_string().contains("secret"));
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_image_is_kept_and_reported() {
+        let path = std::env::temp_dir()
+            .join(format!("maho-cli-ocr-owned-{}.png", std::process::id()));
+        std::fs::write(&path, b"caller image").unwrap();
+        let payload = ocr_payload_with(
+            Some(path.clone()),
+            false,
+            || panic!("must not capture"),
+            |_| Ok(vec![block()]),
+        )
+        .unwrap();
+        let kept = path.is_file();
+        let _ = std::fs::remove_file(&path);
+        assert!(kept);
+        assert_eq!(payload["text_redacted"], false);
+        assert_eq!(payload["image"], serde_json::json!(path));
+    }
 }
