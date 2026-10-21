@@ -32,4 +32,6 @@ anyhow = "1"
 tracing = "0.1"
 
 [profile.release]
-panic = "abort"
+# Unwind so ffi_safe! (maho-ffi) can contain a panic and return its fallback
+# instead of aborting the browser process.
+panic = "unwind"

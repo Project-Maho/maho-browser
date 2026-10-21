@@ -327,6 +327,17 @@ class FakeScreenshotDelegate : public MahoMcpBrowserDelegate {
                                           size_t max_results) override {
     return {};
   }
+  void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) override {
+    std::move(callback).Run(MahoMcpScreenshotResult{});
+  }
+  void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) override {
+    std::move(callback).Run(MahoMcpScreenshotResult{});
+  }
   void CaptureElementPngBase64(
       int tab_id,
       ui::AXNodeID ax_id,

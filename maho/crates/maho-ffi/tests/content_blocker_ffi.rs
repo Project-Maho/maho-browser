@@ -432,3 +432,44 @@ fn test_state_json_exposes_per_list_retry_timestamp_through_ffi() {
         maho_ffi::maho_core_free(core);
     }
 }
+
+#[test]
+fn test_hidden_class_id_selectors_round_trip_and_invalid_input() {
+    unsafe {
+        let core = maho_ffi::maho_core_new();
+        assert!(!core.is_null());
+        assert!(apply_update(
+            core,
+            "{\"listId\":\"easylist\",\"statusCode\":200,\"body\":\"##.ad-banner\\nexample.com#@#.ad-banner\"}"
+        ));
+        let snapshot = maho_ffi::maho_core_create_compile_snapshot(core);
+        let handle = maho_ffi::maho_compile_engine_from_snapshot(snapshot);
+        assert!(maho_ffi::maho_content_engine_install(core, handle));
+
+        let request = cstr(r#"{"classes":["ad-banner","x"],"ids":[]}"#);
+        let selectors = take_json(maho_ffi::maho_core_get_hidden_class_id_selectors(
+            core,
+            request.as_ptr(),
+        ));
+        assert_eq!(selectors, serde_json::json!([".ad-banner"]));
+
+        let excepted = cstr(r#"{"classes":["ad-banner"],"ids":[],"exceptions":[".ad-banner"]}"#);
+        let selectors = take_json(maho_ffi::maho_core_get_hidden_class_id_selectors(
+            core,
+            excepted.as_ptr(),
+        ));
+        assert_eq!(selectors, serde_json::json!([]));
+
+        let invalid = cstr("not json");
+        assert!(
+            maho_ffi::maho_core_get_hidden_class_id_selectors(core, invalid.as_ptr()).is_null()
+        );
+        assert!(maho_ffi::maho_core_get_hidden_class_id_selectors(core, ptr::null()).is_null());
+        assert!(maho_ffi::maho_core_get_hidden_class_id_selectors(
+            ptr::null_mut(),
+            request.as_ptr()
+        )
+        .is_null());
+        maho_ffi::maho_core_free(core);
+    }
+}

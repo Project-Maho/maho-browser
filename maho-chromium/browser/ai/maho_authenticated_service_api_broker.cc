@@ -7,6 +7,8 @@
 #include <sstream>
 
 #if !defined(MAHO_STANDALONE_TEST)
+#include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/storage_partition.h"
@@ -473,9 +475,18 @@ std::string DirectApiExecutionOutcome::ToDebugString() const {
 VaultCredential::VaultCredential() = default;
 VaultCredential::VaultCredential(std::string token_type_in, std::string secret_in)
     : token_type(std::move(token_type_in)), secret(std::move(secret_in)) {}
-VaultCredential::~VaultCredential() = default;
+VaultCredential::~VaultCredential() {
+  std::fill_n(static_cast<volatile char*>(secret.data()), secret.size(), 0);
+}
 VaultCredential::VaultCredential(const VaultCredential&) = default;
-VaultCredential& VaultCredential::operator=(const VaultCredential&) = default;
+VaultCredential& VaultCredential::operator=(const VaultCredential& other) {
+  if (this != &other) {
+    std::fill_n(static_cast<volatile char*>(secret.data()), secret.size(), 0);
+    token_type = other.token_type;
+    secret = other.secret;
+  }
+  return *this;
+}
 
 VaultCredential VaultCredential::Bearer(std::string token) {
   return VaultCredential("Bearer", std::move(token));
@@ -681,7 +692,8 @@ void ProfileCookieJarDirectApiTransport::Send(TransportRequest request,
   auto resource_request = std::make_unique<network::ResourceRequest>();
   resource_request->url = url;
   resource_request->method = request.method;
-  resource_request->credentials_mode = network::mojom::CredentialsMode::kInclude;
+  resource_request->credentials_mode = request.operation_name == "channels.send_message"
+      ? network::mojom::CredentialsMode::kOmit : network::mojom::CredentialsMode::kInclude;
   for (const auto& [header_name, header_val] : request.headers) {
     resource_request->headers.SetHeader(header_name, header_val);
   }
@@ -913,6 +925,49 @@ void MahoAuthenticatedServiceApiBroker::ExecuteOp(
   // Secrets and tokens are NEVER inlined into outcome structs or returned to model.
   req.headers["Authorization"] = cred->FormatAuthHeader();
   req.headers["Content-Type"] = "application/json";
+
+#if !defined(MAHO_STANDALONE_TEST)
+  if (op.operation_name == "channels.send_message") {
+    auto params = base::JSONReader::ReadDict(op.parameters_json, base::JSON_PARSE_RFC);
+    const auto* destination = params ? params->FindString("destination_id") : nullptr;
+    const auto* text = params ? params->FindString("text") : nullptr;
+    if (!destination || destination->empty() || !text ||
+        destination->find_first_not_of("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_-") != std::string::npos) {
+      std::move(callback).Run(DirectApiExecutionOutcome::MakeTypedError(
+          DirectApiErrorCode::kBadRequest, "Invalid channel destination", false));
+      return;
+    }
+    base::DictValue body;
+    switch (op.service) {
+      case DirectApiServiceKind::kSlack:
+        req.url = "https://slack.com/api/chat.postMessage";
+        body.Set("channel", *destination);
+        body.Set("text", *text);
+        break;
+      case DirectApiServiceKind::kDiscord:
+        req.url = "https://discord.com/api/v10/channels/" + *destination + "/messages";
+        body.Set("content", *text);
+        req.headers["Authorization"] = "Bot " + cred->secret;
+        break;
+      case DirectApiServiceKind::kTelegram:
+        if (cred->secret.find_first_not_of("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:-") != std::string::npos) {
+          std::move(callback).Run(DirectApiExecutionOutcome::MakeTypedError(
+              DirectApiErrorCode::kBadRequest, "Invalid bot credential", false));
+          return;
+        }
+        req.url = "https://api.telegram.org/bot" + cred->secret + "/sendMessage";
+        req.headers.erase("Authorization");
+        body.Set("chat_id", *destination);
+        body.Set("text", *text);
+        break;
+      default:
+        std::move(callback).Run(DirectApiExecutionOutcome::MakeTypedError(
+            DirectApiErrorCode::kBadRequest, "Unsupported channel provider", false));
+        return;
+    }
+    req.body = base::WriteJson(body).value();
+  }
+#endif
 
   // Step 5: Transport execution and outcome mapping
   DirectApiServiceKind service = op.service;

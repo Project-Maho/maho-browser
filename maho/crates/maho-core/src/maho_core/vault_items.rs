@@ -6,6 +6,7 @@ mod add;
 mod audit;
 mod mutate;
 mod parity;
+pub mod passkey_authenticator;
 mod policy;
 mod query;
 mod shared;

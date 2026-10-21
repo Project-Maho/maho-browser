@@ -66,6 +66,7 @@ class MahoDomScreenshotHandler
   void OnEditClicked();
   void OnSendViaIMessageClicked();
   void OnSaveToLibraryClicked();
+  void OnAskMahoClicked();
   void OnBubbleDismissed();
 
   void Finish();

@@ -67,7 +67,8 @@ class TestLinuxUpdateManifest(unittest.TestCase):
         with patch.object(_release_local, "run") as run:
             artifacts = _release_local.build_and_bundle_linux("1.0.0", args)
 
-        self.assertEqual(artifacts[-1], os.path.join(output_dir, "update-linux.json"))
+        self.assertIn(os.path.join(output_dir, "update-linux.json"), artifacts)
+        self.assertEqual(artifacts[-1], os.path.join(output_dir, "release-notes.html"))
         manifest_command = run.call_args_list[-1].args[0]
         self.assertEqual(manifest_command[1], _release_local._GEN_MANIFESTS)
         self.assertIn("--linux", manifest_command)
@@ -77,12 +78,15 @@ class TestLinuxUpdateManifest(unittest.TestCase):
         pub = self._pubkey()
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = self._write_manifest(tmp_dir, "2026.9.27")
+            notes = os.path.join(tmp_dir, "release-notes.html")
+            with open(notes, "w", encoding="utf-8") as nf:
+                nf.write("<html><body>notes</body></html>")
             _release_local.verify_manifest_matches_artifacts(
-                [path], pubkey_bytes=pub, expected_version="2026.9.27")
+                [path, notes], pubkey_bytes=pub, expected_version="2026.9.27")
 
             with self.assertRaises(_release_local.ManifestVerificationError):
                 _release_local.verify_manifest_matches_artifacts(
-                    [path], pubkey_bytes=pub, expected_version="2026.9.28")
+                    [path, notes], pubkey_bytes=pub, expected_version="2026.9.28")
 
             import json
             with open(path, encoding="utf-8") as f:
@@ -91,7 +95,7 @@ class TestLinuxUpdateManifest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(envelope, f)
             with self.assertRaises(_release_local.ManifestVerificationError):
-                _release_local.verify_manifest_matches_artifacts([path], pubkey_bytes=pub)
+                _release_local.verify_manifest_matches_artifacts([path, notes], pubkey_bytes=pub)
 
     def test_relay_registration_carries_linux_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -148,6 +152,7 @@ class TestReleaseArtifactPaths(unittest.TestCase):
                 os.path.join(output_dir, "MahoSetup-1.0.0.exe"),
                 os.path.join(output_dir, "update-win.json"),
                 os.path.join(output_dir, "MahoBrowser_1.0.0.0_x64.msix"),
+                os.path.join(output_dir, "release-notes.html"),
             ],
         )
 

@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use thiserror::Error;
 
 /// Unique device identifier
@@ -234,6 +235,7 @@ pub enum SyncEntityType {
     Settings,
     SharedCollection,
     VaultItem,
+    SiteSession,
 }
 
 impl SyncEntityType {
@@ -249,6 +251,7 @@ impl SyncEntityType {
                 | SyncEntityType::ReadingListItem
                 | SyncEntityType::CssMod
                 | SyncEntityType::Easel
+                | SyncEntityType::SiteSession
         )
     }
 
@@ -282,8 +285,133 @@ impl SyncEntityType {
             SyncEntityType::Settings => "settings",
             SyncEntityType::SharedCollection => "sharedcollection",
             SyncEntityType::VaultItem => "vaultitem",
+            SyncEntityType::SiteSession => "sitesession",
         }
     }
+}
+
+/// Website data intentionally supported by SiteSession sync.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SiteSessionRecord {
+    pub origin: String,
+    /// Cookies belonging to this exact origin.
+    #[serde(default)]
+    pub cookies: Vec<String>,
+    /// localStorage key/value entries belonging to this exact origin.
+    #[serde(default)]
+    pub local_storage: std::collections::HashMap<String, String>,
+}
+
+/// Upper bounds for one origin's synced site data.
+pub const MAX_SITE_SESSION_COOKIES: usize = 200;
+pub const MAX_SITE_SESSION_STORAGE_KEYS: usize = 1_000;
+pub const MAX_SITE_SESSION_BYTES: usize = 512 * 1024;
+
+impl SiteSessionRecord {
+    pub fn validate_size(&self) -> Result<(), SiteSessionOriginError> {
+        let bytes: usize = self.cookies.iter().map(String::len).sum::<usize>()
+            + self
+                .local_storage
+                .iter()
+                .map(|(k, v)| k.len() + v.len())
+                .sum::<usize>();
+        if self.cookies.len() > MAX_SITE_SESSION_COOKIES
+            || self.local_storage.len() > MAX_SITE_SESSION_STORAGE_KEYS
+            || bytes > MAX_SITE_SESSION_BYTES
+        {
+            return Err(SiteSessionOriginError::TooLarge);
+        }
+        Ok(())
+    }
+
+    pub fn new(
+        origin: &str,
+        cookies: Vec<String>,
+        local_storage: std::collections::HashMap<String, String>,
+    ) -> Result<Self, SiteSessionOriginError> {
+        Ok(Self {
+            origin: canonical_site_session_origin(origin)?,
+            cookies,
+            local_storage,
+        })
+    }
+}
+
+/// Origins explicitly opted into SiteSession sync. Origins are exact-origin
+/// scoped: opting into a host does not opt its parent or subdomains in.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct SiteSessionOriginSet(HashSet<String>);
+
+impl SiteSessionOriginSet {
+    pub fn insert(&mut self, origin: &str) -> Result<bool, SiteSessionOriginError> {
+        Ok(self.0.insert(canonical_site_session_origin(origin)?))
+    }
+
+    pub fn remove(&mut self, origin: &str) -> Result<bool, SiteSessionOriginError> {
+        Ok(self.0.remove(&canonical_site_session_origin(origin)?))
+    }
+
+    pub fn contains(&self, origin: &str) -> Result<bool, SiteSessionOriginError> {
+        Ok(self.0.contains(&canonical_site_session_origin(origin)?))
+    }
+
+    pub fn origins(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+}
+
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
+pub enum SiteSessionOriginError {
+    #[error("site session origin must use https")]
+    HttpsRequired,
+    #[error("site session origin must contain only a host and optional port")]
+    InvalidOrigin,
+    #[error("site session data exceeds the per-origin limit")]
+    TooLarge,
+}
+
+/// Validate an HTTPS origin and canonicalize scheme and DNS host casing.
+/// Paths, credentials, query/fragment components, and non-HTTPS schemes are
+/// rejected; host ports remain part of the exact origin.
+pub fn canonical_site_session_origin(origin: &str) -> Result<String, SiteSessionOriginError> {
+    let (scheme, authority) = origin
+        .split_once("://")
+        .ok_or(SiteSessionOriginError::InvalidOrigin)?;
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err(SiteSessionOriginError::HttpsRequired);
+    }
+    if authority.is_empty()
+        || authority.contains(['/', '?', '#', '@', '\\'])
+        || authority.chars().any(char::is_whitespace)
+    {
+        return Err(SiteSessionOriginError::InvalidOrigin);
+    }
+    let url = url::Url::parse(origin).map_err(|_| SiteSessionOriginError::InvalidOrigin)?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || url.username() != ""
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(SiteSessionOriginError::InvalidOrigin);
+    }
+    let host = url
+        .host_str()
+        .ok_or(SiteSessionOriginError::InvalidOrigin)?;
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_ascii_lowercase()
+    };
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    Ok(format!("https://{host}{port}"))
 }
 
 /// A versioned entity for LWW sync

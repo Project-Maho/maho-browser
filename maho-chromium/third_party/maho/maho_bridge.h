@@ -88,6 +88,9 @@ std::string VaultSetLoginTotpJson(MahoCore* core, const char* request_json);
 std::string VaultTotpCodeJson(MahoCore* core, const char* request_json);
 std::string VaultHealthReportJson(MahoCore* core);
 std::string VaultGeneratePasswordJson(MahoCore* core, const char* request_json);
+std::string VaultPasskeyCreateJson(MahoCore* core, const char* request_json);
+std::string VaultPasskeyGetAssertionJson(MahoCore* core,
+                                         const char* request_json);
 std::string VaultPasswordStrengthJson(MahoCore* core, const char* request_json);
 
 
@@ -211,6 +214,30 @@ BlockResult CheckRequest(MahoCore* core,
 int GetContentBlockingMode(MahoCore* core);
 bool SetContentBlockingMode(MahoCore* core, int mode);
 std::string GetContentBlockerStateJson(MahoCore* core);
+// Content-blocker diagnostics and local rules. "{}" on bridge failure.
+std::string TestContentBlockerRequestJson(MahoCore* core,
+                                          const std::string& url,
+                                          const std::string& source_url,
+                                          const std::string& request_type);
+std::string GetCustomRulesJson(MahoCore* core);
+std::string SetCustomRulesJson(MahoCore* core, const std::string& rules);
+std::string ImportLocalFilterListJson(MahoCore* core,
+                                      const std::string& name,
+                                      const std::string& contents);
+// Episodic memory (opt-in, browser-only). Empty string / -1 on failure.
+std::string RecordEpisodeJson(MahoCore* core, const std::string& episode_json);
+int64_t ForgetEpisodeOrigin(MahoCore* core, const std::string& site);
+std::string SearchMemoryHybridJson(MahoCore* core,
+                                   const std::string& query,
+                                   uint32_t top_k);
+// SiteSession sync (opt-in https origins; cookies + localStorage). Call on the
+// thread that owns |core|. Empty string / false on failure.
+std::string GetSiteSessionOptedOriginsJson(MahoCore* core);
+bool SetSiteSessionOptedOriginsJson(MahoCore* core,
+                                    const std::string& origins_json);
+std::string GetSiteSessionExportOriginsJson(MahoCore* core);
+bool RecordSiteSessionJson(MahoCore* core, const std::string& record_json);
+std::string TakeSiteSessionAppliesJson(MahoCore* core);
 std::string AddFilterListResultJson(MahoCore* core,
                                     const char* id,
                                     const char* name,
@@ -233,6 +260,8 @@ bool SaveContentEngineCache(MahoCore* core, const char* path);
 bool LoadContentEngineCache(MahoCore* core, const char* path);
 
 std::string GetCosmeticResources(MahoCore* core, const char* url);
+std::string GetHiddenClassIdSelectors(MahoCore* core,
+                                      const char* request_json);
 
 std::string GetBoostInjectionCss(MahoCore* core, const char* url);
 

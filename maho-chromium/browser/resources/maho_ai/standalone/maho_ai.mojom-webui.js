@@ -165,6 +165,8 @@ export const ContextSourceKind = {
   kHistory: 2,
   kBookmark: 3,
   kFile: 4,
+  kLocalFile: 5,
+  kCapturedImage: 6,
 };
 
 export const ChatIntent = {

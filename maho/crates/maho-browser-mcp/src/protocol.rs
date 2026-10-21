@@ -115,6 +115,12 @@ pub struct InitializeParams {
     /// When present, the server validates against its in-memory token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+    /// Browser-approved per-controller pairing token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pairing_token: Option<String>,
+    /// Browser-generated identity associated with the pairing token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub controller_id: Option<String>,
 }
 
 /// Client identification sent during initialization.
@@ -580,6 +586,8 @@ mod tests {
             controller_kind: ControllerKind::MahoBrowserMcp,
             autonomous: false,
             auth_token: None,
+            pairing_token: None,
+            controller_id: None,
         };
         let val = serde_json::to_value(&params).unwrap();
         assert_eq!(val["protocolVersion"], "2025-03-26");
@@ -587,12 +595,16 @@ mod tests {
         assert_eq!(val["controllerKind"], "maho-browser-mcp");
         assert!(val.get("autonomous").is_none());
         assert!(val.get("authToken").is_none());
+        assert!(val.get("pairingToken").is_none());
+        assert!(val.get("controllerId").is_none());
 
         let back: InitializeParams = serde_json::from_value(val).unwrap();
         assert_eq!(back.protocol_version, "2025-03-26");
         assert_eq!(back.controller_kind, ControllerKind::MahoBrowserMcp);
         assert!(!back.autonomous);
         assert!(back.auth_token.is_none());
+        assert!(back.pairing_token.is_none());
+        assert!(back.controller_id.is_none());
     }
 
     #[test]
@@ -606,6 +618,8 @@ mod tests {
             controller_kind: ControllerKind::MahoCli,
             autonomous: true,
             auth_token: None,
+            pairing_token: None,
+            controller_id: None,
         };
         let value = serde_json::to_value(&params).unwrap();
         assert_eq!(value["autonomous"], true);

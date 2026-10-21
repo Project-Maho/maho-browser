@@ -4,15 +4,20 @@
 
 #include "maho/browser/ui/webui/maho_webui_private_boundary.h"
 
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "components/prefs/pref_service.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/webui/maho_auth_utils.h"
+#include "maho/third_party/maho/maho_bridge.h"
 #include "maho/third_party/maho/maho_ffi.h"
 
 namespace {
@@ -281,6 +286,35 @@ MahoSyncPageHandler::GenerateSyncKeyOnPool() {
   return result;
 }
 
+std::vector<std::string>
+MahoSyncPageHandler::GetSiteSessionOptedOriginsOnPool() {
+  MahoCore* core = maho::GetCore();
+  if (!core) return {};
+  const std::string json = maho::core::GetSiteSessionOptedOriginsJson(core);
+  auto parsed = base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_list()) return {};
+  std::vector<std::string> origins;
+  for (const auto& item : parsed->GetList()) {
+    if (item.is_string()) origins.push_back(item.GetString());
+  }
+  return origins;
+}
+
+std::pair<bool, std::string>
+MahoSyncPageHandler::SetSiteSessionOptedOriginsOnPool(
+    const std::vector<std::string>& origins) {
+  MahoCore* core = maho::GetCore();
+  if (!core) return {false, "Core not available"};
+  base::ListValue list;
+  for (const auto& origin : origins) list.Append(origin);
+  const std::optional<std::string> json = base::WriteJson(list);
+  if (!json)
+    return {false, "Could not encode origin list"};
+  if (!maho::core::SetSiteSessionOptedOriginsJson(core, *json))
+    return {false, "Origins must be valid HTTPS origins"};
+  return {true, ""};
+}
+
 void MahoSyncPageHandler::ConfigureSyncEncryption(const std::string& recovery_phrase,
                                                    ConfigureSyncEncryptionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -346,6 +380,35 @@ void MahoSyncPageHandler::GenerateSyncKey(
       base::BindOnce(&MahoSyncPageHandler::GenerateSyncKeyOnPool),
       base::BindOnce(&MahoSyncPageHandler::OnGenerateSyncKeyResult,
                       weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoSyncPageHandler::GetSiteSessionOptedOrigins(
+    GetSiteSessionOptedOriginsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::vector<std::string>>(
+      FROM_HERE,
+      base::BindOnce(&MahoSyncPageHandler::GetSiteSessionOptedOriginsOnPool),
+      base::BindOnce(
+          [](GetSiteSessionOptedOriginsCallback callback,
+             std::vector<std::string> origins) {
+            std::move(callback).Run(origins);
+          },
+          std::move(callback)));
+}
+
+void MahoSyncPageHandler::SetSiteSessionOptedOrigins(
+    const std::vector<std::string>& origins,
+    SetSiteSessionOptedOriginsCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::PostCoreTask<std::pair<bool, std::string>>(
+      FROM_HERE,
+      base::BindOnce(&MahoSyncPageHandler::SetSiteSessionOptedOriginsOnPool,
+                     origins),
+      base::BindOnce(
+          [](SetSiteSessionOptedOriginsCallback callback,
+             std::pair<bool, std::string> result) {
+            std::move(callback).Run(result.first, result.second);
+          }, std::move(callback)));
 }
 
 void MahoSyncPageHandler::OnJoinSyncComplete(

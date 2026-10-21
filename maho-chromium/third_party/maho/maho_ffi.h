@@ -843,6 +843,20 @@ char *maho_core_get_content_rules(struct MahoCore *ptr);
 char *maho_core_get_cosmetic_resources(struct MahoCore *ptr, const char *url);
 
 /**
+ * Returns the generic class/id hide selectors that match the page's classes
+ * and ids, as a JSON string array.
+ *
+ * `request_json` is `{"classes": string[], "ids": string[], "exceptions": string[]}`;
+ * `exceptions` comes from `maho_core_get_cosmetic_resources` for the same URL.
+ * Returns null on invalid input.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `request_json` must be a valid C string.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_get_hidden_class_id_selectors(struct MahoCore *ptr, const char *request_json);
+
+/**
  * # Safety
  * `ptr` must be from `maho_core_new`. `path` must be a valid null-terminated C string.
  */
@@ -879,6 +893,126 @@ bool maho_core_set_content_blocking_mode(struct MahoCore *ptr, int32_t mode_code
  * Caller must free returned string with `maho_string_free`.
  */
 char *maho_core_get_content_blocker_state_json(struct MahoCore *ptr);
+
+/**
+ * Explains how the active content blocker treats one request:
+ * `{validRequest,nativeMode,siteExcepted,blocked,important,matchedFilter,
+ * exception,listId,redirect,rewrittenUrl}`. Read-only diagnostic.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; strings must be valid null-terminated UTF-8.
+ * Caller must free the returned string with `maho_string_free`.
+ */
+char *maho_core_content_blocker_test_request_json(struct MahoCore *ptr,
+                                                  const char *url,
+                                                  const char *source_url,
+                                                  const char *request_type);
+
+/**
+ * Returns `{"rules": "<text>"}` with the user's custom filter rules.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`. Caller frees with `maho_string_free`.
+ */
+char *maho_core_get_custom_rules_json(struct MahoCore *ptr);
+
+/**
+ * Replaces the custom filter rules. Returns a content-blocker mutation
+ * result; a rejected save leaves the previous rules active.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `rules` must be valid null-terminated UTF-8.
+ * Caller frees with `maho_string_free`.
+ */
+char *maho_core_set_custom_rules_json(struct MahoCore *ptr, const char *rules);
+
+/**
+ * Imports a filter list from bytes the user chose in the file picker. The
+ * browser never passes a path. Returns a mutation result plus `listId`.
+ *
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `name` must be valid null-terminated
+ * UTF-8; `bytes` must point to `len` readable bytes (may be null when `len` is 0).
+ * Caller frees with `maho_string_free`.
+ */
+char *maho_core_import_local_filter_list_json(struct MahoCore *ptr,
+                                              const char *name,
+                                              const uint8_t *bytes,
+                                              uintptr_t len);
+
+/**
+ * Records one browsing episode when the user's episodic-memory settings
+ * allow it. `episode_json` is `{"url","title","summary","is_private_context"}`.
+ * Returns `{"recorded":true,"id":...}` or `{"recorded":false,"reason":...}`,
+ * or null on bad arguments or a storage error.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `episode_json` a valid C string.
+ * Caller frees the result with `maho_string_free`.
+ */
+char *maho_core_episode_record_json(struct MahoCore *ptr, const char *episode_json);
+
+/**
+ * Deletes every recorded episode for the origin of `site` (a URL or an
+ * origin). Returns the number deleted, or -1 on bad arguments or error.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `site` a valid C string.
+ */
+int64_t maho_core_episode_forget_origin(struct MahoCore *ptr, const char *site);
+
+/**
+ * Hybrid (lexical + dense) memory search. Returns a JSON array of
+ * `{"id","fact","score","source"}`, or null on bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `query` a valid C string.
+ * Caller frees the result with `maho_string_free`.
+ */
+char *maho_core_search_memory_hybrid_json(struct MahoCore *ptr, const char *query, uint32_t top_k);
+
+/**
+ * SiteSession sync (opt-in per https origin; cookies + localStorage only).
+ * All site-session functions must be called on the thread that owns `ptr`;
+ * returned strings are owned by the caller and freed with `maho_string_free`.
+ *
+ * Returns the active profile's opted-in origins as a JSON string array, or
+ * null on bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+char *maho_core_site_session_get_opted_origins_json(struct MahoCore *ptr);
+
+/**
+ * Replaces the opted-in origins with `origins_json` (a JSON string array).
+ * Returns false and changes nothing when any origin is not a valid https
+ * origin, or on bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `origins_json` a valid C string.
+ */
+bool maho_core_site_session_set_opted_origins_json(struct MahoCore *ptr, const char *origins_json);
+
+/**
+ * Origins whose cookies/localStorage the browser should collect and hand
+ * back with `maho_core_site_session_record_json`, as a JSON string array.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+char *maho_core_site_session_records_for_export_json(struct MahoCore *ptr);
+
+/**
+ * Records one collected SiteSessionRecord (`{"origin","cookies","localStorage"}`)
+ * for an opted-in origin. Returns false for non-opted origins, oversize or
+ * malformed records, or bad arguments.
+ * # Safety
+ * `ptr` must be from `maho_core_new`; `record_json` a valid C string.
+ */
+bool maho_core_site_session_record_json(struct MahoCore *ptr, const char *record_json);
+
+/**
+ * Returns and clears the remote SiteSessionRecords accepted by sync that the
+ * browser must now apply, as a JSON array. Each record is handed out once.
+ * # Safety
+ * `ptr` must be from `maho_core_new`.
+ */
+char *maho_core_site_session_take_applied_json(struct MahoCore *ptr);
 
 /**
  * Applies a FilterListUpdateResponse JSON to the content blocker.
@@ -2652,6 +2786,21 @@ void maho_core_chat_append_assistant_message(struct ChatSession *ptr,
                                              const char *tool_calls_json);
 
 /**
+ * Returns how many panics have been contained at the FFI boundary in this
+ * process.
+ */
+uint64_t maho_core_contained_panic_count(void);
+
+#if defined(MAHO_FFI_DEBUG_TEST_HOOKS)
+/**
+ * Test-only: panics inside `ffi_safe!` so a caller can prove containment.
+ * Compiled only with the `debug-test-hooks` feature, which official builds
+ * never enable.
+ */
+bool maho_core_debug_induce_panic(void);
+#endif
+
+/**
  * Create a new conversation. Returns true on success.
  * All pointer args except `core` may be null (treated as None/empty).
  *
@@ -3031,6 +3180,20 @@ bool maho_agent_session_set_preferred_provider(struct MahoAgentSession *session,
  * `session` must be a valid pointer to a `MahoAgentSession`.
  */
 char *maho_agent_list_tools(struct MahoAgentSession *session);
+
+/**
+ * # Safety
+ * `session` must be a valid pointer returned by a `maho_agent_create_session*`
+ * function. `mime` must be a null-terminated UTF-8 string and `data` must point
+ * to `len` readable bytes (or be null when `len` is 0).
+ * Stages one image for the next `maho_agent_send_message*` call on this
+ * session, replacing any image staged before. Only PNG up to 10 MiB is
+ * accepted; returns false (and stages nothing) otherwise.
+ */
+bool maho_agent_stage_user_image(struct MahoAgentSession *session,
+                                 const char *mime,
+                                 const uint8_t *data,
+                                 uint32_t len);
 
 /**
  * # Safety
@@ -3678,6 +3841,32 @@ char *maho_vault_password_strength_json(struct MahoCore *core, const char *reque
  * `core` must be a valid MahoCore pointer. The returned string is freed with `maho_string_free`.
  */
 char *maho_vault_status_json(struct MahoCore *core);
+
+/**
+ * Creates a Vault-backed passkey (P-256, ES256) for a WebAuthn
+ * registration. Request: {rpId, userIdB64url, userName, displayName,
+ * requireUv, uvPerformed}; response data: {credentialId, publicKeyCose,
+ * itemId} (binary fields base64url without padding). Errors: uv_required,
+ * invalid_request, locked.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` a NUL-terminated UTF-8 JSON string.
+ * The returned string is freed with `maho_string_free`.
+ */
+char *maho_vault_passkey_create_json(struct MahoCore *core, const char *request_json);
+
+/**
+ * Signs a WebAuthn assertion with a Vault passkey bound to `rpId`.
+ * Request: {rpId, clientDataHash, allowCredentialIds?, requireUv,
+ * uvPerformed}; response data: {credentialId, authenticatorData, signature,
+ * userHandle} (base64url). The sign counter is incremented and persisted.
+ * Errors: uv_required, not_found, locked, rp_mismatch, invalid_request.
+ *
+ * # Safety
+ * `core` must be valid and `request_json` a NUL-terminated UTF-8 JSON string.
+ * The returned string is freed with `maho_string_free`.
+ */
+char *maho_vault_passkey_get_assertion_json(struct MahoCore *core, const char *request_json);
 
 /**
  * Returns the effective default agent Vault policy from durable storage.

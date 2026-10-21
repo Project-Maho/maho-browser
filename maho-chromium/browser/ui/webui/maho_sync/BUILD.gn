@@ -23,6 +23,7 @@ source_set("maho_sync") {
 
   deps = [
     "//chrome/browser/profiles:profile",
+    "//components/services/storage/public/mojom",
     "//maho/browser:maho_core_holder",
     "//maho/components/constants",
     "//maho/third_party/maho:maho_bridge",

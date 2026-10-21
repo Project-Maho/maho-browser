@@ -1,5 +1,6 @@
 use maho_core::content_blocker::{
-    compile_engine_snapshot, ContentBlocker, FilterUpdateOutcome, MAX_ENABLED_FILTER_RULES,
+    compile_engine_snapshot, rule_breakdown, ContentBlocker, FilterUpdateOutcome,
+    MAX_ENABLED_FILTER_RULES,
 };
 use maho_types::content_blocking::ContentBlockingError;
 use maho_types::content_blocking::FilterListUpdateResponse;
@@ -336,4 +337,74 @@ fn default_seeded_list_pair_fits_the_aggregate_rule_budget() {
     );
     assert!(blocker.has_pending_candidate("easylist"));
     assert!(blocker.has_pending_candidate("easyprivacy"));
+}
+
+#[test]
+fn rule_breakdown_counts_network_cosmetic_and_rejected_lines() {
+    let body = "! comment\n[Adblock Plus 2.0]\n\n||ads.example^\n||tracker.example^$third-party\n##.ad-banner\n||bad^$unknownoption\nexample.com##div:has-text(\n";
+    let breakdown = rule_breakdown("easylist", body);
+    assert_eq!(breakdown.list_id, "easylist");
+    assert_eq!(breakdown.accepted_network, 2);
+    assert_eq!(breakdown.accepted_cosmetic, 1);
+    assert_eq!(breakdown.rejected, 2, "{breakdown:?}");
+    assert_eq!(
+        breakdown.rejected_samples,
+        vec![
+            "||bad^$unknownoption".to_string(),
+            "example.com##div:has-text(".to_string()
+        ]
+    );
+}
+
+#[test]
+fn rule_breakdown_caps_rejected_samples() {
+    let body = (0..50)
+        .map(|i| format!("||bad{i}^$unknownoption"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let breakdown = rule_breakdown("custom", &body);
+    assert_eq!(breakdown.rejected, 50);
+    assert_eq!(
+        breakdown.rejected_samples.len(),
+        maho_types::content_blocking::MAX_REJECTED_RULE_SAMPLES
+    );
+}
+
+#[test]
+fn health_reports_breakdown_for_each_list_with_content() {
+    let mut blocker = ContentBlocker::new();
+    blocker
+        .update_filter_list_content(
+            "easylist",
+            "||ads.example^\n##.ad\n||x^$unknownoption\n".to_string(),
+        )
+        .unwrap();
+    let health = blocker.health();
+    let easylist = health
+        .rule_breakdown
+        .iter()
+        .find(|entry| entry.list_id == "easylist")
+        .expect("easylist breakdown present");
+    assert_eq!(easylist.accepted_network, 1);
+    assert_eq!(easylist.accepted_cosmetic, 1);
+    assert_eq!(easylist.rejected, 1);
+    assert!(health
+        .rule_breakdown
+        .iter()
+        .all(|entry| entry.list_id == "easylist"));
+}
+
+#[test]
+fn list_with_one_valid_rule_still_activates_despite_rejections() {
+    let mut blocker = ContentBlocker::new();
+    blocker
+        .update_filter_list_content(
+            "easylist",
+            "||ok.example^\n||x^$unknownoption\n".to_string(),
+        )
+        .unwrap();
+    assert_eq!(blocker.health().rule_breakdown[0].rejected, 1);
+    assert!(blocker
+        .update_filter_list_content("easylist", "||x^$unknownoption\n".to_string())
+        .is_err());
 }

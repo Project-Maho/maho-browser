@@ -33,6 +33,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "maho/browser/mcp/maho_mcp_session_token_win.h"
 
 namespace maho {
@@ -329,6 +330,10 @@ void MahoMcpPipeServer::OnClientConnected() {
   conn->pipe_handle = std::move(listen_handle_);
   const std::string peer_executable =
       GetPipeClientExecutable(conn->pipe_handle.get());
+  ULONG peer_pid = 0;
+  const bool peer_browser_owned =
+      ::GetNamedPipeClientProcessId(conn->pipe_handle.get(), &peer_pid) &&
+      IsMahoMcpPeerBrowserOwned(static_cast<base::ProcessId>(peer_pid));
   conn->session = std::shared_ptr<MahoMcpSession>(
       new MahoMcpSession(session_token_, lease_registry_.get(), peer_executable,
                          true),
@@ -339,6 +344,11 @@ void MahoMcpPipeServer::OnClientConnected() {
                               MahoMcpSession* session) { delete session; },
                            registry, session));
       });
+  // Controller pairing: the browser's own descendants (the built-in agent's
+  // bridge) are exempt; every other peer must pair (the DPAPI session token
+  // stays required for all of them).
+  conn->session->SetPairing(MahoMcpPairingCoordinator::Get(),
+                            peer_browser_owned);
   conn->read_buffer.resize(kReadBufferSize);
 
   conn->read_event.Set(::CreateEventW(nullptr, TRUE, FALSE, nullptr));
@@ -482,6 +492,8 @@ void MahoMcpPipeServer::PumpRequests(uint64_t connection_id) {
   const bool large =
       tool_name && (*tool_name == "browser_screenshot_full" ||
                     *tool_name == "browser_screenshot_element" ||
+                    *tool_name == "browser_screenshot_viewport" ||
+                    *tool_name == "browser_screenshot_area" ||
                     *tool_name == "browser_network_stop_capture" ||
                     *tool_name == "browser_network_get_har");
   const size_t reservation =

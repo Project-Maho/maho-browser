@@ -49,6 +49,37 @@ impl VaultSecretUseRequest {
 }
 
 impl VaultRuntime {
+    pub(crate) fn increment_passkey_sign_count(
+        &self,
+        repository: &VaultRepository<'_>,
+        id: VaultItemId,
+        sign_count: u32,
+    ) -> Result<(), VaultCrudError> {
+        self.with_manager(|manager| {
+            let (row, mut record) = active_item(manager, repository, &id)?;
+            let metadata = record
+                .metadata
+                .passkey
+                .as_mut()
+                .ok_or(VaultCrudError::ItemKindMismatch)?;
+            if record.metadata.item_kind != VaultItemKind::Passkey
+                || sign_count <= metadata.sign_count
+            {
+                return Err(VaultCrudError::MalformedPayload);
+            }
+            metadata.sign_count = sign_count;
+            metadata.last_used_at = Some(
+                DateTime::<Utc>::from_timestamp_micros(Utc::now().timestamp_micros())
+                    .ok_or(VaultCrudError::MalformedPayload)?,
+            );
+            record.last_used_at = metadata.last_used_at;
+            let updated = encrypt_updated_row(manager, &row, &id, &record)?;
+            persist_update(manager, repository, &updated, row.revision, &id)?;
+            Ok(())
+        })
+        .map_err(VaultCrudError::from)?
+    }
+
     pub(crate) fn update_login(
         &self,
         repository: &VaultRepository<'_>,

@@ -48,6 +48,14 @@ export class PageHandlerRemote {
     bindNewPipeAndPassReceiver: () => ({}),
     close: () => {},
   };
+
+  getSiteSessionOptedOrigins(): Promise<{origins: string[]}> {
+    return Promise.resolve({origins: []});
+  }
+
+  setSiteSessionOptedOrigins(_origins: string[]): Promise<{success: boolean; errorMessage: string}> {
+    return Promise.resolve({success: true, errorMessage: ''});
+  }
 }
 
 export const PageHandlerFactory = {

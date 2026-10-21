@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/test/bind.h"
@@ -340,13 +342,13 @@ struct FakeAgentState {
   struct Send {
     std::string message;
     uint64_t generation = 0;
-    raw_ptr<void> user_data = nullptr;
+    mutable raw_ptr<void> user_data = nullptr;
 
     void (*token_cb)(void*, const char*) = nullptr;
     void (*complete_cb)(void*, const char*, const char*) = nullptr;
     void (*error_cb)(void*, const char*) = nullptr;
     MahoAgentReleaseCallback release_cb = nullptr;
-    raw_ptr<void> release_user_data = nullptr;
+    mutable raw_ptr<void> release_user_data = nullptr;
     mutable bool released = false;
 
     void DeliverToken(const std::string& token) const {
@@ -372,7 +374,9 @@ struct FakeAgentState {
     void Release() const {
       if (!released && release_cb) {
         released = true;
-        release_cb(release_user_data);
+        user_data = nullptr;
+        void* data = release_user_data.ExtractAsDangling();
+        release_cb(data);
       }
     }
   };
@@ -450,6 +454,9 @@ struct FakeAgentState {
   bool resolve_model_result = true;
 
   std::vector<Send> sends;
+  // Images staged through stage_user_image, in call order.
+  std::vector<std::vector<uint8_t>> staged_images;
+  bool stage_user_image_result = true;
 
   void DeliverUnifiedEvent(const MahoUnifiedAgentEventEnvelope& envelope) {
     if (unified_event_cb) {
@@ -579,7 +586,12 @@ void FakeSessionFree(MahoAgentSession*) {
     g_fake_agent->lifecycle_calls.push_back("session_free");
     if (!g_fake_agent->session_released && g_fake_agent->session_release_cb) {
       g_fake_agent->session_released = true;
-      g_fake_agent->session_release_cb(g_fake_agent->session_release_user_data);
+      g_fake_agent->secure_storage_user_data = nullptr;
+      g_fake_agent->browser_tool_user_data = nullptr;
+      g_fake_agent->unified_event_user_data = nullptr;
+      g_fake_agent->unified_release_user_data = nullptr;
+      void* data = g_fake_agent->session_release_user_data.ExtractAsDangling();
+      g_fake_agent->session_release_cb(data);
     }
   }
 }
@@ -813,6 +825,23 @@ bool FakeResolveModel(MahoAgentSession*,
   return true;
 }
 
+void FakeFreeString(char* s) {
+  free(s);
+}
+
+bool FakeStageUserImage(MahoAgentSession*,
+                        const char* mime,
+                        const uint8_t* data,
+                        uint32_t len) {
+  if (!g_fake_agent || std::string(mime) != "image/png") {
+    return false;
+  }
+  // SAFETY: the FFI contract guarantees |data| points to |len| bytes.
+  auto bytes = UNSAFE_BUFFERS(base::span<const uint8_t>(data, len));
+  g_fake_agent->staged_images.emplace_back(bytes.begin(), bytes.end());
+  return g_fake_agent->stage_user_image_result;
+}
+
 const MahoAgentFfi kFakeFfi = {
     &FakeCreateSession,
     &FakeSetApprovalPolicy,
@@ -835,12 +864,17 @@ const MahoAgentFfi kFakeFfi = {
     &FakeWaitRegister,
     &FakeWaitWake,
     &FakeResolveModel,
+    &FakeStageUserImage,
+    &FakeFreeString,
 };
 
 }  // namespace
 
 class MahoUnifiedAgentAdapterLifecycleTest : public testing::Test {
  public:
+  static void ClearPermissionPromptOverride(MahoUnifiedAgentAdapter* adapter) {
+    adapter->permission_prompt_override_for_testing_.Reset();
+  }
   static void ConfigureMailIntegrationAdapter(MahoUnifiedAgentAdapter* adapter) {
     adapter->set_agent_ffi_for_testing(&kFakeFfi);
   }
@@ -1235,6 +1269,49 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest, HelpRequestResetFailsClosed) {
   EXPECT_TRUE(adapter_->IsWaitingForHumanHelp());
   adapter_->Reset();
   EXPECT_FALSE(adapter_->IsWaitingForHumanHelp());
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       StagedImageIsHandedToTheNextTurnOnly) {
+  const std::vector<uint8_t> png = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a,
+                                    '\n', 1, 2, 3};
+  ASSERT_TRUE(adapter_->StageUserImage(png));
+  adapter_->SubmitMessage("What is in this capture?",
+                          maho_ai::mojom::ChatIntent::kFreeform, false,
+                          maho_ai::mojom::InteractionMode::kAssistant,
+                          callback());
+  task_environment_.RunUntilIdle();
+  ASSERT_EQ(fake_agent_->staged_images.size(), 1u);
+  EXPECT_EQ(fake_agent_->staged_images[0], png);
+  ASSERT_EQ(fake_agent_->sends.size(), 1u);
+
+  // A running turn refuses a new image rather than turning it into a
+  // text-only follow-up.
+  EXPECT_FALSE(adapter_->StageUserImage(png));
+  fake_agent_->DeliverComplete("A chart.");
+  task_environment_.RunUntilIdle();
+
+  adapter_->SubmitMessage("And now?", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kAssistant,
+                          callback());
+  task_environment_.RunUntilIdle();
+  EXPECT_EQ(fake_agent_->staged_images.size(), 1u);
+  EXPECT_EQ(fake_agent_->sends.size(), 2u);
+  fake_agent_->DeliverComplete("Still a chart.");
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
+       RejectedImageFailsTheTurnInsteadOfSendingText) {
+  fake_agent_->stage_user_image_result = false;
+  ASSERT_TRUE(adapter_->StageUserImage({0x89, 'P', 'N', 'G', '\r', '\n',
+                                        0x1a, '\n', 1}));
+  adapter_->SubmitMessage("Describe it", maho_ai::mojom::ChatIntent::kFreeform,
+                          false, maho_ai::mojom::InteractionMode::kAssistant,
+                          callback());
+  task_environment_.RunUntilIdle();
+  EXPECT_TRUE(fake_agent_->sends.empty());
+  EXPECT_EQ(CountEvents(MahoAiRuntimeEventType::kError), 1u);
 }
 
 TEST_F(MahoUnifiedAgentAdapterLifecycleTest, FullTurnFlow) {
@@ -3128,7 +3205,7 @@ TEST_F(MahoUnifiedAgentAdapterLifecycleTest,
       base::RepeatingCallback<Browser*()>());
   SetAgentFfiForTesting(adapter_.get(), &kFakeFfi);
   // Use the override so the dialog doesn't try to show native UI.
-  adapter_->permission_prompt_override_for_testing_ = {};
+  ClearPermissionPromptOverride(adapter_.get());
 
   adapter_->SubmitMessage("test", maho_ai::mojom::ChatIntent::kFreeform,
                           false, maho_ai::mojom::InteractionMode::kDeveloper,

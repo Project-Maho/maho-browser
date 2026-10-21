@@ -30,11 +30,13 @@
 #include "maho/browser/ai/maho_mail_tool_authorization.h"
 #include "maho/browser/mcp/maho_mcp_accessibility_handler.h"
 #include "maho/browser/mcp/maho_mcp_capability_registry.h"
+#include "maho/browser/mcp/maho_mcp_controller_pairing.h"
 #include "maho/browser/mcp/maho_mcp_firewall.h"
 #include "maho/browser/mcp/maho_mcp_input_synthesizer.h"
 #include "maho/browser/mcp/maho_mcp_json_rpc.h"
 #include "maho/browser/mcp/maho_mcp_lease_registry.h"
 #include "maho/browser/mcp/maho_mcp_network_observer.h"
+#include "maho/browser/mcp/maho_mcp_screenshot_handler.h"
 #include "ui/accessibility/ax_node_id_forward.h"
 
 class GURL;
@@ -322,6 +324,17 @@ class MahoMcpSession {
     deferred_response_sender_ = std::move(sender);
   }
 
+  // Controller pairing (todo 67). |coordinator| is the UI-thread pairing
+  // owner; null disables the gate (tests that do not exercise pairing).
+  // |browser_owned| marks a peer that is the browser itself or one of its
+  // descendants (the built-in agent's maho-browser-mcp), which needs no
+  // pairing.
+  void SetPairing(MahoMcpPairingCoordinator* coordinator, bool browser_owned) {
+    pairing_coordinator_ = coordinator;
+    pairing_exempt_ = browser_owned;
+  }
+  bool pairing_paired_for_testing() const { return pairing_paired_; }
+
   State state() const { return state_; }
 
   // Unguessable per-connection id used as the lease-holder key. Exposed so the
@@ -391,9 +404,7 @@ class MahoMcpSession {
   }
 
  private:
-  // Visual-frame capture path: minted only from a real delegate capture that
-  // carried real geometry. See MahoMcpCaptureMetrics and the screenshot_full
-  // tool handler.
+  // Visual-frame capture path: minted only from real delegate metrics.
   void OnFullScreenshotCaptured(
       std::optional<base::Value> message_id,
       DeferredResponseSender deferred_sender,
@@ -406,6 +417,13 @@ class MahoMcpSession {
                         std::vector<std::string>& responses);
   void HandleActiveMethod(const McpJsonRpcMessage& msg,
                           std::vector<std::string>& responses);
+  // Returns true when the call was answered by the pairing gate.
+  bool HandlePairingMethod(const McpJsonRpcMessage& msg,
+                           std::vector<std::string>& responses);
+  bool GateToolCallForPairing(const McpJsonRpcMessage& msg,
+                              std::vector<std::string>& responses);
+  void OnPairingAwaited(std::optional<base::Value> message_id,
+                        const MahoMcpPairingCoordinator::Outcome& outcome);
   void HandleControlList(const McpJsonRpcMessage& msg,
                          std::vector<std::string>& responses);
   void HandleControlCall(const McpJsonRpcMessage& msg,
@@ -503,6 +521,15 @@ class MahoMcpSession {
   uint64_t activity_revision_ = 0;
 
   DeferredResponseSender deferred_response_sender_;
+
+  raw_ptr<MahoMcpPairingCoordinator> pairing_coordinator_ = nullptr;
+  bool pairing_exempt_ = false;
+  bool pairing_paired_ = false;
+  bool pairing_revoked_ = false;
+  std::string pairing_controller_id_;
+  std::string pairing_kind_;
+  std::string pairing_name_;
+  std::string pairing_request_id_;
 
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<MahoMcpSession> weak_factory_{this};
@@ -696,6 +723,14 @@ class MahoMcpBrowserDelegate {
       int tab_id,
       ui::AXNodeID ax_id,
       base::OnceCallback<void(std::string)> callback) = 0;
+
+  virtual void CaptureViewportPngBase64(
+      int tab_id,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) = 0;
+  virtual void CaptureAreaPngBase64(
+      int tab_id,
+      const gfx::Rect& area,
+      base::OnceCallback<void(MahoMcpScreenshotResult)> callback) = 0;
 
   virtual bool Scroll(int tab_id,
                       const std::string& direction,

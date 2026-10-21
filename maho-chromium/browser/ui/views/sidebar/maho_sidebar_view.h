@@ -66,6 +66,7 @@ enum class MahoSidebarBodyMode {
 
 class MahoSidebarArchiveView;
 class MahoSidebarCreateSpaceView;
+class MahoCoreRecoveryBannerView;
 class MahoSidebarDownloadsView;
 
 class MahoSidebarFavoritesGridView;
@@ -79,6 +80,7 @@ class MahoSidebarTabListView;
 class MahoSidebarUpdateNotificationController;
 class MahoSidebarUpdateNotificationView;
 class MahoSidebarTopBarView;
+class MahoSidebarAgentTasksView;
 class MahoSidebarSpacesView;
 class MahoSpacesOverlayBoardView;
 
@@ -261,6 +263,7 @@ class MahoSidebarView
   }
 
   void ActivateTabById(const std::string& tab_id);
+  void ActivateTaskTab(int64_t focus_tab_id);
   static bool ActivateSpaceAndTab(Browser* browser, const std::string& space_id);
 
   bool ActivateFavoriteByIndex(size_t index);
@@ -398,12 +401,14 @@ class MahoSidebarView
   raw_ptr<MahoSpacesOverlayBoardView> spaces_view_ = nullptr;
   raw_ptr<MahoSidebarLibraryRailView> library_rail_view_ = nullptr;
   raw_ptr<MahoSidebarTopBarView> top_bar_view_ = nullptr;
+  raw_ptr<MahoSidebarAgentTasksView> agent_tasks_view_ = nullptr;
   raw_ptr<MahoSidebarFavoritesGridView> favorites_view_ = nullptr;
   raw_ptr<MahoSidebarTabListView> tab_list_view_ = nullptr;
   raw_ptr<views::View> space_header_view_ = nullptr;
   raw_ptr<views::ScrollView> tab_scroll_view_ = nullptr;
   raw_ptr<MahoSidebarScrollBar> tab_scroll_bar_ = nullptr;
   base::CallbackListSubscription tab_scroll_subscription_;
+  base::CallbackListSubscription core_recovery_subscription_;
   raw_ptr<MahoSidebarFooterView> footer_view_ = nullptr;
   raw_ptr<MahoSidebarNowPlayingView> now_playing_view_ = nullptr;
   std::unique_ptr<MahoSidebarUpdateNotificationController>
@@ -412,6 +417,7 @@ class MahoSidebarView
       nullptr;
   raw_ptr<MahoSidebarCreateSpaceView> create_space_view_ = nullptr;
   raw_ptr<MahoSidebarGrainOverlayView> grain_overlay_ = nullptr;
+  raw_ptr<MahoCoreRecoveryBannerView> core_recovery_banner_ = nullptr;
   MahoSidebarPaletteHost palette_host_;
   base::RepeatingCallbackList<void(const MahoSidebarPalette&)>
       palette_changed_callbacks_;

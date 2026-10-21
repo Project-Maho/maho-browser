@@ -128,6 +128,10 @@ inline int MoveToFolderIndex(int id) {
   return id - IDC_MAHO_FAV_MOVE_FOLDER_BASE;
 }
 
+enum MahoPageContextMenuCommand {
+  IDC_MAHO_ASK_ABOUT_SELECTION = 57301,
+};
+
 // Link context menu: 57300-57304
 enum MahoLinkContextMenuCommand {
   IDC_MAHO_LINK_OPEN_MAHO_MINI = 57300,

@@ -13,6 +13,8 @@
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
+#include "base/logging.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/strings/strcat.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
@@ -33,6 +35,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/isolated_world_ids.h"
+#include "maho/browser/ai/maho_selection_ask_dispatch.h"
 #include "maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
@@ -388,6 +391,16 @@ void MahoDomScreenshotHandler::ShowResultBubble(
           : base::OnceClosure(),
   });
 
+  // Captures in private windows never leave the dialog for the AI panel.
+  const bool ask_enabled =
+      wc->GetBrowserContext() && !wc->GetBrowserContext()->IsOffTheRecord();
+  menu.rows.push_back({
+      u"Ask Maho", &maho_lucide_icons::kWandSparklesIcon, ask_enabled, false,
+      ask_enabled ? base::BindOnce(&MahoDomScreenshotHandler::OnAskMahoClicked,
+                                   weak_factory_.GetWeakPtr())
+                  : base::OnceClosure(),
+  });
+
   menu.dismiss_callback = base::BindOnce(
       &MahoDomScreenshotHandler::OnBubbleDismissed,
       weak_factory_.GetWeakPtr());
@@ -506,6 +519,21 @@ void MahoDomScreenshotHandler::OnSendViaIMessageClicked() {
 
 void MahoDomScreenshotHandler::OnSaveToLibraryClicked() {
   OnDownloadClicked();
+}
+
+void MahoDomScreenshotHandler::OnAskMahoClicked() {
+  content::WebContents* wc = web_contents();
+  scoped_refptr<base::RefCountedMemory> png =
+      captured_image_.IsEmpty() ? nullptr : captured_image_.As1xPNGBytes();
+  if (wc && png && png->size() > 0) {
+    BrowserWindowInterface* browser =
+        GlobalBrowserCollection::GetInstance()->FindBrowserWithTab(wc);
+    const bool dispatched = AskMahoAboutCapture(
+        browser, wc, wc->GetLastCommittedURL(),
+        std::vector<uint8_t>(png->begin(), png->end()));
+    LOG_IF(WARNING, !dispatched) << "Ask Maho capture was not dispatched";
+  }
+  Finish();
 }
 
 void MahoDomScreenshotHandler::AgentHostClosed(

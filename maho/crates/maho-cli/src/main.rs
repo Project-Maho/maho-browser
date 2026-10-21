@@ -1,9 +1,11 @@
 mod auth;
 mod browser;
 pub mod config;
+mod controllers;
 mod credits;
 mod doctor;
 mod platform;
+mod skills;
 
 use maho_cli::browser_pipe;
 
@@ -115,10 +117,22 @@ pub enum Commands {
         command: Option<McpCommands>,
     },
 
+    /// Manage locally paired browser controllers.
+    Controllers {
+        #[command(subcommand)]
+        command: controllers::ControllersCommands,
+    },
+
     /// Manage and run routines
     Routine {
         #[command(subcommand)]
         command: RoutineCommands,
+    },
+
+    /// Install and manage the Maho browser skill for coding agents
+    Skills {
+        #[command(subcommand)]
+        command: skills::SkillsCommands,
     },
 
     /// Delegate browser goals to Maho's built-in agent; task runs a separate CLI agent
@@ -1243,6 +1257,12 @@ async fn async_main() -> Result<()> {
 
         // ─── MCP server ───────────────────────────────────────────────────
         Commands::Mcp { command } => cmd_mcp(command, json_output).await,
+
+        Commands::Controllers { command } => {
+            controllers::run(command, socket_path.as_deref(), json_output).await
+        }
+
+        Commands::Skills { command } => skills::run(command),
 
         // ─── Routine group ────────────────────────────────────────────────
         Commands::Routine { command } => match command {

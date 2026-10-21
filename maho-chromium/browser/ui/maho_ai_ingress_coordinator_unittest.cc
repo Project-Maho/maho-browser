@@ -33,11 +33,12 @@ class MahoAiIngressCoordinatorTest : public BrowserWithTestWindowTest {
     return maho_ai::mojom::AskMahoDispatch::New(
         id, query, maho_ai::mojom::AskMahoSource::kCommandPalette, true,
         maho_ai::mojom::InteractionMode::kAssistant,
-        maho_ai::mojom::AskMahoContextIntent::kNone, std::nullopt);
+        maho_ai::mojom::AskMahoContextIntent::kNone, std::nullopt,
+        std::vector<maho_ai::mojom::ContextAttachmentPtr>());
   }
 
   struct TestConsumer {
-    std::vector<maho_ai::mojom::AskMahoDispatch> dispatches;
+    std::vector<maho_ai::mojom::AskMahoDispatchPtr> dispatches;
     std::vector<uint64_t> delivery_ids;
     std::vector<MahoAiIngressCoordinator::AcceptanceCallback> accept_callbacks;
 
@@ -46,7 +47,7 @@ class MahoAiIngressCoordinatorTest : public BrowserWithTestWindowTest {
           [](TestConsumer* self, const maho_ai::mojom::AskMahoDispatch& d,
              uint64_t delivery_id,
              MahoAiIngressCoordinator::AcceptanceCallback accept_cb) {
-            self->dispatches.push_back(*d.Clone());
+            self->dispatches.push_back(d.Clone());
             self->delivery_ids.push_back(delivery_id);
             self->accept_callbacks.push_back(std::move(accept_cb));
           },
@@ -77,8 +78,8 @@ TEST_F(MahoAiIngressCoordinatorTest, ColdRetentionAndFIFO) {
 
   // Only the first one is delivered because of FIFO transaction gating.
   ASSERT_EQ(1u, consumer.dispatches.size());
-  EXPECT_EQ("q1", consumer.dispatches[0].query);
-  EXPECT_EQ("id1", consumer.dispatches[0].request_id);
+  EXPECT_EQ("q1", consumer.dispatches[0]->query);
+  EXPECT_EQ("id1", consumer.dispatches[0]->request_id);
 
   // Accept it.
   std::move(consumer.accept_callbacks[0]).Run("session1");
@@ -93,7 +94,7 @@ TEST_F(MahoAiIngressCoordinatorTest, ColdRetentionAndFIFO) {
 
   // Now "q2" is delivered.
   ASSERT_EQ(2u, consumer.dispatches.size());
-  EXPECT_EQ("q2", consumer.dispatches[1].query);
+  EXPECT_EQ("q2", consumer.dispatches[1]->query);
 }
 
 TEST_F(MahoAiIngressCoordinatorTest, DuplicateIgnoredForever) {
@@ -264,7 +265,7 @@ TEST_F(MahoAiIngressCoordinatorTest, PriorityAndFallback) {
   histograms.ExpectUniqueSample("Maho.AI.Ingress.Requeued", true, 1);
 
   ASSERT_EQ(1u, sidebar.dispatches.size());
-  EXPECT_EQ("q1", sidebar.dispatches[0].query);
+  EXPECT_EQ("q1", sidebar.dispatches[0]->query);
 }
 
 TEST_F(MahoAiIngressCoordinatorTest, AcceptedNoRedelivery) {
@@ -315,7 +316,7 @@ TEST_F(MahoAiIngressCoordinatorTest,
   floating_registration.Reset();
   ASSERT_EQ(1u, sidebar.dispatches.size());
   ASSERT_EQ(1u, sidebar.delivery_ids.size());
-  EXPECT_EQ("request-x", sidebar.dispatches[0].request_id);
+  EXPECT_EQ("request-x", sidebar.dispatches[0]->request_id);
   const uint64_t delivery_g2 = sidebar.delivery_ids[0];
   EXPECT_NE(0u, delivery_g2);
   EXPECT_NE(delivery_g1, delivery_g2);
@@ -325,7 +326,7 @@ TEST_F(MahoAiIngressCoordinatorTest,
 
   coordinator->NotifyTerminal(delivery_g2);
   ASSERT_EQ(2u, sidebar.dispatches.size());
-  EXPECT_EQ("request-y", sidebar.dispatches[1].request_id);
+  EXPECT_EQ("request-y", sidebar.dispatches[1]->request_id);
 }
 
 TEST_F(MahoAiIngressCoordinatorTest,
@@ -363,7 +364,7 @@ TEST_F(MahoAiIngressCoordinatorTest,
 
   ASSERT_EQ(1u, fallback.dispatches.size());
   ASSERT_EQ(1u, fallback.delivery_ids.size());
-  EXPECT_EQ("request-x", fallback.dispatches[0].request_id);
+  EXPECT_EQ("request-x", fallback.dispatches[0]->request_id);
   EXPECT_NE(0u, fallback.delivery_ids[0]);
   EXPECT_NE(delivery_g2, fallback.delivery_ids[0]);
 }
@@ -438,7 +439,7 @@ TEST_F(MahoAiIngressCoordinatorTest,
   weak_coordinator1->NotifyTerminal(consumer1.delivery_ids[0]);
 
   ASSERT_EQ(2u, consumer1.dispatches.size());
-  EXPECT_EQ("browser1-b", consumer1.dispatches[1].request_id);
+  EXPECT_EQ("browser1-b", consumer1.dispatches[1]->request_id);
   EXPECT_EQ(1u, consumer2.dispatches.size());
 
   MahoAiIngressCoordinator::RemoveFromBrowser(browser2.get());

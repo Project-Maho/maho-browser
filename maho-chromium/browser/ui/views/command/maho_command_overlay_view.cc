@@ -49,6 +49,8 @@
 #include "components/tabs/public/tab_interface.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "content/public/browser/web_contents.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "chrome/browser/ui/side_panel/side_panel_entry_id.h"
 #include "chrome/browser/ui/side_panel/side_panel_ui.h"
@@ -95,9 +97,16 @@
 #include "ui/views/style/typography.h"
 #include "ui/views/view_utils.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/controls/menu/menu_runner.h"
+#include "ui/menus/simple_menu_model.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/select_file_policy.h"
+#include "ui/shell_dialogs/selected_file_info.h"
+#include "maho/browser/ai/maho_ai_file_attachment_registry.h"
 #include "url/gurl.h"
 
 namespace maho {
+
 
 namespace {
 
@@ -214,6 +223,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
     : browser_(nullptr),
       mode_(mode),
       model_(nullptr),
+      attachment_model_(std::make_unique<MahoCommandAttachmentModel>()),
       dismiss_callback_(std::move(dismiss_callback)),
       resize_callback_(std::move(resize_callback)),
       origin_mode_(mode),
@@ -288,6 +298,39 @@ MahoCommandOverlayView::MahoCommandOverlayView(
       context_class_ != MahoPrivateContextClass::kNull) {
     action_selector_->SetVisible(false);
   }
+  if (browser_ &&
+      (context_class_ == MahoPrivateContextClass::kRegular ||
+       context_class_ == MahoPrivateContextClass::kNull)) {
+    if (!browser_->GetProfile()->IsOffTheRecord())
+      attachment_model_->AddCurrentTab("Current tab");
+    file_registry_ = ai::GetMahoAiFileAttachmentRegistry(browser_->GetProfile());
+    attachment_row_ = field_shell_->AddChildView(std::make_unique<views::View>());
+    attachment_row_->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal));
+    attachment_chips_container_ = attachment_row_->AddChildView(
+        std::make_unique<views::View>());
+    attachment_chips_container_->SetLayoutManager(
+        std::make_unique<views::BoxLayout>(
+            views::BoxLayout::Orientation::kHorizontal));
+    auto add_tab = std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&MahoCommandOverlayView::OnAddTabPressed,
+                            weak_factory_.GetWeakPtr()), u"+ Tab");
+    add_tab->GetViewAccessibility().SetName(u"Add open tab attachment");
+    add_tab_button_ = attachment_row_->AddChildView(std::move(add_tab));
+    auto add_file = std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&MahoCommandOverlayView::OnAddFilePressed,
+                            weak_factory_.GetWeakPtr()), u"+ File");
+    add_file->GetViewAccessibility().SetName(u"Add local file attachment");
+    add_file_button_ = attachment_row_->AddChildView(std::move(add_file));
+    auto mode_button = std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&MahoCommandOverlayView::OnToggleInteractionMode,
+                            weak_factory_.GetWeakPtr()), u"Ask");
+    mode_button->GetViewAccessibility().SetName(u"Switch interaction mode");
+    interaction_mode_button_ =
+        attachment_row_->AddChildView(std::move(mode_button));
+    attachment_row_->SetVisible(false);
+  }
+
 
   auto elements = MahoCommandResultRowView::BuildRowLayout(
       search_row_, std::move(input_background),
@@ -334,6 +377,9 @@ MahoCommandOverlayView::MahoCommandOverlayView(
   UpdateSearchRowChrome();
 
   UpdateModeChipVisibility();
+  if (attachment_row_)
+    attachment_row_->SetVisible(false);
+  RebuildAttachmentChips();
 
   divider_ = AddChildView(std::make_unique<views::Separator>());
   divider_->SetBorder(views::CreateEmptyBorder(
@@ -410,6 +456,7 @@ MahoCommandOverlayView::MahoCommandOverlayView(
     : browser_(browser),
       mode_(mode),
       model_(std::make_unique<MahoCommandModel>(browser)),
+      attachment_model_(std::make_unique<MahoCommandAttachmentModel>()),
       dismiss_callback_(std::move(dismiss_callback)),
       resize_callback_(std::move(resize_callback)),
       origin_mode_(mode),
@@ -1072,6 +1119,12 @@ bool MahoCommandOverlayView::HandleKeyEvent(views::Textfield* sender,
     }
 
     case ui::VKEY_BACK: {
+      if (textfield_->GetText().empty() && attachment_model_ &&
+          attachment_model_->RemoveLastOnBackspace(true)) {
+        attachment_model_->RemoveLast();
+        RebuildAttachmentChips();
+        return true;
+      }
       if (mode_ == CommandOverlayMode::kCommandsOnly &&
           textfield_->GetText().empty()) {
         ExitCommandsOnlyMode();
@@ -1466,7 +1519,8 @@ void MahoCommandOverlayView::ActivateSelected() {
     std::string query = base::UTF16ToUTF8(textfield_->GetText());
     Browser* browser = browser_;
     if (MahoCommandActionHandler::OnQuerySubmitted(
-            browser, query, palette_action_, context_class_)) {
+            browser, query, palette_action_, context_class_,
+            attachment_model_->ToMojom(), interaction_mode_)) {
       Dismiss();
       bool has_popup = maho::MahoAiPopupLifetimeTracker::Get()->GetPopupForOpener(browser) != nullptr;
       if (!has_popup && browser && browser->GetFeatures().side_panel_ui()) {
@@ -1530,6 +1584,149 @@ void MahoCommandOverlayView::ActivateSelected() {
   }
 
   NavigateTypedText();
+}
+
+void MahoCommandOverlayView::RebuildAttachmentChips() {
+  if (!attachment_chips_container_ || !attachment_model_)
+    return;
+  attachment_chips_container_->RemoveAllChildViews();
+  for (size_t i = 0; i < attachment_model_->chips().size(); ++i) {
+    const auto& chip = attachment_model_->chips()[i];
+    auto row = std::make_unique<views::View>();
+    row->SetLayoutManager(std::make_unique<views::BoxLayout>(
+        views::BoxLayout::Orientation::kHorizontal));
+    row->GetViewAccessibility().SetName(base::UTF8ToUTF16(chip.label));
+    row->AddChildView(std::make_unique<views::Label>(
+        base::UTF8ToUTF16(chip.label), views::style::CONTEXT_LABEL,
+        views::style::STYLE_BODY_5));
+    auto remove = std::make_unique<views::MdTextButton>(
+        base::BindRepeating(&MahoCommandOverlayView::OnRemoveAttachment,
+                            weak_factory_.GetWeakPtr(), i), u"×");
+    remove->GetViewAccessibility().SetName(
+        base::UTF8ToUTF16("Remove " + chip.label + " attachment"));
+    row->AddChildView(std::move(remove));
+    attachment_chips_container_->AddChildView(std::move(row));
+  }
+  attachment_row_->SetVisible(palette_action_ == PaletteAction::kAskMaho &&
+                              AiIngressAllowed());
+  add_tab_button_->SetVisible(palette_action_ == PaletteAction::kAskMaho &&
+                              AiIngressAllowed());
+  add_file_button_->SetVisible(palette_action_ == PaletteAction::kAskMaho &&
+                               AiIngressAllowed());
+  interaction_mode_button_->SetVisible(palette_action_ == PaletteAction::kAskMaho &&
+                                       AiIngressAllowed());
+  InvalidateLayout();
+}
+
+void MahoCommandOverlayView::OnAddTabPressed() {
+  ShowOpenTabMenu();
+}
+
+void MahoCommandOverlayView::ShowOpenTabMenu() {
+  if (!browser_ || !attachment_model_)
+    return;
+  TabStripModel* tabs = browser_->tab_strip_model();
+  if (!tabs)
+    return;
+  attachment_tab_ids_.clear();
+  attachment_tab_menu_model_ = std::make_unique<ui::SimpleMenuModel>(this);
+  for (int i = 0; i < tabs->count(); ++i) {
+    content::WebContents* contents = tabs->GetWebContentsAt(i);
+    if (!contents)
+      continue;
+    const int tab_id = tabs->GetTabAtIndex(i)->GetHandle().raw_value();
+    bool already_attached = false;
+    for (const auto& chip : attachment_model_->chips())
+      already_attached |= chip.tab_id == tab_id;
+    if (already_attached)
+      continue;
+    const std::string label = base::UTF16ToUTF8(contents->GetTitle());
+    attachment_tab_ids_.push_back(tab_id);
+    attachment_tab_menu_model_->AddItem(
+        static_cast<int>(attachment_tab_ids_.size() - 1),
+        base::UTF8ToUTF16(label.empty() ? "Open tab" : label));
+  }
+  if (attachment_tab_ids_.empty())
+    return;
+  attachment_tab_menu_runner_ = std::make_unique<views::MenuRunner>(
+      attachment_tab_menu_model_.get(), views::MenuRunner::COMBOBOX);
+  attachment_tab_menu_runner_->RunMenuAt(
+      GetWidget(), nullptr, add_tab_button_->GetBoundsInScreen(),
+      views::MenuAnchorPosition::kTopLeft, ui::mojom::MenuSourceType::kNone);
+}
+
+void MahoCommandOverlayView::ExecuteCommand(int command_id, int event_flags) {
+  (void)event_flags;
+  if (!attachment_model_ || command_id < 0 ||
+      command_id >= static_cast<int>(attachment_tab_ids_.size())) {
+    return;
+  }
+  const int tab_id = attachment_tab_ids_[command_id];
+  TabStripModel* tabs = browser_ ? browser_->tab_strip_model() : nullptr;
+  if (!tabs)
+    return;
+  for (int i = 0; i < tabs->count(); ++i) {
+    auto* contents = tabs->GetWebContentsAt(i);
+    if (!contents || tabs->GetTabAtIndex(i)->GetHandle().raw_value() != tab_id)
+      continue;
+    const std::string label = base::UTF16ToUTF8(contents->GetTitle());
+    attachment_model_->AddOpenTab(tab_id, label.empty() ? "Open tab" : label);
+    RebuildAttachmentChips();
+    return;
+  }
+}
+
+void MahoCommandOverlayView::OnAddFilePressed() {
+  if (!browser_ || browser_->GetProfile()->IsOffTheRecord() ||
+      !file_registry_) {
+    return;
+  }
+  attachment_file_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+  ui::SelectFileDialog::FileTypeInfo types;
+  types.extensions.push_back({FILE_PATH_LITERAL("txt"), FILE_PATH_LITERAL("md"),
+                              FILE_PATH_LITERAL("csv"), FILE_PATH_LITERAL("json")});
+  attachment_file_dialog_->SelectFile(
+      ui::SelectFileDialog::SELECT_OPEN_FILE, u"Attach a file",
+      base::FilePath(), &types, 0, FILE_PATH_LITERAL("txt"),
+      GetWidget() ? GetWidget()->GetNativeWindow() : gfx::NativeWindow());
+}
+
+void MahoCommandOverlayView::FileSelected(const ui::SelectedFileInfo& file,
+                                          int index) {
+  attachment_file_dialog_.reset();
+  if (!file_registry_ || !attachment_model_)
+    return;
+  std::string token = file_registry_->IssueToken(file.path());
+  if (token.empty())
+    return;
+  const std::string label =
+      base::UTF16ToUTF8(file.path().BaseName().LossyDisplayName());
+  attachment_model_->AddLocalFile(std::move(token), label);
+  RebuildAttachmentChips();
+}
+
+void MahoCommandOverlayView::FileSelectionCanceled() {
+  attachment_file_dialog_.reset();
+}
+
+void MahoCommandOverlayView::OnRemoveAttachment(size_t index) {
+  if (attachment_model_ && attachment_model_->Remove(index))
+    RebuildAttachmentChips();
+}
+
+void MahoCommandOverlayView::OnToggleInteractionMode() {
+  interaction_mode_ =
+      interaction_mode_ == maho_ai::mojom::InteractionMode::kAssistant
+          ? maho_ai::mojom::InteractionMode::kDeveloper
+          : maho_ai::mojom::InteractionMode::kAssistant;
+  interaction_mode_button_->SetText(
+      interaction_mode_ == maho_ai::mojom::InteractionMode::kAssistant
+          ? u"Ask"
+          : u"Agent");
+  interaction_mode_button_->GetViewAccessibility().SetName(
+      interaction_mode_ == maho_ai::mojom::InteractionMode::kAssistant
+          ? u"Switch to Agent mode"
+          : u"Switch to Ask mode");
 }
 
 void MahoCommandOverlayView::ActivateFirstNavigation() {
@@ -1668,6 +1865,13 @@ bool MahoCommandOverlayView::AcceleratorPressed(
     HandleEscape();
     return true;
   }
+  if (accelerator.key_code() == ui::VKEY_BACK && textfield_ &&
+      textfield_->GetText().empty() && attachment_model_ &&
+      attachment_model_->RemoveLastOnBackspace(true)) {
+    attachment_model_->RemoveLast();
+    RebuildAttachmentChips();
+    return true;
+  }
   return views::View::AcceleratorPressed(accelerator);
 }
 
@@ -1742,6 +1946,7 @@ bool MahoCommandOverlayView::AiIngressAllowed() const {
 
 void MahoCommandOverlayView::OnPaletteActionChanged(PaletteAction action) {
   palette_action_ = action;
+  RebuildAttachmentChips();
   TriggerSearchForCurrentText();
 }
 

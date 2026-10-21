@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import call, patch
@@ -249,8 +250,46 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
 
         linux_env.assert_called_once()
         self.assertEqual(linux_env.call_args.args[0], target)
+        # Non-release builds compile maho-ffi with its debug test hooks.
         cargo_build.assert_called_once_with(
-            ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env)
+            ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env,
+            features=['debug-test-hooks'])
+
+    def test_release_main_prebuilt_excludes_debug_test_hooks(self):
+        target = 'x86_64-unknown-linux-gnu'
+        toolchain_env = {'CC_x86_64_unknown_linux_gnu': '/chromium/clang'}
+        with patch.object(
+                 _module, 'get_target_triple',
+                 return_value=(target, 'x64', 'libmaho_ffi.a')), \
+             patch.object(
+                 _module, 'chromium_linux_toolchain_env',
+                 return_value=toolchain_env), \
+             patch.object(_module, '_cargo_build') as cargo_build, \
+             patch.object(_module.os.path, 'exists', return_value=False):
+            with self.assertRaises(SystemExit):
+                _module.build_rust_prebuilt(target, is_release=True)
+
+        cargo_build.assert_called_once_with(
+            ['cargo'], _module.MAHO_ROOT, target, 'maho-ffi', toolchain_env,
+            features=[])
+
+    def test_windows_openssl_pdb_is_placed_at_embedded_object_path(self):
+        with tempfile.TemporaryDirectory() as release_dir:
+            out_dir = os.path.join(
+                release_dir, 'build', 'openssl-sys-deadbeef', 'out')
+            install_lib = os.path.join(
+                out_dir, 'openssl-build', 'install', 'lib')
+            os.makedirs(install_lib)
+            installed_pdb = os.path.join(install_lib, 'ossl_static.pdb')
+            with open(installed_pdb, 'wb') as f:
+                f.write(b'pdb-bytes')
+            with patch.object(_module.sys, 'platform', 'win32'):
+                _module._place_windows_openssl_pdbs(release_dir)
+            embedded_pdb = os.path.join(
+                out_dir, 'openssl-build', 'build', 'src', 'ossl_static.pdb')
+            self.assertTrue(os.path.isfile(embedded_pdb))
+            with open(embedded_pdb, 'rb') as f:
+                self.assertEqual(f.read(), b'pdb-bytes')
 
     def test_mail_only_build_skips_main_rust_prebuilt(self):
         with patch.object(_module, 'build_mail_ffi_prebuilt') as build_mail:
@@ -364,6 +403,52 @@ class TestMailOAuthBuildEnvironment(unittest.TestCase):
             ['ranlib', '-c', str(destination) + '.tmp'],
             check=True,
         ))
+
+    def test_privatize_redefine_map_ends_every_line(self):
+        maps = []
+
+        def run(cmd, **kwargs):
+            if cmd[0] == 'objcopy':
+                with open(cmd[1].split('=', 1)[1], encoding='utf-8') as f:
+                    maps.append(f.read())
+            elif cmd[:2] == ['ar', 'x']:
+                Path(kwargs['cwd'], 'member.o').write_bytes(b'obj')
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+
+        with patch.object(
+                 _module, '_find_llvm_tools',
+                 return_value=('nm', 'ar', 'objcopy')), \
+             patch.object(_module, '_bundled_c_staticlibs', return_value=[]), \
+             patch.object(
+                 _module, '_defined_extern_symbols',
+                 return_value={'rust_eh_personality'}), \
+             patch.object(_module.subprocess, 'run', side_effect=run):
+            _module.privatize_rust_staticlib('lib.a', 'release', 'mahoffi')
+
+        # GNU objcopy rejects a final map line without a newline.
+        self.assertEqual(maps, ['rust_eh_personality mahoffi_rust_eh_personality\n'])
+
+    def test_privatize_reports_objcopy_stderr(self):
+        def run(cmd, **kwargs):
+            if cmd[:2] == ['ar', 'x']:
+                Path(kwargs['cwd'], 'member.o').write_bytes(b'obj')
+            if cmd[0] == 'objcopy':
+                return subprocess.CompletedProcess(cmd, 1, '', 'bad map line 7\n')
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+
+        with patch.object(
+                 _module, '_find_llvm_tools',
+                 return_value=('nm', 'ar', 'objcopy')), \
+             patch.object(_module, '_bundled_c_staticlibs', return_value=[]), \
+             patch.object(
+                 _module, '_defined_extern_symbols',
+                 return_value={'rust_eh_personality'}), \
+             patch.object(_module.subprocess, 'run', side_effect=run):
+            with self.assertRaises(SystemExit) as raised:
+                _module.privatize_rust_staticlib('lib.a', 'release', 'mahoffi')
+
+        self.assertIn('member.o', str(raised.exception))
+        self.assertIn('bad map line 7', str(raised.exception))
 
     def test_linux_mail_helper_denies_arbitrary_unix_ipc_without_secret_service(self):
         overlay = Path(__file__).parents[2]

@@ -40,24 +40,25 @@ pub struct DefaultEmbeddingEngine;
 impl EmbeddingEngine for DefaultEmbeddingEngine {
     fn descriptor(&self) -> EmbeddingModelDescriptor {
         EmbeddingModelDescriptor {
-            model_id: "all-MiniLM-L6-v2".to_string(),
-            model_version: "1.0.0".to_string(),
+            model_id: crate::embedding::EMBEDDING_MODEL_ID.to_string(),
+            model_version: crate::embedding::EMBEDDING_MODEL_REVISION.to_string(),
             model_sha256: None,
         }
     }
 
     fn embed_single(&self, text: &str) -> Result<Vec<f32>, CoreError> {
-        let res = crate::embedding::embed(&[text.to_string()])?;
-        Ok(res
+        crate::embedding::embed(&[text.to_string()])?
             .into_iter()
             .next()
-            .unwrap_or_else(|| vec![0.0; EMBED_DIM]))
+            .ok_or_else(|| CoreError::Embedding("model returned no vector".into()))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, CoreError> {
         crate::embedding::embed(texts)
     }
 }
+
+const REEMBED_BATCH: usize = 64;
 
 /// Validate vector length against expected dimensionality.
 pub fn validate_vector(v: &[f32], expected_dim: usize) -> Result<(), CoreError> {
@@ -141,6 +142,73 @@ impl MemoryEngine {
     /// Enqueue a maintenance job into the execution queue.
     pub fn enqueue_job(&mut self, job: MaintenanceJob) {
         self.queued_jobs.push(job);
+    }
+
+    pub fn generation_id(&self) -> &str {
+        &self.generation_id
+    }
+
+    /// Queues one RebuildEmbeddingGeneration job (idempotent) when any fact
+    /// still carries a vector from another generation or a zero placeholder.
+    pub fn schedule_reembed_if_stale(
+        &mut self,
+        storage: &SqliteStorage,
+    ) -> Result<bool, CoreError> {
+        if self
+            .queued_jobs
+            .iter()
+            .any(|job| job.kind == MemoryJobKind::RebuildEmbeddingGeneration)
+        {
+            return Ok(true);
+        }
+        let stale = storage
+            .memory_facts_needing_embedding(&self.generation_id, 1)
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        if stale.is_empty() {
+            return Ok(false);
+        }
+        self.queued_jobs.push(MaintenanceJob {
+            id: format!("job_reembed_{}", self.generation_id),
+            kind: MemoryJobKind::RebuildEmbeddingGeneration,
+            status: JobStatus::Pending,
+            source_cursor: None,
+            idempotency_key: format!("reembed_{}", self.generation_id),
+            payload: None,
+            created_at: self.now(),
+        });
+        Ok(true)
+    }
+
+    /// Re-embeds up to REEMBED_BATCH stale facts with the current model and
+    /// tags them with this generation. Returns whether stale facts remain.
+    /// Progress lives in the rows themselves, so an interrupted rebuild picks
+    /// up exactly the facts that are still stale.
+    fn reembed_batch(&self, storage: &SqliteStorage) -> Result<bool, CoreError> {
+        let batch = storage
+            .memory_facts_needing_embedding(&self.generation_id, REEMBED_BATCH)
+            .map_err(|e| CoreError::Storage(e.to_string()))?;
+        if batch.is_empty() {
+            return Ok(false);
+        }
+        let texts: Vec<String> = batch.iter().map(|(_, fact)| fact.clone()).collect();
+        let vectors = self.embedding_engine.embed_batch(&texts)?;
+        if vectors.len() != batch.len() {
+            return Err(CoreError::Embedding(format!(
+                "model returned {} vectors for {} facts",
+                vectors.len(),
+                batch.len()
+            )));
+        }
+        for ((id, _), vector) in batch.iter().zip(&vectors) {
+            validate_vector(vector, EMBED_DIM)?;
+            storage
+                .update_memory_embedding_with_model(id, &vec_to_bytes(vector), &self.generation_id)
+                .map_err(|e| CoreError::Storage(e.to_string()))?;
+        }
+        Ok(!storage
+            .memory_facts_needing_embedding(&self.generation_id, 1)
+            .map_err(|e| CoreError::Storage(e.to_string()))?
+            .is_empty())
     }
 
     /// Retrieve the current L1 briefing prompt block from storage.
@@ -505,8 +573,11 @@ impl MemoryEngine {
                                                 self.embedding_engine.embed_single(&fact_text)
                                             {
                                                 let bytes = vec_to_bytes(&emb);
-                                                let _ = storage
-                                                    .update_memory_embedding(&fact_id, &bytes);
+                                                let _ = storage.update_memory_embedding_with_model(
+                                                    &fact_id,
+                                                    &bytes,
+                                                    &self.generation_id,
+                                                );
                                             }
                                         }
                                         ConsolidationAction::Reinforce { .. } => {
@@ -528,29 +599,45 @@ impl MemoryEngine {
                     jobs_processed += 1;
                 }
                 MemoryJobKind::EmbedFact => {
+                    let mut stored = true;
                     if let Some(fact_id) = &job.source_cursor {
                         if let Ok(all_facts) = storage.load_all_memories() {
                             if let Some(record) = all_facts.into_iter().find(|f| f.0 == *fact_id) {
                                 if let Ok(emb) = self.embedding_engine.embed_single(&record.1) {
                                     let bytes = vec_to_bytes(&emb);
-                                    let _ = storage.update_memory_embedding(&record.0, &bytes);
+                                    // A failed write leaves the fact stale, so the
+                                    // job must not report success.
+                                    stored = storage
+                                        .update_memory_embedding_with_model(
+                                            &record.0,
+                                            &bytes,
+                                            &self.generation_id,
+                                        )
+                                        .is_ok();
                                 }
                             }
                         }
                     }
-                    job.status = JobStatus::Completed;
+                    job.status = if stored {
+                        JobStatus::Completed
+                    } else {
+                        JobStatus::Failed
+                    };
                     jobs_processed += 1;
                 }
                 MemoryJobKind::RebuildEmbeddingGeneration => {
-                    if let Ok(all_facts) = storage.load_all_memories() {
-                        for record in all_facts {
-                            if let Ok(emb) = self.embedding_engine.embed_single(&record.1) {
-                                let bytes = vec_to_bytes(&emb);
-                                let _ = storage.update_memory_embedding(&record.0, &bytes);
+                    job.status = match self.reembed_batch(storage) {
+                        Ok(remaining) => {
+                            if remaining {
+                                self.queued_jobs.push(MaintenanceJob {
+                                    status: JobStatus::Pending,
+                                    ..job.clone()
+                                });
                             }
+                            JobStatus::Completed
                         }
-                    }
-                    job.status = JobStatus::Completed;
+                        Err(_) => JobStatus::Failed,
+                    };
                     jobs_processed += 1;
                 }
                 _ => {

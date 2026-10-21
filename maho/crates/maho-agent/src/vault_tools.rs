@@ -1,4 +1,53 @@
+use maho_types::vault::{VaultAgentPolicy, VaultLockState};
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VaultCredentialRequestContext {
+    pub vault_available: bool,
+    pub lock_state: VaultLockState,
+    pub executor_context_present: bool,
+    pub explicitly_approved: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VaultPolicyDecision {
+    Allowed,
+    Denied,
+}
+
+/// Decides whether an agent credential request may receive a lease.
+///
+/// Fails closed: an unavailable or locked Vault, or a request without an
+/// executor context, is denied under every policy. Past that, `Deny` never
+/// allows; `AskEveryUse` and `AllowForTask` need an explicit approval for
+/// the request (task scoping is enforced by the lease itself); `WhileUnlocked`
+/// and `AlwaysAllow` allow without a fresh approval.
+pub fn decide_vault_credential_request(
+    policy: VaultAgentPolicy,
+    context: VaultCredentialRequestContext,
+) -> VaultPolicyDecision {
+    if !context.vault_available
+        || !context.executor_context_present
+        || context.lock_state != VaultLockState::Unlocked
+    {
+        return VaultPolicyDecision::Denied;
+    }
+    let allowed = match policy {
+        VaultAgentPolicy::Deny => false,
+        VaultAgentPolicy::AskEveryUse | VaultAgentPolicy::AllowForTask => {
+            context.explicitly_approved
+        }
+        VaultAgentPolicy::WhileUnlocked | VaultAgentPolicy::AlwaysAllow => true,
+        // VaultAgentPolicy is #[non_exhaustive]: a policy this build does not
+        // know is denied.
+        _ => false,
+    };
+    if allowed {
+        VaultPolicyDecision::Allowed
+    } else {
+        VaultPolicyDecision::Denied
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VaultListCredentialsParams {
@@ -209,6 +258,7 @@ mod tests {
 pub enum LeaseValidationError {
     ExpiredOrNotFound,
     OriginMismatch,
+    PolicyDenied,
 }
 
 pub struct VaultCredentialLeaseManager {
@@ -253,6 +303,19 @@ impl VaultCredentialLeaseManager {
             },
         );
         handle
+    }
+
+    pub fn grant_lease_for_request(
+        &mut self,
+        item_id: &str,
+        origin: &str,
+        policy: VaultAgentPolicy,
+        context: VaultCredentialRequestContext,
+    ) -> Result<VaultCredentialHandle, LeaseValidationError> {
+        if decide_vault_credential_request(policy, context) != VaultPolicyDecision::Allowed {
+            return Err(LeaseValidationError::PolicyDenied);
+        }
+        Ok(self.grant_lease(item_id, origin))
     }
 
     pub fn validate_and_consume(
