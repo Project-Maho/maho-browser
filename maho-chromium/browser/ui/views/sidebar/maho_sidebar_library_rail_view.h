@@ -9,6 +9,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "maho/browser/ui/theme/maho_theme_helper.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_downloads_data.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/vector_icon_types.h"
 #include "ui/views/view.h"
@@ -61,6 +62,19 @@ class MahoSidebarLibraryRailView : public views::View {
   // right after construction and on every subsequent palette change.
   void OnSidebarPaletteChanged(const MahoSidebarPalette& palette);
 
+  // Applies the aggregated Downloads state to the Downloads rail item. The
+  // owning sidebar pushes this on every throttled MahoDownloadBridgeService
+  // notification, so the icon reflects progress even while the Downloads pane
+  // has never been built. A default-constructed state clears the indicator.
+  void SetDownloadsIndicatorState(const DownloadsIndicatorState& state);
+  const DownloadsIndicatorState& downloads_indicator_state_for_testing() const {
+    return downloads_indicator_state_;
+  }
+  // The Downloads rail item's indicator view, or null when the item is absent.
+  views::View* downloads_indicator_for_testing();
+  // Painted fill width of that indicator, in dp, after layout.
+  int downloads_indicator_fill_width_for_testing() const;
+
   views::Button* button_for_category_for_testing(Category category);
   std::vector<Category> visible_categories_for_testing() const;
   views::ImageButton* back_button_for_testing() { return back_button_; }
@@ -84,6 +98,7 @@ class MahoSidebarLibraryRailView : public views::View {
   std::vector<raw_ptr<MahoSidebarLibraryRailItemButton>> category_buttons_;
   raw_ptr<views::ImageButton> back_button_ = nullptr;
   Category selected_category_ = Category::kArchivedTabs;
+  DownloadsIndicatorState downloads_indicator_state_;
   CategorySelectedCallback category_selected_callback_;
   base::RepeatingClosure back_callback_;
   MahoSidebarPalette palette_;
