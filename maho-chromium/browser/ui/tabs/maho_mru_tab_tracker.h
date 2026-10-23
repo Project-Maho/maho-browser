@@ -49,6 +49,22 @@ class MahoMruTabTracker : public TabStripModelObserver {
   std::vector<content::WebContents*> GetMruListForSpace(
       const std::string& space_id) const;
 
+  // Pure core of GetMruListForSpace(): `tab_ids[i]` is the stable Maho tab id
+  // of the i-th MRU entry (empty when the tab has no id yet). Reports which
+  // entries belong to `space_id` and, for the rest, why they were dropped, so
+  // a Ctrl+Tab that finds fewer than two candidates can say which rule
+  // removed them.
+  struct SpaceFilterResult {
+    std::vector<size_t> kept;
+    size_t unidentified = 0;  // no stable tab id
+    size_t unmapped = 0;      // id absent from the core's tab->space map
+    size_t other_space = 0;   // mapped to a different space
+  };
+  static SpaceFilterResult FilterBySpace(
+      const std::vector<std::string>& tab_ids,
+      const base::flat_map<std::string, std::string>& tab_to_space,
+      const std::string& space_id);
+
   // TabStripModelObserver:
   void OnTabStripModelChanged(
       TabStripModel* tab_strip_model,

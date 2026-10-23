@@ -30,6 +30,31 @@ class TestGenerateProductVersion(unittest.TestCase):
         version = generate_product_version.read_version(version_path)
         self.assertRegex(version, r"^\d+(\.\d+)+$")
 
+    def test_default_resolution_follows_the_script_checkout_not_the_tree(self):
+        # BUILD.gn passes no --version-file, so the version must come from the
+        # checkout that holds this script (reached via the //maho symlink).
+        with tempfile.TemporaryDirectory() as root:
+            checkout = Path(root) / "checkout"
+            scripts = checkout / "maho-chromium" / "build" / "scripts"
+            scripts.mkdir(parents=True)
+            (checkout / "maho").mkdir()
+            (checkout / "maho" / "version.txt").write_text("2026.10.20\n")
+            real = Path(generate_product_version.__file__).read_text()
+            (scripts / "generate_product_version.py").write_text(real)
+            other = Path(root) / "other" / "maho"
+            other.mkdir(parents=True)
+            (other / "version.txt").write_text("2026.10.14\n")
+            link = Path(root) / "src_maho"
+            link.symlink_to(checkout / "maho-chromium")
+            out = Path(root) / "gen.h"
+            import subprocess, sys
+            subprocess.run(
+                [sys.executable, str(link / "build" / "scripts" /
+                                     "generate_product_version.py"),
+                 "--output", str(out)],
+                check=True, cwd=str(Path(root) / "other"))
+            self.assertIn('"2026.10.20"', out.read_text())
+
     def test_write_file_if_changed_and_depfile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             out_path = Path(temp_dir) / "gen" / "maho_product_version.h"

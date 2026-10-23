@@ -99,6 +99,7 @@ source_set("unit_tests") {
     "maho_unified_click_path_behavior_unittest.cc",
     "maho_command_action_selector_view_unittest.cc",
     "maho_shortcut_contract_unittest.cc",
+    "maho_shortcut_accelerator_registration_unittest.cc",
   ]
 
   deps = [
@@ -111,6 +112,7 @@ source_set("unit_tests") {
     "//maho/third_party/maho:maho_core_prebuilt",
     "//testing/gtest",
     "//ui/base",
+    "//ui/base:test_support",
     "//ui/events",
     "//ui/views",
     "//ui/views:test_support",
@@ -130,6 +132,7 @@ test("maho_command_overlay_unittests") {
     "//chrome/browser:browser",
     "//chrome/browser/ui",
     "//chrome/test:test_support",
+    "//maho/browser/ui/tabs:unit_tests",
     "//mojo/core/embedder",
     "//testing/gtest",
     "//ui/views:test_support",

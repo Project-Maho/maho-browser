@@ -94,6 +94,37 @@ class TestSetAppProductVersion(unittest.TestCase):
             self.assertEqual(updated.get('CFBundleVersion'), '2026.9.27')
 
 
+class TestVerifyCompiledProductVersion(unittest.TestCase):
+
+    def _write_header(self, root, version):
+        gen = os.path.join(root, 'out', 'Default', 'gen', 'maho', 'browser',
+                           'updates')
+        os.makedirs(gen)
+        with open(os.path.join(gen, 'maho_product_version.h'), 'w') as fp:
+            fp.write(f'inline constexpr char kMahoProductVersion[] = "{version}";\n')
+
+    def test_matching_version_passes(self):
+        with tempfile.TemporaryDirectory() as root:
+            self._write_header(root, '2026.10.20')
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', root):
+                _bm.verify_compiled_product_version('out/Default', '2026.10.20')
+
+    def test_stale_compiled_version_fails(self):
+        # The 2026.10.19 macOS release compiled 2026.10.14 because version.txt
+        # was read through another checkout.
+        with tempfile.TemporaryDirectory() as root:
+            self._write_header(root, '2026.10.14')
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', root):
+                with self.assertRaisesRegex(RuntimeError, '2026.10.14.*2026.10.20'):
+                    _bm.verify_compiled_product_version('out/Default', '2026.10.20')
+
+    def test_missing_header_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(_bm, '_CHROMIUM_SRC_ROOT', root):
+                with self.assertRaises(FileNotFoundError):
+                    _bm.verify_compiled_product_version('out/Default', '2026.10.20')
+
+
 class TestFindCodesignIdentity(unittest.TestCase):
 
     def _make_result(self, stdout):

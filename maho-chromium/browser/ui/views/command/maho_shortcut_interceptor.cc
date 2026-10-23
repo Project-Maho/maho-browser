@@ -25,6 +25,7 @@
 #include "ui/events/event_constants.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
+#include "ui/views/focus/focus_manager.h"
 #include "ui/views/view_utils.h"
 
 namespace maho {
@@ -364,6 +365,26 @@ MahoShortcutInterceptor::GetRegisteredAccelerators() {
   }
 
   return accelerators;
+}
+
+// static
+size_t MahoShortcutInterceptor::RegisterMissingAccelerators(
+    views::FocusManager* focus_manager,
+    ui::AcceleratorTarget* target,
+    const std::vector<ui::Accelerator>& accelerators) {
+  if (!focus_manager || !target) {
+    return 0;
+  }
+  size_t registered = 0;
+  for (const ui::Accelerator& accelerator : accelerators) {
+    if (focus_manager->HasPriorityHandler(accelerator)) {
+      continue;
+    }
+    focus_manager->RegisterAccelerator(
+        accelerator, ui::AcceleratorManager::kHighPriority, target);
+    ++registered;
+  }
+  return registered;
 }
 
 // static

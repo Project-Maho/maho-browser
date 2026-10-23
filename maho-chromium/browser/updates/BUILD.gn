@@ -41,11 +41,14 @@ source_set("maho_update_crypto_util") {
 action("generate_maho_product_version") {
   script = "//maho/build/scripts/generate_product_version.py"
   depfile = "$target_gen_dir/maho_product_version.d"
-  inputs = [ "//../../maho/version.txt" ]
   outputs = [ "$target_gen_dir/maho_product_version.h" ]
+  # No --version-file: the script resolves maho/version.txt from its own real
+  # location, i.e. the checkout that //maho (a symlink) points at. A
+  # tree-relative path like //../../maho/version.txt follows whatever `maho`
+  # symlink sits beside chromium/, which on a shared builder is another
+  # checkout and compiled a stale version into the 2026.10.19 macOS release.
+  # The script writes a depfile naming the file it actually read.
   args = [
-    "--version-file",
-    rebase_path("//../../maho/version.txt", root_build_dir),
     "--output",
     rebase_path("$target_gen_dir/maho_product_version.h", root_build_dir),
     "--depfile",

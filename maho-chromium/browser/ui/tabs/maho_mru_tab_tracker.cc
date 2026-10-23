@@ -7,6 +7,7 @@
 
 #include "base/functional/bind.h"
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/values.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
@@ -77,23 +78,53 @@ std::vector<content::WebContents*> MahoMruTabTracker::GetMruListForSpace(
     return full;
   }
 
-  std::vector<content::WebContents*> filtered;
-  filtered.reserve(full.size());
+  std::vector<std::string> tab_ids;
+  tab_ids.reserve(full.size());
   for (content::WebContents* contents : full) {
     auto* helper = MahoTabIdHelper::FromWebContents(contents);
-    if (!helper) {
-      continue;
-    }
-    const std::string& tab_id = helper->stable_tab_id();
-    if (tab_id.empty()) {
-      continue;
-    }
-    auto it = tab_to_space.find(tab_id);
-    if (it != tab_to_space.end() && it->second == space_id) {
-      filtered.push_back(contents);
-    }
+    tab_ids.push_back(helper ? helper->stable_tab_id() : std::string());
+  }
+
+  const SpaceFilterResult result =
+      FilterBySpace(tab_ids, tab_to_space, space_id);
+  if (result.kept.size() < 2 && full.size() >= 2) {
+    LOG(WARNING) << "[maho-ctrl-tab] space filter kept " << result.kept.size()
+                 << " of " << full.size() << " tabs for space '" << space_id
+                 << "': unidentified=" << result.unidentified
+                 << " unmapped=" << result.unmapped
+                 << " other_space=" << result.other_space
+                 << " cache_size=" << tab_to_space.size();
+  }
+
+  std::vector<content::WebContents*> filtered;
+  filtered.reserve(result.kept.size());
+  for (size_t index : result.kept) {
+    filtered.push_back(full[index]);
   }
   return filtered;
+}
+
+// static
+MahoMruTabTracker::SpaceFilterResult MahoMruTabTracker::FilterBySpace(
+    const std::vector<std::string>& tab_ids,
+    const base::flat_map<std::string, std::string>& tab_to_space,
+    const std::string& space_id) {
+  SpaceFilterResult result;
+  for (size_t i = 0; i < tab_ids.size(); ++i) {
+    if (tab_ids[i].empty()) {
+      ++result.unidentified;
+      continue;
+    }
+    auto it = tab_to_space.find(tab_ids[i]);
+    if (it == tab_to_space.end()) {
+      ++result.unmapped;
+    } else if (it->second != space_id) {
+      ++result.other_space;
+    } else {
+      result.kept.push_back(i);
+    }
+  }
+  return result;
 }
 
 void MahoMruTabTracker::OnTabStripModelChanged(

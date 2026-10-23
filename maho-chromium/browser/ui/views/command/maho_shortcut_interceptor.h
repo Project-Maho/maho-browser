@@ -11,6 +11,9 @@
 #include "ui/events/keycodes/keyboard_codes.h"
 
 class Browser;
+namespace views {
+class FocusManager;
+}  // namespace views
 
 namespace ui {
 class KeyEvent;
@@ -89,6 +92,18 @@ class MahoShortcutInterceptor {
   // cannot be mapped to a ui::KeyboardCode are skipped. Returns an empty vector
   // if the Rust core is unavailable.
   static std::vector<ui::Accelerator> GetRegisteredAccelerators();
+
+  // Registers every accelerator in `accelerators` on `focus_manager` at high
+  // priority for `target`, skipping those that already have a priority
+  // handler. Idempotent. BrowserView registers the Maho shortcuts once in
+  // AddedToWidget(); when maho-core is not ready yet that list is empty and
+  // only Ctrl+1..9 are registered, so Cmd+T and Ctrl+Tab never reach Maho.
+  // Calling this again once core is ready repairs that window. Returns the
+  // number of accelerators newly registered.
+  static size_t RegisterMissingAccelerators(
+      views::FocusManager* focus_manager,
+      ui::AcceleratorTarget* target,
+      const std::vector<ui::Accelerator>& accelerators);
 
   static void SetRecordingMode(bool enabled);
   static bool IsRecording();
