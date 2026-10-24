@@ -45,6 +45,14 @@ class SettingsTest {
             "Notifications",
             "Max AI",
             "Web Agent",
+            "API Keys",
+            "History",
+            "Downloads",
+            "Reading List",
+            "Notes",
+            "Profiles",
+            "Language",
+            "Advanced",
             "Feedback",
         )
 

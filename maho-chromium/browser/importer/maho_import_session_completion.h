@@ -23,6 +23,7 @@ enum class ImportProgressAction {
 
 std::vector<ImportProgressAction> AdvanceImportProgress(
     uint32_t kind,
+    uint32_t import_type,
     ImportTerminalState* terminal_state);
 
 }  // namespace maho

@@ -146,6 +146,13 @@ class MahoImportSessionBridge {
   raw_ptr<Profile> profile_ = nullptr;
   RAW_PTR_EXCLUSION MahoImportSession* session_ = nullptr;
   ImportTerminalState terminal_state_ = ImportTerminalState::kRunning;
+  // Per-type outcome of the run for the legacy welcome handler. AllComplete
+  // carries |legacy_type_error_| (the first typed error) only when no
+  // requested type completed; a partial import completes without an error
+  // because its per-type failures already reached the page as typed events.
+  std::string legacy_type_error_;
+  uint32_t legacy_succeeded_types_ = 0;
+  uint32_t legacy_failed_types_ = 0;
   base::RepeatingClosure hydration_callback_for_testing_;
   base::WeakPtrFactory<MahoImportSessionBridge> weak_factory_{this};
 };
