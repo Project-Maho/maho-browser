@@ -78,8 +78,8 @@ describe("CreateEventDialog - Timezone handling (DEFECT-04 and DEFECT-05)", () =
       expect(api.googleCalendarFreeBusy).toHaveBeenCalledWith(
         "acc-1",
         ["colleague@example.com"],
-        "2026-09-08T00:00:00Z",
-        "2026-09-08T23:59:59Z",
+        "2026-09-08T04:00:00.000Z",
+        "2026-09-09T03:59:59.000Z",
       );
     });
 

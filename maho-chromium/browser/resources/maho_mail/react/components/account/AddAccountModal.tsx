@@ -26,8 +26,9 @@ export function AddAccountModal({ isOpen, onClose, onAccountAdded, fullscreen = 
 
   if (!isOpen) return null;
 
+  // onAccountAdded already ran when the account was created, so closing the
+  // modal on a later setup step still leaves the new account listed.
   function handleComplete(_accountId: string) {
-    onAccountAdded();
     onClose();
   }
 
@@ -76,7 +77,10 @@ export function AddAccountModal({ isOpen, onClose, onAccountAdded, fullscreen = 
         >
           <h2 id="add-account-title" className="text-lg font-semibold text-foreground">{t("account.addAccount")}</h2>
           <button
+            type="button"
             onClick={onClose}
+            aria-label={t("common.close")}
+            title={t("common.close")}
             className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X size={20} />
@@ -89,7 +93,7 @@ export function AddAccountModal({ isOpen, onClose, onAccountAdded, fullscreen = 
           )}
           style={fullscreen ? { paddingBottom: "env(safe-area-inset-bottom)" } : undefined}
         >
-          <AccountSetupFlow onComplete={handleComplete} onCancel={onClose} />
+          <AccountSetupFlow onComplete={handleComplete} onAccountCreated={() => onAccountAdded()} onCancel={onClose} />
         </div>
       </div>
     </div>

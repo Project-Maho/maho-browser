@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Clock, X } from "lucide-react";
 import { useToast } from "../ui/Toast";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
 
 interface SchedulePickerProps {
   isOpen: boolean;
@@ -40,7 +41,10 @@ export function SchedulePicker({ isOpen, onClose, onSchedule }: SchedulePickerPr
   const { t } = useTranslation();
   const { toast } = useToast();
 
-  if (!isOpen) return null;
+  const handleClose = () => {
+    setCustomDate("");
+    onClose();
+  };
 
   const handleCustomSchedule = () => {
     if (!customDate) return;
@@ -53,16 +57,19 @@ export function SchedulePicker({ isOpen, onClose, onSchedule }: SchedulePickerPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-80 rounded-2xl border border-border bg-background p-4 shadow-xl">
+    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) handleClose(); }}>
+      <DialogContent hideDefaultClose className="w-80 max-w-[calc(100vw-2rem)] gap-0 rounded-2xl border border-border bg-background p-4 shadow-xl sm:rounded-2xl">
+        <DialogDescription className="sr-only">{t("compose.scheduleSendDescription")}</DialogDescription>
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Clock size={16} className="text-amber-400" />
-            <h3 className="text-sm font-semibold text-foreground">{t("compose.scheduleSendTitle")}</h3>
+            <DialogTitle className="text-sm font-semibold text-foreground">{t("compose.scheduleSendTitle")}</DialogTitle>
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
+            aria-label={t("common.close")}
+            title={t("common.close")}
             className="mail-pressable flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X size={14} />
@@ -107,7 +114,7 @@ export function SchedulePicker({ isOpen, onClose, onSchedule }: SchedulePickerPr
             {t("compose.scheduleSendButton")}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

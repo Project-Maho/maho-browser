@@ -72,9 +72,13 @@ std::vector<content::WebContents*> MahoMruTabTracker::GetMruListForSpace(
     return full;
   }
 
+  // An empty map means MahoCore is unavailable or its payload could not be
+  // parsed, so space membership is unknown. Returning the global list here
+  // would let a "current space" switch jump into other spaces; return no
+  // candidates instead so the caller falls back to positional switching.
   const auto& tab_to_space = EnsureSpaceCache();
   if (tab_to_space.empty()) {
-    return full;
+    return {};
   }
 
   std::vector<content::WebContents*> filtered;

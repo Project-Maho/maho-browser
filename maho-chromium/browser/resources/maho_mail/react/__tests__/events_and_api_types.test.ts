@@ -160,14 +160,14 @@ describe('events and api typing seams', () => {
       },
     );
 
-    mojoMocks.fire('onNewMail', 'acc456');
+    mojoMocks.fire('onNewMail', 'acc456', 'email-1', '<arrival@x>');
 
     expect(receivedNewMail).toEqual([
       {
         event: 'new-mail',
         payload: {
           account_id: 'acc456',
-          message_ids: [],
+          message_ids: ['<arrival@x>'],
         },
       },
     ]);

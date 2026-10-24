@@ -47,4 +47,16 @@ describe("SnoozePicker", () => {
     expect(snoozedUntil.getHours()).toBe(8);
     expect(snoozedUntil.getMinutes()).toBe(15);
   });
+
+  it("rejects a custom time in the past", () => {
+    const onSnooze = vi.fn();
+    render(<SnoozePicker isOpen={true} onClose={vi.fn()} onSnooze={onSnooze} />);
+
+    const [dateInput, timeInput] = Array.from(document.querySelectorAll('input[type="date"], input[type="time"]')) as HTMLInputElement[];
+    fireEvent.change(dateInput, { target: { value: "2025-12-30" } });
+    fireEvent.change(timeInput, { target: { value: "08:15" } });
+    fireEvent.click(screen.getByRole("button", { name: "Snooze" }));
+
+    expect(onSnooze).not.toHaveBeenCalled();
+  });
 });

@@ -14,6 +14,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -118,6 +119,12 @@ fun AppearanceSettingsScreen(
                     ) { Text(label) }
                 }
             }
+            Text(
+                "Density, the tab bar and window transparency apply to your desktop browser.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
             Spacer(modifier = Modifier.height(8.dp))
 
             SwitchPreference(
@@ -143,6 +150,12 @@ fun AppearanceSettingsScreen(
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
             SectionHeader("Custom CSS")
+            Text(
+                "Styles the desktop browser's interface. It has no effect on Android.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = customCss,
                 onValueChange = { customCss = it },

@@ -16,11 +16,15 @@ export function ComposeWindow() {
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [initialized, setInitialized] = useState(false);
   const windowRef = useRef<HTMLDivElement>(null);
+  // Set once the user types into the fallback form; a payload arriving after
+  // that must not remount the form and discard their input.
+  const userEditedRef = useRef(false);
 
   // Set up focus trap for popout window accessibility
   useFocusTrap(windowRef, initialized);
 
   useComposeInitListener((payload) => {
+    if (userEditedRef.current) return;
     setInitPayload(payload as ComposeInitPayload);
     setInitialized(true);
   });
@@ -60,10 +64,17 @@ export function ComposeWindow() {
   return (
     <div
       ref={windowRef}
+      onInputCapture={() => {
+        userEditedRef.current = true;
+      }}
       className="flex h-screen flex-col bg-background text-foreground"
     >
       <div className="h-8 shrink-0 select-none bg-background/50" data-tauri-drag-region />
+      {/* ComposeForm hydrates once on mount; remount it when the payload
+          arrives after the fallback timeout so it is not left blank. A payload
+          that arrives after the user started typing is dropped instead. */}
       <ComposeForm
+        key={initPayload ? "hydrated" : "fallback"}
         onClose={handleClose}
         accountId={initPayload?.accountId ?? ""}
         initialTo={initPayload?.to}

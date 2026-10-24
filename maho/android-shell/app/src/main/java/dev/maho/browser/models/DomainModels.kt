@@ -261,6 +261,13 @@ data class BookmarkEntry(
 )
 
 @Serializable
+data class BookmarkFolder(
+    val id: String,
+    val name: String,
+    @SerialName("parentId") val parentId: String? = null,
+)
+
+@Serializable
 data class HistoryEntry(
     val id: String,
     val url: String,

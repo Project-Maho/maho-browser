@@ -19,6 +19,7 @@ vi.mock('../api', () => ({
   startAutoSync: vi.fn(), stopAutoSync: vi.fn(), startScheduler: vi.fn(), stopScheduler: vi.fn(),
   listCalendarEvents: vi.fn(), listAccountCalendars: vi.fn(), listCalendarCategories: vi.fn(),
   toggleStar: vi.fn(), markRead: vi.fn(), getReplyContext: vi.fn(),
+  listPinnedEmails: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../hooks/useAuthStatus', () => ({useAuthStatus: () => ({authErrors: [], clearAuthError: vi.fn()})}));
 vi.mock('../hooks/useReauthRetryQueue', () => ({useReauthRetryQueue: () => ({enqueueRetry: vi.fn()})}));
@@ -57,6 +58,7 @@ beforeEach(() => {
   vi.mocked(api.getAppSetting).mockResolvedValue(null);
   vi.mocked(api.md5Hash).mockResolvedValue('hash');
   vi.mocked(api.startOAuth2).mockResolvedValue({auth_url: '', state: ''});
+  vi.mocked(api.listPinnedEmails).mockResolvedValue([]);
   vi.mocked(api.reconnectAccount).mockResolvedValue(undefined);
   vi.mocked(api.listCalendarEvents).mockResolvedValue([]);
   vi.mocked(api.listAccountCalendars).mockResolvedValue([]);

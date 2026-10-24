@@ -41,6 +41,12 @@ object RelaySessionStore {
     fun hasSession(): Boolean = load() != null
     fun isSyncEnabled(): Boolean = store?.isSyncEnabled() ?: false
     fun setSyncEnabled(enabled: Boolean): Boolean = store?.setSyncEnabled(enabled) ?: false
+    fun loadSyncSeed(accountId: String?): String? = store?.loadSyncSeed(accountId)
+    fun saveSyncSeed(seed: String, accountId: String?): Boolean = store?.saveSyncSeed(seed, accountId) ?: false
+    fun clearSyncSeed(): Boolean = store?.clearSyncSeed() ?: false
+    fun loadSyncRecoveryRequirement(): SyncRecoveryRequirement? = store?.loadSyncRecoveryRequirement()
+    fun saveSyncRecoveryRequirement(requirement: SyncRecoveryRequirement?): Boolean =
+        store?.saveSyncRecoveryRequirement(requirement) ?: false
 
     interface TokenCrypto {
         @Throws(GeneralSecurityException::class)
@@ -159,6 +165,80 @@ object RelaySessionStore {
 
         fun clear(): Boolean = prefs.edit().clear().commit()
 
+        /**
+         * Account Sync seed, encrypted with the Keystore-backed key and bound to
+         * the relay account it was fetched for. A legacy plaintext seed is
+         * migrated (encrypted, plaintext deleted) on first read.
+         */
+        fun loadSyncSeed(accountId: String?): String? {
+            migrateLegacySyncSeed()
+            val encrypted = prefs.getString(KEY_SYNC_SEED_ENCRYPTED, null)?.takeIf { it.isNotBlank() }
+                ?: return null
+            if (prefs.getString(KEY_SYNC_SEED_ACCOUNT_ID, null) != accountId) return null
+            val seed = try {
+                crypto.decrypt(encrypted)
+            } catch (_: GeneralSecurityException) {
+                clearSyncSeed()
+                return null
+            } catch (_: IllegalArgumentException) {
+                clearSyncSeed()
+                return null
+            }
+            return seed.takeIf { it.isNotBlank() }
+        }
+
+        fun saveSyncSeed(seed: String, accountId: String?): Boolean {
+            val encrypted = try {
+                crypto.encrypt(seed)
+            } catch (_: GeneralSecurityException) {
+                return false
+            }
+            return prefs.edit()
+                .putString(KEY_SYNC_SEED_ENCRYPTED, encrypted)
+                .putString(KEY_SYNC_SEED_ACCOUNT_ID, accountId)
+                .remove(KEY_SYNC_BOOTSTRAP_SEED)
+                .commit()
+        }
+
+        fun clearSyncSeed(): Boolean = prefs.edit()
+            .remove(KEY_SYNC_SEED_ENCRYPTED)
+            .remove(KEY_SYNC_SEED_ACCOUNT_ID)
+            .remove(KEY_SYNC_BOOTSTRAP_SEED)
+            .commit()
+
+        /**
+         * Persisted "enter your recovery phrase" pause, so a relaunch does not
+         * resume syncing (or re-create a seed) for a client-held account.
+         */
+        fun loadSyncRecoveryRequirement(): SyncRecoveryRequirement? {
+            val stored = prefs.getString(KEY_SYNC_RECOVERY_REQUIRED, null) ?: return null
+            return SyncRecoveryRequirement.values().firstOrNull { it.name == stored }
+        }
+
+        fun saveSyncRecoveryRequirement(requirement: SyncRecoveryRequirement?): Boolean {
+            val editor = prefs.edit()
+            if (requirement == null) {
+                editor.remove(KEY_SYNC_RECOVERY_REQUIRED)
+            } else {
+                // The escrow seed is gone (client-held) or points at a retired room.
+                editor.putString(KEY_SYNC_RECOVERY_REQUIRED, requirement.name)
+                    .remove(KEY_SYNC_SEED_ENCRYPTED)
+                    .remove(KEY_SYNC_SEED_ACCOUNT_ID)
+                    .remove(KEY_SYNC_BOOTSTRAP_SEED)
+            }
+            return editor.commit()
+        }
+
+        private fun migrateLegacySyncSeed() {
+            val legacy = prefs.getString(KEY_SYNC_BOOTSTRAP_SEED, null) ?: return
+            if (legacy.isBlank()) {
+                prefs.edit().remove(KEY_SYNC_BOOTSTRAP_SEED).commit()
+                return
+            }
+            // Keep the plaintext only if encryption fails, so migration can retry next launch.
+            saveSyncSeed(legacy, prefs.getString(KEY_ACCOUNT_ID, null)?.takeIf { it.isNotBlank() })
+        }
+
         fun migrateRetiredRelay(): LegacyRelayMigrationOutcome {
             if (prefs.getString(KEY_SERVER_URL, null) != RETIRED_SERVER_URL) {
                 return LegacyRelayMigrationOutcome.NONE
@@ -169,6 +249,7 @@ object RelaySessionStore {
                 KEY_ACCESS_TOKEN_ENCRYPTED,
                 KEY_REFRESH_TOKEN_ENCRYPTED,
                 KEY_SYNC_BOOTSTRAP_SEED,
+                KEY_SYNC_SEED_ENCRYPTED,
             ).any { !prefs.getString(it, null).isNullOrBlank() }
             val editor = prefs.edit()
             if (hasSessionMaterial) editor.clear()
@@ -296,6 +377,9 @@ object RelaySessionStore {
     private const val KEY_SESSION_ID = "session_id"
     private const val KEY_SYNC_ENABLED = "sync_enabled"
     private const val KEY_SYNC_BOOTSTRAP_SEED = "sync_bootstrap_seed"
+    private const val KEY_SYNC_SEED_ENCRYPTED = "sync_seed_encrypted"
+    private const val KEY_SYNC_SEED_ACCOUNT_ID = "sync_seed_account_id"
+    private const val KEY_SYNC_RECOVERY_REQUIRED = "sync_recovery_required"
     private const val RETIRED_SERVER_URL = "http://192.168.0.39:8787"
     private const val PRODUCTION_SERVER_URL = "https://relay.mahobrowser.com"
 }

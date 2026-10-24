@@ -16,10 +16,12 @@ function isOAuthProvider(p: ProviderId): p is OAuthProviderId {
 
 interface AccountSetupFlowProps {
   onComplete: (accountId: string) => void;
+  /** Fires as soon as the account exists, before the remaining setup steps. */
+  onAccountCreated?: (accountId: string) => void;
   onCancel?: () => void;
 }
 
-export function AccountSetupFlow({ onComplete }: AccountSetupFlowProps) {
+export function AccountSetupFlow({ onComplete, onAccountCreated }: AccountSetupFlowProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<SetupStep>('provider');
   const [selectedProvider, setSelectedProvider] = useState<ProviderId | null>(null);
@@ -59,6 +61,7 @@ export function AccountSetupFlow({ onComplete }: AccountSetupFlowProps) {
 
   function handleSuccess(id: string) {
     setAccountId(id);
+    onAccountCreated?.(id);
     setStep('translation');
   }
 

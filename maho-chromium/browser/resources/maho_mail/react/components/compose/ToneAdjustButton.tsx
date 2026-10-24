@@ -31,6 +31,10 @@ export function ToneAdjustButton({
   const [previousHtml, setPreviousHtml] = useState<string | null>(null);
   const inFlightRef = useRef(false);
   const [previousBody, setPreviousBody] = useState<string | null>(null);
+  // The body text produced by the last rewrite (or undo). Undo is only safe
+  // while the draft still equals it; any later edit would be discarded.
+  const [rewrittenBody, setRewrittenBody] = useState<string | null>(null);
+  const canUndo = previousBody !== null && rewrittenBody === body;
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -92,7 +96,9 @@ export function ToneAdjustButton({
       }
       setPreviousBody(body);
       setPreviousHtml(bodyHtml ?? plainTextToHtml(body));
-      setBody(result.adjusted_text + (parts?.signatureText ?? "") + (parts?.quoteText ?? ""));
+      const nextBody = result.adjusted_text + (parts?.signatureText ?? "") + (parts?.quoteText ?? "");
+      setRewrittenBody(nextBody);
+      setBody(nextBody);
       if (setBodyHtml) {
         setBodyHtml(plainTextToHtml(result.adjusted_text) + (parts?.signatureHtml ?? "") + (parts?.quoteHtml ?? ""));
       }
@@ -119,8 +125,9 @@ export function ToneAdjustButton({
   }, [handleAdjust]);
 
   const handleUndo = useCallback(() => {
-    if (previousBody !== null) {
+    if (canUndo && previousBody !== null) {
       const current = body;
+      setRewrittenBody(previousBody);
       setBody(previousBody);
       if (setBodyHtml) {
         setBodyHtml(previousHtml ?? plainTextToHtml(previousBody));
@@ -129,7 +136,7 @@ export function ToneAdjustButton({
       setPreviousHtml(bodyHtml ?? plainTextToHtml(current));
       toast("success", "Tone adjustment undone");
     }
-  }, [body, bodyHtml, previousHtml, previousBody, toast, setBody, setBodyHtml, plainTextToHtml]);
+  }, [body, bodyHtml, canUndo, previousHtml, previousBody, toast, setBody, setBodyHtml, plainTextToHtml]);
 
   return (
     <div className="relative flex items-center gap-1.5" ref={dropdownRef} data-testid="tone-adjust-container">
@@ -164,7 +171,7 @@ export function ToneAdjustButton({
         </div>
       )}
 
-      {previousBody !== null && (
+      {canUndo && (
         <button
           type="button"
           onClick={handleUndo}

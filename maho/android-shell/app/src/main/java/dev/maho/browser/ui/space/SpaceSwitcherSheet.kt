@@ -22,7 +22,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import android.widget.Toast
 import dev.maho.browser.bridge.BridgeSpaces
+import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.SpaceColor
 import dev.maho.browser.models.SpaceId
 import dev.maho.browser.models.SpaceViewModel
@@ -36,6 +39,7 @@ fun SpaceSwitcherSheet(
     modifier: Modifier = Modifier,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val context = LocalContext.current
 
     var spaces by remember { mutableStateOf<List<SpaceViewModel>>(emptyList()) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
@@ -78,6 +82,9 @@ fun SpaceSwitcherSheet(
                     SpaceCard(
                         space = space,
                         isActive = space.id == activeSpaceId,
+                        canDelete = spaces.size > 1,
+                        // Core moves the tabs to the first other space in its order.
+                        deleteTargetSpaceName = spaces.firstOrNull { it.id != space.id }?.name,
                         onTap = {
                             BridgeSpaces.activateSpace(space.id)
                             onSpaceSelected(space.id)
@@ -92,8 +99,12 @@ fun SpaceSwitcherSheet(
                             spaces = BridgeSpaces.getSpaceViewModels()
                         },
                         onDelete = {
-                            BridgeSpaces.deleteSpace(space.id)
+                            val updates = BridgeSpaces.deleteSpace(space.id)
+                            if (updates.any { it is CoreUpdate.ErrorUpdate && it.error.code == "LAST_SPACE" }) {
+                                Toast.makeText(context, "You need at least one space", Toast.LENGTH_SHORT).show()
+                            }
                             spaces = BridgeSpaces.getSpaceViewModels()
+                            activeSpaceId = BridgeSpaces.getActiveSpaceId()
                         },
                     )
                 }

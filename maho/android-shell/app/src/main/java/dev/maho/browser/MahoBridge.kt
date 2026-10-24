@@ -395,6 +395,12 @@ object MahoBridge {
         return nativeDeleteBookmarkFolder(ptr, folderId)
     }
 
+    fun getBookmarkFolders(): String? {
+        val ptr = corePtr
+        if (ptr == 0L) return null
+        return nativeGetBookmarkFolders(ptr)
+    }
+
     // === History ===
 
     fun searchHistory(query: String, limit: Long): String? {
@@ -1118,6 +1124,7 @@ object MahoBridge {
     private external fun nativeSearchBookmarks(ptr: Long, query: String): String?
     private external fun nativeCreateBookmarkFolder(ptr: Long, name: String, parentId: String): String?
     private external fun nativeDeleteBookmarkFolder(ptr: Long, folderId: String): String?
+    private external fun nativeGetBookmarkFolders(ptr: Long): String?
     private external fun nativeSearchHistory(ptr: Long, query: String, limit: Long): String?
     private external fun nativeSearchHistoryPaginated(ptr: Long, query: String, limit: Long, offset: Long): String?
     private external fun nativeGetHistoryGroupedByDate(ptr: Long): String?

@@ -5,13 +5,55 @@ import kotlinx.serialization.Serializable
 
 const val SYNC_PROTOCOL_VERSION = 2
 
+/**
+ * `GET /sync/bootstrap`. An escrow account carries the seed; a client-held
+ * account (`key_mode: "client_held"`) returns only `key_mode` + `room_id`
+ * because the relay no longer holds any key material.
+ */
 @Serializable
 data class RelaySyncBootstrap(
-    val version: Int,
+    val version: Int? = null,
     @SerialName("room_id") val roomId: String,
-    val seed: String,
-    @SerialName("created_at") val createdAt: Long,
-)
+    val seed: String? = null,
+    @SerialName("created_at") val createdAt: Long = 0,
+    @SerialName("key_mode") val keyMode: String? = null,
+) {
+    /** The account holds its own keys: only the recovery phrase can join sync. */
+    val isClientHeld: Boolean
+        get() = keyMode == KEY_MODE_CLIENT_HELD
+
+    companion object {
+        const val KEY_MODE_CLIENT_HELD = "client_held"
+    }
+}
+
+/** Why sync is paused until the user enters the 24-word recovery phrase. */
+enum class SyncRecoveryRequirement(val message: String) {
+    /** Bootstrap said `key_mode: client_held` and this device has not joined that room. */
+    CLIENT_HELD_BOOTSTRAP(
+        "This account uses your own keys \u2014 enter your 24-word recovery phrase to join sync.",
+    ),
+    /** A push or pull answered `410 room_retired`. */
+    ROOM_RETIRED(
+        "This account now uses your own keys - enter your recovery phrase to continue.",
+    ),
+    /** The entered phrase derived a different room than the account's client-held room. */
+    RECOVERY_PHRASE_MISMATCH(
+        "That recovery phrase does not match this account. Enter this account's 24-word recovery phrase to join sync.",
+    ),
+}
+
+/** True for the relay's `410 {"code":"room_retired"}` answer to a push or pull. */
+internal fun isRoomRetiredResponse(code: Int, body: String?): Boolean {
+    if (code != 410 || body.isNullOrBlank()) return false
+    return runCatching {
+        val obj = dev.maho.browser.support.MahoJson.instance.parseToJsonElement(body)
+            as? kotlinx.serialization.json.JsonObject ?: return false
+        val codeValue = (obj["code"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        val errorValue = (obj["error"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        codeValue == "room_retired" || errorValue == "room_retired"
+    }.getOrDefault(false)
+}
 
 @Serializable
 data class RelaySyncBootstrapRequest(

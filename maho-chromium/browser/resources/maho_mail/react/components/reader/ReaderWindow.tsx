@@ -10,6 +10,7 @@ import {
 import * as api from "../../api";
 import type { EmailDetail, ComposeEmailRequest } from "../../types";
 import { useToast } from "../ui/Toast";
+import { useConfirm } from "../ui/ConfirmDialog";
 import { Avatar } from "../ui/Avatar";
 import { EmailDetailSkeleton } from "../ui/Skeleton";
 import { formatRelativeDate } from "../ui/utils";
@@ -23,6 +24,7 @@ import type { ComposeInitPayload } from "../../events";
 import { useSettings } from "../../hooks/useSettings";
 import { EmailBodyView } from "../layout/EmailBodyView";
 import { UndoSendToast } from "../common/UndoSendToast";
+import { useTranslation } from "react-i18next";
 
 interface ReaderWindowProps {
   emailId: string;
@@ -30,6 +32,8 @@ interface ReaderWindowProps {
 
 export function ReaderWindow({ emailId }: ReaderWindowProps) {
   const { toast } = useToast();
+  const { t } = useTranslation();
+  const confirm = useConfirm();
   const { openCompose } = usePopoutWindow();
   const { undoSendDelay } = useSettings();
   const [emailDetail, setEmailDetail] = useState<EmailDetail | null>(null);
@@ -160,6 +164,13 @@ export function ReaderWindow({ emailId }: ReaderWindowProps) {
 
   const handleDelete = async () => {
     if (!emailDetail) return;
+    const ok = await confirm({
+      title: t("app.deleteEmailTitle"),
+      message: t("app.deleteEmailConfirm"),
+      confirmLabel: t("common.delete"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.deleteEmail(emailDetail.email.id);
       void emitMailUpdated(emailDetail.email.id, "delete");

@@ -82,17 +82,17 @@ describe("RichTextEditor", () => {
     vi.stubGlobal("FileReader", MockFileReader);
   });
 
-  it("renders toolbar with image insert button (title 'Insert image')", () => {
+  it("renders toolbar with image insert button (title 'compose.insertImage')", () => {
     render(<RichTextEditor content="" onChange={mockOnChange} />);
 
-    const imageButton = screen.getByTitle("Insert image");
+    const imageButton = screen.getByTitle("compose.insertImage");
     expect(imageButton).toBeInTheDocument();
   });
 
   it("clicking image button triggers hidden file input click", () => {
     render(<RichTextEditor content="" onChange={mockOnChange} />);
 
-    const imageButton = screen.getByTitle("Insert image");
+    const imageButton = screen.getByTitle("compose.insertImage");
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
     const clickSpy = vi.spyOn(fileInput, "click");
     
@@ -132,10 +132,7 @@ describe("RichTextEditor", () => {
 
     fireEvent.change(fileInput, { target: { files: [mockFile] } });
 
-    expect(toastMock).toHaveBeenCalledWith(
-      "error",
-      "Image is too large (max 2MB). Consider using an attachment instead.",
-    );
+    expect(toastMock).toHaveBeenCalledWith("error", "compose.imageTooLarge");
     expect(setImageFn).not.toHaveBeenCalled();
   });
 
@@ -146,7 +143,7 @@ describe("RichTextEditor", () => {
     expect(screen.getByTitle("compose.italic")).toBeInTheDocument();
     expect(screen.getByTitle("compose.strikethrough")).toBeInTheDocument();
     expect(screen.getByTitle("compose.link")).toBeInTheDocument();
-    expect(screen.getByTitle("Insert image")).toBeInTheDocument();
+    expect(screen.getByTitle("compose.insertImage")).toBeInTheDocument();
     expect(screen.getByTitle("compose.bulletList")).toBeInTheDocument();
     expect(screen.getByTitle("compose.orderedList")).toBeInTheDocument();
     expect(screen.getByTitle("compose.blockquote")).toBeInTheDocument();

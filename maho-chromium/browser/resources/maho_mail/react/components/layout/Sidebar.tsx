@@ -509,8 +509,10 @@ export function Sidebar({
     try {
       await api.deleteSavedSearch(id);
       setSavedSearches((prev) => prev.filter((s) => s.id !== id));
-    } catch { /* ignore */ }
-  }, []);
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : t("search.deleteSavedSearchFailed"));
+    }
+  }, [toast, t]);
 
   const handleSavedSearchClick = useCallback((query: string) => {
     onSearchSelect?.(query);
@@ -836,9 +838,13 @@ export function Sidebar({
     (e: React.MouseEvent, folder: Folder) => {
       e.preventDefault();
       setAccountContextMenu(null);
+      // Keyboard activation (Enter/Space) reports no pointer position
+      // (detail === 0); anchor the menu to the triggering control instead.
+      const fromKeyboard = e.type === "click" && e.detail === 0;
+      const anchor = fromKeyboard ? e.currentTarget.getBoundingClientRect() : null;
       setContextMenu({
-        x: e.clientX,
-        y: e.clientY,
+        x: anchor ? anchor.left : e.clientX,
+        y: anchor ? anchor.bottom : e.clientY,
         folderId: folder.id,
         accountId: folder.account_id,
         folderPath: folder.path,
@@ -964,7 +970,7 @@ export function Sidebar({
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-surface-hover hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label={`Actions for ${node.name}`}
           >
-            <Plus size={12} />
+            <MoreHorizontal size={12} />
           </button>
         </div>
 

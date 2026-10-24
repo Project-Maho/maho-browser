@@ -4,6 +4,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import Image from "@tiptap/extension-image";
+import { mahoComposeMarkers } from "./mahoComposeMarkers";
 import {
   Bold,
   ImagePlus,
@@ -92,6 +93,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
         inline: true,
         allowBase64: true,
       }),
+      ...mahoComposeMarkers,
     ],
     content,
     onUpdate: ({ editor }) => {
@@ -172,7 +174,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
 
     const MAX_SIZE = 2 * 1024 * 1024; // 2MB
     if (file.size > MAX_SIZE) {
-      toast("error", t("compose.imageTooLarge", "Image is too large (max 2MB). Consider using an attachment instead."));
+      toast("error", t("compose.imageTooLarge"));
       event.target.value = "";
       return;
     }
@@ -223,7 +225,7 @@ export function RichTextEditor({ content, onChange, placeholder, ariaLabel, auto
             <LinkIcon size={16} />
           </ToolbarButton>
           {showImage && (
-            <ToolbarButton onClick={handleInsertImage} title={t("compose.insertImage", "Insert image")}>
+            <ToolbarButton onClick={handleInsertImage} title={t("compose.insertImage")}>
               <ImagePlus size={16} />
             </ToolbarButton>
           )}

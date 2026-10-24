@@ -74,6 +74,34 @@ function isAuthRelatedError(error: unknown) {
   return message.includes("Auth error") || message.includes("OAuth2") || message.includes("access token");
 }
 
+export type EmailStatePatch = Partial<Pick<EmailSummary, "is_read" | "is_starred">>;
+
+function patchEmailsInSearchResult(current: SearchResult | null, emailIds: Iterable<string>, patch: EmailStatePatch) {
+  if (!current) {
+    return current;
+  }
+
+  const ids = new Set(emailIds);
+  return {
+    ...current,
+    emails: current.emails.map((email) => (ids.has(email.id) ? { ...email, ...patch } : email)),
+  };
+}
+
+/** Serializes advanced filters into the search operators the backend parses. */
+function buildSavedSearchQuery(query: string, filters: SearchFilters) {
+  const quote = (value: string) => (/\s/.test(value) ? `"${value}"` : value);
+  const parts = [query.trim()];
+  if (filters.from) parts.push(`from:${quote(filters.from)}`);
+  if (filters.to) parts.push(`to:${quote(filters.to)}`);
+  if (filters.hasAttachment) parts.push("has:attachment");
+  if (filters.isUnread) parts.push("is:unread");
+  if (filters.isStarred) parts.push("is:starred");
+  if (filters.dateFrom) parts.push(`after:${filters.dateFrom}`);
+  if (filters.dateTo) parts.push(`before:${filters.dateTo}`);
+  return parts.filter(Boolean).join(" ");
+}
+
 type EnqueueRetry = (accountId: string, action: () => Promise<void>, label: string) => void;
 
 function escapeRegExp(value: string) {
@@ -379,6 +407,10 @@ const SEARCH_TIPS: SearchTip[] = [
 interface EmailListProps {
   archiveFolders?: {id: string; account_id: string}[];
   onEmailsRemoved?: (ids: string[]) => void;
+  /** Applies server-confirmed read/star changes to the parent's list state. */
+  onEmailsUpdated?: (ids: string[], patch: EmailStatePatch) => void;
+  /** IDs of emails pinned on the server; seeds the row pin state. */
+  pinnedIds?: ReadonlySet<string>;
   searchRequest?: {query: string} | null;
   emails: EmailSummary[];
   selectedEmailId: string | null;
@@ -399,7 +431,7 @@ interface EmailListProps {
   density?: 'comfortable' | 'compact';
   mailboxTitle?: string;
   onCompose?: () => void;
-  onSync?: () => void;
+  onSync?: () => void | Promise<void>;
   composeDisabled?: boolean;
   syncBusy?: boolean;
   syncError?: string | null;
@@ -433,11 +465,15 @@ interface EmailRowProps {
 function handleRowKeyDown(
   event: React.KeyboardEvent<HTMLDivElement>,
   emailId: string,
-  onSelectEmail: (id: string) => void,
+  activate: (id: string) => void,
 ) {
+  // Keys pressed on nested controls (checkbox, star, pin...) belong to them.
+  if (event.target !== event.currentTarget) {
+    return;
+  }
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
-    onSelectEmail(emailId);
+    activate(emailId);
   }
 }
 
@@ -464,6 +500,7 @@ const EmailRow = React.memo(function EmailRow({
   enterSelectionMode,
   density = 'comfortable',
 }: EmailRowProps) {
+  const { t } = useTranslation();
   const isSelected = selectedIds.has(email.id);
   const senderText = email.from_name ?? email.from_address;
   const actionButtonClassName = cn(
@@ -516,7 +553,7 @@ const EmailRow = React.memo(function EmailRow({
             aria-selected={selectedEmailId === email.id}
             aria-label={`${senderText}, ${email.subject}, ${formatRelativeDate(email.date)}`}
             onClick={() => (batchMode ? toggleSelection(email.id) : onSelectEmail(email.id))}
-            onKeyDown={(event) => handleRowKeyDown(event, email.id, onSelectEmail)}
+            onKeyDown={(event) => handleRowKeyDown(event, email.id, batchMode ? toggleSelection : onSelectEmail)}
             {...rowInteractionHandlers}
             className={`mail-row group relative flex w-full cursor-default items-start border-b border-border/40 pl-3 text-left ${rowSpacingClassName} ${
               isSelected || selectedEmailId === email.id
@@ -534,6 +571,9 @@ const EmailRow = React.memo(function EmailRow({
             <div role="gridcell" className={cn("flex min-w-0 flex-1 items-start", isMobile ? "gap-2.5" : "gap-0")}>
             <button
               type="button"
+              role="checkbox"
+              aria-checked={isSelected}
+              aria-label={t("email.selectEmailFrom", { sender: senderText })}
               onClick={(e) => {
                 e.stopPropagation();
                 toggleSelection(email.id);
@@ -654,8 +694,8 @@ const EmailRow = React.memo(function EmailRow({
                           void onArchive(email.id);
                         }}
                          className={cn(actionButtonClassName, "hover:bg-surface-hover hover:text-foreground")}
-                        aria-label="Archive"
-                        title="Archive"
+                        aria-label={t("app.archive")}
+                        title={t("app.archive")}
                       >
                         <Archive size={14} />
                       </button>
@@ -750,6 +790,8 @@ const EmailRow = React.memo(function EmailRow({
 export function EmailList({
   archiveFolders,
   onEmailsRemoved,
+  onEmailsUpdated,
+  pinnedIds,
   searchRequest,
   emails,
   selectedEmailId,
@@ -792,7 +834,10 @@ export function EmailList({
   const parentRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [optimisticPinnedIds, setOptimisticPinnedIds] = useState<Set<string>>(new Set());
+  const [optimisticPinnedIds, setOptimisticPinnedIds] = useState<Set<string>>(() => new Set(pinnedIds ?? []));
+  useEffect(() => {
+    setOptimisticPinnedIds(new Set(pinnedIds ?? []));
+  }, [pinnedIds]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const batchMode = isMobile ? isSelectionMode : selectedIds.size > 0;
   const [searchFilters, setSearchFilters] = useState<SearchFilters>({});
@@ -816,9 +861,11 @@ export function EmailList({
   const saveSearchInputRef = useRef<HTMLInputElement>(null);
   const [showAutocomplete, setShowAutocomplete] = useState(false);
 
+  // Pull-to-refresh fetches new mail; pagination (onLoadMore) is for the
+  // bottom of the list and must not run here.
   const refreshEmails = useCallback(async () => {
-    if (onLoadMore) {
-      await Promise.resolve(onLoadMore());
+    if (onSync) {
+      await onSync();
       return;
     }
 
@@ -830,7 +877,7 @@ export function EmailList({
     if (accountId) {
       await api.syncFolders(accountId);
     }
-  }, [accountId, folderId, onLoadMore]);
+  }, [accountId, folderId, onSync]);
 
   const {
     bindings: pullToRefreshBindings,
@@ -859,7 +906,8 @@ export function EmailList({
     if (!name) return;
 
     try {
-      await api.saveSearch(name, searchQuery, accountId);
+      const scope = resolveSearchScope(effectiveSearchScope, accountId, folderId);
+      await api.saveSearch(name, buildSavedSearchQuery(searchQuery, sanitizedSearchFilters), scope.accountId);
       toast("success", t("search.searchSaved"));
       setShowSaveSearch(false);
       setSaveSearchName("");
@@ -867,7 +915,7 @@ export function EmailList({
     } catch (err) {
       toast("error", err instanceof Error ? err.message : "Failed to save search");
     }
-  }, [saveSearchName, searchQuery, accountId, toast, t]);
+  }, [saveSearchName, searchQuery, sanitizedSearchFilters, effectiveSearchScope, accountId, folderId, toast, t]);
 
   const persistRecentSearch = useCallback((query: string, filters: SearchFilters) => {
     const entry = buildRecentSearchEntry(query, filters);
@@ -1009,6 +1057,14 @@ export function EmailList({
     }
   }, [accountId, archiveFolderId, archiveFolders, emailById, enqueueRetry, t, toast, onEmailsRemoved]);
 
+  const applyEmailPatch = useCallback((ids: string[], patch: EmailStatePatch, action: "markRead" | "markUnread" | "toggleStar") => {
+    setSearchResults((current) => patchEmailsInSearchResult(current, ids, patch));
+    onEmailsUpdated?.(ids, patch);
+    for (const id of ids) {
+      void emitMailUpdated(id, action);
+    }
+  }, [onEmailsUpdated]);
+
   const handleToggleRead = useCallback(async (email: EmailSummary) => {
     try {
       if (email.is_read) {
@@ -1016,6 +1072,7 @@ export function EmailList({
       } else {
         await api.markRead(email.id);
       }
+      applyEmailPatch([email.id], { is_read: !email.is_read }, email.is_read ? "markUnread" : "markRead");
       toast("success", email.is_read ? "Marked unread" : "Marked read");
     } catch (err) {
       const retryLabel = email.is_read ? t("app.markUnread") : t("app.markRead");
@@ -1030,7 +1087,7 @@ export function EmailList({
 
       toast("error", err instanceof Error ? err.message : "Failed to update");
     }
-  }, [enqueueRetry, t, toast]);
+  }, [applyEmailPatch, enqueueRetry, t, toast]);
 
   const toggleSelection = useCallback((emailId: string) => {
     setSelectedIds((prev) => {
@@ -1078,7 +1135,9 @@ export function EmailList({
         return next;
       });
 
-      throw error;
+      // The caller has already reported the failure; rolling back the
+      // optimistic icon is all that is left to do here.
+      console.warn("[pin] update failed, reverted", error);
     }
   }, [onPin]);
 
@@ -1093,7 +1152,9 @@ export function EmailList({
 
   async function handleBatchMarkRead() {
     try {
-      await api.batchMarkRead({ email_ids: Array.from(selectedIds) });
+      const ids = Array.from(selectedIds);
+      await api.batchMarkRead({ email_ids: ids });
+      applyEmailPatch(ids, { is_read: true }, "markRead");
       toast("success", `${selectedIds.size} emails marked read`);
       clearSelection();
     } catch (err) {
@@ -1103,7 +1164,9 @@ export function EmailList({
 
   async function handleBatchMarkUnread() {
     try {
-      await api.batchMarkUnread({ email_ids: Array.from(selectedIds) });
+      const ids = Array.from(selectedIds);
+      await api.batchMarkUnread({ email_ids: ids });
+      applyEmailPatch(ids, { is_read: false }, "markUnread");
       toast("success", `${selectedIds.size} emails marked unread`);
       clearSelection();
     } catch (err) {
@@ -1113,9 +1176,9 @@ export function EmailList({
 
   async function handleBatchDelete() {
     const ok = await confirm({
-      title: "Delete Emails",
-      message: `Delete ${selectedIds.size} selected emails? This cannot be undone.`,
-      confirmLabel: "Delete",
+      title: t("email.batchDeleteTitle"),
+      message: t("email.batchDeleteConfirm"),
+      confirmLabel: t("common.delete"),
       danger: true,
     });
     if (!ok) return;
@@ -1123,33 +1186,64 @@ export function EmailList({
       const ids = Array.from(selectedIds);
       await api.batchDelete({ email_ids: ids });
       setSearchResults((prev) => removeEmailsFromSearchResult(prev, ids));
-      toast("success", `${selectedIds.size} emails deleted`);
+      onEmailsRemoved?.(ids);
+      for (const id of ids) {
+        void emitMailUpdated(id, "delete");
+      }
+      toast("success", t("email.batchDeleted", { count: selectedIds.size }));
       clearSelection();
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : "Batch action failed");
+      toast("error", err instanceof Error ? err.message : t("email.batchFailed"));
     }
   }
 
   async function handleBatchStar() {
+    // The backend flips each email's star, so report per resulting state.
+    const ids = Array.from(selectedIds);
+    const starredIds = ids.filter((id) => !emailById.get(id)?.is_starred);
+    const unstarredIds = ids.filter((id) => emailById.get(id)?.is_starred);
     try {
-      await api.batchToggleStar({ email_ids: Array.from(selectedIds) });
-      toast("success", `${selectedIds.size} emails starred`);
+      await api.batchToggleStar({ email_ids: ids });
+      if (starredIds.length > 0) applyEmailPatch(starredIds, { is_starred: true }, "toggleStar");
+      if (unstarredIds.length > 0) applyEmailPatch(unstarredIds, { is_starred: false }, "toggleStar");
+      const message = unstarredIds.length === 0
+        ? t("email.batchStarred", { count: starredIds.length })
+        : starredIds.length === 0
+          ? t("email.batchUnstarred", { count: unstarredIds.length })
+          : t("email.batchStarMixed", { starred: starredIds.length, unstarred: unstarredIds.length });
+      toast("success", message);
       clearSelection();
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : "Batch action failed");
+      toast("error", err instanceof Error ? err.message : t("email.batchFailed"));
     }
   }
 
   async function handleBatchArchive() {
     if (!archiveFolderId) return;
+    // Each email goes to its own account's Archive folder, as single archive does.
+    const idsByTarget = new Map<string, string[]>();
+    for (const id of selectedIds) {
+      const target = archiveFolders?.find((folder) => folder.account_id === emailById.get(id)?.account_id)?.id ?? archiveFolderId;
+      idsByTarget.set(target, [...(idsByTarget.get(target) ?? []), id]);
+    }
+    const archived: string[] = [];
     try {
-      const ids = Array.from(selectedIds);
-      await api.batchMove({ email_ids: ids, target_folder_id: archiveFolderId });
-      setSearchResults((prev) => removeEmailsFromSearchResult(prev, ids));
-      toast("success", `${selectedIds.size} emails archived`);
+      for (const [targetFolderId, ids] of idsByTarget) {
+        await api.batchMove({ email_ids: ids, target_folder_id: targetFolderId });
+        archived.push(...ids);
+      }
+      toast("success", t("email.batchArchived", { count: archived.length }));
       clearSelection();
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : "Batch action failed");
+      toast("error", err instanceof Error ? err.message : t("email.batchFailed"));
+    } finally {
+      if (archived.length > 0) {
+        setSearchResults((prev) => removeEmailsFromSearchResult(prev, archived));
+        onEmailsRemoved?.(archived);
+        for (const id of archived) {
+          void emitMailUpdated(id, "move");
+        }
+      }
     }
   }
 
@@ -1331,8 +1425,13 @@ export function EmailList({
               <button
                 type="button"
                 onClick={() => {
+                  // This button always asks in natural language; that mode is
+                  // selected by a leading "?".
+                  const trimmed = searchQuery.trim();
+                  const query = trimmed.startsWith("?") ? searchQuery : `? ${trimmed}`;
+                  setSearchQuery(query);
                   setSearchLoading(true);
-                  void runSearch(searchQuery);
+                  void runSearch(query);
                 }}
                 className="mail-pressable flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 title="Natural language search"
@@ -1536,6 +1635,8 @@ export function EmailList({
                   <button
                     type="button"
                     onClick={() => setShowSaveSearch(false)}
+                    aria-label={t("common.cancel")}
+                    title={t("common.cancel")}
                     className="mail-pressable flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
                   >
                     <X size={12} />
@@ -1638,11 +1739,11 @@ export function EmailList({
                 "text-muted-foreground hover:bg-surface-hover hover:text-foreground",
                 isMobile ? "flex h-11 min-w-11 items-center justify-center rounded-lg px-3" : "mail-pressable flex h-8 w-8 items-center justify-center rounded-md",
               )}
-              title={isMobile ? "Move" : "Archive"}
-              aria-label={isMobile ? "Move" : "Archive"}
+              title="Archive"
+              aria-label="Archive"
             >
               <Archive size={14} />
-              {isMobile && <span className="ml-2 text-xs font-medium">Move</span>}
+              {isMobile && <span className="ml-2 text-xs font-medium">Archive</span>}
             </button>
           )}
           <button

@@ -9,9 +9,11 @@ interface MiniCalendarProps {
   value: Date;
   onChange: (date: Date) => void;
   events: CalendarEvent[];
+  /** 0 = Sunday, 1 = Monday, 6 = Saturday (user's "week starts on" setting). */
+  weekStartsOn?: 0 | 1 | 6;
 }
 
-export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
+export function MiniCalendar({ value, onChange, events, weekStartsOn = 0 }: MiniCalendarProps) {
   const { t, i18n } = useTranslation();
   const [currentMonth, setCurrentMonth] = useState(startOfMonth(value));
 
@@ -23,13 +25,14 @@ export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
   const handleNextMonth = () => setCurrentMonth(addMonths(currentMonth, 1));
 
   const locale = i18n.language === "ko" ? ko : enUS;
-  const weekdayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+  const allWeekdayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+  const weekdayKeys = [...allWeekdayKeys.slice(weekStartsOn), ...allWeekdayKeys.slice(0, weekStartsOn)];
 
   const weeks = useMemo(() => {
     const monthStart = startOfMonth(currentMonth);
     const monthEnd = endOfMonth(monthStart);
-    const startDate = startOfWeek(monthStart);
-    const endDate = endOfWeek(monthEnd);
+    const startDate = startOfWeek(monthStart, { weekStartsOn });
+    const endDate = endOfWeek(monthEnd, { weekStartsOn });
 
     const rows = [];
     let day = startDate;
@@ -43,7 +46,7 @@ export function MiniCalendar({ value, onChange, events }: MiniCalendarProps) {
       rows.push(week);
     }
     return rows;
-  }, [currentMonth]);
+  }, [currentMonth, weekStartsOn]);
 
   const eventDaysMap = useMemo(() => {
     const map: Record<string, boolean> = {};

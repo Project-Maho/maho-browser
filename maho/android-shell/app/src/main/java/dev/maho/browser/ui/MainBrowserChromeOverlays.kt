@@ -2,13 +2,16 @@ package dev.maho.browser.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -19,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.support.PageSummarizer
 import dev.maho.browser.ui.icons.MahoIcon
@@ -41,7 +46,7 @@ internal fun MainBrowserSummaryShell(
                 stateDescription = if (state is PageSummarizer.State.Result) {
                     "summary shell visible"
                 } else {
-                    "browse for me shell visible"
+                    "page summary shell visible"
                 }
             },
     ) {
@@ -53,6 +58,73 @@ internal fun MainBrowserSummaryShell(
             onDismiss = onDismiss,
             modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
         )
+    }
+}
+
+/** WebView's net error text ("net::ERR_...") is not meant for people; explain the common cases. */
+internal fun pageLoadErrorMessage(errorCode: Int, description: String): String = when (errorCode) {
+    android.webkit.WebViewClient.ERROR_HOST_LOOKUP -> "The site's address couldn't be found. Check the address or your connection."
+    android.webkit.WebViewClient.ERROR_CONNECT -> "Couldn't connect to the site. Check your internet connection."
+    android.webkit.WebViewClient.ERROR_TIMEOUT -> "The site took too long to respond."
+    android.webkit.WebViewClient.ERROR_FAILED_SSL_HANDSHAKE -> "A secure connection to the site couldn't be made."
+    else -> description
+}
+
+@Composable
+internal fun MainBrowserPageErrorView(
+    description: String,
+    failingUrl: String,
+    onReload: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shellColors = BrowserShellTheme.colors
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(shellColors.browsingBackground)
+            .semantics { stateDescription = "page load error" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(24.dp),
+        ) {
+            Icon(
+                painter = painterResource(id = MahoIcon.CircleAlert.drawableRes),
+                contentDescription = null,
+                tint = shellColors.textSecondary,
+                modifier = Modifier.size(32.dp),
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "This page couldn't be loaded",
+                style = MaterialTheme.typography.titleMedium,
+                color = shellColors.textPrimary,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = shellColors.textSecondary,
+                textAlign = TextAlign.Center,
+            )
+            if (failingUrl.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = failingUrl,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = shellColors.textSecondary,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onReload) {
+                Text("Reload")
+            }
+        }
     }
 }
 

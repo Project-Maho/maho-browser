@@ -1,4 +1,5 @@
 import { useCallback, useState, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useToast } from "../components/ui/Toast";
 
 export interface OptimisticMutationOptions<TVariables, TData> {
@@ -15,6 +16,7 @@ export function useOptimisticMutation<TVariables = void, TData = void>(
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const { toast } = useToast();
+  const { t } = useTranslation();
 
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -48,14 +50,14 @@ export function useOptimisticMutation<TVariables = void, TData = void>(
         }
 
         // 4. Show error toast
-        toast("error", `Action failed: ${actualError.message}`);
+        toast("error", t("app.actionFailed", { error: actualError.message }));
         optionsRef.current.onError?.(actualError, variables);
         return undefined;
       } finally {
         setIsLoading(false);
       }
     },
-    [toast]
+    [toast, t]
   );
 
   return {

@@ -40,6 +40,7 @@ vi.mock('../../../api', () => ({
   startOAuth2: vi.fn(),
   listSavedSearches: vi.fn(),
   searchEmails: vi.fn(),
+  listPinnedEmails: vi.fn(),
   md5Hash: vi.fn(),
   getAppSetting: vi.fn(),
   startAutoSync: vi.fn(),
@@ -138,6 +139,8 @@ describe("App compose recovery & draft integration", () => {
     vi.mocked(api.listSavedSearches).mockResolvedValue([]);
     vi.mocked(api.getAppSetting).mockResolvedValue(null);
     vi.mocked(api.md5Hash).mockResolvedValue('hash');
+    vi.mocked(api.listPinnedEmails).mockResolvedValue([]);
+    vi.mocked(api.searchEmails).mockResolvedValue({ emails: [], total_count: 0, query: "" });
     vi.mocked(api.sendEmail).mockResolvedValue({ status: 'sent' });
     vi.mocked(api.saveDraft).mockResolvedValue('saved-pending');
     vi.mocked(api.updateDraft).mockResolvedValue(undefined);

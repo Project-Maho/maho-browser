@@ -61,6 +61,58 @@ it("C03 retains hydrated draft attachments", async () => {
  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Save Draft" })); });
  expect(api.updateDraft).toHaveBeenCalledWith("draft", expect.objectContaining({ attachments }));
 });
+it("C04 Retry keeps files the user attached while the load error showed", async () => {
+ vi.mocked(api.getForwardedAttachments).mockRejectedValueOnce(new Error("load failed"));
+ await setup({ forwardEmailUid: 9, forwardFolderId: "inbox" });
+ expect(await screen.findByText("load failed")).toBeTruthy();
+ let reader!: FileReader;
+ const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function(this: FileReader) { reader = this; });
+ try {
+  fireEvent.change(document.querySelector('input[type="file"][multiple]')!, { target: { files: [new File(["x"], "mine.txt", { type: "text/plain" })] } });
+  await act(async () => { Object.defineProperty(reader, "result", { value: "data:text/plain;base64,eA==" }); reader.dispatchEvent(new ProgressEvent("load")); });
+ } finally { read.mockRestore(); }
+ await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Retry" })); });
+ await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send", exact: true })); });
+ expect(api.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ attachments: [
+  { filename: "mine.txt", mime_type: "text/plain", data: "eA==" },
+  { filename: "f.txt", mime_type: "text/plain", data: "eA==" },
+ ] }));
+});
+it("C04 Retry keeps a user file that shares a forwarded attachment's filename", async () => {
+ vi.mocked(api.getForwardedAttachments).mockRejectedValueOnce(new Error("load failed"));
+ await setup({ forwardEmailUid: 9, forwardFolderId: "inbox" });
+ expect(await screen.findByText("load failed")).toBeTruthy();
+ let reader!: FileReader;
+ const read = vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function(this: FileReader) { reader = this; });
+ try {
+  fireEvent.change(document.querySelector('input[type="file"][multiple]')!, { target: { files: [new File(["x"], "f.txt", { type: "text/plain" })] } });
+  await act(async () => { Object.defineProperty(reader, "result", { value: "data:text/plain;base64,bWluZQ==" }); reader.dispatchEvent(new ProgressEvent("load")); });
+ } finally { read.mockRestore(); }
+ await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Retry" })); });
+ await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send", exact: true })); });
+ expect(api.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ attachments: [
+  { filename: "f.txt", mime_type: "text/plain", data: "bWluZQ==" },
+  { filename: "f.txt", mime_type: "text/plain", data: "eA==" },
+ ] }));
+});
+it("r4-1 a restored forward sends its saved attachments without refetching the source", async () => {
+ vi.mocked(api.getForwardedAttachments).mockResolvedValueOnce([
+  { filename: "f.txt", mime_type: "text/plain", data: "eA==" },
+  { filename: "g.txt", mime_type: "text/plain", data: "eA==" },
+ ]);
+ // Undo Send after the user removed g.txt from a forward of [f.txt, g.txt].
+ const saved = [{ filename: "f.txt", mime_type: "text/plain", data: "eA==" }];
+ await setup({ forwardEmailUid: 9, forwardFolderId: "inbox", initialBodyIsComplete: true, initialAttachments: saved });
+ await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send", exact: true })); });
+ expect(vi.mocked(api.sendEmail).mock.calls[0]?.[0].attachments?.map((a) => a.filename)).toEqual(["f.txt"]);
+ expect(api.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ attachments: saved }));
+ expect(api.getForwardedAttachments).not.toHaveBeenCalled();
+});
+it("C04 names the file in the remove-attachment label", async () => {
+ await setup({ initialAttachments: [{ filename: "report.pdf", mime_type: "application/pdf", data: "eA==" }] });
+ const remove = screen.getByRole("button", { name: "Remove attachment report.pdf" });
+ expect(remove.getAttribute("title")).toBe("Remove attachment report.pdf");
+});
 it("C11 converts HTML immediately when switching to plain text", async () => {
  await setup();
  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Plain Text" })); });

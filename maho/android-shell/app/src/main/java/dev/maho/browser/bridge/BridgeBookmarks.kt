@@ -2,6 +2,7 @@ package dev.maho.browser.bridge
 
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.BookmarkEntry
+import dev.maho.browser.models.BookmarkFolder
 import dev.maho.browser.support.MahoJson
 
 object BridgeBookmarks {
@@ -12,6 +13,21 @@ object BridgeBookmarks {
             MahoJson.instance.decodeFromString<List<BookmarkEntry>>(json)
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    // Display names for bookmark folders, keyed by folder id.
+    fun getFolderNames(): Map<String, String> {
+        val json = try {
+            MahoBridge.getBookmarkFolders()
+        } catch (_: UnsatisfiedLinkError) {
+            // A native library built before nativeGetBookmarkFolders existed.
+            null
+        } ?: return emptyMap()
+        return try {
+            MahoJson.instance.decodeFromString<List<BookmarkFolder>>(json).associate { it.id to it.name }
+        } catch (_: Exception) {
+            emptyMap()
         }
     }
 

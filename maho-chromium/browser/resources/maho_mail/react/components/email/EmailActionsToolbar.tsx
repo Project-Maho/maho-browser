@@ -341,10 +341,6 @@ export function EmailActionsToolbar(props: EmailActionsToolbarProps) {
                     aria-label={moreLabel}
                     aria-haspopup="menu"
                     aria-expanded={overflowOpen}
-                    onContextMenu={(e) => {
-                      if (renderableOverflow.length === 0) return;
-                      openContextMenu(e, renderableOverflow[0], "overflow");
-                    }}
                     className="mail-pressable flex h-9 items-center gap-2 rounded-lg px-3 text-sm text-foreground hover:bg-surface-hover"
                   >
                     <MoreHorizontal size={16} />

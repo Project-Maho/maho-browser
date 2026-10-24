@@ -28,6 +28,7 @@ source_set("maho_mru_tab_tracker") {
 
 source_set("maho_ctrl_tab_switcher_views") {
   sources = [
+    "maho_ctrl_tab_layout.h",
     "maho_ctrl_tab_switcher_card_view.cc",
     "maho_ctrl_tab_switcher_card_view.h",
     "maho_ctrl_tab_switcher_view.cc",
@@ -49,6 +50,7 @@ source_set("maho_ctrl_tab_switcher_views") {
 
 source_set("maho_ctrl_tab_switcher_controller") {
   sources = [
+    "maho_ctrl_tab_slot_model.h",
     "maho_ctrl_tab_switcher_controller.cc",
     "maho_ctrl_tab_switcher_controller.h",
   ]
@@ -65,6 +67,7 @@ source_set("maho_ctrl_tab_switcher_controller") {
     "//content/public/browser",
     "//maho/browser:maho_space_profile_bridge",
     "//ui/base",
+    "//ui/display",
     "//ui/events",
     "//ui/gfx",
     "//ui/views",

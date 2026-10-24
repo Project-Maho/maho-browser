@@ -109,18 +109,17 @@ TEST_F(MahoMruTabTrackerTest, GetMruListForSpaceEmptyIdReturnsFull) {
   EXPECT_EQ(full.size(), filtered.size());
 }
 
-// Space filter without a live MahoCore returns the full MRU list as a
-// graceful fallback (the FFI call short-circuits to empty JSON, which is
-// treated as "no filter data" — the caller falls back to the unfiltered
-// list rather than surprising the user with an empty result).
-TEST_F(MahoMruTabTrackerTest, GetMruListForSpaceWithoutCoreFallsBack) {
+// Space filter without a live MahoCore must not fall back to the global MRU:
+// space membership is unknown, so a "current space" switch would otherwise
+// jump into other spaces. It returns no candidates and the caller falls
+// through to positional switching.
+TEST_F(MahoMruTabTrackerTest, GetMruListForSpaceWithoutCoreReturnsEmpty) {
   AddTab(browser(), GURL("http://a.test/"));
   AddTab(browser(), GURL("http://b.test/"));
+  ASSERT_GE(tracker()->GetMruList().size(), 2u);
   auto filtered =
       tracker()->GetMruListForSpace(std::string("unknown-space-id"));
-  // With no MahoCore in the test environment the space cache stays empty
-  // and the tracker returns the unfiltered list rather than an empty vector.
-  EXPECT_EQ(tracker()->GetMruList().size(), filtered.size());
+  EXPECT_TRUE(filtered.empty());
 }
 
 }  // namespace maho

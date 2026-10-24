@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from "react";
 import type { CalendarEvent } from "../../types";
-import { format, addDays, subDays } from "date-fns";
+import { format, addDays, subDays, isToday } from "date-fns";
+import { useTranslation } from "react-i18next";
+import { parseAllDayDate } from "../../utils/calendarDate";
 import { ChevronLeft, ChevronRight, MapPin } from "lucide-react";
 
 interface MobileDayViewProps {
@@ -11,6 +13,7 @@ interface MobileDayViewProps {
 }
 
 export function MobileDayView({ date, onNavigate, events, onSelectEvent }: MobileDayViewProps) {
+  const { t } = useTranslation();
   const [touchStart, setTouchStart] = useState<number | null>(null);
 
   const dayEvents = useMemo(() => {
@@ -55,6 +58,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
       <div className="flex items-center justify-between p-3 border-b border-border bg-muted/20">
         <button
           onClick={() => onNavigate(subDays(date, 1))}
+          aria-label={t("calendar.previousDay")}
           className="mail-pressable flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronLeft size={16} />
@@ -64,6 +68,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
         </span>
         <button
           onClick={() => onNavigate(addDays(date, 1))}
+          aria-label={t("calendar.nextDay")}
           className="mail-pressable flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronRight size={16} />
@@ -84,11 +89,11 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
         })}
 
         {dayEvents.map((ev) => {
-          const startDate = new Date(ev.dtstart);
+          const startDate = parseAllDayDate(ev.dtstart);
           const startHour = startDate.getHours();
           const startMin = startDate.getMinutes();
 
-          const endDate = ev.dtend ? new Date(ev.dtend) : new Date(startDate.getTime() + 60 * 60 * 1000);
+          const endDate = ev.dtend ? parseAllDayDate(ev.dtend) : new Date(startDate.getTime() + 60 * 60 * 1000);
           let durationHours = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60);
           if (durationHours <= 0) durationHours = 1;
 
@@ -108,7 +113,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
             >
               <div>
                 <p className="text-xs font-semibold truncate text-foreground">
-                  {ev.summary || "(No Title)"}
+                  {ev.summary || t("calendar.untitled")}
                 </p>
                 {ev.location && (
                   <p className="flex items-center gap-1 text-[10px] text-muted-foreground truncate">
@@ -125,7 +130,7 @@ export function MobileDayView({ date, onNavigate, events, onSelectEvent }: Mobil
 
         {dayEvents.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <p className="text-xs text-muted-foreground">No events scheduled today</p>
+            <p className="text-xs text-muted-foreground">{isToday(date) ? t("calendar.noEventsToday") : t("calendar.noEventsOnDay")}</p>
           </div>
         )}
       </div>

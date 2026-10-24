@@ -31,10 +31,10 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [imapHost, setImapHost] = useState('');
-  const [imapPort, setImapPort] = useState(993);
+  const [imapPort, setImapPort] = useState('993');
   const [imapEncryption, setImapEncryption] = useState<Encryption>('Tls');
   const [smtpHost, setSmtpHost] = useState('');
-  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpPort, setSmtpPort] = useState('587');
   const [smtpEncryption, setSmtpEncryption] = useState<Encryption>('StartTls');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -56,10 +56,10 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
       setEmail(account.email);
       setDisplayName(account.display_name);
       setImapHost(account.imap_host);
-      setImapPort(account.imap_port);
+      setImapPort(String(account.imap_port));
       setImapEncryption(account.imap_encryption);
       setSmtpHost(account.smtp_host);
-      setSmtpPort(account.smtp_port);
+      setSmtpPort(String(account.smtp_port));
       setSmtpEncryption(account.smtp_encryption);
       setUsername(account.username);
       setPassword('');
@@ -87,7 +87,15 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
     }
   }, [isOpen, loading]);
 
+  // A stale success banner must not survive an edit to the tested settings.
+  useEffect(() => {
+    setTestResult(null);
+  }, [email, imapHost, imapPort, imapEncryption, smtpHost, smtpPort, smtpEncryption, username, password]);
+
   if (!isOpen) return null;
+
+  const imapPortNum = /^\d+$/.test(imapPort.trim()) ? parseInt(imapPort, 10) : NaN;
+  const smtpPortNum = /^\d+$/.test(smtpPort.trim()) ? parseInt(smtpPort, 10) : NaN;
 
   function buildTestRequest(): CreateAccountRequest {
     return {
@@ -95,10 +103,10 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
       display_name: displayName,
       auth_type: (original?.auth_type ?? 'password') as CreateAccountRequest['auth_type'],
       imap_host: imapHost,
-      imap_port: imapPort,
+      imap_port: imapPortNum,
       imap_encryption: imapEncryption,
       smtp_host: smtpHost,
-      smtp_port: smtpPort,
+      smtp_port: smtpPortNum,
       smtp_encryption: smtpEncryption,
       username,
       password: password || undefined,
@@ -112,17 +120,31 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
     if (email !== original.email) req.email = email;
     if (displayName !== original.display_name) req.display_name = displayName;
     if (imapHost !== original.imap_host) req.imap_host = imapHost;
-    if (imapPort !== original.imap_port) req.imap_port = imapPort;
+    if (imapPortNum !== original.imap_port) req.imap_port = imapPortNum;
     if (imapEncryption !== original.imap_encryption) req.imap_encryption = imapEncryption;
     if (smtpHost !== original.smtp_host) req.smtp_host = smtpHost;
-    if (smtpPort !== original.smtp_port) req.smtp_port = smtpPort;
+    if (smtpPortNum !== original.smtp_port) req.smtp_port = smtpPortNum;
     if (smtpEncryption !== original.smtp_encryption) req.smtp_encryption = smtpEncryption;
     if (username !== original.username) req.username = username;
     if (password) req.password = password;
     return req;
   }
 
+  function validateSettings(): string | null {
+    if (!email || !imapHost || !smtpHost) return t('account.requiredFields');
+    if (!(imapPortNum >= 1 && imapPortNum <= 65535) || !(smtpPortNum >= 1 && smtpPortNum <= 65535)) {
+      return t('account.portRange');
+    }
+    return null;
+  }
+
   async function handleTestConnection() {
+    const validationError = validateSettings();
+    if (validationError) {
+      setTestResult(null);
+      setError(validationError);
+      return;
+    }
     try {
       setTesting(true);
       setTestResult(null);
@@ -140,12 +162,9 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
   }
 
   async function handleSave() {
-    if (!email || !imapHost || !smtpHost) {
-      setError(t('account.requiredFields'));
-      return;
-    }
-    if (imapPort < 1 || imapPort > 65535 || smtpPort < 1 || smtpPort > 65535) {
-      setError(t('account.portRange'));
+    const validationError = validateSettings();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -213,6 +232,7 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
           </h2>
           <button
             onClick={onClose}
+            aria-label={t('common.close')}
             className="mail-pressable flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <X size={20} />
@@ -291,8 +311,8 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
                     <Input
                       label={t('account.port')}
                       type="number"
-                      value={String(imapPort)}
-                      onChange={(v) => setImapPort(parseInt(v, 10) || imapPort)}
+                      value={imapPort}
+                      onChange={setImapPort}
                       disabled={isDisabled}
                     />
                   </div>
@@ -325,8 +345,8 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
                     <Input
                       label={t('account.port')}
                       type="number"
-                      value={String(smtpPort)}
-                      onChange={(v) => setSmtpPort(parseInt(v, 10) || smtpPort)}
+                      value={smtpPort}
+                      onChange={setSmtpPort}
                       disabled={isDisabled}
                     />
                   </div>
@@ -353,6 +373,13 @@ export function EditAccountModal({ accountId, isOpen, onClose, onAccountUpdated 
                 <div className="flex items-center gap-2 text-sm text-success bg-success/10 border border-success/30 rounded-lg px-3 py-2">
                   <CheckCircle size={16} />
                   {t('account.connectionSuccess')}
+                </div>
+              )}
+
+              {testResult === false && !error && (
+                <div role="alert" className="flex items-center gap-2 text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2">
+                  <AlertTriangle size={16} />
+                  {t('onboarding.testFailed')}
                 </div>
               )}
 

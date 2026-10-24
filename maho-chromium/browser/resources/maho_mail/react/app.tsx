@@ -57,7 +57,7 @@ import { useReauthRetryQueue } from "./hooks/useReauthRetryQueue";
 import * as api from "./api";
 import { Sidebar } from "./components/layout/Sidebar";
 import { MobileDrawer } from "./components/mobile/MobileDrawer";
-import { EmailList } from "./components/layout/EmailList";
+import { EmailList, type EmailStatePatch } from "./components/layout/EmailList";
 import { EmailContent } from "./components/layout/EmailContent";
 import { AuthExpiredBanner } from "./components/common/AuthExpiredBanner";
 import { ComposeModal } from "./components/compose/ComposeModal";
@@ -145,7 +145,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const { authErrors, clearAuthError } = useAuthStatus();
   const { enqueueRetry } = useReauthRetryQueue();
 
-  const totalUnread = useMemo(() => mail.folders.reduce((sum, f) => sum + f.unread_count, 0), [mail.folders]);
+  // Matches the sidebar Inbox badge: Spam, Trash and Archive unread mail must
+  // not inflate the window title count.
+  const totalUnread = useMemo(
+    () => mail.folders.filter((f) => f.folder_type === "Inbox").reduce((sum, f) => sum + f.unread_count, 0),
+    [mail.folders],
+  );
   const accountIds = useMemo(() => new Set(mail.accounts.map((account) => account.id)), [mail.accounts]);
   useTrayBadge(totalUnread);
   const { playSound } = useNotificationSound(settings.soundEnabled);
@@ -182,6 +187,21 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const [searchRequest, setSearchRequest] = useState<{query: string} | null>(null);
   const [syntheticView, setSyntheticView] = useState<string | null>(null);
   const [syntheticEmails, setSyntheticEmails] = useState<EmailSummary[]>([]);
+  const [pinnedIds, setPinnedIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Server-side pins are the source of truth; local toggles only patch it.
+  useEffect(() => {
+    if (mail.accounts.length === 0) return;
+    let cancelled = false;
+    void api.listPinnedEmails(mail.selectedAccountId ?? undefined).then(
+      (emails) => {
+        if (!cancelled) setPinnedIds(new Set(emails.map((email) => email.id)));
+      },
+      (err) => console.warn("[Pins] failed to load pinned emails:", err),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [mail.accounts, mail.selectedAccountId]);
   const [showSnoozePicker, setShowSnoozePicker] = useState(false);
   const [snoozeTargetId, setSnoozeTargetId] = useState<string | null>(null);
   const pendingSendsRef = useRef<Map<string, {
@@ -210,7 +230,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   const [smartCategory, setSmartCategory] = useState<SmartCategory>("personal");
   const { isOnline, pendingMutationCount, connectionStatus } = useNetworkStatus();
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
-  const [recurringPrompt, setRecurringPrompt] = useState<{ event: CalendarEvent; mode: "edit" | "delete" } | null>(null);
+  const [recurringPrompt, setRecurringPrompt] = useState<{
+    event: CalendarEvent;
+    mode: "edit" | "delete";
+    /** Set when the caller (e.g. the calendar grid) performs the action itself. */
+    resolve?: (scope: "single" | "all" | null) => void;
+  } | null>(null);
   const [showCreateEvent, setShowCreateEvent] = useState(false);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
   const [initialEventSummary, setInitialEventSummary] = useState("");
@@ -259,9 +284,21 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     onNewEmails: async (accountId: string, messageIds: string[]) => {
       let shouldNotify = true;
       try {
+        // Each new-mail event carries the Message-ID of the message that
+        // actually arrived. A mute is stored under the Message-ID of whichever
+        // thread message was open, so each arrival is matched against every
+        // Message-ID in its resolved thread. An arrival without a Message-ID
+        // cannot be matched and fails open.
         if (messageIds.length > 0) {
-          const unmuted = await api.filterMutedMessageIds(accountId, messageIds);
-          shouldNotify = unmuted.length > 0;
+          const arrivalMuted = await Promise.all(
+            messageIds.map(async (id) => {
+              const thread = await api.listThreadEmails(accountId, id);
+              const threadIds = [...new Set([id, ...thread.map((email) => email.message_id).filter(Boolean)])];
+              const unmuted = await api.filterMutedMessageIds(accountId, threadIds);
+              return unmuted.length < threadIds.length;
+            }),
+          );
+          shouldNotify = arrivalMuted.some((muted) => !muted);
         }
       } catch {
         // Fail open — still notify
@@ -335,15 +372,17 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     return () => { void api.stopScheduler(); };
   }, []);
 
+  // Keyboard navigation and shortcuts act on the list the user sees.
+  const visibleEmails = syntheticView ? syntheticEmails : mail.emails;
   const selectedEmailIndex = useMemo(
     () => mail.selectedEmail
-      ? mail.emails.findIndex((email) => email.id === mail.selectedEmail?.email.id)
+      ? visibleEmails.findIndex((email) => email.id === mail.selectedEmail?.email.id)
       : -1,
-    [mail.selectedEmail, mail.emails]
+    [mail.selectedEmail, visibleEmails]
   );
   const selectedEmail = useMemo(
-    () => selectedEmailIndex >= 0 ? mail.emails[selectedEmailIndex] : null,
-    [selectedEmailIndex, mail.emails]
+    () => selectedEmailIndex >= 0 ? visibleEmails[selectedEmailIndex] : null,
+    [selectedEmailIndex, visibleEmails]
   );
   const archiveFolder = useMemo(
     () => mail.folders.find((folder) => folder.folder_type === "Archive" &&
@@ -461,15 +500,15 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
   };
 
   const openEmailAt = (index: number) => {
-    const target = mail.emails[index];
+    const target = visibleEmails[index];
     if (!target) return;
     handleSelectEmail(target.id);
   };
 
   const moveSelection = (delta: number) => {
-    if (mail.emails.length === 0) return;
+    if (visibleEmails.length === 0) return;
     const baseIndex = selectedEmailIndex >= 0 ? selectedEmailIndex : delta > 0 ? -1 : 0;
-    const nextIndex = Math.min(Math.max(baseIndex + delta, 0), mail.emails.length - 1);
+    const nextIndex = Math.min(Math.max(baseIndex + delta, 0), visibleEmails.length - 1);
     openEmailAt(nextIndex);
   };
 
@@ -478,7 +517,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     try {
       await api.moveEmail(selectedEmail.id, archiveFolder.id);
       void emitMailUpdated(selectedEmail.id, "move");
-      mail.removeEmails([selectedEmail.id]);
+      handleEmailsRemoved([selectedEmail.id]);
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t("app.failedToArchive"));
     }
@@ -493,8 +532,9 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         await api.markRead(selectedEmail.id);
       }
       void emitMailUpdated(selectedEmail.id, selectedEmail.is_read ? "markUnread" : "markRead");
-      await mail.syncCurrentFolder();
-      await mail.selectEmail(selectedEmail.id);
+      // Patch in place: re-opening the email would re-arm auto-mark-read and
+      // undo an explicit "mark unread" two seconds later.
+      handleEmailsUpdated([selectedEmail.id], { is_read: !selectedEmail.is_read });
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t("app.failedToUpdateReadState"));
     }
@@ -511,6 +551,41 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     if (!ok) return;
 
     await mail.deleteEmail(emailId);
+    setSyntheticEmails((prev) => prev.filter((email) => email.id !== emailId));
+  };
+
+  const syntheticViewTitleKeys: Record<string, string> = {
+    pins: "sidebar.pins",
+    snoozed: "sidebar.snoozed",
+    reminders: "sidebar.reminders",
+    starred: "sidebar.starred",
+    unread: "app.views.unread",
+    smart_inbox: "app.views.smartInbox",
+    vip: "app.views.vip",
+  };
+  const folderTitleKeys: Record<string, string> = {
+    Inbox: "sidebar.inbox",
+    Sent: "sidebar.sent",
+    Drafts: "sidebar.drafts",
+    Trash: "sidebar.trash",
+    Spam: "sidebar.spam",
+    Archive: "sidebar.archive",
+  };
+  const selectedCustomFolderName = mail.folders.find((folder) => folder.id === mail.selectedFolderId)?.name;
+  const mailboxTitle = syntheticView
+    ? t(syntheticViewTitleKeys[syntheticView] ?? "sidebar.inbox")
+    : mail.selectedFolderType === "Custom" && selectedCustomFolderName
+      ? selectedCustomFolderName
+      : t(folderTitleKeys[mail.selectedFolderType ?? "Inbox"] ?? "sidebar.inbox");
+
+  const handleEmailsRemoved = (ids: string[]) => {
+    mail.removeEmails(ids);
+    setSyntheticEmails((prev) => prev.filter((email) => !ids.includes(email.id)));
+  };
+
+  const handleEmailsUpdated = (ids: string[], patch: EmailStatePatch) => {
+    mail.patchEmails(ids, patch);
+    setSyntheticEmails((prev) => prev.map((email) => ids.includes(email.id) ? { ...email, ...patch } : email));
   };
 
   const handleDeleteAccount = async (accountId: string) => {
@@ -529,7 +604,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     try {
       await api.cleanupSmimeForAccount(accountId);
       await api.deleteAccount(accountId);
-      toast("success", t("account.deleteSuccess", "Account deleted successfully"));
+      toast("success", t("account.deleteSuccess"));
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t("account.deleteFailed"));
     }
@@ -553,9 +628,8 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     openComposeScreen();
   };
 
-  const handleManualSync = () => {
-    void mail.syncAllFolders();
-  };
+  // Returned so pull-to-refresh keeps its spinner until the sync finishes.
+  const handleManualSync = () => mail.syncAllFolders();
 
   const handleSelectSynthetic = async (id: string) => {
     setSyntheticView(id);
@@ -563,6 +637,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       if (id === "pins") {
         const emails = await api.listPinnedEmails(mail.selectedAccountId ?? undefined);
         setSyntheticEmails(emails);
+        setPinnedIds(new Set(emails.map((email) => email.id)));
       } else if (id === "snoozed") {
         const emails = await api.listSnoozedEmails(mail.selectedAccountId ?? undefined);
         setSyntheticEmails(emails);
@@ -625,6 +700,8 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     window.history.replaceState(null, '', window.location.pathname);
   }, [mail.folders.length]);
 
+  // Reports the outcome and rethrows on failure so optimistic callers
+  // (the email list) can roll back.
   const handlePinEmail = async (emailId: string, nextPinned: boolean) => {
     try {
       if (nextPinned) {
@@ -634,9 +711,22 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         await api.unpinEmail(emailId);
         toast("success", t("app.emailUnpinned"));
       }
+      setPinnedIds((prev) => {
+        const next = new Set(prev);
+        if (nextPinned) next.add(emailId);
+        else next.delete(emailId);
+        return next;
+      });
     } catch (err) {
       toast("error", err instanceof Error ? err.message : t(nextPinned ? "app.failedToPin" : "app.failedToUnpin"));
+      throw err;
     }
+  };
+
+  // Fire-and-forget pin for surfaces without optimistic state; the failure
+  // was already reported by handlePinEmail.
+  const pinEmail = (emailId: string) => {
+    handlePinEmail(emailId, true).catch(() => {});
   };
 
   const handleOpenSnooze = (emailId: string) => {
@@ -844,7 +934,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       "forward": () => { if (mail.selectedEmail) void handleForward(mail.selectedEmail.email.id); },
       "star": () => { if (mail.selectedEmail) void handleToggleStar(mail.selectedEmail.email.id); },
       "delete": () => { if (mail.selectedEmail) void handleDeleteEmail(mail.selectedEmail.email.id); },
-      "pin": () => { if (mail.selectedEmail) void handlePinEmail(mail.selectedEmail.email.id, true); },
+      "pin": () => { if (mail.selectedEmail) pinEmail(mail.selectedEmail.email.id); },
       "snooze": () => { if (mail.selectedEmail) handleOpenSnooze(mail.selectedEmail.email.id); },
       "remind": () => { if (mail.selectedEmail) void handleSetReminder(mail.selectedEmail.email.id); },
     };
@@ -895,6 +985,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
     { key: "R", shift: true, handler: () => { if (mail.selectedEmail) void handleReplyAll(mail.selectedEmail.email.id); }, disabled: mailHotkeysDisabled || !mail.selectedEmail },
     { key: "e", handler: () => { void handleArchiveShortcut(); }, disabled: modalsOpen || !selectedEmail || syntheticView === "calendar" },
     { key: "u", handler: () => { void handleToggleReadShortcut(); }, disabled: mailHotkeysDisabled || !selectedEmail },
+    { key: "#", handler: () => { if (mail.selectedEmail) void handleDeleteEmail(mail.selectedEmail.email.id); }, disabled: mailHotkeysDisabled || !mail.selectedEmail },
     { key: ",", ctrl: true, handler: () => openSettingsPanel(), disabled: composeOpen || showAddAccount },
     { key: "?", handler: () => setShowCheatsheet(true) },
     { key: "k", ctrl: true, handler: () => setShowCommandPalette(true), disabled: modalsOpen },
@@ -1102,12 +1193,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           shortcut: 'E',
           category: 'mail',
           handler: handleArchiveShortcut,
-          enabled: () => selectedEmail !== null && archiveFolder !== null,
+          enabled: () => selectedEmail !== null && archiveFolder != null,
         },
         {
           id: 'delete',
           label: 'Delete',
-          shortcut: 'Shift+#',
+          shortcut: '#',
           category: 'mail',
           handler: () => {
             if (mail.selectedEmail) {
@@ -1141,7 +1232,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           category: 'mail',
           handler: () => {
             if (mail.selectedEmail) {
-              void handlePinEmail(mail.selectedEmail.email.id, true);
+              pinEmail(mail.selectedEmail.email.id);
             }
           },
           enabled: () => mail.selectedEmail !== null,
@@ -1219,12 +1310,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           category: 'ai',
           handler: async () => {
             if (mail.selectedEmail) {
-              toast('info', 'Generating reply draft...');
+              toast('info', t('app.generatingReplyDraft'));
               try {
                 const res = await api.getReplyDraft(mail.selectedEmail.email.account_id, { email_id: mail.selectedEmail.email.id });
                 void handleDraftReply(mail.selectedEmail.email.id, res.draft);
               } catch (err) {
-                toast('error', err instanceof Error ? err.message : 'Failed to generate reply draft');
+                toast('error', err instanceof Error ? err.message : t('app.failedToGenerateReplyDraft'));
               }
             }
           },
@@ -1236,12 +1327,12 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
           category: 'ai',
           handler: async () => {
             if (mail.selectedEmail) {
-              toast('info', 'Classifying email...');
+              toast('info', t('app.classifyingEmail'));
               try {
                 const res = await api.classifyEmail(mail.selectedEmail.email.account_id, { email_id: mail.selectedEmail.email.id });
-                toast('success', `Classified as: ${res.category}`);
+                toast('success', t('app.classifiedAs', { category: res.category }));
               } catch (err) {
-                toast('error', err instanceof Error ? err.message : 'Failed to classify email');
+                toast('error', err instanceof Error ? err.message : t('app.failedToClassify'));
               }
             }
           },
@@ -1353,8 +1444,8 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <button type="button" className="mail-navigation-trigger items-center gap-2 p-3" aria-label="Open mailbox folders" onClick={() => setDrawerOpen(true)}>
-          <Menu size={18} /> Folders
+        <button type="button" className="mail-navigation-trigger items-center gap-2 p-3" aria-label={t("app.openMailboxFolders")} onClick={() => setDrawerOpen(true)}>
+          <Menu size={18} /> {t("sidebar.folders")}
         </button>
         {authBanner}
 
@@ -1377,10 +1468,9 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                 archiveFolderId={archiveFolder?.id}
                 archiveFolders={mail.folders.filter(folder => folder.folder_type === "Archive")}
                 searchRequest={searchRequest}
-                onEmailsRemoved={(ids) => {
-                  mail.removeEmails(ids);
-                  setSyntheticEmails(prev => prev.filter(email => !ids.includes(email.id)));
-                }}
+                onEmailsRemoved={handleEmailsRemoved}
+                onEmailsUpdated={handleEmailsUpdated}
+                pinnedIds={pinnedIds}
                 onLoadMore={mail.loadMoreEmails}
                 hasMore={syntheticView ? false : mail.hasMore}
                 onPin={handlePinEmail}
@@ -1390,7 +1480,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                 smartCategory={syntheticView === "smart_inbox" ? smartCategory : null}
                 onSmartCategoryChange={syntheticView === "smart_inbox" ? (cat) => void handleSmartCategoryChange(cat) : undefined}
                 density={density}
-                mailboxTitle={syntheticView ? syntheticView.replaceAll("_", " ") : mail.selectedFolderType ?? "Inbox"}
+                mailboxTitle={mailboxTitle}
                 onCompose={openCompose}
                 onSync={handleManualSync}
                 composeDisabled={composeOpen}
@@ -1423,6 +1513,17 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                   accountId={mail.selectedAccountId ?? ""}
                   accounts={mail.accounts}
                   onSelectEvent={(event) => setSelectedEvent(event)}
+                  onEditEvent={(event) => {
+                    if (event.recurrence_rule || event.recurring_event_id) {
+                      setRecurringPrompt({ event, mode: "edit" });
+                      return;
+                    }
+                    setEditEvent(event);
+                    setShowCreateEvent(true);
+                  }}
+                  requestRecurringScope={(event, mode) =>
+                    new Promise((resolve) => setRecurringPrompt({ event, mode, resolve }))
+                  }
                   onCreateEvent={(summary) => {
                     setEditEvent(null);
                     setInitialEventSummary(summary || "");
@@ -1451,7 +1552,7 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
                 onToggleStar={handleToggleStar}
                 onBack={mail.clearSelectedEmail}
                 onDraftReply={(id, draft) => void handleDraftReply(id, draft)}
-                onPin={(id) => void handlePinEmail(id, true)}
+                onPin={pinEmail}
                 onSnooze={handleOpenSnooze}
                 onReminder={(id) => void handleSetReminder(id)}
                 onSendRequested={handleSendRequested}
@@ -1583,10 +1684,17 @@ function MailClientShell({ settings, density }: { readonly settings: UseSettings
         <RecurringScopeDialog
           open={true}
           mode={recurringPrompt.mode}
-          onCancel={() => setRecurringPrompt(null)}
-          onSelect={async (scope) => {
-            const { event, mode } = recurringPrompt;
+          onCancel={() => {
+            recurringPrompt.resolve?.(null);
             setRecurringPrompt(null);
+          }}
+          onSelect={async (scope) => {
+            const { event, mode, resolve } = recurringPrompt;
+            setRecurringPrompt(null);
+            if (resolve) {
+              resolve(scope);
+              return;
+            }
             if (mode === "delete") {
               try {
                 await api.deleteCalendarEvent(event.id, scope);
@@ -1769,12 +1877,12 @@ export function App({renderMailClient}: AppProps = {}) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background p-8">
         <section className="max-w-md space-y-4 text-center" role="status">
-          <h1 className="text-2xl font-semibold">Mail is turned off</h1>
+          <h1 className="text-2xl font-semibold">{t("app.mailDisabledTitle")}</h1>
           <p className="text-muted-foreground">
-            Enable Mail from the Features pane to access your accounts.
+            {t("app.mailDisabledMessage")}
           </p>
           <a className="text-primary underline" href="chrome://maho-settings/features">
-            Open Features settings
+            {t("app.openFeaturesSettings")}
           </a>
         </section>
       </main>
@@ -1785,9 +1893,9 @@ export function App({renderMailClient}: AppProps = {}) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-background p-8">
         <section className="max-w-md space-y-4 text-center" role="alert">
-          <h1 className="text-2xl font-semibold">Mail could not start</h1>
+          <h1 className="text-2xl font-semibold">{t("app.mailStartFailedTitle")}</h1>
           <p className="text-muted-foreground">
-            The Mail helper is unavailable. Retry after checking your profile settings.
+            {t("app.mailStartFailedMessage")}
           </p>
           <button
             className="rounded-md bg-primary px-4 py-2 text-primary-foreground"
@@ -1798,7 +1906,7 @@ export function App({renderMailClient}: AppProps = {}) {
               void refreshAccounts();
             }}
           >
-            Retry
+            {t("common.retry")}
           </button>
         </section>
       </main>

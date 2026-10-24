@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockToast = vi.fn();
@@ -16,6 +16,8 @@ vi.mock("../../../api", async (importOriginal) => {
 });
 
 import { AddressPopover } from "../AddressPopover";
+import { ConfirmProvider } from "../../ui/ConfirmDialog";
+import * as api from "../../../api";
 
 const mockWriteText = vi.fn().mockResolvedValue(undefined);
 Object.defineProperty(globalThis.navigator, "clipboard", {
@@ -26,9 +28,11 @@ Object.defineProperty(globalThis.navigator, "clipboard", {
 
 function renderPopover(props: Partial<React.ComponentProps<typeof AddressPopover>> = {}) {
   return render(
-    <AddressPopover address="foo@example.com" name="Foo Bar" {...props}>
-      <button type="button" data-testid="trigger">open</button>
-    </AddressPopover>,
+    <ConfirmProvider>
+      <AddressPopover address="foo@example.com" name="Foo Bar" {...props}>
+        <button type="button" data-testid="trigger">open</button>
+      </AddressPopover>
+    </ConfirmProvider>,
   );
 }
 
@@ -109,6 +113,20 @@ describe("AddressPopover", () => {
     const blockBtn = await screen.findByRole("button", { name: /block sender/i });
     fireEvent.click(blockBtn);
     expect(mockToast).toHaveBeenCalledWith("info", "Coming soon", expect.any(String));
+  });
+
+  it("asks for confirmation before creating an exact-match block rule", async () => {
+    const createRule = vi.spyOn(api, "createMailRule").mockResolvedValue({} as Awaited<ReturnType<typeof api.createMailRule>>);
+    vi.spyOn(api, "searchContacts").mockResolvedValue([]);
+    renderPopover({ address: "zap@example.com", accountId: "acc-1" });
+    fireEvent.click(screen.getByTestId("trigger"));
+    fireEvent.click(await screen.findByRole("button", { name: /block sender/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(createRule).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: /block sender/i }));
+    await waitFor(() => expect(createRule).toHaveBeenCalledWith(expect.objectContaining({
+      conditions: [{ field: "from", operator: "equals", value: "zap@example.com" }],
+    })));
   });
 
   it("renders all six stub action rows (Group / Priority / Show in Primary / Notifications / Block / Category)", async () => {

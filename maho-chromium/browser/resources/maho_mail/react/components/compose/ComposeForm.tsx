@@ -142,12 +142,83 @@ function buildQuoteHtml(
   const header = `<br><br><p>On ${escapeHtml(dateStr)}, ${escapeHtml(ctx.original_from)} wrote:</p>`;
   const rawBody = ctx.original_body_html ?? plainTextToHtml(ctx.original_body_text ?? "");
   const body = sanitizeEmailHtml(rawBody);
-  return header + `<blockquote>${body}</blockquote>`;
+  // data-maho-quote marks the quote so signature edits can find it after the
+  // rich-text editor re-serializes the body.
+  return header.replace("<p>", '<p data-maho-quote="true">') + `<blockquote data-maho-quote="true">${body}</blockquote>`;
 }
 
 function buildSignatureHtml(sig: Signature): string {
   const safeBody = sanitizeEmailHtml(sig.body_html);
   return `<br><br><div data-maho-signature="true" class="email-signature">--<br>${safeBody}</div>`;
+}
+
+/**
+ * The nodes of the blank-line separator that buildSignatureHtml/buildQuoteHtml
+ * emit directly before a marked block: raw `<br><br>`, or the `<p><br><br></p>`
+ * the editor normalizes it into. Returns [] when `node` is not preceded by one.
+ */
+function separatorBefore(node: Element): ChildNode[] {
+  const nodes: ChildNode[] = [];
+  let prev = node.previousSibling;
+  while (prev && prev.nodeType === Node.TEXT_NODE && !prev.textContent?.trim()) {
+    nodes.push(prev);
+    prev = prev.previousSibling;
+  }
+  if (
+    prev instanceof HTMLParagraphElement &&
+    !prev.textContent?.trim() &&
+    prev.children.length === 2 &&
+    [...prev.children].every((child) => child.tagName === "BR")
+  ) {
+    return [...nodes, prev];
+  }
+  const second = prev;
+  const first = second?.previousSibling ?? null;
+  if (second instanceof HTMLBRElement && first instanceof HTMLBRElement) {
+    return [...nodes, second, first];
+  }
+  return [];
+}
+
+/**
+ * Swaps the signature in editor HTML by its structural markers instead of
+ * exact string matching: once the rich-text editor normalizes the markup, the
+ * originally inserted signature/quote strings no longer match verbatim.
+ */
+export function replaceSignatureHtml(html: string, signatureHtml: string, fallbackQuoteHtml: string): string {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+  // Each marked block owns the separator emitted in front of it, so it is
+  // removed (signature) or moved (quote) together with the block; otherwise
+  // every swap leaves one more blank gap behind.
+  doc.body.querySelectorAll("[data-maho-signature]").forEach((node) => {
+    // A signature inside the quote belongs to the quoted sender (any mail
+    // sent from Maho carries the marker) and must be quoted verbatim.
+    if (node.closest("[data-maho-quote]")) return;
+    // Drafts saved before the quote header became an isolating editor node
+    // can hold the header inside the signature; it outlives the signature.
+    node.after(...[...node.querySelectorAll("[data-maho-quote]")].filter((quote) => !quote.parentElement?.closest("[data-maho-quote]")));
+    separatorBefore(node).forEach((sep) => sep.remove());
+    node.remove();
+  });
+  const quoteStart = doc.body.querySelector("[data-maho-quote]");
+  let userHtml: string;
+  let quoteHtml: string;
+  if (quoteStart) {
+    const tail = doc.createElement("div");
+    const quoteSeparator = separatorBefore(quoteStart).reverse();
+    let node: ChildNode | null = quoteSeparator[0] ?? quoteStart;
+    while (node) {
+      const next: ChildNode | null = node.nextSibling;
+      tail.appendChild(node);
+      node = next;
+    }
+    userHtml = doc.body.innerHTML;
+    quoteHtml = tail.innerHTML;
+  } else {
+    userHtml = fallbackQuoteHtml ? doc.body.innerHTML.replace(fallbackQuoteHtml, "") : doc.body.innerHTML;
+    quoteHtml = fallbackQuoteHtml;
+  }
+  return userHtml + signatureHtml + quoteHtml;
 }
 
 function buildSignatureText(sig: Signature): string {
@@ -243,7 +314,13 @@ export function ComposeForm({
   const [sendError, setSendError] = useState<string | null>(null);
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const [showSchedule, setShowSchedule] = useState(false);
-  const [loadingAttachments, setLoadingAttachments] = useState(forwardEmailUid !== undefined);
+  // A composition restored from a saved snapshot (Undo Send, a recovered
+  // pending send, a draft) already holds the user's final attachment list,
+  // forwarded files included and removed ones excluded; fetching the forward
+  // source again would duplicate or resurrect them.
+  const attachmentsAreRestored = initialBodyIsComplete && initialAttachments !== undefined;
+  const fetchesForwardedAttachments = forwardEmailUid !== undefined && !attachmentsAreRestored;
+  const [loadingAttachments, setLoadingAttachments] = useState(fetchesForwardedAttachments);
   const [attachmentLoadError, setAttachmentLoadError] = useState<string | null>(null);
   const [lastSavedSnapshot, setLastSavedSnapshot] = useState<DraftSnapshot | null>(null);
 
@@ -370,19 +447,38 @@ export function ComposeForm({
     accounts,
   ]);
 
+  const [attachmentLoadAttempt, setAttachmentLoadAttempt] = useState(0);
+  // The exact attachment objects the last forwarded-attachment load added.
+  // ComposeAttachment carries no source id, so object identity is what tells
+  // a forwarded entry apart from a user's own file with the same filename.
+  const forwardedAttachmentsRef = useRef<ReadonlySet<ComposeAttachment>>(new Set());
   useEffect(() => {
     if (initialAttachments) attach.setAttachments(initialAttachments);
-    if (forwardEmailUid === undefined || !forwardFolderId || !effectiveAccountId) return;
+  }, [initialAttachments]);
+  useEffect(() => {
+    if (!fetchesForwardedAttachments || forwardEmailUid === undefined || !forwardFolderId || !effectiveAccountId) return;
     let cancelled = false;
     setLoadingAttachments(true);
+    setAttachmentLoadError(null);
     void api.getForwardedAttachments(effectiveAccountId, forwardEmailUid, forwardFolderId)
-      .then((files) => { if (!cancelled) attach.setAttachments(files); })
+      .then((files) => {
+        if (cancelled) return;
+        // Merge instead of replacing: on Retry the user may already have
+        // attached files of their own while the error was showing. Only the
+        // entries a previous load added are replaced, never by filename.
+        const previousForwarded = forwardedAttachmentsRef.current;
+        forwardedAttachmentsRef.current = new Set(files);
+        attach.setAttachments((current) => [
+          ...current.filter((existing) => !previousForwarded.has(existing)),
+          ...files,
+        ]);
+      })
       .catch((error) => {
-        if (!cancelled) setAttachmentLoadError(error instanceof Error ? error.message : "Failed to load forwarded attachments");
+        if (!cancelled) setAttachmentLoadError(error instanceof Error ? error.message : t("compose.failedToLoadAttachments"));
       })
       .finally(() => { if (!cancelled) setLoadingAttachments(false); });
     return () => { cancelled = true; };
-  }, [effectiveAccountId, forwardEmailUid, forwardFolderId, initialAttachments]);
+  }, [effectiveAccountId, forwardEmailUid, forwardFolderId, fetchesForwardedAttachments, attachmentLoadAttempt]);
 
   // Derived dirty tracking: compare actual user text (excluding signatures/quotes) with saved baseline
   const baselineTo = lastSavedSnapshot ? lastSavedSnapshot.to : (initialTo ?? "");
@@ -503,18 +599,15 @@ export function ComposeForm({
     const quoteHtml = buildQuoteHtml(replyTo, forwardFrom);
 
     let cleanText = body.replace(quoteText, "");
-    let cleanHtml = bodyHtml.replace(quoteHtml, "");
 
     if (prevSig) {
       cleanText = cleanText.replace(buildSignatureText(prevSig), "");
-      cleanHtml = cleanHtml.replace(buildSignatureHtml(prevSig), "");
     }
 
     const addedText = newSig ? buildSignatureText(newSig) : "";
-    const addedHtml = newSig ? buildSignatureHtml(newSig) : "";
 
     setBody(cleanText + addedText + quoteText);
-    setBodyHtml(cleanHtml + addedHtml + quoteHtml);
+    setBodyHtml(replaceSignatureHtml(bodyHtml, newSig ? buildSignatureHtml(newSig) : "", quoteHtml));
   };
 
   const handleApplyTemplate = async (tpl: EmailTemplate) => {
@@ -683,6 +776,12 @@ export function ComposeForm({
 
     if (scheduledAt) {
       await api.scheduleSend({ ...request, scheduled_at: scheduledAt });
+      // The scheduled copy is now the source of truth; leaving the autosaved
+      // draft behind lets it be sent a second time from Drafts.
+      const scheduledDraftId = draft.draftIdRef.current;
+      if (scheduledDraftId) {
+        void api.deleteEmail(scheduledDraftId).catch(() => {});
+      }
       toast("success", t("compose.scheduled"));
       onClose();
       return;
@@ -912,8 +1011,29 @@ export function ComposeForm({
           paddingBottom: mobile && keyboardVisible ? `${keyboardHeight + 16}px` : "16px",
         }}
       >
-        {attachmentLoadError && <div role="alert">{attachmentLoadError}</div>}
-        {loadingAttachments && <div role="status">Loading attachments...</div>}
+        {attachmentLoadError && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-3 text-xs leading-5 text-destructive animate-fade-in"
+          >
+            <span className="min-w-0 flex-1">{attachmentLoadError}</span>
+            <button
+              type="button"
+              onClick={() => setAttachmentLoadAttempt((n) => n + 1)}
+              className="rounded-md px-2 py-1 font-medium hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {t("common.retry")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setAttachmentLoadError(null)}
+              className="rounded-md px-2 py-1 font-medium hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {t("compose.sendWithoutAttachments")}
+            </button>
+          </div>
+        )}
+        {loadingAttachments && <div role="status" className="text-xs text-muted-foreground">{t("compose.loadingAttachments")}</div>}
         {sendError && (
           <div
             id={sendErrorId}
@@ -1092,10 +1212,11 @@ export function ComposeForm({
                   <Paperclip size={12} className="text-muted-foreground" />
                   <span className="max-w-[150px] truncate">{file.filename}</span>
                   <button
-                    onClick={() => attach.removeAttachment(file.filename)}
+                    type="button"
+                    onClick={() => attach.removeAttachment(idx)}
                     className="mail-pressable flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground"
-                    title={t("compose.removeAttachment")}
-                    aria-label={t("compose.removeAttachment")}
+                    title={t("compose.removeAttachment", { filename: file.filename })}
+                    aria-label={t("compose.removeAttachment", { filename: file.filename })}
                   >
                     <X size={12} />
                   </button>
@@ -1112,7 +1233,7 @@ export function ComposeForm({
           {/* Send Buttons */}
           <button
             onClick={() => void handleSend()}
-            disabled={sending || attach.isReading || !effectiveAccountId}
+            disabled={sending || attach.isReading || !effectiveAccountId || loadingAttachments || !!attachmentLoadError}
             className="mail-pressable flex h-10 items-center gap-1.5 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:opacity-50"
           >
             {sending ? <Loader2 size={14} className="animate-spin" /> : null}
@@ -1133,7 +1254,7 @@ export function ComposeForm({
 
           <button
             onClick={() => setShowSchedule(!showSchedule)}
-            disabled={sending || attach.isReading || !effectiveAccountId}
+            disabled={sending || attach.isReading || !effectiveAccountId || loadingAttachments || !!attachmentLoadError}
             className="mail-pressable flex h-10 items-center gap-1.5 rounded-lg px-3 text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             aria-label={t("compose.schedule")}
             title={t("compose.schedule")}

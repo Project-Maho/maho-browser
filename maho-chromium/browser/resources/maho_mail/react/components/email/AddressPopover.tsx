@@ -14,6 +14,7 @@ import {
 
 import { useClipboard } from "../../hooks/useClipboard";
 import { useToast } from "../ui/Toast";
+import { useConfirm } from "../ui/ConfirmDialog";
 import { Avatar } from "../ui/Avatar";
 import { Switch } from "../ui/Switch";
 import {
@@ -77,6 +78,7 @@ export function AddressPopover({
   const [vipLoading, setVipLoading] = useState(false);
   const { copy } = useClipboard();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const { t } = useTranslation();
 
   const close = () => setOpen(false);
@@ -130,11 +132,21 @@ export function AddressPopover({
       return;
     }
     close();
+    // The rule deletes every future message from this sender, so ask first.
+    const ok = await confirm({
+      title: t("email.blockSenderTitle"),
+      message: t("email.blockSenderConfirm", { address }),
+      confirmLabel: t("email.blockSender"),
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await api.createMailRule({
         account_id: accountId,
         name: `Block ${address}`,
-        conditions: [{ field: "from", operator: "contains", value: address }],
+        // Exact match: "contains" would also catch other addresses that
+        // merely include this one as a substring.
+        conditions: [{ field: "from", operator: "equals", value: address }],
         actions: [{ type: "delete" }],
       });
       toast("success", t("email.senderBlocked"), address);

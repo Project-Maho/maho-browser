@@ -9,18 +9,19 @@ interface ProviderStepProps {
   onSelect: (provider: ProviderId) => void;
 }
 
+// name/description are onboarding.* locale keys.
 const PROVIDERS: { id: ProviderId; name: string; description: string; icon: React.ReactNode }[] = [
-  { id: 'gmail', name: 'Gmail', description: 'Sign in with Google', icon: <GmailIcon size={28} /> },
-  { id: 'outlook', name: 'Outlook', description: 'Sign in with Microsoft', icon: <OutlookIcon size={28} /> },
-  { id: 'yahoo', name: 'Yahoo Mail', description: 'App password required', icon: <YahooIcon size={28} /> },
-  { id: 'icloud', name: 'iCloud Mail', description: 'App password required', icon: <ICloudIcon size={28} /> },
-  { id: 'fastmail', name: 'Fastmail', description: 'App password required', icon: <FastmailIcon size={28} /> },
-  { id: 'zoho', name: 'Zoho Mail', description: 'App password required', icon: <ZohoIcon size={28} /> },
-  { id: 'aol', name: 'AOL', description: 'App password required', icon: <AolIcon size={28} /> },
-  { id: 'gmx', name: 'GMX', description: 'Free email service', icon: <GmxIcon size={28} /> },
-  { id: 'yandex', name: 'Yandex', description: 'App password required', icon: <YandexIcon size={28} /> },
-  { id: 'naver', name: 'Naver', description: 'Enable IMAP and use an app password', icon: <NaverIcon size={28} /> },
-  { id: 'other', name: 'Other', description: 'IMAP/SMTP manual setup', icon: <OtherProviderIcon size={28} /> },
+  { id: 'gmail', name: 'providerGmail', description: 'providerGmailDesc', icon: <GmailIcon size={28} /> },
+  { id: 'outlook', name: 'providerOutlook', description: 'providerOutlookDesc', icon: <OutlookIcon size={28} /> },
+  { id: 'yahoo', name: 'providerYahoo', description: 'providerAppPasswordDesc', icon: <YahooIcon size={28} /> },
+  { id: 'icloud', name: 'providerIcloud', description: 'providerAppPasswordDesc', icon: <ICloudIcon size={28} /> },
+  { id: 'fastmail', name: 'providerFastmail', description: 'providerAppPasswordDesc', icon: <FastmailIcon size={28} /> },
+  { id: 'zoho', name: 'providerZoho', description: 'providerAppPasswordDesc', icon: <ZohoIcon size={28} /> },
+  { id: 'aol', name: 'providerAol', description: 'providerAppPasswordDesc', icon: <AolIcon size={28} /> },
+  { id: 'gmx', name: 'providerGmx', description: 'providerGmxDesc', icon: <GmxIcon size={28} /> },
+  { id: 'yandex', name: 'providerYandex', description: 'providerAppPasswordDesc', icon: <YandexIcon size={28} /> },
+  { id: 'naver', name: 'providerNaver', description: 'providerNaverDesc', icon: <NaverIcon size={28} /> },
+  { id: 'other', name: 'providerOther', description: 'providerOtherDesc', icon: <OtherProviderIcon size={28} /> },
 ];
 
 const PRIMARY_PROVIDER_IDS: ProviderId[] = ['gmail', 'outlook', 'yahoo', 'icloud', 'other'];
@@ -55,8 +56,8 @@ export function ProviderStep({ onSelect }: ProviderStepProps) {
           >
             <div className="shrink-0">{provider.icon}</div>
             <div>
-              <div className="text-sm font-medium text-foreground">{provider.name}</div>
-              <div className="text-xs text-muted-foreground">{provider.description}</div>
+              <div className="text-sm font-medium text-foreground">{t(`onboarding.${provider.name}`)}</div>
+              <div className="text-xs text-muted-foreground">{t(`onboarding.${provider.description}`)}</div>
             </div>
           </button>
         ))}
@@ -71,7 +72,7 @@ export function ProviderStep({ onSelect }: ProviderStepProps) {
             aria-expanded={showAllProviders}
           >
             <ChevronDown size={16} />
-            More providers
+            {t('onboarding.moreProviders')}
           </Button>
         )}
 
@@ -85,7 +86,7 @@ export function ProviderStep({ onSelect }: ProviderStepProps) {
             aria-expanded={showAllProviders}
           >
             <ChevronUp size={16} />
-            Show fewer
+            {t('onboarding.showFewer')}
           </Button>
         )}
       </div>

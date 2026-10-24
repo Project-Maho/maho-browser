@@ -70,6 +70,30 @@ import dev.maho.browser.ui.webview.AgenticBrowsingWebViewRegistry
  * user leaves private mode or closes the last tab in it, and the first private WebView
  * of a process wipes it again (covers a crash or kill that skipped [endSession]).
  */
+/**
+ * Applies the user's privacy and media settings from core to [webView]. Runs at
+ * creation and again whenever those settings change while the WebView is alive.
+ */
+internal fun applyUserWebSettings(
+    webView: WebView,
+    isIncognito: Boolean,
+    privateProfileBound: Boolean,
+    cookieManager: CookieManager,
+) {
+    val browserSettings = dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()
+    val privacySettings = browserSettings?.privacy
+    // An unbound private WebView shares the default jar, so it never takes
+    // third-party cookies; otherwise the user's privacy setting decides.
+    val blockThirdPartyCookies = (isIncognito && !privateProfileBound) ||
+        privacySettings?.blockThirdPartyCookies != false
+    cookieManager.setAcceptThirdPartyCookies(webView, !blockThirdPartyCookies)
+    webView.settings.safeBrowsingEnabled = privacySettings?.safeBrowsingEnabled != false
+    // WebView can only gate all media on a gesture, so both block policies
+    // require one; Allow lets pages autoplay.
+    webView.settings.mediaPlaybackRequiresUserGesture =
+        browserSettings?.general?.autoplayPolicy != dev.maho.browser.models.AutoplayPolicy.Allow
+}
+
 internal object PrivateBrowsingProfile {
     private const val PROFILE_NAME = "maho-private"
     private var wipedThisProcess = false
@@ -133,6 +157,7 @@ fun WebViewHost(
     isIncognito: Boolean = false,
     onNewTabRequested: ((String) -> Unit)? = null,
     capturePreviewSignal: Int = 0,
+    webSettingsRevision: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -258,12 +283,9 @@ fun WebViewHost(
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = persistSiteStorage
             settings.databaseEnabled = persistSiteStorage
-            if (isIncognito && !privateProfileBound) {
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
-            }
+            applyUserWebSettings(this, isIncognito, privateProfileBound, downloadCookies)
             settings.setSupportMultipleWindows(true)
             settings.javaScriptCanOpenWindowsAutomatically = true
-            settings.mediaPlaybackRequiresUserGesture = true
             settings.setGeolocationEnabled(true)
             settings.setSupportZoom(true)
             settings.builtInZoomControls = true
@@ -282,7 +304,11 @@ fun WebViewHost(
                 onUrlChanged = onUrlChanged,
                 onLoadingChanged = onLoadingChanged,
                 onNavigationStateChanged = onNavigationStateChanged,
-                onError = onError,
+                // A renderer crash already shows the crash view below; reporting it as a
+                // page load error too would stack a second error screen on top.
+                onError = { code, description, failingUrl ->
+                    if (!isRendererCrashed) onError(code, description, failingUrl)
+                },
                 isSourceWhitelisted = { host ->
                     dev.maho.browser.ui.settings.WhitelistManager
                         .getWhitelist(applicationContext)
@@ -435,7 +461,7 @@ fun WebViewHost(
             val restored = !isIncognito && requestedUrl == null &&
                 WebViewStateStore.restore(tabId, this)
             if (!restored && initialUrl.isNotBlank()) {
-                loadUrl(initialUrl)
+                loadUrl(initialUrl, doNotTrackHeaders())
             }
         }
     }
@@ -497,6 +523,19 @@ fun WebViewHost(
         }
     }
 
+    // Privacy/General changes made while this tab stays open apply to it too, not only
+    // to WebViews created afterwards. Revision 0 is the creation pass applied above.
+    LaunchedEffect(webView, webSettingsRevision) {
+        if (webSettingsRevision == 0) return@LaunchedEffect
+        val privateProfileBound = isIncognito && PrivateBrowsingProfile.isSupported
+        val cookies = if (privateProfileBound) {
+            WebViewCompat.getProfile(webView).cookieManager
+        } else {
+            CookieManager.getInstance()
+        }
+        applyUserWebSettings(webView, isIncognito, privateProfileBound, cookies)
+    }
+
     LaunchedEffect(isDesktopMode) {
         webView.settings.userAgentString = if (isDesktopMode) {
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
@@ -521,7 +560,7 @@ fun WebViewHost(
         }
         if (shouldLoadRequestedUrl(target, webView.url, lastRequestedUrl)) {
             lastRequestedUrl = target
-            webView.loadUrl(target)
+            webView.loadUrl(target, doNotTrackHeaders())
         }
     }
 
@@ -621,6 +660,17 @@ internal fun captureTabPreview(webView: WebView, tabId: TabId) {
 }
 
 private const val PREVIEW_MAX_WIDTH_PX = 360
+
+/**
+ * WebView has no global Do Not Track switch, so the header is sent on the
+ * navigations the shell starts (initial and explicitly requested loads).
+ */
+private fun doNotTrackHeaders(): Map<String, String> =
+    if (dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()?.privacy?.doNotTrack == true) {
+        mapOf("DNT" to "1")
+    } else {
+        emptyMap()
+    }
 
 internal fun android.graphics.Bitmap.isBlank(): Boolean {
     // Sample a grid rather than one centre column: a real page is often uniform

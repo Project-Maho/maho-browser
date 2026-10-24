@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { fromZonedTime } from "date-fns-tz";
+import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
+import { parseAllDayDate } from "../../utils/calendarDate";
 import { TimezoneConverter } from "./TimezoneConverter";
 import { SchedulingAssistant } from "./SchedulingAssistant";
 import {
@@ -30,14 +31,13 @@ interface CreateEventDialogProps {
   initialSummary?: string;
 }
 
-function toDateTimeLocal(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+// Wall-clock time in the event's own zone; submit re-reads it with fromZonedTime(…, timeZone).
+function toDateTimeLocal(iso: string, timeZone: string): string {
+  return formatInTimeZone(new Date(iso), timeZone, "yyyy-MM-dd'T'HH:mm");
 }
 
 function toDateLocal(iso: string): string {
-  const d = new Date(iso);
+  const d = parseAllDayDate(iso);
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
@@ -115,8 +115,9 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
     if (editEvent) {
       setSummary(editEvent.summary);
       setDescription(editEvent.description ?? "");
-      setDtstart(editEvent.all_day ? toDateLocal(editEvent.dtstart) : toDateTimeLocal(editEvent.dtstart));
-      setDtend(editEvent.dtend ? (editEvent.all_day ? toDateLocal(editEvent.dtend) : toDateTimeLocal(editEvent.dtend)) : "");
+      const eventTz = editEvent.start_tz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      setDtstart(editEvent.all_day ? toDateLocal(editEvent.dtstart) : toDateTimeLocal(editEvent.dtstart, eventTz));
+      setDtend(editEvent.dtend ? (editEvent.all_day ? toDateLocal(editEvent.dtend) : toDateTimeLocal(editEvent.dtend, eventTz)) : "");
       setLocation(editEvent.location ?? "");
       setAllDay(editEvent.all_day);
       setAddMeet(false);
@@ -134,7 +135,7 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
       setColor(editEvent.color ?? "");
       setSelectedCategory(editEvent.category ?? "");
       setTravelTime(editEvent.travel_time_minutes ?? 0);
-      setEventType("default");
+      setEventType(editEvent.event_type || "default");
       setTimeZone(editEvent.start_tz || Intl.DateTimeFormat().resolvedOptions().timeZone);
 
       if (editEvent.reminders_json) {
@@ -306,8 +307,9 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
     setQueryingFreeBusy(true);
     try {
       const dateOnly = dtstart.split("T")[0] || new Date().toISOString().split("T")[0];
-      const timeMin = `${dateOnly}T00:00:00Z`;
-      const timeMax = `${dateOnly}T23:59:59Z`;
+      // Query the selected day in the event's zone, matching the local-hour slots.
+      const timeMin = fromZonedTime(`${dateOnly}T00:00:00`, timeZone).toISOString();
+      const timeMax = fromZonedTime(`${dateOnly}T23:59:59`, timeZone).toISOString();
       const data = await api.googleCalendarFreeBusy(accountId, emailsList, timeMin, timeMax);
       setFreeBusyData(data);
       setActiveTab("findTime");
@@ -397,7 +399,7 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
                 <ul className="list-disc list-inside">
                   {conflicts.map(c => (
                     <li key={c.id} className="truncate">
-                      <strong>{c.summary}</strong> ({c.dtstart.substring(11, 16)} - {c.dtend?.substring(11, 16)})
+                      <strong>{c.summary}</strong> ({formatInTimeZone(new Date(c.dtstart), timeZone, "HH:mm")}{c.dtend ? ` - ${formatInTimeZone(new Date(c.dtend), timeZone, "HH:mm")}` : ""})
                     </li>
                   ))}
                 </ul>
@@ -566,8 +568,8 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
                     : 60
                 }
                 onPickSlot={(startIso, endIso) => {
-                  setDtstart(toDateTimeLocal(startIso));
-                  setDtend(toDateTimeLocal(endIso));
+                  setDtstart(toDateTimeLocal(startIso, timeZone));
+                  setDtend(toDateTimeLocal(endIso, timeZone));
                 }}
               />
             )}
@@ -588,6 +590,7 @@ export function CreateEventDialog({ isOpen, onClose, accountId, editEvent, onEve
                       <button
                         type="button"
                         onClick={() => setRemindersList(prev => prev.filter((_, i) => i !== idx))}
+                        aria-label={t("calendar.removeReminder", { label })}
                         className="hover:text-destructive text-muted-foreground transition-colors"
                       >
                         <X size={10} />

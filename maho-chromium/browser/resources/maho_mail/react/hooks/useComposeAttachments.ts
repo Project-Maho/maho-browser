@@ -21,7 +21,8 @@ export interface UseComposeAttachmentsReturn {
   isReading: boolean;
   readingRef: MutableRefObject<boolean>;
   handleFileSelected: (files: FileList | null) => Promise<void>;
-  removeAttachment: (filename: string) => void;
+  /** Removes by list index; a filename removes the first match (duplicates are possible). */
+  removeAttachment: (target: number | string) => void;
   clearAttachments: () => void;
   handleDragEnter: (e: React.DragEvent<HTMLDivElement>) => void;
   handleDragOver: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -124,10 +125,10 @@ export function useComposeAttachments({
     dragDepthRef.current = 0;
   }, []);
 
-  const removeAttachment = useCallback((filename: string) => {
+  const removeAttachment = useCallback((target: number | string) => {
     setAttachments((prev) => {
-      const idx = prev.findIndex((a) => a.filename === filename);
-      if (idx === -1) return prev;
+      const idx = typeof target === "number" ? target : prev.findIndex((a) => a.filename === target);
+      if (idx < 0 || idx >= prev.length) return prev;
       return prev.filter((_, i) => i !== idx);
     });
   }, []);
@@ -136,7 +137,7 @@ export function useComposeAttachments({
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
       if (readingRef.current) {
-        toast("error", "Please wait for attachments to finish loading.");
+        toast("error", t("compose.attachmentsStillLoading"));
         return;
       }
 

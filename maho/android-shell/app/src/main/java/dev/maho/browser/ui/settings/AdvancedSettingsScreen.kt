@@ -83,6 +83,12 @@ fun AdvancedSettingsScreen(
                 hardwareAcceleration = it
                 BridgeSettings.updateAdvancedSettings(AdvancedSettingsUpdate(hardwareAcceleration = it))
             }
+            Text(
+                "Android always renders pages with the GPU. This setting applies to your desktop browser.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
             SectionHeader("Experimental")
@@ -90,6 +96,12 @@ fun AdvancedSettingsScreen(
                 experimentalFeatures = it
                 BridgeSettings.updateAdvancedSettings(AdvancedSettingsUpdate(experimentalFeatures = it))
             }
+            Text(
+                "Android has no experimental features yet. This setting applies to your desktop browser.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
             if (experimentalFeatures) {
                 Text(
                     "Experimental features may be unstable. Use at your own risk.",

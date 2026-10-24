@@ -41,6 +41,32 @@ object SystemDownloadTracker {
         (context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager)?.remove(systemId)
     }
 
+    /**
+     * Reads byte counts for in-flight transfers from DownloadManager, records the
+     * received bytes in core, and returns (received, total) per core download id.
+     * DownloadManager sends no progress broadcasts, so a visible list has to ask.
+     */
+    fun pollProgress(context: Context): Map<String, Pair<Long, Long>> {
+        if (coreIdBySystemId.isEmpty()) return emptyMap()
+        val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return emptyMap()
+        val query = DownloadManager.Query().setFilterById(*coreIdBySystemId.keys.toLongArray())
+        val progress = mutableMapOf<String, Pair<Long, Long>>()
+        dm.query(query)?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+            val receivedColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+            val totalColumn = cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+            while (cursor.moveToNext()) {
+                val coreId = coreIdBySystemId[cursor.getLong(idColumn)] ?: continue
+                val received = cursor.getLong(receivedColumn)
+                // DownloadManager reports -1 until the server sends a length.
+                val total = cursor.getLong(totalColumn).coerceAtLeast(0L)
+                MahoBridge.updateDownloadProgress(coreId, received, total)
+                progress[coreId] = received to total
+            }
+        }
+        return progress
+    }
+
     private fun register(context: Context) {
         if (registered) return
         synchronized(this) {

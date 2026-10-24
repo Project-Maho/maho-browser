@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   signInWithOAuth2: vi.fn<(provider: string) => Promise<{ account_id: string; email: string }>>(),
   syncFolders: vi.fn<(accountId: string) => Promise<readonly unknown[]>>(),
   listAccounts: vi.fn<() => Promise<{ id: string }[]>>(),
+  cancelOAuth: vi.fn<(state: string) => Promise<boolean>>(),
 }));
 
 vi.mock("../../../../api", () => apiMocks);
@@ -43,6 +44,32 @@ describe("OAuthStep", () => {
     apiMocks.listAccounts.mockResolvedValue([{ id: "account-1" }]);
     apiMocks.signInWithOAuth2.mockResolvedValue({ account_id: "account-1", email: "user@example.com" });
     apiMocks.syncFolders.mockResolvedValue([]);
+    apiMocks.cancelOAuth.mockResolvedValue(true);
+  });
+
+  it("cancels the backend OAuth flow with its state when the user cancels", async () => {
+    render(<OAuthStep provider="gmail" onBack={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with Google" }));
+    await waitFor(() => expect(apiMocks.startOAuth2).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(apiMocks.cancelOAuth).toHaveBeenCalledWith("state_from_cpp");
+  });
+
+  it("cancels the pending OAuth flow on Back and on unmount", async () => {
+    const onBack = vi.fn();
+    const { unmount } = render(<OAuthStep provider="gmail" onBack={onBack} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with Google" }));
+    await waitFor(() => expect(apiMocks.startOAuth2).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("Back"));
+    expect(onBack).toHaveBeenCalled();
+    expect(apiMocks.cancelOAuth).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(apiMocks.cancelOAuth).toHaveBeenCalledTimes(1);
   });
 
   it("renders sign in with Google for gmail provider", () => {
@@ -95,6 +122,10 @@ describe("OAuthStep", () => {
   it("advances via onSuccess when accounts-changed fires after browser approval", async () => {
     const { listen } = await import("../../../../events.js");
     const onSuccess = vi.fn();
+    // Snapshot before sign-in has the existing account; the new one appears after approval.
+    apiMocks.listAccounts
+      .mockResolvedValueOnce([{ id: "existing" }])
+      .mockResolvedValue([{ id: "existing" }, { id: "account-1" }]);
     render(<OAuthStep provider="gmail" onBack={vi.fn()} onSuccess={onSuccess} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in with Google" }));

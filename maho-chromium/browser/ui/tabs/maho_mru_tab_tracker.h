@@ -39,8 +39,9 @@ class MahoMruTabTracker : public TabStripModelObserver {
 
   // Filters GetMruList() to entries whose Maho space matches |space_id|.
   // Requires the MahoCore singleton to be initialized; if it is not or if
-  // the FFI payload cannot be parsed, this returns the unfiltered
-  // GetMruList() as a graceful fallback.
+  // the FFI payload cannot be parsed, space membership is unknown and this
+  // returns an empty list (never the global list, which would cross spaces).
+  // An empty |space_id| returns the unfiltered GetMruList().
   //
   // The tab->space map is cached to avoid repeated FFI round-trips and JSON
   // parses on rapid Ctrl+Tab presses.  The cache is invalidated on any

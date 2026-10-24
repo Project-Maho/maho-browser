@@ -28,7 +28,23 @@ enum class SyncCycleOutcome {
 data class SyncCycleResult(
     val outcome: SyncCycleOutcome,
     val error: String? = null,
+    /** Non-null when sync is paused until the user enters the recovery phrase. */
+    val recoveryRequirement: SyncRecoveryRequirement? = null,
 )
+
+/**
+ * Persisted "enter your recovery phrase" pause. While a requirement is set the
+ * transport never reaches the relay, and nothing generates a new seed.
+ */
+interface SyncRecoveryGate {
+    fun current(): SyncRecoveryRequirement?
+    fun require(requirement: SyncRecoveryRequirement)
+}
+
+private object DefaultSyncRecoveryGate : SyncRecoveryGate {
+    override fun current(): SyncRecoveryRequirement? = RelaySessionStore.loadSyncRecoveryRequirement()
+    override fun require(requirement: SyncRecoveryRequirement) = SyncManager.requireRecoveryPhrase(requirement)
+}
 
 /**
  * Hands a refreshed access token to core. Core's SignIn handler rebuilds the
@@ -50,6 +66,7 @@ class SyncTransport(
     private val bridgeAdapter: SyncBridgeAdapter = DefaultSyncBridgeAdapter(),
     private val authClient: RelayAuthClient = RelayAuthClient(),
     private val sessionPersistence: RelaySessionPersistence = DefaultRelaySessionPersistence,
+    private val recoveryGate: SyncRecoveryGate = DefaultSyncRecoveryGate,
     private val reauthenticateCore: (RelaySession) -> Unit = { session ->
         reauthenticateCoreAfterRefresh(
             session = session,
@@ -94,6 +111,9 @@ class SyncTransport(
     private fun runCycleLocked(): SyncCycleResult {
         val initialSession = sessionPersistence.load()
             ?: return finish(SyncCycleOutcome.AUTH_FAILURE, "Sign in to enable sync")
+        recoveryGate.current()?.let { requirement ->
+            return finish(SyncCycleOutcome.PERMANENT_FAILURE, requirement.message, requirement)
+        }
         val roomId = bridgeAdapter.getSyncRoomId()?.takeIf(::isValidRoomId)
             ?: return finish(SyncCycleOutcome.PERMANENT_FAILURE, "Join sync with a recovery phrase first")
         val baseUrl = initialSession.serverUrl
@@ -134,6 +154,15 @@ class SyncTransport(
             }
             finish(SyncCycleOutcome.TRANSIENT_FAILURE, "Sync pull exceeded the bounded page budget")
         } catch (error: RelayApiException) {
+            if (error.isRoomRetired) {
+                // The account switched to client-held keys: pause until the
+                // user enters the recovery phrase. The requeued lease stays
+                // durable in core for the account's new room.
+                val requirement = SyncRecoveryRequirement.ROOM_RETIRED
+                runCatching { recoveryGate.require(requirement) }
+                    .onFailure { Log.w(TAG, "Unable to persist recovery requirement: ${it.message}") }
+                return finish(SyncCycleOutcome.PERMANENT_FAILURE, requirement.message, requirement)
+            }
             val outcome = when {
                 error.code == 401 || error.code == 403 -> SyncCycleOutcome.AUTH_FAILURE
                 error.code == 408 || error.code == 429 || error.code >= 500 -> SyncCycleOutcome.TRANSIENT_FAILURE
@@ -240,11 +269,15 @@ class SyncTransport(
         if (cancelled) throw IOException("Sync cycle cancelled")
     }
 
-    private fun finish(outcome: SyncCycleOutcome, error: String? = null): SyncCycleResult {
+    private fun finish(
+        outcome: SyncCycleOutcome,
+        error: String? = null,
+        recoveryRequirement: SyncRecoveryRequirement? = null,
+    ): SyncCycleResult {
         val kind = if (outcome == SyncCycleOutcome.SUCCESS) "synced" else "error"
         runCatching { bridgeAdapter.reportTransportState(SyncTransportStateReport(kind, error)) }
             .onFailure { Log.w(TAG, "Unable to report transport state: ${it.message}") }
-        return SyncCycleResult(outcome, error)
+        return SyncCycleResult(outcome, error, recoveryRequirement)
     }
 
     private fun isValidRoomId(roomId: String): Boolean =

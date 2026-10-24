@@ -153,12 +153,14 @@ class RelayAuthClient(
         accessToken: String,
         bootstrap: RelaySyncBootstrap,
     ): RelaySyncBootstrap {
+        val seed = bootstrap.seed?.takeIf { !bootstrap.isClientHeld && it.isNotBlank() }
+            ?: throw IOException("A client-held Sync account never uploads a seed")
         val body = json.encodeToString(
             RelaySyncBootstrapRequest.serializer(),
             RelaySyncBootstrapRequest(
-                version = bootstrap.version,
+                version = bootstrap.version ?: 1,
                 roomId = bootstrap.roomId,
-                seed = bootstrap.seed,
+                seed = seed,
             ),
         )
             .toRequestBody(JSON_MEDIA_TYPE)
@@ -326,4 +328,7 @@ class RelayAuthClient(
 class RelayApiException(
     val code: Int,
     message: String,
-) : IOException(message)
+) : IOException(message) {
+    /** `410 room_retired`: the account switched to client-held keys. */
+    val isRoomRetired: Boolean = isRoomRetiredResponse(code, message)
+}

@@ -162,6 +162,16 @@ fun SyncSettingsScreen(
             }
         }
 
+        // Client-held account (bootstrap key_mode) or 410 room_retired: sync
+        // is paused until the recovery phrase is entered below.
+        SyncManager.recoveryRequirement?.let { requirement ->
+            if (session != null) {
+                syncStatus = SyncUiStatus.Error
+                syncStatusDetail = requirement.message
+                syncError = requirement.message
+            }
+        }
+
         val currentDevices = BridgeSync.getConnectedDevices()
         devices.clear()
         devices.addAll(currentDevices)
@@ -528,9 +538,21 @@ fun SyncSettingsScreen(
 
                     Button(
                         onClick = {
-                            val res = BridgeSync.joinSync(recoveryPhraseInput)
-                            joinResult = if (res != null) "Joined successfully" else "Failed to join"
-                            refresh()
+                            val phrase = recoveryPhraseInput.trim()
+                            scope.launch {
+                                val res = withContext(Dispatchers.IO) { BridgeSync.joinSync(phrase) }
+                                // Core answers {"success":true} only for a valid phrase.
+                                if (BridgeSync.bootstrapConfigured(res)) {
+                                    recoveryPhraseInput = ""
+                                    joinResult = "Joined; verifying the phrase with your account…"
+                                    // Sync stays paused until the relay confirms this
+                                    // phrase derives the account's room.
+                                    SyncManager.recoveryPhraseJoined()
+                                } else {
+                                    joinResult = "Failed to join"
+                                }
+                                refresh()
+                            }
                         },
                         enabled = recoveryPhraseInput.isNotBlank(),
                         shape = RoundedCornerShape(10.dp),

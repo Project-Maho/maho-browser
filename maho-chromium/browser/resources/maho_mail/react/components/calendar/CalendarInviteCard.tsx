@@ -6,6 +6,7 @@ import type { CalendarEvent } from "../../types";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import { useToast } from "../ui/Toast";
+import { parseAllDayDate } from "../../utils/calendarDate";
 
 interface CalendarInviteCardProps {
   emailId: string;
@@ -32,7 +33,7 @@ export function hasCalendarInviteContent(bodyText: string | null, bodyHtml: stri
 }
 
 function formatDateTime(iso: string, allDay: boolean): string {
-  const date = new Date(iso);
+  const date = parseAllDayDate(iso);
 
   if (allDay) {
     return date.toLocaleDateString(undefined, {
@@ -59,6 +60,8 @@ export function CalendarInviteCard({ emailId, accountId, bodyText, bodyHtml }: C
   const { toast } = useToast();
   const [event, setEvent] = useState<CalendarEvent | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadingRsvp, setLoadingRsvp] = useState<string | null>(null);
   const hasInvite = useMemo(() => hasCalendarInviteContent(bodyText, bodyHtml), [bodyText, bodyHtml]);
 
@@ -73,13 +76,16 @@ export function CalendarInviteCard({ emailId, accountId, bodyText, bodyHtml }: C
     const loadInvite = async () => {
       try {
         setLoading(true);
+        setLoadError(false);
         const events = await api.autoImportCalendarEvents(accountId, emailId, bodyHtml ?? undefined, bodyText ?? undefined);
         if (!cancelled) {
           setEvent(events[0] ?? null);
         }
-      } catch {
+      } catch (err) {
+        console.warn("Failed to load calendar invite", err);
         if (!cancelled) {
           setEvent(null);
+          setLoadError(true);
         }
       } finally {
         if (!cancelled) {
@@ -93,7 +99,7 @@ export function CalendarInviteCard({ emailId, accountId, bodyText, bodyHtml }: C
     return () => {
       cancelled = true;
     };
-  }, [accountId, bodyHtml, bodyText, emailId, hasInvite]);
+  }, [accountId, bodyHtml, bodyText, emailId, hasInvite, loadAttempt]);
 
   const handleRsvp = async (status: string) => {
     if (!event) return;
@@ -122,7 +128,7 @@ export function CalendarInviteCard({ emailId, accountId, bodyText, bodyHtml }: C
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="truncate font-semibold text-foreground">
-              {event?.summary ?? t("calendar.loadingInvite")}
+              {event ? (event.summary || t("calendar.untitled")) : t("calendar.inviteDetected")}
             </h4>
             {event?.rsvp_status && (
               <Badge variant="secondary">
@@ -130,10 +136,16 @@ export function CalendarInviteCard({ emailId, accountId, bodyText, bodyHtml }: C
               </Badge>
             )}
           </div>
-          {event ? (
-            <p className="text-sm text-muted-foreground">{formatDateTime(event.dtstart, event.all_day)}{event.dtend ? ` – ${formatDateTime(event.dtend, event.all_day)}` : ""}</p>
-          ) : (
-            <p className="text-sm text-muted-foreground">{loading ? t("calendar.loadingInvite") : t("calendar.inviteDetected")}</p>
+          {!event && loading && (
+            <p className="text-sm text-muted-foreground" role="status">{t("calendar.loadingInvite")}</p>
+          )}
+          {!event && !loading && loadError && (
+            <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
+              <span>{t("calendar.inviteLoadFailed")}</span>
+              <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
+                {t("common.retry")}
+              </Button>
+            </div>
           )}
         </div>
       </div>

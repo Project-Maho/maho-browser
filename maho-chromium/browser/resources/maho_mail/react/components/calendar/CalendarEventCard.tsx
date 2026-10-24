@@ -3,6 +3,7 @@ import { Calendar, MapPin, User } from "lucide-react";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import type { CalendarEvent } from "../../types";
+import { parseAllDayDate } from "../../utils/calendarDate";
 
 interface CalendarEventCardProps {
   event: CalendarEvent;
@@ -12,7 +13,7 @@ interface CalendarEventCardProps {
 }
 
 function formatEventTime(event: CalendarEvent): string {
-  const start = new Date(event.dtstart);
+  const start = parseAllDayDate(event.dtstart);
   if (event.all_day) {
     return start.toLocaleDateString();
   }

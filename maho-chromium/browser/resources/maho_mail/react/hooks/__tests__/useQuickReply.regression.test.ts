@@ -46,3 +46,20 @@ it("C02/C13 quick reply provides composition options to onSendRequested for reco
    }),
  );
 });
+it("reply-all parses JSON-stored recipient lists", async () => {
+ const email = { id: "m", account_id: "a", from_address: "sender@example.com", to_addresses: '["self@example.com","other@example.com"]', cc_addresses: '["cc@example.com"]', subject: "topic", message_id: "<m>" } as Email;
+ const { result } = renderHook(() => useQuickReply({ email, emailDetail: null, accountEmail: "self@example.com", toast: vi.fn(), t: k => k }));
+ act(() => result.current.setQuickReplyText("answer"));
+ await act(async () => result.current.handleQuickReply(true));
+ expect(api.sendEmail).toHaveBeenLastCalledWith(expect.objectContaining({ to: ["sender@example.com", "other@example.com"], cc: ["cc@example.com"] }));
+});
+it("quick reply keeps the typed text when the send request fails", async () => {
+ const email = { id: "m", account_id: "a", from_address: "sender@example.com", to_addresses: "self@example.com", subject: "topic", message_id: "<m>" } as Email;
+ const toast = vi.fn();
+ const onSendRequested = vi.fn().mockRejectedValue(new Error("draft save failed"));
+ const { result } = renderHook(() => useQuickReply({ email, emailDetail: null, onSendRequested, toast, t: k => k }));
+ act(() => result.current.setQuickReplyText("keep me"));
+ await act(async () => result.current.handleQuickReply(false));
+ expect(result.current.quickReplyText).toBe("keep me");
+ expect(toast).toHaveBeenCalledWith("error", "draft save failed");
+});

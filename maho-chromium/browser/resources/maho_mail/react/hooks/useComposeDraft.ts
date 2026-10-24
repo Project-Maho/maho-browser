@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, type MutableRefObject } from "react";
 import * as api from "../api";
 import type { ComposeEmailRequest, ComposeAttachment } from "../types";
+import { useTranslation } from "react-i18next";
 import { useToast } from "../components/ui/Toast";
 import { parseRecipientsFn } from "./useComposeRecipients";
 
@@ -69,6 +70,7 @@ export function useComposeDraft({
   const [draftId, setDraftId] = useState<string | null>(initialDraftId ?? null);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const { toast } = useToast();
+  const { t } = useTranslation();
 
   const isDirtyRef = useRef(false);
   const draftIdRef = useRef<string | null>(initialDraftId ?? null);
@@ -239,14 +241,14 @@ export function useComposeDraft({
         // On failure, re-mark dirty so next interval retries
         isDirtyRef.current = true;
         const message = err instanceof Error ? err.message : "Failed to save draft";
-        toast("error", `Auto-save failed: ${message}`);
+        toast("error", t("compose.autoSaveFailed", { error: message }));
       } finally {
         isSavingRef.current = false;
       }
     }, 30_000);
 
     return () => clearInterval(timer);
-  }, [isOpen, autoSaveDrafts, effectiveAccountId, buildRequest, toast]);
+  }, [isOpen, autoSaveDrafts, effectiveAccountId, buildRequest, toast, t]);
 
   return {
     draftId,

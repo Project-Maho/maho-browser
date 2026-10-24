@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Reply,
   ReplyAll,
@@ -162,7 +162,7 @@ interface EmailContentProps {
   onPin?: (emailId: string) => void;
   onSnooze?: (emailId: string) => void;
   onReminder?: (emailId: string) => void;
-  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void;
+  onSendRequested?: (request: ComposeEmailRequest, options?: SendRequestedOptions) => void | Promise<void>;
   onOpenAiSettings?: () => void;
   onComposeToRecipient?: (email: string) => void;
   accountEmail?: string;
@@ -213,6 +213,10 @@ export function EmailContent({
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [labelSearch, setLabelSearch] = useState("");
   const [isThreadMuted, setIsThreadMuted] = useState(false);
+  // AI requests resolve after the user may have opened another email; only
+  // apply results (and clear spinners) for the email that is still shown.
+  const currentEmailIdRef = useRef<string | null>(emailDetail?.email?.id ?? null);
+  currentEmailIdRef.current = emailDetail?.email?.id ?? null;
   const [showDelegateDialog, setShowDelegateDialog] = useState(false);
   const [mdnSending, setMdnSending] = useState(false);
   const [mdnDismissed, setMdnDismissed] = useState(false);
@@ -298,6 +302,9 @@ export function EmailContent({
     setSummaryOpen(false);
     setCategory(null);
     setAiError(null);
+    setSummaryLoading(false);
+    setDraftLoading(false);
+    setClassifyLoading(false);
     setEmailLabels([]);
     setShowLabelPicker(false);
     resetQuickReply();
@@ -456,54 +463,66 @@ export function EmailContent({
 
   async function handleSummarize() {
     if (!emailDetail) return;
+    const emailId = emailDetail.email.id;
+    const isCurrent = () => currentEmailIdRef.current === emailId;
     try {
       setSummaryLoading(true);
       setAiError(null);
       const result = await api.getEmailSummary(emailDetail.email.account_id, {
-        email_ids: [emailDetail.email.id],
+        email_ids: [emailId],
       });
+      if (!isCurrent()) return;
       setSummary(result.summary);
       setSummaryOpen(true);
     } catch (err) {
+      if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : "Failed to summarize";
       setAiError(message);
     } finally {
-      setSummaryLoading(false);
+      if (isCurrent()) setSummaryLoading(false);
     }
   }
 
   async function handleDraftReply() {
     if (!emailDetail) return;
+    const emailId = emailDetail.email.id;
+    const isCurrent = () => currentEmailIdRef.current === emailId;
     try {
       setDraftLoading(true);
       setAiError(null);
-      const response = await api.getReplyDraft(emailDetail.email.account_id, { email_id: emailDetail.email.id });
+      const response = await api.getReplyDraft(emailDetail.email.account_id, { email_id: emailId });
+      if (!isCurrent()) return;
       if (onDraftReply) {
-        onDraftReply(emailDetail.email.id, response.draft);
+        onDraftReply(emailId, response.draft);
       } else {
-        onReply(emailDetail.email.id);
+        onReply(emailId);
       }
     } catch (err) {
+      if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : "Failed to draft reply";
       setAiError(message);
     } finally {
-      setDraftLoading(false);
+      if (isCurrent()) setDraftLoading(false);
     }
   }
 
   async function handleClassify() {
     if (!emailDetail) return;
+    const emailId = emailDetail.email.id;
+    const isCurrent = () => currentEmailIdRef.current === emailId;
 
     try {
       setClassifyLoading(true);
       setAiError(null);
-      const result = await api.classifyEmail(emailDetail.email.account_id, { email_id: emailDetail.email.id });
+      const result = await api.classifyEmail(emailDetail.email.account_id, { email_id: emailId });
+      if (!isCurrent()) return;
       setCategory(result.category);
     } catch (err) {
+      if (!isCurrent()) return;
       const message = err instanceof Error ? err.message : "Failed to classify email";
       setAiError(message);
     } finally {
-      setClassifyLoading(false);
+      if (isCurrent()) setClassifyLoading(false);
     }
   }
 
@@ -586,9 +605,11 @@ export function EmailContent({
         note,
       });
       setShowDelegateDialog(false);
-      toast("success", `Delegated to ${toEmail}`);
+      toast("success", t("email.delegateSuccess", { email: toEmail }));
     } catch (err) {
-      toast("error", err instanceof Error ? err.message : "Failed to delegate");
+      toast("error", err instanceof Error ? err.message : t("email.delegateFailed"));
+      // Let the dialog keep the typed recipient and note for a retry.
+      throw err;
     }
   }
 
@@ -841,7 +862,7 @@ export function EmailContent({
                 <Lock size={12} />
                 PGP Encrypted
               </span>
-              {!pgpDecryptedText && !pgpDecryptError && (
+              {!pgpDecryptedText && (
                 <button
                   type="button"
                   onClick={() => void handlePgpDecrypt()}
@@ -849,7 +870,7 @@ export function EmailContent({
                   className="mail-pressable flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
                 >
                   {pgpDecrypting ? <Loader2 size={12} className="animate-spin" /> : <Unlock size={12} />}
-                  Decrypt
+                  {pgpDecryptError ? t("email.retryDecrypt") : t("email.decrypt")}
                 </button>
               )}
               {pgpDecryptedText && (
@@ -901,7 +922,7 @@ export function EmailContent({
                 <Lock size={12} />
                 S/MIME Encrypted
               </span>
-              {!smimeDecryptedText && !smimeDecryptError && (
+              {!smimeDecryptedText && (
                 <button
                   type="button"
                   onClick={() => void handleSmimeDecrypt()}
@@ -909,7 +930,7 @@ export function EmailContent({
                   className="mail-pressable flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card/50 px-3 text-xs text-muted-foreground hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
                 >
                   {smimeDecrypting ? <Loader2 size={12} className="animate-spin" /> : <Unlock size={12} />}
-                  Decrypt
+                  {smimeDecryptError ? t("email.retryDecrypt") : t("email.decrypt")}
                 </button>
               )}
               {smimeDecryptedText && (
@@ -1184,7 +1205,7 @@ export function EmailContent({
       <DelegateEmailDialog
         isOpen={showDelegateDialog}
         onClose={() => setShowDelegateDialog(false)}
-        onDelegate={(toEmail, note) => void handleDelegate(toEmail, note)}
+        onDelegate={handleDelegate}
       />
     </article>
   );

@@ -84,4 +84,18 @@ describe("ToneAdjustButton", () => {
     expect(setBody).toHaveBeenCalledWith(initialBody);
     expect(setBodyHtml).toHaveBeenCalledWith("<p>This is a test email body.</p>");
   });
+
+  it("hides undo once the draft is edited after a rewrite", async () => {
+    vi.mocked(api.adjustTone).mockResolvedValue({ adjusted_text: "Rewritten." });
+    const { rerender } = render(
+      <ToneAdjustButton body={initialBody} setBody={setBody} setBodyHtml={setBodyHtml} plainTextToHtml={plainTextToHtml} />
+    );
+    fireEvent.click(screen.getByLabelText("Rewrite message"));
+    fireEvent.click(screen.getByText("friendly"));
+    await waitFor(() => expect(setBody).toHaveBeenCalledWith("Rewritten."));
+    rerender(<ToneAdjustButton body="Rewritten." setBody={setBody} setBodyHtml={setBodyHtml} plainTextToHtml={plainTextToHtml} />);
+    expect(screen.getByLabelText("Undo Tone")).toBeInTheDocument();
+    rerender(<ToneAdjustButton body="Rewritten. Plus my edit." setBody={setBody} setBodyHtml={setBodyHtml} plainTextToHtml={plainTextToHtml} />);
+    expect(screen.queryByLabelText("Undo Tone")).not.toBeInTheDocument();
+  });
 });

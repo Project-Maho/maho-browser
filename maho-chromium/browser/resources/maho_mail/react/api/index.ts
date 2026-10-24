@@ -66,6 +66,11 @@ export const startOAuth2 = async (
   return res.state;
 };
 
+export const cancelOAuth = async (state: string): Promise<boolean> => {
+  const res = await handler.cancelOAuth(state);
+  return res.accepted;
+};
+
 export const completeOAuth2 = (provider: string, authCode: string, stateParam: string): Promise<Types.OAuthAccount> =>
   wrapMojoCall<Types.OAuthAccount>(() => handler.oAuthComplete(stateParam, authCode), 'completeOAuth2');
 

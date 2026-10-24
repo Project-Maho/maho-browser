@@ -56,6 +56,7 @@ vi.mock("../api", () => ({
   toggleStar: vi.fn(),
   markRead: vi.fn(),
   getReplyContext: vi.fn(),
+  listPinnedEmails: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("../hooks/useAuthStatus", () => ({

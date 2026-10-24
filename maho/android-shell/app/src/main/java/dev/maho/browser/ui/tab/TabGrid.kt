@@ -51,6 +51,7 @@ fun TabGrid(
     onTabSelected: (TabId) -> Unit,
     onTabArchived: (TabId) -> Unit,
     onTabClosed: (TabId) -> Unit,
+    onTabChanged: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val shellColors = BrowserShellTheme.colors
@@ -292,6 +293,7 @@ fun TabGrid(
                         onTap = { onTabSelected(tab.id) },
                         onArchive = { onTabArchived(tab.id) },
                         onClose = { onTabClosed(tab.id) },
+                        onTabChanged = onTabChanged,
                     )
                 }
             }
@@ -317,6 +319,7 @@ fun TabGrid(
                         onTap = { onTabSelected(tab.id) },
                         onArchive = { onTabArchived(tab.id) },
                         onClose = { onTabClosed(tab.id) },
+                        onTabChanged = onTabChanged,
                     )
                 }
             }

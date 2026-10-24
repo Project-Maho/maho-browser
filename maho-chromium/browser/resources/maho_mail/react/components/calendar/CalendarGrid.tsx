@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { Calendar, dateFnsLocalizer, type Event as RbcEvent } from "react-big-calendar";
 import dragAndDropModule from "react-big-calendar/lib/addons/dragAndDrop";
 import { format, parse, startOfWeek, endOfWeek, getDay, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from "date-fns";
@@ -9,7 +9,7 @@ import { RefreshCw, Search, ChevronLeft, ChevronRight, X, Calendar as CalendarIc
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/Toast";
 import * as api from "../../api";
-import type { AccountSummary, CalendarEvent } from "../../types";
+import type { AccountSummary, CalendarEvent, GoogleCalendarEntry } from "../../types";
 import { toZonedTime } from "date-fns-tz";
 import { MiniCalendar } from "./MiniCalendar";
 import { YearView } from "./YearView";
@@ -86,6 +86,10 @@ interface CalendarGridProps {
   accountId: string;
   accounts?: AccountSummary[];
   onSelectEvent: (event: CalendarEvent) => void;
+  /** Opens the event editor directly (recurring events ask for scope first). */
+  onEditEvent?: (event: CalendarEvent) => void;
+  /** Asks which occurrences a change applies to; null means cancelled. */
+  requestRecurringScope?: (event: CalendarEvent, mode: "edit" | "delete") => Promise<"single" | "all" | null>;
   onCreateEvent: (initialSummary?: string) => void;
   onReauthorize?: () => void;
 }
@@ -139,7 +143,20 @@ function readableTextColor(bg: string): string {
   return luminance > 0.6 ? "#1f2937" : "#ffffff";
 }
 
-export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent, onReauthorize }: CalendarGridProps) {
+function isRecurring(event: CalendarEvent): boolean {
+  return !!(event.recurrence_rule || event.recurring_event_id);
+}
+
+function isCalendarReadOnly(calendarId: string | null | undefined, calendars: readonly GoogleCalendarEntry[]): boolean {
+  const calendar = calendars.find(c => c.calendar_id === calendarId);
+  return calendar ? !["owner", "writer"].includes(calendar.access_role || "") : false;
+}
+
+export function isEventReadOnly(event: CalendarEvent, calendars: readonly GoogleCalendarEntry[]): boolean {
+  return isCalendarReadOnly(event.google_calendar_id, calendars);
+}
+
+export function CalendarGrid({ accountId, accounts, onSelectEvent, onEditEvent, requestRecurringScope, onCreateEvent, onReauthorize }: CalendarGridProps) {
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
 
@@ -185,57 +202,25 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     currentView: view,
   });
 
+  const weekStartsOn = (Number(weekStart) === 1 || Number(weekStart) === 6 ? Number(weekStart) : 0) as 0 | 1 | 6;
   const [isMobile, setIsMobile] = useState(false);
   const [altKeyPressed, setAltKeyPressed] = useState(false);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Alt") setAltKeyPressed(true);
+  /** Resolves the recurrence scope for grid actions; undefined = cancelled. */
+  const resolveScope = useCallback(async (event: CalendarEvent, mode: "edit" | "delete") => {
+    if (!isRecurring(event) || !requestRecurringScope) return { scope: undefined };
+    const scope = await requestRecurringScope(event, mode);
+    return scope ? { scope } : undefined;
+  }, [requestRecurringScope]);
 
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
-        return;
-      }
+  const deleteEvent = useCallback(async (event: CalendarEvent) => {
+    const resolved = await resolveScope(event, "delete");
+    if (resolved) handleDeleteEvent(event.id, resolved.scope);
+  }, [resolveScope, handleDeleteEvent]);
 
-      if (selectedEventIds.length > 0) {
-        const lastSelectedId = selectedEventIds[selectedEventIds.length - 1];
-        const lastEvent = events.find((ev) => ev.id === lastSelectedId);
-        
-        if (e.key === "d" || e.key === "D") {
-          e.preventDefault();
-          if (lastEvent) {
-            void handleDeleteEvent(lastSelectedId);
-          }
-        } else if (e.key === "c" || e.key === "C") {
-          e.preventDefault();
-          if (lastEvent) {
-            void handleDuplicateEvent(lastSelectedId);
-          }
-        } else if (e.key === "e" || e.key === "E") {
-          e.preventDefault();
-          if (lastEvent) {
-            onSelectEvent(lastEvent);
-          }
-        }
-      }
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Alt") setAltKeyPressed(false);
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-    };
-  }, [selectedEventIds, events, handleDeleteEvent, handleDuplicateEvent, onSelectEvent]);
-
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 640);
-    checkMobile();
-    window.addEventListener("resize", checkMobile);
-    return () => window.removeEventListener("resize", checkMobile);
-  }, []);
+  const editEvent = useCallback((event: CalendarEvent) => {
+    (onEditEvent ?? onSelectEvent)(event);
+  }, [onEditEvent, onSelectEvent]);
 
   const handleNavigate = useCallback((action: "PREV" | "NEXT" | "TODAY") => {
     if (action === "TODAY") {
@@ -262,6 +247,99 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
       }
     });
   }, [view]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Alt") setAltKeyPressed(true);
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable ||
+        document.querySelector('[role="dialog"], [role="alertdialog"], [aria-modal="true"]')
+      ) {
+        return;
+      }
+
+      if (selectedEventIds.length > 0) {
+        const lastSelectedId = selectedEventIds[selectedEventIds.length - 1];
+        const lastEvent = events.find((ev) => ev.id === lastSelectedId);
+        const lastEventReadOnly = !!lastEvent && isEventReadOnly(lastEvent, calendars);
+        
+        if (e.key === "d" || e.key === "D") {
+          e.preventDefault();
+          if (lastEvent && !lastEventReadOnly) {
+            void deleteEvent(lastEvent);
+          }
+          return;
+        } else if (e.key === "c" || e.key === "C") {
+          e.preventDefault();
+          if (lastEvent && !lastEventReadOnly) {
+            void handleDuplicateEvent(lastSelectedId);
+          }
+          return;
+        } else if (e.key === "e" || e.key === "E") {
+          e.preventDefault();
+          if (lastEvent && !lastEventReadOnly) {
+            editEvent(lastEvent);
+          }
+          return;
+        }
+      }
+
+      switch (e.key.toLowerCase()) {
+        case "j":
+          handleNavigate("NEXT");
+          break;
+        case "k":
+          handleNavigate("PREV");
+          break;
+        case "t":
+          handleNavigate("TODAY");
+          break;
+        case "n":
+          onCreateEvent();
+          break;
+        case "m":
+          setView("month");
+          break;
+        case "w":
+          setView("week");
+          break;
+        case "d":
+          setView("day");
+          break;
+        case "a":
+          setView("agenda");
+          break;
+        case "y":
+          setView("year");
+          break;
+        default:
+          break;
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Alt") setAltKeyPressed(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, [selectedEventIds, events, deleteEvent, handleDuplicateEvent, editEvent, handleNavigate, onCreateEvent]);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 640);
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
+
 
   // Search states
   const [searchQuery, setSearchQuery] = useState("");
@@ -299,62 +377,31 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     return () => window.removeEventListener("calendar-preferences-changed", handler);
   }, [loadPreferences, fetchEvents]);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === "INPUT" || document.activeElement?.tagName === "TEXTAREA") {
-        return;
-      }
-      
-      switch (e.key.toLowerCase()) {
-        case "j":
-          handleNavigate("NEXT");
-          break;
-        case "k":
-          handleNavigate("PREV");
-          break;
-        case "t":
-          handleNavigate("TODAY");
-          break;
-        case "n":
-          onCreateEvent();
-          break;
-        case "m":
-          setView("month");
-          break;
-        case "w":
-          setView("week");
-          break;
-        case "d":
-          if (selectedEventIds.length === 0) setView("day");
-          break;
-        case "a":
-          setView("agenda");
-          break;
-        case "y":
-          setView("year");
-          break;
-        default:
-          break;
-      }
-    };
-    
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleNavigate, onCreateEvent, selectedEventIds]);
 
-  const handleSearchChange = useCallback(async (val: string) => {
+  // Debounced; only the latest query may write results, so a slow earlier
+  // response (or one landing after the box was cleared) cannot overwrite them.
+  const latestSearchRef = useRef("");
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); }, []);
+  const handleSearchChange = useCallback((val: string) => {
     setSearchQuery(val);
+    latestSearchRef.current = val;
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     if (!val.trim()) {
       setSearchResults([]);
       return;
     }
-    try {
-      const results = await api.searchCalendarEvents(effectiveAccountId, val);
-      setSearchResults(results);
-    } catch (err) {
-      console.error(err);
-    }
-  }, [effectiveAccountId]);
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await api.searchCalendarEvents(effectiveAccountId, val);
+        if (latestSearchRef.current === val) setSearchResults(results);
+      } catch (err) {
+        if (latestSearchRef.current === val) {
+          toast("error", err instanceof Error ? err.message : String(err));
+        }
+      }
+    }, 200);
+  }, [effectiveAccountId, toast]);
 
   const rbcEvents = useMemo(() => events.map(e => toRbcEvent(e, selectedTimezone)), [events, selectedTimezone]);
 
@@ -458,6 +505,8 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
         });
         toast("success", "Event duplicated via drag!");
       } else {
+        const resolved = await resolveScope(resource, "edit");
+        if (!resolved) return;
         await api.updateCalendarEvent({
           event_id: resource.id,
           summary: resource.summary,
@@ -467,6 +516,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
           dtend: dtendStr,
           all_day: allDay,
           time_zone: allDay ? undefined : selectedTimezone,
+          edit_scope: resolved.scope,
         });
         toast("success", t("calendar.eventUpdated"));
       }
@@ -474,7 +524,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     } catch (err) {
       toast("error", err instanceof Error ? err.message : String(err));
     }
-  }, [reloadEvents, t, toast, altKeyPressed, selectedTimezone]);
+  }, [reloadEvents, t, toast, altKeyPressed, selectedTimezone, resolveScope]);
 
   type ResizeArgs = {
     event: RbcEvent;
@@ -485,6 +535,8 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
   const handleEventResize = useCallback(async ({ event, start, end }: ResizeArgs) => {
     const resource = (event as RbcCalendarEvent).resource;
     try {
+      const resolved = await resolveScope(resource, "edit");
+      if (!resolved) return;
       await api.updateCalendarEvent({
         event_id: resource.id,
         summary: resource.summary,
@@ -494,6 +546,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
         dtend: roundTo15Minutes(new Date(end)).toISOString(),
         all_day: resource.all_day,
         time_zone: resource.all_day ? undefined : selectedTimezone,
+        edit_scope: resolved.scope,
       });
       toast("success", t("calendar.eventUpdated"));
       await reloadEvents();
@@ -566,7 +619,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
       case "agenda":
         return format(date, "MMMM yyyy", { locale: loc });
       case "week":
-        return `${format(startOfWeek(date), "MMM d")} - ${format(endOfWeek(date), "MMM d, yyyy", { locale: loc })}`;
+        return `${format(startOfWeek(date, { weekStartsOn: weekStartsOn }), "MMM d", { locale: loc })} - ${format(endOfWeek(date, { weekStartsOn: weekStartsOn }), "MMM d, yyyy", { locale: loc })}`;
       case "day":
         return format(date, "MMMM d, yyyy", { locale: loc });
       case "year":
@@ -582,7 +635,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
     <div className="flex h-full w-full min-w-0 flex-1 flex-row overflow-hidden bg-background">
       {/* Left panel for Mini Calendar and Filters */}
       <div className="hidden lg:flex w-60 flex-shrink-0 flex-col border-r border-border bg-card/15 p-4 space-y-6 overflow-y-auto">
-        <MiniCalendar value={date} onChange={setDate} events={events} />
+        <MiniCalendar value={date} onChange={setDate} events={events} weekStartsOn={weekStartsOn} />
         
         {calendars.length > 0 && (
           <div className="space-y-4 pt-2 border-t border-border/60">
@@ -609,8 +662,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                       {accCals.map((cal) => {
                         const color = cal.background_color || "#3b82f6";
                         const active = cal.visible;
-                        const calCal = calendars.find(c => c.calendar_id === cal.calendar_id);
-                        const isReadOnly = calCal ? !["owner", "writer"].includes(calCal.access_role || "") : false;
+                        const isReadOnly = isCalendarReadOnly(cal.calendar_id, calendars);
 
                         return (
                           <button
@@ -668,7 +720,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                 type="text"
                 placeholder={t("calendar.searchPlaceholder") || "Search events..."}
                 value={searchQuery}
-                onChange={(e) => void handleSearchChange(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
                 className="w-full pl-8 pr-8 py-1.5 text-xs bg-muted/65 hover:bg-surface-hover text-foreground border border-border rounded-xl focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -676,10 +728,8 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
               {searchQuery && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setSearchQuery("");
-                    setSearchResults([]);
-                  }}
+                  onClick={() => handleSearchChange("")}
+                  aria-label={t("calendar.clearSearch")}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 >
                   <X size={14} />
@@ -746,6 +796,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
             <button
               type="button"
               onClick={() => handleNavigate("PREV")}
+              aria-label={t("calendar.previousPeriod")}
               className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronLeft size={16} />
@@ -753,6 +804,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
             <button
               type="button"
               onClick={() => handleNavigate("NEXT")}
+              aria-label={t("calendar.nextPeriod")}
               className="mail-pressable flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-surface-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <ChevronRight size={16} />
@@ -931,6 +983,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
               onNavigate={setDate}
               onViewChange={setView}
               events={events}
+              weekStartsOn={weekStartsOn}
             />
           ) : isMobile && view !== "agenda" ? (
             <MobileDayView
@@ -968,8 +1021,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                   event: ({ event }: any) => {
                     const resource = (event as RbcCalendarEvent).resource;
                     const isRecurring = !!resource.recurrence_rule || !!resource.recurring_event_id;
-                    const calCal = calendars.find(c => c.calendar_id === resource.google_calendar_id);
-                    const isReadOnly = calCal ? !["owner", "writer"].includes(calCal.access_role || "") : false;
+                    const isReadOnly = isEventReadOnly(resource, calendars);
                     const attSummary = getAttendeeSummary(resource.attendees_json);
                     const isBulk = selectedEventIds.includes(resource.id) && selectedEventIds.length > 1;
 
@@ -1030,7 +1082,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                               <ContextMenuItem onClick={() => onSelectEvent(resource)}>
                                 View Details
                               </ContextMenuItem>
-                              <ContextMenuItem onClick={() => onSelectEvent(resource)} disabled={isReadOnly}>
+                              <ContextMenuItem onClick={() => editEvent(resource)} disabled={isReadOnly}>
                                 Edit Event
                                 <ContextMenuShortcut>E</ContextMenuShortcut>
                               </ContextMenuItem>
@@ -1047,7 +1099,7 @@ export function CalendarGrid({ accountId, accounts, onSelectEvent, onCreateEvent
                                 </ContextMenuItem>
                               )}
                               <ContextMenuSeparator />
-                              <ContextMenuItem onClick={() => void handleDeleteEvent(resource.id)} disabled={isReadOnly} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
+                              <ContextMenuItem onClick={() => void deleteEvent(resource)} disabled={isReadOnly} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
                                 <Trash2 size={14} className="mr-2" aria-hidden="true" />Delete
                                 <ContextMenuShortcut>D</ContextMenuShortcut>
                               </ContextMenuItem>

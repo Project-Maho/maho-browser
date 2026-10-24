@@ -74,6 +74,25 @@ describe("useCalendarClient", () => {
 
     expect(api.createCalendarEvent).toHaveBeenCalled();
   });
+
+  it("removes every occurrence immediately when deleting the whole series", async () => {
+    const base = { account_id: "acc-1", email_id: null, uid: "u", summary: "Standup", description: null, dtend: null,
+      location: null, organizer: null, status: "confirmed", rsvp_status: null, recurrence_rule: null, all_day: false,
+      created_at: "", updated_at: "" };
+    vi.mocked(api.listCalendarEvents).mockResolvedValue([
+      { ...base, id: "series_1", recurring_event_id: "series", dtstart: "2026-10-01T09:00:00Z" },
+      { ...base, id: "series_2", recurring_event_id: "series", dtstart: "2026-10-02T09:00:00Z" },
+      { ...base, id: "other", recurring_event_id: null, dtstart: "2026-10-02T10:00:00Z" },
+    ] as never);
+    const { result } = renderHook(() => useCalendarClient({ accountId: "acc-1" }));
+    await waitFor(() => expect(result.current.events).toHaveLength(3));
+
+    act(() => {
+      result.current.handleDeleteEvent("series_1", "all");
+    });
+
+    expect(result.current.events.map((e) => e.id)).toEqual(["other"]);
+  });
 });
 
 describe("useCalendarClient RSVP reply event listeners", () => {
@@ -112,7 +131,7 @@ describe("useCalendarClient RSVP reply event listeners", () => {
     });
 
     expect(sonnerToast.error).toHaveBeenCalledWith(
-      "calendar.rsvp.reply_failed_title",
+      "calendar.rsvpToast.failedTitle",
       expect.objectContaining({ description: expect.any(String) }),
     );
   });
@@ -136,7 +155,7 @@ describe("useCalendarClient RSVP reply event listeners", () => {
     });
 
     expect(sonnerToast.info).toHaveBeenCalledWith(
-      "calendar.rsvp.reply_queued_title",
+      "calendar.rsvpToast.queuedTitle",
       expect.objectContaining({ description: expect.any(String) }),
     );
   });
@@ -154,7 +173,7 @@ describe("useCalendarClient RSVP reply event listeners", () => {
     });
 
     expect(sonnerToast.success).toHaveBeenCalledWith(
-      "calendar.rsvp.reply_drained_title",
+      "calendar.rsvpToast.drainedTitle",
       expect.objectContaining({ description: expect.any(String) }),
     );
   });

@@ -137,6 +137,18 @@ internal class MainDocumentUrlState {
     @Volatile
     private var currentUrl: String = ""
 
+    // The main-frame request in flight; an SSL failure can happen before onPageStarted.
+    @Volatile
+    private var pendingMainFrameUrl: String = ""
+
+    fun onMainFrameRequest(url: String) {
+        pendingMainFrameUrl = url
+    }
+
+    /** True when [url] is the main document (in flight or committed), not a sub-frame or resource. */
+    fun isMainDocumentUrl(url: String, viewUrl: String?): Boolean =
+        url.isNotEmpty() && (url == pendingMainFrameUrl || url == currentUrl || url == viewUrl)
+
     fun onPageStarted(url: String) {
         currentUrl = url
     }
@@ -197,6 +209,10 @@ class MahoWebViewClient(
 ) : WebViewClient() {
     private val mainDocumentUrlState = MainDocumentUrlState()
 
+    internal fun onMainFrameRequest(url: String) {
+        mainDocumentUrlState.onMainFrameRequest(url)
+    }
+
     private fun capturePreviewWhenPainted(view: WebView, tabId: String) {
         // A private page must never be read back into a preview bitmap.
         if (isIncognito()) return
@@ -234,6 +250,7 @@ class MahoWebViewClient(
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         val url = request.url.toString()
+        if (request.isForMainFrame) onMainFrameRequest(url)
         if (handleExternalSchemeUrl(view.context, url) { fallbackUrl ->
             view.loadUrl(fallbackUrl)
         }) {
@@ -248,6 +265,7 @@ class MahoWebViewClient(
     }
 
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        if (request.isForMainFrame) onMainFrameRequest(request.url.toString())
         val settings = dev.maho.browser.bridge.BridgeSettings.getSettingsTyped()
         val contentBlockerEnabled = settings?.privacy?.isNativeBlockingEnabled ?: false
         if (!contentBlockerEnabled) {
@@ -296,6 +314,9 @@ class MahoWebViewClient(
     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
         handler.cancel()
         val failingUrl = error.url.orEmpty().ifEmpty { view.url.orEmpty() }
+        // Sub-frames and subresources fail on their own; only a main-document failure
+        // replaces the page with an error view (onReceivedError filters the same way).
+        if (!mainDocumentUrlState.isMainDocumentUrl(failingUrl, view.url)) return
         val primaryError = error.primaryError
         val errorDesc = when (primaryError) {
             SslError.SSL_UNTRUSTED -> "The certificate authority is not trusted."
