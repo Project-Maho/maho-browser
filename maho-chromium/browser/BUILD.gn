@@ -373,6 +373,7 @@ source_set("maho_browser_ai_tools") {
   sources = [
     "ai/maho_ai_page_context_extractor.cc",
     "ai/maho_ai_page_context_extractor.h",
+    "ai/maho_agent_site_policy.h",
     "ai/maho_browser_tool_executor.cc",
     "ai/maho_browser_tool_executor.h",
     "ai/maho_capability_broker.cc",
@@ -713,6 +714,7 @@ source_set("maho_location_bar_views") {
     "//components/vector_icons",
     "//content/public/browser",
     "//content/public/common",
+    "//maho/browser:maho_theme_support",
     "//maho/browser/net",
     "//maho/browser/ui/site_control:maho_site_control",
     "//maho/browser/ui/views/maho_lucide_icons:maho_lucide_icon_library",
@@ -1067,6 +1069,8 @@ source_set("maho_browser_main_extra_parts") {
     ":maho_ai_provider_oauth",
     ":maho_auth_utils",
     ":maho_routines_scheduler",
+    "//components/os_crypt/async/browser",
+    "//components/os_crypt/async/common",
     ":maho_tab_id_helper",
     ":maho_tab_registry",
     ":maho_theme_support",
@@ -1327,6 +1331,7 @@ source_set("maho_ai_provider_oauth") {
   ]
 
   deps = [
+    ":maho_core_holder",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/ui:browser_navigator_params_headers",
     "//content/public/browser",
@@ -1779,9 +1784,11 @@ source_set("maho_download_bridge") {
 
   deps = [
     ":maho_core_holder",
+    "//chrome/app:generated_resources",
     "//components/download/public/common:public",
     "//maho/third_party/maho:maho_core_prebuilt",
     "//maho/third_party/maho:maho_ffi_headers",
+    "//ui/base",
   ]
 }
 

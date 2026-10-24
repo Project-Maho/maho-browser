@@ -2292,6 +2292,39 @@ class MahoMailHelperImpl : public mojom::MahoMailHelper {
           }, std::move(callback)));
       return;
     }
+    // Agent-originated send: honors the undo window
+    // (agent.mail_send_delay_seconds); returns {"status":"queued",...} when
+    // held. User compose keeps using the immediate SendEmail above.
+    if (command == "AgentSendEmail") {
+      MahoMailReadBridge::Start(
+          base::BindOnce([](std::string req, MahoMailReadCallback cb, void* ud) {
+            return MahoMailAgentSendEmail(req.c_str(), cb, ud);
+          }, args_json),
+          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
+            std::move(cb).Run(ok, std::move(json));
+          }, std::move(callback)));
+      return;
+    }
+    if (command == "CancelAgentSend") {
+      MahoMailReadBridge::Start(
+          base::BindOnce([](std::string id, MahoMailReadCallback cb, void* ud) {
+            return MahoMailCancelAgentSend(id.c_str(), cb, ud);
+          }, get_str("id")),
+          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
+            std::move(cb).Run(ok, std::move(json));
+          }, std::move(callback)));
+      return;
+    }
+    if (command == "ListAgentSendQueue") {
+      MahoMailReadBridge::Start(
+          base::BindOnce([](MahoMailReadCallback cb, void* ud) {
+            return MahoMailListAgentSendQueue(cb, ud);
+          }),
+          base::BindOnce([](CallBackendCallback cb, bool ok, std::string json) {
+            std::move(cb).Run(ok, std::move(json));
+          }, std::move(callback)));
+      return;
+    }
     if (command == "SaveDraft") {
       MahoMailReadBridge::Start(
           base::BindOnce([](std::string req, MahoMailReadCallback cb, void* ud) {

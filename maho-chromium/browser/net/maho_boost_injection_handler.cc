@@ -7,8 +7,10 @@
 #include <utility>
 #include <vector>
 
+#include "base/containers/lru_cache.h"
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -38,6 +40,69 @@ constexpr int kIsolatedWorldIdForBoost =
 
 constexpr base::TimeDelta kPollInterval = base::Milliseconds(25);
 
+constexpr size_t kMaxCachedBoostHosts = 64;
+
+// Last known Boost style script per host. Fetching the CSS is a round trip to
+// the core sequence, during which the new page paints with zapped elements
+// still visible; replaying the cached script at commit closes that window and
+// the fetched result then replaces it. Entries belong to one core generation.
+struct BoostCssCache {
+  uint64_t generation = 0;
+  // Bumped on every invalidation so a fetch that started before a Boost
+  // changed cannot re-cache the outdated style.
+  uint64_t epoch = 0;
+  base::LRUCache<std::string, std::string> scripts{kMaxCachedBoostHosts};
+};
+
+BoostCssCache& GetBoostCssCache() {
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  static base::NoDestructor<BoostCssCache> cache;
+  if (cache->generation != maho::GetCoreGeneration()) {
+    cache->generation = maho::GetCoreGeneration();
+    cache->scripts.Clear();
+  }
+  return *cache;
+}
+
+// Records the fetched style for |host|; an empty CSS result drops the entry so
+// a deleted or disabled Boost is never replayed.
+void UpdateCachedBoostCss(const std::string& host,
+                          uint64_t epoch,
+                          const std::string& css,
+                          const std::string& script) {
+  BoostCssCache& cache = GetBoostCssCache();
+  if (host.empty() || epoch != cache.epoch) {
+    return;
+  }
+  auto& scripts = cache.scripts;
+  if (css.empty()) {
+    auto it = scripts.Peek(host);
+    if (it != scripts.end()) {
+      scripts.Erase(it);
+    }
+    return;
+  }
+  scripts.Put(host, script);
+}
+
+// Drops cached styles for |domain| and its subdomains after a Boost changed,
+// including hosts with no open tab to re-inject.
+void InvalidateCachedBoostCss(const std::string& domain) {
+  BoostCssCache& cache = GetBoostCssCache();
+  ++cache.epoch;
+  auto& scripts = cache.scripts;
+  const std::string dot_domain = "." + domain;
+  for (auto it = scripts.begin(); it != scripts.end();) {
+    if (it->first == domain ||
+        base::EndsWith(it->first, dot_domain,
+                       base::CompareCase::INSENSITIVE_ASCII)) {
+      it = scripts.Erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 std::string BuildBoostCssScript(const std::string& css) {
   if (css.empty()) {
     return "(function() {"
@@ -65,7 +130,19 @@ std::string BuildBoostCssScript(const std::string& css) {
       "  s.textContent = `",
       escaped,
       "`;"
-      "  (document.head || document.documentElement).appendChild(s);"
+      // The cached style is replayed right at commit, possibly before the
+      // parser created the root element; attach as soon as it exists.
+      "  var root = document.head || document.documentElement;"
+      "  if (root) { root.appendChild(s); return; }"
+      "  var mo = new MutationObserver(function() {"
+      "    var r = document.documentElement;"
+      "    if (!r) { return; }"
+      "    mo.disconnect();"
+      "    if (!document.getElementById('maho-boost-style')) {"
+      "      (document.head || r).appendChild(s);"
+      "    }"
+      "  });"
+      "  mo.observe(document, {childList: true});"
       "})();"});
 }
 
@@ -113,6 +190,7 @@ void ReinjectBoostIntoTabsForDomain(const std::string& domain) {
     LOG(WARNING) << "[MahoBoost] ReinjectBoostIntoTabsForDomain: empty domain";
     return;
   }
+  InvalidateCachedBoostCss(domain);
   int matched_tabs = 0;
   const std::string dot_domain = "." + domain;
   ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
@@ -161,6 +239,16 @@ void HandleOneCoreUpdate(const base::DictValue& update) {
   }
   const std::string domain = ExtractBoostDomainFromUpdate(update, *kind);
   ReinjectBoostIntoTabsForDomain(domain);
+}
+
+void ExecuteBoostCssScript(content::RenderFrameHost* frame,
+                           const std::string& script) {
+  if (frame->GetLastCommittedURL().SchemeIs("chrome-error")) {
+    frame->ExecuteJavaScript(base::UTF8ToUTF16(script), base::DoNothing());
+    return;
+  }
+  frame->ExecuteJavaScriptInIsolatedWorld(
+      base::UTF8ToUTF16(script), base::DoNothing(), kIsolatedWorldIdForBoost);
 }
 
 std::string BuildZapSelectorsJson(
@@ -268,32 +356,45 @@ void MahoBoostInjectionHandler::InjectBoostCss(
     return;
   }
 
+  const std::string host(GURL(url).host());
+  const uint64_t cache_epoch = GetBoostCssCache().epoch;
+  if (!host.empty()) {
+    auto& scripts = GetBoostCssCache().scripts;
+    auto cached = scripts.Get(host);
+    if (cached != scripts.end()) {
+      ExecuteBoostCssScript(render_frame_host, cached->second);
+    }
+  }
+
   const uint64_t generation = maho::GetCoreGeneration();
-  maho::PostCoreTask<std::string>(
+  maho::PostCoreTask<std::pair<std::string, std::string>>(
       FROM_HERE,
       base::BindOnce([](uint64_t generation, std::string url) {
         if (generation != maho::GetCoreGeneration() || !maho::GetCore()) {
-          return std::string();
+          return std::pair<std::string, std::string>();
         }
-        return BuildBoostCssScript(
-            maho::core::GetBoostInjectionCss(maho::GetCore(), url.c_str()));
+        std::string css =
+            maho::core::GetBoostInjectionCss(maho::GetCore(), url.c_str());
+        std::string script = BuildBoostCssScript(css);
+        return std::make_pair(std::move(css), std::move(script));
       }, generation, url),
       base::BindOnce([](base::WeakPtr<MahoBoostInjectionHandler> owner,
                         content::WeakDocumentPtr document, uint64_t generation,
-                        std::string script) {
+                        std::string host, uint64_t cache_epoch,
+                        std::pair<std::string, std::string> result) {
+        const auto& [css, script] = result;
+        if (generation != maho::GetCoreGeneration() || script.empty()) {
+          return;
+        }
+        UpdateCachedBoostCss(host, cache_epoch, css, script);
         auto* frame = document.AsRenderFrameHostIfValid();
-        if (!owner || !frame || !frame->IsRenderFrameLive() || !frame->IsActive() ||
-            generation != maho::GetCoreGeneration() || script.empty()) {
+        if (!owner || !frame || !frame->IsRenderFrameLive() ||
+            !frame->IsActive()) {
           return;
         }
-        if (frame->GetLastCommittedURL().SchemeIs("chrome-error")) {
-          frame->ExecuteJavaScript(base::UTF8ToUTF16(script), base::DoNothing());
-          return;
-        }
-        frame->ExecuteJavaScriptInIsolatedWorld(
-            base::UTF8ToUTF16(script), base::DoNothing(), kIsolatedWorldIdForBoost);
+        ExecuteBoostCssScript(frame, script);
       }, weak_factory_.GetWeakPtr(), render_frame_host->GetWeakDocumentPtr(),
-         generation));
+         generation, host, cache_epoch));
 }
 
 void MahoBoostInjectionHandler::InjectContentScript() {

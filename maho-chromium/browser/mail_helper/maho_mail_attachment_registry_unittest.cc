@@ -345,6 +345,31 @@ TEST_F(MahoMailAttachmentRegistryTest, ConsumedFileDeletedAfterOpenCompletion) {
   EXPECT_FALSE(base::PathExists(consumed_path));
 }
 
+TEST_F(MahoMailAttachmentRegistryTest,
+       ReleasedLaunchCopySurvivesUntilStaleSweep) {
+  auto [staged, token, stage_error] =
+      Stage(WriteHelperFile("viewer.txt", "payload"));
+  ASSERT_TRUE(staged) << stage_error;
+
+  auto [attachment, open_error] = Consume(token);
+  ASSERT_TRUE(attachment) << open_error;
+  const base::FilePath launched_path = attachment->path();
+
+  // A viewer that was just spawned must still find the file.
+  MahoMailAttachmentRegistry::ReleaseLaunchedAttachment(std::move(attachment));
+  task_environment_.RunUntilIdle();
+  ASSERT_TRUE(base::PathExists(launched_path));
+
+  MahoMailAttachmentRegistry::DeleteStaleLaunchCopies(
+      launch_root_, base::Time::Now() -
+                        MahoMailAttachmentRegistry::kLaunchCopyLifetime);
+  EXPECT_TRUE(base::PathExists(launched_path));
+
+  MahoMailAttachmentRegistry::DeleteStaleLaunchCopies(
+      launch_root_, base::Time::Now() + base::Minutes(1));
+  EXPECT_FALSE(base::PathExists(launched_path));
+}
+
 TEST_F(MahoMailAttachmentRegistryTest, RejectsAbsolutePathAndTraversalTokens) {
   int launch_count = 0;
   for (const std::string& token : {"/tmp/arbitrary", "../opaque-token"}) {

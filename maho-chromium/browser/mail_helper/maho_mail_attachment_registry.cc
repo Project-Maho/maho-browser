@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "base/files/file.h"
+#include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
@@ -142,7 +143,15 @@ MahoMailAttachmentRegistry::MahoMailAttachmentRegistry(
       now_callback_(base::BindRepeating([] { return base::Time::Now(); })),
       token_callback_(base::BindRepeating([] {
         return base::Uuid::GenerateRandomV4().AsLowercaseString();
-      })) {}
+      })) {
+  // Launch copies released to viewers in earlier sessions are reclaimed here.
+  if (!launch_root_.empty()) {
+    base::ThreadPool::PostTask(
+        FROM_HERE, {base::MayBlock(), base::TaskPriority::BEST_EFFORT},
+        base::BindOnce(&MahoMailAttachmentRegistry::SweepLaunchRootOnWorker,
+                       launch_root_));
+  }
+}
 
 MahoMailAttachmentRegistry::~MahoMailAttachmentRegistry() {
   weak_ptr_factory_.InvalidateWeakPtrs();
@@ -322,6 +331,37 @@ void MahoMailAttachmentRegistry::DeleteConsumedAttachment(
       base::BindOnce(&base::DeleteFile, path), std::move(callback));
 }
 
+// static
+void MahoMailAttachmentRegistry::ReleaseLaunchedAttachment(
+    std::unique_ptr<ConsumedAttachment> attachment) {
+  if (attachment) {
+    // Clearing the path keeps ~ConsumedAttachment from deleting the file
+    // while still closing the protection handle.
+    attachment->TakePath();
+  }
+}
+
+// static
+void MahoMailAttachmentRegistry::DeleteStaleLaunchCopies(
+    const base::FilePath& launch_root,
+    base::Time cutoff) {
+  base::FileEnumerator enumerator(launch_root, /*recursive=*/false,
+                                  base::FileEnumerator::FILES);
+  for (base::FilePath path = enumerator.Next(); !path.empty();
+       path = enumerator.Next()) {
+    if (enumerator.GetInfo().GetLastModifiedTime() < cutoff) {
+      base::DeleteFile(path);
+    }
+  }
+}
+
+// static
+void MahoMailAttachmentRegistry::SweepLaunchRootOnWorker(
+    const base::FilePath& launch_root) {
+  DeleteStaleLaunchCopies(launch_root,
+                          base::Time::Now() - kLaunchCopyLifetime);
+}
+
 void MahoMailAttachmentRegistry::SetNowCallbackForTesting(
     NowCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -493,6 +533,7 @@ MahoMailAttachmentRegistry::ValidateOnWorker(const base::FilePath& staging_root,
   if (validated_handle_callback) {
     validated_handle_callback.Run();
   }
+  SweepLaunchRootOnWorker(launch_root);
   if (!base::CreateDirectory(launch_root)) {
     base::DeleteFile(entry.staged_path);
     result.error = kStageFailed;

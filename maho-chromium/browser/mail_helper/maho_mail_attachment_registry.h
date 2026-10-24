@@ -116,6 +116,21 @@ class MahoMailAttachmentRegistry {
       std::unique_ptr<ConsumedAttachment> attachment,
       CleanupCallback callback);
 
+  // Hands a successfully opened launch copy over to the viewer: drops the
+  // protection handle but keeps the file, since the platform reports success
+  // when the viewer is spawned, not when it has read the file. The copy is
+  // removed later by DeleteStaleLaunchCopies.
+  static void ReleaseLaunchedAttachment(
+      std::unique_ptr<ConsumedAttachment> attachment);
+
+  // Deletes launch copies directly under |launch_root| last modified before
+  // |cutoff|. Blocking; runs on a MayBlock sequence.
+  static void DeleteStaleLaunchCopies(const base::FilePath& launch_root,
+                                      base::Time cutoff);
+
+  // How long a released launch copy stays on disk for its viewer.
+  static constexpr base::TimeDelta kLaunchCopyLifetime = base::Hours(1);
+
   void SetGeneration(uint64_t generation);
   void RevokeAccount(const std::string& account_id);
   void RevokeAll();
@@ -197,6 +212,7 @@ class MahoMailAttachmentRegistry {
                                         base::RepeatingClosure
                                             validated_handle_callback,
                                         Entry entry);
+  static void SweepLaunchRootOnWorker(const base::FilePath& launch_root);
   static bool ReadFileIdentity(base::File* file,
                                FileIdentity* identity);
   static bool CopyValidatedFile(base::File* source,
