@@ -10057,6 +10057,10 @@ impl MahoCore {
         self.bookmark_manager.get_all_bookmarks()
     }
 
+    pub fn get_bookmark_folders(&self) -> Vec<&crate::bookmark_manager::BookmarkFolder> {
+        self.bookmark_manager.get_folders()
+    }
+
     pub fn search_bookmark_entries(&self, query: &str) -> Vec<&crate::bookmark_manager::Bookmark> {
         self.bookmark_manager.search_bookmarks(query)
     }
