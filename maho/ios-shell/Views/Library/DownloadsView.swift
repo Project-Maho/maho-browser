@@ -49,23 +49,6 @@ struct DownloadsView: View {
                             .tint(.orange)
                         }
                     }
-                    .swipeActions(edge: .leading) {
-                        if download.state == .downloading {
-                            Button {
-                                pauseDownload(download)
-                            } label: {
-                                Label { Text("Pause") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pause")) }
-                            }
-                            .tint(.yellow)
-                        } else if download.state == .paused {
-                            Button {
-                                resumeDownload(download)
-                            } label: {
-                                Label { Text("Resume") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("play")) }
-                            }
-                            .tint(.green)
-                        }
-                    }
             }
         }
         .listStyle(.plain)
@@ -95,22 +78,16 @@ struct DownloadsView: View {
         isLoading = false
     }
 
-    private func pauseDownload(_ download: DownloadViewModel) {
-        MahoBridge.shared.pauseDownload(id: download.id)
-        refreshDownloads()
-    }
-
-    private func resumeDownload(_ download: DownloadViewModel) {
-        MahoBridge.shared.resumeDownload(id: download.id)
-        refreshDownloads()
-    }
-
+    // WKDownload cannot pause, so active downloads only offer Cancel, which
+    // stops the real transfer before recording the cancellation in core.
     private func cancelDownload(_ download: DownloadViewModel) {
+        WebDownloadCoordinator.shared.cancel(downloadId: download.id)
         MahoBridge.shared.cancelDownload(id: download.id)
         refreshDownloads()
     }
 
     private func removeDownload(_ download: DownloadViewModel) {
+        WebDownloadCoordinator.shared.cancel(downloadId: download.id)
         MahoBridge.shared.removeDownload(id: download.id)
         downloads.removeAll { $0.id == download.id }
     }

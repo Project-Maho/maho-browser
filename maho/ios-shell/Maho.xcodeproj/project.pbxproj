@@ -192,16 +192,11 @@
 		F9036250E339083B9D8ACD12 /* StreamSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F2E9DA8EE3B2140B64919E0 /* StreamSessionTests.swift */; };
 		F995F435732C86BD69654503 /* AppThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBD842B11A5EC412F000F4C0 /* AppThemeStore.swift */; };
 		FEEC3E2C96B205E9F897A1A2 /* SyncDeviceRelayJourneyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41A5614A62D99EC298EB1CD1 /* SyncDeviceRelayJourneyTests.swift */; };
+		E3BED0A7E5000000000000A3 /* MahoWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = FC2AF47C54490139BFA3F501 /* MahoWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		E3BED0A7E5000000000000A6 /* LucideIcons in Frameworks */ = {isa = PBXBuildFile; productRef = E3BED0A7E5000000000000A5 /* LucideIcons */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		055A4EAAE22829FB65C2A348 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 8F97B9DDBF8E48D8F871C440 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 381E76B368444EEACDECB089;
-			remoteInfo = Maho;
-		};
 		166B2DECBF0789FABE57A659 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 8F97B9DDBF8E48D8F871C440 /* Project object */;
@@ -213,8 +208,8 @@
 			isa = PBXContainerItemProxy;
 			containerPortal = 8F97B9DDBF8E48D8F871C440 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 381E76B368444EEACDECB089;
-			remoteInfo = Maho;
+			remoteGlobalIDString = B0D7A06B4AE9329D610BD971;
+			remoteInfo = MahoWidget;
 		};
 		C702C0F345480897BE4D6F70 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -224,6 +219,20 @@
 			remoteInfo = Maho;
 		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		E3BED0A7E5000000000000A1 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E3BED0A7E5000000000000A3 /* MahoWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A078F4020000000000000001 /* MemoryThreadOwnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryThreadOwnerTests.swift; sourceTree = "<group>"; };
@@ -426,6 +435,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				BFEB32B4554E17F5C8AA6A5F /* LucideIcons in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E3BED0A7E5000000000000A4 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E3BED0A7E5000000000000A6 /* LucideIcons in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -898,10 +915,12 @@
 				96A7F4FCB047986B562B27F1 /* Sources */,
 				574D0393AE837139CDA6897F /* Resources */,
 				050318F26D770AF8BC2CD23C /* Frameworks */,
+				E3BED0A7E5000000000000A1 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C5B8D6D1EC4D269C3D4D50DE /* PBXTargetDependency */,
 			);
 			name = Maho;
 			packageProductDependencies = (
@@ -938,7 +957,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				FC3B8F5BD4795E432116756B /* PBXTargetDependency */,
 			);
 			name = MahoShareExtension;
 			packageProductDependencies = (
@@ -952,14 +970,15 @@
 			buildConfigurationList = 923D22C1374A1DC0B08F8B24 /* Build configuration list for PBXNativeTarget "MahoWidget" */;
 			buildPhases = (
 				E9CE7E2A9A2546281E25875E /* Sources */,
+				E3BED0A7E5000000000000A4 /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				C5B8D6D1EC4D269C3D4D50DE /* PBXTargetDependency */,
 			);
 			name = MahoWidget;
 			packageProductDependencies = (
+				E3BED0A7E5000000000000A5 /* LucideIcons */,
 			);
 			productName = MahoWidget;
 			productReference = FC2AF47C54490139BFA3F501 /* MahoWidget.appex */;
@@ -1276,27 +1295,24 @@
 		};
 		C5B8D6D1EC4D269C3D4D50DE /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 381E76B368444EEACDECB089 /* Maho */;
+			target = B0D7A06B4AE9329D610BD971 /* MahoWidget */;
 			targetProxy = A96F150DDB924A603DA3C422 /* PBXContainerItemProxy */;
-		};
-		FC3B8F5BD4795E432116756B /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 381E76B368444EEACDECB089 /* Maho */;
-			targetProxy = 055A4EAAE22829FB65C2A348 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		2638A06255728BB40A231BBA /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = "TEMP_64D4D08B-4F41-4ED2-8817-47BC417E668B" /* Signing.xcconfig */;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.maho.browser.share-extension";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.maho.browser.share-extension";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1543,14 +1559,16 @@
 		};
 		D73BCB9C9557A1640E9A59CB /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = "TEMP_64D4D08B-4F41-4ED2-8817-47BC417E668B" /* Signing.xcconfig */;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = ShareExtension/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "dev.maho.browser.share-extension";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.maho.browser.share-extension";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1575,14 +1593,16 @@
 		};
 		E75F8B476FC7F3E0FBD647D4 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = "TEMP_64D4D08B-4F41-4ED2-8817-47BC417E668B" /* Signing.xcconfig */;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = MahoWidget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.maho.browser.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.maho.browser.widget;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1590,14 +1610,16 @@
 		};
 		ECDE8C65EFCBE4550AF63F54 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = "TEMP_64D4D08B-4F41-4ED2-8817-47BC417E668B" /* Signing.xcconfig */;
 			buildSettings = {
+				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = MahoWidget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.maho.browser.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.maho.browser.widget;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1692,6 +1714,11 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		B927FE061448A6B3CDAACBEC /* LucideIcons */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1094525BF3B201F3DA0BBD8C /* XCRemoteSwiftPackageReference "lucide-icons-swift" */;
+			productName = LucideIcons;
+		};
+		E3BED0A7E5000000000000A5 /* LucideIcons */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 1094525BF3B201F3DA0BBD8C /* XCRemoteSwiftPackageReference "lucide-icons-swift" */;
 			productName = LucideIcons;

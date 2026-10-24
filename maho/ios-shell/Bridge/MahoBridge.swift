@@ -41,7 +41,10 @@ struct SqlCipherKeychain {
     static let service = "dev.maho.browser.storage"
     static let account = "sqlcipher-key"
 
-    static func getData() -> Data? {
+    // Tests pass their own service so they never read, overwrite, or delete the
+    // key that encrypts the hosting app's real maho.db (the test host shares
+    // the app's keychain).
+    static func getData(service: String = service) -> Data? {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -55,7 +58,7 @@ struct SqlCipherKeychain {
         return data
     }
 
-    static func set(key: String) -> Bool {
+    static func set(key: String, service: String = service) -> Bool {
         guard let data = key.data(using: .utf8) else { return false }
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
@@ -77,7 +80,7 @@ struct SqlCipherKeychain {
         return updateStatus == errSecSuccess
     }
 
-    static func delete() -> Bool {
+    static func delete(service: String = service) -> Bool {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -355,11 +358,19 @@ final class MahoBridge: @unchecked Sendable {
                     let destItem = stagingWebAi.appendingPathComponent(item.lastPathComponent)
                     let liveItem = existingLiveDir.appendingPathComponent("web-ai").appendingPathComponent(item.lastPathComponent)
 
-                    // Differential check: if file in live directory exists and matches size/date, copy from live, else copy from bundle
+                    // Differential check: reuse the live file only when BOTH size and
+                    // modification date match the bundle item (copies preserve the
+                    // bundle mtime). A same-size file from an older app build must
+                    // not survive an update, so anything else copies from the bundle.
                     if fileManager.fileExists(atPath: liveItem.path),
                        let liveAttrs = try? fileManager.attributesOfItem(atPath: liveItem.path),
                        let bundleAttrs = try? fileManager.attributesOfItem(atPath: item.path),
-                       (liveAttrs[.size] as? NSNumber) == (bundleAttrs[.size] as? NSNumber) {
+                       let liveSize = liveAttrs[.size] as? NSNumber,
+                       let bundleSize = bundleAttrs[.size] as? NSNumber,
+                       liveSize == bundleSize,
+                       let liveDate = liveAttrs[.modificationDate] as? Date,
+                       let bundleDate = bundleAttrs[.modificationDate] as? Date,
+                       liveDate == bundleDate {
                         try? fileManager.copyItem(at: liveItem, to: destItem)
                     } else {
                         try? fileManager.copyItem(at: item, to: destItem)

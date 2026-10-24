@@ -20,19 +20,28 @@ final class DeepLinkHandler {
             return false
         }
 
-        log.info("Handling deep link: \(url.absoluteString, privacy: .public)")
+        log.info("Handling deep link: \(url.absoluteString, privacy: .private)")
 
         switch host {
         case "open":
-            guard let urlParam = components.queryItems?.first(where: { $0.name == "url" })?.value else {
+            guard let urlParam = components.queryItems?.first(where: { $0.name == "url" })?.value,
+                  let target = URL(string: urlParam),
+                  let scheme = target.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  target.host?.isEmpty == false else {
+                log.warning("Rejected deep link open target with unsupported scheme")
                 return false
             }
-            onOpenURL?(urlParam)
+            onOpenURL?(target.absoluteString)
             return true
 
         case "search":
-            guard let query = components.queryItems?.first(where: { $0.name == "q" })?.value else {
-                return false
+            // An empty query (e.g. the widget's search entry) opens a new tab
+            // instead of a blank web search.
+            guard let query = components.queryItems?.first(where: { $0.name == "q" })?.value,
+                  !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                onNewTab?()
+                return true
             }
             onSearch?(query)
             return true

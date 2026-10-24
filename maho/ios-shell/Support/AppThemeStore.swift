@@ -60,16 +60,11 @@ final class AppThemeStore: ObservableObject {
     }
 
     static func persistedTheme(from bridge: MahoBridge = .shared) -> Theme {
-        guard let vm = bridge.getSettings() else { return .system }
-        for section in vm.sections {
-            for item in section.items where item.key == "appearance.theme" {
-                if let raw = item.value.value as? String,
-                   let parsed = Theme(rawValue: raw) {
-                    return parsed
-                }
-            }
+        guard let raw = CoreSettingsSnapshot.values(from: bridge)["theme"] as? String,
+              let parsed = Theme(rawValue: raw.lowercased()) else {
+            return .system
         }
-        return .system
+        return parsed
     }
 
     /// Installs a document-start hook that makes the selected native appearance
@@ -148,5 +143,35 @@ final class AppThemeStore: ObservableObject {
         for subview in view.subviews {
             applyTheme(toWebViewsIn: subview, theme: theme)
         }
+    }
+}
+
+/// Flat `key -> value` view of core's settings view model.
+///
+/// Read from the raw JSON because `AnyCodable` drops object values, and core
+/// emits every select item as `{"current": ..., "options": [...]}`; for those
+/// the `current` value is returned.
+enum CoreSettingsSnapshot {
+    static func values(from bridge: MahoBridge = .shared) -> [String: Any] {
+        guard let json = bridge.withCore({ ptr in
+                  FFIString.consume(maho_core_get_settings_view_model(ptr))
+              }) ?? nil,
+              let data = json.data(using: .utf8),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let sections = root["sections"] as? [[String: Any]] else {
+            return [:]
+        }
+        var values: [String: Any] = [:]
+        for section in sections {
+            for item in section["items"] as? [[String: Any]] ?? [] {
+                guard let key = item["key"] as? String, let value = item["value"] else { continue }
+                if let select = value as? [String: Any], let current = select["current"] {
+                    values[key] = current
+                } else {
+                    values[key] = value
+                }
+            }
+        }
+        return values
     }
 }

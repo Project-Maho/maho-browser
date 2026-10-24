@@ -60,14 +60,13 @@ struct RelayAuthRPCDependencies {
  *       onOpenSettings: { [weak self] in self?.presentSettings() }
  *   )
  *   let config = WKWebViewConfiguration()
+ *   config.setURLSchemeHandler(WebAIAssetSchemeHandler(), forURLScheme: WebAIAssetSchemeHandler.scheme)
  *   config.userContentController.add(controller, name: "mahoBridge")
  *   config.userContentController.add(controller, name: "mahoBridgeNav")
  *   let webView = WKWebView(frame: .zero, configuration: config)
  *
- * Load the bundle:
- *   let url = Bundle.main.url(forResource: "index", withExtension: "html",
- *                             subdirectory: "web-ai")!
- *   webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+ * Load the bundle (served from maho-webai://app/, see WebAIAssetSchemeHandler):
+ *   WebViewBridgeController.loadBundle(into: webView, screen: "byok")
  *
  * Dev mode: load http://localhost:5173/#byok instead of the bundle URL.
  */
@@ -102,6 +101,20 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     private var ownershipClosed = false
     private var ownedAgentHandles: Set<String> = []
     private var ownedChatHandles: Set<String> = []
+    // U15 request ledger (guarded by ownershipLock): handles freshly created by
+    // a resource-creating request stay "unclaimed" until web-ai sends
+    // bridgeResourceClaim. A bridgeRequestAbandon (JS timed out / aborted) frees
+    // an unclaimed handle, or marks the request so its later completion frees it.
+    private enum CreatedResource {
+        case agent(String)
+        case chat(String)
+    }
+    private static let resourceCreatingMethods: Set<String> = [
+        "agentCreateSession", "chatSessionStart", "chatSessionResume"
+    ]
+    private static let maxRequestLedgerEntries = 256
+    private var unclaimedResources: [String: CreatedResource] = [:]
+    private var abandonedRequestIds: Set<String> = []
 
     init(
         bridge: MahoBridge = .shared,
@@ -255,7 +268,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
 
     // MARK: - WKScriptMessageHandler
 
-    /// The bundle is loaded from `file://` (or `http://localhost:5173` when the
+    /// The bundle is loaded from `maho-webai://app` (or `http://localhost:5173` when the
     /// `MahoWebAIDev` flag is on). Only the main frame of such a page may reach
     /// native; sub-frames and every other origin are rejected.
     static func isTrustedBridgeSource(
@@ -267,8 +280,8 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     ) -> Bool {
         guard isMainFrame else { return false }
         switch scheme.lowercased() {
-        case "file":
-            return host.isEmpty
+        case WebAIAssetSchemeHandler.scheme:
+            return host == WebAIAssetSchemeHandler.host
         case "http":
             return devMode && host == "localhost" && port == 5173
         default:
@@ -276,17 +289,13 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// Navigation policy: only the bundled assets (file URLs under `roots`),
+    /// Navigation policy: only the bundled assets (`maho-webai://app`),
     /// `about:blank`, and the dev server (dev mode) may load in the bridge view.
-    static func isBundleNavigationAllowed(url: URL?, devMode: Bool, roots: [URL]) -> Bool {
+    static func isBundleNavigationAllowed(url: URL?, devMode: Bool) -> Bool {
         guard let url else { return false }
         switch url.scheme?.lowercased() {
-        case "file":
-            let path = url.resolvingSymlinksInPath().path
-            return roots.contains { root in
-                let rootPath = root.resolvingSymlinksInPath().path
-                return path == rootPath || path.hasPrefix(rootPath + "/")
-            }
+        case WebAIAssetSchemeHandler.scheme:
+            return url.host?.lowercased() == WebAIAssetSchemeHandler.host
         case "about":
             return url.absoluteString == "about:blank"
         case "http":
@@ -294,11 +303,6 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         default:
             return false
         }
-    }
-
-    private static var bundleRoots: [URL] {
-        [Bundle.main.bundleURL]
-            + FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
     }
 
     func userContentController(
@@ -413,14 +417,39 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
 
         let params = obj["params"] ?? []
 
+        // U15 control messages are internal ledger operations, not product
+        // RPCs: they always succeed and never depend on core startup.
+        if method == "bridgeResourceClaim" || method == "bridgeRequestAbandon" {
+            if let requestId = getParam(params, at: 0, name: "requestId") as? String {
+                if method == "bridgeResourceClaim" {
+                    claimRequest(requestId)
+                } else {
+                    abandonRequest(requestId)
+                }
+            }
+            return successResponse(id: id, result: nil)
+        }
+
         // U06i: after a failed startup, dependent RPCs fail explicitly instead
         // of returning null/empty profile results.
         if bridge.startupFailed {
             return errorResponse(id: id, message: "core_initialization_failed", kind: "native_error")
         }
 
+        // A resume that adopts an already-live session creates nothing, so an
+        // abandoned wait for it must never free that session.
+        let createsResource = Self.resourceCreatingMethods.contains(method)
+            && !(method == "chatSessionResume"
+                && (try? resumeConversationId(params)).map(chatRPC.hasSession) == true)
+
         do {
             let result = try dispatchMethod(method, params: params)
+            if createsResource, let requestId = id as? String, let handle = result as? String {
+                let resource: CreatedResource = method == "agentCreateSession" ? .agent(handle) : .chat(handle)
+                if !recordCreatedResource(resource, requestId: requestId) {
+                    return errorResponse(id: id, message: "request_abandoned", kind: "native_error")
+                }
+            }
             return successResponse(id: id, result: result)
         } catch let error as BridgeError {
             return errorResponse(id: id, message: error.rpcReason, kind: error.rpcKind)
@@ -508,6 +537,15 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         case "chatSessionResume":
             let conversationId = try resumeConversationId(params)
             if chatRPC.hasSession(conversationId) {
+                // Adopt the live session so this owner's teardown frees it,
+                // matching the create path below. release(id:) is idempotent.
+                ownershipLock.lock()
+                if ownershipClosed {
+                    ownershipLock.unlock()
+                    throw BridgeError.operationFailed("owner closed during chatSessionResume")
+                }
+                ownedChatHandles.insert(conversationId)
+                ownershipLock.unlock()
                 return conversationId
             }
             guard let conversation = chatRPC.conversation(conversationId) else {
@@ -526,6 +564,15 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             }
 
             chatRPC.bind(conversationId, ptr)
+
+            ownershipLock.lock()
+            if ownershipClosed {
+                ownershipLock.unlock()
+                ChatSessionRegistry.shared.release(id: conversationId)
+                throw BridgeError.operationFailed("owner closed during chatSessionResume")
+            }
+            ownedChatHandles.insert(conversationId)
+            ownershipLock.unlock()
 
             for turn in chatRPC.messages(conversationId) {
                 if turn.role == "user" {
@@ -547,7 +594,7 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
             let contentVal = getParam(params, at: 1, name: "content")
             let content = contentVal as? [String: Any] ?? [:]
             let text = content["text"] as? String ?? ""
-            if let imageObj = content["image"] as? [String: Any] {
+            if let imageObj = content["image"] as? [String: Any] ?? flatImagePayload(content) {
                 let mime = imageObj["mime"] as? String ?? ""
                 let rawBytes = imageObj["base64"] as? String ?? ""
                 let data = Data(base64Encoded: rawBytes) ?? Data()
@@ -985,6 +1032,65 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
         }
     }
 
+    // MARK: - U15 request ledger
+
+    /// Records a freshly created handle as unclaimed. Returns false (after
+    /// freeing the handle) when the JS side already abandoned the request.
+    private func recordCreatedResource(_ resource: CreatedResource, requestId: String) -> Bool {
+        ownershipLock.lock()
+        if abandonedRequestIds.remove(requestId) != nil {
+            ownershipLock.unlock()
+            freeCreatedResource(resource)
+            return false
+        }
+        if unclaimedResources.count >= Self.maxRequestLedgerEntries {
+            // Forgetting ledger entries never leaks: owner teardown still frees
+            // every owned handle. It only drops early-free on abandonment.
+            unclaimedResources.removeAll()
+        }
+        unclaimedResources[requestId] = resource
+        ownershipLock.unlock()
+        return true
+    }
+
+    private func claimRequest(_ requestId: String) {
+        ownershipLock.lock()
+        unclaimedResources.removeValue(forKey: requestId)
+        ownershipLock.unlock()
+    }
+
+    private func abandonRequest(_ requestId: String) {
+        ownershipLock.lock()
+        if let resource = unclaimedResources.removeValue(forKey: requestId) {
+            ownershipLock.unlock()
+            freeCreatedResource(resource)
+            return
+        }
+        if abandonedRequestIds.count >= Self.maxRequestLedgerEntries {
+            abandonedRequestIds.removeAll()
+        }
+        abandonedRequestIds.insert(requestId)
+        ownershipLock.unlock()
+    }
+
+    private func freeCreatedResource(_ resource: CreatedResource) {
+        switch resource {
+        case .agent(let handle):
+            if let ptr = AgentHandleRegistry.shared.get(id: handle) {
+                bridge.agentFreeSession(ptr)
+            }
+            AgentHandleRegistry.shared.unregister(id: handle)
+            ownershipLock.lock()
+            ownedAgentHandles.remove(handle)
+            ownershipLock.unlock()
+        case .chat(let handle):
+            ChatSessionRegistry.shared.release(id: handle)
+            ownershipLock.lock()
+            ownedChatHandles.remove(handle)
+            ownershipLock.unlock()
+        }
+    }
+
     // MARK: - JS response delivery
 
     private func resolveOnJS(_ responseJson: String) {
@@ -1040,6 +1146,13 @@ final class WebViewBridgeController: NSObject, WKScriptMessageHandler {
     }
 
     // MARK: - Parameter extraction helpers
+
+    /// web-ai ChatContent sends images flat: `{kind:"image", mime, base64, text?}`.
+    /// The legacy nested `{image:{mime, base64}}` shape is read separately.
+    private func flatImagePayload(_ content: [String: Any]) -> [String: Any]? {
+        guard content["kind"] as? String == "image" else { return nil }
+        return content
+    }
 
     private func getParam(_ params: Any, at index: Int, name: String) -> Any? {
         if let array = params as? [Any] {
@@ -1688,7 +1801,7 @@ extension WebViewBridgeController {
 
         let config = WKWebViewConfiguration()
         config.userContentController = ucc
-        // Allow file:// access for the bundled assets
+        config.setURLSchemeHandler(WebAIAssetSchemeHandler(), forURLScheme: WebAIAssetSchemeHandler.scheme)
         config.preferences.javaScriptEnabled = true
 
         let wv = WKWebView(frame: .zero, configuration: config)
@@ -1719,23 +1832,7 @@ extension WebViewBridgeController {
             return
         }
 
-        let storagePath = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent("dev.maho.browser", isDirectory: true)
-            .path
-        let assetURL: URL? = {
-            if let storagePath, let provisioned = MahoBridge.shared.getProvisionedAssetURL(storagePath: storagePath, relativePath: "web-ai/index.html") {
-                return provisioned
-            }
-            return Bundle.main.url(
-                forResource: "index",
-                withExtension: "html",
-                subdirectory: "web-ai"
-            )
-        }()
-
-        guard let bundleURL = assetURL else {
+        guard WebAIAssetSchemeHandler.currentRoot() != nil else {
             assertionFailure("[WebViewBridgeController] web-ai/index.html not found in bundle or provisioned storage")
             return
         }
@@ -1748,17 +1845,11 @@ extension WebViewBridgeController {
             hash += "?\(query)"
         }
 
-        // WKWebView requires a file URL; embed the hash as a URL fragment so
-        // app.tsx routes to the correct screen at boot (a post-load JS hash set
-        // races the document and can leave the router on the default screen).
-        let accessURL = bundleURL.deletingLastPathComponent()
-        let targetURL: URL
-        if hash.isEmpty || hash == "#" {
-            targetURL = bundleURL
-        } else {
-            targetURL = URL(string: bundleURL.absoluteString + hash) ?? bundleURL
-        }
-        webView.loadFileURL(targetURL, allowingReadAccessTo: accessURL)
+        // Embed the hash as a URL fragment so app.tsx routes to the correct
+        // screen at boot (a post-load JS hash set races the document and can
+        // leave the router on the default screen).
+        guard let targetURL = WebAIAssetSchemeHandler.entryURL(fragment: hash) else { return }
+        webView.load(URLRequest(url: targetURL))
     }
 }
 
@@ -1774,8 +1865,7 @@ extension WebViewBridgeController: WKNavigationDelegate {
         let url = navigationAction.request.url
         if Self.isBundleNavigationAllowed(
             url: url,
-            devMode: UserDefaults.standard.bool(forKey: "MahoWebAIDev"),
-            roots: Self.bundleRoots
+            devMode: UserDefaults.standard.bool(forKey: "MahoWebAIDev")
         ) {
             decisionHandler(.allow)
             return

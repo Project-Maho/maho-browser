@@ -13,10 +13,16 @@ extension MahoBridge {
     }
 
     func clearHistory() {
-        sendEvent(.clearHistory)
+        _ = withCore { ptr in
+            maho_core_clear_history(ptr)
+        }
     }
 
     func deleteHistoryEntry(id: String) {
-        sendEvent(.deleteHistoryEntry(entryId: id))
+        _ = withCore { ptr in
+            FFIString.withCString(id) { cEntryId in
+                maho_core_delete_history_entry(ptr, cEntryId)
+            }
+        }
     }
 }

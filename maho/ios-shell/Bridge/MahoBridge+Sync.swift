@@ -40,7 +40,10 @@ struct SyncStateResponse: Codable, Equatable {
         case .syncing:
             return .syncing(progress: 0)
         case .synced:
-            let value = lastSuccessAt.map(String.init) ?? ""
+            // Core reports epoch seconds; show a localized time, not the raw number.
+            let value = lastSuccessAt.map {
+                Date(timeIntervalSince1970: TimeInterval($0)).formatted(date: .abbreviated, time: .shortened)
+            } ?? ""
             return .synced(lastSyncAt: value)
         case .error:
             return .error(message: lastError ?? "Sync failed.")
@@ -77,6 +80,12 @@ protocol SyncCoreClient: AnyObject {
     func syncState() throws -> SyncStateResponse
     func syncRoomID() throws -> String
     func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2]
+    /// Returns the leased, unacknowledged batch to the core outbox after a
+    /// failed push so the next cycle re-sends the same delivery IDs.
+    func requeueLeasedEnvelopes() throws
+    /// Records the transport cycle state in core so the status UI reflects
+    /// real relay progress instead of staying "Ready to Poll" forever.
+    func reportTransportState(kind: String, lastError: String?)
     func acknowledge(_ ack: RelayAckV2) throws
     func receiveCursor(roomID: String) throws -> Int
     func apply(_ envelope: SyncEnvelopeV2, roomID: String) throws
@@ -95,6 +104,7 @@ private enum DynamicSyncFFI {
         UnsafePointer<CChar>?
     ) -> UnsafeMutablePointer<CChar>?
     typealias HandleJSON = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?) -> Int32
+    typealias Requeue = @convention(c) (OpaquePointer?) -> Int32
     typealias GetCursor = @convention(c) (OpaquePointer?, UnsafePointer<CChar>?) -> UInt64
 
     static func symbol<T>(_ name: String, as type: T.Type) -> T? {
@@ -193,6 +203,22 @@ extension MahoBridge: SyncCoreClient {
             throw SyncCoreError.operationFailed("lease V2 outbox")
         }
         return try RelayCoding.decoder.decode([SyncEnvelopeV2].self, from: Data(json.utf8))
+    }
+
+    func reportTransportState(kind: String, lastError: String?) {
+        guard let function = DynamicSyncFFI.symbol("maho_core_report_sync_transport_state", as: DynamicSyncFFI.HandleJSON.self),
+              let data = try? JSONSerialization.data(withJSONObject: ["kind": kind, "last_error": lastError as Any]),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+        _ = withCore { ptr in json.withCString { function(ptr, $0) } }
+    }
+
+    func requeueLeasedEnvelopes() throws {
+        guard let function = DynamicSyncFFI.symbol("maho_core_requeue_outgoing_envelopes", as: DynamicSyncFFI.Requeue.self) else {
+            throw SyncCoreError.unavailable("V2 outbox requeue")
+        }
+        let result = withCore { ptr in function(ptr) } ?? -1
+        guard result >= 0 else { throw SyncCoreError.operationFailed("requeue V2 outbox lease") }
     }
 
     func acknowledge(_ ack: RelayAckV2) throws {

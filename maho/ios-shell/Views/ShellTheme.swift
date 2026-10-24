@@ -222,7 +222,12 @@ enum ShellTheme {
         }
 
         static func bottomBarBadgeText(isIncognito: Bool) -> Color {
+#if canImport(UIKit)
+            // Badge fill is the bar foreground (.primary), so the text must invert with it.
+            isIncognito ? incognitoBackground : Color(uiColor: .systemBackground)
+#else
             isIncognito ? incognitoBackground : .white
+#endif
         }
 
         static func bottomBarBorder(for foreground: Color) -> Color {

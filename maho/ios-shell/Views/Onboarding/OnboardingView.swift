@@ -21,6 +21,9 @@ struct OnboardingWebView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var controller: WebViewBridgeController?
+        /// The bridge controller's own delegate (bundle-only navigation policy).
+        /// Every decision except the `maho-theme` scheme is forwarded to it.
+        weak var bridgeNavigationDelegate: WKNavigationDelegate?
 
         func webView(
             _ webView: WKWebView,
@@ -29,7 +32,13 @@ struct OnboardingWebView: UIViewRepresentable {
         ) {
             guard let url = navigationAction.request.url,
                   url.scheme == "maho-theme" else {
-                decisionHandler(.allow)
+                if bridgeNavigationDelegate?.webView?(
+                    webView,
+                    decidePolicyFor: navigationAction,
+                    decisionHandler: decisionHandler
+                ) == nil {
+                    decisionHandler(.cancel)
+                }
                 return
             }
 
@@ -64,6 +73,7 @@ struct OnboardingWebView: UIViewRepresentable {
             onCompleteOnboarding: onComplete
         )
         context.coordinator.controller = controller
+        context.coordinator.bridgeNavigationDelegate = webView.navigationDelegate
         webView.navigationDelegate = context.coordinator
         AppThemeStore.installWebColorSchemeBootstrap(on: webView.configuration.userContentController)
         AppThemeStore.apply(AppThemeStore.persistedTheme(), to: webView)

@@ -83,6 +83,22 @@ final class BridgeLifecycleTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testHandoffCurrentActivityIsReusedForSameURLAndClearedOnNil() throws {
+        let manager = HandoffManager.shared
+        let first = URL(string: "https://example.com/a")!
+        manager.updateCurrentActivity(with: first)
+        let activity = try XCTUnwrap(manager.currentActivity)
+        manager.updateCurrentActivity(with: first)
+        XCTAssertTrue(manager.currentActivity === activity)
+
+        manager.updateCurrentActivity(with: URL(string: "https://example.com/b")!)
+        XCTAssertFalse(manager.currentActivity === activity)
+
+        manager.updateCurrentActivity(with: nil)
+        XCTAssertNil(manager.currentActivity)
+    }
+
     // MARK: - Home / browsing shell route assumptions
 
     func testShellRouteHomeIsNotBrowsing() {

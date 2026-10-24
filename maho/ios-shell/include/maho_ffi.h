@@ -2264,6 +2264,15 @@ char *maho_core_drain_outgoing(struct MahoCore *ptr);
 char *maho_core_drain_outgoing_envelopes(struct MahoCore *ptr);
 
 /**
+ * Returns the leased, unacknowledged outgoing batch to the front of the queue
+ * after a failed push. Returns the number requeued, or -1 on failure.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by `maho_core_new`.
+ */
+int32_t maho_core_requeue_outgoing_envelopes(struct MahoCore *ptr);
+
+/**
  * Get and drain received tabs as a JSON array.
  * UI calls this periodically to fetch received tabs.
  *

@@ -28,6 +28,7 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>com.googleusercontent.apps.650357306759-hlbl52sp5f1jjo0jhtfionpb1l63tolq</string>
+				<string>maho</string>
 			</array>
 		</dict>
 	</array>
@@ -47,6 +48,10 @@
 	<string>Maho accesses your photo library to allow uploading images in web forms.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Maho uses your location to provide local search results and allow websites to access location when permitted.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

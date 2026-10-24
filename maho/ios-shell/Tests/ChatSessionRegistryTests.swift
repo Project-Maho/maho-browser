@@ -85,6 +85,34 @@ final class ChatSessionRegistryTests: XCTestCase {
         XCTAssertEqual(freeCount(), count)
     }
 
+    /// IB1: every release path routes through `nativeFree` exactly once per
+    /// pointer, which is where the shared registry also drops the event
+    /// context, so no path may skip it or run it twice.
+    func testEveryReleasePathInvokesNativeFreeExactlyOnce() {
+        let (registry, freeCount) = makeRegistry()
+        let byId = registry.register(ptr: makePtr())
+        let byPointer = makePtr()
+        _ = registry.register(ptr: byPointer)
+        _ = registry.register(ptr: makePtr())
+
+        registry.release(id: byId)
+        registry.releaseByPointer(byPointer)
+        registry.releaseByPointer(byPointer)
+        registry.releaseAll()
+        registry.release(id: byId)
+
+        XCTAssertEqual(freeCount(), 3)
+    }
+
+    func testUnregisterWithoutFreeNeverInvokesNativeFree() {
+        let (registry, freeCount) = makeRegistry()
+        let ptr = makePtr()
+        _ = registry.register(ptr: ptr)
+        registry.unregisterWithoutFree(ptr)
+        registry.releaseAll()
+        XCTAssertEqual(freeCount(), 0)
+    }
+
     // -------------------------------------------------------------------------
     // Concurrency — 10 concurrent tasks × 100 register+release cycles each
     // -------------------------------------------------------------------------

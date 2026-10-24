@@ -171,7 +171,8 @@ struct SearchSheet: View {
             Image(lucide: icon)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(fieldIconColor)
-                .frame(width: ShellTheme.Size.searchOverlayIconButton, height: ShellTheme.Size.searchOverlayIconButton)
+                .frame(width: ShellTheme.Size.searchOverlayIconButton, height: ShellTheme.Size.touchTarget)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier)
@@ -188,7 +189,8 @@ struct SearchSheet: View {
             Image(systemName: systemName)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(fieldIconColor)
-                .frame(width: ShellTheme.Size.searchOverlayIconButton, height: ShellTheme.Size.searchOverlayIconButton)
+                .frame(width: ShellTheme.Size.searchOverlayIconButton, height: ShellTheme.Size.touchTarget)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(accessibilityIdentifier)

@@ -137,12 +137,12 @@ struct BookmarksView: View {
     }
 
     private func deleteBookmark(_ bookmark: BookmarkEntry) {
-        MahoBridge.shared.sendEvent(.removeBookmark(bookmarkId: bookmark.id))
+        MahoBridge.shared.removeBookmark(id: bookmark.id)
         bookmarks.removeAll { $0.id == bookmark.id }
     }
 
     private func moveBookmarkToRoot(_ bookmark: BookmarkEntry) {
-        MahoBridge.shared.sendEvent(.moveBookmark(bookmarkId: bookmark.id, folderId: nil))
+        MahoBridge.shared.moveBookmark(id: bookmark.id, toFolder: nil)
         loadBookmarks()
     }
 

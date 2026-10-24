@@ -81,19 +81,33 @@ private final class ChatSessionEventRegistry {
         return states[key]?.buffer
     }
 
-    func unregister(_ sessionPtr: OpaquePointer) {
+    /// Removes the state for `sessionPtr` under the lock without releasing its
+    /// context. Detaching before the native free closes the window in which a
+    /// new session at a reused address could have its state removed by this
+    /// session's teardown.
+    func detach(_ sessionPtr: OpaquePointer) -> UnsafeMutableRawPointer? {
         let key = UnsafeMutableRawPointer(sessionPtr)
 
         lock.lock()
         let removed = states.removeValue(forKey: key)
         lock.unlock()
 
-        guard let removed else {
-            return
-        }
-
-        Unmanaged<ChatSessionEventContext>.fromOpaque(removed.contextPointer).release()
+        return removed?.contextPointer
     }
+
+    static func release(_ contextPointer: UnsafeMutableRawPointer) {
+        Unmanaged<ChatSessionEventContext>.fromOpaque(contextPointer).release()
+    }
+}
+
+/// Frees the native chat session and its event context. The context is
+/// detached from the registry first (so a session allocated at the same
+/// address afterwards keeps its own state) and released only after the native
+/// free, so no event callback can observe a released context.
+func freeChatSessionAndEventContext(_ sessionPtr: OpaquePointer) {
+    let contextPointer = ChatSessionEventRegistry.shared.detach(sessionPtr)
+    maho_core_chat_session_free(sessionPtr)
+    contextPointer.map(ChatSessionEventRegistry.release)
 }
 
 private func makeChatEventJSON(type: String, data: Any) -> String? {
@@ -202,8 +216,8 @@ extension MahoBridge {
     }
 
     func freeChatSession(_ ptr: OpaquePointer) {
+        // The shared registry's native free also releases the event context.
         ChatSessionRegistry.shared.releaseByPointer(ptr)
-        ChatSessionEventRegistry.shared.unregister(ptr)
     }
 
     @discardableResult

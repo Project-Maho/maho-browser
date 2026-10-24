@@ -104,10 +104,7 @@ struct MainBrowserView: View {
                         resumeTabFromHome(tabId)
                     },
                     onSelectSite: { url in
-                        if let activeSpace = bridge.getActiveSpaceId() {
-                            bridge.createTab(url: Url(url), inSpace: activeSpace)
-                            refreshState()
-                        }
+                        createTabAndNavigate(url)
                     }
                 )
                 .transition(.opacity)
@@ -192,6 +189,12 @@ struct MainBrowserView: View {
                     },
                     onOpenConversations: {
                         showConversations = true
+                    },
+                    onOpenHistory: {
+                        showHistory = true
+                    },
+                    onOpenDownloads: {
+                        showDownloads = true
                     },
                     onShare: shareCurrentPage,
                     onReload: reloadCurrentPage,
@@ -344,6 +347,7 @@ struct MainBrowserView: View {
             browserVM: browserVM,
             browserState: browserState,
             askAIQuery: askAIQuery,
+            onTabGridSelectTab: activateTab,
             onTabGridDismiss: handleTabGridDismiss,
             onNavigate: createTabAndNavigate
         )
@@ -359,9 +363,6 @@ struct MainBrowserView: View {
                 browserVM.navigate(to: url)
             }
             updateHandoffIfNeeded()
-        }
-        .userActivity(HandoffManager.activityType) { activity in
-            updateHandoffActivity(activity)
         }
         .onReceive(pinchSummarizer.$state) { newState in
             if case .result(let sentences) = newState {
@@ -389,6 +390,7 @@ struct MainBrowserView: View {
             }
         }
         .onChange(of: effectiveIsPrivate) { _, newValue in
+            updateHandoffIfNeeded()
             guard isSearchFocused else { return }
             commandBarVM.query(homeQuery, isIncognito: newValue)
         }
@@ -420,14 +422,14 @@ struct MainBrowserView: View {
         }
     }
 
+    /// Keeps one Handoff activity for the visible non-private page; private
+    /// browsing, Home and no-tab states advertise nothing.
     private func updateHandoffIfNeeded() {
-        guard activeTabId != nil, let url = URL(string: browserVM.currentUrl) else { return }
-        _ = HandoffManager.shared.makeActivity(with: url)
-    }
-
-    private func updateHandoffActivity(_ activity: NSUserActivity) {
-        guard activeTabId != nil, let url = URL(string: browserVM.currentUrl) else { return }
-        _ = HandoffManager.shared.makeActivity(with: url)
+        guard isBrowsing, !effectiveIsPrivate, let url = URL(string: browserVM.currentUrl) else {
+            HandoffManager.shared.clearCurrentActivity()
+            return
+        }
+        HandoffManager.shared.updateCurrentActivity(with: url)
     }
 
     private var currentSpaceTabs: [TabViewModel] {
@@ -1156,6 +1158,7 @@ struct MainBrowserView: View {
             for tab in privateTabs {
                 bridge.closeTab(id: tab.id)
             }
+            PrivateBrowsingDataStorePool.shared.resetIfNoPrivateTabs(in: bridge.getTabViewModels())
             isIncognito = false
             refreshState()
 

@@ -78,19 +78,12 @@ struct ReaderSettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "reader.fontFamily": fontFamily = (item.value.value as? String) ?? "System"
-                case "reader.fontSize": fontSize = (item.value.value as? Double) ?? 18.0
-                case "reader.theme":
-                    if let raw = item.value.value as? String, let t = ReaderTheme(rawValue: raw) {
-                        readerTheme = t
-                    }
-                default: break
-                }
-            }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
+        fontFamily = (values["reader_font"] as? String) ?? "System"
+        fontSize = (values["reader_font_size"] as? Double) ?? 18.0
+        if let raw = values["reader_theme"] as? String, let t = ReaderTheme(rawValue: raw.lowercased()) {
+            readerTheme = t
         }
     }
 }

@@ -35,6 +35,7 @@ extension WebViewBridgeController {
 
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = userContentController
+        configuration.setURLSchemeHandler(WebAIAssetSchemeHandler(), forURLScheme: WebAIAssetSchemeHandler.scheme)
         configuration.preferences.javaScriptEnabled = true
 
         let webView = WKWebView(frame: .zero, configuration: configuration)

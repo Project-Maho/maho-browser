@@ -139,12 +139,12 @@ struct HistoryView: View {
     }
 
     private func deleteEntry(_ entry: HistoryEntry) {
-        MahoBridge.shared.sendEvent(.deleteHistoryEntry(entryId: entry.id))
+        MahoBridge.shared.deleteHistoryEntry(id: entry.id)
         entries.removeAll { $0.id == entry.id }
     }
 
     private func clearAllHistory() {
-        MahoBridge.shared.sendEvent(.clearHistory)
+        MahoBridge.shared.clearHistory()
         entries.removeAll()
     }
 

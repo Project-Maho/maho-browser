@@ -20,8 +20,24 @@ final class PrivateBrowsingDataStorePool {
         return created
     }
 
+    /// Wipes the current private store and drops it. The data is removed from the
+    /// old store (not just the reference dropped) so a web view that is still alive
+    /// while it tears down cannot keep the cookies/cache of the ended session.
     func reset() {
+        guard let store = backingStore else { return }
         backingStore = nil
+        store.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: .distantPast
+        ) {
+            withExtendedLifetime(store) {}
+        }
+    }
+
+    /// Resets the store when no private tab remains in `tabs`.
+    func resetIfNoPrivateTabs(in tabs: [TabViewModel]) {
+        guard !tabs.contains(where: { $0.isPrivate }) else { return }
+        reset()
     }
 
     private init() {}

@@ -99,7 +99,7 @@ struct PrivacySettingsView: View {
                     titleVisibility: .visible
                 ) {
                     Button("Clear Data", role: .destructive) {
-                        bridge.sendEvent(.clearHistory)
+                        bridge.clearHistory()
                     }
                     Button("Cancel", role: .cancel) {}
                 }
@@ -116,23 +116,17 @@ struct PrivacySettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "privacy.doNotTrack": doNotTrack = (item.value.value as? Bool) ?? false
-                case "privacy.blockThirdPartyCookies": blockThirdPartyCookies = (item.value.value as? Bool) ?? false
-                case "privacy.contentBlockerEnabled": contentBlockerEnabled = (item.value.value as? Bool) ?? false
-                case "privacy.popupBlockerEnabled": popupBlockerEnabled = (item.value.value as? Bool) ?? false
-                case "privacy.searchSuggestionsEnabled": searchSuggestionsEnabled = (item.value.value as? Bool) ?? false
-                case "privacy.secureDnsEnabled": secureDnsEnabled = (item.value.value as? Bool) ?? false
-                case "privacy.secureDnsProvider": secureDnsProvider = (item.value.value as? String) ?? ""
-                case "privacy.clearDataOnExit": clearDataOnExit = (item.value.value as? Bool) ?? false
-                case "privacy.safeBrowsingEnabled": safeBrowsingEnabled = (item.value.value as? Bool) ?? true
-                default: break
-                }
-            }
-        }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
+        doNotTrack = (values["do_not_track"] as? Bool) ?? false
+        blockThirdPartyCookies = (values["block_third_party_cookies"] as? Bool) ?? false
+        contentBlockerEnabled = (values["content_blocker"] as? Bool) ?? false
+        popupBlockerEnabled = (values["popup_blocker"] as? Bool) ?? false
+        searchSuggestionsEnabled = (values["search_suggestions"] as? Bool) ?? false
+        secureDnsEnabled = (values["secure_dns"] as? Bool) ?? false
+        secureDnsProvider = (values["secure_dns_provider"] as? String) ?? ""
+        clearDataOnExit = (values["clear_data_on_exit"] as? Bool) ?? false
+        safeBrowsingEnabled = (values["safe_browsing"] as? Bool) ?? true
     }
 }
 

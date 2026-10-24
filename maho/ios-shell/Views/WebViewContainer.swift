@@ -59,6 +59,7 @@ struct WebViewContainer: UIViewRepresentable {
 
         let initialUrl = viewModel.currentUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if !initialUrl.isEmpty && initialUrl != "about:blank", let url = URL(string: initialUrl) {
+            context.coordinator.initialLoadRequestedUrl = initialUrl
             webView.load(URLRequest(url: url))
         }
 
@@ -71,8 +72,13 @@ struct WebViewContainer: UIViewRepresentable {
         AppThemeStore.apply(themeStore.theme, to: webView)
 
         let targetUrl = viewModel.currentUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A navigation that became a download never commits, so `webView.url`
+        // stays nil; only issue the initial load once per URL or every SwiftUI
+        // update restarts the download.
         if !targetUrl.isEmpty && targetUrl != "about:blank" && webView.url == nil,
+           context.coordinator.initialLoadRequestedUrl != targetUrl,
            let url = URL(string: targetUrl) {
+            context.coordinator.initialLoadRequestedUrl = targetUrl
             webView.load(URLRequest(url: url))
         }
     }

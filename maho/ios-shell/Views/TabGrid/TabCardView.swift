@@ -90,23 +90,26 @@ struct TabCardView: View {
                 Label { Text(tab.isFavorite ? "Remove from Favorites" : "Add to Favorites") } icon: { Image(lucide: MahoIcon.imageForSFSymbol(tab.isFavorite ? "star.slash" : "star")) }
             }
 
-            Menu {
-                if sendableDevices.isEmpty {
-                    Button {} label: {
-                        Label { Text("No devices") } icon: { Image(lucide: Lucide.smartphone) }
-                    }
-                    .disabled(true)
-                } else {
-                    ForEach(sendableDevices) { device in
-                        Button {
-                            MahoBridge.shared.sendTabToDevice(url: tab.url, title: title, deviceId: device.id)
-                        } label: {
-                            Label { Text(sendMenuTitle(for: device)) } icon: { Image(lucide: deviceIcon(for: device.deviceType)) }
+            if !tab.isPrivate {
+                Menu {
+                    if sendableDevices.isEmpty {
+                        Button {} label: {
+                            Label { Text("No devices") } icon: { Image(lucide: Lucide.smartphone) }
+                        }
+                        .disabled(true)
+                    } else {
+                        ForEach(sendableDevices) { device in
+                            Button {
+                                guard !tab.isPrivate else { return }
+                                MahoBridge.shared.sendTabToDevice(url: tab.url, title: title, deviceId: device.id)
+                            } label: {
+                                Label { Text(sendMenuTitle(for: device)) } icon: { Image(lucide: deviceIcon(for: device.deviceType)) }
+                            }
                         }
                     }
+                } label: {
+                    Label { Text("Send to Device") } icon: { Image(lucide: Lucide.send) }
                 }
-            } label: {
-                Label { Text("Send to Device") } icon: { Image(lucide: Lucide.send) }
             }
 
             Button {
@@ -174,16 +177,15 @@ struct TabCardView: View {
                 onClose()
             } label: {
                 Image(lucide: Lucide.x)
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.primary.opacity(0.75))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.primary.opacity(0.8))
                     .padding(ShellTheme.Spacing.xSmall)
-                    .background(
-                        ShellTheme.Palette.tabGridFloatingSurface,
-                        in: Circle()
-                    )
+                    .background(ShellTheme.Materials.tabGridCard, in: Circle())
+                    .overlay(Circle().strokeBorder(ShellTheme.Palette.overlayBorder, lineWidth: ShellTheme.Stroke.hairline))
+                    .frame(width: ShellTheme.Size.touchTarget, height: ShellTheme.Size.touchTarget)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(ShellTheme.Spacing.xSmall)
             .accessibilityIdentifier("tabCardClose_\(tab.id)")
             .accessibilityLabel("Close tab")
             .accessibilityHint("Closes this tab from the tab switcher.")

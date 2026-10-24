@@ -99,4 +99,36 @@ final class BridgeAssetsTests: XCTestCase {
         let nonExistent = MahoBridge.shared.getProvisionedAssetURL(storagePath: storagePath, relativePath: "does_not_exist.txt")
         XCTAssertNil(nonExistent)
     }
+
+    /// IB5: an app update that ships a same-size but different web-ai file must
+    /// replace the live copy; size alone must not let a stale file survive.
+    func testStagingReplacesSameSizeFileWithDifferentModificationDate() throws {
+        let fileManager = FileManager.default
+        let bundleDir = tempDir.appendingPathComponent("FakeBundle", isDirectory: true)
+        let webAiDir = bundleDir.appendingPathComponent("web-ai", isDirectory: true)
+        try fileManager.createDirectory(at: webAiDir, withIntermediateDirectories: true)
+        let bundleIndex = webAiDir.appendingPathComponent("index.html")
+        let bundle = try XCTUnwrap(Bundle(url: bundleDir))
+        let storageDir = tempDir.appendingPathComponent("storage", isDirectory: true)
+
+        try Data("OLD1".utf8).write(to: bundleIndex)
+        try fileManager.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_700_000_000)],
+            ofItemAtPath: bundleIndex.path
+        )
+        XCTAssertTrue(MahoBridge.shared.provisionAssets(storagePath: storageDir.path, bundle: bundle, force: true))
+
+        try Data("NEW2".utf8).write(to: bundleIndex)
+        try fileManager.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 1_800_000_000)],
+            ofItemAtPath: bundleIndex.path
+        )
+        XCTAssertTrue(MahoBridge.shared.provisionAssets(storagePath: storageDir.path, bundle: bundle, force: true))
+
+        let liveIndex = try XCTUnwrap(MahoBridge.shared.getProvisionedAssetURL(
+            storagePath: storageDir.path,
+            relativePath: "web-ai/index.html"
+        ))
+        XCTAssertEqual(try String(contentsOf: liveIndex, encoding: .utf8), "NEW2")
+    }
 }

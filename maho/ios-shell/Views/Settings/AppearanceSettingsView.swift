@@ -82,20 +82,13 @@ struct AppearanceSettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "appearance.density":
-                    if let raw = item.value.value as? String, let d = Density(rawValue: raw) {
-                        density = d
-                    }
-                case "appearance.showTabBar": showTabBar = (item.value.value as? Bool) ?? true
-                case "appearance.windowTransparency": windowTransparency = (item.value.value as? Bool) ?? false
-                case "appearance.customChromeCss": customCss = (item.value.value as? String) ?? ""
-                default: break
-                }
-            }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
+        // Core emits density as "Compact"/"Comfortable"; window transparency
+        // and custom CSS are not emitted, so those controls keep their defaults.
+        if let raw = values["density"] as? String, let d = Density(rawValue: raw.lowercased()) {
+            density = d
         }
+        showTabBar = (values["show_tab_bar"] as? Bool) ?? true
     }
 }

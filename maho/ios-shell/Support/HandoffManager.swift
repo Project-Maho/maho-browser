@@ -9,7 +9,26 @@ final class HandoffManager {
 
     var onReceiveURL: ((URL) -> Void)?
 
+    /// The single advertised browsing activity, retained so it can be resigned.
+    private(set) var currentActivity: NSUserActivity?
+
     private init() {}
+
+    /// Advertises `url` as the one current Handoff activity. Same URL keeps the
+    /// existing activity; nil (or a non-web URL) resigns and clears it.
+    func updateCurrentActivity(with url: URL?) {
+        if let url, currentActivity?.webpageURL == url { return }
+        clearCurrentActivity()
+        guard let url, let activity = makeActivity(with: url) else { return }
+        activity.becomeCurrent()
+        currentActivity = activity
+    }
+
+    func clearCurrentActivity() {
+        guard let activity = currentActivity else { return }
+        currentActivity = nil
+        clearActivity(activity)
+    }
 
     func makeActivity(with url: URL) -> NSUserActivity? {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
@@ -22,7 +41,6 @@ final class HandoffManager {
         activity.isEligibleForHandoff = true
         activity.isEligibleForSearch = false
         activity.isEligibleForPublicIndexing = false
-        activity.becomeCurrent()
         return activity
     }
 
@@ -37,7 +55,7 @@ final class HandoffManager {
             return false
         }
 
-        log.info("Received Handoff URL: \(url.absoluteString, privacy: .public)")
+        log.info("Received Handoff URL: \(url.absoluteString, privacy: .private)")
         onReceiveURL?(url)
         return true
     }

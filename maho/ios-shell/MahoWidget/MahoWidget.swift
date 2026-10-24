@@ -27,7 +27,7 @@ struct MahoWidgetEntryView: View {
     var entry: MahoWidgetProvider.Entry
 
     var body: some View {
-        Link(destination: URL(string: "maho://search?q=")!) {
+        Link(destination: URL(string: "maho://newtab")!) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     // `Image(lucide:)` lives in Support/MahoIcon.swift, which is a

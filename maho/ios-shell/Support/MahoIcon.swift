@@ -75,7 +75,7 @@ public enum MahoIcon: String, CaseIterable {
         case .privacy: return Lucide.shield
         case .helpFeedback: return Lucide.mail
         case .clearSweep: return Lucide.rotateCcw
-        case .delete: return Lucide.trash2
+        case .delete: return Lucide.trash
         case .share: return Lucide.share
         case .moreActions: return Lucide.circleEllipsis
         case .infoLock: return Lucide.lock
@@ -153,7 +153,7 @@ extension MahoIcon {
         case "bookmark": return Lucide.bookmark
         case "book": return Lucide.bookOpen
         case "clock": return Lucide.clock
-        case "clock.arrow.circlepath": return Lucide.history
+        case "clock.arrow.circlepath": return Lucide.clock
         case "tray.and.arrow.down": return Lucide.inbox
         case "photo", "photo.on.rectangle": return Lucide.image
         case "photo.on.rectangle.angled": return Lucide.images
@@ -181,7 +181,7 @@ extension MahoIcon {
         case "pause": return Lucide.pause
         case "stop.fill": return Lucide.circleStop
         case "video": return Lucide.video
-        case "music.note": return Lucide.music
+        case "music.note": return Lucide.listMusic
         case "mic": return Lucide.mic
 
         case "gearshape": return Lucide.settings
@@ -206,7 +206,7 @@ extension MahoIcon {
         case "minus.magnifyingglass": return Lucide.zoomOut
 
         case "sparkles", "sparkles.rectangle.stack": return Lucide.sparkles
-        case "trash": return Lucide.trash2
+        case "trash": return Lucide.trash
         case "person.crop.circle": return Lucide.circleUser
         case "puzzlepiece.extension": return Lucide.puzzle
         case "creditcard": return Lucide.creditCard

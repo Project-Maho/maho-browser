@@ -6,6 +6,8 @@ import os.log
 @MainActor
 final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UIGestureRecognizerDelegate {
     weak var webView: WKWebView?
+    /// URL the container already asked this WebView to load before any page committed.
+    var initialLoadRequestedUrl: String?
     var onPinchSummarize: (() -> Void)?
     var onNewTabRequested: ((URL) -> Void)?
     private let viewModel: BrowserViewModel
@@ -18,8 +20,6 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
     private var pinchSummarizeTriggered = false
-    private var activeDownloads: [ObjectIdentifier: String] = [:]
-    private var downloadObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
     private var originMediaPermissions: [String: [WKMediaCaptureType: WKPermissionDecision]] = [:]
     private var crashTimestamps: [Date] = []
 
@@ -111,15 +111,6 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
         canGoBackObservation?.invalidate()
         canGoForwardObservation?.invalidate()
 
-        for (_, observation) in downloadObservations {
-            observation.invalidate()
-        }
-        downloadObservations.removeAll()
-        for (_, downloadId) in activeDownloads {
-            bridge.cancelDownload(id: downloadId)
-        }
-        activeDownloads.removeAll()
-
         titleObservation = nil
         urlObservation = nil
         progressObservation = nil
@@ -169,6 +160,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
             viewModel.failedUrl = nil
             guard !viewModel.tabId.isEmpty else { return }
             bridge.sendEvent(.tabLoadingChanged(tabId: viewModel.tabId, isLoading: false))
+            guard webView.configuration.websiteDataStore.isPersistent else { return }
             let tabId = viewModel.tabId
             Task { @MainActor in
                 if let snapshot = await captureWebViewScreenshot(webView) {
@@ -254,7 +246,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
                 if UIApplication.shared.canOpenURL(url) {
                     await UIApplication.shared.open(url)
                 } else {
-                    self.log.warning("Cannot open external scheme URL: \(url.absoluteString, privacy: .public)")
+                    self.log.warning("Cannot open external scheme URL: \(url.absoluteString, privacy: .private)")
                 }
             }
             decisionHandler(.cancel)
@@ -266,7 +258,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
     ) {
-        if !navigationResponse.canShowMIMEType {
+        if !navigationResponse.canShowMIMEType || Self.isAttachmentResponse(navigationResponse.response) {
             if #available(iOS 14.5, *) {
                 decisionHandler(.download)
                 return
@@ -275,14 +267,24 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
         decisionHandler(.allow)
     }
 
+    /// RFC 6266: a `Content-Disposition: attachment` response is a download even
+    /// when WebKit could render its MIME type inline.
+    nonisolated static func isAttachmentResponse(_ response: URLResponse) -> Bool {
+        guard let http = response as? HTTPURLResponse,
+              let disposition = http.value(forHTTPHeaderField: "Content-Disposition")
+        else { return false }
+        let type = disposition.split(separator: ";", maxSplits: 1).first ?? ""
+        return type.trimmingCharacters(in: .whitespaces).lowercased() == "attachment"
+    }
+
     @available(iOS 14.5, *)
     nonisolated func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
-        download.delegate = self
+        MainActor.assumeIsolated { WebDownloadCoordinator.shared.adopt(download) }
     }
 
     @available(iOS 14.5, *)
     nonisolated func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
-        download.delegate = self
+        MainActor.assumeIsolated { WebDownloadCoordinator.shared.adopt(download) }
     }
 
     nonisolated func webView(
@@ -509,7 +511,60 @@ extension WebViewCoordinator: WKScriptMessageHandler {
     }
 }
 
-extension WebViewCoordinator: WKDownloadDelegate {
+/// App-lifetime owner of WKDownloads. `WKDownload.delegate` is weak and the
+/// per-tab `WebViewCoordinator` is dismantled on every tab switch, so downloads
+/// must be owned here for completion to be recorded.
+@MainActor
+final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
+    static let shared = WebDownloadCoordinator()
+
+    private let bridge = MahoBridge.shared
+    private let log = Logger(subsystem: "dev.maho.browser", category: "WebDownload")
+    private var downloads: [ObjectIdentifier: WKDownload] = [:]
+    private var activeDownloads: [ObjectIdentifier: String] = [:]
+    private var downloadObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    // Ids the user cancelled; their late completion must not mark them Completed.
+    private var cancelledDownloadIds: Set<String> = []
+
+    private override init() {
+        super.init()
+    }
+
+    @available(iOS 14.5, *)
+    func adopt(_ download: WKDownload) {
+        downloads[ObjectIdentifier(download)] = download
+        download.delegate = self
+    }
+
+    /// Stops the live transfer for a core download id. WebKit has no pause, so
+    /// this is the only control the Downloads screen offers for active items.
+    /// Returns false when no WKDownload backs `downloadId` (already finished).
+    @discardableResult
+    func cancel(downloadId: String) -> Bool {
+        guard let key = activeDownloads.first(where: { $0.value == downloadId })?.key,
+              let download = downloads[key] else {
+            return false
+        }
+        cancelledDownloadIds.insert(downloadId)
+        if #available(iOS 14.5, *) {
+            download.cancel { _ in
+                Task { @MainActor in
+                    // Cancellation does not deliver didFailWithError.
+                    _ = self.finish(download)
+                    self.cancelledDownloadIds.remove(downloadId)
+                }
+            }
+        }
+        return true
+    }
+
+    private func finish(_ download: WKDownload) -> String? {
+        let key = ObjectIdentifier(download)
+        downloads.removeValue(forKey: key)
+        downloadObservations.removeValue(forKey: key)?.invalidate()
+        return activeDownloads.removeValue(forKey: key)
+    }
+
     @available(iOS 14.5, *)
     nonisolated func download(
         _ download: WKDownload,
@@ -554,10 +609,10 @@ extension WebViewCoordinator: WKDownloadDelegate {
     nonisolated func downloadDidFinish(_ download: WKDownload) {
         Task { @MainActor in
             self.log.info("Download completed successfully")
-            let key = ObjectIdentifier(download)
-            self.downloadObservations.removeValue(forKey: key)?.invalidate()
-            if let downloadId = self.activeDownloads.removeValue(forKey: key) {
-                self.bridge.completeDownload(id: downloadId)
+            if let downloadId = self.finish(download) {
+                if self.cancelledDownloadIds.remove(downloadId) == nil {
+                    self.bridge.completeDownload(id: downloadId)
+                }
             }
         }
     }
@@ -566,9 +621,8 @@ extension WebViewCoordinator: WKDownloadDelegate {
     nonisolated func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         Task { @MainActor in
             self.log.error("Download failed: \(error.localizedDescription, privacy: .public)")
-            let key = ObjectIdentifier(download)
-            self.downloadObservations.removeValue(forKey: key)?.invalidate()
-            if let downloadId = self.activeDownloads.removeValue(forKey: key) {
+            if let downloadId = self.finish(download) {
+                self.cancelledDownloadIds.remove(downloadId)
                 self.bridge.cancelDownload(id: downloadId)
             }
         }

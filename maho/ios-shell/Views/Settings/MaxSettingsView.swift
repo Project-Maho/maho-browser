@@ -67,20 +67,14 @@ struct MaxSettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "max.enabled": enabled = (item.value.value as? Bool) ?? false
-                case "max.pagePreviews": pagePreviews = (item.value.value as? Bool) ?? false
-                case "max.tidyTabTitles": tidyTabTitles = (item.value.value as? Bool) ?? false
-                case "max.tidyDownloads": tidyDownloads = (item.value.value as? Bool) ?? false
-                case "max.tidyTabs": tidyTabs = (item.value.value as? Bool) ?? false
-                case "max.aiCommandBar": aiCommandBar = (item.value.value as? Bool) ?? false
-                case "max.instantLinks": instantLinks = (item.value.value as? Bool) ?? false
-                default: break
-                }
-            }
-        }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
+        enabled = (values["max_enabled"] as? Bool) ?? false
+        pagePreviews = (values["max_page_previews"] as? Bool) ?? false
+        tidyTabTitles = (values["max_tidy_tab_titles"] as? Bool) ?? false
+        tidyDownloads = (values["max_tidy_downloads"] as? Bool) ?? false
+        tidyTabs = (values["max_tidy_tabs"] as? Bool) ?? false
+        aiCommandBar = (values["max_ai_command_bar"] as? Bool) ?? false
+        instantLinks = (values["max_instant_links"] as? Bool) ?? false
     }
 }

@@ -25,9 +25,15 @@ private final class FailingRelayAuthStore: RelayAuthStoreProtocol {
     func clearSession() throws {}
 }
 
+/// Models core's outbox lease honestly: a lease removes envelopes from the
+/// queue until they are acknowledged or requeued, and a new lease first
+/// requeues any outstanding one (as core does).
 private final class FakeSyncCore: SyncCoreClient {
     var roomID = "0123456789abcdef0123456789abcdef"
     var outgoing = [SyncEnvelopeV2]()
+    var leased = [SyncEnvelopeV2]()
+    var requeueCount = 0
+    var reportedStates = [String]()
     var cursor = 0
     var acknowledged = [RelayAckV2]()
     var applied = [SyncEnvelopeV2]()
@@ -79,10 +85,29 @@ private final class FakeSyncCore: SyncCoreClient {
     }
     func leaseOutgoingEnvelopes() throws -> [SyncEnvelopeV2] {
         calls.append("lease")
-        return outgoing
+        outgoing.insert(contentsOf: leased, at: 0)
+        // Mirrors core: at most 64 envelopes per lease (relay push limit).
+        leased = Array(outgoing.prefix(64))
+        outgoing.removeFirst(leased.count)
+        return leased
+    }
+
+    func reportTransportState(kind: String, lastError: String?) {
+        reportedStates.append(kind)
+    }
+
+    func requeueLeasedEnvelopes() throws {
+        calls.append("requeue")
+        requeueCount += 1
+        outgoing.insert(contentsOf: leased, at: 0)
+        leased = []
     }
 
     func acknowledge(_ ack: RelayAckV2) throws {
+        guard let index = leased.firstIndex(where: { $0.deliveryId == ack.deliveryId }) else {
+            throw SyncCoreError.operationFailed("persist delivery ACK")
+        }
+        leased.remove(at: index)
         acknowledged.append(ack)
     }
 
@@ -117,6 +142,7 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
         createdAt: nil
     )
     var bootstrapRequestCount = 0
+    var bootstrapUnauthorizedOnce = false
 
     func authenticate(
         mode: RelayAuthMode,
@@ -140,6 +166,10 @@ private final class StubRelayAPIClient: RelayAPIClientProtocol {
 
     func getSyncBootstrap(session: RelayAuthSession) async throws -> RelaySyncBootstrap {
         bootstrapRequestCount += 1
+        if bootstrapUnauthorizedOnce {
+            bootstrapUnauthorizedOnce = false
+            throw RelayAPIError.unauthorized
+        }
         return bootstrap
     }
 
@@ -218,13 +248,27 @@ final class SyncTransportTests: XCTestCase {
     }
 
     func testSharedV2FixtureUsesIOSRelaySchema() throws {
-        #if targetEnvironment(simulator) || os(macOS)
-        let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/sync-v2/protocol.json")
-        let data = try Data(contentsOf: fixture)
+        // Wire sample of the relay's v2 push/ack. The shared fixture file stays in the
+        // private relay repo, so the client keeps its own copy (same as Android).
+        let data = Data("""
+        {
+          "push": {
+            "room_id": "0123456789abcdef0123456789abcdef",
+            "messages": [
+              {
+                "protocol_version": 2,
+                "delivery_id": "550e8400-e29b-41d4-a716-446655440000",
+                "payload": "AA==",
+                "relay_seq": null
+              }
+            ]
+          },
+          "ack": {
+            "delivery_id": "550e8400-e29b-41d4-a716-446655440000",
+            "seq": 5
+          }
+        }
+        """.utf8)
         let root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let pushData = try JSONSerialization.data(withJSONObject: root["push"]!)
         let ackData = try JSONSerialization.data(withJSONObject: root["ack"]!)
@@ -234,7 +278,6 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertEqual(push.roomId, "0123456789abcdef0123456789abcdef")
         XCTAssertEqual(push.messages.count, 1)
         XCTAssertEqual(push.messages.first?.deliveryId, ack.deliveryId)
-        #endif
     }
 
     func testRestartRestoresCoreAccountBootstrapAndEnabledStateBeforeUsingRoom() async {
@@ -250,6 +293,38 @@ final class SyncTransportTests: XCTestCase {
             Array(core.calls.prefix(5)),
             ["signIn", "configureBootstrap", "setSyncEnabled:true", "roomID", "lease"]
         )
+    }
+
+    func testRevokedAccessTokenRefreshesOnceAndResumesSync() async {
+        api.bootstrapUnauthorizedOnce = true
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(api.refreshCount, 1)
+        XCTAssertEqual(api.bootstrapRequestCount, 2)
+        XCTAssertEqual(core.configuredBootstrap?.seed, api.bootstrap.seed)
+    }
+
+    func testCompletedCycleReportsSyncingThenSyncedToCore() async {
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 0, applied: 0))
+        XCTAssertEqual(core.reportedStates, ["syncing", "synced"])
+    }
+
+    func testCycleDrainsLargeOfflineOutboxInRelaySizedBatches() async {
+        let ids = (0 ..< 70).map { String(format: "550e8400-e29b-41d4-a716-%012d", $0) }
+        core.outgoing = ids.map { envelope(id: $0, payload: "AA==", seq: nil) }
+        api.pushResponses = [Array(ids.prefix(64)), Array(ids.dropFirst(64))].map { batch in
+            .success(RelayPushResponse(acks: batch.enumerated().map { RelayAckV2(deliveryId: $0.element, seq: $0.offset + 1) }))
+        }
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 70, applied: 0))
+        XCTAssertEqual(api.pushRequests.map(\.1.count), [64, 6])
+        XCTAssertTrue(core.outgoing.isEmpty)
     }
 
     func testPerformCycleHydratesLatestSnapshotWhenAvailable() async {
@@ -359,6 +434,64 @@ final class SyncTransportTests: XCTestCase {
         XCTAssertEqual(authStore.session?.accessToken, "refreshed")
     }
 
+    func testUnauthorizedPushRetriesTheSameLeaseOnceAfterRefresh() async {
+        let first = envelope(id: "550e8400-e29b-41d4-a716-446655440010")
+        let second = envelope(id: "550e8400-e29b-41d4-a716-446655440011")
+        core.outgoing = [first, second]
+        api.pushResponses = [
+            .failure(RelayAPIError.unauthorized),
+            .success(RelayPushResponse(acks: [
+                RelayAckV2(deliveryId: first.deliveryId, seq: 1),
+                RelayAckV2(deliveryId: second.deliveryId, seq: 2),
+            ])),
+        ]
+
+        let outcome = await transport.runCycle()
+
+        XCTAssertEqual(outcome, .completed(pushed: 2, applied: 0))
+        XCTAssertEqual(api.refreshCount, 1)
+        XCTAssertEqual(core.calls.filter { $0 == "lease" }.count, 1, "a 401 retry must not re-lease")
+        XCTAssertEqual(core.requeueCount, 0)
+        XCTAssertEqual(api.pushRequests.map { $0.envelopes }, [[first, second], [first, second]])
+        XCTAssertEqual(core.acknowledged.map(\.deliveryId), [first.deliveryId, second.deliveryId])
+        XCTAssertTrue(core.outgoing.isEmpty)
+        XCTAssertTrue(core.leased.isEmpty)
+    }
+
+    func testFailedPushRequeuesLeaseAndNextCycleRepushesSameDeliveryIDs() async {
+        let first = envelope(id: "550e8400-e29b-41d4-a716-446655440010")
+        let second = envelope(id: "550e8400-e29b-41d4-a716-446655440011")
+        core.outgoing = [first, second]
+        api.pushResponses = [
+            .failure(RelayAPIError.http(statusCode: 503, message: "unavailable")),
+            .success(RelayPushResponse(acks: [
+                RelayAckV2(deliveryId: first.deliveryId, seq: 1),
+                RelayAckV2(deliveryId: second.deliveryId, seq: 2),
+            ])),
+        ]
+
+        let failed = await transport.runCycle()
+
+        guard case .failed = failed else {
+            return XCTFail("Expected the 503 push to fail the cycle.")
+        }
+        XCTAssertEqual(core.requeueCount, 1)
+        XCTAssertEqual(core.outgoing, [first, second])
+        XCTAssertTrue(core.leased.isEmpty)
+
+        let retried = await transport.runCycle()
+
+        XCTAssertEqual(retried, .completed(pushed: 2, applied: 0))
+        XCTAssertEqual(api.pushRequests.count, 2)
+        XCTAssertEqual(
+            api.pushRequests[1].envelopes.map(\.deliveryId),
+            api.pushRequests[0].envelopes.map(\.deliveryId)
+        )
+        XCTAssertEqual(core.acknowledged.map(\.deliveryId), [first.deliveryId, second.deliveryId])
+        XCTAssertTrue(core.outgoing.isEmpty)
+        XCTAssertTrue(core.leased.isEmpty)
+    }
+
     func testMismatchedAckFailsWithoutCompletingDurableOutbox() async {
         let outgoing = envelope(id: "550e8400-e29b-41d4-a716-446655440000")
         core.outgoing = [outgoing]
@@ -377,6 +510,8 @@ final class SyncTransportTests: XCTestCase {
             return XCTFail("Expected a relay ACK protocol failure.")
         }
         XCTAssertTrue(core.acknowledged.isEmpty)
+        XCTAssertEqual(core.outgoing, [outgoing])
+        XCTAssertTrue(core.leased.isEmpty)
     }
 
     func testFailedEnvelopeApplicationLeavesCursorUntouched() async {

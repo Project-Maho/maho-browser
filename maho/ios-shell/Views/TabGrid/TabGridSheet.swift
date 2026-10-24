@@ -2,6 +2,8 @@ import SwiftUI
 
 struct TabGridSheet: View {
     @Binding var isIncognito: Bool
+    /// Routes the shell to the selected tab. When nil, the tab is only activated in core.
+    var onSelectTab: ((TabId) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -36,12 +38,17 @@ struct TabGridSheet: View {
                 activeSpaceId: activeSpaceId,
                 isIncognito: isIncognito,
                 onSelectTab: { tabId in
-                    bridge.activateTab(id: tabId)
+                    if let onSelectTab {
+                        onSelectTab(tabId)
+                    } else {
+                        bridge.activateTab(id: tabId)
+                    }
                     dismiss()
                 },
                 onCloseTab: { tabId in
                     bridge.closeTab(id: tabId)
                     reloadState()
+                    PrivateBrowsingDataStorePool.shared.resetIfNoPrivateTabs(in: bridge.getTabViewModels())
                 }
             )
 
@@ -55,6 +62,7 @@ struct TabGridSheet: View {
                         bridge.closeTab(id: tab.id)
                     }
                     reloadState()
+                    PrivateBrowsingDataStorePool.shared.resetIfNoPrivateTabs(in: bridge.getTabViewModels())
                 },
                 onDone: {
                     dismiss()

@@ -235,7 +235,7 @@ final class VoiceSearchManager {
         }
         state = .result(trimmed)
         stopListening()
-        log.info("Voice search result: \(trimmed, privacy: .public)")
+        log.info("Voice search result: \(trimmed, privacy: .private)")
     }
 
     private func resetSilenceTimer() {

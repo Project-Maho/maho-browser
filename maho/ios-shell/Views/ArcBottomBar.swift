@@ -37,6 +37,8 @@ struct ArcBottomBar: View {
     let onSettings: () -> Void
     let onOpenAiChat: () -> Void
     let onOpenConversations: () -> Void
+    let onOpenHistory: () -> Void
+    let onOpenDownloads: () -> Void
     let onShare: () -> Void
     let onReload: () -> Void
     let onArchive: () -> Void
@@ -396,6 +398,18 @@ struct ArcBottomBar: View {
                     Label { Text("Browse for Me") } icon: { Image(lucide: Lucide.sparkles) }
                 }
                 .disabled(!canReload)
+            }
+
+            Section {
+                Button(action: onOpenHistory) {
+                    Label { Text("History") } icon: { Image(lucide: Lucide.clock) }
+                }
+                .accessibilityIdentifier("openHistoryButton")
+
+                Button(action: onOpenDownloads) {
+                    Label { Text("Downloads") } icon: { Image(lucide: Lucide.circleArrowDown) }
+                }
+                .accessibilityIdentifier("openDownloadsButton")
             }
 
             Section {

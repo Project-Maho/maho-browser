@@ -53,16 +53,10 @@ struct AdvancedSettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "advanced.developerMode": developerMode = (item.value.value as? Bool) ?? false
-                case "advanced.hardwareAcceleration": hardwareAcceleration = (item.value.value as? Bool) ?? true
-                case "advanced.experimentalFeatures": experimentalFeatures = (item.value.value as? Bool) ?? false
-                default: break
-                }
-            }
-        }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
+        developerMode = (values["developer_mode"] as? Bool) ?? false
+        hardwareAcceleration = (values["hardware_acceleration"] as? Bool) ?? true
+        experimentalFeatures = (values["experimental_features"] as? Bool) ?? false
     }
 }

@@ -65,7 +65,9 @@ struct ReaderWebView: UIViewRepresentable {
     let theme: ReaderTheme
     
     func makeUIView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
@@ -88,8 +90,8 @@ struct ReaderWebView: UIViewRepresentable {
         </head>
         <body>
             <div class="container">
-                <h1 class="title">\(article.title)</h1>
-                \(article.byline.isEmpty ? "" : "<p class=\"byline\">By \(article.byline)</p>")
+                <h1 class="title">\(Self.escapeHTML(article.title))</h1>
+                \(article.byline.isEmpty ? "" : "<p class=\"byline\">By \(Self.escapeHTML(article.byline))</p>")
                 <div class="content">
                     \(article.content)
                 </div>
@@ -104,7 +106,46 @@ struct ReaderWebView: UIViewRepresentable {
         Coordinator()
     }
     
-    class Coordinator: NSObject, WKNavigationDelegate {}
+    static func escapeHTML(_ text: String) -> String {
+        var escaped = ""
+        escaped.reserveCapacity(text.count)
+        for character in text {
+            switch character {
+            case "&": escaped += "&amp;"
+            case "<": escaped += "&lt;"
+            case ">": escaped += "&gt;"
+            case "\"": escaped += "&quot;"
+            case "'": escaped += "&#39;"
+            default: escaped.append(character)
+            }
+        }
+        return escaped
+    }
+
+    /// The reader view only ever shows its own `loadHTMLString` document;
+    /// link taps open in the system handler and nothing else may navigate it.
+    class Coordinator: NSObject, WKNavigationDelegate {
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        ) {
+            let url = navigationAction.request.url
+            if navigationAction.navigationType == .other,
+               navigationAction.targetFrame?.isMainFrame == true,
+               url == nil || url?.absoluteString == "about:blank" {
+                decisionHandler(.allow)
+                return
+            }
+            decisionHandler(.cancel)
+            if navigationAction.navigationType == .linkActivated,
+               let url,
+               let scheme = url.scheme?.lowercased(),
+               scheme == "http" || scheme == "https" {
+                UIApplication.shared.open(url)
+            }
+        }
+    }
     
     private func generateCSS() -> String {
         let scheme = ShellTheme.ReaderPalette.scheme(for: theme)

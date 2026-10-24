@@ -146,7 +146,8 @@ struct GeneralSettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
 
         if let storedSearchEngine = defaults.string(forKey: Self.searchEngineDefaultsKey) {
             selectedSearchEngine = storedSearchEngine
@@ -156,38 +157,36 @@ struct GeneralSettingsView: View {
             archiveTimeoutHours = defaults.double(forKey: Self.archiveTimingDefaultsKey)
         }
 
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "general.restoreOnLaunch":
-                    if let raw = item.value.value as? String, let policy = RestorePolicy(rawValue: raw) {
-                        restorePolicy = policy
-                    }
-                case "general.autoplayPolicy":
-                    if let raw = item.value.value as? String, let policy = AutoplayPolicy(rawValue: raw) {
-                        autoplayPolicy = policy
-                    }
-                case "general.defaultSearchEngine":
-                    if defaults.string(forKey: Self.searchEngineDefaultsKey) == nil,
-                       let raw = item.value.value as? String,
-                       Self.searchEngineOptions.contains(where: { $0.name == raw }) {
-                        selectedSearchEngine = raw
-                    }
-                case "general.archive_timeout":
-                    if defaults.object(forKey: Self.archiveTimingDefaultsKey) == nil,
-                       let val = item.value.value as? Double {
-                        archiveTimeoutHours = val
-                    }
-                case "general.downloadPath":
-                    if let val = item.value.value as? String { downloadPath = val }
-                default: break
-                }
-            }
+        // Core does not emit restore-on-launch or autoplay items, so those
+        // pickers keep their defaults.
+        if defaults.string(forKey: Self.searchEngineDefaultsKey) == nil,
+           let raw = values["search_engine"] as? String,
+           Self.searchEngineOptions.contains(where: { $0.name == raw }) {
+            selectedSearchEngine = raw
+        }
+        if defaults.object(forKey: Self.archiveTimingDefaultsKey) == nil,
+           let label = values["general.archive_timeout"] as? String,
+           let hours = Self.archiveTimeoutHours(forCoreLabel: label) {
+            archiveTimeoutHours = hours
+        }
+        if let path = values["download_path"] as? String { downloadPath = path }
+    }
+
+    private static func archiveTimeoutHours(forCoreLabel label: String) -> Double? {
+        switch label {
+        case "Off": return -1.0
+        case "12 hours": return 12.0
+        case "24 hours": return 24.0
+        case "7 days": return 168.0
+        case "30 days": return 720.0
+        case "60 days": return 1440.0
+        case "90 days": return 2160.0
+        default: return nil
         }
     }
 
     private func clearBrowsingData() {
-        bridge.sendEvent(.clearHistory)
+        bridge.clearHistory()
         let dataStore = WKWebsiteDataStore.default()
         let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
 

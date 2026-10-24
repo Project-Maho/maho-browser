@@ -68,17 +68,11 @@ struct NotificationSettingsView: View {
     }
 
     private func loadSettings() {
-        guard let vm = bridge.getSettings() else { return }
-        for section in vm.sections {
-            for item in section.items {
-                switch item.key {
-                case "notifications.enabled": enabled = (item.value.value as? Bool) ?? true
-                case "notifications.calendarNotifications": calendarNotifications = (item.value.value as? Bool) ?? true
-                case "notifications.updateNotifications": updateNotifications = (item.value.value as? Bool) ?? true
-                case "notifications.soundEnabled": soundEnabled = (item.value.value as? Bool) ?? true
-                default: break
-                }
-            }
-        }
+        let values = CoreSettingsSnapshot.values(from: bridge)
+        guard !values.isEmpty else { return }
+        enabled = (values["notifications_enabled"] as? Bool) ?? true
+        calendarNotifications = (values["calendar_notifications"] as? Bool) ?? true
+        updateNotifications = (values["update_notifications"] as? Bool) ?? true
+        soundEnabled = (values["notification_sound"] as? Bool) ?? true
     }
 }

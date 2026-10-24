@@ -8,19 +8,35 @@ extension MahoBridge {
     }
 
     func pauseDownload(id: String) {
-        sendEvent(.pauseDownload(downloadId: id))
+        _ = withCore { ptr in
+            FFIString.withCString(id) { cDownloadId in
+                maho_core_pause_download(ptr, cDownloadId)
+            }
+        }
     }
 
     func resumeDownload(id: String) {
-        sendEvent(.resumeDownload(downloadId: id))
+        _ = withCore { ptr in
+            FFIString.withCString(id) { cDownloadId in
+                maho_core_resume_download(ptr, cDownloadId)
+            }
+        }
     }
 
     func cancelDownload(id: String) {
-        sendEvent(.cancelDownload(downloadId: id))
+        _ = withCore { ptr in
+            FFIString.withCString(id) { cDownloadId in
+                maho_core_cancel_download(ptr, cDownloadId)
+            }
+        }
     }
 
     func removeDownload(id: String) {
-        sendEvent(.removeDownload(downloadId: id))
+        _ = withCore { ptr in
+            FFIString.withCString(id) { cDownloadId in
+                maho_core_remove_download(ptr, cDownloadId)
+            }
+        }
     }
 
     func startDownload(filename: String, url: String, totalBytes: Int64 = 0, filePath: String? = nil, mimeType: String? = nil) -> String? {

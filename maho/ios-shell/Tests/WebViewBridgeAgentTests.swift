@@ -853,8 +853,10 @@ final class WebViewBridgeAgentTests: XCTestCase {
 
     func testBridgeSourceRejectsSubframesAndForeignOrigins() {
         typealias C = WebViewBridgeController
-        XCTAssertTrue(C.isTrustedBridgeSource(isMainFrame: true, scheme: "file", host: "", port: 0, devMode: false))
-        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: false, scheme: "file", host: "", port: 0, devMode: false))
+        XCTAssertTrue(C.isTrustedBridgeSource(isMainFrame: true, scheme: "maho-webai", host: "app", port: 0, devMode: false))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: false, scheme: "maho-webai", host: "app", port: 0, devMode: false))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "maho-webai", host: "other", port: 0, devMode: false))
+        XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "file", host: "", port: 0, devMode: false))
         XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "https", host: "evil.example", port: 443, devMode: false))
         XCTAssertFalse(C.isTrustedBridgeSource(isMainFrame: true, scheme: "http", host: "localhost", port: 5173, devMode: false))
         XCTAssertTrue(C.isTrustedBridgeSource(isMainFrame: true, scheme: "http", host: "localhost", port: 5173, devMode: true))
@@ -862,12 +864,35 @@ final class WebViewBridgeAgentTests: XCTestCase {
     }
 
     func testBundleNavigationAllowsOnlyBundleFiles() {
-        let root = URL(fileURLWithPath: "/tmp/maho-bundle", isDirectory: true)
         typealias C = WebViewBridgeController
-        XCTAssertTrue(C.isBundleNavigationAllowed(url: URL(string: "file:///tmp/maho-bundle/web-ai/index.html#agent"), devMode: false, roots: [root]))
-        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "file:///etc/passwd"), devMode: false, roots: [root]))
-        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "https://example.com/"), devMode: false, roots: [root]))
-        XCTAssertFalse(C.isBundleNavigationAllowed(url: nil, devMode: false, roots: [root]))
+        XCTAssertTrue(C.isBundleNavigationAllowed(url: URL(string: "maho-webai://app/index.html#agent"), devMode: false))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "maho-webai://other/index.html"), devMode: false))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "file:///etc/passwd"), devMode: false))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: URL(string: "https://example.com/"), devMode: false))
+        XCTAssertFalse(C.isBundleNavigationAllowed(url: nil, devMode: false))
+    }
+
+    func testWebAIAssetSchemeResolvesOnlyFilesInsideRoot() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("chunks"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("<html></html>".utf8).write(to: root.appendingPathComponent("index.html"))
+        try Data("export {}".utf8).write(to: root.appendingPathComponent("chunks/a.js"))
+        let outside = root.deletingLastPathComponent().appendingPathComponent("\(UUID().uuidString).txt")
+        try Data("secret".utf8).write(to: outside)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        typealias H = WebAIAssetSchemeHandler
+        let realRoot = root.resolvingSymlinksInPath().path
+
+        XCTAssertEqual(H.resolve(url: URL(string: "maho-webai://app/index.html#onboarding")!, root: root)?.path, realRoot + "/index.html")
+        XCTAssertEqual(H.resolve(url: URL(string: "maho-webai://app/")!, root: root)?.path, realRoot + "/index.html")
+        XCTAssertEqual(H.resolve(url: URL(string: "maho-webai://app/chunks/a.js")!, root: root)?.path, realRoot + "/chunks/a.js")
+        XCTAssertNil(H.resolve(url: URL(string: "maho-webai://app/../\(outside.lastPathComponent)")!, root: root))
+        XCTAssertNil(H.resolve(url: URL(string: "maho-webai://app/%2E%2E/\(outside.lastPathComponent)")!, root: root))
+        XCTAssertNil(H.resolve(url: URL(string: "maho-webai://app/chunks")!, root: root))
+        XCTAssertNil(H.resolve(url: URL(string: "maho-webai://evil/index.html")!, root: root))
+        XCTAssertNil(H.resolve(url: URL(string: "file://\(root.path)/index.html")!, root: root))
+        XCTAssertEqual(H.mimeType(for: URL(fileURLWithPath: "/x/a.js")), "text/javascript")
     }
 
     func testAgentPermissionAllowlistIsReadOnlyOnly() {

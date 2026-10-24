@@ -346,7 +346,7 @@ struct SyncSettingsView: View {
 
     private var activeTabForSend: TabViewModel? {
         guard let activeTabId = bridge.getActiveTabId() else { return nil }
-        return bridge.getTabViewModels().first(where: { $0.id == activeTabId })
+        return bridge.getTabViewModels().first(where: { $0.id == activeTabId && !$0.isPrivate })
     }
 
     private func sendActiveTab(to device: ConnectedDevice) {
@@ -429,6 +429,13 @@ struct SyncSettingsView: View {
             syncStatus = status
         } else if relaySession == nil {
             syncStatus = .idle
+        }
+        // A cycle that fails before core sync is configured (expired session,
+        // bootstrap error) cannot be recorded in core; surface it instead of
+        // leaving the screen at "Ready to Poll".
+        if relaySession != nil, case .idle = syncStatus,
+           case .failed(let message)? = SyncTransport.shared.lastCycleOutcome {
+            syncStatus = .error(message: message)
         }
 
         devices = bridge.getConnectedDevices()

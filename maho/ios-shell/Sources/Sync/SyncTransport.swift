@@ -65,6 +65,11 @@ final class SyncTransport {
     /// unbounded backlog from blowing the background execution budget; the
     /// remainder is picked up by the next cycle because the cursor advanced.
     static let maxPullPagesPerCycle = 20
+    /// Core leases at most 64 envelopes per push (relay limit); a cycle drains
+    /// the outbox in up to this many batches so offline bursts are not left
+    /// pending behind a "Relay Up to Date" status.
+    static let maxPushBatchesPerCycle = 20
+    static let corePushBatchLimit = 64
 
     private let authStore: RelayAuthStoreProtocol
     private let apiClient: RelayAPIClientProtocol
@@ -212,6 +217,7 @@ final class SyncTransport {
     // MARK: - Cycle implementation
 
     private func performCycle() async -> SyncCycleOutcome {
+        core.reportTransportState(kind: "syncing", lastError: nil)
         postStatusChanged()
 
         guard var session = authStore.loadSession() else {
@@ -227,7 +233,13 @@ final class SyncTransport {
             if session.isAccessTokenExpired {
                 session = try await refreshSession(session)
             }
-            try await prepareCore(session: session)
+            // A stored access token can be revoked or expired server-side even when
+            // its local expiry has not passed; refresh once on 401 so sync resumes
+            // after a relaunch instead of failing every cycle.
+            session = try await withOneRefreshRetry(session: session) { activeSession in
+                try await self.prepareCore(session: activeSession)
+                return activeSession
+            }
         } catch {
             return finish(.failed(message: message(for: error)))
         }
@@ -246,8 +258,12 @@ final class SyncTransport {
         do {
             try await self.hydrateSnapshotIfNeeded(roomID: roomID, session: session)
 
-            let pushed = try await withOneRefreshRetry(session: session) { activeSession in
-                try await self.pushOutbox(roomID: roomID, session: activeSession)
+            var pushed = 0
+            for _ in 0 ..< Self.maxPushBatchesPerCycle {
+                try Task.checkCancellation()
+                let batch = try await pushOutbox(roomID: roomID, session: currentSession(fallback: session))
+                pushed += batch
+                if batch < Self.corePushBatchLimit { break }
             }
 
             let applied = try await withOneRefreshRetry(session: currentSession(fallback: session)) { activeSession in
@@ -258,9 +274,7 @@ final class SyncTransport {
         } catch is CancellationError {
             return finish(.skipped(reason: SyncTransportError.cancelled.localizedDescription))
         } catch {
-            let text = message(for: error)
-            log.error("Sync cycle failed: \(text, privacy: .public)")
-            return finish(.failed(message: text))
+            return finish(.failed(message: message(for: error)))
         }
     }
 
@@ -346,26 +360,39 @@ final class SyncTransport {
         authStore.loadSession() ?? fallback
     }
 
-    /// Leases the durable outbox and pushes it. Rows only leave the outbox when
-    /// their exact delivery ID comes back in the relay ACK list.
+    /// Leases the durable outbox once and pushes it. Rows only leave the outbox
+    /// when their exact delivery ID comes back in the relay ACK list. A 401
+    /// retry re-pushes the same leased envelopes; any failure before every ACK
+    /// is persisted returns the lease to core so the next cycle re-sends it.
     private func pushOutbox(roomID: String, session: RelayAuthSession) async throws -> Int {
         let envelopes = try core.leaseOutgoingEnvelopes()
         guard !envelopes.isEmpty else { return 0 }
 
-        try Task.checkCancellation()
-        let response = try await apiClient.push(roomID: roomID, envelopes: envelopes, session: session)
+        do {
+            try Task.checkCancellation()
+            let response = try await withOneRefreshRetry(session: session) { activeSession in
+                try await self.apiClient.push(roomID: roomID, envelopes: envelopes, session: activeSession)
+            }
 
-        let leased = Set(envelopes.map(\.deliveryId))
-        let acknowledged = Set(response.acks.map(\.deliveryId))
-        guard acknowledged == leased, acknowledged.count == response.acks.count else {
-            throw SyncTransportError.protocolViolation(
-                "relay ACK set did not exactly match the leased delivery IDs"
-            )
+            let leased = Set(envelopes.map(\.deliveryId))
+            let acknowledged = Set(response.acks.map(\.deliveryId))
+            guard acknowledged == leased, acknowledged.count == response.acks.count else {
+                throw SyncTransportError.protocolViolation(
+                    "relay ACK set did not exactly match the leased delivery IDs"
+                )
+            }
+            for ack in response.acks {
+                try core.acknowledge(ack)
+            }
+            return response.acks.count
+        } catch {
+            do {
+                try core.requeueLeasedEnvelopes()
+            } catch let requeueError {
+                log.error("Failed requeueing sync lease: \(requeueError.localizedDescription, privacy: .public)")
+            }
+            throw error
         }
-        for ack in response.acks {
-            try core.acknowledge(ack)
-        }
-        return response.acks.count
     }
 
     /// Pulls pages after the core-owned receive cursor and applies each envelope.
@@ -412,9 +439,17 @@ final class SyncTransport {
     private func finish(_ outcome: SyncCycleOutcome) -> SyncCycleOutcome {
         lastCycleOutcome = outcome
         switch outcome {
-        case .completed, .skipped:
+        case .completed:
+            core.reportTransportState(kind: "synced", lastError: nil)
+            postStatusChanged()
+        case .skipped:
+            core.reportTransportState(kind: "idle", lastError: nil)
             postStatusChanged()
         case .failed(let message):
+            // Every failed cycle is logged here, including failures before the
+            // core sync manager exists (auth/bootstrap), which core cannot record.
+            log.error("Sync cycle failed: \(message, privacy: .public)")
+            core.reportTransportState(kind: "error", lastError: message)
             NotificationCenter.default.post(
                 name: .syncStatusChanged,
                 object: nil,

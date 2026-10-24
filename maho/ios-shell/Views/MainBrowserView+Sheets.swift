@@ -17,6 +17,7 @@ extension View {
         browserVM: BrowserViewModel,
         browserState: BrowserState,
         askAIQuery: String?,
+        onTabGridSelectTab: @escaping (TabId) -> Void,
         onTabGridDismiss: @escaping () -> Void,
         onNavigate: @escaping (String) -> Void
     ) -> some View {
@@ -37,6 +38,7 @@ extension View {
                 browserVM: browserVM,
                 browserState: browserState,
                 askAIQuery: askAIQuery,
+                onTabGridSelectTab: onTabGridSelectTab,
                 onTabGridDismiss: onTabGridDismiss,
                 onNavigate: onNavigate
             )
@@ -61,13 +63,14 @@ private struct MainBrowserSheets: ViewModifier {
 
     let browserState: BrowserState
     let askAIQuery: String?
+    let onTabGridSelectTab: (TabId) -> Void
     let onTabGridDismiss: () -> Void
     let onNavigate: (String) -> Void
 
     func body(content: Content) -> some View {
         content
             .sheet(isPresented: $showTabGrid, onDismiss: onTabGridDismiss) {
-                TabGridSheet(isIncognito: $isIncognito)
+                TabGridSheet(isIncognito: $isIncognito, onSelectTab: onTabGridSelectTab)
                     .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: $showSettings) {

@@ -1,8 +1,5 @@
 import Foundation
-
-
-
-
+import os.log
 
 struct SettingsBundle: Codable {
     var searchSuggestions: Bool = true
@@ -10,6 +7,10 @@ struct SettingsBundle: Codable {
     var contentBlocker: Bool = false
 }
 
+/// State for the archive / legacy settings sheets. It does NOT drain the core
+/// update queue: `MainBrowserView` is the single consumer of `tickDrain()`, and a
+/// second drainer here would silently steal updates from it. Callers refresh this
+/// object explicitly (`refreshState()`, `loadArchivedTabs()`).
 @MainActor
 class BrowserState: ObservableObject {
     @Published var currentUrl: String = ""
@@ -32,85 +33,49 @@ class BrowserState: ObservableObject {
     @Published var showSettings: Bool = false
 
     private let bridge = MahoBridge.shared
-    private var tickTimer: Timer?
+    private let log = Logger(subsystem: "dev.maho.browser", category: "BrowserState")
 
     init() {
         refreshState()
-        tickTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.drainCoreUpdates()
-            }
-        }
-    }
-
-    deinit {
-        tickTimer?.invalidate()
     }
 
     func goBack() {
-        bridge.sendEvent(name: "navigate_back")
+        guard let tabId = bridge.getActiveTabId() else { return }
+        bridge.sendEvent(.goBack(tabId: tabId))
         refreshState()
     }
 
     func goForward() {
-        bridge.sendEvent(name: "navigate_forward")
+        guard let tabId = bridge.getActiveTabId() else { return }
+        bridge.sendEvent(.goForward(tabId: tabId))
         refreshState()
     }
 
     func refreshState() {
-        guard let json = bridge.getStateJson() else { return }
-        guard let data = json.data(using: .utf8) else { return }
-        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        tabs = bridge.getTabViewModels()
+        spaces = bridge.getSpaceViewModels()
+        downloads = bridge.getDownloads()
 
-        if let url = dict["currentUrl"] as? String {
-            currentUrl = url
-        }
-        if let back = dict["canGoBack"] as? Bool {
-            canGoBack = back
-        }
-        if let forward = dict["canGoForward"] as? Bool {
-            canGoForward = forward
-        }
-        if let tabData = try? JSONSerialization.data(withJSONObject: dict["tabs"] ?? []),
-           let decoded = try? JSONDecoder().decode([TabViewModel].self, from: tabData) {
-            tabs = decoded
-        }
-        if let spaceData = try? JSONSerialization.data(withJSONObject: dict["spaces"] ?? []),
-           let decoded = try? JSONDecoder().decode([SpaceViewModel].self, from: spaceData) {
-            spaces = decoded
-        }
-        if let folderData = try? JSONSerialization.data(withJSONObject: dict["folders"] ?? []),
-           let decoded = try? JSONDecoder().decode([FolderViewModel].self, from: folderData) {
-            folders = decoded
-        }
-        if let downloadData = try? JSONSerialization.data(withJSONObject: dict["downloads"] ?? []),
-           let decoded = try? JSONDecoder().decode([DownloadViewModel].self, from: downloadData) {
-            downloads = decoded
-        }
-        if let settingsData = try? JSONSerialization.data(withJSONObject: dict["settings"] ?? [:]),
-           let decoded = try? JSONDecoder().decode(SettingsBundle.self, from: settingsData) {
-            settings = decoded
-        }
-    }
+        let activeSpaceId = bridge.getActiveSpaceId()
+        folders = activeSpaceId.map { bridge.getFolderViewModels(spaceId: $0) } ?? []
 
-    func drainCoreUpdates() {
-        guard let updatesJson = bridge.tickJson() else { return }
-        guard let data = updatesJson.data(using: .utf8) else { return }
-        guard let updates = try? JSONDecoder().decode([CoreUpdate].self, from: data) else { return }
-        processCoreUpdates(updates)
-    }
+        let activeTabId = bridge.getActiveTabId()
+        currentUrl = tabs.first(where: { $0.id == activeTabId })?.url ?? ""
 
-    func processCoreUpdates(_ updates: [CoreUpdate]) {
-        for update in updates {
-            switch update {
-            case .tabsMigrated:
-                refreshState()
-            case .openPeekTab(let url, let sourceTabId):
-                bridge.sendEvent(name: "open_peek_tab", payload: ["url": url.value, "sourceTabId": sourceTabId])
-            case .favoriteLimitReached:
-                break
-            default:
-                break
+        if let viewModel = bridge.getSettings() {
+            for section in viewModel.sections {
+                for item in section.items {
+                    guard let value = item.value.value as? Bool else { continue }
+                    switch item.key {
+                    // Keys emitted by maho-core settings_manager.rs get_settings_view_model.
+                    case "search_suggestions": settings.searchSuggestions = value
+                    case "popup_blocker": settings.popupBlocker = value
+                    case "content_blocker":
+                        settings.contentBlocker = value
+                        contentBlockerEnabled = value
+                    default: break
+                    }
+                }
             }
         }
     }
@@ -129,20 +94,28 @@ class BrowserState: ObservableObject {
     }
 
     func updateContentRules() {
-        let payload: [String: Any] = [
-            "enabled": contentBlockerEnabled,
-            "ruleIds": Array(enabledRuleIds)
-        ]
-        bridge.sendEvent(name: "update_content_rules", payload: payload)
+        bridge.setContentBlocker(contentBlockerEnabled)
+        for rule in contentRules {
+            bridge.sendEvent(.toggleFilterList(id: rule.id, enabled: enabledRuleIds.contains(rule.id)))
+        }
     }
 
     func updateSetting(key: String, value: AnyCodable) {
-        let payload: [String: Any] = ["key": key, "value": encodeAnyCodable(value)]
-        bridge.sendEvent(name: "update_setting", payload: payload)
+        guard let enabled = value.value as? Bool else {
+            log.warning("Ignoring non-boolean setting update for \(key, privacy: .public)")
+            return
+        }
+        switch key {
+        case "general.search_suggestions":
+            bridge.updatePrivacySettings(PrivacySettingsUpdate(searchSuggestionsEnabled: enabled))
+        case "general.popup_blocker":
+            bridge.updatePrivacySettings(PrivacySettingsUpdate(popupBlockerEnabled: enabled))
+        case "privacy.content_blocker":
+            bridge.setContentBlocker(enabled)
+        default:
+            log.warning("Ignoring unknown setting key \(key, privacy: .public)")
+            return
+        }
         refreshState()
-    }
-
-    private func encodeAnyCodable(_ value: AnyCodable) -> Any {
-        return value.value ?? ""
     }
 }

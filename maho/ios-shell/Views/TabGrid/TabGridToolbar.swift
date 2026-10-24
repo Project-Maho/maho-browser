@@ -42,7 +42,8 @@ struct TabGridToolbar: View {
         HStack(spacing: ShellTheme.Spacing.medium) {
             VStack(alignment: .leading, spacing: ShellTheme.Spacing.badgeVertical) {
                 Text(activeSpaceName)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
                     .foregroundStyle(spaceNameColor)
                 Text("\(tabCount) tab\(tabCount != 1 ? "s" : "")")
                     .font(.caption2.weight(.bold))
@@ -60,14 +61,14 @@ struct TabGridToolbar: View {
                         showCloseAllConfirmation = true
                     } label: {
                         HStack(spacing: 4) {
-                            Image(lucide: Lucide.trash2)
+                            Image(lucide: Lucide.trash)
                                 .font(.body.weight(.bold))
                             Text("Close all")
                                 .font(.caption.weight(.semibold))
                         }
-                        .foregroundStyle(.red)
+                        .foregroundStyle(ShellTheme.Palette.error)
                         .padding(.horizontal, ShellTheme.Spacing.medium)
-                        .padding(.vertical, ShellTheme.Spacing.small)
+                        .frame(minHeight: ShellTheme.Size.touchTarget)
                         .background(
                             Capsule()
                                 .fill(controlFill)
@@ -89,8 +90,8 @@ struct TabGridToolbar: View {
                     Text("Done")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(doneForeground)
-                        .padding(.horizontal, ShellTheme.Spacing.medium)
-                        .padding(.vertical, ShellTheme.Spacing.small)
+                        .padding(.horizontal, ShellTheme.Spacing.large)
+                        .frame(minHeight: ShellTheme.Size.touchTarget)
                         .background(
                             Capsule()
                                 .fill(controlFill)

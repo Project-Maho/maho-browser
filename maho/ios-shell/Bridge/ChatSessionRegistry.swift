@@ -114,7 +114,10 @@ final class ChatSessionRegistry {
         return sessions.first(where: { $0.value == ptr })?.key
     }
 
+    /// Every release path (`release(id:)`, `releaseAll()`, `releaseByPointer`)
+    /// funnels through this closure, so the event-sink context retained at
+    /// session creation is released exactly once, together with the session.
     static let shared = ChatSessionRegistry { ptr in
-        maho_core_chat_session_free(ptr)
+        freeChatSessionAndEventContext(ptr)
     }
 }

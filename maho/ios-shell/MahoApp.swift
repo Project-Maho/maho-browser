@@ -41,7 +41,12 @@ struct MahoApp: App {
         os_signpost(.end, log: launchLog, name: "loadState")
         E2ETestHooks.runOnBoot()
         SyncManager.registerBackgroundRefresh()
-        SyncManager.shared.configureForCurrentSession()
+        // The unit-test host shares this app's Keychain relay session. Starting real
+        // sync there rotates the refresh token and the host is killed mid-request,
+        // leaving the stored session revoked ("session expired" on next launch).
+        if !isRunningUITests {
+            SyncManager.shared.configureForCurrentSession()
+        }
     }
 
     var body: some Scene {
@@ -77,7 +82,9 @@ struct MahoApp: App {
                 SyncManager.shared.appDidEnterBackground()
             case .active:
                 ConversationArchiveForegroundBridge.sweep()
-                SyncManager.shared.configureForCurrentSession()
+                if !isRunningUITests {
+                    SyncManager.shared.configureForCurrentSession()
+                }
                 themeStore.refresh()
             case .inactive:
                 break

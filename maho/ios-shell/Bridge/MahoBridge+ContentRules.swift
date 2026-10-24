@@ -92,8 +92,7 @@ extension MahoBridge {
         }
 
         guard let jsonRules: String = withCore({ ptr -> String? in
-            guard let raw = maho_core_get_content_rules(ptr) else { return nil }
-            return String(cString: raw)
+            FFIString.consume(maho_core_get_content_rules(ptr))
         }) ?? nil else { return }
         compileContentRules(json: jsonRules) { [weak self] ruleList in
             guard let ruleList else { return }

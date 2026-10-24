@@ -17,7 +17,12 @@ private final class MemoryThreadDocument: NSObject, WKNavigationDelegate {
     }
 
     func load() {
-        host.webView.loadHTMLString("<html><body>Memory thread native transport fixture</body></html>", baseURL: nil)
+        // The bridge only accepts the production origin (maho-webai://app), so the
+        // fixture must load there; an about:blank document is dropped as untrusted.
+        host.webView.loadHTMLString(
+            "<html><body>Memory thread native transport fixture</body></html>",
+            baseURL: URL(string: "\(WebAIAssetSchemeHandler.scheme)://\(WebAIAssetSchemeHandler.host)/")
+        )
         XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 10), .completed)
     }
 
@@ -51,6 +56,11 @@ private final class MemoryThreadDocument: NSObject, WKNavigationDelegate {
         let drained = XCTestExpectation(description: "native owner close fence")
         host.controller.dispatchQueue.async { drained.fulfill() }
         XCTAssertEqual(XCTWaiter.wait(for: [drained], timeout: 5), .completed)
+        // Teardown removes the script handlers in a Main hop queued by the
+        // controller queue; drain Main so that removal has run.
+        let mainDrained = XCTestExpectation(description: "handler removal on Main")
+        DispatchQueue.main.async { mainDrained.fulfill() }
+        XCTAssertEqual(XCTWaiter.wait(for: [mainDrained], timeout: 5), .completed)
     }
 }
 

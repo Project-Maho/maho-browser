@@ -9,8 +9,10 @@ extension MahoBridge {
     }
 
     func getActiveProfileId() -> ProfileId? {
+        // The FFI returns the id JSON-encoded (a quoted string, as desktop expects);
+        // reading it raw made every id comparison fail and showed the quoted UUID.
         withCore { ptr in
-            FFIString.consume(maho_core_get_active_profile_id(ptr))
+            FFIString.consumeJSON(maho_core_get_active_profile_id(ptr), as: ProfileId.self)
         } ?? nil
     }
 

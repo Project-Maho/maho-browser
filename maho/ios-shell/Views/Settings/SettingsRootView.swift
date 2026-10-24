@@ -124,8 +124,8 @@ struct SettingsRootView: View {
                     return "Syncing…"
                 case .synced:
                     return "Synced — \(email)"
-                case .error(let msg):
-                    return "Error: \(msg)"
+                case .error:
+                    return "Sync paused — tap for details"
                 default:
                     return "Signed in as \(email)"
                 }

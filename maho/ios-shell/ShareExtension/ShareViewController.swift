@@ -18,25 +18,54 @@ final class ShareViewController: SLComposeServiceViewController {
     }
 
     override func isContentValid() -> Bool {
-        return sharedURL != nil || !contentText.isEmpty
+        return resolvedWebURL() != nil
     }
 
     override func didSelectPost() {
-        let urlToShare: URL?
-        if let sharedURL = sharedURL {
-            urlToShare = sharedURL
-        } else if !contentText.isEmpty, let url = URL(string: contentText) {
-            urlToShare = url
-        } else {
-            urlToShare = nil
-        }
-
-        if let url = urlToShare,
-           let openURL = URL(string: "maho://open?url=\(url.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")") {
+        // Only http(s) URLs are forwarded; anything else (javascript:, file:,
+        // custom schemes, free text) is dropped so the host app never receives
+        // a non-web URL through maho://open.
+        //
+        // Note: iOS does not let a share extension launch its host app —
+        // NSExtensionContext.open(_:) is honored only for Today/widget
+        // extensions and reports failure here. A reliable handoff needs a
+        // shared App Group container (not provisioned yet); until then this
+        // is a best-effort attempt and the request completes either way.
+        if let url = resolvedWebURL(), let openURL = Self.mahoOpenURL(for: url) {
             extensionContext?.open(openURL) { _ in }
         }
 
         extensionContext?.completeRequest(returningItems: nil)
+    }
+
+    private func resolvedWebURL() -> URL? {
+        if let sharedURL = Self.webURL(sharedURL) {
+            return sharedURL
+        }
+        let text = contentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.webURL(URL(string: text))
+    }
+
+    static func webURL(_ url: URL?) -> URL? {
+        guard let url,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty else {
+            return nil
+        }
+        return url
+    }
+
+    /// Builds `maho://open?url=<encoded>`, percent-encoding every reserved
+    /// query delimiter so a shared URL with its own query string or fragment
+    /// survives DeepLinkHandler's URLComponents parsing intact.
+    static func mahoOpenURL(for url: URL) -> URL? {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&=+?#")
+        guard let encoded = url.absoluteString.addingPercentEncoding(withAllowedCharacters: allowed) else {
+            return nil
+        }
+        return URL(string: "maho://open?url=\(encoded)")
     }
 
     override func configurationItems() -> [Any]! {
@@ -55,14 +84,15 @@ final class ShareViewController: SLComposeServiceViewController {
                     if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
                         provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { (value, _) in
                             DispatchQueue.main.async {
-                                completion(value as? URL)
+                                completion(Self.webURL(value as? URL))
                             }
                         }
                         return
                     } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
                         provider.loadItem(forTypeIdentifier: UTType.plainText.identifier, options: nil) { (value, _) in
                             DispatchQueue.main.async {
-                                if let text = value as? String, let url = URL(string: text) {
+                                if let text = value as? String,
+                                   let url = Self.webURL(URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines))) {
                                     completion(url)
                                 } else {
                                     completion(nil)
