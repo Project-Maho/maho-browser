@@ -1,13 +1,48 @@
 import SwiftUI
 import WebKit
 
+/// Shared reader-mode style contract: the storage keys, the font families every
+/// reader settings surface offers, and how each one renders.
+enum ReaderStyle {
+    static let fontFamilyKey = "readerFontFamily"
+    static let fontSizeKey = "readerFontSize"
+    static let themeKey = "readerTheme"
+
+    static let defaultFontFamily = "System"
+    static let defaultFontSize: Double = 18.0
+    static let fontSizeRange: ClosedRange<Double> = 12...36
+
+    static let fontFamilies = [
+        "System", "Georgia", "Palatino", "Times New Roman",
+        "Helvetica", "Arial", "Verdana", "Courier New"
+    ]
+
+    static func cssFontStack(for family: String) -> String {
+        switch family {
+        case "Georgia": return "Georgia, serif"
+        case "Palatino": return "Palatino, 'Palatino Linotype', serif"
+        case "Times New Roman": return "'Times New Roman', Times, serif"
+        case "Helvetica": return "Helvetica, Arial, sans-serif"
+        case "Arial": return "Arial, Helvetica, sans-serif"
+        case "Verdana": return "Verdana, Geneva, sans-serif"
+        case "Courier New": return "'Courier New', monospace"
+        default: return "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        }
+    }
+
+    static func previewFont(family: String, size: Double) -> Font {
+        guard family != defaultFontFamily else { return .system(size: CGFloat(size)) }
+        return .custom(family, size: CGFloat(size))
+    }
+}
+
 struct ReaderView: View {
     let article: ExtractedArticle
     @Binding var isPresented: Bool
     
-    @AppStorage("readerFontFamily") private var fontFamily: String = "System"
-    @AppStorage("readerFontSize") private var fontSize: Double = 18.0
-    @AppStorage("readerTheme") private var readerTheme: ReaderTheme = .light
+    @AppStorage(ReaderStyle.fontFamilyKey) private var fontFamily: String = ReaderStyle.defaultFontFamily
+    @AppStorage(ReaderStyle.fontSizeKey) private var fontSize: Double = ReaderStyle.defaultFontSize
+    @AppStorage(ReaderStyle.themeKey) private var readerTheme: ReaderTheme = .light
     
     @State private var showSettings = false
     
@@ -154,15 +189,7 @@ struct ReaderWebView: UIViewRepresentable {
         let mutedHex = scheme.mutedForegroundHex
         let linkHex = scheme.linkHex
 
-        let fontStack: String
-        switch fontFamily {
-        case "Georgia":
-            fontStack = "Georgia, serif"
-        case "Courier New":
-            fontStack = "'Courier New', monospace"
-        default:
-            fontStack = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
-        }
+        let fontStack = ReaderStyle.cssFontStack(for: fontFamily)
         
         return """
         body {

@@ -5,15 +5,18 @@ import AppIntents
 struct OpenInMahoIntent: AppIntent {
     static var title: LocalizedStringResource = "Open in Maho"
     static var description = IntentDescription("Open a URL in Maho browser.")
+    static var openAppWhenRun: Bool = true
 
     @Parameter(title: "URL")
     var urlString: String
 
+    @MainActor
     func perform() async throws -> some IntentResult {
-        guard let url = URL(string: urlString), let spaceId = MahoBridge.shared.getActiveSpaceId() else {
-            return .result()
-        }
-        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: Url(url.absoluteString), parentId: nil, isPrivate: false))
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .result() }
+        // Route through the UI so the tab is created and shown in front; on a
+        // cold launch the browser view consumes the queued URL once it appears.
+        DeepLinkHandler.shared.openURL(trimmed)
         return .result()
     }
 }
@@ -26,11 +29,7 @@ struct NewTabIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        if let onNewTab = DeepLinkHandler.shared.onNewTab {
-            onNewTab()
-        } else {
-            DeepLinkHandler.shared.pendingNewTabSearch = true
-        }
+        DeepLinkHandler.shared.openNewTab()
         return .result()
     }
 }
@@ -39,16 +38,16 @@ struct NewTabIntent: AppIntent {
 struct SearchInMahoIntent: AppIntent {
     static var title: LocalizedStringResource = "Search in Maho"
     static var description = IntentDescription("Search the web using Maho.")
+    static var openAppWhenRun: Bool = true
 
     @Parameter(title: "Query")
     var query: String
 
+    @MainActor
     func perform() async throws -> some IntentResult {
-        guard let spaceId = MahoBridge.shared.getActiveSpaceId() else {
-            return .result()
-        }
-        let searchURL = "https://www.google.com/search?q=\(query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query)"
-        MahoBridge.shared.sendEvent(.createTab(spaceId: spaceId, url: Url(searchURL), parentId: nil, isPrivate: false))
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .result() }
+        DeepLinkHandler.shared.openSearch(trimmed)
         return .result()
     }
 }

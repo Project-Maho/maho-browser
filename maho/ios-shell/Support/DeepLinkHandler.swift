@@ -1,6 +1,14 @@
 import Foundation
 import os.log
 
+/// An intent that arrived before the browser view installed its handlers.
+/// Queued in arrival order so a second intent cannot replace the first.
+enum PendingDeepLink {
+    case open(String)
+    case search(String)
+    case newTab
+}
+
 @MainActor
 final class DeepLinkHandler {
     static let shared = DeepLinkHandler()
@@ -9,7 +17,10 @@ final class DeepLinkHandler {
     var onOpenURL: ((String) -> Void)?
     var onSearch: ((String) -> Void)?
     var onNewTab: (() -> Void)?
-    var pendingNewTabSearch = false
+    /// Set by App Intents and deep links that arrive before the browser view
+    /// installs its handlers (cold launch, onboarding, launch data clear); the
+    /// browser view drains them in arrival order when it appears.
+    private var pendingDeepLinks: [PendingDeepLink] = []
 
     private init() {}
 
@@ -32,7 +43,7 @@ final class DeepLinkHandler {
                 log.warning("Rejected deep link open target with unsupported scheme")
                 return false
             }
-            onOpenURL?(target.absoluteString)
+            openURL(target.absoluteString)
             return true
 
         case "search":
@@ -40,19 +51,65 @@ final class DeepLinkHandler {
             // instead of a blank web search.
             guard let query = components.queryItems?.first(where: { $0.name == "q" })?.value,
                   !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                onNewTab?()
+                openNewTab()
                 return true
             }
-            onSearch?(query)
+            openSearch(query)
             return true
 
         case "newtab":
-            onNewTab?()
+            openNewTab()
             return true
 
         default:
             log.warning("Unhandled deep link host: \(host, privacy: .public)")
             return false
         }
+    }
+
+    /// Opens `urlString` now, or keeps it for the browser view when its
+    /// handlers are not installed yet.
+    func openURL(_ urlString: String) {
+        if let onOpenURL {
+            onOpenURL(urlString)
+        } else {
+            enqueue(.open(urlString))
+        }
+    }
+
+    /// Runs `query` now, or keeps it for the browser view when its handlers are
+    /// not installed yet.
+    func openSearch(_ query: String) {
+        if let onSearch {
+            onSearch(query)
+        } else {
+            enqueue(.search(query))
+        }
+    }
+
+    /// Opens a new tab now, or keeps it for the browser view when its handlers
+    /// are not installed yet.
+    func openNewTab() {
+        if let onNewTab {
+            onNewTab()
+        } else {
+            enqueue(.newTab)
+        }
+    }
+
+    /// Takes the queued intents in arrival order for the browser view to replay
+    /// after installing its handlers. Draining clears the queue, so a repeated
+    /// call (a second `onAppear`) cannot replay an intent.
+    func takePendingDeepLinks() -> [PendingDeepLink] {
+        let queued = pendingDeepLinks
+        pendingDeepLinks.removeAll()
+        return queued
+    }
+
+    private func enqueue(_ link: PendingDeepLink) {
+        pendingDeepLinks.append(link)
+        log.info(
+            "Queued deep link until the browser view appears (depth \(self.pendingDeepLinks.count)): \(String(describing: link), privacy: .private)"
+        )
     }
 }

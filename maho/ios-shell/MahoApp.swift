@@ -10,6 +10,7 @@ struct MahoApp: App {
     @AppStorage("onboardingCompleted") private var onboardingCompleted: Bool = false
     @StateObject private var updateChecker = AppStoreUpdateChecker()
     @StateObject private var themeStore = AppThemeStore()
+    @ObservedObject private var launchDataClear = LaunchDataClearGate.shared
 
     private var shouldShowOnboarding: Bool {
         !isRunningUITests && !onboardingCompleted
@@ -39,6 +40,22 @@ struct MahoApp: App {
         os_signpost(.begin, log: launchLog, name: "loadState")
         MahoBridge.shared.loadState()
         os_signpost(.end, log: launchLog, name: "loadState")
+        // Clear Data on Exit runs here, at the start of a new process and before
+        // any web view exists. iOS gives no reliable termination callback, and
+        // clearing on every trip to the background signed users out mid-task.
+        // The browser UI (and so every web view) is held back until WebKit has
+        // finished removing the data, so a restored tab cannot load with the
+        // cookies that were meant to be gone.
+        if MahoBridge.shared.isClearDataOnExitEnabled() {
+            let gate = LaunchDataClearGate.shared
+            gate.close()
+            MahoBridge.shared.clearAllBrowsingData {
+                Task { @MainActor in gate.open() }
+            }
+        }
+        if !isRunningUITests {
+            MahoBridge.shared.applyRestorePolicyOnLaunch()
+        }
         E2ETestHooks.runOnBoot()
         SyncManager.registerBackgroundRefresh()
         // The unit-test host shares this app's Keychain relay session. Starting real
@@ -53,7 +70,9 @@ struct MahoApp: App {
         WindowGroup {
             ZStack(alignment: .top) {
                 Group {
-                    if shouldShowOnboarding {
+                    if !launchDataClear.isOpen {
+                        Color(uiColor: .systemBackground).ignoresSafeArea()
+                    } else if shouldShowOnboarding {
                         OnboardingView {
                             onboardingCompleted = true
                         }
@@ -84,6 +103,7 @@ struct MahoApp: App {
                 ConversationArchiveForegroundBridge.sweep()
                 if !isRunningUITests {
                     SyncManager.shared.configureForCurrentSession()
+                    FilterListUpdater.shared.refreshIfNeeded()
                 }
                 themeStore.refresh()
             case .inactive:
@@ -93,4 +113,18 @@ struct MahoApp: App {
             }
         }
     }
+}
+
+/// Holds back the browser UI while launch-time data clearing is in flight.
+/// Open by default; closed only between starting and finishing the clear.
+@MainActor
+final class LaunchDataClearGate: ObservableObject {
+    static let shared = LaunchDataClearGate()
+
+    @Published private(set) var isOpen = true
+
+    func close() { isOpen = false }
+    func open() { isOpen = true }
+
+    private init() {}
 }

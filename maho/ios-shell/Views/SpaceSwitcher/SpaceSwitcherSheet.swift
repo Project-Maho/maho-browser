@@ -8,6 +8,8 @@ struct SpaceSwitcherSheet: View {
     @State private var activeSpaceId: SpaceId?
     @State private var showNewSpaceAlert = false
     @State private var newSpaceName = ""
+    @State private var pendingDeleteSpace: SpaceViewModel?
+    @State private var spaceErrorMessage: String?
 
     var onSpaceSelected: (() -> Void)?
 
@@ -42,9 +44,9 @@ struct SpaceSwitcherSheet: View {
                             reloadSpaces()
                         },
                         onDelete: {
-                            bridge.deleteSpace(id: space.id)
-                            reloadSpaces()
-                        }
+                            pendingDeleteSpace = space
+                        },
+                        canDelete: spaces.count > 1
                     )
                     .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
                 }
@@ -78,8 +80,51 @@ struct SpaceSwitcherSheet: View {
             } message: {
                 Text("Enter a name for the new space.")
             }
+            .confirmationDialog(
+                "Delete \"\(pendingDeleteSpace?.name ?? "Space")\"?",
+                isPresented: Binding(
+                    get: { pendingDeleteSpace != nil },
+                    set: { if !$0 { pendingDeleteSpace = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: pendingDeleteSpace
+            ) { space in
+                Button("Delete Space", role: .destructive) {
+                    let updates = bridge.handleEvent(.deleteSpace(spaceId: space.id))
+                    pendingDeleteSpace = nil
+                    reloadSpaces()
+                    if let message = Self.errorMessage(in: updates) {
+                        spaceErrorMessage = message
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingDeleteSpace = nil
+                }
+            } message: { _ in
+                Text("This space will be deleted and its tabs will move to another space.")
+            }
+            .alert(
+                "Couldn't Delete Space",
+                isPresented: Binding(
+                    get: { spaceErrorMessage != nil },
+                    set: { if !$0 { spaceErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { spaceErrorMessage = nil }
+            } message: {
+                Text(spaceErrorMessage ?? "")
+            }
             .onAppear(perform: reloadSpaces)
         }
+    }
+
+    private static func errorMessage(in updates: [CoreUpdate]) -> String? {
+        for update in updates {
+            if case .error(_, let error) = update {
+                return error.message
+            }
+        }
+        return nil
     }
 
     private func reloadSpaces() {

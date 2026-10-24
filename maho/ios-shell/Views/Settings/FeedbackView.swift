@@ -1,8 +1,12 @@
 import SwiftUI
 
 struct FeedbackView: View {
+    private static let feedbackAddress = "feedback@maho.dev"
+
     @State private var email: String = ""
     @State private var message: String = ""
+    @State private var showMailUnavailable = false
+    @State private var unsentFeedback = ""
     @Environment(\.dismiss) private var dismiss
 
     private var canSend: Bool {
@@ -42,6 +46,14 @@ struct FeedbackView: View {
             }
         }
         .navigationTitle("Feedback")
+        .alert("Couldn't Open Mail", isPresented: $showMailUnavailable) {
+            Button("Copy Feedback") {
+                UIPasteboard.general.string = unsentFeedback
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("No mail app is set up on this device. Copy your feedback and send it to \(Self.feedbackAddress).")
+        }
     }
 
     private func sendFeedback() {
@@ -54,11 +66,31 @@ struct FeedbackView: View {
         }
         body += "Message:\n\(trimmedMessage)"
 
-        guard let encodedBody = body.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "mailto:feedback@maho.dev?subject=Maho%20Feedback&body=\(encodedBody)") else {
+        var components = URLComponents()
+        components.scheme = "mailto"
+        components.path = Self.feedbackAddress
+        components.queryItems = [
+            URLQueryItem(name: "subject", value: "Maho Feedback"),
+            URLQueryItem(name: "body", value: body)
+        ]
+
+        guard let url = components.url else {
+            presentMailUnavailable(body)
             return
         }
 
-        UIApplication.shared.open(url)
+        UIApplication.shared.open(url) { success in
+            if success {
+                message = ""
+                dismiss()
+            } else {
+                presentMailUnavailable(body)
+            }
+        }
+    }
+
+    private func presentMailUnavailable(_ body: String) {
+        unsentFeedback = "To: \(Self.feedbackAddress)\n\n\(body)"
+        showMailUnavailable = true
     }
 }

@@ -1,24 +1,27 @@
 import SwiftUI
 
 struct ReaderSettingsSheet: View {
-    @AppStorage("readerFontFamily") private var fontFamily: String = "System"
-    @AppStorage("readerFontSize") private var fontSize: Double = 18.0
-    @AppStorage("readerTheme") private var readerTheme: ReaderTheme = .light
+    @AppStorage(ReaderStyle.fontFamilyKey) private var fontFamily: String = ReaderStyle.defaultFontFamily
+    @AppStorage(ReaderStyle.fontSizeKey) private var fontSize: Double = ReaderStyle.defaultFontSize
+    @AppStorage(ReaderStyle.themeKey) private var readerTheme: ReaderTheme = .light
     
     @Environment(\.dismiss) private var dismiss
     
-    let availableFonts = ["System", "Georgia", "Courier New"]
+    private let bridge = MahoBridge.shared
     
     var body: some View {
         NavigationStack {
             Form {
                 Section("Font Style") {
                     Picker("Font Family", selection: $fontFamily) {
-                        ForEach(availableFonts, id: \.self) { font in
+                        ForEach(ReaderStyle.fontFamilies, id: \.self) { font in
                             Text(font).tag(font)
                         }
                     }
                     .pickerStyle(.menu)
+                    .onChange(of: fontFamily) { _, newValue in
+                        bridge.setReaderFont(newValue)
+                    }
                     
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -27,7 +30,10 @@ struct ReaderSettingsSheet: View {
                             Text("\(Int(fontSize))pt")
                                 .foregroundStyle(.secondary)
                         }
-                        Slider(value: $fontSize, in: 12...36, step: 1)
+                        Slider(value: $fontSize, in: ReaderStyle.fontSizeRange, step: 1)
+                            .onChange(of: fontSize) { _, newValue in
+                                bridge.setReaderFontSize(newValue)
+                            }
                     }
                 }
                 
@@ -38,6 +44,9 @@ struct ReaderSettingsSheet: View {
                         Text("Dark").tag(ReaderTheme.dark)
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: readerTheme) { _, newValue in
+                        bridge.setReaderTheme(newValue)
+                    }
                 }
             }
             .navigationTitle("Reader Settings")

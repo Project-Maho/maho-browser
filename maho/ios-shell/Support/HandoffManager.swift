@@ -56,7 +56,13 @@ final class HandoffManager {
         }
 
         log.info("Received Handoff URL: \(url.absoluteString, privacy: .private)")
-        onReceiveURL?(url)
+        if let onReceiveURL {
+            onReceiveURL(url)
+        } else {
+            // Arrived before the browser view installed its handlers (cold
+            // launch, onboarding, launch data clear); it opens on appear.
+            DeepLinkHandler.shared.openURL(url.absoluteString)
+        }
         return true
     }
 }

@@ -12,6 +12,7 @@ struct FolderListSheet: View {
     @State private var selectedFolder: FolderViewModel?
     @State private var showNewFolderAlert = false
     @State private var newFolderName = ""
+    @State private var pendingDeleteFolder: FolderViewModel?
 
     private let bridge = MahoBridge.shared
 
@@ -69,8 +70,7 @@ struct FolderListSheet: View {
                         reloadFolders()
                     },
                     onDelete: {
-                        bridge.deleteFolder(id: folder.id, spaceId: spaceId)
-                        reloadFolders()
+                        pendingDeleteFolder = folder
                     }
                 )
             }
@@ -92,6 +92,26 @@ struct FolderListSheet: View {
             }
         }
         .listStyle(.plain)
+        .confirmationDialog(
+            "Delete \"\(pendingDeleteFolder?.name ?? "Folder")\"?",
+            isPresented: Binding(
+                get: { pendingDeleteFolder != nil },
+                set: { if !$0 { pendingDeleteFolder = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingDeleteFolder
+        ) { folder in
+            Button("Delete Folder", role: .destructive) {
+                bridge.deleteFolder(id: folder.id, spaceId: spaceId)
+                pendingDeleteFolder = nil
+                reloadFolders()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteFolder = nil
+            }
+        } message: { _ in
+            Text("This folder will be deleted. Its tabs will stay in this space.")
+        }
         .dropDestination(for: String.self) { _, _ in
             true
         }

@@ -10,6 +10,8 @@ struct NotesView: View {
     @State private var showExportOptions = false
     @State private var pendingDeleteNote: NoteViewModel?
     @State private var showDeleteConfirmation = false
+    @State private var exportedFile: ExportedNotesFile?
+    @State private var showExportError = false
 
     private var filteredNotes: [NoteViewModel] {
         guard !searchText.isEmpty else { return notes }
@@ -62,6 +64,14 @@ struct NotesView: View {
                     updateNote(id: note.id, content: content)
                     editingNote = nil
                 }
+            }
+            .sheet(item: $exportedFile) { file in
+                NotesActivityView(activityItems: [file.url])
+            }
+            .alert("Couldn't Export Notes", isPresented: $showExportError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Maho couldn't prepare the export. Please try again.")
             }
             .onChange(of: searchText) { _, newValue in
                 if !newValue.isEmpty {
@@ -166,12 +176,45 @@ struct NotesView: View {
     }
 
     private func exportAllNotes() {
-        _ = MahoBridge.shared.exportNotes()
+        presentExport(MahoBridge.shared.exportNotes(), fileName: "Maho Notes")
     }
 
     private func exportSingleNote(id: NoteId) {
-        _ = MahoBridge.shared.exportSingleNote(id: id)
+        presentExport(MahoBridge.shared.exportSingleNote(id: id), fileName: "Maho Note")
     }
+
+    private func presentExport(_ markdown: String?, fileName: String) {
+        guard let markdown, !markdown.isEmpty else {
+            showExportError = true
+            return
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(fileName)
+            .appendingPathExtension("md")
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+            exportedFile = ExportedNotesFile(url: url)
+        } catch {
+            showExportError = true
+        }
+    }
+}
+
+// MARK: - Export sharing
+
+private struct ExportedNotesFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct NotesActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 // MARK: - NoteRow

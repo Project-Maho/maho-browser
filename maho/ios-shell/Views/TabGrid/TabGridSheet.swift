@@ -71,7 +71,7 @@ struct TabGridSheet: View {
         }
         .background(tabGridBackground)
         .onAppear(perform: reloadState)
-        .sheet(isPresented: $showSpaceSwitcher) {
+        .sheet(isPresented: $showSpaceSwitcher, onDismiss: reloadState) {
             SpaceSwitcherSheet(
                 onSpaceSelected: {
                     reloadState()

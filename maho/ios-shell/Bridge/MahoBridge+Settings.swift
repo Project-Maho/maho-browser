@@ -18,6 +18,45 @@ extension MahoBridge {
         sendEvent(.resetSettings)
     }
 
+    /// Full persisted settings document (camelCase keys). Some fields, such as
+    /// restore-on-launch and autoplay, are not emitted in the view model.
+    func getSettingsDocument() -> [String: Any]? {
+        guard let json = withCore({ ptr in FFIString.consume(maho_core_get_settings(ptr)) }) ?? nil,
+              let data = json.data(using: .utf8) else {
+            return nil
+        }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    /// Autoplay policy for new web views, from the full settings document.
+    func autoplayPolicy() -> AutoplayPolicy {
+        guard let general = getSettingsDocument()?["general"] as? [String: Any],
+              let raw = general["autoplayPolicy"] as? String,
+              let policy = AutoplayPolicy(rawValue: raw) else {
+            return .blockAudio
+        }
+        return policy
+    }
+
+    /// Restore-on-launch policy from the full settings document.
+    func restorePolicy() -> RestorePolicy {
+        guard let general = getSettingsDocument()?["general"] as? [String: Any],
+              let raw = general["restoreOnLaunch"] as? String,
+              let policy = RestorePolicy(rawValue: raw) else {
+            return .restoreAll
+        }
+        return policy
+    }
+
+    /// Applies "On Launch" once after state is loaded: Restore Pinned Only
+    /// closes normal tabs; Start Fresh also returns pinned tabs to their home.
+    /// Core prunes on this device only and queues no sync deletions, so tabs
+    /// open on the user's other devices are never closed by this.
+    func applyRestorePolicyOnLaunch() {
+        guard restorePolicy() != .restoreAll else { return }
+        sendEvent(.applyRestorePolicyOnLaunch)
+    }
+
     // MARK: - General
 
     func updateGeneralSettings(_ update: GeneralSettingsUpdate) {
@@ -75,6 +114,25 @@ extension MahoBridge {
 
     func setContentBlocker(_ enabled: Bool) {
         updatePrivacySettings(PrivacySettingsUpdate(contentBlockerEnabled: enabled))
+        NotificationCenter.default.post(name: .mahoContentBlockerChanged, object: nil)
+        if enabled {
+            FilterListUpdater.shared.refreshIfNeeded(force: true)
+        }
+    }
+
+    /// Rules in the filter lists currently installed in core (0 until the first
+    /// successful download).
+    func contentBlockerRuleCount() -> Int {
+        Int(withCore { ptr in maho_core_get_content_rule_count(ptr) } ?? 0)
+    }
+
+    /// Persisted Safe Browsing flag, applied to new web views.
+    func isSafeBrowsingEnabled() -> Bool {
+        (CoreSettingsSnapshot.values(from: self)["safe_browsing"] as? Bool) ?? true
+    }
+
+    func isClearDataOnExitEnabled() -> Bool {
+        (CoreSettingsSnapshot.values(from: self)["clear_data_on_exit"] as? Bool) ?? false
     }
 
     func setClearDataOnExit(_ enabled: Bool) {

@@ -107,12 +107,26 @@ cp "$SIM_LIB" "$VENDOR/lib/sim/$LIB_NAME"
 
 # ── Pin metadata ─────────────────────────────────────────────────────────────
 HEADER_SHA="$(shasum -a 256 "$VENDOR/include/maho_ffi.h" | awk '{print $1}')"
+LIB_IOS_SHA="$(shasum -a 256 "$VENDOR/lib/ios/$LIB_NAME" | awk '{print $1}')"
+LIB_SIM_SHA="$(shasum -a 256 "$VENDOR/lib/sim/$LIB_NAME" | awk '{print $1}')"
+# Content digest of the FFI-relevant Rust sources this snapshot was built from.
+# check-ffi-pin.sh recomputes it, so a core change after the pin fails the build
+# instead of shipping old behavior behind a fresh header.
+SRC_DIGEST="$( cd "$WORKSPACE" && find crates/maho-ffi crates/maho-core crates/maho-types \
+      -path '*/target/*' -prune -o \
+      \( -name '*.rs' -o -name 'Cargo.toml' \) -type f -print \
+    | LC_ALL=C sort \
+    | xargs shasum -a 256 \
+    | shasum -a 256 | awk '{print $1}' )"
 SRC_SHA="$(git -C "$WORKSPACE" rev-parse HEAD 2>/dev/null || echo unknown)"
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > "$VENDOR/maho_ffi.pin" <<EOF
 # Auto-written by scripts/pin-ffi.sh — do not edit by hand.
 source_commit=$SRC_SHA
+core_source_sha256=$SRC_DIGEST
 header_sha256=$HEADER_SHA
+lib_sha256_ios=$LIB_IOS_SHA
+lib_sha256_sim=$LIB_SIM_SHA
 cbindgen_config=$(basename "$CBINDGEN_CONFIG")
 rust_targets=$RUST_TARGET_IOS,$RUST_TARGET_SIM
 ios_deployment_target=$IOS_DEPLOYMENT_TARGET
@@ -126,6 +140,7 @@ echo "  header : $VENDOR/include/maho_ffi.h  (sha256 $HEADER_SHA)"
 echo "  ios lib: $VENDOR/lib/ios/$LIB_NAME"
 echo "  sim lib: $VENDOR/lib/sim/$LIB_NAME"
 echo "  pin    : $VENDOR/maho_ffi.pin  (source_commit $SRC_SHA)"
+echo "  src sha: $SRC_DIGEST"
 echo ""
 echo "  Next: point project.yml HEADER_SEARCH_PATHS/LIBRARY_SEARCH_PATHS at vendor/"
 echo "        (see vendor/maho-ffi/README.md), then commit vendor/ + Swift bridge."

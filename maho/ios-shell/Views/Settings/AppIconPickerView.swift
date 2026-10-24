@@ -9,7 +9,7 @@ struct AppIconPickerView: View {
         let alternateIconName: String?
     }
 
-    private let options: [IconOption] = [
+    private static let allOptions: [IconOption] = [
         IconOption(id: "default", name: "Default", icon: Lucide.appWindow, alternateIconName: nil),
         IconOption(id: "dark", name: "Dark", icon: Lucide.moon, alternateIconName: "AppIcon-Dark"),
         IconOption(id: "light", name: "Light", icon: Lucide.sun, alternateIconName: "AppIcon-Light"),
@@ -17,7 +17,33 @@ struct AppIconPickerView: View {
         IconOption(id: "neon", name: "Neon", icon: Lucide.zap, alternateIconName: "AppIcon-Neon")
     ]
 
-    @State private var currentIcon: String = UIApplication.shared.alternateIconName ?? "default"
+    /// Alternate icons the built bundle actually ships. actool writes them to
+    /// `CFBundleIcons.CFBundleAlternateIcons` only when the asset catalog has a
+    /// matching app icon set, so offering anything else can only fail.
+    private static var bundledAlternateIconNames: Set<String> {
+        guard let icons = Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any],
+              let alternates = icons["CFBundleAlternateIcons"] as? [String: Any] else {
+            return []
+        }
+        return Set(alternates.keys)
+    }
+
+    static var hasAlternateIcons: Bool {
+        let bundled = bundledAlternateIconNames
+        return allOptions.contains { option in
+            option.alternateIconName.map { bundled.contains($0) } ?? false
+        }
+    }
+
+    private let options: [IconOption] = {
+        let bundled = AppIconPickerView.bundledAlternateIconNames
+        return AppIconPickerView.allOptions.filter { option in
+            option.alternateIconName.map { bundled.contains($0) } ?? true
+        }
+    }()
+
+    @State private var currentIcon: String = AppIconPickerView.allOptions
+        .first { $0.alternateIconName == UIApplication.shared.alternateIconName }?.id ?? "default"
     @State private var showError = false
 
     var body: some View {

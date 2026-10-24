@@ -123,7 +123,20 @@ struct ProfileSettingsView: View {
     }
 
     private func createProfile(name: String, avatarColor: String, downloadPath: String) {
-        MahoBridge.shared.sendEvent(.createProfile(name: name))
+        let bridge = MahoBridge.shared
+        let existingIds = Set(bridge.getProfiles().map(\.id))
+        // CreateProfile only carries a name; core creates the profile
+        // synchronously, so apply the rest of the form to the new profile.
+        bridge.sendEvent(.createProfile(name: name))
+        if let created = bridge.getProfiles().first(where: { !existingIds.contains($0.id) }) {
+            let trimmedPath = downloadPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            bridge.updateProfile(
+                id: created.id,
+                name: nil,
+                avatarColor: avatarColor,
+                downloadPath: trimmedPath.isEmpty ? nil : trimmedPath
+            )
+        }
         loadProfiles()
     }
 

@@ -9,7 +9,7 @@ struct OpenMahoIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        DeepLinkHandler.shared.onNewTab?()
+        DeepLinkHandler.shared.openNewTab()
         return .result()
     }
 }

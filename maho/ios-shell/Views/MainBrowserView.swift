@@ -44,6 +44,7 @@ struct MainBrowserView: View {
     @State private var pendingNavigationUrl: String?
     @ObservedObject private var agenticJourney = E2EAgenticJourney.shared
     @State private var isReaderMode = false
+    @State private var showReaderUnavailable = false
     @State private var zoomLevel = 1.0
     @State private var isDesktopMode = false
     @State private var defaultUserAgent: String?
@@ -377,6 +378,19 @@ struct MainBrowserView: View {
                 pinchSummarizer.reset()
             }
         }
+        .onChange(of: browserVM.readerExtractionFailed) { _, failed in
+            guard failed else { return }
+            browserVM.readerExtractionFailed = false
+            guard isReaderMode else { return }
+            isReaderMode = false
+            browserVM.extractedArticle = nil
+            showReaderUnavailable = true
+        }
+        .alert("Reader Mode Unavailable", isPresented: $showReaderUnavailable) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Reader mode isn't available for this page.")
+        }
         .onChange(of: homeQuery) { _, newValue in
             Task {
                 try? await Task.sleep(nanoseconds: 150 * 1_000_000)
@@ -398,12 +412,13 @@ struct MainBrowserView: View {
 
     private func setupDeepLinkHandler() {
         DeepLinkHandler.shared.onOpenURL = { [self] urlString in
+            // A deep link replaces whatever the search sheet was covering.
+            dismissSearchOverlay()
             createTabAndNavigate(urlString)
         }
         DeepLinkHandler.shared.onSearch = { [self] query in
-            let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-            let searchURL = "https://www.google.com/search?q=\(encoded)"
-            createTabAndNavigate(searchURL)
+            dismissSearchOverlay()
+            createTabAndNavigate(SearchEngineCatalog.searchURL(for: query))
         }
         DeepLinkHandler.shared.onNewTab = { [self] in
             activeTabId = nil
@@ -411,14 +426,26 @@ struct MainBrowserView: View {
             presentSearchOverlay(origin: .home)
         }
         HandoffManager.shared.onReceiveURL = { [self] url in
+            // Same contract as the queued path below: a continuation must not
+            // navigate behind an open search sheet. Handoff arriving before the
+            // handler is installed goes through DeepLinkHandler.openURL, which
+            // dismisses it, so the two paths must agree.
+            dismissSearchOverlay()
             createTabAndNavigate(url.absoluteString)
         }
 
-        if DeepLinkHandler.shared.pendingNewTabSearch {
-            DeepLinkHandler.shared.pendingNewTabSearch = false
-            activeTabId = nil
-            transitionToHome()
-            presentSearchOverlay(origin: .home)
+        // Replay what arrived before the handlers existed, in arrival order, so
+        // no intent is replaced by the next one and a later open/search closes
+        // the search sheet an earlier new-tab opened.
+        for pending in DeepLinkHandler.shared.takePendingDeepLinks() {
+            switch pending {
+            case .open(let urlString):
+                DeepLinkHandler.shared.onOpenURL?(urlString)
+            case .search(let query):
+                DeepLinkHandler.shared.onSearch?(query)
+            case .newTab:
+                DeepLinkHandler.shared.onNewTab?()
+            }
         }
     }
 
@@ -919,6 +946,14 @@ struct MainBrowserView: View {
             return
         }
 
+        if suggestion.kind == .search, suggestion.key.hasPrefix("search:") {
+            // Build the web-search URL from the same engine typed searches use,
+            // so the row and Return always open the selected engine.
+            let query = String(suggestion.key.dropFirst("search:".count))
+            handleSearchSubmission(SearchEngineCatalog.searchURL(for: query))
+            return
+        }
+
         let targetUrl = suggestion.executionPayload ?? suggestion.key
         handleSearchSubmission(targetUrl)
     }
@@ -1042,6 +1077,7 @@ struct MainBrowserView: View {
     private func toggleReaderMode() {
         guard browsingTabId != nil else { return }
         isReaderMode.toggle()
+        browserVM.readerExtractionFailed = false
         if isReaderMode {
             runReadabilityExtraction()
         } else {
@@ -1050,10 +1086,19 @@ struct MainBrowserView: View {
     }
 
     private func runReadabilityExtraction() {
-        guard let webView = browserVM.webView else { return }
-        webView.evaluateJavaScript("window.__mahoRunReadability && window.__mahoRunReadability();") { _, error in
+        guard let webView = browserVM.webView else {
+            browserVM.readerExtractionFailed = true
+            return
+        }
+        // The readability user script is only present once the page finished
+        // loading; report false instead of silently doing nothing without it.
+        let script = "typeof window.__mahoRunReadability === 'function' ? (window.__mahoRunReadability(), true) : false"
+        webView.evaluateJavaScript(script) { result, error in
             if let error = error {
                 print("Readability execution failed: \(error.localizedDescription)")
+            }
+            if error != nil || (result as? Bool) != true {
+                browserVM.readerExtractionFailed = true
             }
         }
     }

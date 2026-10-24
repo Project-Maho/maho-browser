@@ -1,4 +1,5 @@
 import Foundation
+import WebKit
 
 extension MahoBridge {
 
@@ -15,6 +16,21 @@ extension MahoBridge {
     func clearHistory() {
         _ = withCore { ptr in
             maho_core_clear_history(ptr)
+        }
+    }
+
+    /// Clears everything "Clear Browsing Data" promises: core history plus all
+    /// WebKit website data (cookies, cache, local storage, logins).
+    /// Removal is by type since `.distantPast`, so there is no fetch-then-remove
+    /// window in which a newly written record escapes. `completion` runs once
+    /// WebKit has finished removing the data.
+    func clearAllBrowsingData(completion: (() -> Void)? = nil) {
+        clearHistory()
+        WKWebsiteDataStore.default().removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+            modifiedSince: .distantPast
+        ) {
+            completion?()
         }
     }
 

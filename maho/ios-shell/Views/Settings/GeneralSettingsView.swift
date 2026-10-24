@@ -2,34 +2,20 @@ import Foundation
 import SwiftUI
 import WebKit
 
-private struct SearchEngineOption: Identifiable {
-    let id: String
-    let name: String
-    let urlTemplate: String
-}
-
 struct GeneralSettingsView: View {
 
     @State private var restorePolicy: RestorePolicy = .restoreAll
     @State private var autoplayPolicy: AutoplayPolicy = .blockAudio
     @State private var archiveTimeoutHours: Double = 24.0
-    @State private var downloadPath: String = ""
     @State private var selectedSearchEngine: String = Self.searchEngineOptions.first?.name ?? "Google"
     @State private var showClearBrowsingDataAlert = false
 
     private let bridge = MahoBridge.shared
     private let defaults = UserDefaults.standard
 
-    private static let searchEngineDefaultsKey = "general.selectedSearchEngine"
+    private static let searchEngineDefaultsKey = SearchEngineCatalog.selectedEngineDefaultsKey
     private static let archiveTimingDefaultsKey = "general.archiveTimingHours"
-    private static let searchEngineOptions: [SearchEngineOption] = [
-        SearchEngineOption(id: "google", name: "Google", urlTemplate: "https://www.google.com/search?q=%@"),
-        SearchEngineOption(id: "bing", name: "Bing", urlTemplate: "https://www.bing.com/search?q=%@"),
-        SearchEngineOption(id: "duckduckgo", name: "DuckDuckGo", urlTemplate: "https://duckduckgo.com/?q=%@"),
-        SearchEngineOption(id: "ecosia", name: "Ecosia", urlTemplate: "https://www.ecosia.org/search?q=%@"),
-        SearchEngineOption(id: "perplexity", name: "Perplexity", urlTemplate: "https://www.perplexity.ai/search?q=%@"),
-        SearchEngineOption(id: "kagi", name: "Kagi", urlTemplate: "https://kagi.com/search?q=%@")
-    ]
+    private static let searchEngineOptions = SearchEngineCatalog.options
 
     var body: some View {
         Form {
@@ -64,6 +50,8 @@ struct GeneralSettingsView: View {
                 }
             } header: {
                 Text("Startup")
+            } footer: {
+                Text("Applies the next time Maho launches. Pinned and favorite tabs are kept unless you choose Start Fresh, which also returns them to their pinned pages.")
             }
 
             Section {
@@ -97,6 +85,8 @@ struct GeneralSettingsView: View {
                 }
             } header: {
                 Text("Media")
+            } footer: {
+                Text("Applies to pages opened after the change.")
             }
 
             Section {
@@ -113,14 +103,16 @@ struct GeneralSettingsView: View {
             Section {
 
                 HStack {
-                    Text("Download Path")
+                    Text("Save To")
                     Spacer()
-                    Text(downloadPath.isEmpty ? "Default" : downloadPath)
+                    Text(Self.downloadsLocationLabel)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             } header: {
                 Text("Downloads")
+            } footer: {
+                Text("Downloads are saved in the Maho folder of the Files app.")
             }
         }
         .navigationTitle("General")
@@ -145,7 +137,25 @@ struct GeneralSettingsView: View {
         )
     }
 
+    /// iOS always saves downloads to the app's Documents folder
+    /// (WebDownloadCoordinator), which Files shows as "On My iPhone > Maho".
+    private static var downloadsLocationLabel: String {
+        let device = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        return "On My \(device) › Maho"
+    }
+
     private func loadSettings() {
+        // Restore and autoplay policies are not view-model items, so read them
+        // from the full settings document.
+        if let general = bridge.getSettingsDocument()?["general"] as? [String: Any] {
+            if let raw = general["restoreOnLaunch"] as? String, let policy = RestorePolicy(rawValue: raw) {
+                restorePolicy = policy
+            }
+            if let raw = general["autoplayPolicy"] as? String, let policy = AutoplayPolicy(rawValue: raw) {
+                autoplayPolicy = policy
+            }
+        }
+
         let values = CoreSettingsSnapshot.values(from: bridge)
         guard !values.isEmpty else { return }
 
@@ -157,8 +167,8 @@ struct GeneralSettingsView: View {
             archiveTimeoutHours = defaults.double(forKey: Self.archiveTimingDefaultsKey)
         }
 
-        // Core does not emit restore-on-launch or autoplay items, so those
-        // pickers keep their defaults.
+        // Core does not emit restore-on-launch or autoplay items; those were
+        // loaded from the settings document above.
         if defaults.string(forKey: Self.searchEngineDefaultsKey) == nil,
            let raw = values["search_engine"] as? String,
            Self.searchEngineOptions.contains(where: { $0.name == raw }) {
@@ -169,7 +179,6 @@ struct GeneralSettingsView: View {
            let hours = Self.archiveTimeoutHours(forCoreLabel: label) {
             archiveTimeoutHours = hours
         }
-        if let path = values["download_path"] as? String { downloadPath = path }
     }
 
     private static func archiveTimeoutHours(forCoreLabel label: String) -> Double? {
@@ -186,14 +195,7 @@ struct GeneralSettingsView: View {
     }
 
     private func clearBrowsingData() {
-        bridge.clearHistory()
-        let dataStore = WKWebsiteDataStore.default()
-        let dataTypes = WKWebsiteDataStore.allWebsiteDataTypes()
-
-        dataStore.fetchDataRecords(ofTypes: dataTypes) { records in
-            dataStore.removeData(ofTypes: dataTypes, for: records) {}
-        }
-
+        bridge.clearAllBrowsingData()
         defaults.removeObject(forKey: Self.searchEngineDefaultsKey)
         defaults.removeObject(forKey: Self.archiveTimingDefaultsKey)
         defaults.synchronize()

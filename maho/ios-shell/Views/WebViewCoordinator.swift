@@ -19,6 +19,7 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
     private var progressObservation: NSKeyValueObservation?
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
+    private var contentBlockerObserver: NSObjectProtocol?
     private var pinchSummarizeTriggered = false
     private var originMediaPermissions: [String: [WKMediaCaptureType: WKPermissionDecision]] = [:]
     private var crashTimestamps: [Date] = []
@@ -59,6 +60,17 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
 
     func startObserving() {
         guard let webView else { return }
+
+        contentBlockerObserver = NotificationCenter.default.addObserver(
+            forName: .mahoContentBlockerChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let webView = self.webView else { return }
+                self.bridge.refreshContentRules(webView: webView)
+            }
+        }
 
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] _, change in
             Task { @MainActor in
@@ -110,7 +122,10 @@ final class WebViewCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, UI
         progressObservation?.invalidate()
         canGoBackObservation?.invalidate()
         canGoForwardObservation?.invalidate()
-
+        if let contentBlockerObserver {
+            NotificationCenter.default.removeObserver(contentBlockerObserver)
+        }
+        contentBlockerObserver = nil
         titleObservation = nil
         urlObservation = nil
         progressObservation = nil
@@ -482,6 +497,7 @@ extension WebViewCoordinator: WKScriptMessageHandler {
         
         if let error = dict["error"] as? String {
             log.error("Reader Mode extraction failed: \(error)")
+            viewModel.readerExtractionFailed = true
             return
         }
         
@@ -517,12 +533,17 @@ extension WebViewCoordinator: WKScriptMessageHandler {
 @MainActor
 final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
     static let shared = WebDownloadCoordinator()
+    /// Posted on the main thread after core records a download start,
+    /// progress, completion, or failure, so open lists can refresh.
+    static let downloadsDidChange = Notification.Name("dev.maho.browser.downloadsDidChange")
 
     private let bridge = MahoBridge.shared
     private let log = Logger(subsystem: "dev.maho.browser", category: "WebDownload")
     private var downloads: [ObjectIdentifier: WKDownload] = [:]
     private var activeDownloads: [ObjectIdentifier: String] = [:]
     private var downloadObservations: [ObjectIdentifier: NSKeyValueObservation] = [:]
+    /// Reserved destination path per download, released when it finishes.
+    private var destinationPaths: [ObjectIdentifier: String] = [:]
     // Ids the user cancelled; their late completion must not mark them Completed.
     private var cancelledDownloadIds: Set<String> = []
 
@@ -562,6 +583,11 @@ final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
         let key = ObjectIdentifier(download)
         downloads.removeValue(forKey: key)
         downloadObservations.removeValue(forKey: key)?.invalidate()
+        // The file (or its absence after a failure) now guards the name, so a
+        // later download may reuse it once the user deletes the file.
+        if let path = destinationPaths.removeValue(forKey: key) {
+            DownloadDestinations.release(path)
+        }
         return activeDownloads.removeValue(forKey: key)
     }
 
@@ -573,22 +599,24 @@ final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
         completionHandler: @escaping (URL?) -> Void
     ) {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
-        let dest = docs.appendingPathComponent(suggestedFilename)
-        try? FileManager.default.removeItem(at: dest)
+        // Never overwrite: every row in core points at its own file, so a repeat
+        // download of the same name gets "name (2).ext" instead of replacing it.
+        let dest = DownloadDestinations.unique(for: suggestedFilename, in: docs)
 
         let urlStr = response.url?.absoluteString ?? ""
         let totalBytes = response.expectedContentLength > 0 ? response.expectedContentLength : 0
         let mimeType = response.mimeType
 
         Task { @MainActor in
+            let key = ObjectIdentifier(download)
+            self.destinationPaths[key] = dest.path
             if let downloadId = self.bridge.startDownload(
-                filename: suggestedFilename,
+                filename: dest.lastPathComponent,
                 url: urlStr,
                 totalBytes: totalBytes,
                 filePath: dest.path,
                 mimeType: mimeType
             ) {
-                let key = ObjectIdentifier(download)
                 self.activeDownloads[key] = downloadId
 
                 let observation = download.progress.observe(\.completedUnitCount) { [weak self] prog, _ in
@@ -596,14 +624,21 @@ final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
                     let bytes = UInt64(max(0, prog.completedUnitCount))
                     Task { @MainActor in
                         self.bridge.updateDownloadProgress(id: downloadId, receivedBytes: bytes)
+                        self.notifyDownloadsChanged()
                     }
                 }
                 self.downloadObservations[key] = observation
+                self.notifyDownloadsChanged()
             }
         }
 
         completionHandler(dest)
     }
+
+    private func notifyDownloadsChanged() {
+        NotificationCenter.default.post(name: Self.downloadsDidChange, object: nil)
+    }
+
 
     @available(iOS 14.5, *)
     nonisolated func downloadDidFinish(_ download: WKDownload) {
@@ -613,6 +648,7 @@ final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
                 if self.cancelledDownloadIds.remove(downloadId) == nil {
                     self.bridge.completeDownload(id: downloadId)
                 }
+                self.notifyDownloadsChanged()
             }
         }
     }
@@ -624,7 +660,40 @@ final class WebDownloadCoordinator: NSObject, WKDownloadDelegate {
             if let downloadId = self.finish(download) {
                 self.cancelledDownloadIds.remove(downloadId)
                 self.bridge.cancelDownload(id: downloadId)
+                self.notifyDownloadsChanged()
             }
         }
+    }
+}
+
+/// Picks a download path that no existing file and no in-flight download uses.
+/// Reservations cover the gap before WebKit creates the file, so two downloads
+/// with the same suggested name started together never share a path.
+private enum DownloadDestinations {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var reserved: Set<String> = []
+
+    static func unique(for suggestedFilename: String, in directory: URL) -> URL {
+        let lastComponent = (suggestedFilename as NSString).lastPathComponent
+        let name = lastComponent.isEmpty ? "download" : lastComponent
+        let stem = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        lock.lock()
+        defer { lock.unlock() }
+        var candidate = directory.appendingPathComponent(name)
+        var index = 2
+        while FileManager.default.fileExists(atPath: candidate.path) || reserved.contains(candidate.path) {
+            let numbered = ext.isEmpty ? "\(stem) (\(index))" : "\(stem) (\(index)).\(ext)"
+            candidate = directory.appendingPathComponent(numbered)
+            index += 1
+        }
+        reserved.insert(candidate.path)
+        return candidate
+    }
+
+    static func release(_ path: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        reserved.remove(path)
     }
 }

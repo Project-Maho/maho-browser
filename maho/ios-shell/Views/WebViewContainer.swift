@@ -25,7 +25,10 @@ struct WebViewContainer: UIViewRepresentable {
         configuration.defaultWebpagePreferences = preferences
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = true
-        configuration.mediaTypesRequiringUserActionForPlayback = [.all]
+        configuration.mediaTypesRequiringUserActionForPlayback = Self.mediaTypesRequiringUserAction(
+            for: MahoBridge.shared.autoplayPolicy()
+        )
+        configuration.preferences.isFraudulentWebsiteWarningEnabled = MahoBridge.shared.isSafeBrowsingEnabled()
 
         configuration.userContentController.add(context.coordinator, name: "mahoReader")
         Self.installReadabilityUserScript(on: configuration.userContentController)
@@ -88,6 +91,14 @@ struct WebViewContainer: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "mahoReader")
         coordinator.stopObserving()
         coordinator.webView = nil
+    }
+
+    static func mediaTypesRequiringUserAction(for policy: AutoplayPolicy) -> WKAudiovisualMediaTypes {
+        switch policy {
+        case .allow: return []
+        case .blockAudio: return .audio
+        case .blockAll: return .all
+        }
     }
 
     /// Pre-registers Readability.js at `.atDocumentEnd` so the extractor is

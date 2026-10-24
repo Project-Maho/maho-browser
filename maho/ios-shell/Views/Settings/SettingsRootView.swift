@@ -72,8 +72,10 @@ struct SettingsRootView: View {
                 }
 
                 Section(header: Text("App")) {
-                    NavigationLink(destination: AppIconPickerView()) {
-                        Label { Text("App Icon") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("app.badge.checkmark")) }
+                    if AppIconPickerView.hasAlternateIcons {
+                        NavigationLink(destination: AppIconPickerView()) {
+                            Label { Text("App Icon") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("app.badge.checkmark")) }
+                        }
                     }
                     NavigationLink(destination: FeedbackView()) {
                         Label { Text("Feedback") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("envelope")) }

@@ -1,22 +1,19 @@
 import SwiftUI
 
 struct ReaderSettingsView: View {
-    @State private var fontFamily: String = "System"
-    @State private var fontSize: Double = 18.0
-    @State private var readerTheme: ReaderTheme = .light
+    // Same keys the reader page and its in-reader settings sheet use, so a
+    // change here is what the next reader page renders with.
+    @AppStorage(ReaderStyle.fontFamilyKey) private var fontFamily: String = ReaderStyle.defaultFontFamily
+    @AppStorage(ReaderStyle.fontSizeKey) private var fontSize: Double = ReaderStyle.defaultFontSize
+    @AppStorage(ReaderStyle.themeKey) private var readerTheme: ReaderTheme = .light
 
     private let bridge = MahoBridge.shared
-
-    private let availableFonts = [
-        "System", "Georgia", "Palatino", "Times New Roman",
-        "Helvetica", "Arial", "Verdana"
-    ]
 
     var body: some View {
         Form {
             Section("Font") {
                 Picker("Font Family", selection: $fontFamily) {
-                    ForEach(availableFonts, id: \.self) { font in
+                    ForEach(ReaderStyle.fontFamilies, id: \.self) { font in
                         Text(font).tag(font)
                     }
                 }
@@ -31,7 +28,7 @@ struct ReaderSettingsView: View {
                         Text("\(Int(fontSize))pt")
                             .foregroundStyle(.secondary)
                     }
-                    Slider(value: $fontSize, in: 12...32, step: 1)
+                    Slider(value: $fontSize, in: ReaderStyle.fontSizeRange, step: 1)
                         .onChange(of: fontSize) { _, newValue in
                             bridge.setReaderFontSize(newValue)
                         }
@@ -55,13 +52,12 @@ struct ReaderSettingsView: View {
             }
         }
         .navigationTitle("Reader Mode")
-        .onAppear(perform: loadSettings)
     }
 
     @ViewBuilder
     private var previewText: some View {
         Text("The quick brown fox jumps over the lazy dog. This is a preview of how reader mode content will appear with the selected font and size settings.")
-            .font(.system(size: CGFloat(fontSize)))
+            .font(ReaderStyle.previewFont(family: fontFamily, size: fontSize))
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(readerBackground)
@@ -75,15 +71,5 @@ struct ReaderSettingsView: View {
 
     private var readerForeground: Color {
         ShellTheme.ReaderPalette.foreground(for: readerTheme)
-    }
-
-    private func loadSettings() {
-        let values = CoreSettingsSnapshot.values(from: bridge)
-        guard !values.isEmpty else { return }
-        fontFamily = (values["reader_font"] as? String) ?? "System"
-        fontSize = (values["reader_font_size"] as? Double) ?? 18.0
-        if let raw = values["reader_theme"] as? String, let t = ReaderTheme(rawValue: raw.lowercased()) {
-            readerTheme = t
-        }
     }
 }
