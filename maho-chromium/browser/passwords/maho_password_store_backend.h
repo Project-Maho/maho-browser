@@ -28,12 +28,6 @@
 #endif
 #include "maho/chromium_src/components/password_manager/core/browser/password_fill_request.h"
 
-#if !MAHO_PASSWORD_STORE_BACKEND_USES_STORED_CREDENTIAL
-namespace password_manager {
-using BackendLoginsResult = LoginsResult;
-using BackendLoginsResultOrError = LoginsResultOrError;
-}
-#endif
 
 namespace maho {
 namespace passwords {
@@ -42,7 +36,8 @@ namespace passwords {
 using PasswordStoreBackendCredential = password_manager::StoredCredential;
 using ChromiumLoginsOrErrorReply =
     password_manager::BackendLoginsOrErrorReply;
-using ChromiumBackendLoginsResult = password_manager::BackendLoginsResult;
+using ChromiumBackendLoginsResult =
+    std::vector<password_manager::StoredCredential>;
 #else
 using PasswordStoreBackendCredential = password_manager::PasswordForm;
 using ChromiumLoginsOrErrorReply = password_manager::LoginsOrErrorReply;

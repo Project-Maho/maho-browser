@@ -14,6 +14,7 @@
 #include "base/run_loop.h"
 #include "base/test/run_until.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/password_manager/factories/account_password_store_factory.h"
@@ -117,7 +118,7 @@ BuildMahoPasswordStore(bool enabled, content::BrowserContext *context) {
 
 struct MatchingResult {
   bool success = false;
-  password_manager::LoginsResult forms;
+  std::vector<password_manager::StoredCredential> forms;
 };
 
 } // namespace
@@ -448,8 +449,8 @@ protected:
 
   static void CaptureMatchingResult(
       base::RunLoop *loop, MatchingResult *output,
-      password_manager::LoginsResultOrError result) {
-    if (auto *forms = std::get_if<password_manager::LoginsResult>(
+      password_manager::BackendLoginsResultOrError result) {
+    if (auto *forms = std::get_if<password_manager::BackendLoginsResult>(
             &result)) {
       output->success = true;
       output->forms = std::move(*forms);

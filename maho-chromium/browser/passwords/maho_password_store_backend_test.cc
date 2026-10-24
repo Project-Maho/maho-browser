@@ -24,6 +24,7 @@
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
 #include "base/time/time.h"
+#include "base/types/expected.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/password_manager/core/browser/password_form.h"
 #include "components/password_manager/core/browser/password_form_digest.h"
@@ -495,7 +496,7 @@ protected:
     return matched_forms;
   }
 
-  password_manager::BackendLoginsResult
+  std::vector<password_manager::StoredCredential>
   FillPasswordStoreForms(MahoPasswordStoreBackend &backend,
                          const std::string &origin,
                          password_manager::PasswordForm::Scheme scheme =
@@ -503,18 +504,17 @@ protected:
     Grant(PasswordAuthorizationAction::kFill, origin);
     base::RunLoop fill_loop;
     bool fill_success = false;
-    password_manager::BackendLoginsResult matched_forms;
+    std::vector<password_manager::StoredCredential> matched_forms;
     std::vector<password_manager::PasswordFormDigest> digests;
     digests.emplace_back(scheme, origin, GURL(origin + "/login"));
     const bool include_psl = false;
     backend.FillMatchingLoginsAsync(
         base::BindOnce(
             [](base::RunLoop *loop, bool *success_out,
-               password_manager::BackendLoginsResult *forms_out,
+               std::vector<password_manager::StoredCredential> *forms_out,
                password_manager::BackendLoginsResultOrError result) {
               if (auto *forms =
-                      std::get_if<password_manager::BackendLoginsResult>(
-                          &result)) {
+                      std::get_if<0>(&result)) {
                 *success_out = true;
                 *forms_out = std::move(*forms);
               }
@@ -545,7 +545,7 @@ protected:
                 password_manager::PasswordManagerDocumentToken()};
   }
 
-  password_manager::BackendLoginsResult DiscoverForContext(
+  std::vector<password_manager::StoredCredential> DiscoverForContext(
       MahoPasswordStoreBackend &backend, const std::string &origin,
       const password_manager::PasswordFillRequestContext &context) {
     Grant(PasswordAuthorizationAction::kFill, origin);
@@ -553,16 +553,15 @@ protected:
         password_manager::PasswordForm::Scheme::kHtml, origin,
         GURL(origin + "/login"));
     base::RunLoop loop;
-    password_manager::BackendLoginsResult forms;
+    std::vector<password_manager::StoredCredential> forms;
     backend.GetGroupedMatchingLoginsAsync(
         digest, context,
         base::BindOnce(
             [](base::RunLoop *loop,
-               password_manager::BackendLoginsResult *forms_out,
+               std::vector<password_manager::StoredCredential> *forms_out,
                password_manager::BackendLoginsResultOrError result) {
               if (auto *resolved =
-                      std::get_if<password_manager::BackendLoginsResult>(
-                          &result)) {
+                      std::get_if<0>(&result)) {
                 *forms_out = std::move(*resolved);
               }
               loop->Quit();
@@ -916,8 +915,7 @@ TEST_F(MahoPasswordStoreBackendTest,
       base::BindOnce(
           [](base::RunLoop *loop, bool *failed_closed,
              password_manager::PasswordChangesOrError result) {
-            *failed_closed = std::holds_alternative<
-                password_manager::PasswordStoreBackendError>(result);
+            *failed_closed = result.index() == 1;
             loop->Quit();
           },
           &wrapper_add_loop, &wrapper_add_failed_closed));
@@ -931,7 +929,7 @@ TEST_F(MahoPasswordStoreBackendTest,
       [](base::RunLoop *loop, bool *success_out, size_t *count_out,
          password_manager::BackendLoginsResultOrError result) {
         if (auto *forms =
-                std::get_if<password_manager::BackendLoginsResult>(&result)) {
+                std::get_if<0>(&result)) {
           *success_out = true;
           *count_out = forms->size();
         }
@@ -942,7 +940,7 @@ TEST_F(MahoPasswordStoreBackendTest,
   EXPECT_TRUE(get_all_success);
   EXPECT_EQ(0u, all_count);
 
-  password_manager::BackendLoginsResult disabled_fill =
+  std::vector<password_manager::StoredCredential> disabled_fill =
       FillPasswordStoreForms(backend, "https://account-store.example");
   EXPECT_TRUE(disabled_fill.empty());
 }
@@ -1150,7 +1148,7 @@ TEST_F(MahoPasswordStoreBackendTest,
       ImportOnePasswordCredential(origin, "jit@example.test", kJitPassword));
   const password_manager::PasswordFillRequestContext context =
       FillContextFor(origin);
-  password_manager::BackendLoginsResult discovered =
+  std::vector<password_manager::StoredCredential> discovered =
       DiscoverForContext(backend, origin, context);
   ASSERT_EQ(1u, discovered.size());
   // Upstream fill-on-load, suggestions and save-vs-update compare all read
@@ -1211,7 +1209,7 @@ TEST_F(MahoPasswordStoreBackendTest,
   ASSERT_TRUE(ImportOnePasswordCredential("https://login.psl-example.com",
                                           "psl@example.test", kJitPassword));
   const std::string page = "https://www.psl-example.com";
-  password_manager::BackendLoginsResult discovered =
+  std::vector<password_manager::StoredCredential> discovered =
       DiscoverForContext(backend, page, FillContextFor(page));
 
   ASSERT_EQ(1u, discovered.size());
@@ -1246,7 +1244,7 @@ TEST_F(MahoPasswordStoreBackendTest,
           [](base::RunLoop *loop, bool *error_out, size_t *count_out,
              password_manager::BackendLoginsResultOrError result) {
             auto *forms =
-                std::get_if<password_manager::BackendLoginsResult>(&result);
+                std::get_if<0>(&result);
             *error_out = !forms;
             *count_out = forms ? forms->size() : 0;
             loop->Quit();
@@ -1272,7 +1270,7 @@ TEST_F(MahoPasswordStoreBackendTest,
                                           kJitPassword));
   const password_manager::PasswordFillRequestContext context =
       FillContextFor(origin);
-  password_manager::BackendLoginsResult discovered =
+  std::vector<password_manager::StoredCredential> discovered =
       DiscoverForContext(backend, origin, context);
   ASSERT_EQ(1u, discovered.size());
   ASSERT_TRUE(discovered[0].primary_key.has_value());
@@ -1363,7 +1361,7 @@ TEST_F(MahoPasswordStoreBackendTest,
       ImportOnePasswordCredential(origin, "jit@example.test", kJitPassword));
   const password_manager::PasswordFillRequestContext context =
       FillContextFor(origin);
-  password_manager::BackendLoginsResult discovered =
+  std::vector<password_manager::StoredCredential> discovered =
       DiscoverForContext(backend, origin, context);
   ASSERT_EQ(1u, discovered.size());
   ASSERT_TRUE(discovered[0].primary_key.has_value());
@@ -1422,7 +1420,7 @@ TEST_F(MahoPasswordStoreBackendTest,
       ImportOnePasswordCredential(origin, "jit@example.test", kJitPassword));
   const password_manager::PasswordFillRequestContext context =
       FillContextFor(origin);
-  password_manager::BackendLoginsResult discovered =
+  std::vector<password_manager::StoredCredential> discovered =
       DiscoverForContext(backend, origin, context);
   ASSERT_EQ(1u, discovered.size());
   ASSERT_TRUE(discovered[0].primary_key.has_value());
@@ -1506,7 +1504,7 @@ TEST_F(MahoPasswordStoreBackendTest,
   SelectPasswordProvider("maho_native", "[]");
   ASSERT_EQ("maho_native", GetActivePasswordProviderMode());
 
-  password_manager::BackendLoginsResult password_store_forms =
+  std::vector<password_manager::StoredCredential> password_store_forms =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, password_store_forms.size());
   EXPECT_EQ(origin, password_store_forms[0].signon_realm);
@@ -1539,15 +1537,14 @@ TEST_F(MahoPasswordStoreBackendTest,
           [](base::RunLoop *loop, bool *success_out,
              password_manager::PasswordChangesOrError result) {
             *success_out =
-                std::holds_alternative<password_manager::PasswordChanges>(
-                    result);
+                result.index() == 0;
             loop->Quit();
           },
           &add_loop, &add_success));
   add_loop.Run();
   ASSERT_TRUE(add_success);
 
-  password_manager::BackendLoginsResult password_store_forms =
+  std::vector<password_manager::StoredCredential> password_store_forms =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, password_store_forms.size());
   EXPECT_EQ(origin, password_store_forms[0].signon_realm);
@@ -1593,7 +1590,7 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_AddReportsError) {
              size_t *count_out,
              password_manager::PasswordChangesOrError result) {
             if (auto *changes =
-                    std::get_if<password_manager::PasswordChanges>(&result)) {
+                    std::get_if<0>(&result)) {
               *changes_out = true;
               *count_out = changes->has_value() ? (*changes)->size() : 0u;
             } else {
@@ -1642,7 +1639,7 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteDisabled_FillReturnsEmpty) {
   kill_switch_prefs->SetBoolean(prefs::kMahoNativePasswordWriteEnabled, false);
   ASSERT_FALSE(IsNativePasswordWriteEnabled(kill_switch_prefs));
 
-  password_manager::BackendLoginsResult filled =
+  std::vector<password_manager::StoredCredential> filled =
       FillPasswordStoreForms(backend, origin);
   EXPECT_TRUE(filled.empty());
 
@@ -1690,8 +1687,7 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteEnabled_AddReachesVault) {
           [](base::RunLoop *loop, bool *success_out,
              password_manager::PasswordChangesOrError result) {
             *success_out =
-                std::holds_alternative<password_manager::PasswordChanges>(
-                    result);
+                result.index() == 0;
             loop->Quit();
           },
           &add_loop, &add_success));
@@ -1701,7 +1697,7 @@ TEST_F(MahoPasswordStoreBackendTest, NativeWriteEnabled_AddReachesVault) {
   EXPECT_EQ(std::string::npos,
             CredentialPayloadForOrigin(origin).find(kKillSwitchPassword));
 
-  password_manager::BackendLoginsResult filled =
+  std::vector<password_manager::StoredCredential> filled =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, filled.size());
   EXPECT_EQ(origin, filled[0].signon_realm);
@@ -1812,8 +1808,7 @@ TEST_F(MahoPasswordStoreBackendTest, ProviderRouting_NativeHandlesAddAndFill) {
           [](base::RunLoop *loop, bool *success_out,
              password_manager::PasswordChangesOrError result) {
             *success_out =
-                std::holds_alternative<password_manager::PasswordChanges>(
-                    result);
+                result.index() == 0;
             loop->Quit();
           },
           &add_loop, &add_success));
@@ -1824,7 +1819,7 @@ TEST_F(MahoPasswordStoreBackendTest, ProviderRouting_NativeHandlesAddAndFill) {
   EXPECT_EQ(std::string::npos,
             CredentialPayloadForOrigin(origin).find(kRoutingPassword));
 
-  password_manager::BackendLoginsResult filled =
+  std::vector<password_manager::StoredCredential> filled =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, filled.size());
   EXPECT_EQ(origin, filled[0].signon_realm);
@@ -1877,7 +1872,7 @@ TEST_F(MahoPasswordStoreBackendTest, ProviderRouting_BitwardenIsNoOp) {
           [](base::RunLoop *loop, bool *changes_out, size_t *count_out,
              password_manager::PasswordChangesOrError result) {
             if (auto *changes =
-                    std::get_if<password_manager::PasswordChanges>(&result)) {
+                    std::get_if<0>(&result)) {
               *changes_out = true;
               *count_out = changes->has_value() ? (*changes)->size() : 0u;
             }
@@ -1988,15 +1983,14 @@ TEST_F(MahoPasswordStoreBackendTest,
           [](base::RunLoop *loop, bool *success_out,
              password_manager::PasswordChangesOrError result) {
             *success_out =
-                std::holds_alternative<password_manager::PasswordChanges>(
-                    result);
+                result.index() == 0;
             loop->Quit();
           },
           &add_loop, &add_success));
   add_loop.Run();
   ASSERT_TRUE(add_success);
 
-  password_manager::BackendLoginsResult native_fill =
+  std::vector<password_manager::StoredCredential> native_fill =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, native_fill.size());
   EXPECT_TRUE(native_fill[0].password_value.empty());
@@ -2014,7 +2008,7 @@ TEST_F(MahoPasswordStoreBackendTest,
   SelectPasswordProvider("maho_native", "[]");
   ASSERT_TRUE(IsNativePasswordProviderActive());
 
-  password_manager::BackendLoginsResult restored_fill =
+  std::vector<password_manager::StoredCredential> restored_fill =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, restored_fill.size());
   EXPECT_TRUE(restored_fill[0].password_value.empty());
@@ -2321,7 +2315,7 @@ protected:
                std::optional<password_manager::PasswordStoreChangeList> *out,
                password_manager::PasswordChangesOrError result) {
               if (auto *value =
-                      std::get_if<password_manager::PasswordChanges>(&result)) {
+                      std::get_if<0>(&result)) {
                 if (value->has_value()) {
                   *out = **value;
                 }
@@ -2345,7 +2339,7 @@ protected:
                std::optional<password_manager::PasswordStoreChangeList> *out,
                password_manager::PasswordChangesOrError result) {
               if (auto *value =
-                      std::get_if<password_manager::PasswordChanges>(&result)) {
+                      std::get_if<0>(&result)) {
                 if (value->has_value()) {
                   *out = **value;
                 }
@@ -2369,7 +2363,7 @@ protected:
                std::optional<password_manager::PasswordStoreChangeList> *out,
                password_manager::PasswordChangesOrError result) {
               if (auto *value =
-                      std::get_if<password_manager::PasswordChanges>(&result)) {
+                      std::get_if<0>(&result)) {
                 if (value->has_value()) {
                   *out = **value;
                 }
@@ -2435,7 +2429,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
 
   // Then only the saved login is returned.
   const auto* forms =
-      std::get_if<password_manager::BackendLoginsResult>(&result.Get());
+      std::get_if<0>(&result.Get());
   ASSERT_NE(nullptr, forms);
   ASSERT_EQ(1u, forms->size());
   EXPECT_EQ(u"saved@example.test", forms->front().username_value);
@@ -2494,7 +2488,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
 
   // Then neither site's credentials are omitted.
   const auto* forms =
-      std::get_if<password_manager::BackendLoginsResult>(&result.Get());
+      std::get_if<0>(&result.Get());
   ASSERT_NE(nullptr, forms);
   ASSERT_EQ(2u, forms->size());
   EXPECT_TRUE(std::ranges::any_of(*forms, [&](const auto& form) {
@@ -2518,7 +2512,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
 
   // Then the empty query succeeds without attempting an all-Vault read.
   const auto* forms =
-      std::get_if<password_manager::BackendLoginsResult>(&result.Get());
+      std::get_if<0>(&result.Get());
   ASSERT_NE(nullptr, forms);
   EXPECT_TRUE(forms->empty());
 }
@@ -2553,7 +2547,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
       {{password_manager::PasswordForm::Scheme::kHtml, origin, GURL(origin)}});
   ASSERT_TRUE(html_result.Wait());
   const auto* html_forms =
-      std::get_if<password_manager::BackendLoginsResult>(&html_result.Get());
+      std::get_if<0>(&html_result.Get());
   ASSERT_NE(nullptr, html_forms);
 
   // Then the HTML lookup answers with the HTML credential only.
@@ -2570,7 +2564,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
       {{password_manager::PasswordForm::Scheme::kBasic, origin, GURL(origin)}});
   ASSERT_TRUE(basic_result.Wait());
   const auto* basic_forms =
-      std::get_if<password_manager::BackendLoginsResult>(&basic_result.Get());
+      std::get_if<0>(&basic_result.Get());
   ASSERT_NE(nullptr, basic_forms);
   ASSERT_EQ(1u, basic_forms->size());
   EXPECT_EQ(password_manager::PasswordForm::Scheme::kBasic,
@@ -2597,7 +2591,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   expected.scheme = password_manager::PasswordForm::Scheme::kHtml;
   ASSERT_TRUE(AddAuthorized(backend, std::move(original)).has_value());
 
-  password_manager::BackendLoginsResult read_back =
+  std::vector<password_manager::StoredCredential> read_back =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, read_back.size());
   const PasswordStoreBackendCredential &actual = read_back[0];
@@ -2644,7 +2638,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   // Identity: the read assigns a stable Chromium primary key derived from the
   // Vault UUID.
   ASSERT_TRUE(actual.primary_key.has_value());
-  password_manager::BackendLoginsResult second_read =
+  std::vector<password_manager::StoredCredential> second_read =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, second_read.size());
   EXPECT_EQ(actual.primary_key, second_read[0].primary_key);
@@ -2679,7 +2673,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   cred.keychain_identifier = "keychain-id";
   ASSERT_TRUE(AddAuthorized(backend, std::move(cred)).has_value());
 
-  password_manager::BackendLoginsResult read_back =
+  std::vector<password_manager::StoredCredential> read_back =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, read_back.size());
   EXPECT_TRUE(read_back[0].affiliated_web_realm.empty());
@@ -2705,7 +2699,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(AddAuthorized(backend, std::move(first)).has_value());
   ASSERT_TRUE(AddAuthorized(backend, std::move(second)).has_value());
 
-  password_manager::BackendLoginsResult stored =
+  std::vector<password_manager::StoredCredential> stored =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(2u, stored.size());
   const PasswordStoreBackendCredential *target = nullptr;
@@ -2727,7 +2721,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   SetCredentialPassword(edit, u"second-updated-password");
   ASSERT_TRUE(UpdateAuthorized(backend, std::move(edit)).has_value());
 
-  password_manager::BackendLoginsResult after =
+  std::vector<password_manager::StoredCredential> after =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(2u, after.size());
   for (const auto &candidate : after) {
@@ -2751,7 +2745,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(AddAuthorized(backend, FullyPopulatedCredential(
                                          origin, u"stale@example.test"))
                   .has_value());
-  password_manager::BackendLoginsResult initial =
+  std::vector<password_manager::StoredCredential> initial =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, initial.size());
   const std::optional<password_manager::FormPrimaryKey> stale_primary_key =
@@ -2775,7 +2769,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   stale_remove.primary_key = stale_primary_key;
   EXPECT_FALSE(RemoveAuthorized(backend, std::move(stale_remove)).has_value());
 
-  password_manager::BackendLoginsResult after =
+  std::vector<password_manager::StoredCredential> after =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, after.size());
   EXPECT_TRUE(after[0].password_value.empty());
@@ -2813,7 +2807,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   const int add_primary_key =
       GetChangeCredential((*add_changes)[0]).primary_key->value();
 
-  password_manager::BackendLoginsResult stored =
+  std::vector<password_manager::StoredCredential> stored =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, stored.size());
   ASSERT_TRUE(stored[0].primary_key.has_value());
@@ -2845,7 +2839,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
       add_primary_key,
       GetChangeCredential((*update_changes)[0]).primary_key->value());
 
-  password_manager::BackendLoginsResult after_password_update =
+  std::vector<password_manager::StoredCredential> after_password_update =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, after_password_update.size());
   EXPECT_EQ(GetChangeCredential((*update_changes)[0]).primary_key,
@@ -2869,7 +2863,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   EXPECT_NE(after_password_update[0].primary_key,
             GetChangeCredential((*metadata_update_changes)[0]).primary_key);
 
-  password_manager::BackendLoginsResult before_remove =
+  std::vector<password_manager::StoredCredential> before_remove =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, before_remove.size());
   PasswordStoreBackendCredential to_remove =
@@ -2903,7 +2897,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(AddAuthorized(backend, FullyPopulatedCredential(
                                          origin, u"range@example.test"))
                   .has_value());
-  password_manager::BackendLoginsResult stored =
+  std::vector<password_manager::StoredCredential> stored =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, stored.size());
   ASSERT_TRUE(stored[0].primary_key.has_value());
@@ -2916,12 +2910,8 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
           [](base::RunLoop *loop,
              std::optional<password_manager::PasswordStoreChangeList> *out,
              password_manager::PasswordChangesOrError result) {
-            if (absl::holds_alternative<
-                    std::optional<password_manager::PasswordStoreChangeList>>(
-                    result)) {
-              *out = absl::get<
-                  std::optional<password_manager::PasswordStoreChangeList>>(
-                  std::move(result));
+            if (auto *value = std::get_if<0>(&result)) {
+              *out = std::move(*value);
             }
             loop->Quit();
           },
@@ -2951,7 +2941,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   credential.action = GURL();
   ASSERT_TRUE(AddAuthorized(backend, std::move(credential)).has_value());
 
-  password_manager::BackendLoginsResult read_back =
+  std::vector<password_manager::StoredCredential> read_back =
       FillPasswordStoreForms(backend, android_realm);
   ASSERT_EQ(1u, read_back.size());
   EXPECT_EQ(android_realm, read_back[0].signon_realm);
@@ -3094,7 +3084,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(AddAuthorized(backend, FullyPopulatedCredential(
                                          origin, u"before@example.test"))
                   .has_value());
-  password_manager::BackendLoginsResult before =
+  std::vector<password_manager::StoredCredential> before =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, before.size());
 
@@ -3103,7 +3093,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   edit.primary_key = before[0].primary_key;
   ASSERT_TRUE(UpdateAuthorized(backend, std::move(edit)).has_value());
 
-  password_manager::BackendLoginsResult after =
+  std::vector<password_manager::StoredCredential> after =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, after.size());
   EXPECT_EQ(u"after@example.test", after[0].username_value);
@@ -3138,7 +3128,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   SetCredentialPassword(ambiguous, u"must-not-update");
   EXPECT_FALSE(UpdateAuthorized(backend, std::move(ambiguous)).has_value());
 
-  password_manager::BackendLoginsResult after =
+  std::vector<password_manager::StoredCredential> after =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(2u, after.size());
   for (const auto &candidate : after) {
@@ -3158,7 +3148,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   credential.type = password_manager::PasswordForm::Type::kGenerated;
   ASSERT_TRUE(AddAuthorized(backend, std::move(credential)).has_value());
 
-  password_manager::BackendLoginsResult stored =
+  std::vector<password_manager::StoredCredential> stored =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, stored.size());
   EXPECT_TRUE(stored[0].blocked_by_user);
@@ -3196,7 +3186,7 @@ TEST_F(MahoPasswordStoreBackendRoundTripTest,
   ASSERT_TRUE(VaultResponseOk(
       maho_vault_add_login_json(maho::GetCore(), request_json.c_str())));
 
-  password_manager::BackendLoginsResult read_back =
+  std::vector<password_manager::StoredCredential> read_back =
       FillPasswordStoreForms(backend, origin);
   ASSERT_EQ(1u, read_back.size());
   EXPECT_EQ(origin, read_back[0].signon_realm);

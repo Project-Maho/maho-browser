@@ -20,6 +20,7 @@
 #include "base/uuid.h"
 #include "base/logging.h"
 #include "base/task/sequenced_task_runner.h"
+#include "base/types/expected.h"
 #include "base/values.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/autofill/core/common/unique_ids.h"
@@ -35,6 +36,22 @@
 
 namespace maho {
 namespace passwords {
+
+namespace {
+
+// Both Chromium reply variants used by this backend
+// (`password_manager::BackendLoginsResultOrError` and
+// `password_manager::PasswordChangesOrError`) carry the
+// `PasswordStoreBackendError` at alternative index 1.
+template <typename ReplyVariant>
+ReplyVariant UncategorizedBackendError() {
+  return ReplyVariant(
+      std::in_place_index<1>,
+      password_manager::PasswordStoreBackendError(
+          password_manager::PasswordStoreBackendErrorType::kUncategorized));
+}
+
+}  // namespace
 
 MahoPasswordForm::MahoPasswordForm() = default;
 
@@ -1022,7 +1039,8 @@ void MahoPasswordStoreBackend::OnVaultLockStateChanged(bool locked) {
   }
   identity_map_.Clear();
   fill_context_snapshots_.clear();
-  remote_form_changes_received_.Run(password_manager::PasswordChanges());
+  remote_form_changes_received_.Run(
+      std::optional<password_manager::PasswordStoreChangeList>());
 }
 
 void MahoPasswordStoreBackend::InitBackend(
@@ -1213,8 +1231,10 @@ void MahoPasswordStoreBackend::GetAllLoginsAsync(
          ChromiumLoginsOrErrorReply cb,
          std::vector<MahoPasswordForm> forms, bool success) {
         if (!backend || !success) {
-          std::move(cb).Run(password_manager::PasswordStoreBackendError(
-              password_manager::PasswordStoreBackendErrorType::kUncategorized));
+          std::move(cb).Run(password_manager::BackendLoginsResultOrError(
+              std::in_place_index<1>,
+              password_manager::PasswordStoreBackendError(
+                  password_manager::PasswordStoreBackendErrorType::kUncategorized)));
           return;
         }
         backend->ObserveIdentities(forms);
@@ -1242,8 +1262,10 @@ void MahoPasswordStoreBackend::GetAutofillableLoginsAsync(
          ChromiumLoginsOrErrorReply cb,
          std::vector<MahoPasswordForm> forms, bool success) {
         if (!backend || !success) {
-          std::move(cb).Run(password_manager::PasswordStoreBackendError(
-              password_manager::PasswordStoreBackendErrorType::kUncategorized));
+          std::move(cb).Run(password_manager::BackendLoginsResultOrError(
+              std::in_place_index<1>,
+              password_manager::PasswordStoreBackendError(
+                  password_manager::PasswordStoreBackendErrorType::kUncategorized)));
           return;
         }
         backend->ObserveIdentities(forms);
@@ -1302,9 +1324,7 @@ void MahoPasswordStoreBackend::FillMatchingLoginsAsync(
             std::vector<MahoPasswordForm> combined_forms;
             for (auto &[realm_forms, success] : results) {
               if (!success) {
-                std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                    password_manager::PasswordStoreBackendErrorType::
-                        kUncategorized));
+                std::move(cb).Run(UncategorizedBackendError<password_manager::BackendLoginsResultOrError>());
                 return;
               }
               combined_forms.insert(combined_forms.end(),
@@ -1351,9 +1371,7 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
              ChromiumLoginsOrErrorReply cb,
              std::vector<MahoPasswordForm> forms, bool success) {
             if (!backend || !success) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::BackendLoginsResultOrError>());
               return;
             }
             backend->ObserveIdentities(forms);
@@ -1399,9 +1417,7 @@ void MahoPasswordStoreBackend::GetGroupedMatchingLoginsAsync(
              ChromiumLoginsOrErrorReply cb,
              std::vector<MahoPasswordForm> forms, bool success) {
             if (!backend || !success) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::BackendLoginsResultOrError>());
               return;
             }
             backend->ObserveIdentities(forms);
@@ -1474,9 +1490,7 @@ void MahoPasswordStoreBackend::AddLoginAsync(
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
-                       password_manager::PasswordStoreBackendError(
-                           password_manager::PasswordStoreBackendErrorType::
-                               kUncategorized)));
+                       UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
     return;
   }
   // Under an external provider the extension owns the save, and under a
@@ -1491,9 +1505,7 @@ void MahoPasswordStoreBackend::AddLoginAsync(
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
-                       password_manager::PasswordStoreBackendError(
-                           password_manager::PasswordStoreBackendErrorType::
-                               kUncategorized)));
+                       UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
     return;
   }
   if (!IsMahoVaultRoutingActive()) {
@@ -1512,9 +1524,7 @@ void MahoPasswordStoreBackend::AddLoginAsync(
              password_manager::PasswordChangesOrErrorReply cb,
              std::optional<MahoPasswordForm> snapshot) {
             if (!backend || !snapshot) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             const int primary_key = backend->identity_map_.Observe(
@@ -1542,9 +1552,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
-                       password_manager::PasswordStoreBackendError(
-                           password_manager::PasswordStoreBackendErrorType::
-                               kUncategorized)));
+                       UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
     return;
   }
   // Same split as AddLoginAsync: a kill-switched write the user explicitly
@@ -1554,9 +1562,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
-                       password_manager::PasswordStoreBackendError(
-                           password_manager::PasswordStoreBackendErrorType::
-                               kUncategorized)));
+                       UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
     return;
   }
   if (!IsMahoVaultRoutingActive()) {
@@ -1574,9 +1580,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(std::move(callback),
-                         password_manager::PasswordStoreBackendError(
-                             password_manager::PasswordStoreBackendErrorType::
-                                 kUncategorized)));
+                         UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
       return;
     }
     observed_revision =
@@ -1585,9 +1589,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(std::move(callback),
-                         password_manager::PasswordStoreBackendError(
-                             password_manager::PasswordStoreBackendErrorType::
-                                 kUncategorized)));
+                         UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
       return;
     }
   }
@@ -1603,9 +1605,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
              password_manager::PasswordChangesOrErrorReply cb,
              std::vector<MahoPasswordForm> matched_forms, bool success) {
             if (!backend || !success) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             backend->ObserveIdentities(matched_forms);
@@ -1615,15 +1615,11 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
             std::optional<MahoPasswordForm> target =
                 ResolveTarget(cred, backend->identity_map_, matched_forms);
             if (!target.has_value()) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             if (observed_vault_id && target->id != *observed_vault_id) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             MahoPasswordForm form = FromBackendCredential(cred);
@@ -1646,10 +1642,7 @@ void MahoPasswordStoreBackend::UpdateLoginAsync(
                        std::optional<MahoPasswordForm> mutation_result) {
                       if (!backend || !mutation_result) {
                         std::move(reply_cb).Run(
-                            password_manager::PasswordStoreBackendError(
-                                password_manager::
-                                    PasswordStoreBackendErrorType::
-                                        kUncategorized));
+                            UncategorizedBackendError<password_manager::PasswordChangesOrError>());
                         return;
                       }
                       snapshot.id = mutation_result->id;
@@ -1686,9 +1679,7 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(std::move(callback),
-                       password_manager::PasswordStoreBackendError(
-                           password_manager::PasswordStoreBackendErrorType::
-                               kUncategorized)));
+                       UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
     return;
   }
   if (!IsMahoVaultRoutingActive()) {
@@ -1707,9 +1698,7 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(std::move(callback),
-                         password_manager::PasswordStoreBackendError(
-                             password_manager::PasswordStoreBackendErrorType::
-                                 kUncategorized)));
+                         UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
       return;
     }
     observed_revision =
@@ -1718,9 +1707,7 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
       base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(std::move(callback),
-                         password_manager::PasswordStoreBackendError(
-                             password_manager::PasswordStoreBackendErrorType::
-                                 kUncategorized)));
+                         UncategorizedBackendError<password_manager::PasswordChangesOrError>()));
       return;
     }
   }
@@ -1736,24 +1723,18 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
              password_manager::PasswordChangesOrErrorReply cb,
              std::vector<MahoPasswordForm> matched_forms, bool success) {
             if (!backend || !success) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             backend->ObserveIdentities(matched_forms);
             std::optional<MahoPasswordForm> target =
                 ResolveTarget(cred, backend->identity_map_, matched_forms);
             if (!target.has_value()) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             if (observed_vault_id && target->id != *observed_vault_id) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             if (observed_revision) {
@@ -1772,10 +1753,7 @@ void MahoPasswordStoreBackend::RemoveLoginAsync(
                        bool remove_ok) {
                       if (!remove_ok) {
                         std::move(reply_cb).Run(
-                            password_manager::PasswordStoreBackendError(
-                                password_manager::
-                                    PasswordStoreBackendErrorType::
-                                        kUncategorized));
+                            UncategorizedBackendError<password_manager::PasswordChangesOrError>());
                         return;
                       }
                       password_manager::PasswordStoreChangeList changes;
@@ -1813,9 +1791,7 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
              password_manager::PasswordChangesOrErrorReply cb,
              std::vector<MahoPasswordForm> forms, bool read_ok) {
             if (!backend || !read_ok) {
-              std::move(cb).Run(password_manager::PasswordStoreBackendError(
-                  password_manager::PasswordStoreBackendErrorType::
-                      kUncategorized));
+              std::move(cb).Run(UncategorizedBackendError<password_manager::PasswordChangesOrError>());
               return;
             }
             backend->ObserveIdentities(forms);
@@ -1836,10 +1812,7 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
                        bool success) {
                       if (!backend || !success) {
                         std::move(cb2).Run(
-                            password_manager::PasswordStoreBackendError(
-                                password_manager::
-                                    PasswordStoreBackendErrorType::
-                                        kUncategorized));
+                            UncategorizedBackendError<password_manager::PasswordChangesOrError>());
                         return;
                       }
                       password_manager::PasswordStoreChangeList changes;
@@ -1850,10 +1823,7 @@ void MahoPasswordStoreBackend::RemoveLoginsCreatedBetweenAsync(
                                                                  form.revision);
                         if (!primary_key) {
                           std::move(cb2).Run(
-                              password_manager::PasswordStoreBackendError(
-                                  password_manager::
-                                      PasswordStoreBackendErrorType::
-                                          kUncategorized));
+                              UncategorizedBackendError<password_manager::PasswordChangesOrError>());
                           return;
                         }
                         changes.emplace_back(
