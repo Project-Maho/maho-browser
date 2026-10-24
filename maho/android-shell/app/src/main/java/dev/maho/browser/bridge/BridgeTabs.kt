@@ -47,17 +47,23 @@ object BridgeTabs {
         return tabs.maxByOrNull { it.lastActiveAt }?.id
     }
 
+    /** The tab the user is looking at; falls back to the active space's newest tab. */
+    fun getShownTabId(): TabId? {
+        val shown = dev.maho.browser.ui.ShownTab.current() ?: return getActiveTabId()
+        return shown.takeIf { id -> getTabViewModels().any { it.id == id } } ?: getActiveTabId()
+    }
+
     fun createTab(spaceId: SpaceId, url: String? = null): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.CreateTab(spaceId = spaceId, url = url))
 
-    fun closeTab(id: TabId): List<CoreUpdate> {
-        dev.maho.browser.ui.WebViewStateStore.remove(id)
-        return MahoBridge.sendEvent(ShellEvent.CloseTab(tabId = id))
+    fun closeTab(id: TabId): List<CoreUpdate> = dev.maho.browser.ui.closeTabAndForget(id) {
+        dev.maho.browser.ui.WebViewStateStore.remove(it)
+        MahoBridge.sendEvent(ShellEvent.CloseTab(tabId = it))
     }
 
-    fun archiveTab(id: TabId): List<CoreUpdate> {
-        dev.maho.browser.ui.WebViewStateStore.remove(id)
-        return MahoBridge.sendEvent(ShellEvent.ArchiveTabById(tabId = id))
+    fun archiveTab(id: TabId): List<CoreUpdate> = dev.maho.browser.ui.closeTabAndForget(id) {
+        dev.maho.browser.ui.WebViewStateStore.remove(it)
+        MahoBridge.sendEvent(ShellEvent.ArchiveTabById(tabId = it))
     }
 
     fun activateTab(id: TabId): List<CoreUpdate> =

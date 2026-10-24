@@ -23,7 +23,7 @@ internal fun ArcBottomBarPageSection(
     DropdownMenuItem(
         text = {
             ArcMenuLabel(
-                title = "Browse for Me",
+                title = "Summarize page",
                 subtitle = "Generate a quicker read of this page",
                 shellColors = shellColors,
             )

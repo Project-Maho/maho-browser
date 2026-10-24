@@ -2,6 +2,7 @@
 
 package dev.maho.browser.ui.library
 
+import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -131,6 +132,20 @@ fun ArchiveScreen(
     }
 }
 
+/** Renders the core's ISO-8601 `archivedAt` as a relative time ("3 days ago"). */
+private fun formatArchivedAt(archivedAt: String): String {
+    val archivedMillis = try {
+        java.time.Instant.parse(archivedAt).toEpochMilli()
+    } catch (_: java.time.format.DateTimeParseException) {
+        return archivedAt
+    }
+    return DateUtils.getRelativeTimeSpanString(
+        archivedMillis,
+        System.currentTimeMillis(),
+        DateUtils.MINUTE_IN_MILLIS,
+    ).toString()
+}
+
 @Composable
 private fun ArchiveItem(
     tab: ArchivedTabViewModel,
@@ -153,7 +168,7 @@ private fun ArchiveItem(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    text = "Archived ${tab.archivedAt}",
+                    text = "Archived ${formatArchivedAt(tab.archivedAt)}",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,

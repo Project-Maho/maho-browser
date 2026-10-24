@@ -55,6 +55,10 @@ fun TabGridScreen(
     onDismiss: () -> Unit,
     onTabSelected: (TabId?) -> Unit,
     onNewTabCreated: (spaceId: SpaceId, tabId: TabId) -> Unit,
+    onTabsMutated: () -> Unit = {},
+    // Bumped by the browser after each resync, so tabs closed remotely or by an
+    // agent leave the deck while it stays open.
+    tabsRevision: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val shellColors = BrowserShellTheme.colors
@@ -102,14 +106,21 @@ fun TabGridScreen(
         return resolvedSpaceId to createdTabId
     }
 
-    LaunchedEffect(Unit) {
-        refresh()
+    var loadedRevision by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(tabsRevision) {
+        if (tabGridNeedsReload(loadedRevision, tabsRevision)) {
+            refresh()
+            loadedRevision = tabsRevision
+        }
     }
 
     val visibleTabs = orderTabsForDeck(
         tabs.filter { tab -> activeSpaceId == null || tab.spaceId == activeSpaceId },
         activeTabId,
     ) { it.id }
+    // Core only suspends pinned tabs and favorites on close, so Close all counts and
+    // closes just the regular tabs.
+    val closableTabs = visibleTabs.filter { it.role.type != "pinned" && it.role.type != "favorite" }
     val activeSpaceName = spaces.firstOrNull { it.id == activeSpaceId }?.name ?: "Current space"
     val containerColor = if (isIncognito) shellColors.incognitoSurface else shellColors.overlaySurface
     val elevatedSurfaceColor = if (isIncognito) shellColors.incognitoBackground else shellColors.overlaySurfaceHigh
@@ -231,7 +242,13 @@ fun TabGridScreen(
 
                 if (showSpaceSwitcher) {
                     SpaceSwitcherSheet(
-                        onDismiss = { showSpaceSwitcher = false },
+                        // Rename, recolor, create and delete in the sheet change core too,
+                        // so the switcher and the browser behind it re-read on close.
+                        onDismiss = {
+                            showSpaceSwitcher = false
+                            refresh()
+                            onTabsMutated()
+                        },
                         onSpaceSelected = { spaceId ->
                             refresh()
                         }
@@ -244,21 +261,30 @@ fun TabGridScreen(
                     activeTabId = activeTabId,
                     isIncognito = isIncognito,
                     onTabSelected = { tabId ->
+                        // Favorites are profile-wide, so the tapped tab can live in another
+                        // space. The user stays in the current space; the browser keeps
+                        // showing a favorite whichever space owns it (canKeepShowingTab).
                         BridgeTabs.activateTab(tabId)
                         refresh()
+                        // A card whose tab is gone (closed remotely or by an agent): the
+                        // refresh above dropped it, and the deck stays open.
+                        if (!isSelectableTab(tabs.map { it.id }, tabId)) return@TabGrid
                         onTabSelected(tabId)
                         onDismiss()
                     },
+                    // Archiving or closing one card keeps the switcher open; the browser
+                    // behind it only resyncs its tab state.
                     onTabArchived = { tabId ->
                         BridgeTabs.archiveTab(tabId)
                         refresh()
-                        onTabSelected(BridgeTabs.getActiveTabId())
+                        onTabsMutated()
                     },
                     onTabClosed = { tabId ->
                         BridgeTabs.closeTab(tabId)
                         refresh()
-                        onTabSelected(BridgeTabs.getActiveTabId())
+                        onTabsMutated()
                     },
+                    onTabChanged = { refresh() },
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 16.dp, vertical = 6.dp),
@@ -266,6 +292,7 @@ fun TabGridScreen(
 
                 TabGridToolbar(
                     tabCount = visibleTabs.size,
+                    closableCount = closableTabs.size,
                     activeSpaceName = activeSpaceName,
                     onNewTab = {
                         createTabInActiveSpace()?.let { (spaceId, tabId) ->
@@ -273,7 +300,7 @@ fun TabGridScreen(
                         }
                     },
                     onCloseAll = {
-                        visibleTabs.forEach { BridgeTabs.closeTab(it.id) }
+                        closableTabs.forEach { BridgeTabs.closeTab(it.id) }
                         refresh()
                         // Favorites survive Close all; land on Home rather than reopening one.
                         onTabSelected(null)

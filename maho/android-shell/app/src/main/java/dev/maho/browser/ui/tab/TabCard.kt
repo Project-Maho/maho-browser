@@ -63,9 +63,12 @@ fun TabCard(
     onTap: () -> Unit,
     onArchive: () -> Unit,
     onClose: () -> Unit,
+    // Called after a menu action changes this tab in core so the deck re-reads it.
+    onTabChanged: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val shellColors = BrowserShellTheme.colors
+    val context = androidx.compose.ui.platform.LocalContext.current
     val metrics = BrowserShellTheme.metrics
     val accentColor = if (isIncognito) shellColors.incognitoAccent else shellColors.accent
     val borderColor = when {
@@ -165,6 +168,7 @@ fun TabCard(
                     onClick = {
                         showMenu = false
                         BridgeTabs.duplicateTab(tab.id)
+                        onTabChanged()
                     }
                 )
                 DropdownMenuItem(
@@ -176,13 +180,25 @@ fun TabCard(
                         } else {
                             BridgeTabs.pinTab(tab.id)
                         }
+                        onTabChanged()
                     }
                 )
                 DropdownMenuItem(
                     text = { Text(if (tab.isFavorite) "Remove from Favorites" else "Add to Favorites") },
                     onClick = {
                         showMenu = false
-                        BridgeTabs.favoriteTab(tab.id)
+                        val limit = BridgeTabs.favoriteTab(tab.id)
+                            .filterIsInstance<dev.maho.browser.models.CoreUpdate.FavoriteLimitReached>()
+                            .firstOrNull()
+                        if (limit != null) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "You can have up to ${limit.max} favorites",
+                                android.widget.Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            onTabChanged()
+                        }
                     }
                 )
                 DropdownMenuItem(
@@ -204,6 +220,7 @@ fun TabCard(
                         } else {
                             BridgeTabs.muteTab(tab.id)
                         }
+                        onTabChanged()
                     }
                 )
                 androidx.compose.material3.HorizontalDivider()

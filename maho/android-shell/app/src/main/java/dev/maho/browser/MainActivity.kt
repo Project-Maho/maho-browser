@@ -44,6 +44,9 @@ class MainActivity : ComponentActivity() {
 
     private var pendingOpen by mutableStateOf<ExternalOpen?>(null)
     private var nextOpenId = 0L
+    // Bumped each time this window becomes the top-resumed activity (API 29+), the
+    // only signal of a focus change between split-screen or freeform panes.
+    private var topResumedSignal by mutableStateOf(0)
     private lateinit var appUpdateManager: MahoAppUpdateManager
 
     private fun queueExternalOpen(intent: Intent) {
@@ -112,6 +115,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             MainBrowserScreen(
                                 externalOpen = pendingOpen,
+                                topResumedSignal = topResumedSignal,
                                 onExternalOpenConsumed = { consumed ->
                                     if (pendingOpen?.id == consumed.id) pendingOpen = null
                                 },
@@ -135,6 +139,11 @@ class MainActivity : ComponentActivity() {
             sweepConversations = { MahoBridge.autoArchiveConversations() },
             checkForUpdate = { appUpdateManager.checkForUpdate() },
         )
+    }
+
+    override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+        super.onTopResumedActivityChanged(isTopResumedActivity)
+        if (isTopResumedActivity) topResumedSignal++
     }
 
     override fun onPause() {

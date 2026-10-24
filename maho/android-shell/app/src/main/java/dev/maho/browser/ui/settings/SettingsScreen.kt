@@ -155,6 +155,24 @@ fun SettingsScreen(
                     showChevron = true,
                     onClick = onNavigateToDownloads,
                 )
+                MahoRowDivider()
+                MahoGroupedRow(
+                    title = "Reading List",
+                    subtitle = "Pages saved for later",
+                    icon = painterResource(id = MahoIcon.ReadingList.drawableRes),
+                    iconTint = Color(0xFFFF9F0A),
+                    showChevron = true,
+                    onClick = onNavigateToReadingList,
+                )
+                MahoRowDivider()
+                MahoGroupedRow(
+                    title = "Notes",
+                    subtitle = "Your saved notes",
+                    icon = painterResource(id = MahoIcon.Notes.drawableRes),
+                    iconTint = Color(0xFFFFD60A),
+                    showChevron = true,
+                    onClick = onNavigateToNotes,
+                )
             }
 
             MahoGroupedSection(title = "Browsing") {
@@ -247,9 +265,45 @@ fun SettingsScreen(
                     showChevron = true,
                     onClick = onNavigateToWebAgent,
                 )
+                MahoRowDivider()
+                MahoGroupedRow(
+                    title = "API Keys",
+                    subtitle = "Use your own AI provider keys",
+                    icon = painterResource(id = MahoIcon.AutofillKey.drawableRes),
+                    iconTint = Color(0xFF8E8E93),
+                    showChevron = true,
+                    onClick = onNavigateToApiKeys,
+                )
             }
 
             MahoGroupedSection(title = "App") {
+                MahoGroupedRow(
+                    title = "Profiles",
+                    subtitle = "Separate browsing identities",
+                    icon = painterResource(id = MahoIcon.Profiles.drawableRes),
+                    iconTint = Color(0xFF5E5CE6),
+                    showChevron = true,
+                    onClick = onNavigateToProfiles,
+                )
+                MahoRowDivider()
+                MahoGroupedRow(
+                    title = "Language",
+                    subtitle = "Voice recognition language",
+                    icon = painterResource(id = MahoIcon.Globe.drawableRes),
+                    iconTint = Color(0xFF64D2FF),
+                    showChevron = true,
+                    onClick = onNavigateToLanguage,
+                )
+                MahoRowDivider()
+                MahoGroupedRow(
+                    title = "Advanced",
+                    subtitle = "Developer and experimental options",
+                    icon = painterResource(id = MahoIcon.Code.drawableRes),
+                    iconTint = Color(0xFF8E8E93),
+                    showChevron = true,
+                    onClick = onNavigateToAdvanced,
+                )
+                MahoRowDivider()
                 MahoGroupedRow(
                     title = "Feedback",
                     icon = painterResource(id = MahoIcon.HelpFeedback.drawableRes),

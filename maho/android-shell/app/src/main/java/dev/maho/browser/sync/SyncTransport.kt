@@ -99,6 +99,7 @@ class SyncTransport(
         val baseUrl = initialSession.serverUrl
             ?: sessionPersistence.getServerUrl(DEFAULT_SERVER_URL)
 
+        var appliedEnvelopes = 0
         return try {
             bridgeAdapter.reportTransportState(SyncTransportStateReport("syncing"))
             var batches = 0
@@ -124,6 +125,7 @@ class SyncTransport(
                         throw SyncProtocolException("Core failed to apply delivery ${envelope.deliveryId}")
                     }
                     cursor = seq
+                    appliedEnvelopes += 1
                 }
                 if (!response.hasMore) return finish(SyncCycleOutcome.SUCCESS)
                 if (response.messages.isEmpty()) {
@@ -144,6 +146,9 @@ class SyncTransport(
             finish(SyncCycleOutcome.PERMANENT_FAILURE, error.message)
         } catch (error: Exception) {
             finish(SyncCycleOutcome.PERMANENT_FAILURE, error.message ?: "Sync failed")
+        } finally {
+            // Every exit, including a failure after some envelopes applied.
+            signalShownTabResync(appliedEnvelopes)
         }
     }
 
@@ -217,6 +222,17 @@ class SyncTransport(
         }
         if (envelope.deliveryId.isBlank() || envelope.payload.isBlank()) {
             throw SyncProtocolException("Relay returned a malformed V2 envelope")
+        }
+    }
+
+    /**
+     * Applied envelopes can close or move the tab on screen (a remote tab
+     * tombstone, for example), so the browser screen must resync; nothing else
+     * tells it about a core-side change.
+     */
+    private fun signalShownTabResync(appliedEnvelopes: Int) {
+        if (dev.maho.browser.ui.shouldResyncAfterSyncPull(appliedEnvelopes)) {
+            dev.maho.browser.ui.ShownTab.requestResync()
         }
     }
 

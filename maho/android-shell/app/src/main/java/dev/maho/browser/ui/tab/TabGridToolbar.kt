@@ -15,12 +15,17 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import dev.maho.browser.ui.components.ConfirmDialog
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
@@ -28,6 +33,9 @@ import androidx.compose.ui.res.painterResource
 @Composable
 fun TabGridToolbar(
     tabCount: Int,
+    // Close all only closes regular tabs, so its guard and copy use their own count
+    // while the pill shows every tab in the deck.
+    closableCount: Int,
     activeSpaceName: String,
     onNewTab: () -> Unit,
     onCloseAll: () -> Unit,
@@ -38,6 +46,20 @@ fun TabGridToolbar(
     val metrics = BrowserShellTheme.metrics
     val toolbarSurfaceColor = shellColors.overlaySurface.copy(alpha = 0.74f)
     val secondaryActionColor = shellColors.textSecondary
+    var showCloseAllConfirm by remember { mutableStateOf(false) }
+
+    if (showCloseAllConfirm) {
+        ConfirmDialog(
+            title = "Close all tabs?",
+            message = "$closableCount tab${if (closableCount != 1) "s" else ""} in $activeSpaceName will be closed. Pinned tabs and favorites stay.",
+            confirmLabel = "Close all",
+            onConfirm = {
+                showCloseAllConfirm = false
+                onCloseAll()
+            },
+            onDismiss = { showCloseAllConfirm = false },
+        )
+    }
 
     Surface(
         modifier = modifier
@@ -90,8 +112,8 @@ fun TabGridToolbar(
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (tabCount > 1) {
-                    TextButton(onClick = onCloseAll) {
+                if (closableCount > 1) {
+                    TextButton(onClick = { showCloseAllConfirm = true }) {
                         Icon(painter = painterResource(id = MahoIcon.Eraser.drawableRes),
                             contentDescription = "Close All",
                             modifier = Modifier,

@@ -20,6 +20,7 @@ internal fun runMainBrowserReadabilityExtraction(
     webView: WebView,
     onReaderUrlCaptured: (String?) -> Unit,
     onReaderContentLoaded: () -> Unit,
+    onExtractionFailed: () -> Unit = {},
 ) {
     val readabilityScript = try {
         webView.context.assets.open("readability.js").bufferedReader().use { it.readText() }
@@ -54,11 +55,15 @@ internal fun runMainBrowserReadabilityExtraction(
     """.trimIndent()
 
     webView.evaluateJavascript(extractionScript) { json ->
-        if (json == null || json == "null" || json.startsWith("\"error")) return@evaluateJavascript
+        if (json == null || json == "null" || json.startsWith("\"error")) {
+            onExtractionFailed()
+            return@evaluateJavascript
+        }
         try {
             val unescaped = JSONObject(decodeReadabilityResult(json))
             if (unescaped.has("error")) {
                 Log.e("MahoReader", "Readability extraction error: " + unescaped.getString("error"))
+                onExtractionFailed()
                 return@evaluateJavascript
             }
             val dir = unescaped.optString("dir")
@@ -95,6 +100,7 @@ internal fun runMainBrowserReadabilityExtraction(
             onReaderContentLoaded()
         } catch (error: Exception) {
             Log.e("MahoReader", "Failed to parse json: " + error.message)
+            onExtractionFailed()
         }
     }
 }

@@ -37,16 +37,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeDownloads
-import dev.maho.browser.models.CoreUpdate
+import dev.maho.browser.bridge.SystemDownloadTracker
 import dev.maho.browser.models.DownloadState
 import dev.maho.browser.models.DownloadViewModel
 import dev.maho.browser.ui.components.ConfirmDialog
 import dev.maho.browser.ui.icons.MahoIcon
 import dev.maho.browser.ui.theme.BrowserShellTheme
 import androidx.compose.ui.res.painterResource
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,11 +57,33 @@ fun DownloadsScreen(
 ) {
     var downloads by remember { mutableStateOf<List<DownloadViewModel>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    val context = LocalContext.current
+
+    // Core only records bytes it is told about, and the native bridge keeps no total
+    // for system transfers until they finish, so overlay DownloadManager's live counts.
+    fun loadDownloads(): List<DownloadViewModel> {
+        val live = SystemDownloadTracker.pollProgress(context)
+        return BridgeDownloads.getDownloads().map { download ->
+            val (received, total) = live[download.id] ?: return@map download
+            download.copy(
+                receivedBytes = received,
+                totalBytes = if (total > 0) total else download.totalBytes,
+            )
+        }
+    }
 
     LaunchedEffect(Unit) {
         isLoading = true
-        downloads = BridgeDownloads.getDownloads()
+        downloads = loadDownloads()
         isLoading = false
+    }
+
+    val hasActiveDownload = downloads.any { it.state == DownloadState.Downloading }
+    LaunchedEffect(hasActiveDownload) {
+        while (hasActiveDownload) {
+            delay(1_000)
+            downloads = loadDownloads()
+        }
     }
 
     Scaffold(
@@ -126,11 +150,6 @@ fun DownloadsScreen(
                                     BridgeDownloads.removeDownload(download.id)
                                     downloads = downloads.filter { it.id != download.id }
                                 },
-                                onProgressUpdate = { updated ->
-                                    downloads = downloads.map {
-                                        if (it.id == updated.id) updated else it
-                                    }
-                                },
                             )
                         }
                     }
@@ -147,7 +166,6 @@ private fun DownloadItem(
     onResume: () -> Unit,
     onCancel: () -> Unit,
     onRemove: () -> Unit,
-    onProgressUpdate: (DownloadViewModel) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showRemoveConfirm by remember { mutableStateOf(false) }
@@ -223,16 +241,29 @@ private fun DownloadItem(
             supportingContent = {
                 Column {
                     if (download.state == DownloadState.Downloading || download.state == DownloadState.Paused) {
-                        LinearProgressIndicator(
-                            progress = { progress.coerceIn(0f, 1f) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp),
-                        )
+                        if (download.totalBytes > 0) {
+                            LinearProgressIndicator(
+                                progress = { progress.coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                            )
+                        } else {
+                            // The server sent no Content-Length: show activity, not a stuck 0%.
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                            )
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = formatBytes(download.receivedBytes) + " / " + formatBytes(download.totalBytes),
+                            text = if (download.totalBytes > 0) {
+                                formatBytes(download.receivedBytes) + " / " + formatBytes(download.totalBytes)
+                            } else {
+                                formatBytes(download.receivedBytes) + " downloaded"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -338,11 +369,4 @@ private fun formatBytes(bytes: Long): String {
     if (mb < 1024) return "%.1f MB".format(mb)
     val gb = mb / 1024.0
     return "%.1f GB".format(gb)
-}
-
-fun isDownloadUpdate(update: CoreUpdate): Boolean = when (update) {
-    is CoreUpdate.DownloadStarted -> true
-    is CoreUpdate.DownloadProgress -> true
-    is CoreUpdate.DownloadCompleted -> true
-    else -> false
 }

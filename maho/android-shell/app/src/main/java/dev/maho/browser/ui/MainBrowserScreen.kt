@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -36,12 +37,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.bridge.BridgeCommandBar
 import dev.maho.browser.bridge.BridgeNavigation
@@ -70,11 +74,14 @@ data class ExternalOpen(val url: String, val id: Long)
 fun MainBrowserScreen(
     externalOpen: ExternalOpen? = null,
     onExternalOpenConsumed: (ExternalOpen) -> Unit = {},
+    // Bumped by the activity each time its window becomes top-resumed (API 29+).
+    topResumedSignal: Int = 0,
 ) {
     val shellColors = BrowserShellTheme.colors
     val bridge = MahoBridge
     val context = LocalContext.current
     val view = LocalView.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     // Status-bar chrome must follow the in-app theme choice, not only the OS mode.
     val isSystemDarkTheme = BrowserThemeController.isDarkTheme()
     var tabs by remember { mutableStateOf<List<TabViewModel>>(emptyList()) }
@@ -84,10 +91,8 @@ fun MainBrowserScreen(
     var shellRoute by rememberSaveable { mutableStateOf(ShellRoute.Home) }
     var homeReturnTabId by rememberSaveable { mutableStateOf<TabId?>(null) }
     var showTabGrid by rememberSaveable { mutableStateOf(false) }
-    fun captureActiveTabPreview() {
-        val webView = AgenticBrowsingWebViewRegistry.current() ?: return
-        activeTabId?.let { captureTabPreview(webView, it) }
-    }
+    // Bumped after every outside resync so an open tab grid reloads its deck.
+    var tabGridRevision by remember { mutableStateOf(0) }
     var showFindSheet by rememberSaveable { mutableStateOf(false) }
     var showSearchSheet by rememberSaveable { mutableStateOf(false) }
     var showPinchSummary by rememberSaveable { mutableStateOf(false) }
@@ -118,6 +123,15 @@ fun MainBrowserScreen(
 
     var loadProgress by remember { mutableStateOf(0) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    // This screen's own WebView only: the registry slot can hold another screen's page.
+    fun captureActiveTabPreview() {
+        val webView = webViewRef ?: return
+        activeTabId?.let { captureTabPreview(webView, it) }
+    }
+    // Main-frame load failure for the shown tab: description to failing URL.
+    var pageError by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // Bumped when the user leaves a settings screen whose values the live WebView applies.
+    var webSettingsRevision by remember { mutableStateOf(0) }
     var bottomBarVisible by rememberSaveable { mutableStateOf(true) }
     var isReaderMode by rememberSaveable { mutableStateOf(false) }
     var isDesktopMode by rememberSaveable { mutableStateOf(false) }
@@ -155,16 +169,13 @@ fun MainBrowserScreen(
             latestTabs.isNotEmpty() -> latestTabs.first().spaceId
             else -> null
         }
-        val bridgeActiveTabId = BridgeTabs.getActiveTabId()
-        val resolvedTabId = when {
-            bridgeActiveTabId != null -> bridgeActiveTabId
-            activeTabId != null && latestTabs.any { it.id == activeTabId } -> activeTabId
-            resolvedSpaceId != null -> latestTabs
-                .filter { it.spaceId == resolvedSpaceId }
-                .maxByOrNull { it.lastActiveAt }
-                ?.id
-            else -> latestTabs.maxByOrNull { it.lastActiveAt }?.id
-        }
+        val resolvedTabId = resolveShownTabId(
+            tabs = latestTabs.map { ShownTabFacts(it.id, it.spaceId, it.role.type, it.lastActiveAt) },
+            shownTabId = activeTabId,
+            previousSpaceId = activeSpaceId,
+            activeSpaceId = resolvedSpaceId,
+            requestedTabId = ShownTab.takeRequest(),
+        )
 
         tabs = latestTabs
         spaces = latestSpaces
@@ -193,6 +204,13 @@ fun MainBrowserScreen(
                 if (urlBeforeReaderMode == null) urlBeforeReaderMode = readerUrl
             },
             onReaderContentLoaded = { isReaderMode = true },
+            onExtractionFailed = {
+                android.widget.Toast.makeText(
+                    context,
+                    "Reader view isn't available for this page",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
         )
     }
 
@@ -217,6 +235,12 @@ fun MainBrowserScreen(
         }
         if (overlayStack.lastOrNull() == BrowserOverlay.GeneralSettings) {
             coreSearchEngineName()?.let { selectedSearchEngine.value = it }
+        }
+        // Privacy and General own settings the live WebView applies; signal it to re-read.
+        if (overlayStack.lastOrNull() == BrowserOverlay.GeneralSettings ||
+            overlayStack.lastOrNull() == BrowserOverlay.PrivacySettings
+        ) {
+            webSettingsRevision++
         }
         overlayStack = overlayStack.dropLast(1)
     }
@@ -333,6 +357,20 @@ fun MainBrowserScreen(
         refreshBrowserState()
         activeTabId = targetTab.id
         transitionToBrowsing(targetTab.id)
+    }
+
+    // The tab switcher can change the active space or close the shown tab, so
+    // leaving it resyncs from core instead of keeping the pre-switcher page.
+    fun dismissTabGrid() {
+        showTabGrid = false
+        refreshBrowserState()
+        if (shellRoute != ShellRoute.Browsing) return
+        val shownTabId = activeTabId
+        if (shownTabId != null) {
+            transitionToBrowsing(shownTabId)
+        } else {
+            transitionToHome(returnTabId = null)
+        }
     }
 
     fun shareCurrentPage() {
@@ -571,6 +609,89 @@ fun MainBrowserScreen(
         WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = chromeTheme.useDarkStatusIcons
     }
 
+    // This screen's ownership token for the process-wide ShownTab slot. Several
+    // screens can be alive at once (a second instance opened from another app,
+    // split-screen), so every publish and the final clear carry this token and
+    // never touch another screen's registration.
+    val shownTabOwner = remember { java.util.concurrent.atomic.AtomicReference<Any?>(null) }
+    // The takeover registered by the effect below, run from the top-resumed signal.
+    val takeOver = remember { java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null) }
+
+    SideEffect {
+        // While Home is on screen no tab is shown, so agent page tools must see
+        // "no page" instead of a hidden tab.
+        shownTabOwner.get()?.let { owner ->
+            ShownTab.publish(owner, publishedShownTabId(isBrowsingRoute, activeTabId))
+        }
+    }
+
+    DisposableEffect(view, lifecycleOwner) {
+        fun onSignal(requestedTabId: TabId?) {
+            view.post {
+                // The tab shown before this refresh: a refresh that keeps it (a
+                // sync pull that only changed history, for example) must not
+                // re-run the browsing transition, which closes the tab grid.
+                val previousTabId = activeTabId
+                refreshBrowserState()
+                tabGridRevision++
+                when (resolveSignalAction(
+                    isBrowsingRoute = shellRoute == ShellRoute.Browsing,
+                    requestedTabId = requestedTabId,
+                    resolvedTabId = activeTabId,
+                    previousTabId = previousTabId,
+                )) {
+                    ShownTabSignalAction.ShowRequested -> requestedTabId?.let(::transitionToBrowsing)
+                    ShownTabSignalAction.KeepBrowsing -> activeTabId?.let(::transitionToBrowsing)
+                    ShownTabSignalAction.GoHome -> transitionToHome(returnTabId = null)
+                    ShownTabSignalAction.RefreshOnly -> Unit
+                }
+            }
+        }
+        val owner = ShownTab.setSignalListener(::onSignal)
+        shownTabOwner.set(owner)
+        ShownTab.publish(owner, publishedShownTabId(isBrowsingRoute, activeTabId))
+        // A screen the user returns to (Recents, the launcher, the other
+        // split-screen pane) takes the signal slot back from a newer screen and
+        // resyncs, since agent and sync signals reached that screen meanwhile.
+        // Its own WebView becomes the agent page again (or none, on Home), so
+        // navigate and DOM tools never act on the hidden screen's page. From API
+        // 29 both split-screen panes stay resumed, so the focus change arrives
+        // only as the top-resumed signal; ON_RESUME covers older releases.
+        fun takeOverForeground() {
+            takeOverAgentPage(
+                webViewRef,
+                AgenticBrowsingWebViewRegistry::attach,
+                AgenticBrowsingWebViewRegistry::clear,
+            )
+            if (ShownTab.activate(owner)) {
+                ShownTab.publish(owner, publishedShownTabId(shellRoute == ShellRoute.Browsing, activeTabId))
+                onSignal(null)
+            }
+        }
+        takeOver.set(::takeOverForeground)
+        val observer = LifecycleEventObserver { _, event ->
+            if (event != Lifecycle.Event.ON_RESUME) return@LifecycleEventObserver
+            if (shouldTakeOverOnForegroundSignal(ForegroundSignal.Resumed, android.os.Build.VERSION.SDK_INT)) {
+                takeOverForeground()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            takeOver.set(null)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            shownTabOwner.compareAndSet(owner, null)
+            ShownTab.clearSignalListener(owner)
+        }
+    }
+
+    LaunchedEffect(topResumedSignal) {
+        if (topResumedSignal > 0 &&
+            shouldTakeOverOnForegroundSignal(ForegroundSignal.TopResumedGained, android.os.Build.VERSION.SDK_INT)
+        ) {
+            takeOver.get()?.invoke()
+        }
+    }
+
     LaunchedEffect(activeTabId) {
         currentUrl = activeTab?.url.orEmpty()
         currentTitle = activeTab?.title.orEmpty()
@@ -583,6 +704,7 @@ fun MainBrowserScreen(
 
         isReaderMode = false
         zoomLevel = 1.0f
+        pageError = null
         if (showSummaryOverlay) {
             showSummaryOverlay = false
             summaryState = dev.maho.browser.support.PageSummarizer.State.Idle
@@ -633,7 +755,7 @@ fun MainBrowserScreen(
         hasOverlay = overlayStack.isNotEmpty(),
         isHomeRoute = shellRoute == ShellRoute.Home,
         homeReturnTabId = resolvedHomeReturnTabId,
-        onDismissTabGrid = { showTabGrid = false },
+        onDismissTabGrid = ::dismissTabGrid,
         onDismissFind = { showFindSheet = false },
         onDismissSummary = {
             showSummaryOverlay = false
@@ -824,6 +946,12 @@ fun MainBrowserScreen(
                                             (context as? android.app.Activity)?.let { activity ->
                                                 dev.maho.browser.PiPHelper.enterPiP(activity)
                                             }
+                                        } else {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Play a video to use picture in picture",
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
                                         }
                                     }
                                 },
@@ -947,6 +1075,7 @@ fun MainBrowserScreen(
                                 ?.takeIf { it.isNotBlank() },
                             isDesktopMode = isDesktopMode,
                             isIncognito = isIncognito,
+                            webSettingsRevision = webSettingsRevision,
                             onUrlChanged = { url ->
                                 currentUrl = url
                                 if (requestedNavigationUrl != null && url.isNotBlank()) {
@@ -959,6 +1088,7 @@ fun MainBrowserScreen(
                             },
                             onLoadingChanged = { loading ->
                                 isLoading = loading
+                                if (loading) pageError = null
                                 if (loading && shouldResetReaderModeOnNavigation(urlBeforeReaderMode, currentUrl)) {
                                     isReaderMode = false
                                     urlBeforeReaderMode = null
@@ -967,14 +1097,29 @@ fun MainBrowserScreen(
                                 if (!loading) {
                                     loadProgress = 100
                                     refreshBrowserState()
+                                    // A new document starts at 100%; re-apply the zoom the
+                                    // menu shows so the two stay in sync across navigations.
+                                    applyDisplayOptions()
                                 }
                             },
                             onProgressChanged = { progress ->
                                 loadProgress = progress
                             },
                             onNavigationStateChanged = { _, _ -> },
-                            onError = { _, _, _ ->
+                            onError = { errorCode, description, failingUrl ->
                                 isLoading = false
+                                val scheme = android.net.Uri.parse(failingUrl).scheme?.lowercase()
+                                if (scheme == null || scheme == "http" || scheme == "https") {
+                                    pageError = pageLoadErrorMessage(errorCode, description) to failingUrl
+                                } else {
+                                    // A link to an app that isn't installed: the current page
+                                    // is still fine, so only explain why nothing opened.
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "No app can open this link",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
                             },
                             onWebViewReady = { webView ->
                                 webViewRef = webView
@@ -1007,6 +1152,12 @@ fun MainBrowserScreen(
                                         if (state is dev.maho.browser.support.PageSummarizer.State.Result) {
                                             pinchSummarySentences = state.bullets
                                             showPinchSummary = true
+                                        } else if (state is dev.maho.browser.support.PageSummarizer.State.Error) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                state.message,
+                                                android.widget.Toast.LENGTH_SHORT,
+                                            ).show()
                                         }
                                     }
                                 }
@@ -1019,6 +1170,22 @@ fun MainBrowserScreen(
                             },
                             modifier = Modifier.fillMaxSize(),
                         )
+                        pageError?.let { (description, failingUrl) ->
+                            MainBrowserPageErrorView(
+                                description = description,
+                                failingUrl = failingUrl,
+                                onReload = {
+                                    pageError = null
+                                    val view = webViewRef
+                                    // A failed first load leaves no committed page to reload.
+                                    if (view != null && failingUrl.isNotBlank() && view.url != failingUrl) {
+                                        view.loadUrl(failingUrl)
+                                    } else {
+                                        view?.reload()
+                                    }
+                                },
+                            )
+                        }
                         }
                     }
                 }
@@ -1144,9 +1311,11 @@ fun MainBrowserScreen(
         TabGridScreen(
             activeTabId = activeTabId,
             isIncognito = isIncognito,
-            onDismiss = { showTabGrid = false },
+            onDismiss = ::dismissTabGrid,
             onTabSelected = { tabId ->
                 refreshBrowserState()
+                // A tab closed meanwhile is never shown under its dead id.
+                if (tabId != null && !isSelectableTab(tabs.map { it.id }, tabId)) return@TabGridScreen
                 if (tabId != null) {
                     transitionToBrowsing(tabId)
                 } else {
@@ -1157,6 +1326,8 @@ fun MainBrowserScreen(
             onNewTabCreated = { spaceId, tabId ->
                 completeTabGridNewTabFlow(spaceId, tabId)
             },
+            onTabsMutated = ::refreshBrowserState,
+            tabsRevision = tabGridRevision,
         )
     }
 

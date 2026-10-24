@@ -10,6 +10,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -191,6 +192,14 @@ fun PrivacySettingsScreen(
                 secureDnsEnabled = it
                 BridgeSettings.updatePrivacySettings(PrivacySettingsUpdate(secureDnsEnabled = it))
             }
+            // Android WebView always resolves through the system resolver, so this
+            // preference only syncs to desktop; say so instead of implying it works here.
+            Text(
+                "On Android, Secure DNS is set in system settings under Private DNS. This setting applies to your desktop browser.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
             if (secureDnsEnabled) {
                 OutlinedTextField(
                     value = secureDnsProvider,

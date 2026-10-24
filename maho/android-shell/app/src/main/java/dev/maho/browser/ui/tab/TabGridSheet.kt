@@ -43,7 +43,7 @@ fun TabGridSheet(
         tabs = BridgeTabs.getTabViewModels()
         spaces = BridgeSpaces.getSpaceViewModels()
         activeSpaceId = BridgeSpaces.getActiveSpaceId()
-        activeTabId = BridgeTabs.getActiveTabId()
+        activeTabId = BridgeTabs.getShownTabId()
     }
 
     val filteredTabs = tabs.filter { it.spaceId == activeSpaceId }
@@ -86,6 +86,7 @@ fun TabGridSheet(
 
         TabGridToolbar(
             tabCount = filteredTabs.size,
+            closableCount = filteredTabs.size,
             activeSpaceName = activeSpaceName,
             onNewTab = {
                 val spaceId = activeSpaceId ?: return@TabGridToolbar
@@ -120,13 +121,13 @@ fun TabGridSheet(
                 BridgeTabs.archiveTab(tabId)
                 tabs = BridgeTabs.getTabViewModels()
                 spaces = BridgeSpaces.getSpaceViewModels()
-                activeTabId = BridgeTabs.getActiveTabId()
+                activeTabId = BridgeTabs.getShownTabId()
             },
             onTabClosed = { tabId ->
                 BridgeTabs.closeTab(tabId)
                 tabs = BridgeTabs.getTabViewModels()
                 spaces = BridgeSpaces.getSpaceViewModels()
-                activeTabId = BridgeTabs.getActiveTabId()
+                activeTabId = BridgeTabs.getShownTabId()
             },
             modifier = Modifier
                 .fillMaxWidth()

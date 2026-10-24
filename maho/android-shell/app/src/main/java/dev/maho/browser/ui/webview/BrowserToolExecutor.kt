@@ -7,6 +7,8 @@ import dev.maho.browser.bridge.BridgeHistory
 import dev.maho.browser.bridge.BridgeNavigation
 import dev.maho.browser.bridge.BridgeSpaces
 import dev.maho.browser.bridge.BridgeTabs
+import dev.maho.browser.models.CoreUpdate
+import dev.maho.browser.ui.ShownTab
 import java.lang.ref.WeakReference
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -41,6 +43,11 @@ object AgenticBrowsingWebViewRegistry {
         if (activeWebView.get() === webView) {
             activeWebView.clear()
         }
+    }
+
+    /** Nothing is shown by the screen that took over: no page is addressable. */
+    fun clear() {
+        activeWebView.clear()
     }
 
     fun current(): WebView? = activeWebView.get()
@@ -114,8 +121,10 @@ private fun invokeLiveTool(name: String, args: JSONObject): JSONObject {
             },
         )
         "get_page_info" -> {
-            val activeTabId = BridgeTabs.getActiveTabId()
-            val tab = activeTabId?.let { id -> BridgeTabs.getTabViewModels().firstOrNull { it.id == id } }
+            // The published shown tab is the truth: while Home is on screen it is
+            // null, so a hidden tab is never reported as the page on screen. A
+            // tab closed outside the UI (by Sync, for example) is not reported.
+            val tab = liveShownTabId()?.let { id -> BridgeTabs.getTabViewModels().firstOrNull { it.id == id } }
             if (tab == null) failure("no_active_tab") else success(
                 JSONObject().put("id", tab.id).put("url", tab.url).put("title", tab.title),
             )
@@ -134,13 +143,24 @@ private fun invokeLiveTool(name: String, args: JSONObject): JSONObject {
             if (url.isBlank() || spaceId == null) failure("missing_url_or_active_space")
             else if (!isAgentNavigableUrl(url)) failure("unsupported_url_scheme")
             else {
-                BridgeTabs.createTab(spaceId, url)
+                val createdTabId = BridgeTabs.createTab(spaceId, url)
+                    .filterIsInstance<CoreUpdate.TabCreated>()
+                    .firstOrNull()
+                    ?.tab
+                    ?.id
+                if (createdTabId != null) {
+                    BridgeTabs.activateTab(createdTabId)
+                    ShownTab.request(createdTabId)
+                }
                 success(JSONObject().put("url", url))
             }
         }
         "navigate" -> {
             val url = args.optString("url").trim()
-            val tabId = BridgeTabs.getActiveTabId()
+            // Navigates the tab actually on screen; with Home shown there is none,
+            // and a shown tab that core already closed (by Sync, for example) is
+            // not navigated, because core would never persist the result.
+            val tabId = liveShownTabId()
             if (url.isBlank() || tabId == null) failure("missing_url_or_active_tab")
             else if (!isAgentNavigableUrl(url)) failure("unsupported_url_scheme")
             else {
@@ -158,7 +178,12 @@ private fun invokeLiveTool(name: String, args: JSONObject): JSONObject {
         "close_tab" -> {
             val tabId = args.optString("tab_id")
             if (tabId.isBlank()) failure("missing_tab_id") else {
+                // closeTab forgets the id for every screen (active or not), so
+                // later tool calls never resolve it; the screen must resync so a
+                // vanished shown tab transitions to the resolver's choice or
+                // Home, as dismissing the tab grid does.
                 BridgeTabs.closeTab(tabId)
+                ShownTab.requestResync()
                 success(JSONObject().put("tab_id", tabId))
             }
         }
@@ -172,6 +197,10 @@ private fun invokeLiveTool(name: String, args: JSONObject): JSONObject {
         else -> failure("unknown_tool")
     }
 }
+
+/** The published shown tab, only while core still has it. */
+private fun liveShownTabId(): String? =
+    ShownTab.current()?.takeIf { id -> BridgeTabs.getTabViewModels().any { it.id == id } }
 
 internal fun invokeAgenticBrowsingTool(
     name: String,

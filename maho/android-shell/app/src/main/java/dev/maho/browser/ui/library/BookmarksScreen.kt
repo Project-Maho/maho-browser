@@ -2,6 +2,7 @@
 
 package dev.maho.browser.ui.library
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -47,6 +48,7 @@ fun BookmarksScreen(
     onBack: () -> Unit = {},
 ) {
     var bookmarks by remember { mutableStateOf<List<BookmarkEntry>>(emptyList()) }
+    var folderNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var currentFolderId by remember { mutableStateOf<String?>(null) }
@@ -56,15 +58,29 @@ fun BookmarksScreen(
     // Searching shows every hit regardless of folder; otherwise show the current folder's
     // bookmarks. At the root, each distinct folder also gets a row that navigates into it.
     val displayedBookmarks = if (isSearching) bookmarks else bookmarks.filter { it.folderId == currentFolderId }
-    // No bridge API exposes bookmark-folder names, so the folder id is the label.
     val displayedFolders = if (isSearching || currentFolderId != null) {
         emptyList()
     } else {
         bookmarks.mapNotNull { it.folderId }.distinct()
     }
+    // Core folder names; an id core no longer knows gets a numbered placeholder
+    // rather than exposing the raw id.
+    fun folderLabel(folderId: String): String =
+        folderNames[folderId]?.takeIf { it.isNotBlank() }
+            ?: "Folder ${displayedFolders.indexOf(folderId).coerceAtLeast(0) + 1}"
+
+    fun leaveFolder() {
+        val prev = folderStack.dropLast(1)
+        folderStack = prev
+        currentFolderId = prev.lastOrNull()?.second
+    }
+
+    // System back steps out of a folder before it closes the whole screen.
+    BackHandler(enabled = folderStack.isNotEmpty(), onBack = ::leaveFolder)
 
     LaunchedEffect(searchQuery) {
         isLoading = true
+        folderNames = BridgeBookmarks.getFolderNames()
         bookmarks = if (searchQuery.isBlank()) {
             BridgeBookmarks.getBookmarkEntries()
         } else {
@@ -82,9 +98,7 @@ fun BookmarksScreen(
                 navigationIcon = {
                     IconButton(onClick = {
                         if (folderStack.isNotEmpty()) {
-                            val prev = folderStack.dropLast(1)
-                            folderStack = prev
-                            currentFolderId = prev.lastOrNull()?.second
+                            leaveFolder()
                         } else {
                             onBack()
                         }
@@ -143,9 +157,10 @@ fun BookmarksScreen(
                             items = displayedFolders,
                             key = { "folder:$it" },
                         ) { folderId ->
+                            val label = folderLabel(folderId)
                             ListItem(
                                 headlineContent = {
-                                    Text(text = folderId, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(text = label, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 },
                                 leadingContent = {
                                     Icon(
@@ -154,7 +169,7 @@ fun BookmarksScreen(
                                     )
                                 },
                                 modifier = Modifier.clickable {
-                                    folderStack = folderStack + (folderId to folderId)
+                                    folderStack = folderStack + (label to folderId)
                                     currentFolderId = folderId
                                 },
                             )

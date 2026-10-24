@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.models.SpaceColor
 import dev.maho.browser.models.SpaceViewModel
+import dev.maho.browser.ui.components.ConfirmDialog
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -39,12 +40,17 @@ fun SpaceCard(
     onRename: (String) -> Unit,
     onRecolor: (SpaceColor) -> Unit,
     onDelete: () -> Unit,
+    // Core refuses to delete the last space, so the action is not offered then.
+    canDelete: Boolean = true,
+    // Where core moves this space's tabs on delete (the next space in order).
+    deleteTargetSpaceName: String? = null,
     modifier: Modifier = Modifier,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf(space.name) }
     var showColorDialog by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     val spaceColor = Color.hsv(
         space.color.hue.toFloat(),
@@ -91,6 +97,7 @@ fun SpaceCard(
             text = { Text("Rename") },
             onClick = {
                 showMenu = false
+                renameText = space.name
                 showRenameDialog = true
             },
         )
@@ -101,12 +108,31 @@ fun SpaceCard(
                 showColorDialog = true
             },
         )
-        DropdownMenuItem(
-            text = { Text("Delete") },
-            onClick = {
-                showMenu = false
+        if (canDelete) {
+            DropdownMenuItem(
+                text = { Text("Delete") },
+                onClick = {
+                    showMenu = false
+                    showDeleteConfirm = true
+                },
+            )
+        }
+    }
+
+    if (showDeleteConfirm) {
+        ConfirmDialog(
+            title = "Delete Space?",
+            message = if (deleteTargetSpaceName != null) {
+                "\"${space.name}\" will be deleted. Its tabs will move to \"$deleteTargetSpaceName\"."
+            } else {
+                "\"${space.name}\" will be deleted. Its tabs will move to another space."
+            },
+            confirmLabel = "Delete",
+            onConfirm = {
+                showDeleteConfirm = false
                 onDelete()
             },
+            onDismiss = { showDeleteConfirm = false },
         )
     }
 
@@ -123,10 +149,13 @@ fun SpaceCard(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    showRenameDialog = false
-                    onRename(renameText)
-                }) {
+                TextButton(
+                    onClick = {
+                        showRenameDialog = false
+                        onRename(renameText.trim())
+                    },
+                    enabled = renameText.isNotBlank(),
+                ) {
                     Text("OK")
                 }
             },
