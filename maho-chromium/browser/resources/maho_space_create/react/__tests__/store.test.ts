@@ -2,8 +2,11 @@ import {beforeEach, afterEach, describe, expect, it, vi} from 'vitest';
 import {ThemePickerStore, getDialLevel} from '../store.js';
 import {
   DEFAULT_CANVAS_GEOMETRY,
+  DEFAULT_DISTANCE,
   HARMONY_MAX_DOTS,
+  HARMONIES,
   createDefaultSelection,
+  normalizeHue,
 } from '../types.js';
 import type {ThemeSelectionWire, CanvasGeometry} from '../types.js';
 
@@ -346,6 +349,24 @@ describe('ThemePickerStore — setHarmony', () => {
     expect(afterPos.x).not.toBeCloseTo(beforePos.x, 0);
   });
 
+  it('triadic secondary hues follow the dragged primary hue, not overlay position (r3-2)', () => {
+    const {store} = createStore();
+    // Drag in the inset dots-overlay space (272x272), which differs from
+    // DEFAULT_CANVAS_GEOMETRY (380x380): the harmony angle must come from
+    // primary.hue, not from position measured against the wrong geometry.
+    const overlay: CanvasGeometry = {width: 272, height: 272, padding: 20};
+    store.setStopPosition(0, 136, 171, overlay); // 35px below overlay centre
+    store.setHarmony('triadic');
+    const stops = store.getSnapshot().selection.stops;
+    expect(stops).toHaveLength(3);
+    expect(stops[0].isPrimary).toBe(true);
+    const primaryHue = stops[0].hue;
+    expect(stops[1].hue).toBeCloseTo(
+        normalizeHue(primaryHue + HARMONIES.triadic[0] / 360), 10);
+    expect(stops[2].hue).toBeCloseTo(
+        normalizeHue(primaryHue + HARMONIES.triadic[1] / 360), 10);
+  });
+
   it('floating preserves stop positions', () => {
     const {store} = createStore();
     const beforeStops = store.getSnapshot().selection.stops.map(
@@ -390,7 +411,12 @@ describe('ThemePickerStore — applyPreset', () => {
     expect(sel.harmony).toBe('analogous');
     expect(sel.stops.length).toBeGreaterThanOrEqual(1);
     expect(sel.stops[0].isPrimary).toBe(true);
-    expect(sel.stops[0].lightness).toBe(85);
+    // Lightness comes from the preset, which derives it from DEFAULT_DISTANCE.
+    // Asserting the derivation rather than a magic number keeps this test about
+    // its stated subject (atomicity) and stops it silently pinning the ring
+    // geometry, which is a separate design value.
+    expect(sel.stops[0].lightness).toBeCloseTo(
+        (1 - DEFAULT_DISTANCE) * 100, 5);
     expect(sel.preset_index).toBe(0);
   });
 });

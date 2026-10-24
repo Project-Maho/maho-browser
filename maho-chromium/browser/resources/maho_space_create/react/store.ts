@@ -182,9 +182,10 @@ export class ThemePickerStore {
       const primary = stops.find(s => s.isPrimary) ?? stops[0]!;
 
       if (harmony !== 'floating') {
-        const geom = DEFAULT_CANVAS_GEOMETRY;
+        // Angle/distance come from primary.hue/lightness (space-independent);
+        // no canvas geometry is needed here.
         const secondaries = recomputeSecondaryPositions(
-            primary, harmony, geom);
+            primary, harmony);
         const maxDots = HARMONY_MAX_DOTS[harmony];
 
         const newStops: ZenStop[] = [
@@ -204,16 +205,19 @@ export class ThemePickerStore {
     });
   }
 
-  addStop(position?: {x: number; y: number}): void {
+  addStop(
+      position?: {x: number; y: number},
+      geom: CanvasGeometry = DEFAULT_CANVAS_GEOMETRY): void {
     this.patch(draft => {
       const sel = draft.selection;
       const maxDots = HARMONY_MAX_DOTS[sel.harmony];
       if (sel.stops.length >= maxDots) return;
 
-      const geom = DEFAULT_CANVAS_GEOMETRY;
+      // `position` is in the measured canvas' pixel space, so color and
+      // clamping must use that same geometry (the canvas is responsive).
       let pos: {x: number; y: number};
       if (position) {
-        pos = position;
+        pos = clampToCircle(position.x, position.y, geom);
       } else {
         const angleFraction = (sel.stops.length * 60) / 360;
         pos = positionForHueAndDistance(angleFraction, 0.7, geom);
@@ -233,8 +237,12 @@ export class ThemePickerStore {
   removeStop(index: number): void {
     this.patch(draft => {
       const stops = draft.selection.stops;
-      if (stops.length === 0) return;
-      if (stops.length > 1 && stops[index]?.isPrimary) return;
+      // A gradient needs at least one stop: with none there is nothing to
+      // paint and the preview and the saved theme are both meaningless. The
+      // primary stop cannot be removed while others remain either, because it
+      // is the stop the hue wheel edits.
+      if (stops.length <= 1) return;
+      if (stops[index]?.isPrimary) return;
       stops.splice(index, 1);
     });
   }
@@ -243,7 +251,6 @@ export class ThemePickerStore {
     const idx = ((presetIndex % ZEN_PRESETS.length) + ZEN_PRESETS.length) %
         ZEN_PRESETS.length;
     const preset = ZEN_PRESETS[idx];
-    const geom = DEFAULT_CANVAS_GEOMETRY;
 
     const hsb = rgbToHsb(
         preset.colors[0].r, preset.colors[0].g, preset.colors[0].b);
@@ -257,7 +264,7 @@ export class ThemePickerStore {
     };
 
     const secondaries = recomputeSecondaryPositions(
-        primary, preset.algorithm, geom);
+        primary, preset.algorithm);
     const stops: ZenStop[] = [primary];
     for (let i = 0; i < preset.numDots - 1 && i < secondaries.length; i++) {
       stops.push({

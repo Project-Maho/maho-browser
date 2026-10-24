@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
   DEFAULT_CANVAS_GEOMETRY,
+  DEFAULT_DISTANCE,
   HARMONIES,
   HARMONY_MAX_DOTS,
   OPACITY_MAX,
@@ -14,11 +15,13 @@ import {
   clampUnit,
   createDefaultSelection,
   createInitialState,
+  distanceFromLightness,
   getColorFromPosition,
   harmonyDotsForSelection,
   hsbToRgb,
   normalizeHue,
   normalizePresetIndex,
+  normalizeSelection,
   parseThemeSelection,
   positionForHueAndDistance,
   recomputeSecondaryPositions,
@@ -29,7 +32,7 @@ import {
   stopsForPreset,
   wireThemeToSelection,
 } from '../types.js';
-import type {SerializedSolidTheme, SerializedZenTheme, ZenStop} from '../types.js';
+import type {CanvasGeometry, SerializedSolidTheme, SerializedZenTheme, ZenStop} from '../types.js';
 
 describe('PRESETS table', () => {
   it('has exactly 9 entries', () => {
@@ -616,10 +619,28 @@ describe('wire round-trip', () => {
     sel.stops[2].position = {x: 300, y: 300};
     const json = serializeThemeSelection(sel);
     const recovered = parseThemeSelection(json);
-    expect(recovered.stops[0].position.x).toBeCloseTo(250, 0);
-    expect(recovered.stops[0].position.y).toBeCloseTo(150, 0);
-    expect(recovered.stops[1].position.x).toBeCloseTo(100, 0);
-    expect(recovered.stops[1].position.y).toBeCloseTo(200, 0);
+    // Position is NOT part of the wire format: it is derived from hue and
+    // lightness by positionForHueAndDistance() on parse, so a hand-placed x/y
+    // cannot and should not survive. What must survive is the data the position
+    // is derived FROM - hue, lightness and the stop order - and the derived
+    // position must match what the geometry produces for those values.
+    //
+    // Hue is carried as 8-bit RGB in the wire format, so it comes back quantized
+    // to roughly 1/255 of the circle (~0.004). Lightness is a 0-100 scale, so the
+    // same quantization is ~1 unit. Both are properties of the format, not
+    // defects, so the tolerances are stated per scale rather than as a single
+    // decimal-places argument that means different things on each.
+    expect(recovered.stops.length).toBe(sel.stops.length);
+    for (let i = 0; i < recovered.stops.length; i++) {
+      const stop = recovered.stops[i];
+      expect(Math.abs(stop.hue - sel.stops[i].hue)).toBeLessThan(0.01);
+      expect(Math.abs(stop.lightness - sel.stops[i].lightness)).toBeLessThan(1);
+      const expected = positionForHueAndDistance(
+          stop.hue, distanceFromLightness(stop.lightness),
+          DEFAULT_CANVAS_GEOMETRY);
+      expect(stop.position.x).toBeCloseTo(expected.x, 0);
+      expect(stop.position.y).toBeCloseTo(expected.y, 0);
+    }
   });
 
   it('harmony preserved through round-trip', () => {
@@ -690,6 +711,39 @@ describe('createDefaultSelection', () => {
       expect(typeof stop.position.y).toBe('number');
       expect(typeof stop.lightness).toBe('number');
     }
+  });
+});
+
+describe('normalizeSelection — ring-edge clamp regression (r3-1)', () => {
+  it('keeps lightness 0 from a far-outside click clamped to the ring edge', () => {
+    // Inset dots-overlay geometry (272x272 box, radius 116): a click far
+    // outside the ring clamps to the ring edge, where getColorFromPosition
+    // yields normalized distance 1 and lightness exactly 0.
+    const geom: CanvasGeometry = {width: 272, height: 272, padding: 20};
+    const cx = geom.width / 2;
+    const cy = geom.height / 2;
+    const click = {x: cx + 200, y: cy}; // far outside the ring
+    const clamped = clampToCircle(click.x, click.y, geom);
+    const color = getColorFromPosition(clamped.x, clamped.y, geom);
+    expect(color.lightness).toBe(0);
+
+    const selection = normalizeSelection({
+      mode: 'sparkle',
+      harmony: 'floating',
+      stops: [{
+        hue: color.hue,
+        saturation: color.saturation,
+        lightness: color.lightness,
+        isPrimary: true,
+        position: clamped,
+      }],
+    });
+    const stop = selection.stops[0];
+    expect(stop.lightness).toBe(0);
+    // The darkest ring-edge color must stay at distance 1, not snap back to
+    // DEFAULT_DISTANCE (the corrupt-import fallback).
+    expect(distanceFromLightness(stop.lightness)).toBe(1);
+    expect(distanceFromLightness(stop.lightness)).not.toBe(DEFAULT_DISTANCE);
   });
 });
 
@@ -796,5 +850,19 @@ describe('wireThemeToSelection — opacity clamping', () => {
     });
     const result = wireThemeToSelection(wire);
     expect(result.selection.opacity).toBe(0.9);
+  });
+
+  it('keeps a committed ring-edge black stop through serialize and parse', () => {
+    const wire = JSON.stringify({
+      type: 'gradient',
+      gradientColors: [
+        {hue: 0.5, saturation: 0.9, lightness: 0, brightness: 0, isPrimary: true},
+      ],
+      harmony: 'analogous',
+      opacity: 0.5,
+      texture: 0,
+    });
+    const parsed = wireThemeToSelection(wire);
+    expect(parsed.selection.stops[0]?.lightness).toBe(0);
   });
 });

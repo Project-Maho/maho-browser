@@ -41,8 +41,9 @@ export const DEFAULT_CANVAS_GEOMETRY: CanvasGeometry = {
 export const DEFAULT_DISTANCE = 0.3;
 
 export function distanceFromLightness(lightness: number | undefined): number {
+  // lightness 0 is valid (a ring-edge click): distance 1, not DEFAULT_DISTANCE.
   if (typeof lightness === 'number' && Number.isFinite(lightness) &&
-      lightness > 0 && lightness <= 100) {
+      lightness >= 0 && lightness <= 100) {
     return clampUnit(1 - lightness / 100);
   }
   return DEFAULT_DISTANCE;
@@ -108,7 +109,11 @@ export function positionForHueAndDistance(
 // Opacity helpers
 // ---------------------------------------------------------------------------
 
-export const OPACITY_MIN = 0.0;
+// The floor is 0.25, not 0: this is a background gradient, so an opacity of 0
+// makes the space vanish entirely and leaves the user with a blank area and no
+// way to tell that a setting did it. The slider runs the full [MIN, MAX] range,
+// so MIN is also the value the far-left end of the track produces.
+export const OPACITY_MIN = 0.25;
 export const OPACITY_MAX = 0.9;
 
 export function clampOpacity(v: number): number {
@@ -419,7 +424,7 @@ export function normalizeSelection(
     stops = selection.stops.map(stop => {
       const hue = typeof stop.hue === 'number' ? normalizeHue(stop.hue) : 0;
       const lightness = typeof stop.lightness === 'number' &&
-              Number.isFinite(stop.lightness) && stop.lightness > 0 &&
+              Number.isFinite(stop.lightness) && stop.lightness >= 0 &&
               stop.lightness <= 100
           ? stop.lightness
           : (1 - DEFAULT_DISTANCE) * 100;
@@ -461,7 +466,7 @@ function isValidHarmony(h: unknown): h is ColorHarmony {
 
 export function recomputeSecondaryPositions(
     primary: ZenStop, harmony: ColorHarmony,
-    geom: CanvasGeometry): Array<{
+    geom: CanvasGeometry = DEFAULT_CANVAS_GEOMETRY): Array<{
       position: {x: number; y: number};
       hue: number;
       saturation: number;
@@ -469,12 +474,13 @@ export function recomputeSecondaryPositions(
     }> {
   const cx = geom.width / 2;
   const cy = geom.height / 2;
-  const dx = primary.position.x - cx;
-  const dy = primary.position.y - cy;
-  const distance = Math.sqrt(dx * dx + dy * dy);
   const radius = Math.min(cx, cy) - geom.padding;
-  const normalizedDistance = radius > 0 ? distance / radius : 0;
-  const baseDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+  // Derive the harmony angle and distance from hue/lightness, not from
+  // primary.position: hue/lightness are set from the same click/drag but are
+  // space-independent, while position lives in the caller's pixel space
+  // (the measured dots overlay), which need not match geom.
+  const baseDeg = primary.hue * 360;
+  const distance = distanceFromLightness(primary.lightness) * radius;
 
   return HARMONIES[harmony].map(offsetDeg => {
     const newDeg = baseDeg + offsetDeg;
@@ -701,7 +707,7 @@ export function wireThemeToSelection(
         }
 
         if (!(typeof lightness === 'number' && Number.isFinite(lightness) &&
-              lightness > 0 && lightness <= 100)) {
+              lightness >= 0 && lightness <= 100)) {
           const distance = DEFAULT_DISTANCE;
           lightness = (1 - distance) * 100;
           saturation = (90 + (1 - distance) * 10) / 100;
