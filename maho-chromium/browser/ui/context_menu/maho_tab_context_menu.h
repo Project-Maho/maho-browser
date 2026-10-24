@@ -52,6 +52,10 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
    public:
     virtual ~Delegate() = default;
     virtual void RenameTab(int tab_index) {}
+    // Shares the tab at |tab_index| through the platform share surface
+    // anchored on the row (macOS share picker), falling back to copying the
+    // link with the shared "Link copied" toast where no picker exists.
+    virtual void ShareTab(int tab_index) {}
     virtual void CloseSelectedTabs() {}
     virtual void CloseTabById(const std::string& tab_id) {}
     virtual void PinSelectedTabs(bool pin) {}
@@ -95,6 +99,10 @@ class MahoTabContextMenu : public ui::SimpleMenuModel::Delegate {
   // with no existing split. 0 when the browser/model is unavailable. The
   // multi-select Open-in-Split command is shown/enabled only when this is >= 2.
   int CountEligibleSplitTabs() const;
+
+  // True when the window's active tab is one of |selected_tab_ids_|. The
+  // active tab can never be discarded, so multi-select Sleep must say so.
+  bool IsActiveTabSelected() const;
 
   raw_ptr<Browser> browser_;
   int tab_index_;

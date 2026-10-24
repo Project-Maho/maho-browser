@@ -1226,8 +1226,11 @@ void MahoWelcomePageHandler::GetRelayAccountStatusFromWelcome(
       !prefs->GetString(maho::account_prefs::kRelayAccessTokenEncryptedB64)
            .empty();
   bool is_local_dev = std::getenv("MAHO_RELAY_URL") != nullptr;
+  std::string sync_key_mode = maho::auth::IsClientHeldSyncAccount(prefs)
+                                  ? maho::account_prefs::kSyncKeyModeClientHeld
+                                  : "escrow";
   std::move(callback).Run(signed_in, tier, sub_status, welcome_completed,
-                          has_stored_session, is_local_dev);
+                          has_stored_session, is_local_dev, sync_key_mode);
 }
 
 void MahoWelcomePageHandler::GetPasswordProviderOptions(
@@ -1315,6 +1318,16 @@ void MahoWelcomePageHandler::StartSync(
     const std::string& room_id,
     const std::string& recovery_phrase,
     StartSyncCallback callback) {
+  // A client-held account (or one whose room was retired) never starts from a
+  // freshly generated key: that would open a new, empty room. It joins with
+  // the recovery phrase via JoinSyncWithRecoveryPhrase instead.
+  PrefService* prefs = profile_->GetPrefs();
+  if (maho::auth::IsClientHeldSyncAccount(prefs) ||
+      !prefs->GetString(maho::account_prefs::kRelaySyncRetiredRoomId).empty()) {
+    std::move(callback).Run(
+        false, maho::account_prefs::kSyncRoomRetiredMessage);
+    return;
+  }
   MahoCore* core = maho::GetCore();
   if (!core) {
     std::move(callback).Run(false, "Core not available");
@@ -1333,6 +1346,71 @@ void MahoWelcomePageHandler::StartSync(
 
   maho::welcome::StartSyncResult parsed =
       maho::welcome::ParseStartSyncJsonForTesting(json);
+  std::move(callback).Run(parsed.ok, parsed.error_message);
+}
+
+void MahoWelcomePageHandler::JoinSyncWithRecoveryPhrase(
+    const std::string& recovery_phrase,
+    JoinSyncWithRecoveryPhraseCallback callback) {
+  PrefService* prefs = profile_->GetPrefs();
+  // A retired room is recorded but the account's new room is unknown: fetch
+  // it first so the phrase can be checked (the check fails closed otherwise).
+  if (maho::auth::NeedsClientHeldRoomRefresh(prefs) && encryptor_) {
+    const std::string token =
+        maho::auth::GetRelayAccessToken(prefs, *encryptor_);
+    if (!token.empty()) {
+      maho::auth::RefreshSyncKeyModeFromRelay(
+          prefs,
+          profile_->GetDefaultStoragePartition()
+              ->GetURLLoaderFactoryForBrowserProcess(),
+          token,
+          base::BindOnce(
+              [](base::WeakPtr<MahoWelcomePageHandler> self,
+                 std::string phrase,
+                 JoinSyncWithRecoveryPhraseCallback cb, bool /*recorded*/) {
+                if (self) {
+                  self->JoinSyncWithCheckedRecoveryPhrase(phrase,
+                                                          std::move(cb));
+                }
+              },
+              weak_factory_.GetWeakPtr(), recovery_phrase,
+              std::move(callback)));
+      return;
+    }
+  }
+  JoinSyncWithCheckedRecoveryPhrase(recovery_phrase, std::move(callback));
+}
+
+void MahoWelcomePageHandler::JoinSyncWithCheckedRecoveryPhrase(
+    const std::string& recovery_phrase,
+    JoinSyncWithRecoveryPhraseCallback callback) {
+  PrefService* prefs = profile_->GetPrefs();
+  // A wrong phrase would derive a different room and silently start an empty
+  // one; refuse it before core is touched.
+  const std::string phrase_error =
+      maho::auth::CheckClientHeldRecoveryPhrase(prefs, recovery_phrase);
+  if (!phrase_error.empty()) {
+    std::move(callback).Run(false, phrase_error);
+    return;
+  }
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    std::move(callback).Run(false, "Core not available");
+    return;
+  }
+  char* result = maho_core_join_sync(
+      core, maho::auth::GetSyncRelayUrl().c_str(), recovery_phrase.c_str());
+  if (!result) {
+    std::move(callback).Run(false, "Couldn't start sync. Try again.");
+    return;
+  }
+  std::string json(result);
+  maho_string_free(result);
+  maho::welcome::StartSyncResult parsed =
+      maho::welcome::ParseStartSyncJsonForTesting(json);
+  if (parsed.ok) {
+    maho::auth::ClearRetiredSyncRoom(prefs);
+  }
   std::move(callback).Run(parsed.ok, parsed.error_message);
 }
 

@@ -297,7 +297,7 @@ MahoDomScreenshotActionDialogView::MahoDomScreenshotActionDialogView(
     header_button_ = header_button;
   }
 
-  if (!menu_.rows.empty()) {
+  if (!menu_.header_label.empty() && !menu_.rows.empty()) {
     AddChildView(std::make_unique<MenuSeparator>());
   }
 

@@ -48,6 +48,9 @@ export class PageHandlerRemote {
   saveSyncKeyBackup(_content) {
     return Promise.resolve({saved: false, errorMessage: 'Native file saving is unavailable in this preview.'});
   }
+  joinSyncWithRecoveryPhrase(_recoveryPhrase) {
+    return Promise.resolve({ok: false, errorMessage: 'Sync is unavailable in this preview.'});
+  }
   setTranslationProvider(_provider) { return Promise.resolve({ok: true}); }
   getByokCredentialConfigured() { return Promise.resolve({configured: false}); }
   openByokSettingsDialog() { return Promise.resolve({configured: false}); }

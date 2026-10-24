@@ -39,6 +39,8 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterInt64Pref(ai_prefs::kPendingSurfaceGeneration, 0);
   registry->RegisterBooleanPref(ai_prefs::kAttachBrowserContext, true);
   registry->RegisterBooleanPref(ai_prefs::kMailReadAllowed, false);
+  registry->RegisterStringPref(ai_prefs::kAgentDeniedOrigins, std::string());
+  registry->RegisterIntegerPref(ai_prefs::kAgentMailSendDelaySeconds, 0);
   registry->RegisterStringPref(ai_prefs::kTranslationProvider, std::string());
   registry->RegisterStringPref(ai_prefs::kByokOpenAIEncryptedB64,
                                 std::string());
@@ -54,6 +56,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterInt64Pref(ai_prefs::kOAuthAnthropicExpiresAt, 0);
   registry->RegisterDictionaryPref(ai_prefs::kAgentToolGrants);
   registry->RegisterDictionaryPref(ai_prefs::kMcpCredentials);
+  registry->RegisterBooleanPref(ai_prefs::kMcpEnabled, true);
 
   // Models settings v1 prefs.
   registry->RegisterDictionaryPref(ai_prefs::kProviderConfigs);
@@ -90,6 +93,13 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
       account_prefs::kRelaySubscriptionStatus, std::string());
   registry->RegisterInt64Pref(
       account_prefs::kRelaySubscriptionExpiresAt, 0);
+  registry->RegisterStringPref(account_prefs::kRelaySyncKeyMode, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelaySyncClientHeldRoomId, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelaySyncRetiredRoomId, std::string());
+  registry->RegisterStringPref(
+      account_prefs::kRelaySyncClientHeldRelayPendingRoomId, std::string());
 }
 
 }  // namespace maho::ai

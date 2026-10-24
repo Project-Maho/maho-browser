@@ -5,7 +5,8 @@ import {createRoot, type Root} from 'react-dom/client';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {ALL_PANE_DEFINITIONS} from '../../schema/panes.js';
-import {BrowserDataImportCard} from '../domain_panes.js';
+import {BrowserDataExportCard, BrowserDataImportCard} from '../domain_panes.js';
+import {DataExportKind} from '../../maho_settings.mojom-webui.js';
 
 Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
   configurable: true,
@@ -72,5 +73,97 @@ describe('Maho Settings - browser data import', () => {
     });
 
     expect(openMigrationDialog).toHaveBeenCalledTimes(1);
+  });
+
+  function findButton(pattern: RegExp): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll('button'))
+        .find(button => pattern.test(button.textContent || ''));
+  }
+
+  it('exports each data kind through exportData() and shows the saved path', async () => {
+    const exportData = vi.fn().mockResolvedValue(
+        {success: true, path: '/tmp/maho-bookmarks.html', errorCode: ''});
+    const handler = {exportData} as never;
+
+    await act(async () => {
+      root.render(<BrowserDataExportCard handler={handler} />);
+    });
+
+    for (const [pattern, kind] of [
+      [/Export Bookmarks/, DataExportKind.kBookmarks],
+      [/Export History/, DataExportKind.kHistory],
+      [/Export Conversations/, DataExportKind.kConversations],
+      [/Export Spaces/, DataExportKind.kSpaces],
+      [/Export Backup/, DataExportKind.kFullBackup],
+    ] as const) {
+      await act(async () => {
+        findButton(pattern)?.click();
+      });
+      expect(exportData).toHaveBeenLastCalledWith(kind, null);
+    }
+    expect(container.textContent).toContain('Saved to /tmp/maho-bookmarks.html');
+  });
+
+  it('surfaces vault_locked for password export without asking for a passphrase', async () => {
+    const exportData = vi.fn().mockResolvedValue(
+        {success: false, path: '', errorCode: 'vault_locked'});
+    const handler = {exportData} as never;
+
+    await act(async () => {
+      root.render(<BrowserDataExportCard handler={handler} />);
+    });
+    await act(async () => {
+      findButton(/Export Passwords/)?.click();
+    });
+
+    expect(exportData).toHaveBeenCalledWith(DataExportKind.kPasswords, null);
+    expect(container.textContent).toContain('Unlock your passwords vault first');
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it('asks for the vault passphrase when OS auth is unavailable and retries with it', async () => {
+    const exportData = vi.fn()
+        .mockResolvedValueOnce(
+            {success: false, path: '', errorCode: 'passphrase_required'})
+        .mockResolvedValueOnce(
+            {success: true, path: '/tmp/maho-passwords.csv', errorCode: ''});
+    const handler = {exportData} as never;
+
+    await act(async () => {
+      root.render(<BrowserDataExportCard handler={handler} />);
+    });
+    await act(async () => {
+      findButton(/Export Passwords/)?.click();
+    });
+
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]');
+    expect(input).not.toBeNull();
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(input, 'hunter2');
+      input!.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+    await act(async () => {
+      findButton(/^Confirm$/)?.click();
+    });
+
+    expect(exportData).toHaveBeenLastCalledWith(DataExportKind.kPasswords, 'hunter2');
+    expect(container.textContent).toContain('Saved to /tmp/maho-passwords.csv');
+    expect(container.querySelector('input[type="password"]')).toBeNull();
+  });
+
+  it('treats a canceled save dialog as no-op', async () => {
+    const exportData = vi.fn().mockResolvedValue(
+        {success: false, path: '', errorCode: 'canceled'});
+    const handler = {exportData} as never;
+
+    await act(async () => {
+      root.render(<BrowserDataExportCard handler={handler} />);
+    });
+    await act(async () => {
+      findButton(/Export History/)?.click();
+    });
+    expect(container.textContent).not.toContain('Export failed');
   });
 });

@@ -2,6 +2,8 @@
 
 #include "maho/browser/ui/views/location_bar/maho_dom_screenshot_action_dialog_view.h"
 
+#include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+
 #include <array>
 #include <string_view>
 #include <memory>
@@ -45,7 +47,7 @@ class MahoDomScreenshotActionDialogViewTest : public views::ViewsTestBase {
                                          bool edit_enabled = false) {
     MahoDomScreenshotActionMenu menu;
     menu.header_label = u"Send To...";
-    menu.header_sf_symbol_name = "square.and.arrow.up";
+    menu.header_icon = &maho_lucide_icons::kShareIcon;
     menu.header_activate =
         base::BindOnce([](int* count) { ++(*count); }, header_count);
     menu.rows.push_back({u"Copy", "doc.on.doc", true, false,

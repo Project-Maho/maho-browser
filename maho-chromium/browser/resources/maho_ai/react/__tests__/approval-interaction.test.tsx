@@ -257,4 +257,28 @@ describe('Approval interaction in rendered DOM', () => {
     expect(respondToApprovalSpy).not.toHaveBeenCalled();
     expect(mockHandler.respondToApproval).not.toHaveBeenCalled();
   });
+
+  it('keeps both buttons disabled after dispatch until approvalResult arrives', async () => {
+    await store.bootstrap();
+    const item = collectConversationItems(
+        [{sessionId: 'session-1', event: createApprovalRequestEvent('approval-lock', 'session-1')}])[0]!;
+    const renderItem = () => root.render(
+        <ConversationSystemItem
+          answered={Boolean(store.getSnapshot().answeredApprovalSessionById['approval-lock'])}
+          item={item}
+          onOpenSettings={vi.fn()}
+          onRespondToApproval={(approvalId, approved) => store.respondToApproval(approvalId, approved)}
+          readOnly={false}
+        />);
+    act(() => renderItem());
+
+    await act(async () => {
+      requireButton(container, 'Allow once').dispatchEvent(new MouseEvent('click', {bubbles: true}));
+    });
+    expect(store.getSnapshot().answeredApprovalSessionById['approval-lock']).toBe('session-1');
+    act(() => renderItem());
+    // RespondToApproval resolved, but no approvalResult yet: still locked.
+    expect(requireButton(container, 'Allow once').disabled).toBe(true);
+    expect(requireButton(container, 'Reject').disabled).toBe(true);
+  });
 });

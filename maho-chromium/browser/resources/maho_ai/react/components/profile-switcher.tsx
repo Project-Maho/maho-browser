@@ -40,9 +40,15 @@ export function ProfileSwitcher({store}: {store: MahoAiStore}) {
         <div className="px-2 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
           AI Agent Profile
         </div>
+        {!activeWorkspace ? (
+          <p className="px-2 pb-1.5 text-[11px] leading-4 text-muted-foreground" role="status">
+            No workspace is loaded yet, so the profile can't be switched.
+          </p>
+        ) : null}
         {profiles.map(profile => (
           <DropdownMenuItem
             key={profile.id}
+            disabled={!activeWorkspace}
             onSelect={() => handleSwitch(profile.id)}
             className="flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs cursor-pointer hover:bg-surface-hover transition-colors"
           >

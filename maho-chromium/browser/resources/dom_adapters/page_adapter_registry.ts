@@ -28,6 +28,67 @@ const DEFAULT_SENSITIVE_PATTERNS: RegExp[] = [
   /session[_-]?id["':\s=]+[a-zA-Z0-9_\-]{16,}/gi,
 ];
 
+const TRUNCATION_MARKER = '…';
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+type StringSlot = { holder: Record<string, unknown> | unknown[]; key: string | number; value: string };
+
+function collectStringSlots(value: unknown, out: StringSlot[]): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      if (typeof item === 'string') out.push({ holder: value, key: index, value: item });
+      else collectStringSlots(item, out);
+    });
+  } else if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const [key, item] of Object.entries(record)) {
+      if (typeof item === 'string') out.push({ holder: record, key, value: item });
+      else collectStringSlots(item, out);
+    }
+  }
+}
+
+/**
+ * Serializes |data| within |maxBytes| by cutting its longest strings at code
+ * point boundaries. Throws when the non-string structure alone is over budget.
+ */
+function truncateToBudget(data: unknown, maxBytes: number): string {
+  if (typeof data === 'string') {
+    // Truncate inside a one-element array ("[...]" costs two extra bytes).
+    const box: unknown[] = [data];
+    truncateToBudget(box, maxBytes + 2);
+    return JSON.stringify(box[0]);
+  }
+  let json = JSON.stringify(data);
+  let excess = byteLength(json) - maxBytes;
+  while (excess > 0) {
+    const slots: StringSlot[] = [];
+    collectStringSlots(data, slots);
+    const longest = slots
+      .filter((slot) => slot.value.length > 0 && slot.value !== TRUNCATION_MARKER)
+      .sort((a, b) => b.value.length - a.value.length)[0];
+    if (!longest) {
+      throw new Error(`Output exceeds ${maxBytes} byte limit`);
+    }
+    const chars = Array.from(longest.value);
+    // Drop at least |excess| serialized bytes plus room for the marker.
+    let dropped = 0;
+    let keep = chars.length;
+    while (keep > 0 && dropped < excess + byteLength(TRUNCATION_MARKER)) {
+      keep -= 1;
+      dropped += byteLength(JSON.stringify(chars[keep]!)) - 2;
+    }
+    const next = keep > 0 ? chars.slice(0, keep).join('') + TRUNCATION_MARKER : '';
+    (longest.holder as Record<string | number, unknown>)[longest.key] = next;
+    json = JSON.stringify(data);
+    excess = byteLength(json) - maxBytes;
+  }
+  return json;
+}
+
 export class PageAdapterRegistry {
   private static instance: PageAdapterRegistry | null = null;
   private adapters = new Map<string, PageSurfaceAdapter>();
@@ -156,7 +217,7 @@ export class PageAdapterRegistry {
   }
 
   /**
-   * Redacts decoded values and rejects output exceeding the byte budget.
+   * Redacts decoded values and truncates output exceeding the byte budget.
    */
   public sanitizeAndBoundOutput(
     data: unknown,
@@ -206,9 +267,14 @@ export class PageAdapterRegistry {
       jsonStr = JSON.stringify(redact(JSON.parse(jsonStr)));
     }
 
-    const encodedBytes = new TextEncoder().encode(jsonStr).length;
+    let encodedBytes = byteLength(jsonStr);
     if (encodedBytes > maxBytes) {
-      throw new Error(`Output exceeds ${maxBytes} byte limit`);
+      // Shrink the longest strings (e.g. page text) to the budget rather than
+      // failing the whole extract; only a structure that is over budget with
+      // every string emptied still fails closed.
+      jsonStr = truncateToBudget(JSON.parse(jsonStr), maxBytes);
+      encodedBytes = byteLength(jsonStr);
+      warnings.push('TRUNCATED_OUTPUT');
     }
 
     let sanitized: unknown;

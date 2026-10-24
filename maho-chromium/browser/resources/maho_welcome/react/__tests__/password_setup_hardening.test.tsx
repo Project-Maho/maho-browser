@@ -79,6 +79,7 @@ function createSnapshot(lockState: number): WelcomeState {
         autoLockMinutes: 15,
         failedUnlockCount: 0,
         retryAtTimestamp: null,
+        accountSeedMissing: false,
       },
     },
   } as WelcomeState;

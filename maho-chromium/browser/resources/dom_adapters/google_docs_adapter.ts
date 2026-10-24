@@ -26,6 +26,9 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
   private static readonly DEFAULT_REF_TTL_MS = 30000; // 30 seconds
 
   private docToken: string = '';
+  // Content fingerprint the token was minted for; a different fingerprint
+  // means the document was edited and outstanding refs are stale.
+  private docFingerprint: string | null = null;
   private currentTabId: number = 0;
   private currentFrameId: string = 'main';
 
@@ -189,6 +192,7 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
   }
 
   public Extract(request: ExtractRequest): ExtractResult {
+    this.refreshDocumentToken();
     switch (request.operation) {
       case 'GetDocumentSurfaceInfo': {
         const info = this.GetDocumentSurfaceInfo();
@@ -273,6 +277,7 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
       return { found: false, error: 'Query string empty' };
     }
 
+    this.refreshDocumentToken();
     const rects = this.ResolveVisibleRangeRects(searchText);
     if (rects.length === 0) {
       return { found: false, error: 'No matching text region found on visible canvas' };
@@ -292,6 +297,7 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
   }
 
   public TranslateAction(action: ActionTranslation): ActionTranslation | null {
+    this.refreshDocumentToken();
     switch (action.kind) {
       case 'focus_editor': {
         const editorTarget = this.locateEditorTarget();
@@ -525,10 +531,23 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
         isCollapsed = sel.isCollapsed;
       }
 
-      const visibleText = this.GetVisibleText().text;
-      if (visibleText) {
-        prefix = visibleText.slice(0, 60);
-        suffix = visibleText.slice(60, 120);
+      // Context comes from the rendered line the caret sits on, split at the
+      // caret's horizontal position; without a caret there is no context.
+      if (cursorRect) {
+        const caretX = cursorRect.x;
+        const caretY = cursorRect.y + cursorRect.height / 2;
+        const lineElements = document.querySelectorAll('.kix-lineview-text-block');
+        for (let i = 0; i < lineElements.length; i++) {
+          const line = lineElements[i]!;
+          const r = line.getBoundingClientRect();
+          if (r.height <= 0 || caretY < r.top || caretY > r.bottom) continue;
+          lineIdx = i;
+          const text = line.textContent || '';
+          const offset = this.caretOffsetInLine(line, text, caretX);
+          prefix = text.slice(Math.max(0, offset - 60), offset);
+          suffix = text.slice(offset, offset + 60);
+          break;
+        }
       }
     }
 
@@ -551,17 +570,72 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
     const textNodes = document.querySelectorAll(
       '.kix-lineview-text-block, .kix-word-html, [role="textbox"]'
     );
+    const needle = query.toLowerCase();
     textNodes.forEach((node) => {
       const content = node.textContent || '';
-      if (content.toLowerCase().includes(query.toLowerCase())) {
-        const r = node.getBoundingClientRect();
+      let from = content.toLowerCase().indexOf(needle);
+      while (from !== -1) {
+        // Prefer the geometry of the matched characters; fall back to the
+        // block only when the text cannot be measured as a DOM range.
+        const r = this.rangeRect(node, from, from + query.length) ?? node.getBoundingClientRect();
         if (r.width > 0 && r.height > 0) {
           rects.push(this.domRectToViewport(r));
         }
+        from = content.toLowerCase().indexOf(needle, from + needle.length);
       }
     });
 
     return rects;
+  }
+
+  /**
+   * Bounding rect of characters [start, end) of |root|'s text content, measured
+   * with a DOM Range over its text nodes. Null when unmeasurable.
+   */
+  private rangeRect(root: Element, start: number, end: number): DOMRect | null {
+    if (typeof document.createRange !== 'function') return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const range = document.createRange();
+    let seen = 0;
+    let startSet = false;
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const length = (node.nodeValue || '').length;
+      if (!startSet && start < seen + length) {
+        range.setStart(node, start - seen);
+        startSet = true;
+      }
+      if (startSet && end <= seen + length) {
+        range.setEnd(node, end - seen);
+        const rect = typeof range.getBoundingClientRect === 'function'
+          ? range.getBoundingClientRect()
+          : null;
+        return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+      }
+      seen += length;
+    }
+    return null;
+  }
+
+  /**
+   * Character offset within |line| closest to viewport x |caretX|, found by
+   * measuring each character boundary with a DOM Range.
+   */
+  private caretOffsetInLine(line: Element, text: string, caretX: number): number {
+    const lineRect = line.getBoundingClientRect();
+    if (caretX <= lineRect.left) return 0;
+    if (caretX >= lineRect.right) return text.length;
+    for (let i = 0; i < text.length; i++) {
+      const r = this.rangeRect(line, i, i + 1);
+      if (!r) break;
+      if (caretX < r.left + r.width / 2) return i;
+    }
+    // Unmeasurable text: estimate proportionally across the line width.
+    if (lineRect.width > 0) {
+      const fraction = (caretX - lineRect.left) / lineRect.width;
+      return Math.max(0, Math.min(text.length, Math.round(fraction * text.length)));
+    }
+    return text.length;
   }
 
   public createVisualTargetRef(
@@ -652,6 +726,24 @@ export class GoogleDocsAdapter implements PageSurfaceAdapter {
     const end = Math.min(fullText.length, idx + selectedText.length + 50);
     const after = fullText.slice(idx + selectedText.length, end);
     return { before, after };
+  }
+
+  /**
+   * Re-mints the document token when the visible document content changed
+   * since the token was minted, so refs captured before an edit fail
+   * validation instead of targeting moved text.
+   */
+  private refreshDocumentToken(): void {
+    if (typeof document === 'undefined') return;
+    const fingerprint = this.computeHash(this.GetVisibleText().text);
+    if (this.docFingerprint === null) {
+      this.docFingerprint = fingerprint;
+      return;
+    }
+    if (fingerprint !== this.docFingerprint) {
+      this.docFingerprint = fingerprint;
+      this.docToken = this.generateDocumentToken();
+    }
   }
 
   private generateDocumentToken(): string {

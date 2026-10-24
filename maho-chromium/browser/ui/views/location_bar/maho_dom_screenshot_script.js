@@ -3,7 +3,11 @@
 (function() {
   'use strict';
 
-  if (window.__mahoDomScreenshotActive) return;
+  // A new session replaces any overlay a previous session left behind, so a
+  // stale overlay can never block capture.
+  if (window.__mahoDomScreenshotActive && window.__mahoDomScreenshotCleanup) {
+    window.__mahoDomScreenshotCleanup();
+  }
   window.__mahoDomScreenshotActive = true;
 
   var sessionToken = window.__mahoDomScreenshotToken;
@@ -112,7 +116,12 @@
     document.documentElement.appendChild(instructionEl);
   }
 
-  function cleanup() {
+  // Removes this session's overlay. With a token, only the matching session
+  // is torn down (the browser calls this when it abandons a session).
+  function cleanup(token) {
+    if (token !== undefined && token !== sessionToken) return;
+    if (window.__mahoDomScreenshotCleanup !== cleanup) return;
+    window.__mahoDomScreenshotCleanup = null;
     if (overlay) { overlay.remove(); overlay = null; }
     if (highlightEl) { highlightEl.remove(); highlightEl = null; }
     if (dragRectEl) { dragRectEl.remove(); dragRectEl = null; }
@@ -257,6 +266,7 @@
     }
   }
 
+  window.__mahoDomScreenshotCleanup = cleanup;
   createOverlay();
 
   overlay.addEventListener('mousemove', onMouseMove, true);

@@ -94,8 +94,13 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
     };
   }, []);
 
+  const hasLoadedRef = useRef(false);
+
   const loadCalendarData = useCallback(async () => {
-    setModelState({status: 'loading'});
+    // Only the first load replaces the pane with a spinner; later reloads
+    // (after toggles or sync events) refresh in place.
+    if (!hasLoadedRef.current) setModelState({status: 'loading'});
+    setError('');
     try {
       const {ok: okPrefs, resultJson: prefsJson} = await handler.mailGetCalendarPrefs();
       if (!mountedRef.current) return;
@@ -123,6 +128,7 @@ export function MailCalendarPane({pane, store}: {pane: PaneDefinition; store: Ma
           setError('Failed to load account calendars');
         }
         setModelState({status: 'ready', data: nextPrefs});
+        hasLoadedRef.current = true;
       }
     } catch {
       if (!mountedRef.current) return;

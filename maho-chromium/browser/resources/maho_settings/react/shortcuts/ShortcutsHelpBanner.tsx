@@ -17,9 +17,11 @@ export function ShortcutsHelpBanner({onDismiss}: ShortcutsHelpBannerProps) {
       <CardContent className="text-xs text-muted-foreground pr-8">
         Click any shortcut row and press "Edit" to record a custom combination. Press Escape during recording to cancel, or Backspace/Delete to clear.
         <button
+          type="button"
+          aria-label="Dismiss shortcuts help"
           onClick={onDismiss}
           className="absolute right-3 top-3 text-muted-foreground hover:text-foreground">
-          ✕
+          <span aria-hidden="true">✕</span>
         </button>
       </CardContent>
     </Card>

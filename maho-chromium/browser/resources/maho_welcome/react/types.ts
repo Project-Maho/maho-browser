@@ -57,6 +57,33 @@ const PASSWORD_PROVIDER_ORDER = [
 export type AppearanceMode = 'system' | 'light' | 'dark';
 export type ImportStage = 'A' | 'B';
 
+const IMPORT_TYPE_LABELS: ReadonlyArray<readonly [number, string]> = [
+  [IMPORT_BOOKMARKS, 'Bookmarks'],
+  [IMPORT_HISTORY, 'History'],
+  [IMPORT_PASSWORDS, 'Passwords'],
+  [IMPORT_COOKIES, 'Cookies'],
+  [IMPORT_AUTOFILL, 'Autofill'],
+  [IMPORT_WORKSPACES, 'Spaces'],
+  [IMPORT_FAVICONS, 'Site icons'],
+];
+
+// Names of the import types in |bits|, in display order. Bits without a
+// user-facing name are reported once as "Other data".
+export function describeImportTypes(bits: number): string[] {
+  const names: string[] = [];
+  let rest = bits;
+  for (const [flag, label] of IMPORT_TYPE_LABELS) {
+    if (bits & flag) {
+      names.push(label);
+      rest &= ~flag;
+    }
+  }
+  if (rest !== 0) {
+    names.push('Other data');
+  }
+  return names;
+}
+
 export interface AuthState {
   readonly mode: 'signin' | 'signup';
   readonly email: string;
@@ -90,6 +117,8 @@ export interface PasswordSetupState {
   readonly vaultStatus: VaultStatus | null;
   readonly passwordManagerSkipped: boolean;
 }
+
+export type SyncKeyMode = 'escrow' | 'client_held';
 
 export interface SyncKeyBackupState {
   readonly status: 'idle' | 'generating' | 'ready' | 'saving' | 'saved' | 'starting' | 'error';
@@ -131,21 +160,33 @@ export interface WelcomeState {
   readonly availableBrowsers: readonly BrowserProfile[];
   readonly importState: ImportState;
   readonly importItemSelections: ReadonlyMap<number, number>;
+  // Type bits that failed in the last import that brought other data in.
+  // Non-zero means the import was partial; cleared when a new import starts.
+  readonly importFailedTypes: number;
   readonly setAsDefaultRequested: boolean;
   readonly importStarted: boolean;
   readonly importStage: ImportStage;
 
   readonly searchEngines: readonly SearchEngineInfo[];
+  readonly searchEnginesLoaded: boolean;
   readonly selectedEngine: string | null;
 
   readonly essentialSites: readonly EssentialSite[];
   readonly selectedEssentials: ReadonlySet<string>;
 
   readonly auth: AuthState;
+  // "Continue without an account": onboarding finishes without a relay
+  // session, the local Vault gets a passphrase, and sync stays off until the
+  // user signs in later.
+  readonly isLocalOnly: boolean;
   readonly isVaultRepairMode: boolean;
   readonly aiSetup: AiSetupState;
   readonly passwordSetup: PasswordSetupState;
   readonly syncKeyBackup: SyncKeyBackupState;
+  // "client_held" when the signed-in account holds its own Sync keys (the
+  // relay has no seed): this device joins with the 24-word recovery phrase
+  // instead of generating a new key.
+  readonly syncKeyMode: SyncKeyMode;
 
   readonly selectedTheme: string | null;
   readonly localizedStrings: ReadonlyMap<string, string>;
@@ -161,10 +202,12 @@ export function createInitialState(): WelcomeState {
     availableBrowsers: [],
     importState: {phase: 'idle', statusMessage: '', browserIndex: null},
     importItemSelections: new Map(),
+    importFailedTypes: 0,
     setAsDefaultRequested: false,
     importStarted: false,
     importStage: 'A',
     searchEngines: [],
+    searchEnginesLoaded: false,
     selectedEngine: null,
     essentialSites: [],
     selectedEssentials: new Set(),
@@ -178,6 +221,7 @@ export function createInitialState(): WelcomeState {
       isReauthMode: false,
       hasStoredSession: false,
     },
+    isLocalOnly: false,
     isVaultRepairMode: false,
     aiSetup: {
       provider: '',
@@ -201,6 +245,7 @@ export function createInitialState(): WelcomeState {
       syncKey: null,
       savedToFile: false,
     },
+    syncKeyMode: 'escrow',
     selectedTheme: null,
     localizedStrings: new Map([
       ['IDS_MAHO_WELCOME_SYNC_BACKUP_TITLE', 'Back up your sync recovery key'],

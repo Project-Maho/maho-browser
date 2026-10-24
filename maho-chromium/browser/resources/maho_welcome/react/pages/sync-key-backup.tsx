@@ -24,7 +24,78 @@ interface SyncKeyBackupProps {
   readonly onRegisterSaveHandler?: (handler: (() => Promise<void>) | null) => void;
 }
 
+/**
+ * Client-held account on a new device: the relay holds no key, so the user
+ * types the 24-word recovery phrase. A wrong phrase shows the native error and
+ * never starts a new room.
+ */
+export function SyncRecoveryPhraseJoinContent(
+    {snapshot, store}: {snapshot: WelcomeState; store: MahoWelcomeStore}) {
+  const [phrase, setPhrase] = useState('');
+  const {syncKeyBackup} = snapshot;
+  const isJoining = syncKeyBackup.status === 'starting';
+
+  // Scrub the typed phrase on unmount.
+  useEffect(() => () => setPhrase(''), []);
+
+  return (
+    <div className="flex h-full w-full max-w-lg flex-col justify-center p-1 text-foreground">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 pb-4">
+        <div className="flex items-center gap-2.5">
+          <div className="flex size-8 items-center justify-center rounded-lg border border-border/40 bg-primary/10 text-primary">
+            <KeyRound className="size-4" aria-hidden="true" />
+          </div>
+          <h2 className="text-sm font-semibold leading-none tracking-tight text-foreground">
+            Enter your recovery phrase
+          </h2>
+        </div>
+        <p className="text-pretty text-xs leading-5 text-muted-foreground">
+          This account holds its own Sync keys, so Maho cannot set up this device for you. Enter the 24-word recovery phrase you saved when you switched to your own keys.
+        </p>
+        <textarea
+          aria-label="Recovery phrase"
+          autoComplete="off"
+          spellCheck={false}
+          className="h-28 w-full resize-none rounded-lg border border-border bg-background/70 p-3 font-mono text-xs"
+          placeholder="word1 word2 word3 ..."
+          value={phrase}
+          disabled={isJoining}
+          onChange={event => setPhrase(event.target.value)}
+        />
+        <Button
+          type="button"
+          className="h-10 min-w-36 rounded-lg font-semibold"
+          disabled={isJoining || phrase.trim() === ''}
+          onClick={() => { void store.joinSyncWithRecoveryPhrase(phrase); }}
+        >
+          {isJoining ? 'Joining…' : 'Join Sync'}
+        </Button>
+        {syncKeyBackup.errorMessage ? (
+          <Alert variant="destructive" aria-live="assertive">
+            <AlertCircle className="size-4" />
+            <AlertTitle>Could not join Sync</AlertTitle>
+            <AlertDescription>{syncKeyBackup.errorMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function SyncKeyBackupSidebar({store}: {store: MahoWelcomeStore}) {
+  if (store.getSnapshot().syncKeyMode === 'client_held') {
+    return (
+      <>
+        <div className="flex size-11 items-center justify-center rounded-xl border border-border bg-background/70 text-foreground shadow-sm">
+          <KeyRound className="size-5 text-primary" aria-hidden="true" />
+        </div>
+        <h1 className="text-balance">Join with your recovery phrase</h1>
+        <p className="text-pretty">
+          You hold your own Sync keys. Your recovery phrase unlocks your synced data on this device.
+        </p>
+      </>
+    );
+  }
   return (
     <>
       <div className="flex size-11 items-center justify-center rounded-xl border border-border bg-background/70 text-foreground shadow-sm">
@@ -197,7 +268,7 @@ Generated: ${new Date().toISOString()}
           ) : null}
         </div>
         <p className="text-pretty text-xs leading-5 text-muted-foreground">
-          This private key decrypts your bookmarks, history, and tabs across devices. Maho servers cannot read your phrase.
+          This private key decrypts your bookmarks, history, and tabs across devices. Keep this phrase in a safe place to recover your sync data on new devices.
         </p>
 
         {words.length > 0 ? (
@@ -249,14 +320,14 @@ Generated: ${new Date().toISOString()}
         ) : (
           <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 p-3 rounded-lg border border-border/50">
             <Sparkles className="size-4 shrink-0 text-amber-500" />
-            <span>Save file is mandatory to enable sync. Click "Save File (.txt)" in the footer to unlock "Start syncing".</span>
+            <span>{`Save the backup file to enable sync. Click "${store.getString('IDS_MAHO_WELCOME_SYNC_BACKUP_SAVE_FILE')}" below to unlock "${store.getString('IDS_MAHO_WELCOME_SYNC_BACKUP_START_SYNC')}".`}</span>
           </div>
         )}
 
         {errorMessage ? (
           <Alert variant="destructive" aria-live="assertive">
             <AlertCircle className="size-4" />
-            <AlertTitle>Save file incomplete</AlertTitle>
+            <AlertTitle>{saveError ? 'Save file incomplete' : 'Sync setup incomplete'}</AlertTitle>
             <AlertDescription>{errorMessage}</AlertDescription>
           </Alert>
         ) : null}

@@ -488,6 +488,43 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: 'agent.denied_origins',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Sites the AI agent may not use',
+      description: 'One site per line, for example https://bank.example or bank.example. The AI agent refuses to act on these sites and their subdomains. Empty by default.',
+      control: 'textarea',
+      placeholder: 'https://bank.example',
+    },
+  },
+  {
+    key: 'agent.mail_send_delay_seconds',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Undo window for agent-sent mail',
+      description: 'Hold mail the AI agent sends for a few seconds so you can cancel it from Agent activity. Off sends immediately. Queued mail is still sent after a restart if Maho quits during the window. Purchases and form submits cannot be undone.',
+      control: 'select',
+      options: [
+        {value: '0', label: 'Off (send immediately)'},
+        {value: '10', label: '10 seconds'},
+        {value: '20', label: '20 seconds'},
+        {value: '30', label: '30 seconds'},
+      ],
+    },
+  },
+  {
+    key: 'developers.mcp_enabled',
+    metadata: {
+      scope: 'profile',
+      selectedProfile: false,
+      label: 'Allow local MCP connections',
+      description: 'Run the local MCP server so the maho CLI and MCP agents on this computer can control the browser. Takes effect after restarting Maho.',
+      control: 'toggle',
+    },
+  },
+  {
     key: 'ai.mail_read_allowed',
     metadata: {
       scope: 'profile',

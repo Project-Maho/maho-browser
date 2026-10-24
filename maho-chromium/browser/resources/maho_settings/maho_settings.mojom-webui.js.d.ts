@@ -310,6 +310,16 @@ export interface SyncStatus {
   statusLabel: string;
   errorMessage: string;
   lastSyncTimestamp: bigint;
+  keyMode: string;
+  roomRetired: boolean;
+  relaySwitchPending: boolean;
+}
+
+export interface ClientHeldKeysResult {
+  success: boolean;
+  recoveryPhrase: string;
+  roomId: string;
+  errorMessage: string;
 }
 
 export interface SyncDeviceInfo {
@@ -405,6 +415,7 @@ export interface VaultStatus {
   autoLockMinutes: number;
   failedUnlockCount: number;
   retryAtTimestamp: bigint | null;
+  accountSeedMissing: boolean;
 }
 
 export interface VaultItem {
@@ -428,6 +439,15 @@ export interface VaultItem {
 export enum SecretAction {
   kCopy = 0,
   kReveal = 1,
+}
+
+export enum DataExportKind {
+  kBookmarks = 0,
+  kHistory = 1,
+  kPasswords = 2,
+  kConversations = 3,
+  kSpaces = 4,
+  kFullBackup = 5,
 }
 
 export interface VaultTotpCodeResult {
@@ -634,6 +654,17 @@ export interface ContentBlockerStats {
   lastUpdateTimestamp: bigint;
 }
 
+export interface AgentActionJournalEntry {
+  id: bigint;
+  timestamp: bigint;
+  sessionId: string;
+  actor: string;
+  action: string;
+  origin: string;
+  summary: string;
+  outcome: string;
+}
+
 export interface ContentBlockerMutationResult {
   success: boolean;
   errorCode: string | null;
@@ -645,6 +676,8 @@ export interface ContentBlockerMutationResult {
 
 export interface AccountStatus {
   signedIn: boolean;
+  sessionValid: boolean;
+  localOnly: boolean;
   email: string;
   displayName: string;
   userId: string;
@@ -844,6 +877,7 @@ export class PageHandlerRemote {
   generateSyncKey(): Promise<{keyInfo: SyncKeyInfo}>;
   configureSyncEncryption(recoveryPhrase: string): Promise<{status: SyncStatus}>;
   joinSync(recoveryPhrase: string): Promise<{status: SyncStatus}>;
+  enableClientHeldKeys(): Promise<{result: ClientHeldKeysResult}>;
   stopSync(): Promise<void>;
   disconnectSyncDevice(deviceId: string): Promise<{success: boolean}>;
   renameSyncDevice(deviceId: string, newName: string): Promise<{success: boolean}>;
@@ -996,6 +1030,11 @@ export class PageHandlerRemote {
     mutation: ContentBlockerMutationResult;
   }>;
   getContentBlockerStats(): Promise<{stats: ContentBlockerStats}>;
+  getAgentActionJournal(actor: string, action: string, query: string):
+      Promise<{entries: AgentActionJournalEntry[]}>;
+  clearAgentActionJournal(): Promise<{success: boolean}>;
+  listQueuedAgentMail(): Promise<{success: boolean, queueJson: string}>;
+  cancelQueuedAgentMail(id: string): Promise<{cancelled: boolean}>;
   setContentBlockingMode(mode: ContentBlockingMode): Promise<{
     success: boolean;
     mutation: ContentBlockerMutationResult;
@@ -1007,6 +1046,11 @@ export class PageHandlerRemote {
   openExtensionsPage(): void;
   openChromiumSettingsPage(): void;
   openMigrationDialog(): void;
+  exportData(kind: DataExportKind, passphrase: string | null): Promise<{
+    success: boolean;
+    path: string;
+    errorCode: string;
+  }>;
   setBYOKKey(provider: string, key: string): Promise<{success: boolean}>;
   clearBYOKKey(provider: string): Promise<{success: boolean}>;
   setAIProviderOAuthClientId(provider: string, clientId: string): Promise<{success: boolean}>;

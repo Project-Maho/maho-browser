@@ -1097,7 +1097,7 @@ class LateNotifyingRemoteSearchController final
 
 TEST_F(MahoRemoteSearchSuggestionsTest,
        ProductionAdapterUsesSearchOnlyControllerConfig) {
-  EXPECT_EQ(AutocompleteProvider::TYPE_SEARCH,
+  EXPECT_EQ(static_cast<int>(AutocompleteProvider::TYPE_SEARCH),
             MahoRemoteSearchSuggestions::ProviderTypesForTesting());
 }
 

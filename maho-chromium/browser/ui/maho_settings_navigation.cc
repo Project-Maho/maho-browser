@@ -7,8 +7,8 @@
 #include "base/check.h"
 #include "base/memory/raw_ptr.h"
 #include "chrome/browser/ui/browser.h"  // nogncheck
-#include "chrome/browser/ui/browser_navigator.h"  // nogncheck
-#include "chrome/browser/ui/browser_navigator_params.h"  // nogncheck
+#include "chrome/browser/ui/navigator/browser_navigator.h"  // nogncheck
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"  // nogncheck
 #include "chrome/browser/ui/tabs/tab_strip_model.h"  // nogncheck

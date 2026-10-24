@@ -6,7 +6,10 @@
 #include <utility>
 
 #include "base/task/single_thread_task_runner.h"
+#include "base/functional/bind.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"  // nogncheck
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"  // nogncheck
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -16,7 +19,9 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/animation/tween.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/widget/widget.h"
+#include "url/gurl.h"
 
 namespace maho {
 
@@ -34,8 +39,37 @@ void ShowLinkCopiedToast(Browser* browser) {
   auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser);
   if (overlay) {
     overlay->Show(l10n_util::GetStringUTF16(IDS_MAHO_TOAST_LINK_COPIED),
-                  std::u16string(), base::Seconds(2));
+                  std::u16string(), base::Seconds(2),
+                  MahoToastView::Icon::kCopy);
   }
+}
+
+void ShowAgentActionNoticeToast(Browser* browser,
+                                const std::u16string& title,
+                                const std::u16string& body) {
+  if (!browser) {
+    return;
+  }
+  auto* overlay = MahoNotificationOverlay::GetOrCreateForBrowser(browser);
+  if (!overlay) {
+    return;
+  }
+  base::WeakPtr<BrowserWindowInterface> weak_browser = browser->GetWeakPtr();
+  overlay->ShowWithClickAction(
+      title, body, base::Seconds(6),
+      base::BindRepeating(
+          [](base::WeakPtr<BrowserWindowInterface> target) {
+            if (!target) {
+              return;
+            }
+            NavigateParams params(
+                target.get(),
+                GURL("chrome://maho-settings/?pane=privacy#agent-activity"),
+                ui::PAGE_TRANSITION_AUTO_TOPLEVEL);
+            params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+            Navigate(&params);
+          },
+          weak_browser));
 }
 
 }  // namespace maho
@@ -67,7 +101,8 @@ MahoNotificationOverlay::~MahoNotificationOverlay() {
 
 void MahoNotificationOverlay::Show(const std::u16string& title,
                                    const std::u16string& body,
-                                   base::TimeDelta duration) {
+                                   base::TimeDelta duration,
+                                   MahoToastView::Icon icon) {
   if (browser_) {
     BrowserView* bv = BrowserView::GetBrowserViewForBrowser(browser_);
     if (!bv || !bv->GetWidget()) {
@@ -88,15 +123,42 @@ void MahoNotificationOverlay::Show(const std::u16string& title,
   CreateWidget();
   toast_view_->SetTitleText(title);
   toast_view_->SetBodyText(body);
+  toast_view_->SetIcon(icon);
   toast_view_->SetOnClicked(base::BindRepeating(
       &MahoNotificationOverlay::Hide, weak_factory_.GetWeakPtr()));
 
   PrimeAnimationStartFrame();
   widget_->ShowInactive();
+  // The toast window is non-activatable and never takes focus, so screen
+  // readers would otherwise never hear it.
+  toast_view_->GetViewAccessibility().AnnouncePolitely(
+      toast_view_->GetAnnouncementText());
   StartShowAnimation();
   dismiss_timer_.Start(FROM_HERE, duration,
       base::BindOnce(&MahoNotificationOverlay::OnDismissTimerFired,
                      weak_factory_.GetWeakPtr()));
+}
+
+void MahoNotificationOverlay::ShowWithClickAction(
+    const std::u16string& title,
+    const std::u16string& body,
+    base::TimeDelta duration,
+    base::RepeatingClosure on_clicked) {
+  Show(title, body, duration, MahoToastView::Icon::kNone);
+  if (!toast_view_) {
+    return;
+  }
+  toast_view_->SetOnClicked(base::BindRepeating(
+      [](base::RepeatingClosure action,
+         base::WeakPtr<MahoNotificationOverlay> overlay) {
+        if (action) {
+          action.Run();
+        }
+        if (overlay) {
+          overlay->Hide();
+        }
+      },
+      std::move(on_clicked), weak_factory_.GetWeakPtr()));
 }
 
 void MahoNotificationOverlay::Hide() {
@@ -246,7 +308,17 @@ gfx::Rect MahoNotificationOverlay::ComputeTargetBounds() const {
   gfx::Size toast_size = toast_view_ ? toast_view_->GetPreferredSize() : gfx::Size(320, 80);
   gfx::Rect content_bounds = bv->contents_container()->GetBoundsInScreen();
   constexpr int kMarginPx = 16;
-  int x = content_bounds.right() - toast_size.width() - kMarginPx;
+  // Narrow contents area: shrink the toast to fit inside it (text wraps) and
+  // never let it start left of the contents origin, where it would cover the
+  // sidebar or spill past the window edge.
+  const int available_width = content_bounds.width() - 2 * kMarginPx;
+  if (toast_view_ && available_width > 0 &&
+      toast_size.width() > available_width) {
+    toast_size.set_width(available_width);
+    toast_size.set_height(toast_view_->GetHeightForWidth(available_width));
+  }
+  int x = std::max(content_bounds.right() - toast_size.width() - kMarginPx,
+                   content_bounds.x() + kMarginPx);
   int y = content_bounds.y() + kMarginPx;
   return gfx::Rect(gfx::Point(x, y), toast_size);
 }

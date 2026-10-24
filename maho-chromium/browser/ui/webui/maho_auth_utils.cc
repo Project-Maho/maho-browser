@@ -45,6 +45,7 @@ StoreTokensParams::operator=(StoreTokensParams &&) noexcept = default;
 namespace {
 
 constexpr char kDefaultRelayUrl[] = "https://relay.mahobrowser.com";
+constexpr char kSyncKeyModeEscrow[] = "escrow";
 
 const net::NetworkTrafficAnnotationTag kRefreshTrafficAnnotation =
     net::DefineNetworkTrafficAnnotation("maho_auth_refresh", R"(
@@ -237,6 +238,48 @@ ParseSyncBootstrap(const std::string &json) {
   return material;
 }
 
+// GET /sync/bootstrap for a client-held account returns
+// {"key_mode":"client_held","room_id":...} and no seed. Returns the room id
+// for that shape, nullopt for anything else.
+std::optional<std::string>
+ParseClientHeldBootstrapRoomId(const std::string &json) {
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return std::nullopt;
+  }
+  const base::DictValue &dict = parsed->GetDict();
+  const std::string *key_mode = dict.FindString("key_mode");
+  const std::string *room_id = dict.FindString("room_id");
+  if (!key_mode || *key_mode != maho::account_prefs::kSyncKeyModeClientHeld ||
+      !room_id || room_id->empty()) {
+    return std::nullopt;
+  }
+  return *room_id;
+}
+
+const net::NetworkTrafficAnnotationTag kSyncClientHeldTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("maho_sync_client_held_bootstrap", R"(
+      semantics {
+        sender: "Maho Sync Client-Held Keys"
+        description:
+          "Tells the Maho relay that this account now holds its own Sync "
+          "keys: the relay deletes its copy of the Sync seed and Vault "
+          "escrow, keeps only the new room id, and retires the old room."
+        trigger:
+          "User confirms 'Hold my own keys' in Settings > Sync."
+        data: "Bearer access token and the new Sync room id."
+        destination: WEBSITE
+      }
+      policy {
+        cookies_allowed: NO
+        setting: "Triggered by an explicit user action; not background."
+        policy_exception_justification:
+          "Not controlled by enterprise policy. Sent only after the user "
+          "explicitly opts in to client-held Sync keys."
+      }
+    )");
+
 std::string GetSyncRoomIdOnCoreSequence() {
   MahoCore *core = maho::GetCore();
   if (!core) {
@@ -425,12 +468,13 @@ void ConfigureFetchedSyncBootstrap(
 
 void FetchAccountSyncBootstrap(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    std::string access_token, bool allow_create, LoginResultCallback callback);
+    std::string access_token, bool allow_create, LoginResultCallback callback,
+    SyncKeyModeCallback on_key_mode);
 
 void PutGeneratedSyncBootstrap(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     std::string access_token, SyncBootstrapMaterial generated,
-    LoginResultCallback callback) {
+    LoginResultCallback callback, SyncKeyModeCallback on_key_mode) {
   base::DictValue body;
   body.Set("version", generated.version);
   body.Set("room_id", generated.room_id);
@@ -459,7 +503,7 @@ void PutGeneratedSyncBootstrap(
       base::BindOnce(
           [](scoped_refptr<network::SharedURLLoaderFactory> factory,
              std::string token, SyncBootstrapMaterial local_generated,
-             LoginResultCallback cb,
+             LoginResultCallback cb, SyncKeyModeCallback key_mode_cb,
              std::unique_ptr<network::SimpleURLLoader> completed_loader,
              std::optional<std::string> response_body) {
             const auto *info = completed_loader->ResponseInfo();
@@ -472,7 +516,8 @@ void PutGeneratedSyncBootstrap(
             }
             if (status == 409) {
               FetchAccountSyncBootstrap(std::move(factory), std::move(token),
-                                        false, std::move(cb));
+                                        false, std::move(cb),
+                                        std::move(key_mode_cb));
               return;
             }
             if ((status != 200 && status != 201) || !response_body) {
@@ -492,13 +537,14 @@ void PutGeneratedSyncBootstrap(
                                           std::move(*stored), std::move(cb));
           },
           std::move(url_loader_factory), access_token, std::move(generated),
-          std::move(callback), std::move(loader)),
+          std::move(callback), std::move(on_key_mode), std::move(loader)),
       64 * 1024);
 }
 
 void FetchAccountSyncBootstrap(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    std::string access_token, bool allow_create, LoginResultCallback callback) {
+    std::string access_token, bool allow_create, LoginResultCallback callback,
+    SyncKeyModeCallback on_key_mode) {
   GURL request_url(GetSyncRelayUrl() + "/sync/bootstrap");
   if (!request_url.is_valid()) {
     std::move(callback).Run(false, "Invalid Sync relay URL.");
@@ -527,6 +573,7 @@ void FetchAccountSyncBootstrap(
       base::BindOnce(
           [](scoped_refptr<network::SharedURLLoaderFactory> factory,
              std::string token, bool can_create, LoginResultCallback cb,
+             SyncKeyModeCallback key_mode_cb,
              std::unique_ptr<network::SimpleURLLoader> completed_loader,
              std::optional<std::string> response_body) {
             const auto *info = completed_loader->ResponseInfo();
@@ -543,12 +590,27 @@ void FetchAccountSyncBootstrap(
               return;
             }
             if (status == 200 && response_body) {
+              // Client-held account: the relay holds no seed and must not get
+              // one. Record the mode so welcome/settings ask for the recovery
+              // phrase; sign-in itself succeeds without configuring Sync.
+              if (std::optional<std::string> client_held_room =
+                      ParseClientHeldBootstrapRoomId(*response_body)) {
+                if (key_mode_cb) {
+                  key_mode_cb.Run(account_prefs::kSyncKeyModeClientHeld,
+                                  *client_held_room);
+                }
+                std::move(cb).Run(true, std::string());
+                return;
+              }
               std::optional<SyncBootstrapMaterial> bootstrap =
                   ParseSyncBootstrap(*response_body);
               if (!bootstrap) {
                 std::move(cb).Run(false,
                                   "Invalid account Sync bootstrap response.");
                 return;
+              }
+              if (key_mode_cb) {
+                key_mode_cb.Run(kSyncKeyModeEscrow, bootstrap->room_id);
               }
               ConfigureFetchedSyncBootstrap(std::move(factory), std::move(token),
                                             std::move(*bootstrap),
@@ -569,6 +631,7 @@ void FetchAccountSyncBootstrap(
                     [](scoped_refptr<network::SharedURLLoaderFactory>
                            inner_factory,
                        std::string inner_token, LoginResultCallback inner_cb,
+                       SyncKeyModeCallback inner_key_mode_cb,
                        std::optional<SyncBootstrapMaterial> generated) {
                       if (!generated) {
                         std::move(inner_cb).Run(
@@ -576,31 +639,39 @@ void FetchAccountSyncBootstrap(
                             "Unable to generate account Sync bootstrap.");
                         return;
                       }
+                      if (inner_key_mode_cb) {
+                        inner_key_mode_cb.Run(kSyncKeyModeEscrow,
+                                              generated->room_id);
+                      }
                       PutGeneratedSyncBootstrap(
                           std::move(inner_factory), std::move(inner_token),
-                          std::move(*generated), std::move(inner_cb));
+                          std::move(*generated), std::move(inner_cb),
+                          std::move(inner_key_mode_cb));
                     },
-                    std::move(factory), std::move(token), std::move(cb)));
+                    std::move(factory), std::move(token), std::move(cb),
+                    std::move(key_mode_cb)));
           },
           std::move(url_loader_factory), access_token, allow_create,
-          std::move(callback), std::move(loader)),
+          std::move(callback), std::move(on_key_mode), std::move(loader)),
       64 * 1024);
 }
 
 void ConfigureAccountSyncAfterLogin(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-    std::string access_token, LoginResultCallback callback) {
+    std::string access_token, LoginResultCallback callback,
+    SyncKeyModeCallback on_key_mode) {
   maho::PostCoreTask<std::string>(
       FROM_HERE, base::BindOnce(&GetSyncRoomIdOnCoreSequence),
       base::BindOnce(
           [](scoped_refptr<network::SharedURLLoaderFactory> factory,
              std::string token, LoginResultCallback cb,
-             std::string legacy_room_id) {
+             SyncKeyModeCallback key_mode_cb, std::string legacy_room_id) {
             FetchAccountSyncBootstrap(std::move(factory), std::move(token),
-                                      legacy_room_id.empty(), std::move(cb));
+                                      legacy_room_id.empty(), std::move(cb),
+                                      std::move(key_mode_cb));
           },
           std::move(url_loader_factory), std::move(access_token),
-          std::move(callback)));
+          std::move(callback), std::move(on_key_mode)));
 }
 
 void CompleteLogin(PrefService *prefs, StoreTokensParams params,
@@ -732,7 +803,8 @@ void OnLoginResponse(
   ConfigureAccountSyncAfterLogin(
       std::move(url_loader_factory), std::move(access_token_for_sync),
       base::BindOnce(&CompleteLogin, prefs, std::move(params),
-                     std::move(callback)));
+                     std::move(callback)),
+      base::BindRepeating(&RecordSyncKeyMode, prefs));
 }
 
 void OnGoogleLoginResponse(
@@ -758,9 +830,10 @@ namespace testing {
 void FetchAccountSyncBootstrapForTesting(
     scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
     const std::string& access_token,
-    LoginResultCallback callback) {
+    LoginResultCallback callback,
+    SyncKeyModeCallback on_key_mode) {
   FetchAccountSyncBootstrap(std::move(url_loader_factory), access_token, true,
-                            std::move(callback));
+                            std::move(callback), std::move(on_key_mode));
 }
 
 }  // namespace testing
@@ -801,6 +874,11 @@ bool StoreRelayTokens(PrefService *prefs,
   prefs->SetString(maho::account_prefs::kRelayUserDisplayName,
                    params.user_display_name);
   prefs->SetString(maho::account_prefs::kRelayUserTier, params.user_tier);
+  // Any sign-in ends "Continue without an account". The pref is registered by
+  // the welcome prefs, which unit-test pref services may not register.
+  if (prefs->FindPreference(maho::account_prefs::kLocalOnly)) {
+    prefs->SetBoolean(maho::account_prefs::kLocalOnly, false);
+  }
 
   std::string oauth_provider;
   std::string oauth_provider_sub;
@@ -863,6 +941,10 @@ void ClearRelayTokens(PrefService *prefs) {
   prefs->ClearPref(maho::account_prefs::kRelayOAuthProviderSub);
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionStatus);
   prefs->ClearPref(maho::account_prefs::kRelaySubscriptionExpiresAt);
+  prefs->ClearPref(maho::account_prefs::kRelaySyncKeyMode);
+  prefs->ClearPref(maho::account_prefs::kRelaySyncClientHeldRoomId);
+  prefs->ClearPref(maho::account_prefs::kRelaySyncRetiredRoomId);
+  prefs->ClearPref(maho::account_prefs::kRelaySyncClientHeldRelayPendingRoomId);
 }
 
 std::string BuildMailOAuthStartOptionsJson(PrefService *prefs) {
@@ -1229,6 +1311,210 @@ void MahoRelayGoogleLogin(
                      url_loader_factory, std::cref(encryptor),
                      std::move(callback), std::move(url_loader)),
       /*max_body_size=*/64 * 1024);
+}
+
+void RecordSyncKeyMode(PrefService *prefs, const std::string &key_mode,
+                       const std::string &room_id) {
+  if (!prefs) {
+    return;
+  }
+  prefs->SetString(account_prefs::kRelaySyncKeyMode, key_mode);
+  if (key_mode == account_prefs::kSyncKeyModeClientHeld) {
+    prefs->SetString(account_prefs::kRelaySyncClientHeldRoomId, room_id);
+  } else {
+    prefs->ClearPref(account_prefs::kRelaySyncClientHeldRoomId);
+  }
+}
+
+bool IsClientHeldSyncAccount(PrefService *prefs) {
+  return prefs && prefs->GetString(account_prefs::kRelaySyncKeyMode) ==
+                      account_prefs::kSyncKeyModeClientHeld;
+}
+
+std::string CheckClientHeldRecoveryPhrase(PrefService *prefs,
+                                          const std::string &recovery_phrase) {
+  const std::string retired_room =
+      prefs ? prefs->GetString(account_prefs::kRelaySyncRetiredRoomId)
+            : std::string();
+  if (!IsClientHeldSyncAccount(prefs) && retired_room.empty()) {
+    return std::string();
+  }
+  const std::string expected_room =
+      prefs->GetString(account_prefs::kRelaySyncClientHeldRoomId);
+  char *value = maho_sync_room_id_for_recovery_phrase(recovery_phrase.c_str());
+  std::string json = value ? value : "";
+  if (value) {
+    maho_string_free(value);
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  const base::DictValue *dict =
+      parsed && parsed->is_dict() ? &parsed->GetDict() : nullptr;
+  const std::string *room_id = dict ? dict->FindString("roomId") : nullptr;
+  if (!dict || !dict->FindBool("success").value_or(false) || !room_id) {
+    return "That recovery phrase is not valid. Check all 24 words.";
+  }
+  if (!retired_room.empty() && *room_id == retired_room) {
+    return "That recovery phrase is for the Sync room this account no longer "
+           "uses. Enter the new recovery phrase from the device that "
+           "switched to your own keys.";
+  }
+  if (expected_room.empty()) {
+    // Fail closed: without the account's room, any phrase would start a new,
+    // empty room.
+    return "Maho could not confirm this account's Sync room. Check your "
+           "connection and try again.";
+  }
+  if (*room_id != expected_room) {
+    return "That recovery phrase belongs to a different Sync account.";
+  }
+  return std::string();
+}
+
+void MarkSyncRoomRetired(PrefService *prefs, const std::string &room_id) {
+  if (!prefs || room_id.empty()) {
+    return;
+  }
+  prefs->SetString(account_prefs::kRelaySyncRetiredRoomId, room_id);
+  if (!IsClientHeldSyncAccount(prefs)) {
+    prefs->SetString(account_prefs::kRelaySyncKeyMode,
+                     account_prefs::kSyncKeyModeClientHeld);
+  }
+  // A recorded client-held room equal to the retired one is stale.
+  if (prefs->GetString(account_prefs::kRelaySyncClientHeldRoomId) == room_id) {
+    prefs->ClearPref(account_prefs::kRelaySyncClientHeldRoomId);
+  }
+}
+
+bool NeedsClientHeldRoomRefresh(PrefService *prefs) {
+  return prefs &&
+         !prefs->GetString(account_prefs::kRelaySyncRetiredRoomId).empty() &&
+         prefs->GetString(account_prefs::kRelaySyncClientHeldRoomId).empty();
+}
+
+void RefreshSyncKeyModeFromRelay(
+    PrefService *prefs,
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const std::string &access_token, SyncKeyModeRefreshCallback callback) {
+  GURL request_url(GetSyncRelayUrl() + "/sync/bootstrap");
+  if (!prefs || !request_url.is_valid() || access_token.empty()) {
+    std::move(callback).Run(false);
+    return;
+  }
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = request_url;
+  request->method = "GET";
+  request->headers.SetHeader("Authorization", "Bearer " + access_token);
+  request->headers.SetHeader("Accept", "application/json");
+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), kSyncBootstrapTrafficAnnotation);
+  loader->SetTimeoutDuration(base::Seconds(30));
+  loader->SetAllowHttpErrorResults(true);
+  auto *raw_loader = loader.get();
+  // Read before the BindOnce below moves the refptr (see
+  // FetchAccountSyncBootstrap).
+  network::SharedURLLoaderFactory *factory_ptr = url_loader_factory.get();
+  raw_loader->DownloadToString(
+      factory_ptr,
+      base::BindOnce(
+          [](PrefService *prefs, SyncKeyModeRefreshCallback cb,
+             std::unique_ptr<network::SimpleURLLoader> completed_loader,
+             std::optional<std::string> response_body) {
+            const auto *info = completed_loader->ResponseInfo();
+            const int status =
+                info && info->headers ? info->headers->response_code() : 0;
+            if (completed_loader->NetError() != net::OK || status != 200 ||
+                !response_body) {
+              std::move(cb).Run(false);
+              return;
+            }
+            std::optional<std::string> room =
+                ParseClientHeldBootstrapRoomId(*response_body);
+            if (!room) {
+              std::move(cb).Run(false);
+              return;
+            }
+            RecordSyncKeyMode(prefs, account_prefs::kSyncKeyModeClientHeld,
+                              *room);
+            std::move(cb).Run(true);
+          },
+          prefs, std::move(callback), std::move(loader)),
+      64 * 1024);
+}
+
+void ClearRetiredSyncRoom(PrefService *prefs) {
+  if (prefs) {
+    prefs->ClearPref(account_prefs::kRelaySyncRetiredRoomId);
+  }
+}
+
+void PostClientHeldSyncBootstrap(
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+    const std::string &access_token, const std::string &room_id,
+    ClientHeldSwitchCallback callback) {
+  GURL request_url(GetSyncRelayUrl() + "/sync/bootstrap/client-held");
+  if (!request_url.is_valid() || access_token.empty() || room_id.empty()) {
+    std::move(callback).Run(false, 0, "Invalid client-held switch request.");
+    return;
+  }
+  base::DictValue body;
+  body.Set("room_id", room_id);
+  std::string body_json;
+  base::JSONWriter::Write(body, &body_json);
+
+  auto request = std::make_unique<network::ResourceRequest>();
+  request->url = request_url;
+  request->method = "POST";
+  request->headers.SetHeader("Authorization", "Bearer " + access_token);
+  request->headers.SetHeader("Content-Type", "application/json");
+  request->headers.SetHeader("Accept", "application/json");
+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
+  auto loader = network::SimpleURLLoader::Create(
+      std::move(request), kSyncClientHeldTrafficAnnotation);
+  loader->AttachStringForUpload(body_json, "application/json");
+  loader->SetTimeoutDuration(base::Seconds(30));
+  loader->SetAllowHttpErrorResults(true);
+  auto *raw_loader = loader.get();
+  // Read before the BindOnce below moves the refptr (see
+  // FetchAccountSyncBootstrap).
+  network::SharedURLLoaderFactory *factory_ptr = url_loader_factory.get();
+  raw_loader->DownloadToString(
+      factory_ptr,
+      base::BindOnce(
+          [](std::string expected_room, ClientHeldSwitchCallback cb,
+             std::unique_ptr<network::SimpleURLLoader> completed_loader,
+             std::optional<std::string> response_body) {
+            const auto *info = completed_loader->ResponseInfo();
+            const int status =
+                info && info->headers ? info->headers->response_code() : 0;
+            if (completed_loader->NetError() != net::OK) {
+              std::move(cb).Run(false, status,
+                                "Unable to reach the Sync relay.");
+              return;
+            }
+            if (status == 410) {
+              std::move(cb).Run(false, status, "room_retired");
+              return;
+            }
+            if (status != 200 || !response_body) {
+              std::move(cb).Run(
+                  false, status,
+                  status == 404 ? "Holding your own keys is not available yet."
+                                : "The Sync relay refused the switch.");
+              return;
+            }
+            std::optional<std::string> stored =
+                ParseClientHeldBootstrapRoomId(*response_body);
+            if (!stored || *stored != expected_room) {
+              std::move(cb).Run(false, status,
+                                "Invalid client-held switch response.");
+              return;
+            }
+            std::move(cb).Run(true, status, std::string());
+          },
+          room_id, std::move(callback), std::move(loader)),
+      64 * 1024);
 }
 
 } // namespace maho::auth

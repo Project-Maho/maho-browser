@@ -7,12 +7,14 @@
 #include "cc/paint/paint_flags.h"
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "maho/browser/ui/views/maho_lucide_icons/vector_icons.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
 #include "ui/base/models/image_model.h"
 #include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/rect_f.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
@@ -63,6 +65,7 @@ MahoToastView::MahoToastView() {
   layout->set_cross_axis_alignment(views::BoxLayout::CrossAxisAlignment::kCenter);
 
   icon_chip_ = AddChildView(std::make_unique<ToastIconChip>());
+  icon_chip_->SetVisible(false);
 
   auto* text_container = AddChildView(std::make_unique<views::View>());
   auto* text_layout =
@@ -89,6 +92,10 @@ MahoToastView::MahoToastView() {
   body_label_->SetMaxLines(2);
   body_label_->SetElideBehavior(gfx::ELIDE_TAIL);
   body_label_->SetVisible(false);
+
+  // A non-activatable toast never takes focus, so it is exposed as an alert
+  // and announced explicitly by MahoNotificationOverlay::Show.
+  GetViewAccessibility().SetRole(ax::mojom::Role::kAlert);
 }
 
 MahoToastView::~MahoToastView() = default;
@@ -96,11 +103,44 @@ MahoToastView::~MahoToastView() = default;
 void MahoToastView::SetTitleText(const std::u16string& title) {
   title_label_->SetText(title);
   title_label_->SetVisible(!title.empty());
+  GetViewAccessibility().SetName(GetAnnouncementText());
 }
 
 void MahoToastView::SetBodyText(const std::u16string& body) {
   body_label_->SetText(body);
   body_label_->SetVisible(!body.empty());
+  GetViewAccessibility().SetName(GetAnnouncementText());
+}
+
+void MahoToastView::SetIcon(Icon icon) {
+  icon_ = icon;
+  UpdateIcon();
+}
+
+std::u16string MahoToastView::GetAnnouncementText() const {
+  // GetText() returns a view into the label's storage, so materialize each part
+  // before concatenating.
+  const std::u16string title(title_label_->GetText());
+  const std::u16string body(body_label_->GetText());
+  if (title.empty() || body.empty()) {
+    return title.empty() ? body : title;
+  }
+  return title + u". " + body;
+}
+
+void MahoToastView::UpdateIcon() {
+  if (!icon_chip_) {
+    return;
+  }
+  icon_chip_->SetVisible(icon_ != Icon::kNone);
+  const ui::ColorProvider* cp = GetColorProvider();
+  if (icon_ == Icon::kNone || !cp) {
+    return;
+  }
+  icon_chip_->SetImage(ui::ImageModel::FromVectorIcon(
+      maho_lucide_icons::kCopyIcon, cp->GetColor(kMahoColorToastForeground),
+      kIconGlyphSize));
+  icon_chip_->SchedulePaint();
 }
 
 void MahoToastView::SetOnClicked(base::RepeatingClosure callback) {
@@ -138,17 +178,15 @@ void MahoToastView::OnThemeChanged() {
   views::View::OnThemeChanged();
   const ui::ColorProvider* cp = GetColorProvider();
   const SkColor foreground = cp->GetColor(kMahoColorToastForeground);
-  const SkColor background = cp->GetColor(kMahoColorToastBackground);
 
   if (icon_chip_) {
-    icon_chip_->SetImage(ui::ImageModel::FromVectorIcon(
-        maho_lucide_icons::kCopyIcon, foreground, kIconGlyphSize));
-    icon_chip_->SchedulePaint();
+    UpdateIcon();
   }
+  // OnPaintBackground is the only painter of the toast fill. Giving the labels
+  // the same translucent color would composite it twice over their rects and
+  // leave a visible seam against the padding.
   title_label_->SetEnabledColor(foreground);
-  title_label_->SetBackgroundColor(background);
   body_label_->SetEnabledColor(cp->GetColor(kMahoColorToastBodyForeground));
-  body_label_->SetBackgroundColor(background);
   SchedulePaint();
 }
 

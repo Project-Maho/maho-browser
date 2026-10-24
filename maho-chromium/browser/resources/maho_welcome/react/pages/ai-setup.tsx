@@ -26,9 +26,12 @@ interface Props {
   status: 'idle' | 'submitting' | 'success' | 'error';
   errorMessage: string;
   isSignedIn: boolean;
+  // Continue-without-account profiles get BYOK / skip only: Maho Managed AI
+  // needs an account, which they can add later from Settings > Account.
+  isLocalOnly?: boolean;
 }
 
-export function AiSetupContent({store, provider, status, errorMessage, isSignedIn}: Props) {
+export function AiSetupContent({store, provider, status, errorMessage, isSignedIn, isLocalOnly = false}: Props) {
   const handleSelect = (choice: AiProviderChoice) => {
     store.setAiProvider(choice);
   };
@@ -43,6 +46,7 @@ export function AiSetupContent({store, provider, status, errorMessage, isSignedI
       </div>
 
       <div className="mt-5 grid gap-3">
+        {!isLocalOnly ? (
         <button
           type="button"
           onClick={() => handleSelect('maho-managed')}
@@ -69,6 +73,7 @@ export function AiSetupContent({store, provider, status, errorMessage, isSignedI
             </p>
           </div>
         </button>
+        ) : null}
 
         <button
           type="button"

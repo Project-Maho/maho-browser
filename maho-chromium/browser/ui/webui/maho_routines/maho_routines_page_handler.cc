@@ -392,8 +392,10 @@ void MahoRoutinesPageHandler::RunRoutine(const std::string& id,
     auto cb = std::move(ctx->callback);
     delete ctx;
     FailRoutine(std::move(cb),
-                tier < 2 ? "Routines are available on Max tier only"
-                         : "Failed to start routine");
+                !maho_routines_entitled(core)
+                    ? "Routines are available on Max tier or with your own "
+                      "API key (BYOK)"
+                    : "Failed to start routine");
   }
 }
 
@@ -462,6 +464,11 @@ void MahoRoutinesPageHandler::GetUserTier(GetUserTierCallback callback) {
   int32_t tier = maho_account_get_tier(core);
   if (tier < 0) {
     tier = 0;
+  }
+  // Routines eligibility is reported through the tier value: a validated BYOK
+  // key unlocks Routines on any tier, so it reports the Max-equivalent value.
+  if (tier < 2 && maho_routines_entitled(core)) {
+    tier = 2;
   }
   std::move(callback).Run(tier);
 }

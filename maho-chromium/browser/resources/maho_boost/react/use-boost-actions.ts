@@ -74,11 +74,15 @@ export function useBoostActions(controller: BoostController): BoostActions {
   const importInputRef = React.useRef<HTMLInputElement | null>(null);
   const pendingActionRef = React.useRef<Exclude<PendingAction, null> | null>(null);
   const busy = state.isLoading || pendingAction !== null;
+  const {clearError} = controller;
 
   const runAction = React.useCallback(async (request: ActionRequest): Promise<void> => {
     if (pendingActionRef.current !== null) {
       return;
     }
+    // A new user action supersedes any earlier controller error; otherwise the
+    // stale error outranks every later action status in the status line.
+    clearError();
     pendingActionRef.current = request.pending;
     setPendingAction(request.pending);
     setStatus({kind: 'loading', message: request.loadingMessage});
@@ -94,7 +98,7 @@ export function useBoostActions(controller: BoostController): BoostActions {
       pendingActionRef.current = null;
       setPendingAction(null);
     }
-  }, []);
+  }, [clearError]);
 
   const handleImport = React.useCallback(async (): Promise<void> => {
     const input = importInputRef.current;

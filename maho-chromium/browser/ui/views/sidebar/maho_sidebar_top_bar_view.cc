@@ -18,8 +18,8 @@
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 #include "maho/browser/mcp/maho_mcp_session.h"
@@ -356,9 +356,7 @@ void MahoSidebarTopBarView::OnControlActivityChanged(
   }
   const bool controls_target =
       activity.target.has_value() && !model.target_is_other_window &&
-      activity.state != maho::ai::ControlActivityState::kDisconnected &&
-      activity.state != maho::ai::ControlActivityState::kCompleted &&
-      activity.state != maho::ai::ControlActivityState::kFailed;
+      !maho::ai::IsTerminalControlActivityState(activity.state);
   if (controlled_tab_changed_callback_) {
     controlled_tab_changed_callback_.Run(
         controls_target ? std::move(stable_target_tab_id) : std::string());
@@ -516,7 +514,7 @@ void MahoSidebarTopBarView::OnAiPressed(const ui::Event& event) {
     return;
   }
 
-  auto* side_panel_ui = browser_->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = SidePanelUI::From(browser_);
   if (side_panel_ui->GetCurrentEntryId() ==
       SidePanelEntryId::kMahoAiPanel) {
     side_panel_ui->Close(

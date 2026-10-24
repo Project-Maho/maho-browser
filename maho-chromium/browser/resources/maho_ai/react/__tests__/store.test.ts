@@ -742,6 +742,54 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
     expect(clear).not.toHaveBeenCalled();
   });
 
+  it('keeps an answered approval locked until approvalResult arrives', async () => {
+    vi.spyOn(mockHandler, 'respondToApproval').mockResolvedValue(undefined);
+    await store.resumeSession('test-session-123', false);
+    const runtimeListener = vi.mocked(mockRouter.onRuntimeEvent.addListener).mock.calls[0]?.[0];
+
+    expect(await store.respondToApproval('approval-1', true)).toBe(true);
+    expect(store.getSnapshot().answeredApprovalSessionById['approval-1']).toBe('test-session-123');
+    expect(await store.respondToApproval('approval-1', false)).toBe(false);
+    expect(mockHandler.respondToApproval).toHaveBeenCalledOnce();
+
+    runtimeListener?.({
+      ...createRuntimeEvent('test-session-123', RuntimeEventKind.kApprovalResult, 50, ''),
+      approvalResult: {approvalId: 'approval-1', approved: true} as RuntimeEvent['approvalResult'],
+    });
+    expect(store.getSnapshot().answeredApprovalSessionById['approval-1']).toBeUndefined();
+    expect(await store.respondToApproval('approval-1', false)).toBe(false);
+  });
+
+  it('releases an answered approval when the turn ends without a result or dispatch fails', async () => {
+    const respond = vi.spyOn(mockHandler, 'respondToApproval').mockResolvedValue(undefined);
+    await store.resumeSession('test-session-123', false);
+    const runtimeListener = vi.mocked(mockRouter.onRuntimeEvent.addListener).mock.calls[0]?.[0];
+
+    await store.respondToApproval('approval-2', true);
+    runtimeListener?.(createRuntimeEvent(
+        'test-session-123', RuntimeEventKind.kTurnComplete, 60, 'done'));
+    expect(store.getSnapshot().answeredApprovalSessionById['approval-2']).toBeUndefined();
+
+    respond.mockRejectedValueOnce(new Error('pipe closed'));
+    expect(await store.respondToApproval('approval-3', true)).toBe(false);
+    expect(store.getSnapshot().answeredApprovalSessionById['approval-3']).toBeUndefined();
+  });
+
+  it('moves a carried draft out of the previous conversation scope on new session', async () => {
+    const clear = vi.fn(async () => undefined);
+    const schedule = vi.fn();
+    vi.spyOn(mockHandler, 'startSession').mockResolvedValue({session: createSession('fresh')});
+    store.setComposerDraftPersistenceForTesting(draftPersistenceWithClear(clear, {schedule}));
+    await store.resumeSession('test-session-123', false);
+    store.setComposerPrompt('carry me');
+    schedule.mockClear();
+
+    await store.startSession();
+
+    expect(clear).toHaveBeenCalledWith({kind: 'conversation', conversationId: 'test-session-123'});
+    expect(schedule).toHaveBeenCalledWith({kind: 'new_task'}, 'carry me');
+  });
+
   it('opens default settings or a requested pane', async () => {
     const openSettings = vi.spyOn(mockHandler, 'openSettings').mockResolvedValue(undefined);
     const openSettingsPane = vi.mocked(mockHandler.openSettingsPane);
@@ -962,6 +1010,17 @@ describe('MahoAiStore — session resume and history fetch behavior', () => {
       expect(snapshot.currentSessionId).toBe('new-session-456');
       expect(snapshot.turnPendingBySessionId['new-session-456']).toBe(true);
       expect(clear).toHaveBeenCalledWith({kind: 'new_task'});
+    });
+
+    it('consumes sent attachments after an accepted submitPrompt', async () => {
+      vi.spyOn(mockHandler, 'submitPrompt').mockResolvedValue({accepted: true});
+      await store.resumeSession('test-session-123', false);
+      store.setComposerPrompt('use this tab');
+      store.addAttachment({id: 'tab:1', kind: 'tab', label: 'Tab 1', tabId: 1, url: 'http://a.com'});
+
+      await store.submitPrompt();
+
+      expect(store.getSnapshot().composer.attachments).toEqual([]);
     });
 
     it('normal submitPrompt passes kFreeform intent', async () => {

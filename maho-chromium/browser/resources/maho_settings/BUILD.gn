@@ -35,6 +35,7 @@ tailwind_css("build_tailwind") {
     "../maho_common/react/ui/toggle-group.tsx",
     "../maho_common/react/ui/tooltip.tsx",
     "react/app.tsx",
+    "react/agent_activity.tsx",
     "react/ai_developers.tsx",
     "react/domain_panes.tsx",
     "react/mcp_agent_guidance_settings_section.tsx",

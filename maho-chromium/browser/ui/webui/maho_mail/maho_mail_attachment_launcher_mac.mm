@@ -31,6 +31,14 @@ struct LaunchState {
 };
 
 void FinishLaunch(std::shared_ptr<LaunchState> state, bool opened) {
+  if (opened) {
+    // The completion handler fires once the viewer app launches, not after it
+    // has read the file; the registry's stale-copy sweep removes it later.
+    MahoMailAttachmentRegistry::ReleaseLaunchedAttachment(
+        std::move(state->attachment));
+    std::move(state->callback).Run(true, std::string());
+    return;
+  }
   MahoMailAttachmentRegistry::DeleteConsumedAttachment(
       std::move(state->attachment),
       base::BindOnce(

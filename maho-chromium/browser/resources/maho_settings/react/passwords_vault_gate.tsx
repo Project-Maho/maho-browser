@@ -60,7 +60,8 @@ export interface VaultSetupValidationFailure {
 export interface VaultAccessCopy {
   readonly actionLabel: 'Initialize Vault'|'Unlock Vault';
   readonly description: string;
-  readonly mode: 'initialize'|'unlock';
+  readonly mode: 'initialize'|'unlock'|'sign-in';
+  readonly signInActionLabel?: 'Sign in to unlock your vault';
   readonly title: 'Set up Maho Vault'|'Unlock Maho Vault';
 }
 
@@ -69,7 +70,8 @@ export interface VaultAccessCopy {
  * initialized Vault that is merely locked. Callers can use this same copy for
  * both the gate itself and regression assertions without inspecting secrets.
  */
-export function getVaultAccessCopy(lockState: VaultLockState): VaultAccessCopy {
+export function getVaultAccessCopy(
+    lockState: VaultLockState, accountSeedMissing = false): VaultAccessCopy {
   if (lockState === VaultLockState.kUninitialized) {
     return {
       actionLabel: 'Initialize Vault',
@@ -79,10 +81,21 @@ export function getVaultAccessCopy(lockState: VaultLockState): VaultAccessCopy {
       title: 'Set up Maho Vault',
     };
   }
+  if (accountSeedMissing) {
+    // Signed out / session expired: the account-escrowed key needs a sign-in.
+    return {
+      actionLabel: 'Unlock Vault',
+      description:
+          'You are signed out, so your Maho Vault stays locked. Sign in to unlock your vault, or enter your master passphrase if you set one.',
+      mode: 'sign-in',
+      signInActionLabel: 'Sign in to unlock your vault',
+      title: 'Unlock Maho Vault',
+    };
+  }
   return {
     actionLabel: 'Unlock Vault',
     description:
-        'Your Maho Vault unlocks when you sign in. After auto-lock, confirm it is you or enter your passphrase.',
+        'Your Maho Vault unlocks when you sign in. After auto-lock, enter your master passphrase to unlock it.',
     mode: 'unlock',
     title: 'Unlock Maho Vault',
   };
@@ -171,7 +184,8 @@ export function VaultAccessGate(
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const lockState = vaultResult.status?.lockState ?? VaultLockState.kUninitialized;
-  const accessCopy = getVaultAccessCopy(lockState);
+  const accessCopy = getVaultAccessCopy(
+      lockState, vaultResult.status?.accountSeedMissing ?? false);
   const needsInitialize = accessCopy.mode === 'initialize';
 
   const clearSecrets = () => {
@@ -248,6 +262,13 @@ export function VaultAccessGate(
     await loadPasswords(searchQuery, true);
   };
 
+  const submitOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void submit();
+    }
+  };
+
   return (
     <ManagedSettingRow
       controlClassName={SETTING_CONTROL_STACKED_CLASS}
@@ -267,6 +288,7 @@ export function VaultAccessGate(
             placeholder="Master passphrase"
             ref={bindSecretInput(masterInputRef)}
             type="password"
+            onKeyDown={submitOnEnter}
             value={masterPassphrase}
             onChange={event => {
               setMasterPassphrase(event.currentTarget.value);
@@ -287,6 +309,7 @@ export function VaultAccessGate(
                 placeholder="Confirm master passphrase"
                 ref={bindSecretInput(confirmPassphraseInputRef)}
                 type="password"
+                onKeyDown={submitOnEnter}
                 value={confirmPassphrase}
                 onChange={event => {
                   setConfirmPassphrase(event.currentTarget.value);
@@ -305,6 +328,7 @@ export function VaultAccessGate(
                 placeholder="Recovery secret"
                 ref={bindSecretInput(recoveryInputRef)}
                 type="password"
+                onKeyDown={submitOnEnter}
                 value={recoverySecret}
                 onChange={event => {
                   setRecoverySecret(event.currentTarget.value);
@@ -323,6 +347,7 @@ export function VaultAccessGate(
                 placeholder="Confirm recovery secret"
                 ref={bindSecretInput(confirmRecoveryInputRef)}
                 type="password"
+                onKeyDown={submitOnEnter}
                 value={confirmRecovery}
                 onChange={event => {
                   setConfirmRecovery(event.currentTarget.value);
@@ -361,6 +386,12 @@ export function VaultAccessGate(
         </p>
       </div>
       <div className={SETTING_ACTIONS_CLASS}>
+        {accessCopy.signInActionLabel ? (
+          <ActionButton
+            label={accessCopy.signInActionLabel}
+            onClick={() => store.selectPane('account')}
+          />
+        ) : null}
         <ActionButton
           label={busy ? 'Working…' : accessCopy.actionLabel}
           onClick={submit}

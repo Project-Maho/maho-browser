@@ -65,7 +65,7 @@ MahoRoutinesUI::MahoRoutinesUI(content::WebUI* web_ui)
   }
   maho::ai::MahoAiPendingSurface::Request(
       profile->GetPrefs(), maho_ai::mojom::CompactSurface::kRoutines);
-  auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = SidePanelUI::From(browser);
   if (!side_panel_ui) {
     return;
   }

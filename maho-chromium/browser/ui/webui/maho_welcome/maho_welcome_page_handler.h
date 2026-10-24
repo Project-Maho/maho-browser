@@ -111,6 +111,13 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
   void StartSync(const std::string& room_id,
                  const std::string& recovery_phrase,
                  StartSyncCallback callback) override;
+  void JoinSyncWithRecoveryPhrase(
+      const std::string& recovery_phrase,
+      JoinSyncWithRecoveryPhraseCallback callback) override;
+  // Validates the phrase against the recorded client-held room, then joins.
+  void JoinSyncWithCheckedRecoveryPhrase(
+      const std::string& recovery_phrase,
+      JoinSyncWithRecoveryPhraseCallback callback);
 
   // Mail account onboarding. Thin proxies to the profile-keyed
   // MahoMailService (via MahoMailServiceFactory::GetForProfile(profile_)).
@@ -138,6 +145,7 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
       const std::string& tier,
       GetSubscriptionCheckoutUrlCallback callback) override;
 
+  void SetLocalOnlyMode(SetLocalOnlyModeCallback callback) override;
   void FinishOnboarding() override;
   void DevSkipOnboarding() override;
   void OpenFDASettings() override;
@@ -187,6 +195,15 @@ class MahoWelcomePageHandler : public maho_welcome::mojom::PageHandler,
   std::unique_ptr<maho::MahoImportSessionBridge> import_session_bridge_;
   std::unique_ptr<maho::EssentialImporter> essential_importer_;
   bool is_finishing_ = false;
+  // True once any import brought data in (wizard import or migration
+  // dialog), including a partial one; never reset by a later failed run.
+  // Selects the post-onboarding toast copy.
+  bool import_succeeded_ = false;
+  // True while some requested data is still missing after an import that
+  // brought other data in (a type failed and no later run fully succeeded).
+  bool import_partial_ = false;
+  // Set by a typed (per-type) error of the in-flight wizard import run.
+  bool run_had_type_failure_ = false;
   scoped_refptr<ui::SelectFileDialog> sync_save_dialog_;
   SaveSyncKeyBackupCallback sync_save_callback_;
   std::string sync_save_content_;

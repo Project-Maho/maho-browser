@@ -122,7 +122,7 @@ void MahoAIUI::RedirectTabHostedNavigationToSidePanel() {
     return;
   }
 
-  auto* side_panel_ui = browser->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = SidePanelUI::From(browser);
   if (!side_panel_ui) {
     return;
   }

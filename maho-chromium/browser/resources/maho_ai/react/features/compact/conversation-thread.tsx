@@ -44,6 +44,7 @@ function ThinkingBubble({item}: {item: ConversationItem}) {
 
 export function ConversationThread(
     {
+      answeredApprovalIds,
       bottomPadding,
       entries,
       onOpenSettings,
@@ -58,6 +59,8 @@ export function ConversationThread(
       thinkingLabel,
       topPadding,
     }: {
+      // Approval ids answered from this panel that still await approvalResult.
+      answeredApprovalIds?: Readonly<Record<string, unknown>>;
       bottomPadding: number;
       entries: TimelineEntry[];
       onOpenSettings: (paneKey: string) => void;
@@ -204,6 +207,7 @@ export function ConversationThread(
               <ConversationSystemItem
                 key={item.key}
                 item={item}
+                answered={Boolean(item.approval && answeredApprovalIds?.[item.approval.approvalId])}
                 readOnly={readOnly}
                 onOpenSettings={onOpenSettings}
                 onRespondToApproval={onRespondToApproval}

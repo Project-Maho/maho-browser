@@ -244,7 +244,7 @@ IN_PROC_BROWSER_TEST_F(MahoRoutineHandoffBrowserTest,
   NavigateLegacyRoutinesAndWait();
   ASSERT_TRUE(panel_opened.Wait());
   ASSERT_LT(browser_view->contents_container()->width(), cold_width);
-  auto* side_panel_ui = browser()->GetFeatures().side_panel_ui();
+  auto* side_panel_ui = SidePanelUI::From(browser());
   ASSERT_TRUE(side_panel_ui);
   EXPECT_TRUE(side_panel_ui->IsSidePanelShowing());
   EXPECT_EQ(SidePanelEntryId::kMahoAiPanel,

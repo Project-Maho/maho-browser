@@ -250,14 +250,14 @@ export function Inspector(
                         <>
                           <div className="flex flex-wrap items-center gap-2">
                             <Button
-                              disabled={readOnly}
+                              disabled={readOnly || Boolean(state.answeredApprovalSessionById[approval.approvalId])}
                               size="sm"
                               variant="default"
                               onClick={() => onRespondToApproval(approval.approvalId, true)}>
                               Approve
                             </Button>
                             <Button
-                              disabled={readOnly}
+                              disabled={readOnly || Boolean(state.answeredApprovalSessionById[approval.approvalId])}
                               size="sm"
                               variant="outline"
                               onClick={() => onRespondToApproval(approval.approvalId, false)}>

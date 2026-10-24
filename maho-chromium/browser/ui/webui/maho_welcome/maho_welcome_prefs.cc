@@ -53,6 +53,7 @@ StartSyncResult ParseStartSyncJsonForTesting(const std::string& json) {
 void RegisterProfilePrefs(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kWelcomeCompleted, false);
   registry->RegisterBooleanPref(kLoginGateActive, false);
+  registry->RegisterBooleanPref(kLocalOnly, false);
 }
 
 }  // namespace maho::welcome

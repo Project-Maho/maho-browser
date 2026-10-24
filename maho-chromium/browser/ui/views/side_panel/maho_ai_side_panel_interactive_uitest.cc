@@ -291,7 +291,7 @@ class MahoAiSidePanelLifecycleTest : public InProcessBrowserTest {
 
  protected:
   SidePanelUI* GetSidePanelUI() {
-    return browser()->GetFeatures().side_panel_ui();
+    return SidePanelUI::From(browser());
   }
 
   base::CallbackListSubscription startup_ready_subscription_;
@@ -742,7 +742,7 @@ IN_PROC_BROWSER_TEST_F(MahoAiSidePanelLifecycleTest,
   MahoAIUIConfig config;
   EXPECT_FALSE(config.IsWebUIEnabled(incognito->GetProfile()));
 
-  SidePanelUI* ui = incognito->GetFeatures().side_panel_ui();
+  SidePanelUI* ui = SidePanelUI::From(incognito);
   if (ui) {
     EXPECT_FALSE(ui->IsSidePanelEntryShowing(
         SidePanelEntryKey(kMahoAiEntryId)));

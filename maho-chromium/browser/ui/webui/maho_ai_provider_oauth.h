@@ -70,6 +70,22 @@ void RefreshProviderOAuthTokens(const std::string& provider,
 
 void ClearProviderOAuth(PrefService* prefs, std::string_view provider);
 
+// BYOK -> maho_core bridge. Desktop keeps BYOK keys in OSCrypt prefs; core
+// only counts a key toward BYOK entitlement (Routines, Skills, deep research,
+// premium search) once it is mirrored into core settings and validated.
+//
+// Mirrors `key` for `provider` ("openai" / "anthropic") into maho_core. A
+// non-empty key is validated against the provider off the UI thread (skipped
+// when core already holds the same validated key) and stored validated only on
+// a 2xx response; an empty key clears core's copy and validation record.
+void SyncByokKeyToCore(std::string_view provider, const std::string& key);
+
+// Startup hydration: decrypts each saved desktop BYOK key from `prefs` and
+// mirrors it into core via SyncByokKeyToCore. Providers with no saved key are
+// cleared in core so a key removed while core was down stops counting.
+void HydrateByokKeysIntoCore(PrefService* prefs,
+                             const os_crypt_async::Encryptor& encryptor);
+
 }  // namespace maho::ai_oauth
 
 #endif  // MAHO_BROWSER_UI_WEBUI_MAHO_AI_PROVIDER_OAUTH_H_

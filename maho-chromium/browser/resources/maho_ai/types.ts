@@ -741,6 +741,10 @@ export interface AppState {
   toolResultsByCallId: Record<string, ToolResultRecord>;
   approvalsById: Record<string, ApprovalRequestRecord>;
   approvalResultsById: Record<string, ApprovalResultRecord>;
+  // Approvals answered by this panel whose approvalResult has not arrived yet,
+  // keyed by approval id with the owning session id. Cleared on the result,
+  // on a failed dispatch, or when the owning turn ends without a result.
+  answeredApprovalSessionById: Record<string, string>;
   interactionsBySessionId: Record<string, InteractionRequestRecord[]>;
   selectedInspector: InspectorSelection;
   composer: ComposerState;
@@ -804,6 +808,7 @@ export function createInitialState(): AppState {
     toolResultsByCallId: {},
     approvalsById: {},
     approvalResultsById: {},
+    answeredApprovalSessionById: {},
     interactionsBySessionId: {},
     selectedInspector: {kind: 'session'},
     composer: {...DEFAULT_COMPOSER_STATE},

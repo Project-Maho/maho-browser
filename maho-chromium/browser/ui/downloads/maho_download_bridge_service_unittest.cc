@@ -11,6 +11,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/values.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/download/public/common/download_interrupt_reasons.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/mock_download_item.h"
 #include "content/public/test/browser_task_environment.h"
@@ -163,6 +164,72 @@ TEST_F(MahoDownloadBridgeServiceTest, InProgressTargetResolutionFinalizesMetadat
 
   EXPECT_TRUE(FindViewModelByFilename(core, "c.bin").has_value())
       << "metadata must be finalized once the target path is known (D1)";
+
+  maho_core_free(core);
+}
+
+// A network-interrupted download is a failure with a reason, not a user pause:
+// the bridge must expose it as a live failure (the sidebar shows "failed" +
+// reason) while a user cancel interruption is not a failure.
+TEST_F(MahoDownloadBridgeServiceTest, ErrorInterruptionIsReportedAsFailure) {
+  MahoCore* core = maho_core_new();
+  ScopedCoreOverride override_core(core);
+  auto service = std::make_unique<MahoDownloadBridgeService>(&profile_);
+  content::DownloadManager* manager = profile_.GetDownloadManager();
+
+  NiceMock<download::MockDownloadItem> item;
+  ConfigureItem(item, "guid-fail-1", "https://example.com/d.iso", "/tmp/d.iso",
+                "d.iso", download::DownloadItem::IN_PROGRESS, 100, 10);
+  service->OnDownloadCreated(manager, &item);
+  auto vm = FindViewModelByFilename(core, "d.iso");
+  ASSERT_TRUE(vm.has_value());
+  const std::string maho_id = *vm->FindString("id");
+  EXPECT_FALSE(service->GetLiveFailure(maho_id).has_value());
+
+  ConfigureItem(item, "guid-fail-1", "https://example.com/d.iso", "/tmp/d.iso",
+                "d.iso", download::DownloadItem::INTERRUPTED, 100, 10);
+  ON_CALL(item, GetLastReason())
+      .WillByDefault(
+          Return(download::DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED));
+  service->OnDownloadUpdated(manager, &item);
+
+  auto failure = service->GetLiveFailure(maho_id);
+  ASSERT_TRUE(failure.has_value());
+  EXPECT_EQ(failure->message,
+            MahoDownloadBridgeService::FailureMessageForReason(
+                download::DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED));
+
+  // Resuming clears the failure.
+  ConfigureItem(item, "guid-fail-1", "https://example.com/d.iso", "/tmp/d.iso",
+                "d.iso", download::DownloadItem::IN_PROGRESS, 100, 20);
+  service->OnDownloadUpdated(manager, &item);
+  EXPECT_FALSE(service->GetLiveFailure(maho_id).has_value());
+
+  maho_core_free(core);
+}
+
+// A guid-less legacy row must not be adopted by URL alone: two downloads of
+// the same URL are different rows.
+TEST_F(MahoDownloadBridgeServiceTest, CompleteItemDoesNotAdoptRowByUrlAlone) {
+  MahoCore* core = maho_core_new();
+  ScopedCoreOverride override_core(core);
+  // Seed an older, path-less, guid-less row for the same URL.
+  char* raw_seed = maho_core_start_download(
+      core,
+      R"({"filename":"old.pdf","url":"https://example.com/e.pdf","total_bytes":1})");
+  ASSERT_NE(raw_seed, nullptr);
+  maho_string_free(raw_seed);
+  auto service = std::make_unique<MahoDownloadBridgeService>(&profile_);
+
+  NiceMock<download::MockDownloadItem> item;
+  ConfigureItem(item, "guid-url-1", "https://example.com/e.pdf", "", "new.pdf",
+                download::DownloadItem::COMPLETE, 7, 7);
+  service->OnDownloadCreated(profile_.GetDownloadManager(), &item);
+
+  EXPECT_TRUE(FindViewModelByFilename(core, "old.pdf").has_value())
+      << "the older same-URL row must keep its own metadata";
+  EXPECT_TRUE(FindViewModelByFilename(core, "new.pdf").has_value())
+      << "the new download must be ingested as its own row";
 
   maho_core_free(core);
 }

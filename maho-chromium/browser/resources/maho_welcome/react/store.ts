@@ -34,6 +34,7 @@ import type {
   ImportState,
   PasswordSetupState,
   SyncKeyBackupState,
+  SyncKeyMode,
   WelcomeState,
 } from './types.js';
 
@@ -60,6 +61,7 @@ interface MutableWelcomeState {
   mailAccounts: readonly MailAccount[];
   passwordSetup: PasswordSetupState;
   syncKeyBackup: SyncKeyBackupState;
+  syncKeyMode: SyncKeyMode;
   selectedTheme: string | null;
   localizedStrings: Map<string, string>;
   isLocalDev: boolean;
@@ -143,7 +145,7 @@ export class MahoWelcomeStore {
       this.pageHandler.getAvailableBrowsers(),
       this.pageHandler.getLocalizedStrings(),
     ]);
-    const {signedIn, welcomeCompleted, hasStoredSession, isLocalDev} =
+    const {signedIn, welcomeCompleted, hasStoredSession, isLocalDev, syncKeyMode} =
         await this.pageHandler.getRelayAccountStatusFromWelcome();
 
     const isVaultRepairNeeded = Boolean(hasStoredSession && await this.checkVaultRepairNeeded());
@@ -173,6 +175,7 @@ export class MahoWelcomeStore {
         ]);
         draft.isLocalDev = isLocalDev;
         draft.isVaultRepairMode = isVaultRepairNeeded;
+        draft.syncKeyMode = toSyncKeyMode(syncKeyMode);
 
       draft.auth = {
         ...draft.auth,
@@ -826,6 +829,11 @@ export class MahoWelcomeStore {
   }
 
   async generateSyncKey(): Promise<{syncKey: string; roomId: string; recoveryPhrase: string} | null> {
+    if (this.state.syncKeyMode === 'client_held') {
+      // A client-held account already has its keys; a fresh key would start
+      // a new, empty room. The device joins with the recovery phrase instead.
+      return null;
+    }
     this.patch(draft => {
       draft.syncKeyBackup = {...draft.syncKeyBackup, status: 'generating', errorMessage: ''};
     });
@@ -854,9 +862,66 @@ export class MahoWelcomeStore {
     }
   }
 
+  /**
+   * Client-held join: the account holds its own keys, so this device joins
+   * with the user's 24-word recovery phrase. The native side refuses a phrase
+   * for another room before anything starts, so a wrong phrase never creates
+   * a new room; the page stays put and shows the error.
+   */
+  async joinSyncWithRecoveryPhrase(phrase: string): Promise<boolean> {
+    if (this.state.currentPage !== WelcomePage.SyncKeyBackup) {
+      return false;
+    }
+    const words = phrase.trim().split(/\s+/).filter(Boolean);
+    if (words.length !== 24) {
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          status: 'error',
+          errorMessage: 'Enter all 24 words of your recovery phrase.',
+        };
+      });
+      return false;
+    }
+    this.patch(draft => {
+      draft.syncKeyBackup = {...draft.syncKeyBackup, status: 'starting', errorMessage: ''};
+    });
+    let ok = false;
+    let errorMessage = '';
+    try {
+      ({ok, errorMessage} =
+           await this.pageHandler.joinSyncWithRecoveryPhrase(words.join(' ')));
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      this.patch(draft => {
+        draft.syncKeyBackup = {
+          ...draft.syncKeyBackup,
+          status: 'error',
+          errorMessage: errorMessage || 'Failed to join sync. Check your recovery phrase.',
+        };
+      });
+      return false;
+    }
+    this.patch(draft => {
+      draft.currentPage = WelcomePage.Completion;
+      draft.direction = 'forward';
+      draft.syncKeyBackup = {
+        status: 'idle',
+        errorMessage: '',
+        recoveryPhrase: null,
+        roomId: null,
+        syncKey: null,
+        savedToFile: false,
+      };
+    });
+    return true;
+  }
+
   async startSync(): Promise<boolean> {
     const {roomId, recoveryPhrase} = this.state.syncKeyBackup;
-    if (!roomId || !recoveryPhrase) {
+    if (!roomId || !recoveryPhrase || this.state.syncKeyMode === 'client_held') {
       return false;
     }
     try {
@@ -1124,13 +1189,14 @@ export class MahoWelcomeStore {
   }
 
   async refreshRelayAccountStatus(): Promise<void> {
-    const {signedIn, welcomeCompleted, hasStoredSession} =
+    const {signedIn, welcomeCompleted, hasStoredSession, syncKeyMode} =
         await this.pageHandler.getRelayAccountStatusFromWelcome();
     this.patch(draft => {
       if (signedIn) {
         // Signing in ends local-only mode (the native side clears the pref).
         draft.isLocalOnly = false;
       }
+      draft.syncKeyMode = toSyncKeyMode(syncKeyMode);
       draft.auth = {
         ...draft.auth,
         status: signedIn ? 'success' : 'idle',
@@ -1242,6 +1308,10 @@ export class MahoWelcomeStore {
   }
 }
 
+function toSyncKeyMode(value: string | undefined): SyncKeyMode {
+  return value === 'client_held' ? 'client_held' : 'escrow';
+}
+
 function makeMutableState(state: WelcomeState): MutableWelcomeState {
   return {
     mailAccounts: state.mailAccounts,
@@ -1266,6 +1336,7 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
     syncKeyBackup: state.syncKeyBackup,
+    syncKeyMode: state.syncKeyMode,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
     isLocalDev: state.isLocalDev,
@@ -1296,6 +1367,7 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
     syncKeyBackup: state.syncKeyBackup,
+    syncKeyMode: state.syncKeyMode,
     selectedTheme: state.selectedTheme,
     localizedStrings: new Map(state.localizedStrings),
     isLocalDev: state.isLocalDev,

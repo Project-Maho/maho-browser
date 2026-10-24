@@ -177,6 +177,8 @@ export class RoutineOperationsClient {
   }
 
   async isEligible(): Promise<boolean> {
+    // The handler reports the Max-equivalent tier (2) for Max accounts and for
+    // any tier holding a validated BYOK key, which also unlocks Routines.
     const result = this.handler.getUserTier ?
         await this.handler.getUserTier() :
         await this.handler.getRoutineUserTier!();

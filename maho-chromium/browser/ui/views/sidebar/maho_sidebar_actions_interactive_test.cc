@@ -44,7 +44,7 @@
 #include "chrome/browser/ui/views/frame/contents_web_view.h"
 #include "chrome/browser/ui/views/frame/multi_contents_view.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
-#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/split_tabs/split_tab_id.h"
 #include "components/split_tabs/split_tab_visual_data.h"
@@ -1945,7 +1945,7 @@ IN_PROC_BROWSER_TEST_F(MahoSidebarActionsInteractiveTest,
   SeedProfile(1);
   BrowserView* browser_view = BrowserView::GetBrowserViewForBrowser(browser());
   ASSERT_TRUE(browser_view);
-  SidePanelUI* side_panel_ui = browser()->GetFeatures().side_panel_ui();
+  SidePanelUI* side_panel_ui = SidePanelUI::From(browser());
   ASSERT_TRUE(side_panel_ui);
   const SidePanelEntryKey maho_ai_key(SidePanelEntryId::kMahoAiPanel);
   ASSERT_FALSE(side_panel_ui->IsSidePanelEntryShowing(maho_ai_key))

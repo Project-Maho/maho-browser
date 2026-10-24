@@ -7,8 +7,11 @@ import {Mic, MicOff, X} from '@icons/lucide';
 
 interface VoiceInputModalProps {
   onClose: () => void;
+  onFinish: () => void;
   onRetry: () => void;
+  preparing: boolean;
   state: AppState;
+  transcribing: boolean;
 }
 
 const WAVEFORM_WEIGHTS = [1, 0.94, 0.88, 0.8, 0.72, 0.64, 0.56, 0.48, 0.42, 0.36, 0.3, 0.25, 0.2, 0.16] as const;
@@ -68,12 +71,17 @@ function VoiceWaveform({level, listening}: {level: number; listening: boolean}) 
   );
 }
 
-export function VoiceInputModal({onClose, onRetry, state}: VoiceInputModalProps) {
+export function VoiceInputModal({onClose, onFinish, onRetry, preparing, state, transcribing}: VoiceInputModalProps) {
   const voice = state.voice;
   const transcript = voice.transcript.trim();
-  const listening = voice.status === 'listening';
   const hasError = voice.status === 'error' || voice.status === 'unsupported';
-  const headline = listening && transcript ? transcript : 'Hi! How can I help?';
+  const listening = voice.status === 'listening' && !transcribing && !hasError;
+  const headline = (listening || transcribing) && transcript ? transcript : 'Hi! How can I help?';
+  const description = transcribing ?
+    'Transcribing…' :
+    listening ? 'Listening… speak naturally.' :
+    preparing ? 'Preparing voice input… The first use downloads a speech model.' :
+    'Opening microphone…';
   const errorMessage = voice.error || (voice.status === 'unsupported' ?
     'Voice input is not supported in this WebUI host.' :
     'Voice input stopped unexpectedly.');
@@ -127,15 +135,22 @@ export function VoiceInputModal({onClose, onRetry, state}: VoiceInputModalProps)
                     <DialogPrimitive.Title className="mx-auto max-h-36 max-w-full overflow-y-auto text-balance break-words text-4xl font-semibold leading-tight tracking-[-0.04em] text-foreground max-[520px]:text-3xl">
                       {headline}
                     </DialogPrimitive.Title>
-                    <DialogPrimitive.Description id="voice-input-description" className="text-sm font-medium text-muted-foreground">
-                      {listening ? 'Listening… speak naturally.' : 'Opening microphone…'}
+                    <DialogPrimitive.Description id="voice-input-description" className="text-sm font-medium text-muted-foreground" aria-live="polite">
+                      {description}
                     </DialogPrimitive.Description>
                   </div>
+                  <Button
+                    className="rounded-full px-6"
+                    disabled={!listening}
+                    type="button"
+                    onClick={onFinish}>
+                    {transcribing ? 'Transcribing…' : 'Done'}
+                  </Button>
                 </>
               )}
             </div>
 
-            <VoiceWaveform level={voice.level} listening={listening && !hasError} />
+            <VoiceWaveform level={voice.level} listening={listening} />
           </section>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

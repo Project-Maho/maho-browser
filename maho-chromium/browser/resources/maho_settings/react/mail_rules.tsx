@@ -36,13 +36,18 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
     };
   }, []);
 
+  const hasLoadedRef = useRef(false);
+
   const loadRules = useCallback(async () => {
-    setModelState({status: 'loading'});
+    // Only the first load replaces the pane with a spinner; later reloads
+    // (after edits or change events) refresh in place.
+    if (!hasLoadedRef.current) setModelState({status: 'loading'});
     try {
       const {ok, resultJson} = await handler.mailListRules('');
       if (!mountedRef.current) return;
       if (ok) {
         const next = JSON.parse(resultJson) as MailRule[];
+        hasLoadedRef.current = true;
         setRules(next);
         setModelState(createMailSettingsContentState(next));
       } else {
@@ -82,9 +87,11 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
     }
   };
 
-  const deleteRule = async (id: string) => {
-    const {ok} = await handler.mailDeleteRule(id);
+  const deleteRule = async (rule: MailRule) => {
+    if (!window.confirm(`Delete the rule "${rule.name}"? This can't be undone.`)) return;
+    const {ok} = await handler.mailDeleteRule(rule.id);
     if (ok) {
+      setError('');
       void loadRules();
     } else {
       setError('Failed to delete rule');
@@ -101,6 +108,7 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
     const ruleIds = newRules.map(r => r.id);
     const {ok} = await handler.mailReorderRules('', JSON.stringify(ruleIds));
     if (ok) {
+      setError('');
       void loadRules();
     } else {
       setError('Failed to reorder rules');
@@ -135,14 +143,14 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
                     <p className="mt-1 text-xs text-muted-foreground">Priority: {idx + 1}</p>
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" disabled={idx === 0} onClick={() => moveRule(idx, 'up')}>
-                      <ArrowUp className="size-3.5" />
+                    <Button variant="outline" size="sm" aria-label={`Move ${rule.name} up`} disabled={idx === 0} onClick={() => moveRule(idx, 'up')}>
+                      <ArrowUp className="size-3.5" aria-hidden="true" />
                     </Button>
-                    <Button variant="outline" size="sm" disabled={idx === rules.length - 1} onClick={() => moveRule(idx, 'down')}>
-                      <ArrowDown className="size-3.5" />
+                    <Button variant="outline" size="sm" aria-label={`Move ${rule.name} down`} disabled={idx === rules.length - 1} onClick={() => moveRule(idx, 'down')}>
+                      <ArrowDown className="size-3.5" aria-hidden="true" />
                     </Button>
-                    <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive/10" onClick={() => deleteRule(rule.id)}>
-                      <Trash2 className="size-3.5" />
+                    <Button variant="outline" size="sm" aria-label={`Delete rule ${rule.name}`} className="text-destructive hover:bg-destructive/10" onClick={() => deleteRule(rule)}>
+                      <Trash2 className="size-3.5" aria-hidden="true" />
                     </Button>
                   </div>
                 </div>
@@ -173,7 +181,7 @@ export function MailRulesPane({pane, store}: {pane: PaneDefinition; store: MahoS
                   <label htmlFor="is-enabled-rule" className="text-xs font-medium select-none">Enabled</label>
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <Button variant="outline" onClick={() => setEditingRule(null)}>Cancel</Button>
+                  <Button variant="outline" onClick={() => { setEditingRule(null); setError(''); }}>Cancel</Button>
                   <Button onClick={saveRule}>Save</Button>
                 </div>
               </div>

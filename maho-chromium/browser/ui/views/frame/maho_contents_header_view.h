@@ -20,6 +20,7 @@
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/menus/simple_menu_model.h"
 #include "ui/views/accessible_pane_view.h"
+#include "ui/views/context_menu_controller.h"
 #include "ui/views/view.h"
 #include "ui/views/view_tracker.h"
 
@@ -28,6 +29,7 @@ class BrowserView;
 class ContentsWebView;
 class FullscreenController;
 class GURL;
+class MahoAddressBarContextMenu;
 class Profile;
 
 namespace content {
@@ -96,6 +98,7 @@ inline constexpr int kMahoContentsHeaderHeightDp = 24;
 class MahoContentsHeaderView : public views::AccessiblePaneView,
                                public content::WebContentsObserver,
                                public ui::SimpleMenuModel::Delegate,
+                               public views::ContextMenuController,
                                public translate::TranslateDriver::
                                    LanguageDetectionObserver {
   METADATA_HEADER(MahoContentsHeaderView, views::AccessiblePaneView)
@@ -185,6 +188,12 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   void DidChangeVisibleSecurityState() override;
   void WebContentsDestroyed() override;
 
+  // views::ContextMenuController (host button right-click):
+  void ShowContextMenuForViewImpl(
+      views::View* source,
+      const gfx::Point& point,
+      ui::mojom::MenuSourceType source_type) override;
+
   // ui::SimpleMenuModel::Delegate:
   void ExecuteCommand(int command_id, int event_flags) override;
   bool IsCommandIdChecked(int command_id) const override;
@@ -208,6 +217,8 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   void OnForwardPressed(const ui::Event& event);
   void OnReloadPressed(const ui::Event& event);
   void OnHostPressed(const ui::Event& event);
+  // Opens the command overlay on this pane's tab to edit its address.
+  void EditAddress();
   void OnCopyUrlPressed(const ui::Event& event);
   void OnTranslatePressed(const ui::Event& event);
   // Opens the page info bubble for this pane, anchored to the security icon.
@@ -315,6 +326,10 @@ class MahoContentsHeaderView : public views::AccessiblePaneView,
   std::unique_ptr<ui::SimpleMenuModel> translate_options_menu_model_;
   std::unique_ptr<ui::SimpleMenuModel> translate_languages_menu_model_;
   std::unique_ptr<views::MenuRunner> translate_options_menu_runner_;
+  // Host-button right-click menu (Edit Address / Copy URL / Copy as Markdown).
+  std::unique_ptr<MahoAddressBarContextMenu> address_context_menu_;
+  std::unique_ptr<ui::SimpleMenuModel> address_context_menu_model_;
+  std::unique_ptr<views::MenuRunner> address_context_menu_runner_;
   std::vector<std::string> translate_option_language_codes_;
   base::RepeatingClosure close_translate_popover_;
   base::WeakPtr<views::Widget> translate_popover_widget_;

@@ -48,6 +48,7 @@ class MahoSpacesOverlayTabRowView : public views::View {
 
   void OnThemeChanged() override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
   ui::Cursor GetCursor(const ui::MouseEvent& event) override;
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;

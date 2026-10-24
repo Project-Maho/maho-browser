@@ -8,16 +8,28 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/web_contents.h"
 #include "maho/browser/ui/context_menu/maho_context_menu_ids.h"
+#include "maho/browser/ui/notifications/maho_notification_overlay.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
 #include "ui/menus/simple_menu_model.h"
 
 MahoAddressBarContextMenu::MahoAddressBarContextMenu(
     Browser* browser,
-    base::RepeatingClosure on_edit_address)
-    : browser_(browser), on_edit_address_(std::move(on_edit_address)) {}
+    base::RepeatingClosure on_edit_address,
+    base::RepeatingCallback<content::WebContents*()> target_contents_getter)
+    : browser_(browser),
+      on_edit_address_(std::move(on_edit_address)),
+      target_contents_getter_(std::move(target_contents_getter)) {}
 
 MahoAddressBarContextMenu::~MahoAddressBarContextMenu() = default;
+
+content::WebContents* MahoAddressBarContextMenu::GetTargetContents() const {
+  if (target_contents_getter_) {
+    return target_contents_getter_.Run();
+  }
+  return browser_ ? browser_->GetTabStripModel()->GetActiveWebContents()
+                  : nullptr;
+}
 
 std::unique_ptr<ui::SimpleMenuModel>
 MahoAddressBarContextMenu::BuildMenuModel() {
@@ -44,25 +56,29 @@ void MahoAddressBarContextMenu::ExecuteCommand(int command_id,
       }
       break;
     case IDC_MAHO_ADDR_COPY_URL: {
-      content::WebContents* contents =
-          browser_->GetTabStripModel()->GetActiveWebContents();
+      content::WebContents* contents = GetTargetContents();
       if (contents) {
-        ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-        writer.WriteText(
-            base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
+        {
+          ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+          writer.WriteText(
+              base::UTF8ToUTF16(contents->GetVisibleURL().spec()));
+        }
+        maho::ShowLinkCopiedToast(browser_);
       }
       break;
     }
     case IDC_MAHO_ADDR_COPY_MARKDOWN: {
-      content::WebContents* contents =
-          browser_->GetTabStripModel()->GetActiveWebContents();
+      content::WebContents* contents = GetTargetContents();
       if (contents) {
         std::string url = contents->GetVisibleURL().spec();
         std::u16string title = contents->GetTitle();
         std::u16string markdown =
             u"[" + title + u"](" + base::UTF8ToUTF16(url) + u")";
-        ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
-        writer.WriteText(markdown);
+        {
+          ui::ScopedClipboardWriter writer(ui::ClipboardBuffer::kCopyPaste);
+          writer.WriteText(markdown);
+        }
+        maho::ShowLinkCopiedToast(browser_);
       }
       break;
     }
@@ -77,7 +93,7 @@ bool MahoAddressBarContextMenu::IsCommandIdEnabled(int command_id) const {
       return !on_edit_address_.is_null();
     case IDC_MAHO_ADDR_COPY_URL:
     case IDC_MAHO_ADDR_COPY_MARKDOWN:
-      return browser_->GetTabStripModel()->GetActiveWebContents() != nullptr;
+      return GetTargetContents() != nullptr;
     default:
       return false;
   }

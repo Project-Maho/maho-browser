@@ -391,6 +391,11 @@ constexpr SettingMapping kSettingsMap[] = {
      SettingMapping::Type::kBool},
     {kAIMailReadAllowedMahoKey, ai::kMailReadAllowed,
      SettingMapping::Type::kBool},
+    {"developers.mcp_enabled", ai::kMcpEnabled, SettingMapping::Type::kBool},
+    {"agent.denied_origins", ai::kAgentDeniedOrigins,
+     SettingMapping::Type::kString},
+    {"agent.mail_send_delay_seconds", ai::kAgentMailSendDelaySeconds,
+     SettingMapping::Type::kInt},
     {"general.homepage", prefs::kHomePage, SettingMapping::Type::kString},
     {"general.restore_on_startup", prefs::kRestoreOnStartup,
      SettingMapping::Type::kInt},
@@ -484,6 +489,10 @@ constexpr SettingScopeMapping kSettingScopes[] = {
      maho_settings::mojom::SettingScope::kCoreGlobal},
     {kVaultDeviceAuthRequiredMahoKey,
      maho_settings::mojom::SettingScope::kCoreGlobal},
+    {"agent.denied_origins", maho_settings::mojom::SettingScope::kProfile},
+    {"agent.mail_send_delay_seconds",
+     maho_settings::mojom::SettingScope::kProfile},
+    {"developers.mcp_enabled", maho_settings::mojom::SettingScope::kProfile},
     {"general.homepage", maho_settings::mojom::SettingScope::kProfile},
     {"general.prompt_for_download",
      maho_settings::mojom::SettingScope::kProfile},
@@ -1418,6 +1427,57 @@ void StopSyncOnCoreSequence() {
   maho_core_stop_sync(core);
 }
 
+std::string EnableClientHeldKeysOnCoreSequence() {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::string();
+  }
+  char* result = maho_core_enable_client_held_keys(core);
+  if (!result) {
+    return std::string();
+  }
+  std::string json(result);
+  maho_string_free(result);
+  return json;
+}
+
+std::string GetSyncKeyModeOnCoreSequence() {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return std::string();
+  }
+  char* result = maho_core_get_sync_key_mode(core);
+  if (!result) {
+    return std::string();
+  }
+  std::string mode(result);
+  maho_string_free(result);
+  return mode;
+}
+
+struct CoreKeyModeAndRoom {
+  std::string key_mode;
+  std::string room_id;
+};
+
+CoreKeyModeAndRoom GetKeyModeAndRoomOnCoreSequence() {
+  CoreKeyModeAndRoom result;
+  result.key_mode = GetSyncKeyModeOnCoreSequence();
+  if (MahoCore* core = maho::GetCore()) {
+    if (char* room = maho_core_get_sync_room_id(core)) {
+      result.room_id = room;
+      maho_string_free(room);
+    }
+  }
+  return result;
+}
+
+maho_settings::mojom::SyncStatusPtr BuildSyncStatusWithKeyModeOnCoreSequence() {
+  auto status = BuildSyncStatusOnCoreSequence();
+  status->key_mode = GetSyncKeyModeOnCoreSequence();
+  return status;
+}
+
 bool DisconnectSyncDeviceOnCoreSequence(const std::string& device_id) {
   MahoCore* core = maho::GetCore();
   if (!core) {
@@ -2231,6 +2291,13 @@ MahoSettingsPageHandler::~MahoSettingsPageHandler() {
     std::move(password_import_file_callback_).Run(std::nullopt);
   }
   password_import_select_file_dialog_.reset();
+  if (data_export_select_file_dialog_) {
+    data_export_select_file_dialog_->ListenerDestroyed();
+    data_export_select_file_dialog_.reset();
+  }
+  if (data_export_callback_) {
+    std::move(data_export_callback_).Run(false, std::string(), "canceled");
+  }
   maho::MahoUpdateManager::GetInstance()->RemoveObserver(this);
   maho::MahoMailService* service =
       maho::MahoMailServiceFactory::GetForProfile(profile_);
@@ -2645,6 +2712,13 @@ void MahoSettingsPageHandler::SetSetting(const std::string& key,
         }
         if (key == kMemorySaverTimeoutMahoKey) {
           if (int_value < 0 || int_value > 2) {
+            std::move(callback).Run(false);
+            return;
+          }
+        }
+        if (key == "agent.mail_send_delay_seconds") {
+          if (int_value != 0 && int_value != 10 && int_value != 20 &&
+              int_value != 30) {
             std::move(callback).Run(false);
             return;
           }
@@ -4626,9 +4700,11 @@ bool MahoSettingsPageHandler::DisconnectAIProviderInternal(
   if (provider_id == "openai") {
     prefs->SetString(maho::ai_prefs::kByokOpenAIEncryptedB64, "");
     maho::ai_oauth::ClearProviderOAuth(prefs, "openai");
+    maho::ai_oauth::SyncByokKeyToCore("openai", std::string());
   } else if (provider_id == "anthropic") {
     prefs->SetString(maho::ai_prefs::kByokAnthropicEncryptedB64, "");
     maho::ai_oauth::ClearProviderOAuth(prefs, "anthropic");
+    maho::ai_oauth::SyncByokKeyToCore("anthropic", std::string());
   } else if (provider_id == "openai-compatible" || provider_id == "custom") {
     prefs->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, "");
     if (prefs->GetString(ai::kProvider) == "openai-compatible") {
@@ -4882,15 +4958,44 @@ void MahoSettingsPageHandler::ImportShortcuts(
 
 // ── Sync domain ──
 
+maho_settings::mojom::SyncStatusPtr MahoSettingsPageHandler::DecorateSyncStatus(
+    maho_settings::mojom::SyncStatusPtr status) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (maho::auth::IsClientHeldSyncAccount(prefs_)) {
+    status->key_mode = acct::kSyncKeyModeClientHeld;
+  } else if (status->key_mode.empty()) {
+    status->key_mode = "escrow";
+  }
+  const std::string retired =
+      prefs_->GetString(acct::kRelaySyncRetiredRoomId);
+  // Retired only while this device is not syncing some other room (a
+  // successful phrase join moves it to the new room).
+  status->room_retired =
+      !retired.empty() && (!status->is_syncing || status->room_id == retired);
+  if (status->room_retired) {
+    status->is_syncing = false;
+    status->status_label = "room_retired";
+    status->error_message = acct::kSyncRoomRetiredMessage;
+  }
+  status->relay_switch_pending =
+      !prefs_->GetString(acct::kRelaySyncClientHeldRelayPendingRoomId).empty();
+  return status;
+}
+
 void MahoSettingsPageHandler::GetSyncStatus(GetSyncStatusCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::PostCoreTask(FROM_HERE, base::BindOnce(&BuildSyncStatusOnCoreSequence),
-                     base::BindOnce(
-                         [](GetSyncStatusCallback cb,
-                            maho_settings::mojom::SyncStatusPtr status) {
-                           std::move(cb).Run(std::move(status));
-                         },
-                         std::move(callback)));
+  maho::PostCoreTask(
+      FROM_HERE, base::BindOnce(&BuildSyncStatusWithKeyModeOnCoreSequence),
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> self,
+             GetSyncStatusCallback cb,
+             maho_settings::mojom::SyncStatusPtr status) {
+            if (self) {
+              status = self->DecorateSyncStatus(std::move(status));
+            }
+            std::move(cb).Run(std::move(status));
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
 void MahoSettingsPageHandler::GetSyncDevices(GetSyncDevicesCallback callback) {
@@ -4921,31 +5026,227 @@ void MahoSettingsPageHandler::GenerateSyncKey(
           std::move(callback)));
 }
 
+void MahoSettingsPageHandler::RunRecoveryPhraseSync(
+    const std::string& recovery_phrase,
+    base::OnceCallback<maho_settings::mojom::SyncStatusPtr()> core_task,
+    base::OnceCallback<void(maho_settings::mojom::SyncStatusPtr)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // A retired room was recorded but the account's new room is unknown yet:
+  // fetch it from GET /sync/bootstrap first, then validate the phrase (it
+  // fails closed if the room is still unknown).
+  if (maho::auth::NeedsClientHeldRoomRefresh(prefs_) && encryptor_) {
+    const std::string token =
+        maho::auth::GetRelayAccessToken(prefs_, *encryptor_);
+    if (!token.empty()) {
+      auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                    ->GetURLLoaderFactoryForBrowserProcess();
+      maho::auth::RefreshSyncKeyModeFromRelay(
+          prefs_, url_loader_factory, token,
+          base::BindOnce(
+              [](base::WeakPtr<MahoSettingsPageHandler> self,
+                 std::string phrase,
+                 base::OnceCallback<maho_settings::mojom::SyncStatusPtr()> task,
+                 base::OnceCallback<void(maho_settings::mojom::SyncStatusPtr)>
+                     cb,
+                 bool /*recorded*/) {
+                if (!self) {
+                  return;
+                }
+                self->RunRecoveryPhraseSyncChecked(phrase, std::move(task),
+                                                   std::move(cb));
+              },
+              weak_factory_.GetWeakPtr(), recovery_phrase,
+              std::move(core_task), std::move(callback)));
+      return;
+    }
+  }
+  RunRecoveryPhraseSyncChecked(recovery_phrase, std::move(core_task),
+                               std::move(callback));
+}
+
+void MahoSettingsPageHandler::RunRecoveryPhraseSyncChecked(
+    const std::string& recovery_phrase,
+    base::OnceCallback<maho_settings::mojom::SyncStatusPtr()> core_task,
+    base::OnceCallback<void(maho_settings::mojom::SyncStatusPtr)> callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const std::string phrase_error =
+      maho::auth::CheckClientHeldRecoveryPhrase(prefs_, recovery_phrase);
+  if (!phrase_error.empty()) {
+    auto status = maho_settings::mojom::SyncStatus::New();
+    status->is_syncing = false;
+    status->status_label = "error";
+    status->error_message = phrase_error;
+    status->key_mode = acct::kSyncKeyModeClientHeld;
+    status->room_retired =
+        !prefs_->GetString(acct::kRelaySyncRetiredRoomId).empty();
+    std::move(callback).Run(std::move(status));
+    return;
+  }
+  maho::PostCoreTask(
+      FROM_HERE, std::move(core_task),
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> self,
+             base::OnceCallback<void(maho_settings::mojom::SyncStatusPtr)> cb,
+             maho_settings::mojom::SyncStatusPtr status) {
+            if (self) {
+              if (status->status_label != "error") {
+                maho::auth::ClearRetiredSyncRoom(self->prefs_);
+              }
+              status = self->DecorateSyncStatus(std::move(status));
+            }
+            std::move(cb).Run(std::move(status));
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
 void MahoSettingsPageHandler::ConfigureSyncEncryption(
     const std::string& recovery_phrase,
     ConfigureSyncEncryptionCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  maho::PostCoreTask(
-      FROM_HERE,
+  RunRecoveryPhraseSync(
+      recovery_phrase,
       base::BindOnce(&ConfigureSyncEncryptionOnCoreSequence, recovery_phrase),
-      base::BindOnce(
-          [](ConfigureSyncEncryptionCallback cb,
-             maho_settings::mojom::SyncStatusPtr status) {
-            std::move(cb).Run(std::move(status));
-          },
-          std::move(callback)));
+      std::move(callback));
 }
 
 void MahoSettingsPageHandler::JoinSync(const std::string& recovery_phrase,
                                        JoinSyncCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  RunRecoveryPhraseSync(
+      recovery_phrase,
+      base::BindOnce(&JoinSyncOnCoreSequence, recovery_phrase),
+      std::move(callback));
+}
+
+void MahoSettingsPageHandler::EnableClientHeldKeys(
+    EnableClientHeldKeysCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!encryptor_ || maho::auth::GetRelayAccessToken(prefs_, *encryptor_)
+                         .empty()) {
+    auto result = maho_settings::mojom::ClientHeldKeysResult::New();
+    result->error_message = "Sign in to Maho before holding your own keys.";
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+  // If this device already switched locally (e.g. an earlier relay POST
+  // failed), only re-POST the current room id; never rotate keys again.
   maho::PostCoreTask(
-      FROM_HERE, base::BindOnce(&JoinSyncOnCoreSequence, recovery_phrase),
+      FROM_HERE, base::BindOnce(&GetKeyModeAndRoomOnCoreSequence),
       base::BindOnce(
-          [](JoinSyncCallback cb, maho_settings::mojom::SyncStatusPtr status) {
-            std::move(cb).Run(std::move(status));
+          [](base::WeakPtr<MahoSettingsPageHandler> self,
+             EnableClientHeldKeysCallback cb, CoreKeyModeAndRoom current) {
+            if (!self) {
+              return;
+            }
+            if (current.key_mode == acct::kSyncKeyModeClientHeld) {
+              std::string room = self->prefs_->GetString(
+                  acct::kRelaySyncClientHeldRelayPendingRoomId);
+              if (room.empty()) {
+                room = current.room_id;
+              }
+              self->RetryClientHeldRelaySwitch(std::move(cb), std::move(room));
+              return;
+            }
+            maho::PostCoreTask(
+                FROM_HERE, base::BindOnce(&EnableClientHeldKeysOnCoreSequence),
+                base::BindOnce(
+                    &MahoSettingsPageHandler::OnClientHeldKeysEnabledInCore,
+                    self, std::move(cb)));
           },
-          std::move(callback)));
+          weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void MahoSettingsPageHandler::RetryClientHeldRelaySwitch(
+    EnableClientHeldKeysCallback callback,
+    std::string room_id) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto result = maho_settings::mojom::ClientHeldKeysResult::New();
+  if (room_id.empty()) {
+    result->error_message =
+        "This device holds its own keys but has no Sync room to report. "
+        "Join Sync with your recovery phrase first.";
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+  // The phrase is shown once, at switch time; a retry only re-reports the
+  // room, so recovery_phrase stays empty.
+  result->room_id = std::move(room_id);
+  PostClientHeldSwitchToRelay(std::move(callback), std::move(result));
+}
+
+void MahoSettingsPageHandler::PostClientHeldSwitchToRelay(
+    EnableClientHeldKeysCallback callback,
+    maho_settings::mojom::ClientHeldKeysResultPtr result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // Pending until the relay confirms; cleared on success below.
+  prefs_->SetString(acct::kRelaySyncClientHeldRelayPendingRoomId,
+                    result->room_id);
+  const std::string access_token =
+      encryptor_ ? maho::auth::GetRelayAccessToken(prefs_, *encryptor_)
+                 : std::string();
+  const std::string room_id = result->room_id;
+  auto url_loader_factory = profile_->GetDefaultStoragePartition()
+                                ->GetURLLoaderFactoryForBrowserProcess();
+  maho::auth::PostClientHeldSyncBootstrap(
+      url_loader_factory, access_token, room_id,
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> self,
+             EnableClientHeldKeysCallback cb,
+             maho_settings::mojom::ClientHeldKeysResultPtr partial, bool ok,
+             int http_status, const std::string& error) {
+            partial->success = ok;
+            if (ok) {
+              if (self) {
+                self->prefs_->ClearPref(
+                    acct::kRelaySyncClientHeldRelayPendingRoomId);
+              }
+            } else {
+              partial->error_message =
+                  "This device now uses your own keys, but the Sync relay "
+                  "was not updated (" +
+                  (error.empty() ? std::string("HTTP ") +
+                                       base::NumberToString(http_status)
+                                 : error) +
+                  "). Keep your recovery phrase and use \"Retry relay "
+                  "update\".";
+            }
+            std::move(cb).Run(std::move(partial));
+          },
+          weak_factory_.GetWeakPtr(), std::move(callback), std::move(result)));
+}
+
+void MahoSettingsPageHandler::OnClientHeldKeysEnabledInCore(
+    EnableClientHeldKeysCallback callback,
+    std::string json) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  auto result = maho_settings::mojom::ClientHeldKeysResult::New();
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  const base::DictValue* dict =
+      parsed && parsed->is_dict() ? &parsed->GetDict() : nullptr;
+  const std::string* phrase =
+      dict ? dict->FindString("recoveryPhrase") : nullptr;
+  const std::string* room_id = dict ? dict->FindString("roomId") : nullptr;
+  if (!dict || !dict->FindBool("success").value_or(false) || !phrase ||
+      !room_id || phrase->empty() || room_id->empty()) {
+    const std::string* error = dict ? dict->FindString("error") : nullptr;
+    result->error_message =
+        error && !error->empty()
+            ? "Could not switch to your own keys: " + *error +
+                  ". Sync keeps working as before."
+            : "Could not switch to your own keys. Sync keeps working as "
+              "before.";
+    std::move(callback).Run(std::move(result));
+    return;
+  }
+  // Core already moved to the new room; record it now so this device treats
+  // the account as client-held even if the relay step below fails.
+  result->recovery_phrase = *phrase;
+  result->room_id = *room_id;
+  maho::auth::RecordSyncKeyMode(prefs_, acct::kSyncKeyModeClientHeld,
+                                *room_id);
+  maho::auth::ClearRetiredSyncRoom(prefs_);
+  PostClientHeldSwitchToRelay(std::move(callback), std::move(result));
 }
 
 void MahoSettingsPageHandler::StopSync() {
@@ -6104,6 +6405,10 @@ void MahoSettingsPageHandler::FileSelected(const ui::SelectedFileInfo& file,
     OnSelectedProfileDownloadDirectoryChosen(file.file_path);
     return;
   }
+  if (data_export_select_file_dialog_) {
+    OnDataExportPathChosen(file.path());
+    return;
+  }
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   password_import_select_file_dialog_.reset();
   if (password_import_file_callback_.is_null()) {
@@ -6117,6 +6422,10 @@ void MahoSettingsPageHandler::FileSelected(const ui::SelectedFileInfo& file,
 void MahoSettingsPageHandler::FileSelectionCanceled() {
   if (download_directory_select_callback_) {
     OnSelectedProfileDownloadDirectoryChosen(base::FilePath());
+    return;
+  }
+  if (data_export_select_file_dialog_) {
+    OnDataExportPathChosen(base::FilePath());
     return;
   }
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -6304,6 +6613,120 @@ void MahoSettingsPageHandler::GetContentBlockerStats(
   std::move(callback).Run(BuildCurrentContentBlockerStats());
 }
 
+void MahoSettingsPageHandler::GetAgentActionJournal(
+    const std::string& actor,
+    const std::string& action,
+    const std::string& query,
+    GetAgentActionJournalCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  std::vector<maho_settings::mojom::AgentActionJournalEntryPtr> entries;
+  MahoCore* core = maho::GetCore();
+  // The journal never records incognito activity; never surface it there.
+  if (!core || !profile_ || profile_->IsOffTheRecord()) {
+    std::move(callback).Run(std::move(entries));
+    return;
+  }
+  char* json = maho_agent_action_journal_list(core, actor.c_str(),
+                                              action.c_str(), query.c_str(),
+                                              /*limit=*/200);
+  if (!json) {
+    std::move(callback).Run(std::move(entries));
+    return;
+  }
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  maho_string_free(json);
+  if (parsed && parsed->is_list()) {
+    for (const base::Value& row : parsed->GetList()) {
+      const base::DictValue* dict = row.GetIfDict();
+      if (!dict) {
+        continue;
+      }
+      auto entry = maho_settings::mojom::AgentActionJournalEntry::New();
+      entry->id = static_cast<int64_t>(dict->FindDouble("id").value_or(0));
+      entry->timestamp =
+          static_cast<int64_t>(dict->FindDouble("ts").value_or(0));
+      auto str = [dict](std::string_view key) {
+        const std::string* value = dict->FindString(key);
+        return value ? *value : std::string();
+      };
+      entry->session_id = str("sessionId");
+      entry->actor = str("actor");
+      entry->action = str("action");
+      entry->origin = str("origin");
+      entry->summary = str("summary");
+      entry->outcome = str("outcome");
+      entries.push_back(std::move(entry));
+    }
+  }
+  std::move(callback).Run(std::move(entries));
+}
+
+void MahoSettingsPageHandler::ClearAgentActionJournal(
+    ClearAgentActionJournalCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  MahoCore* core = maho::GetCore();
+  if (!core || !profile_ || profile_->IsOffTheRecord()) {
+    std::move(callback).Run(false);
+    return;
+  }
+  std::move(callback).Run(maho_agent_action_journal_clear(core) >= 0);
+}
+
+void MahoSettingsPageHandler::ListQueuedAgentMail(
+    ListQueuedAgentMailCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      profile_ && !profile_->IsOffTheRecord()
+          ? maho::MahoMailServiceFactory::GetForProfile(profile_)
+          : nullptr;
+  if (!service) {
+    std::move(callback).Run(false, "[]");
+    return;
+  }
+  service->CallBackend(
+      "ListAgentSendQueue", "{}",
+      base::BindOnce(
+          [](ListQueuedAgentMailCallback cb, bool ok, std::string json) {
+            std::move(cb).Run(ok, ok ? std::move(json) : std::string("[]"));
+          },
+          std::move(callback)));
+}
+
+void MahoSettingsPageHandler::CancelQueuedAgentMail(
+    const std::string& id,
+    CancelQueuedAgentMailCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  maho::MahoMailService* service =
+      profile_ && !profile_->IsOffTheRecord() && !id.empty()
+          ? maho::MahoMailServiceFactory::GetForProfile(profile_)
+          : nullptr;
+  if (!service) {
+    std::move(callback).Run(false);
+    return;
+  }
+  base::DictValue args;
+  args.Set("id", id);
+  std::string args_json;
+  base::JSONWriter::Write(args, &args_json);
+  service->CallBackend(
+      "CancelAgentSend", args_json,
+      base::BindOnce(
+          [](CancelQueuedAgentMailCallback cb, bool ok, std::string json) {
+            bool cancelled = false;
+            if (ok) {
+              std::optional<base::Value> parsed =
+                  base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+              if (parsed && parsed->is_dict()) {
+                cancelled =
+                    parsed->GetDict().FindBool("cancelled").value_or(false);
+              }
+            }
+            std::move(cb).Run(cancelled);
+          },
+          std::move(callback)));
+}
+
 void MahoSettingsPageHandler::SetContentBlockingMode(
     maho_settings::mojom::ContentBlockingMode mode,
     SetContentBlockingModeCallback callback) {
@@ -6432,6 +6855,231 @@ void MahoSettingsPageHandler::OpenMigrationDialog() {
                      weak_factory_.GetWeakPtr()));
 }
 
+namespace {
+
+const char* DataExportKindToCoreKind(maho_settings::mojom::DataExportKind kind) {
+  switch (kind) {
+    case maho_settings::mojom::DataExportKind::kBookmarks:
+      return "bookmarks";
+    case maho_settings::mojom::DataExportKind::kHistory:
+      return "history";
+    case maho_settings::mojom::DataExportKind::kPasswords:
+      return "passwords";
+    case maho_settings::mojom::DataExportKind::kConversations:
+      return "conversations";
+    case maho_settings::mojom::DataExportKind::kSpaces:
+      return "spaces";
+    case maho_settings::mojom::DataExportKind::kFullBackup:
+      return "full_backup";
+  }
+  return "";
+}
+
+struct DataExportFileSpec {
+  const base::FilePath::CharType* default_name;
+  const base::FilePath::CharType* extension;
+  const char16_t* description;
+};
+
+DataExportFileSpec DataExportFileSpecFor(
+    maho_settings::mojom::DataExportKind kind) {
+  switch (kind) {
+    case maho_settings::mojom::DataExportKind::kBookmarks:
+      return {FILE_PATH_LITERAL("maho-bookmarks.html"),
+              FILE_PATH_LITERAL("html"), u"Bookmarks HTML (.html)"};
+    case maho_settings::mojom::DataExportKind::kHistory:
+      return {FILE_PATH_LITERAL("maho-history.csv"), FILE_PATH_LITERAL("csv"),
+              u"History CSV (.csv)"};
+    case maho_settings::mojom::DataExportKind::kPasswords:
+      return {FILE_PATH_LITERAL("maho-passwords.csv"), FILE_PATH_LITERAL("csv"),
+              u"Passwords CSV (.csv)"};
+    case maho_settings::mojom::DataExportKind::kConversations:
+      return {FILE_PATH_LITERAL("maho-conversations.json"),
+              FILE_PATH_LITERAL("json"), u"AI conversations JSON (.json)"};
+    case maho_settings::mojom::DataExportKind::kSpaces:
+      return {FILE_PATH_LITERAL("maho-spaces.json"), FILE_PATH_LITERAL("json"),
+              u"Spaces JSON (.json)"};
+    case maho_settings::mojom::DataExportKind::kFullBackup:
+      return {FILE_PATH_LITERAL("maho-backup.json"), FILE_PATH_LITERAL("json"),
+              u"Maho backup JSON (.json)"};
+  }
+  return {FILE_PATH_LITERAL("maho-export"), FILE_PATH_LITERAL(""), u"Export"};
+}
+
+// Parses `{"ok":true}` / `{"ok":false,"error":"code"}` from the export FFI
+// and frees `raw`. Returns the empty string on success.
+std::string TakeDataExportStatus(char* raw) {
+  if (!raw) {
+    return "core_unavailable";
+  }
+  const std::string json(raw);
+  maho_string_free(raw);
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(json, base::JSON_PARSE_RFC);
+  if (!parsed || !parsed->is_dict()) {
+    return "core_unavailable";
+  }
+  if (parsed->GetDict().FindBool("ok").value_or(false)) {
+    return std::string();
+  }
+  const std::string* error = parsed->GetDict().FindString("error");
+  return error && !error->empty() ? *error : "export_failed";
+}
+
+std::string WriteDataExportOnCoreSequence(std::string kind,
+                                          base::FilePath path) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return "core_unavailable";
+  }
+  return TakeDataExportStatus(maho_core_export_data_to_path(
+      core, kind.c_str(), path.AsUTF8Unsafe().c_str()));
+}
+
+std::string AuthorizePasswordExportOnCoreSequence(
+    std::optional<std::string> passphrase) {
+  MahoCore* core = maho::GetCore();
+  if (!core) {
+    return "core_unavailable";
+  }
+  std::string status = TakeDataExportStatus(
+      maho_core_authorize_password_export_with_passphrase(
+          core, passphrase ? passphrase->c_str() : nullptr));
+  if (passphrase) {
+    std::fill(passphrase->begin(), passphrase->end(), '\0');
+  }
+  return status;
+}
+
+}  // namespace
+
+void MahoSettingsPageHandler::ExportData(
+    maho_settings::mojom::DataExportKind kind,
+    const std::optional<std::string>& passphrase,
+    ExportDataCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (data_export_callback_ || data_export_select_file_dialog_) {
+    std::move(callback).Run(false, std::string(), "export_in_progress");
+    return;
+  }
+  data_export_kind_ = kind;
+  data_export_callback_ = std::move(callback);
+  if (kind != maho_settings::mojom::DataExportKind::kPasswords) {
+    ShowDataExportSaveDialog();
+    return;
+  }
+
+  if (!maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    FinishDataExport(false, std::string(), "profile_not_allowed");
+    return;
+  }
+  if (maho::IsVaultLockedForUi()) {
+    FinishDataExport(false, std::string(), "vault_locked");
+    return;
+  }
+  // Escrow unlock is zero-input, so an unlocked Vault is not proof of
+  // presence: password export always needs a fresh OS authentication. Where
+  // no OS authenticator exists (Linux) the Vault passphrase stands in, and an
+  // escrow-only Vault (no passphrase) is refused with os_auth_unavailable.
+  device_reauth::DeviceAuthParams params(
+      base::Seconds(0), device_reauth::DeviceAuthSource::kPasswordManager,
+      "PasswordManager.ReauthToAccessPasswordInSettings");
+  data_export_authenticator_ = ChromeDeviceAuthenticatorFactory::GetForProfile(
+      profile_, GetSettingsNativeWindow(profile_), params);
+  if (data_export_authenticator_ &&
+      data_export_authenticator_->CanAuthenticateWithBiometricOrScreenLock()) {
+    data_export_authenticator_->AuthenticateWithMessage(
+        u"Export saved passwords",
+        base::BindOnce(
+            [](base::WeakPtr<MahoSettingsPageHandler> handler,
+               bool authenticated) {
+              if (!handler) {
+                return;
+              }
+              handler->data_export_authenticator_.reset();
+              handler->OnDataExportAuthorized(
+                  authenticated ? std::string() : "reauth_failed");
+            },
+            weak_factory_.GetWeakPtr()));
+    return;
+  }
+  data_export_authenticator_.reset();
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&AuthorizePasswordExportOnCoreSequence, passphrase),
+      base::BindOnce(&MahoSettingsPageHandler::OnDataExportAuthorized,
+                     weak_factory_.GetWeakPtr()));
+}
+
+void MahoSettingsPageHandler::OnDataExportAuthorized(
+    const std::string& error_code) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!data_export_callback_) {
+    return;
+  }
+  if (!error_code.empty()) {
+    FinishDataExport(false, std::string(), error_code);
+    return;
+  }
+  if (maho::IsVaultLockedForUi() ||
+      !maho::IsPasswordManagerAllowedForProfile(profile_)) {
+    FinishDataExport(false, std::string(), "vault_locked");
+    return;
+  }
+  ShowDataExportSaveDialog();
+}
+
+void MahoSettingsPageHandler::ShowDataExportSaveDialog() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  const DataExportFileSpec spec = DataExportFileSpecFor(data_export_kind_);
+  ui::SelectFileDialog::FileTypeInfo file_type_info;
+  file_type_info.extensions.push_back({spec.extension});
+  file_type_info.extension_description_overrides.push_back(spec.description);
+  const base::FilePath default_dir =
+      profile_->GetPrefs()->GetFilePath(prefs::kDownloadDefaultDirectory);
+  data_export_select_file_dialog_ = ui::SelectFileDialog::Create(this, nullptr);
+  data_export_select_file_dialog_->SelectFile(
+      ui::SelectFileDialog::SELECT_SAVEAS_FILE, u"Export data",
+      default_dir.Append(spec.default_name), &file_type_info, 1,
+      spec.extension, GetSettingsNativeWindow(profile_));
+}
+
+void MahoSettingsPageHandler::OnDataExportPathChosen(
+    const base::FilePath& path) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  data_export_select_file_dialog_.reset();
+  if (path.empty()) {
+    FinishDataExport(false, std::string(), "canceled");
+    return;
+  }
+  maho::PostCoreTask(
+      FROM_HERE,
+      base::BindOnce(&WriteDataExportOnCoreSequence,
+                     std::string(DataExportKindToCoreKind(data_export_kind_)),
+                     path),
+      base::BindOnce(
+          [](base::WeakPtr<MahoSettingsPageHandler> handler,
+             base::FilePath path, std::string error_code) {
+            if (handler) {
+              handler->FinishDataExport(error_code.empty(),
+                                        error_code.empty()
+                                            ? path.AsUTF8Unsafe()
+                                            : std::string(),
+                                        error_code);
+            }
+          },
+          weak_factory_.GetWeakPtr(), path));
+}
+
+void MahoSettingsPageHandler::FinishDataExport(bool success,
+                                               const std::string& path,
+                                               const std::string& error_code) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (data_export_callback_) {
+    std::move(data_export_callback_).Run(success, path, error_code);
+  }
+}
+
 void MahoSettingsPageHandler::OnOpenMigrationDialogBrowsersDetected(
     std::vector<maho::DetectedBrowser> browsers) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -6493,11 +7141,15 @@ void MahoSettingsPageHandler::SetBYOKKey(const std::string& provider,
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, encrypted_b64);
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+    // Mirror into maho_core so a validated key unlocks BYOK agent features.
+    maho::ai_oauth::SyncByokKeyToCore(provider, key);
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, encrypted_b64);
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
+    // Mirror into maho_core so a validated key unlocks BYOK agent features.
+    maho::ai_oauth::SyncByokKeyToCore(provider, key);
     std::move(callback).Run(true);
   } else if (provider == "openai-compatible" || provider == "custom") {
     prefs_->SetString(maho::ai_prefs::kByokOpenAICompatibleEncryptedB64, encrypted_b64);
@@ -6598,12 +7250,14 @@ void MahoSettingsPageHandler::ClearBYOKKey(const std::string& provider,
     prefs_->SetString(ai::kByokOpenAIEncryptedB64, "");
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
+    maho::ai_oauth::SyncByokKeyToCore(provider, std::string());
     MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
   } else if (provider == "anthropic") {
     prefs_->SetString(ai::kByokAnthropicEncryptedB64, "");
     prefs_->CommitPendingWrite();
     MahoUnifiedAgentAdapter::ClearActiveBYOKKeys(provider);
+    maho::ai_oauth::SyncByokKeyToCore(provider, std::string());
     MahoUnifiedAgentAdapter::NotifyAISettingsChanged(prefs_);
     std::move(callback).Run(true);
   } else if (provider == "openai-compatible" || provider == "custom") {

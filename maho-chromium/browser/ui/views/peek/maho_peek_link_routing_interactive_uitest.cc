@@ -12,7 +12,7 @@
 
 // These desktop fixtures use CreateBrowserWindow, whose non-Android factory
 // creates Browser instances. Borrowing the concrete pointer does not own it.
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"

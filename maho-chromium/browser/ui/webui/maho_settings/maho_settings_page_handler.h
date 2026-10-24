@@ -637,6 +637,7 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
       ConfigureSyncEncryptionCallback callback) override;
   void JoinSync(const std::string& recovery_phrase,
                 JoinSyncCallback callback) override;
+  void EnableClientHeldKeys(EnableClientHeldKeysCallback callback) override;
   void StopSync() override;
   void DisconnectSyncDevice(const std::string& device_id,
                             DisconnectSyncDeviceCallback callback) override;
@@ -795,6 +796,15 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
                         RemoveFilterListCallback callback) override;
   void RebuildContentRules(RebuildContentRulesCallback callback) override;
   void GetContentBlockerStats(GetContentBlockerStatsCallback callback) override;
+  void GetAgentActionJournal(const std::string& actor,
+                             const std::string& action,
+                             const std::string& query,
+                             GetAgentActionJournalCallback callback) override;
+  void ClearAgentActionJournal(
+      ClearAgentActionJournalCallback callback) override;
+  void ListQueuedAgentMail(ListQueuedAgentMailCallback callback) override;
+  void CancelQueuedAgentMail(const std::string& id,
+                             CancelQueuedAgentMailCallback callback) override;
   void SetContentBlockingMode(maho_settings::mojom::ContentBlockingMode mode,
                               SetContentBlockingModeCallback callback) override;
   void TriggerFilterUpdate(const std::optional<std::string>& list_id,
@@ -803,6 +813,9 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void OpenExtensionsPage() override;
   void OpenChromiumSettingsPage() override;
   void OpenMigrationDialog() override;
+  void ExportData(maho_settings::mojom::DataExportKind kind,
+                  const std::optional<std::string>& passphrase,
+                  ExportDataCallback callback) override;
 
   void SetBYOKKey(const std::string& provider,
                   const std::string& key,
@@ -1051,6 +1064,31 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   void OnRelayLoginCompleted(LoginCallback callback,
                              bool ok,
                              const std::string& error_message);
+  // Adds the profile-pref view of Sync key custody (key_mode, room_retired)
+  // to a core-built status.
+  maho_settings::mojom::SyncStatusPtr DecorateSyncStatus(
+      maho_settings::mojom::SyncStatusPtr status);
+  // Runs a recovery-phrase join/configure: for a client-held account a phrase
+  // that does not derive the account's room is refused before core starts a
+  // new room; a successful join clears the room_retired banner.
+  void RunRecoveryPhraseSync(
+      const std::string& recovery_phrase,
+      base::OnceCallback<maho_settings::mojom::SyncStatusPtr()> core_task,
+      base::OnceCallback<void(maho_settings::mojom::SyncStatusPtr)> callback);
+  void RunRecoveryPhraseSyncChecked(
+      const std::string& recovery_phrase,
+      base::OnceCallback<maho_settings::mojom::SyncStatusPtr()> core_task,
+      base::OnceCallback<void(maho_settings::mojom::SyncStatusPtr)> callback);
+  void OnClientHeldKeysEnabledInCore(EnableClientHeldKeysCallback callback,
+                                     std::string json);
+  // Core already holds client-held keys: re-POST `room_id` to the relay.
+  void RetryClientHeldRelaySwitch(EnableClientHeldKeysCallback callback,
+                                  std::string room_id);
+  // POSTs `result->room_id` to /sync/bootstrap/client-held, keeping the
+  // relay-pending pref in step with the outcome.
+  void PostClientHeldSwitchToRelay(
+      EnableClientHeldKeysCallback callback,
+      maho_settings::mojom::ClientHeldKeysResultPtr result);
   void OnProfileCreatedInCore(
       CreateProfileCallback callback,
       maho_settings::mojom::ProfileInfoPtr profile);
@@ -1161,6 +1199,19 @@ class MahoSettingsPageHandler : public maho_settings::mojom::PageHandler,
   scoped_refptr<ui::SelectFileDialog> password_import_select_file_dialog_;
   SelectPasswordImportFileCallback password_import_file_callback_;
   scoped_refptr<ui::SelectFileDialog> download_directory_select_file_dialog_;
+  // GAP-5 data export: one export flow at a time (reauth -> save dialog ->
+  // core write). `data_export_callback_` is non-null while a flow is pending.
+  void FinishDataExport(bool success,
+                        const std::string& path,
+                        const std::string& error_code);
+  void OnDataExportAuthorized(const std::string& error_code);
+  void ShowDataExportSaveDialog();
+  void OnDataExportPathChosen(const base::FilePath& path);
+  maho_settings::mojom::DataExportKind data_export_kind_ =
+      maho_settings::mojom::DataExportKind::kBookmarks;
+  ExportDataCallback data_export_callback_;
+  scoped_refptr<ui::SelectFileDialog> data_export_select_file_dialog_;
+  std::unique_ptr<device_reauth::DeviceAuthenticator> data_export_authenticator_;
   SelectSelectedProfileDownloadDirectoryCallback
       download_directory_select_callback_;
   std::string download_directory_profile_id_;

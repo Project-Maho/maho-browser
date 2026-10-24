@@ -63,7 +63,7 @@ export class PageHandlerRemote {
   signupFromWelcome(email: string, password: string, displayName: string): Promise<{ok: boolean, errorMessage: string}>;
   loginFromWelcome(email: string, password: string): Promise<{ok: boolean, errorMessage: string}>;
   signInWithGoogleFromWelcome(): Promise<{ok: boolean, errorMessage: string}>;
-  getRelayAccountStatusFromWelcome(): Promise<{signedIn: boolean, tier: string, subscriptionStatus: string, welcomeCompleted: boolean, hasStoredSession: boolean, isLocalDev: boolean}>;
+  getRelayAccountStatusFromWelcome(): Promise<{signedIn: boolean, tier: string, subscriptionStatus: string, welcomeCompleted: boolean, hasStoredSession: boolean, isLocalDev: boolean, syncKeyMode: string}>;
   getPasswordProviderOptions(): Promise<{options: PasswordProviderOption[]}>;
   getPasswordProviderStatus(): Promise<{status: PasswordProviderStatus}>;
   setPasswordProvider(provider: PasswordProviderKind): Promise<{success: boolean}>;
@@ -75,6 +75,7 @@ export class PageHandlerRemote {
   generateSyncKey(): Promise<{syncKey: string, roomId: string, recoveryPhrase: string}>;
   saveSyncKeyBackup(content: string): Promise<{saved: boolean, errorMessage: string}>;
   startSync(roomId: string, recoveryPhrase: string): Promise<{ok: boolean, errorMessage: string}>;
+  joinSyncWithRecoveryPhrase(recoveryPhrase: string): Promise<{ok: boolean, errorMessage: string}>;
   mailListAccounts(): Promise<{ok: boolean, resultJson: string}>;
   mailAddAccount(requestJson: string): Promise<{ok: boolean, resultJson: string}>;
   mailTestConnection(paramsJson: string): Promise<{ok: boolean, resultJson: string}>;
@@ -86,6 +87,7 @@ export class PageHandlerRemote {
   getByokCredentialConfigured(): Promise<{configured: boolean}>;
   openByokSettingsDialog(): Promise<{configured: boolean}>;
   getSubscriptionCheckoutUrl(tier: string): Promise<{checkoutUrl: string}>;
+  setLocalOnlyMode(): Promise<{ok: boolean}>;
   finishOnboarding(): void;
   devSkipOnboarding(): void;
 }

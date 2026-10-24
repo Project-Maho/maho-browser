@@ -17,10 +17,12 @@ export function ShortcutsSearchBar({value, onChange}: ShortcutsSearchBarProps) {
       />
       {value && (
         <button
+          type="button"
+          aria-label="Clear search"
           onClick={() => onChange('')}
           className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground text-xs"
         >
-          ✕
+          <span aria-hidden="true">✕</span>
         </button>
       )}
     </div>

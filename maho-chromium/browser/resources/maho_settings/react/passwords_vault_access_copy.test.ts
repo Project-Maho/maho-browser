@@ -27,3 +27,22 @@ describe('Vault access copy', () => {
     expect(copy.description).toContain('unlocks when you sign in');
   });
 });
+
+describe('Vault access copy while signed out', () => {
+  it('offers sign-in for an account-escrowed Vault with no seed in memory', () => {
+    const copy = getVaultAccessCopy(VaultLockState.kLocked, true);
+    expect(copy.mode).toBe('sign-in');
+    expect(copy.signInActionLabel).toBe('Sign in to unlock your vault');
+    expect(copy.title).toBe('Unlock Maho Vault');
+  });
+
+  it('keeps setup copy for an uninitialized Vault even when signed out', () => {
+    expect(getVaultAccessCopy(VaultLockState.kUninitialized, true).mode)
+        .toBe('initialize');
+  });
+
+  it('omits the sign-in action while the account seed is present', () => {
+    expect(getVaultAccessCopy(VaultLockState.kLocked, false).signInActionLabel)
+        .toBeUndefined();
+  });
+});

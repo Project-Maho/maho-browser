@@ -50,6 +50,8 @@ const mockHandlerInstance = vi.hoisted(() => ({
   openByokSettingsDialog: vi.fn().mockResolvedValue({configured: false}),
   saveSyncKeyBackup: vi.fn(),
   generateSyncKey: vi.fn(),
+  startSync: vi.fn(),
+  joinSyncWithRecoveryPhrase: vi.fn(),
   setPasswordProvider: vi.fn(),
   getSubscriptionCheckoutUrl: vi.fn(),
   finishOnboarding: vi.fn(),
@@ -852,6 +854,80 @@ describe('MahoWelcomeStore', () => {
     await store.skipPasswordSetup();
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
     expect(store.getSnapshot().passwordSetup.passwordManagerSkipped).toBe(true);
+  });
+
+  describe('client-held account on a new device', () => {
+    const PHRASE = Array.from({length: 24}, (_, i) => `word${i + 1}`).join(' ');
+
+    async function signInToClientHeldAccount() {
+      const store = new MahoWelcomeStore();
+      store.setAuthEmail('client-held@example.test');
+      store.setAuthPassword('test-only-password');
+      mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+        signedIn: true, tier: 'free', subscriptionStatus: '',
+        welcomeCompleted: false, hasStoredSession: true, isLocalDev: false,
+        syncKeyMode: 'client_held',
+      });
+      expect(await store.submitSignIn()).toBe(true);
+      (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void})
+          .patch(draft => {
+            draft.currentPage = WelcomePage.PasswordSetup;
+          });
+      await store.skipPasswordSetup();
+      return store;
+    }
+
+    it('routes to recovery-phrase entry and joins with the phrase', async () => {
+      const store = await signInToClientHeldAccount();
+      expect(store.getSnapshot().syncKeyMode).toBe('client_held');
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+
+      // No auto-bootstrap: neither a new key nor the generated-key start path.
+      expect(await store.generateSyncKey()).toBeNull();
+      expect(await store.startSync()).toBe(false);
+      expect(mockHandlerInstance.generateSyncKey).not.toHaveBeenCalled();
+      expect(mockHandlerInstance.startSync).not.toHaveBeenCalled();
+
+      mockHandlerInstance.joinSyncWithRecoveryPhrase.mockResolvedValueOnce(
+          {ok: true, errorMessage: ''});
+      expect(await store.joinSyncWithRecoveryPhrase(`  ${PHRASE}\n`)).toBe(true);
+      expect(mockHandlerInstance.joinSyncWithRecoveryPhrase).toHaveBeenCalledWith(PHRASE);
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+      expect(store.getSnapshot().syncKeyBackup.errorMessage).toBe('');
+    });
+
+    it('shows an error for a wrong phrase and creates no new room', async () => {
+      const store = await signInToClientHeldAccount();
+
+      mockHandlerInstance.joinSyncWithRecoveryPhrase.mockResolvedValueOnce({
+        ok: false,
+        errorMessage: 'That recovery phrase belongs to a different Sync account.',
+      });
+      expect(await store.joinSyncWithRecoveryPhrase(PHRASE)).toBe(false);
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.SyncKeyBackup);
+      expect(store.getSnapshot().syncKeyBackup.status).toBe('error');
+      expect(store.getSnapshot().syncKeyBackup.errorMessage)
+          .toBe('That recovery phrase belongs to a different Sync account.');
+
+      // A phrase that is not 24 words never reaches the native side.
+      expect(await store.joinSyncWithRecoveryPhrase('too short')).toBe(false);
+      expect(mockHandlerInstance.joinSyncWithRecoveryPhrase).toHaveBeenCalledTimes(1);
+      expect(store.getSnapshot().syncKeyBackup.errorMessage)
+          .toBe('Enter all 24 words of your recovery phrase.');
+
+      // Nothing generated or started a fresh room.
+      expect(mockHandlerInstance.generateSyncKey).not.toHaveBeenCalled();
+      expect(mockHandlerInstance.startSync).not.toHaveBeenCalled();
+    });
+
+    it('keeps the generated-key flow for escrow accounts', async () => {
+      const store = new MahoWelcomeStore();
+      mockHandlerInstance.generateSyncKey.mockResolvedValueOnce(
+          {syncKey: 'k', roomId: 'r', recoveryPhrase: PHRASE});
+      expect(await store.generateSyncKey()).toEqual(
+          {syncKey: 'k', roomId: 'r', recoveryPhrase: PHRASE});
+      expect(store.getSnapshot().syncKeyMode).toBe('escrow');
+    });
   });
 
   it('does not open checkout when the generated subscription URL is empty', async () => {

@@ -27,6 +27,7 @@ export type {
   AutofillAddress,
   AutofillPayment,
   BrowserVersionInfo,
+  ClientHeldKeysResult,
   ContentBlockerStats,
   MailBehaviorSnapshot,
   MailBehaviorUpdateResult,

@@ -10,7 +10,7 @@ import {TOTAL_PAGES, WelcomePage} from '../types.js';
 const REACT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 describe('PasswordSetup isolated frontend contract', () => {
-  it('is page 8 followed by SyncKeyBackup, with eight user-facing progress steps (ImportProgress excluded)', () => {
+  it('is page 8 followed by SyncKeyBackup, with flow-dependent progress steps (ImportProgress excluded)', () => {
     const source = readFileSync(path.join(REACT_DIR, 'app.tsx'), 'utf8');
 
     expect(WelcomePage.PasswordSetup).toBe(8);
@@ -19,9 +19,9 @@ describe('PasswordSetup isolated frontend contract', () => {
     expect(TOTAL_PAGES).toBe(12);
     expect(WelcomePage.PasswordSetup + 1).toBe(WelcomePage.SyncKeyBackup);
     expect(WelcomePage.SyncKeyBackup + 1).toBe(WelcomePage.Completion);
-    expect(source).toContain('const WIZARD_STEP_PAGES: readonly WelcomePage[] = [');
-    expect(source).toContain('const WIZARD_STEPS = WIZARD_STEP_PAGES.length;');
-    expect(source).toContain('const currentStep = WIZARD_STEP_PAGES.indexOf(stepIndicatorPage);');
+    expect(source).toContain('const CORE_WIZARD_STEP_PAGES: readonly WelcomePage[] = [');
+    expect(source).toContain('const currentStep = wizardStepPages.indexOf(stepIndicatorPage);');
+    expect(source).toContain('total={wizardStepPages.length}');
     expect(source).not.toContain('WelcomePage.ImportProgress,\n  WelcomePage.SearchEngine');
     expect(source).toContain(
         'aria-label={`Setup progress: step ${current + 1} of ${total}`}');
@@ -37,7 +37,7 @@ describe('PasswordSetup isolated frontend contract', () => {
     expect(source).toContain('state.currentPage === WelcomePage.PasswordSetup ||');
     expect(source).toContain('state.currentPage === WelcomePage.SyncKeyBackup) return;');
     expect(source).toContain('!isPasswordSetupPage && !isSyncKeyBackupPage && !isCompletionPage');
-    expect(source).toContain('{!isPasswordSetupPage ? (');
+    expect(source).toContain('{!isPasswordSetupPage && !isImportProgressPage ? (');
   });
 
   it('keeps cards scrollable and the CTA fixed without clipping on mobile', () => {

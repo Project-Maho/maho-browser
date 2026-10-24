@@ -171,6 +171,8 @@ class MahoCommandOverlayView : public views::View,
   void MaybeApplyInlineAutocomplete();
   void ActivateResultAtIndex(int index);
   void ActivateSelected();
+  // True when Ask Maho is the palette action and the field holds a question.
+  bool HasAskMahoQuery() const;
   void ActivateFirstNavigation();
   void NavigateTypedText();
   WindowOpenDisposition DispositionForMode() const;

@@ -291,6 +291,26 @@ struct SyncStatus {
   string status_label;
   string error_message;
   int64 last_sync_timestamp;
+  // "client_held" when this account holds its own Sync keys (the relay keeps
+  // no seed), "escrow" otherwise.
+  string key_mode;
+  // The relay retired this device's room (410 room_retired): another device
+  // switched the account to client-held keys. The user must re-join with the
+  // 24-word recovery phrase.
+  bool room_retired;
+  // This device switched to client-held keys but the relay was not told yet
+  // (POST /sync/bootstrap/client-held failed). EnableClientHeldKeys retries.
+  bool relay_switch_pending;
+};
+
+// Result of Settings > Sync "Hold my own keys". `recovery_phrase` is set
+// whenever this device switched locally, even if the relay step failed, so
+// the phrase is never lost; `success` means the relay switch also landed.
+struct ClientHeldKeysResult {
+  bool success;
+  string recovery_phrase;
+  string room_id;
+  string error_message;
 };
 
 struct SyncDeviceInfo {
@@ -388,6 +408,17 @@ struct VaultItem {
 enum SecretAction {
   kCopy = 0,
   kReveal = 1,
+};
+
+// User-data export formats (GAP-5). kPasswords requires OS re-authentication
+// (Touch ID / Windows Hello); on Linux it requires the Vault passphrase.
+enum DataExportKind {
+  kBookmarks = 0,
+  kHistory = 1,
+  kPasswords = 2,
+  kConversations = 3,
+  kSpaces = 4,
+  kFullBackup = 5,
 };
 
 struct VaultTotpCodeResult {
@@ -629,6 +660,19 @@ struct ContentBlockerStats {
   int64 last_update_timestamp;
 };
 
+// One row of the local-only agent action journal (Settings > Privacy >
+// Agent activity). Never synced; retained 30 days.
+struct AgentActionJournalEntry {
+  int64 id;
+  int64 timestamp;
+  string session_id;
+  string actor;
+  string action;
+  string origin;
+  string summary;
+  string outcome;
+};
+
 struct ContentBlockerMutationResult {
   bool success;
   string? error_code;
@@ -844,6 +888,9 @@ interface PageHandler {
   GenerateSyncKey() => (SyncKeyInfo key_info);
   ConfigureSyncEncryption(string recovery_phrase) => (SyncStatus status);
   JoinSync(string recovery_phrase) => (SyncStatus status);
+  // Switches to client-held keys; when this device already switched locally
+  // it only re-POSTs the current room id to the relay (retry).
+  EnableClientHeldKeys() => (ClientHeldKeysResult result);
   StopSync();
   DisconnectSyncDevice(string device_id) => (bool success);
   RenameSyncDevice(string device_id, string new_name) => (bool success);
@@ -972,6 +1019,17 @@ interface PageHandler {
 
   GetContentBlockerStats() => (ContentBlockerStats stats);
 
+  // Agent activity journal. Filters are optional (empty = all). Returns an
+  // empty list for incognito / off-the-record profiles.
+  GetAgentActionJournal(string actor, string action, string query)
+      => (array<AgentActionJournalEntry> entries);
+  ClearAgentActionJournal() => (bool success);
+  // Agent mail held in its undo window (agent.mail_send_delay_seconds > 0).
+  // `queue_json` is the mail-core list: [{id, account_id, subject, to,
+  // send_at_ms, status}]. Cancel succeeds only while the item is pending.
+  ListQueuedAgentMail() => (bool success, string queue_json);
+  CancelQueuedAgentMail(string id) => (bool cancelled);
+
   SetContentBlockingMode(ContentBlockingMode mode)
       => (bool success, ContentBlockerMutationResult mutation);
 
@@ -983,6 +1041,15 @@ interface PageHandler {
   OpenExtensionsPage();
   OpenChromiumSettingsPage();
   OpenMigrationDialog();
+
+  // Prompts for a save location and writes the export there. `path` is the
+  // written file on success. `error_code` is empty on success, "canceled" when
+  // the user dismissed a dialog, or a stable code such as "vault_locked",
+  // "os_auth_unavailable", "reauth_failed", "passphrase_required",
+  // "invalid_passphrase", "write_failed". `passphrase` is used only for
+  // kPasswords on platforms without an OS authenticator.
+  ExportData(DataExportKind kind, string? passphrase)
+      => (bool success, string path, string error_code);
 
   SetBYOKKey(string provider, string key) => (bool success);
   ClearBYOKKey(string provider) => (bool success);

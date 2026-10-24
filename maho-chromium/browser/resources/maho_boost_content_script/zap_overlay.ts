@@ -22,6 +22,8 @@ interface SelectorComponentInstance {
   tearDown(): void;
   handleEvent(event: Event, prevent: boolean): void;
   setState(state: 'selecting' | 'selected', data?: Element | null): void;
+  hasPendingSelection(): boolean;
+  updateHighlight(): void;
   showHighlight(selection: NodeListOf<Element> | readonly Element[]): void;
   removeHighlight(): void;
   safeAreaPadding: { left: number; right: number; top: number; bottom: number };
@@ -188,13 +190,25 @@ class ZapOverlay {
       }
     });
 
-    this.selectorComponent?.setState('selecting');
+    // Previewing a zap must not discard an element the user selected but has
+    // not confirmed yet; only an unzap click is a real action.
+    if (!this.selectorComponent?.hasPendingSelection()) {
+      this.selectorComponent?.setState('selecting');
+    }
   }
 
   private unzapButtonUnhover(button: HTMLInputElement): void {
+    if (this.unzapHoverFrameId !== null) {
+      this.win.cancelAnimationFrame(this.unzapHoverFrameId);
+      this.unzapHoverFrameId = null;
+    }
     button.value = button.getAttribute('data-index') || '';
     this.boostContext.tempHideZappedElement();
     this.selectorComponent?.removeHighlight();
+    // Bring back the pending selection's highlight the preview replaced.
+    if (this.selectorComponent?.hasPendingSelection()) {
+      this.selectorComponent.updateHighlight();
+    }
   }
 
   private unzapButtonClick(button: HTMLInputElement): void {

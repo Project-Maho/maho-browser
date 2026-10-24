@@ -45,6 +45,13 @@ class MahoNotificationOverlay
             base::TimeDelta duration = base::Seconds(4),
             MahoToastView::Icon icon = MahoToastView::Icon::kNone);
 
+  // Same as Show(), but clicking the toast runs `on_clicked` (then hides).
+  // The toast stays non-modal: no buttons, never activates, auto-dismisses.
+  void ShowWithClickAction(const std::u16string& title,
+                           const std::u16string& body,
+                           base::TimeDelta duration,
+                           base::RepeatingClosure on_clicked);
+
   void Hide();
   bool IsVisible() const;
 
@@ -100,6 +107,13 @@ namespace maho {
 // Lives here (moved from maho_command_action_handler.cc) so all copy surfaces
 // link one shared helper — clipboard-copy must confirm with a toast.
 void ShowLinkCopiedToast(Browser* browser);
+
+// Shows the non-modal after-the-fact agent action notice for |browser|.
+// Clicking it opens Settings > Privacy > Agent activity. Never blocks the
+// agent: no buttons, no focus, auto-dismisses.
+void ShowAgentActionNoticeToast(Browser* browser,
+                                const std::u16string& title,
+                                const std::u16string& body);
 }  // namespace maho
 
 #endif  // MAHO_BROWSER_UI_NOTIFICATIONS_MAHO_NOTIFICATION_OVERLAY_H_

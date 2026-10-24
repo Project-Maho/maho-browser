@@ -431,6 +431,9 @@ std::optional<maho_settings::mojom::VaultStatusPtr> ParseVaultStatus(
   status->agent_policy_default = *parsed_policy;
   status->auto_lock_minutes = static_cast<uint32_t>(*auto_lock_minutes);
   status->failed_unlock_count = static_cast<uint32_t>(*failed_unlock_count);
+  const std::string* lock_reason = dict.FindString("lockReason");
+  status->account_seed_missing =
+      lock_reason && *lock_reason == "account_seed_missing";
   const base::Value* retry_at_value = dict.Find("retryAt");
   if (retry_at_value && !retry_at_value->is_none()) {
     const std::string* retry_at = retry_at_value->GetIfString();

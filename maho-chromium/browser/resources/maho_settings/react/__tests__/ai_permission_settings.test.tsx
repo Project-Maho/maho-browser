@@ -4,7 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import type {SettingValue} from '../../mojo.js';
 import {ALL_PANE_DEFINITIONS} from '../../schema/panes.js';
-import {DomainPaneContent} from '../domain_panes.js';
+import {DomainPaneContent, normalizeDeniedOrigins} from '../domain_panes.js';
 import type {MahoSettingsStore} from '../store.js';
 
 import {SETTING_METADATA} from '../../schema/setting_schema.js';
@@ -15,6 +15,7 @@ describe('AI permission metadata', () => {
     ['ai.final_confirm', 'toggle'],
     ['ai.proactive_mode', 'toggle'],
     ['ai.approval_policy', 'select'],
+    ['agent.denied_origins', 'textarea'],
   ])('exposes %s as a profile setting', (key, control) => {
     expect(SETTING_METADATA[key]).toMatchObject({
       control,
@@ -60,6 +61,7 @@ async function renderPermissions() {
       'ai.final_confirm': 'true',
       'ai.proactive_mode': 'false',
       'ai.approval_policy': 'prompt',
+      'agent.denied_origins': '',
     }).map(([key, value]) => ({key, value} as SettingValue)),
   };
   const listeners = new Set<() => void>();
@@ -131,5 +133,29 @@ describe('AI pane permission controls', () => {
     await act(async () => { rendered[options.findIndex(option => option.value === next)].click(); });
     expect(harness.commitSettingValue).toHaveBeenCalledWith(key, next);
     expect(controlFor(key).textContent).toBe(options.find(option => option.value === next)!.label);
+  });
+});
+
+describe('agent.denied_origins list editor', () => {
+  it('normalizes entries to a trimmed, lowercased, de-duplicated list', () => {
+    expect(normalizeDeniedOrigins('')).toBe('');
+    expect(normalizeDeniedOrigins(' https://Bank.Example \n\nmail.example, bank.example,https://bank.example'))
+        .toBe('https://bank.example\nmail.example\nbank.example');
+  });
+
+  it('defaults to an empty list and saves the normalized list through the store', async () => {
+    const harness = await renderPermissions();
+    const editor = container.querySelector<HTMLTextAreaElement>(
+        `textarea[aria-label="${SETTING_METADATA['agent.denied_origins'].label}"]`);
+    if (!editor) throw new Error('Missing denied origins editor');
+    expect(editor.value).toBe('');
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setter.call(editor, ' https://Bank.Example\n\nmail.example ');
+      editor.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+    await act(async () => { editor.focus(); editor.blur(); });
+    expect(harness.commitSettingValue).toHaveBeenCalledWith(
+        'agent.denied_origins', 'https://bank.example\nmail.example');
   });
 });

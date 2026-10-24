@@ -17,50 +17,76 @@ TEST(MahoWelcomeCompletionPolicyTest, StoredValidSessionSkipsOnboarding) {
     const bool reconciled = ReconcileWelcomeCompleted(completed, true, true);
     EXPECT_TRUE(reconciled);
     EXPECT_FALSE(RequiresPasswordSetup(reconciled));
-    EXPECT_FALSE(IsLoginGateActive(false, true, reconciled));
+    EXPECT_FALSE(IsLoginGateActive(false, reconciled, /*local_only=*/false));
   }
 }
 
-TEST(MahoWelcomeCompletionPolicyTest, StoredExpiredSessionRequiresOnlyLogin) {
+TEST(MahoWelcomeCompletionPolicyTest, StoredExpiredSessionDoesNotRegate) {
+  // An expired relay session pauses sync; it must not re-gate a profile whose
+  // stored credentials prove it already finished onboarding.
   const bool reconciled = ReconcileWelcomeCompleted(false, false, true);
   EXPECT_TRUE(reconciled);
   EXPECT_FALSE(RequiresPasswordSetup(reconciled));
-  EXPECT_TRUE(IsLoginGateActive(false, false, reconciled));
+  EXPECT_FALSE(IsLoginGateActive(false, reconciled, /*local_only=*/false));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, CompletedProfileWithExpiredSessionIsNotGated) {
+  const bool reconciled = ReconcileWelcomeCompleted(
+      /*welcome_completed=*/true, /*has_valid_relay_session=*/false,
+      /*has_stored_session=*/false);
+  EXPECT_TRUE(reconciled);
+  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/false, reconciled,
+                                 /*local_only=*/false));
 }
 
 TEST(MahoWelcomeCompletionPolicyTest, NoCredentialsStillRequiresFullOnboarding) {
   const bool reconciled = ReconcileWelcomeCompleted(false, false, false);
   EXPECT_FALSE(reconciled);
   EXPECT_TRUE(RequiresPasswordSetup(reconciled));
-  EXPECT_TRUE(IsLoginGateActive(false, false, reconciled));
+  EXPECT_TRUE(IsLoginGateActive(false, reconciled, /*local_only=*/false));
 }
 
 TEST(MahoWelcomeCompletionPolicyTest, IsLoginGateActivePolicyMatrix) {
-  // Authentication does not imply that required setup was completed.
+  // Only an unfinished first run gates; session validity is not an input.
+  for (bool bypassed : {false, true}) {
+    for (bool completed : {false, true}) {
+      for (bool local_only : {false, true}) {
+        EXPECT_EQ(!bypassed && !completed && !local_only,
+                  IsLoginGateActive(bypassed, completed, local_only))
+            << "bypassed=" << bypassed << " completed=" << completed
+            << " local_only=" << local_only;
+      }
+    }
+  }
   EXPECT_TRUE(IsLoginGateActive(/*login_gate_bypassed=*/false,
-                                /*has_valid_relay_session=*/false,
-                                /*welcome_completed=*/false));
-  EXPECT_TRUE(IsLoginGateActive(/*login_gate_bypassed=*/false,
-                                /*has_valid_relay_session=*/false,
-                                /*welcome_completed=*/true));
-  EXPECT_TRUE(IsLoginGateActive(/*login_gate_bypassed=*/false,
-                                /*has_valid_relay_session=*/true,
-                                /*welcome_completed=*/false));
+                                /*welcome_completed=*/false,
+                                /*local_only=*/false));
   EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/false,
-                                 /*has_valid_relay_session=*/true,
-                                 /*welcome_completed=*/true));
+                                 /*welcome_completed=*/true,
+                                 /*local_only=*/false));
   EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
-                                 /*has_valid_relay_session=*/false,
-                                 /*welcome_completed=*/false));
-  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
-                                 /*has_valid_relay_session=*/false,
-                                 /*welcome_completed=*/true));
-  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
-                                 /*has_valid_relay_session=*/true,
-                                 /*welcome_completed=*/false));
-  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/true,
-                                 /*has_valid_relay_session=*/true,
-                                 /*welcome_completed=*/true));
+                                 /*welcome_completed=*/false,
+                                 /*local_only=*/false));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, LocalOnlyProfileIsNotGatedWithoutSession) {
+  // Continue without an account: no credentials, onboarding unfinished, but
+  // the local-only choice keeps the sign-in gate off.
+  const bool reconciled = ReconcileWelcomeCompleted(false, false, false);
+  EXPECT_FALSE(reconciled);
+  EXPECT_FALSE(IsLoginGateActive(/*login_gate_bypassed=*/false, reconciled,
+                                 /*local_only=*/true));
+}
+
+TEST(MahoWelcomeCompletionPolicyTest, FinishOnboardingAcceptsLocalOnly) {
+  EXPECT_FALSE(CanFinishOnboarding(/*has_valid_relay_session=*/false,
+                                   /*local_only=*/false));
+  EXPECT_TRUE(CanFinishOnboarding(/*has_valid_relay_session=*/false,
+                                  /*local_only=*/true));
+  EXPECT_TRUE(CanFinishOnboarding(/*has_valid_relay_session=*/true,
+                                  /*local_only=*/false));
+  EXPECT_TRUE(CanFinishOnboarding(/*has_valid_relay_session=*/true,
+                                  /*local_only=*/true));
 }
 
 TEST(MahoWelcomeSyncKeyTest, ParseGenerateSyncKeyJsonSuccessAndFailure) {

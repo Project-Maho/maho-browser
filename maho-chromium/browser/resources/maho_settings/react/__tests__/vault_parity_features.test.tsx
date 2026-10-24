@@ -104,6 +104,7 @@ function createVaultStatus(lockState: VaultLockState = VaultLockState.kUnlocked)
       autoLockMinutes: 15,
       failedUnlockCount: 0,
       retryAtTimestamp: null,
+      accountSeedMissing: false,
     },
     item: null,
   };
@@ -889,5 +890,38 @@ describe('Maho Native Vault Parity - Edit drawer username', () => {
     });
     expect(buttonWithLabel('Save changes').disabled).toBe(true);
     expect(document.querySelector<HTMLInputElement>('#edit-saved-password-username')?.value).toBe('');
+  });
+});
+
+describe('Maho Native Vault Parity - Round 2 fixes', () => {
+  it('keeps the replacement password in the input when save fails', async () => {
+    const item = createMockItem();
+    const onSave = vi.fn().mockResolvedValue('Save failed.');
+    const store = createMockStore();
+    await act(async () => {
+      root.render(<EditSavedPasswordDrawer item={item} onClose={vi.fn()} onSave={onSave} store={store} />);
+    });
+    const pw = document.querySelector<HTMLInputElement>('#edit-saved-password-value')!;
+    pw.value = 'new-secret';
+    await act(async () => {
+      buttonWithLabel('Save changes').click();
+    });
+    expect(onSave).toHaveBeenCalledWith(item, expect.objectContaining({password: 'new-secret'}));
+    expect(pw.value).toBe('new-secret');
+  });
+
+  it('asks for a character type instead of calling the generator when all are off', async () => {
+    const store = createMockStore();
+    await act(async () => {
+      root.render(<PasswordGenerator store={store} />);
+    });
+    const switches = Array.from(document.querySelectorAll<HTMLButtonElement>('button[role="switch"]')).slice(0, 4);
+    for (const sw of switches) {
+      if (sw.getAttribute('aria-checked') === 'true') {
+        await act(async () => { sw.click(); });
+      }
+    }
+    expect(document.querySelector('[role="status"]')?.textContent).toBe('Turn on at least one character type.');
+    expect(document.body.textContent).not.toContain('bits entropy');
   });
 });

@@ -205,7 +205,9 @@ interface Page {
   OnAuthRequired(string account_id, string provider, string reason);
   OnAuthRefreshSucceeded(string account_id);
   // === [W-C..W-K.Events] ===
-  OnNewMail(string account_id);
+  // Fired once per arrived message. `email_id` is the local row id and
+  // `message_id` the RFC 5322 Message-ID (may be empty if the server sent none).
+  OnNewMail(string account_id, string email_id, string message_id);
   OnMutation(string account_id, string payload);
   OnOutbox(string account_id, string payload);
   OnScheduler(string account_id, string payload);

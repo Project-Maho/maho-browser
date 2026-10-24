@@ -53,6 +53,7 @@ function createVaultResult(lockState: VaultLockState): VaultOperationResult {
       autoLockMinutes: 15,
       failedUnlockCount: 0,
       retryAtTimestamp: null,
+      accountSeedMissing: false,
     },
     item: null,
   };

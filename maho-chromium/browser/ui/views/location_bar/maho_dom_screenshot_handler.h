@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
+#include "build/build_config.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client.h"
@@ -61,13 +62,15 @@ class MahoDomScreenshotHandler
   void OnCopyClicked();
   void OnSaveClicked();
   void OnDownloadClicked();
+#if BUILDFLAG(IS_MAC)
+  // Shares the captured image through the native macOS share sheet.
   void OnSendToClicked();
+#endif
   void OnRetakeClicked();
-  void OnEditClicked();
-  void OnSendViaIMessageClicked();
-  void OnSaveToLibraryClicked();
   void OnBubbleDismissed();
 
+  // Removes this session's selection overlay from the page, if still present.
+  void RemovePageOverlay();
   void Finish();
 
   // content::WebContentsObserver:

@@ -140,6 +140,9 @@ class MahoSidebarCreateSpaceView : public views::View,
   std::u16string saved_name_text_;
   bool awaiting_icon_input_ = false;
   bool restoring_name_text_ = false;
+  // True between posting CreateSpaceOnPool and its OnSpaceCreated reply, so a
+  // repeated Enter or re-enabled button cannot create a duplicate space.
+  bool create_in_flight_ = false;
   base::RepeatingClosure close_callback_;
   MahoSidebarPalette palette_;
   base::WeakPtrFactory<MahoSidebarCreateSpaceView> weak_factory_{this};

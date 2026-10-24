@@ -154,6 +154,15 @@ export enum SecretAction {
   kReveal = 1,
 }
 
+export enum DataExportKind {
+  kBookmarks = 0,
+  kHistory = 1,
+  kPasswords = 2,
+  kConversations = 3,
+  kSpaces = 4,
+  kFullBackup = 5,
+}
+
 export enum PasswordImportSourceFormat {
   kOnePasswordCsv = 0,
   kOnePasswordPux = 1,
@@ -285,6 +294,7 @@ export interface VaultStatus {
   autoLockMinutes: number;
   failedUnlockCount: number;
   retryAtTimestamp: string | null;
+  accountSeedMissing: boolean;
 }
 
 export interface VaultOperationResult {
@@ -293,4 +303,23 @@ export interface VaultOperationResult {
   errorMessage: string | null;
   status: VaultStatus | null;
   item: VaultItem | null;
+}
+
+export interface SyncStatus {
+  isSyncing: boolean;
+  relayUrl: string;
+  roomId: string;
+  statusLabel: string;
+  errorMessage: string;
+  lastSyncTimestamp: bigint;
+  keyMode: string;
+  roomRetired: boolean;
+  relaySwitchPending: boolean;
+}
+
+export interface ClientHeldKeysResult {
+  success: boolean;
+  recoveryPhrase: string;
+  roomId: string;
+  errorMessage: string;
 }

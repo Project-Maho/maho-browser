@@ -172,7 +172,7 @@ bool MahoActionMarkerService::Show(const Request& request) {
   BrowserView* browser_view =
       browser ? BrowserView::GetBrowserViewForBrowser(browser) : nullptr;
   views::View* contents_view =
-      browser_view ? browser_view->contents_web_view() : nullptr;
+      browser_view ? browser_view->GetContentsView() : nullptr;
   if (!contents_view || contents_view->bounds().IsEmpty()) {
     Clear();
     return false;

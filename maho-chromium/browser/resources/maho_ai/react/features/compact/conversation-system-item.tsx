@@ -30,16 +30,25 @@ export function ConversationSystemItem(
       onRespondToApproval,
       onRetry,
       readOnly,
+      answered = false,
     }: {
       item: ConversationItem;
       onOpenSettings: (paneKey: string) => void;
-      onRespondToApproval: (approvalId: string, approved: boolean) => void;
+      onRespondToApproval: (approvalId: string, approved: boolean) => void | Promise<unknown>;
       onRetry?: () => void;
       readOnly: boolean;
+      // True while the store holds this approval's answer and is waiting for
+      // the runtime's approvalResult (see AppState.answeredApprovalSessionById).
+      answered?: boolean;
     }) {
   const approval = item.approval;
   const isApproval = item.kind === 'approval' && approval;
   const isPendingApproval = approval?.status === 'pending';
+  // Both answers stay locked from the store's answered state until the card
+  // leaves 'pending', so a second click cannot send a contradictory response.
+  const respond = (approvalId: string, approved: boolean) => {
+    void onRespondToApproval(approvalId, approved);
+  };
   const toneClassName = isApproval ?
     approval.status === 'approved' ? 'border-success/60' :
     approval.status === 'denied' ? 'border-destructive/60' : 'border-warning/60' :
@@ -136,18 +145,18 @@ export function ConversationSystemItem(
                 <>
                   <Button
                     className="border-warning/40 bg-warning/10 text-warning hover:bg-warning/20"
-                    disabled={readOnly}
+                    disabled={readOnly || answered}
                     size="sm"
                     title="Approves this request only. Maho will ask again next time."
                     variant="outline"
-                    onClick={() => onRespondToApproval(approval.approvalId, true)}>
+                    onClick={() => respond(approval.approvalId, true)}>
                     Allow once
                   </Button>
                   <Button
-                    disabled={readOnly}
+                    disabled={readOnly || answered}
                     size="sm"
                     variant="destructive"
-                    onClick={() => onRespondToApproval(approval.approvalId, false)}>
+                    onClick={() => respond(approval.approvalId, false)}>
                     Reject
                   </Button>
                 </>

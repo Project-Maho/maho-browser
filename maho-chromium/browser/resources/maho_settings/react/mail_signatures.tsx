@@ -34,13 +34,18 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
     };
   }, []);
 
+  const hasLoadedRef = useRef(false);
+
   const loadSignatures = useCallback(async () => {
-    setModelState({status: 'loading'});
+    // Only the first load replaces the pane with a spinner; later reloads
+    // (after edits or change events) refresh in place.
+    if (!hasLoadedRef.current) setModelState({status: 'loading'});
     try {
       const {ok, resultJson} = await handler.mailListSignatures(null);
       if (!mountedRef.current) return;
       if (ok) {
         const next = JSON.parse(resultJson) as Signature[];
+        hasLoadedRef.current = true;
         setSignatures(next);
         setModelState(createMailSettingsContentState(next));
       } else {
@@ -80,9 +85,11 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
     }
   };
 
-  const deleteSignature = async (id: string) => {
-    const {ok} = await handler.mailDeleteSignature(id);
+  const deleteSignature = async (sig: Signature) => {
+    if (!window.confirm(`Delete the signature "${sig.name}"? This can't be undone.`)) return;
+    const {ok} = await handler.mailDeleteSignature(sig.id);
     if (ok) {
+      setError('');
       void loadSignatures();
     } else {
       setError('Failed to delete signature');
@@ -117,11 +124,11 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
                     <div className="mt-1 text-xs text-muted-foreground" dangerouslySetInnerHTML={{__html: sig.content_html}} />
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setEditingSig(sig)}>
-                      <Edit2 className="size-3.5" />
+                    <Button variant="outline" size="sm" aria-label={`Edit signature ${sig.name}`} onClick={() => setEditingSig(sig)}>
+                      <Edit2 className="size-3.5" aria-hidden="true" />
                     </Button>
-                    <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive/10" onClick={() => deleteSignature(sig.id)}>
-                      <Trash2 className="size-3.5" />
+                    <Button variant="outline" size="sm" aria-label={`Delete signature ${sig.name}`} className="text-destructive hover:bg-destructive/10" onClick={() => deleteSignature(sig)}>
+                      <Trash2 className="size-3.5" aria-hidden="true" />
                     </Button>
                   </div>
                 </div>
@@ -148,7 +155,7 @@ export function MailSignaturesPane({pane, store}: {pane: PaneDefinition; store: 
                   <label htmlFor="is-default-sig" className="text-xs font-medium select-none">Set as default signature</label>
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <Button variant="outline" onClick={() => setEditingSig(null)}>Cancel</Button>
+                  <Button variant="outline" onClick={() => { setEditingSig(null); setError(''); }}>Cancel</Button>
                   <Button onClick={saveSignature}>Save</Button>
                 </div>
               </div>

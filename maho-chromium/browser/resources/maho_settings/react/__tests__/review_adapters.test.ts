@@ -4,15 +4,18 @@ import {ReactFiberInspector} from '../../../dom_adapters/react_fiber_inspector';
 import {GoogleDocsAdapter} from '../../../dom_adapters/google_docs_adapter';
 
 afterEach(() => {document.body.innerHTML = '';});
-it('fails closed rather than returning an over-budget non-ASCII extraction', () => {
+it('truncates an over-budget non-ASCII extraction to the byte budget', () => {
   const registry = new PageAdapterRegistry();
   const adapter = new ReactFiberInspector();
   adapter.Extract = () => ({success: true, source_adapter: adapter.descriptor().adapter_id, data: {text: '漢'.repeat(100000)}});
   registry.registerAdapter(adapter);
   const result = registry.executeExtract(adapter.descriptor().adapter_id, {operation: 'InspectElement'}, 'https://example.com', {hasReactFiber: true});
-  expect(result.success).toBe(false);
-  expect(result.data).toBeUndefined();
-  expect(result.error).toBeTruthy();
+  expect(result.success).toBe(true);
+  expect(result.warnings).toContain('TRUNCATED_OUTPUT');
+  const maxBytes = adapter.descriptor().max_output_bytes;
+  expect(new TextEncoder().encode(JSON.stringify(result.data)).length).toBeLessThanOrEqual(maxBytes);
+  expect(result.bytes_produced).toBeLessThanOrEqual(maxBytes);
+  expect((result.data as {text: string}).text.startsWith('漢漢')).toBe(true);
 });
 it('does not invent a Docs target for absent text', () => {
   document.body.innerHTML = '<div class="kix-appview-editor"></div>';

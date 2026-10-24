@@ -22,14 +22,15 @@
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/browser_navigator_params.h"
+#include "chrome/browser/ui/navigator/browser_navigator.h"
+#include "chrome/browser/ui/navigator/browser_navigator_params.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
+#include "maho/browser/maho_core_holder.h"
 #include "maho/browser/ui/views/peek/maho_peek_controller.h"
 #include "maho/browser/ui/views/sidebar/maho_sidebar_prefs.h"
 #include "maho/browser/ui/webui/maho_ai_prefs.h"
@@ -604,6 +605,63 @@ void ClearProviderOAuth(PrefService* prefs, std::string_view provider) {
   prefs->SetString(refresh_pref, "");
   prefs->SetInt64(expires_pref, 0);
   prefs->CommitPendingWrite();
+}
+
+void SyncByokKeyToCore(std::string_view provider, const std::string& key) {
+  if (provider != "openai" && provider != "anthropic") {
+    return;
+  }
+  // Runs on the core sequence (MayBlock): the validation is a network probe and
+  // every maho_core_* call must stay on that sequence.
+  maho::PostCoreClosure(
+      FROM_HERE,
+      base::BindOnce(
+          [](std::string provider_id, std::string api_key) {
+            MahoCore* core = maho::GetCore();
+            if (!core) {
+              return;
+            }
+            if (api_key.empty()) {
+              maho_core_byok_set_validated_key(core, provider_id.c_str(),
+                                               nullptr);
+              return;
+            }
+            if (maho_core_byok_is_validated(core, provider_id.c_str(),
+                                            api_key.c_str())) {
+              return;
+            }
+            // Validate first (core=null: probe only), then store. An invalid
+            // or unverifiable key clears core's copy so it never counts.
+            const bool valid = maho_core_byok_validate_key(
+                nullptr, provider_id.c_str(), api_key.c_str());
+            maho_core_byok_set_validated_key(
+                core, provider_id.c_str(), valid ? api_key.c_str() : nullptr);
+          },
+          std::string(provider), key));
+}
+
+void HydrateByokKeysIntoCore(PrefService* prefs,
+                             const os_crypt_async::Encryptor& encryptor) {
+  if (!prefs) {
+    return;
+  }
+  for (const char* provider : {"openai", "anthropic"}) {
+    const char* pref = AccessTokenPrefFor(provider);
+    std::string plaintext;
+    const std::string encrypted_b64 = pref ? prefs->GetString(pref) : "";
+    std::string encrypted_bytes;
+    if (!encrypted_b64.empty() &&
+        base::Base64Decode(encrypted_b64, &encrypted_bytes) &&
+        !encryptor.DecryptString(encrypted_bytes, &plaintext)) {
+      plaintext.clear();
+    }
+    // OAuth sessions share the BYOK slot, but an OAuth access token is not a
+    // BYOK API key; only a pasted key counts toward BYOK entitlement.
+    if (HasOAuthSession(prefs, provider)) {
+      plaintext.clear();
+    }
+    SyncByokKeyToCore(provider, plaintext);
+  }
 }
 
 }  // namespace maho::ai_oauth

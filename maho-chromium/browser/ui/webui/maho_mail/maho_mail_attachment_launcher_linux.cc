@@ -27,6 +27,14 @@ void DeleteAfterLaunch(
     AttachmentLaunchCallback callback,
     bool opened,
     std::string open_error) {
+  if (opened) {
+    // The portal's success response precedes the viewer reading the file; the
+    // registry's stale-copy sweep removes it later.
+    MahoMailAttachmentRegistry::ReleaseLaunchedAttachment(
+        std::move(attachment));
+    std::move(callback).Run(true, std::string());
+    return;
+  }
   MahoMailAttachmentRegistry::DeleteConsumedAttachment(
       std::move(attachment),
       base::BindOnce(

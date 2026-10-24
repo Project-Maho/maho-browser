@@ -89,13 +89,6 @@
   E_CPONLY(kMahoColorFolderIcon) \
   E_CPONLY(kMahoColorDangerRed) \
   E_CPONLY(kMahoColorSuccessGreen) \
-  /* Reader Mode */ \
-  E_CPONLY(kMahoColorReaderLightBackground) \
-  E_CPONLY(kMahoColorReaderLightText) \
-  E_CPONLY(kMahoColorReaderSepiaBackground) \
-  E_CPONLY(kMahoColorReaderSepiaText) \
-  E_CPONLY(kMahoColorReaderDarkBackground) \
-  E_CPONLY(kMahoColorReaderDarkText) \
   E_CPONLY(kMahoColorDropIndicator) \
   /* Toast Notification */ \
   E_CPONLY(kMahoColorToastBackground) \

@@ -33,6 +33,13 @@ inline constexpr char kPendingSurfaceGeneration[] =
     "maho.ai.pending_surface_generation";
 inline constexpr char kAttachBrowserContext[] = "maho.ai.attach_browser_context";
 inline constexpr char kMailReadAllowed[] = "maho.ai.mail_read_allowed";
+// Per-site agent deny list (newline-separated origins/hosts). Default empty.
+// Mirrors maho-agent permission::authorize_agent_site (agent_site_denied).
+inline constexpr char kAgentDeniedOrigins[] = "maho.agent.denied_origins";
+// Undo window for agent-sent mail, seconds: 0 (default, send immediately), 10,
+// 20 or 30. Forwarded to mail-core MahoMailAgentSendEmail.
+inline constexpr char kAgentMailSendDelaySeconds[] =
+    "maho.agent.mail_send_delay_seconds";
 
 // Translation onboarding choice. Cloud-backed (BYOK) — NO local model.
 // Values: "byok" | "skip". Empty = not chosen yet.
@@ -61,6 +68,10 @@ inline constexpr char kOAuthAnthropicExpiresAt[] =
 
 inline constexpr char kAgentToolGrants[] = "maho.ai.extensions.agent_tool_grants";
 inline constexpr char kMcpCredentials[] = "maho.ai.byok.mcp_credentials";
+// Off switch for the local MCP control server (Unix socket / named pipe).
+// When false the browser does not start the server at launch, so no local
+// process can drive the browser through MCP. Read at startup.
+inline constexpr char kMcpEnabled[] = "maho.mcp.enabled";
 
 // Models settings v1 prefs.
 inline constexpr char kProviderConfigs[] = "maho.ai.provider_configs";

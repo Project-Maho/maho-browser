@@ -40,7 +40,7 @@ import {Toaster} from '@ui/sonner';
 import {ArrowLeft, ArrowUpRight} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {applyTheme, watchAutoTheme} from '@theme/apply_theme';
-import {BrowserDataImportCard as DomainBrowserDataImportCard, DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
+import {BrowserDataExportCard as DomainBrowserDataExportCard, BrowserDataImportCard as DomainBrowserDataImportCard, DomainPaneContent, PaneShell, SectionCard, Toggle} from './domain_panes.js';
 import {DiscordCommunitySettingsSection} from './discord_community_settings_section.js';
 import {MahoSettingsStore} from './store.js';
 
@@ -394,7 +394,7 @@ function PaneButton(
 }
 
 const UPDATE_STATE_LABELS: Record<number, string> = {
-  [BrowserUpdateState.kIdle]: 'Up to date',
+  [BrowserUpdateState.kIdle]: 'Not checked yet',
   [BrowserUpdateState.kChecking]: 'Checking for updates…',
   [BrowserUpdateState.kUpdateAvailable]: 'Update available',
   [BrowserUpdateState.kDownloading]: 'Downloading update…',
@@ -547,6 +547,9 @@ function LivePaneSection(
       {pane.key === 'import' ? (
         <div className="mb-6">
           <DomainBrowserDataImportCard handler={store.getHandler()} />
+          <div className="mt-6">
+            <DomainBrowserDataExportCard handler={store.getHandler()} />
+          </div>
         </div>
       ) : null}
       {pane.key === 'extensions' ? (
@@ -748,6 +751,9 @@ function InputControl(
   const commitValue = useCallback(async () => {
     const nextValue = normalizeInputValue(draftValue, item.value);
     setDraftValue(nextValue);
+    if (nextValue === item.value) {
+      return;
+    }
     await store.commitSettingValue(item.key, nextValue);
   }, [draftValue, item.key, item.value, store]);
 
@@ -941,6 +947,9 @@ function TextareaControl(
         value={draftValue}
         className="font-mono text-sm"
         onBlur={() => {
+          if (draftValue === (item.value || '')) {
+            return;
+          }
           void store.commitSettingValue(item.key, draftValue);
         }}
         onChange={event => setDraftValue(event.currentTarget.value)}

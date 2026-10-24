@@ -29,6 +29,9 @@ struct DownloadItem {
   std::optional<std::string> file_path;
   std::optional<std::string> mime_type;
   std::optional<std::string> error;
+  // A failed download the live session can still resume (Resume/Cancel are
+  // offered instead of only Remove).
+  bool can_resume = false;
 };
 
 std::vector<DownloadItem> ParseDownloads();

@@ -58,6 +58,7 @@ function createVaultResult(lockState: VaultLockState): VaultOperationResult {
       autoLockMinutes: 15,
       failedUnlockCount: 0,
       retryAtTimestamp: null,
+      accountSeedMissing: false,
     },
     item: null,
   };
@@ -334,6 +335,14 @@ describe('Saved password delete confirmation target', () => {
     expect(describeDeleteTarget(createItem({origins: [], usernameHint: ''}))).toEqual({
       origin: 'No origin',
       username: 'No username saved',
+    });
+  });
+
+  it('targets the note title for secure notes', () => {
+    expect(describeDeleteTarget(createItem({
+      itemKind: VaultItemKind.kSecureItem, origins: [], title: 'Bank PINs', usernameHint: ''}))).toEqual({
+      origin: 'Bank PINs',
+      username: '',
     });
   });
 });

@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "base/functional/bind.h"
+#include "base/json/json_reader.h"
 #include "base/scoped_environment_variable_override.h"
 #include "base/test/task_environment.h"
 #include "base/test/test_future.h"
@@ -49,6 +50,14 @@ class HasValidRelaySessionTest : public ::testing::Test {
         account_prefs::kRelaySubscriptionStatus, "");
     prefs_.registry()->RegisterInt64Pref(
         account_prefs::kRelaySubscriptionExpiresAt, 0);
+    prefs_.registry()->RegisterStringPref(account_prefs::kRelaySyncKeyMode,
+                                          "");
+    prefs_.registry()->RegisterStringPref(
+        account_prefs::kRelaySyncClientHeldRoomId, "");
+    prefs_.registry()->RegisterStringPref(
+        account_prefs::kRelaySyncRetiredRoomId, "");
+    prefs_.registry()->RegisterStringPref(
+        account_prefs::kRelaySyncClientHeldRelayPendingRoomId, "");
   }
 
   int64_t NowSec() const { return base::Time::Now().ToTimeT(); }
@@ -176,6 +185,96 @@ TEST_F(HasValidRelaySessionTest, LogoutClearsOAuthMetadataRepeatedly) {
   EXPECT_TRUE(prefs_.GetString(account_prefs::kRelayOAuthProviderSub).empty());
 }
 
+TEST_F(HasValidRelaySessionTest, RecordsClientHeldKeyModeAndClearsOnLogout) {
+  EXPECT_FALSE(IsClientHeldSyncAccount(&prefs_));
+  RecordSyncKeyMode(&prefs_, account_prefs::kSyncKeyModeClientHeld, "room-2");
+  EXPECT_TRUE(IsClientHeldSyncAccount(&prefs_));
+  EXPECT_EQ("room-2",
+            prefs_.GetString(account_prefs::kRelaySyncClientHeldRoomId));
+
+  RecordSyncKeyMode(&prefs_, "escrow", "room-1");
+  EXPECT_FALSE(IsClientHeldSyncAccount(&prefs_));
+  EXPECT_TRUE(
+      prefs_.GetString(account_prefs::kRelaySyncClientHeldRoomId).empty());
+
+  RecordSyncKeyMode(&prefs_, account_prefs::kSyncKeyModeClientHeld, "room-2");
+  prefs_.SetString(account_prefs::kRelaySyncRetiredRoomId, "room-1");
+  ClearRelayTokens(&prefs_);
+  EXPECT_FALSE(IsClientHeldSyncAccount(&prefs_));
+  EXPECT_TRUE(
+      prefs_.GetString(account_prefs::kRelaySyncRetiredRoomId).empty());
+}
+
+TEST_F(HasValidRelaySessionTest, ClientHeldJoinRejectsForeignOrInvalidPhrase) {
+  // Escrow accounts are unaffected.
+  EXPECT_EQ("", CheckClientHeldRecoveryPhrase(&prefs_, "not a phrase"));
+
+  MahoCore* core = maho_core_new();
+  ASSERT_NE(core, nullptr);
+  char* generated = maho_core_generate_sync_key(core);
+  ASSERT_NE(generated, nullptr);
+  std::optional<base::Value> parsed =
+      base::JSONReader::Read(generated, base::JSON_PARSE_RFC);
+  maho_string_free(generated);
+  maho_core_free(core);
+  ASSERT_TRUE(parsed && parsed->is_dict());
+  const std::string* phrase = parsed->GetDict().FindString("recoveryPhrase");
+  const std::string* room = parsed->GetDict().FindString("roomId");
+  ASSERT_TRUE(phrase && room);
+
+  RecordSyncKeyMode(&prefs_, account_prefs::kSyncKeyModeClientHeld, *room);
+  EXPECT_EQ("", CheckClientHeldRecoveryPhrase(&prefs_, *phrase));
+  EXPECT_EQ("That recovery phrase is not valid. Check all 24 words.",
+            CheckClientHeldRecoveryPhrase(&prefs_, "not a phrase"));
+
+  RecordSyncKeyMode(&prefs_, account_prefs::kSyncKeyModeClientHeld,
+                    "another-account-room");
+  EXPECT_EQ("That recovery phrase belongs to a different Sync account.",
+            CheckClientHeldRecoveryPhrase(&prefs_, *phrase));
+}
+
+// An escrow device whose room was retired by another device's switch must
+// not accept an arbitrary phrase (that would start a new room): until the
+// account's new room is known every phrase is refused, and the retired room's
+// own phrase is always refused.
+TEST_F(HasValidRelaySessionTest, RetiredRoomFailsClosedUntilNewRoomKnown) {
+  MahoCore* core = maho_core_new();
+  ASSERT_NE(core, nullptr);
+  auto generate = [core]() {
+    char* raw = maho_core_generate_sync_key(core);
+    std::optional<base::Value> parsed =
+        base::JSONReader::Read(raw, base::JSON_PARSE_RFC);
+    maho_string_free(raw);
+    return std::move(parsed->GetDict());
+  };
+  base::DictValue old_key = generate();
+  base::DictValue new_key = generate();
+  base::DictValue foreign_key = generate();
+  maho_core_free(core);
+  const std::string old_room = *old_key.FindString("roomId");
+
+  RecordSyncKeyMode(&prefs_, "escrow", old_room);
+  MarkSyncRoomRetired(&prefs_, old_room);
+  EXPECT_TRUE(IsClientHeldSyncAccount(&prefs_));
+  EXPECT_TRUE(NeedsClientHeldRoomRefresh(&prefs_));
+  EXPECT_NE("", CheckClientHeldRecoveryPhrase(
+                    &prefs_, *foreign_key.FindString("recoveryPhrase")));
+  EXPECT_NE("", CheckClientHeldRecoveryPhrase(
+                    &prefs_, *new_key.FindString("recoveryPhrase")));
+
+  // GET /sync/bootstrap reported the account's new room.
+  RecordSyncKeyMode(&prefs_, account_prefs::kSyncKeyModeClientHeld,
+                    *new_key.FindString("roomId"));
+  EXPECT_FALSE(NeedsClientHeldRoomRefresh(&prefs_));
+  EXPECT_EQ("", CheckClientHeldRecoveryPhrase(
+                    &prefs_, *new_key.FindString("recoveryPhrase")));
+  EXPECT_EQ("That recovery phrase belongs to a different Sync account.",
+            CheckClientHeldRecoveryPhrase(
+                &prefs_, *foreign_key.FindString("recoveryPhrase")));
+  EXPECT_NE("", CheckClientHeldRecoveryPhrase(
+                    &prefs_, *old_key.FindString("recoveryPhrase")));
+}
+
 class SyncBootstrapTest : public ::testing::Test {
  protected:
   using ResultFuture = base::test::TestFuture<bool, std::string>;
@@ -210,7 +309,14 @@ class SyncBootstrapTest : public ::testing::Test {
   void Start(ResultFuture* result, int* call_count) {
     testing::FetchAccountSyncBootstrapForTesting(
         url_loader_factory_.GetSafeWeakWrapper(), "access-token",
-        CountingCallback(result, call_count));
+        CountingCallback(result, call_count),
+        base::BindRepeating(
+            [](std::string* mode, std::string* room, const std::string& m,
+               const std::string& r) {
+              *mode = m;
+              *room = r;
+            },
+            &key_mode_, &key_mode_room_));
   }
 
   void WaitForRequest(std::string_view method) {
@@ -254,7 +360,114 @@ class SyncBootstrapTest : public ::testing::Test {
   network::TestURLLoaderFactory url_loader_factory_;
   MahoCore* saved_core_ = nullptr;
   MahoCore* core_ = nullptr;
+  std::string key_mode_;
+  std::string key_mode_room_;
 };
+
+// A client-held account's bootstrap carries no seed. Sign-in must succeed
+// without configuring Sync and without PUTting a fresh seed or escrow, and the
+// mode must be reported so welcome/Settings ask for the recovery phrase.
+TEST_F(SyncBootstrapTest, ClientHeldBootstrapRecordsModeWithoutPuttingSeed) {
+  ResultFuture result;
+  int call_count = 0;
+  Start(&result, &call_count);
+
+  WaitForRequest("GET");
+  Respond(R"({"key_mode":"client_held","room_id":"client-room"})",
+          net::HTTP_OK);
+
+  ExpectResult(&result, &call_count, true, "");
+  EXPECT_EQ(1u, url_loader_factory_.total_requests());
+  EXPECT_EQ("client_held", key_mode_);
+  EXPECT_EQ("client-room", key_mode_room_);
+}
+
+TEST_F(SyncBootstrapTest, ClientHeldBootstrapWithoutRoomIsInvalid) {
+  ResultFuture result;
+  int call_count = 0;
+  Start(&result, &call_count);
+
+  WaitForRequest("GET");
+  Respond(R"({"key_mode":"client_held"})", net::HTTP_OK);
+
+  ExpectResult(&result, &call_count, false,
+               "Invalid account Sync bootstrap response.");
+  EXPECT_EQ(1u, url_loader_factory_.total_requests());
+  EXPECT_TRUE(key_mode_.empty());
+}
+
+TEST_F(SyncBootstrapTest, CreatedBootstrapReportsEscrowMode) {
+  ResultFuture result;
+  int call_count = 0;
+  Start(&result, &call_count);
+
+  WaitForRequest("GET");
+  Respond("", net::HTTP_NOT_FOUND);
+  WaitForRequest("PUT");
+  const std::string generated = PendingUpload();
+  ASSERT_FALSE(generated.empty());
+  Respond(generated, net::HTTP_CREATED);
+
+  ExpectResult(&result, &call_count, true, "");
+  EXPECT_EQ("escrow", key_mode_);
+  EXPECT_FALSE(key_mode_room_.empty());
+}
+
+class ClientHeldSwitchTest : public ::testing::Test {
+ protected:
+  using SwitchFuture = base::test::TestFuture<bool, int, std::string>;
+
+  ClientHeldSwitchTest()
+      : relay_url_override_("MAHO_SYNC_RELAY_URL",
+                            "https://relay.mahobrowser.com") {}
+
+  void Start(SwitchFuture* result, const std::string& room_id) {
+    PostClientHeldSyncBootstrap(url_loader_factory_.GetSafeWeakWrapper(),
+                                "access-token", room_id,
+                                result->GetCallback<bool, int, const std::string&>());
+  }
+
+  static constexpr char kSwitchUrl[] =
+      "https://relay.mahobrowser.com/sync/bootstrap/client-held";
+
+  base::ScopedEnvironmentVariableOverride relay_url_override_;
+  base::test::TaskEnvironment task_environment_;
+  network::TestURLLoaderFactory url_loader_factory_;
+};
+
+TEST_F(ClientHeldSwitchTest, PostsNewRoomAndAcceptsMatchingResponse) {
+  SwitchFuture result;
+  Start(&result, "new-room");
+  url_loader_factory_.WaitForRequest(GURL(kSwitchUrl));
+  network::TestURLLoaderFactory::PendingRequest* pending =
+      url_loader_factory_.GetPendingRequest(0);
+  ASSERT_NE(pending, nullptr);
+  EXPECT_EQ("POST", pending->request.method);
+  EXPECT_EQ(R"({"room_id":"new-room"})",
+            network::GetUploadData(pending->request));
+  ASSERT_TRUE(url_loader_factory_.SimulateResponseForPendingRequest(
+      kSwitchUrl, R"({"key_mode":"client_held","room_id":"new-room"})",
+      net::HTTP_OK));
+
+  ASSERT_TRUE(result.Wait());
+  EXPECT_TRUE(result.Get<0>());
+  EXPECT_EQ(200, result.Get<1>());
+  EXPECT_EQ("", result.Get<2>());
+}
+
+TEST_F(ClientHeldSwitchTest, RetiredRoomReportsRoomRetired) {
+  SwitchFuture result;
+  Start(&result, "old-room");
+  url_loader_factory_.WaitForRequest(GURL(kSwitchUrl));
+  ASSERT_TRUE(url_loader_factory_.SimulateResponseForPendingRequest(
+      kSwitchUrl, R"({"error":"room_retired","code":"room_retired"})",
+      net::HTTP_GONE));
+
+  ASSERT_TRUE(result.Wait());
+  EXPECT_FALSE(result.Get<0>());
+  EXPECT_EQ(410, result.Get<1>());
+  EXPECT_EQ("room_retired", result.Get<2>());
+}
 
 TEST_F(SyncBootstrapTest, MissingBootstrapIsCreatedAndConfigured) {
   ResultFuture result;

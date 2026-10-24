@@ -84,7 +84,10 @@ interface PageHandler {
   LoginFromWelcome(string email, string password) => (bool ok, string error_message);
   SignupFromWelcome(string email, string password, string display_name) => (bool ok, string error_message);
   SignInWithGoogleFromWelcome() => (bool ok, string error_message);
-  GetRelayAccountStatusFromWelcome() => (bool signed_in, string tier, string subscription_status, bool welcome_completed, bool has_stored_session, bool is_local_dev);
+  // sync_key_mode is "client_held" when GET /sync/bootstrap reported that the
+  // account holds its own keys (the relay has no seed): a new device must join
+  // with the 24-word recovery phrase instead of auto-bootstrapping.
+  GetRelayAccountStatusFromWelcome() => (bool signed_in, string tier, string subscription_status, bool welcome_completed, bool has_stored_session, bool is_local_dev, string sync_key_mode);
 
   // Password setup
   GetPasswordProviderOptions() => (array<maho_settings.mojom.PasswordProviderOption> options);
@@ -98,6 +101,9 @@ interface PageHandler {
   GenerateSyncKey() => (string sync_key, string room_id, string recovery_phrase);
   SaveSyncKeyBackup(string content) => (bool saved, string error_message);
   StartSync(string room_id, string recovery_phrase) => (bool ok, string error_message);
+  // Client-held join: refuses a phrase that does not derive the account's
+  // room (no new room is created), otherwise joins Sync with it.
+  JoinSyncWithRecoveryPhrase(string recovery_phrase) => (bool ok, string error_message);
 
   // Mail account onboarding
   // Thin proxies to the profile-keyed MahoMailService; each returns
@@ -135,6 +141,11 @@ interface PageHandler {
   // Returns the LemonSqueezy checkout URL for a monthly subscription tier.
   // tier must be "pro" or "max". Returns empty string otherwise.
   GetSubscriptionCheckoutUrl(string tier) => (string checkout_url);
+
+  // First-run "Continue without an account": records the local-only choice
+  // (maho.auth.local_only) so FinishOnboarding no longer needs a relay
+  // session. Returns false when the profile is already signed in.
+  SetLocalOnlyMode() => (bool ok);
 
   // Completion / FDA
   FinishOnboarding();

@@ -6,8 +6,12 @@ import {Button} from '@ui/button';
 import {Check, Code, Copy} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {MCP_AGENT_GUIDANCE_COMMAND} from '../../maho_common/react/mcp-agent-guidance-copy.js';
+import type {SettingValue} from '../mojo.js';
 import type {PaneDefinition} from '../models.js';
-import {PaneShell, SectionCard} from './domain_panes.js';
+import {ManagedSettingRow, PaneShell, SectionCard, Toggle} from './domain_panes.js';
+import type {MahoSettingsStore} from './store.js';
+
+export const MCP_ENABLED_SETTING_KEY = 'developers.mcp_enabled';
 
 const CLI_COMMANDS = [
   {
@@ -134,10 +138,45 @@ function CommandRow(
   );
 }
 
-export function AiDevelopersPane({pane}: {readonly pane: PaneDefinition}) {
+function McpServerToggleCard(
+    {settings, store}: {
+      readonly settings: SettingValue[];
+      readonly store: MahoSettingsStore;
+    }) {
+  const setting = settings.find(item => item.key === MCP_ENABLED_SETTING_KEY);
+  // The browser registers maho.mcp.enabled with a default of true; treat a
+  // missing row as on so the card never claims MCP is off when it is running.
+  const enabled = setting ? setting.value === 'true' : true;
+  return (
+    <SectionCard
+      title="Local MCP server"
+      description="The MCP server accepts connections only from programs running as your user account on this computer. Any such program can control the browser while it is on; Maho labels its own CLI but cannot stop other software you run from using the same access.">
+      <ManagedSettingRow
+        title="Allow local MCP connections"
+        description="Turn off to stop the maho CLI and MCP agents from controlling Maho. Takes effect after restarting Maho.">
+        <Toggle
+          enabled={enabled}
+          label="Allow local MCP connections"
+          onToggle={async next => {
+            await store.commitSettingValue(
+                MCP_ENABLED_SETTING_KEY, next ? 'true' : 'false');
+          }}
+        />
+      </ManagedSettingRow>
+    </SectionCard>
+  );
+}
+
+export function AiDevelopersPane(
+    {pane, settings, store}: {
+      readonly pane: PaneDefinition;
+      readonly settings: SettingValue[];
+      readonly store: MahoSettingsStore;
+    }) {
   return (
     <PaneShell pane={pane}>
       <div className="space-y-6">
+        <McpServerToggleCard settings={settings} store={store} />
         <section className="space-y-3">
           <h3 className="px-1 text-base font-semibold tracking-tight text-foreground">CLI</h3>
           <CliHeroCard />

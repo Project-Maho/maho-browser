@@ -12,8 +12,10 @@
 #include "maho/browser/ui/theme/maho_color_id.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/models/image_model.h"
+#include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/color/color_provider.h"
 #include "ui/events/test/event_generator.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/views_test_base.h"
@@ -197,13 +199,30 @@ TEST_F(MahoToastViewTest, ThemeChangeUpdatesColors) {
             cp->GetColor(kMahoColorToastBodyForeground));
 }
 
-TEST_F(MahoToastViewTest, ShowsLeadingIcon) {
+TEST_F(MahoToastViewTest, ShowsLeadingIconOnlyWhenRequested) {
   toast_->SetTitleText(u"Link copied");
-
   toast_->OnThemeChanged();
-
   ASSERT_NE(toast_->icon_view_for_testing(), nullptr);
+  // Default toasts (errors, welcome, informational) carry no copy glyph.
+  EXPECT_FALSE(toast_->icon_view_for_testing()->GetVisible());
+
+  toast_->SetIcon(MahoToastView::Icon::kCopy);
+  EXPECT_TRUE(toast_->icon_view_for_testing()->GetVisible());
   EXPECT_FALSE(toast_->icon_view_for_testing()->GetImageModel().IsEmpty());
+
+  toast_->SetIcon(MahoToastView::Icon::kNone);
+  EXPECT_FALSE(toast_->icon_view_for_testing()->GetVisible());
+}
+
+TEST_F(MahoToastViewTest, ExposesAlertWithAccessibleName) {
+  toast_->SetTitleText(u"File Not Found");
+  toast_->SetBodyText(u"The file was moved or deleted.");
+  EXPECT_EQ(toast_->GetViewAccessibility().GetCachedRole(),
+            ax::mojom::Role::kAlert);
+  EXPECT_EQ(toast_->GetViewAccessibility().GetCachedName(),
+            u"File Not Found. The file was moved or deleted.");
+  EXPECT_EQ(toast_->GetAnnouncementText(),
+            u"File Not Found. The file was moved or deleted.");
 }
 
 }  // namespace maho

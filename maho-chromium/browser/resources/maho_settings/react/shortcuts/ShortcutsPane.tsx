@@ -1,8 +1,17 @@
-import React, {useCallback, useState} from 'react';
+import React, {useCallback, useRef, useState} from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@ui/dialog';
+import {Button} from '@ui/button';
 import {MahoSettingsStore} from '../store.js';
 import {MojoKeyCombo, ShortcutBinding} from '../../mojo.js';
 import {useShortcutInterceptor} from '../use_shortcut_interceptor.js';
-import {formatKeyCombo} from './key_combo.js';
+import {formatKeyCombo, keyComboSearchText} from './key_combo.js';
 import {exportShortcutsToFile, importShortcutsFromFile} from './import_export.js';
 import {useShortcuts} from './useShortcuts.js';
 
@@ -34,7 +43,14 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
   const handler = store.getHandler();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedAction, setSelectedAction] = useState<ShortcutBinding | null>(null);
+  // Only the id is held so the detail panel always reflects the reloaded list.
+  const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
+  const selectedAction = shortcuts.find(b => b.action === selectedActionId) ?? null;
+  const selectAction = useCallback((binding: ShortcutBinding) => {
+    setSelectedActionId(binding.action);
+  }, []);
+  const [pendingReset, setPendingReset] = useState<'all' | 'customized' | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   const [recordingBinding, setRecordingBinding] = useState<ShortcutBinding | null>(null);
   const [recordedCombo, setRecordedCombo] = useState<MojoKeyCombo | null>(null);
   const [conflictAction, setConflictAction] = useState<string | null>(null);
@@ -48,19 +64,23 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
     setCollapsedCategories(prev => ({...prev, [cat]: !prev[cat]}));
   };
 
+  const conflictRequestIdRef = useRef(0);
+
   const handleClear = useCallback(async () => {
     if (!recordingBinding) return;
     const emptyCombo: MojoKeyCombo = {key: '', modifiers: []};
     const {result} = await setShortcut(recordingBinding.action, emptyCombo);
     if (result.success) {
-      if (selectedAction?.action === recordingBinding.action) {
-        setSelectedAction(prev => prev ? {...prev, keyCombo: emptyCombo, isCustom: true} : null);
-      }
       setRecordingBinding(null);
       setRecordedCombo(null);
       setConflictAction(null);
+      setRecordingError(null);
+    } else if (result.conflictAction) {
+      setConflictAction(result.conflictAction);
+    } else {
+      setRecordingError('This shortcut could not be cleared. Try again.');
     }
-  }, [recordingBinding, selectedAction, setShortcut]);
+  }, [recordingBinding, setShortcut]);
 
   useShortcutInterceptor(
     store,
@@ -72,10 +92,14 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
         return;
       }
       setRecordedCombo(keyCombo);
+      setRecordingError(null);
+      setConflictAction(null);
+      // Only the latest combo's conflict check may commit its result.
+      const requestId = ++conflictRequestIdRef.current;
       void (async () => {
         const {conflictAction: conflict} = await checkShortcutConflict(keyCombo);
-        if (conflict) {
-          setConflictAction(conflict);
+        if (requestId === conflictRequestIdRef.current) {
+          setConflictAction(conflict ?? null);
         }
       })();
     }, [checkShortcutConflict, handleClear])
@@ -85,26 +109,30 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
     if (!recordingBinding || !recordedCombo) return;
     const {result} = await setShortcut(recordingBinding.action, recordedCombo);
     if (result.success) {
-      if (selectedAction?.action === recordingBinding.action) {
-        setSelectedAction(prev => prev ? {...prev, keyCombo: recordedCombo, isCustom: true} : null);
-      }
       setRecordingBinding(null);
       setRecordedCombo(null);
       setConflictAction(null);
+      setRecordingError(null);
     } else if (result.conflictAction) {
       setConflictAction(result.conflictAction);
+    } else {
+      setRecordingError('This shortcut could not be saved. Try another combination.');
     }
   };
 
   const cancelRecording = () => {
+    conflictRequestIdRef.current += 1;
     setRecordingBinding(null);
     setRecordedCombo(null);
     setConflictAction(null);
+    setRecordingError(null);
   };
 
   const tryAgain = () => {
+    conflictRequestIdRef.current += 1;
     setConflictAction(null);
     setRecordedCombo(null);
+    setRecordingError(null);
   };
 
   const exportAllShortcuts = async () => {
@@ -126,6 +154,18 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
     }
   };
 
+  const customizedCount = shortcuts.filter(b => b.isCustom).length;
+
+  const confirmReset = async () => {
+    const scope = pendingReset;
+    setPendingReset(null);
+    if (scope === 'all') {
+      await resetAllShortcuts();
+    } else if (scope === 'customized') {
+      await handleResetCustomized();
+    }
+  };
+
 
 
   const handleCopyShortcut = (binding: ShortcutBinding) => {
@@ -144,12 +184,13 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
     {key: 'custom', label: 'Custom'},
   ];
 
+  const searchTerm = keyComboSearchText(searchQuery);
   const filteredShortcuts = shortcuts.filter(binding => {
     const term = searchQuery.toLowerCase();
     const label = (binding.label || '').toLowerCase();
     const action = binding.action.toLowerCase();
-    const combo = formatKeyCombo(binding.keyCombo).toLowerCase();
-    return label.includes(term) || action.includes(term) || combo.includes(term);
+    const combo = keyComboSearchText(formatKeyCombo(binding.keyCombo));
+    return label.includes(term) || action.includes(term) || combo.includes(searchTerm);
   });
 
   const customizedShortcuts = filteredShortcuts.filter(b => b.isCustom);
@@ -179,8 +220,8 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
           <ShortcutsKebabMenu
             onExport={exportAllShortcuts}
             onImport={importAllShortcuts}
-            onResetAll={resetAllShortcuts}
-            onResetCustomized={handleResetCustomized}
+            onResetAll={() => setPendingReset('all')}
+            onResetCustomized={() => setPendingReset('customized')}
             onShowCheatSheet={() => setShowCheatSheet(true)}
           />
         </div>
@@ -202,7 +243,7 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
                 isCollapsed={!!collapsedCategories["customized"]}
                 onToggleCollapse={() => toggleCategory("customized")}
                 selectedAction={selectedAction}
-                onSelectAction={setSelectedAction}
+                onSelectAction={selectAction}
                 onEdit={setRecordingBinding}
                 onCopy={handleCopyShortcut}
                 onReset={resetShortcut}
@@ -223,7 +264,7 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
                   isCollapsed={!!isCollapsed}
                   onToggleCollapse={() => toggleCategory(cat.key)}
                   selectedAction={selectedAction}
-                  onSelectAction={setSelectedAction}
+                  onSelectAction={selectAction}
                   onEdit={setRecordingBinding}
                   onCopy={handleCopyShortcut}
                   onReset={resetShortcut}
@@ -249,11 +290,34 @@ export function ShortcutsPane({store}: ShortcutsPaneProps) {
         binding={recordingBinding}
         recordedCombo={recordedCombo}
         conflictAction={conflictAction}
+        error={recordingError}
         onSave={saveShortcut}
         onCancel={cancelRecording}
         onTryAgain={tryAgain}
         onClear={handleClear}
       />
+
+      {/* Reset confirmation */}
+      <Dialog open={pendingReset !== null} onOpenChange={(o) => { if (!o) setPendingReset(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {pendingReset === 'all' ? 'Reset all shortcuts?' : 'Reset customized shortcuts?'}
+            </DialogTitle>
+            <DialogDescription>
+              {customizedCount === 0
+                ? 'All shortcuts already use their defaults.'
+                : `${customizedCount} customized ${customizedCount === 1 ? 'shortcut' : 'shortcuts'} will go back to the default. This can't be undone.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button variant="secondary" onClick={() => setPendingReset(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={customizedCount === 0} onClick={() => { void confirmReset(); }}>
+              Reset
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Cheat Sheet Modal */}
       <ShortcutsCheatSheet

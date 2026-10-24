@@ -11,7 +11,8 @@ class MahoReaderTheme {
  public:
   MahoReaderTheme() = delete;
 
-  // Registers Maho reader mode palettes and remaps ReadAnything colors.
+  // Registers the Maho read-aloud highlight for ReadAnything. Foreground and
+  // background stay with Chromium so they remain a matched pair.
   static void AddColors(ui::ColorMixer& mixer, bool dark_mode);
 };
 

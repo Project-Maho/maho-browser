@@ -79,6 +79,14 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
   // The browser-side Rust CSPRNG is the only password source. A renderer-side
   // fallback would silently produce weaker passwords, so failures surface as errors.
   const generate = useCallback(async (opts: PasswordGeneratorOptions) => {
+    if (!opts.passphraseMode && !opts.useLowercase && !opts.useUppercase &&
+        !opts.useDigits && !opts.useSymbols) {
+      setGeneratedPassword('');
+      setStrengthScore(0);
+      setEntropyBits(0);
+      setGeneratorError('Turn on at least one character type.');
+      return;
+    }
     try {
       const handler = store?.getHandler();
       if (handler) {
@@ -103,6 +111,8 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
       // Reported below; no local generation fallback.
     }
     setGeneratedPassword('');
+    setStrengthScore(0);
+    setEntropyBits(0);
     setGeneratorError('Password generation is unavailable. Try again.');
   }, [store]);
 
@@ -149,6 +159,7 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
           <Button
             aria-label="Copy generated password"
             className="size-7 p-0"
+            disabled={!generatedPassword}
             size="icon"
             type="button"
             variant="ghost"
@@ -165,7 +176,7 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
         {generatorError}
       </div>
 
-      <div className="grid gap-1">
+      {generatedPassword ? <div className="grid gap-1">
         <div className="flex items-center justify-between text-[11px]">
           <span className="text-muted-foreground">Strength: <strong className={scoreInfo.color}>{scoreInfo.label}</strong></span>
           <span className="text-muted-foreground tabular-nums">~{entropyBits} bits entropy</span>
@@ -178,7 +189,7 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
             />
           ))}
         </div>
-      </div>
+      </div> : null}
 
       <div className="flex rounded-md border border-border bg-background/60 p-0.5">
         <button
@@ -300,6 +311,7 @@ export function PasswordGenerator({onUsePassword, store}: PasswordGeneratorProps
       {onUsePassword ? (
         <Button
           className="mt-1 h-8 w-full gap-1.5 bg-primary text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+          disabled={!generatedPassword}
           type="button"
           onClick={() => onUsePassword(generatedPassword)}>
           <Check className="size-3.5" />
@@ -456,6 +468,8 @@ export function AddSavedPasswordDrawer(
     }
     setSubmitting(false);
     if (message) {
+      // Keep the typed password so a retry does not lose it.
+      if (password && passwordRef.current) passwordRef.current.value = password;
       setErrorMessage(message);
       return;
     }
@@ -789,7 +803,9 @@ export function EditSavedPasswordDrawer(
       origins: origins.map(o => o.trim()).filter(Boolean),
       password,
       username: username.trim(),
-      notes: notes.trim() || undefined,
+      // Once the existing notes are loaded, send an empty string so clearing
+      // them reaches the Vault; undefined means "keep the stored notes".
+      notes: usernameLoaded ? notes.trim() : undefined,
       totpSecret: totpSecret.trim() || undefined,
     });
     if (!mountedRef.current) {
@@ -797,6 +813,8 @@ export function EditSavedPasswordDrawer(
     }
     setSubmitting(false);
     if (message) {
+      // Keep the replacement password so a retry does not silently drop it.
+      if (password && passwordRef.current) passwordRef.current.value = password;
       setErrorMessage(message);
       return;
     }
@@ -813,7 +831,9 @@ export function EditSavedPasswordDrawer(
         <DialogHeader>
           <DialogTitle>Edit {item.itemKind === VaultItemKind.kSecureItem ? 'secure note' : 'saved password'}</DialogTitle>
           <DialogDescription>
-            Update {getDisplayName(item)}. The existing password remains hidden; enter a new password only when replacing it.
+            {item.itemKind === VaultItemKind.kSecureItem ?
+                `Update ${getDisplayName(item)}.` :
+                `Update ${getDisplayName(item)}. The existing password remains hidden; enter a new password only when replacing it.`}
           </DialogDescription>
         </DialogHeader>
 

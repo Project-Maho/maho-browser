@@ -7,6 +7,7 @@ import type {TimelineEntry, ViewMode} from '../../../types.js';
 
 import {TrustCeremony} from '../trust-ceremony/trust-ceremony.js';
 import {InteractionApprovalCard} from './interaction-approval-card.js';
+import {useAppState} from '../../hooks/use-app-state.js';
 
 export function CompactShell(
     {
@@ -48,6 +49,7 @@ export function CompactShell(
       topOverlayRef?: RefObject<HTMLDivElement | null>;
       topPadding?: number;
     }) {
+  const {answeredApprovalSessionById} = useAppState(store);
   const renameArtifact = (artifactId: string, displayName: string): Promise<string | null> => {
     const sessionId = store.getSnapshot().currentSessionId;
     return sessionId ? store.renameArtifact(sessionId, artifactId, displayName)
@@ -83,6 +85,7 @@ export function CompactShell(
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             data-testid="runtime-flow">
           <ConversationThread
+            answeredApprovalIds={answeredApprovalSessionById}
             bottomPadding={bottomPadding}
             entries={entries}
             onOpenSettings={onOpenSettings}

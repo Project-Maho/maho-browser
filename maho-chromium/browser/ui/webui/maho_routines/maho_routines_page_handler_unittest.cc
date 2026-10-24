@@ -155,7 +155,8 @@ TEST_F(MahoRoutinesPageHandlerTest,
   run_loop.Run();
   EXPECT_FALSE(run_result);
   EXPECT_EQ(run_error, std::optional<std::string>(
-                           "Routines are available on Max tier only"));
+                           "Routines are available on Max tier or with your "
+                           "own API key (BYOK)"));
 
   auto parsed = MahoRoutinesPageHandler::ParseRunResultJsonForTesting(
       R"({"id":"morning_briefing","ran_at":1750000000,)"

@@ -16,7 +16,7 @@
 namespace maho {
 namespace {
 
-AutocompleteMatch MakeMatch(AutocompleteMatchType::Type type,
+AutocompleteMatch MakeMatch(AutocompleteMatch::Type type,
                             std::u16string fill_into_edit,
                             std::u16string contents,
                             std::u16string description,
@@ -38,7 +38,7 @@ std::vector<RemoteSearchSuggestion> MapMatches(ACMatches matches) {
 
 TEST(MahoRemoteSearchSuggestionMappingTest,
      AcceptedMatchTypesMapToRemoteSuggestions) {
-  const std::array<AutocompleteMatchType::Type, 5> accepted_types = {
+  const std::array<AutocompleteMatch::Type, 5> accepted_types = {
       AutocompleteMatchType::SEARCH_SUGGEST,
       AutocompleteMatchType::SEARCH_SUGGEST_ENTITY,
       AutocompleteMatchType::SEARCH_SUGGEST_TAIL,
@@ -102,7 +102,7 @@ TEST(MahoRemoteSearchSuggestionCursorTest,
 }
 
 TEST(MahoRemoteSearchSuggestionMappingTest, RejectsNonAcceptedMatchTypes) {
-  const std::array<AutocompleteMatchType::Type, 8> rejected_types = {
+  const std::array<AutocompleteMatch::Type, 8> rejected_types = {
       AutocompleteMatchType::SEARCH_WHAT_YOU_TYPED,
       AutocompleteMatchType::SEARCH_HISTORY,
       AutocompleteMatchType::SEARCH_OTHER_ENGINE,

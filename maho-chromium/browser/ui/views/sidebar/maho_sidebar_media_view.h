@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string>
 
+#include "base/files/file_path.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
@@ -15,6 +16,8 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/textfield/textfield_controller.h"
 #include "ui/views/view.h"
+
+class Browser;
 
 namespace views {
 class Button;
@@ -43,7 +46,7 @@ class MahoSidebarMediaView : public views::View,
   METADATA_HEADER(MahoSidebarMediaView, views::View)
 
  public:
-  MahoSidebarMediaView();
+  explicit MahoSidebarMediaView(Browser* browser);
   MahoSidebarMediaView(const MahoSidebarMediaView&) = delete;
   MahoSidebarMediaView& operator=(const MahoSidebarMediaView&) = delete;
   ~MahoSidebarMediaView() override;
@@ -72,7 +75,13 @@ class MahoSidebarMediaView : public views::View,
   void ApplySearchFilter();
   void SetActiveFilter(std::optional<MediaKind> filter);
   void HandleMediaAction(const std::string& item_id, MediaActionKind action);
+  // Reply (on the UI thread) of the async file-existence probe for Open/Reveal;
+  // shows a toast instead of silently doing nothing when the file is gone.
+  void HandleResolvedMediaAction(MediaActionKind action,
+                                 base::FilePath path,
+                                 bool exists);
 
+  raw_ptr<Browser> browser_ = nullptr;
   raw_ptr<views::ScrollView> scroll_view_ = nullptr;
   raw_ptr<views::View> list_container_ = nullptr;
   raw_ptr<views::Label> header_label_ = nullptr;

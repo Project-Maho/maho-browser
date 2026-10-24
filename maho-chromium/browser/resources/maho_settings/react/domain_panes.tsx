@@ -15,6 +15,7 @@ import {MailBehaviorPane} from './mail_behavior.js';
 import {MailSecurityPane} from './mail_security.js';
 import {AiDevelopersPane} from './ai_developers.js';
 import {McpAgentGuidanceSettingsSection} from './mcp_agent_guidance_settings_section.js';
+import {AgentActivityCard} from './agent_activity.js';
 import {ProfilesEditor} from './profiles_editor.js';
 import {openCheckoutOverlay} from '../../maho_common/react/lemonsqueezy.js';
 import {PlanPicker} from '../../maho_common/react/ui/plan-picker.js';
@@ -36,11 +37,13 @@ import {
   SelectValue,
 } from '@ui/select';
 import {Switch} from '@ui/switch';
+import {Textarea} from '@ui/textarea';
 import {AlertCircle, ArrowUpRight, Sparkles, Download, ExternalLink, Check, Loader2, Zap, Puzzle, ShieldOff, Globe, Database, Settings, Trash2, Key, RefreshCw} from '@icons/lucide';
 import {cn} from '@lib/utils';
 import {SETTING_METADATA} from '../schema/setting_schema.js';
 import {PRIVACY_SETTING_KEYS} from '../schema/panes.js';
 import type {AccountStatus, BillingInfo, PageHandlerRemote} from '../maho_settings.mojom-webui.js';
+import {DataExportKind} from '../maho_settings.mojom-webui.js';
 import {scopeApplicabilityLabel} from '../models.js';
 import {
   AIConnectionState,
@@ -59,6 +62,7 @@ import {
   SyncDeviceInfo,
   SyncKeyInfo,
   SyncStatus,
+  type ClientHeldKeysResult,
 } from '../mojo.js';
 import type {PaneDefinition} from '../models.js';
 import type {MahoSettingsStore, SettingsState} from './store.js';
@@ -148,6 +152,15 @@ function useMountedRef(): React.MutableRefObject<boolean> {
 
   return mountedRef;
 }
+
+// Maho Mini registers Option+Command+N on macOS and Ctrl+Alt+N elsewhere
+// (maho_mini_window.cc); the click override uses the same modifier pair.
+const IS_MAC_PLATFORM = typeof navigator !== 'undefined' &&
+    /mac/i.test(navigator.platform || '');
+const MINI_SHORTCUT_LABEL = IS_MAC_PLATFORM ? 'Option+Command+N' : 'Ctrl+Alt+N';
+// The click override is only implemented on macOS (Browser::OpenURLFromTab
+// patch is IS_MAC), so the row is shown there only.
+const MINI_CLICK_LABEL = 'Command+Option+Click';
 
 function createTransientId(prefix: string): string {
   const randomUUID = globalThis.crypto &&
@@ -333,7 +346,7 @@ export function DomainPaneContent(
     case 'ai':
       return <AiPane pane={pane} store={store} />;
     case 'ai-developers':
-      return <AiDevelopersPane pane={pane} />;
+      return <AiDevelopersPane pane={pane} settings={settings} store={store} />;
     case 'billing':
       return <BillingPane pane={pane} store={store} />;
     case 'content-blocker':
@@ -359,12 +372,78 @@ export function DomainPaneContent(
   }
 }
 
+export interface AccountRequiredNotice {
+  readonly title: string;
+  readonly description: string;
+}
+
+/**
+ * Sync needs a Maho account. A profile with no account (including one that
+ * chose "Continue without an account") sees why sync is off and how to turn
+ * it on instead of sync controls that the native side would refuse.
+ */
+export function getSyncAccountRequiredNotice(
+    account: Pick<AccountStatus, 'signedIn'|'localOnly'>|null):
+    AccountRequiredNotice|null {
+  if (account === null || account.signedIn) {
+    return null;
+  }
+  return {
+    title: 'Account required for sync',
+    description: account.localOnly ?
+        'You chose to use Maho without an account. Your data stays on this device. Sign in above to sync across devices.' :
+        'Sign in above to sync your data across devices.',
+  };
+}
+
+/** Header copy for the signed-out Account pane. */
+export function getAccountSignInCopy(
+    account: Pick<AccountStatus, 'localOnly'>|null):
+    {title: string; description: string} {
+  if (account?.localOnly) {
+    return {
+      title: 'Using Maho without an account',
+      description:
+          'Everything stays on this device. Sign in later to add sync, Maho Managed AI, and billing.',
+    };
+  }
+  return {
+    title: 'Sign in to Maho',
+    description: 'Access your subscription, sync, and billing.',
+  };
+}
+
+export interface AccountSessionNotice {
+  readonly title: 'Signed out - sync paused';
+  readonly description: string;
+}
+
+/**
+ * Non-modal notice for a profile that finished onboarding but whose relay
+ * session expired: browsing continues, sync pauses until the next sign-in.
+ */
+export function getAccountSessionNotice(
+    account: Pick<AccountStatus, 'signedIn'|'sessionValid'>|null):
+    AccountSessionNotice|null {
+  if (!account?.signedIn || account.sessionValid) {
+    return null;
+  }
+  return {
+    title: 'Signed out - sync paused',
+    description:
+        'Your session expired. Sign in to resume sync and unlock your vault.',
+  };
+}
+
 function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore}) {
   const mountedRef = useMountedRef();
   const state = useSettingsStoreState(store);
   const account = state.accountStatus;
-  const error = state.accountError;
+  const error = state.signInError;
+  const statusError = state.accountError;
   const loading = state.accountLoading;
+  const sessionNotice = getAccountSessionNotice(account);
+  const signInCopy = getAccountSignInCopy(account);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -376,9 +455,16 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
   let accountSection: React.ReactNode;
   if (loading && !submitting && account === null) {
     accountSection = <PaneLoading message="Loading account…" />;
-  } else if (!account?.signedIn) {
+  } else if (!account?.signedIn || sessionNotice) {
     accountSection = (
-      <SectionCard title="Sign in to Maho" description="Access your subscription, sync, and billing." className="max-w-md" padded>
+      <SectionCard title={signInCopy.title} description={signInCopy.description} className="max-w-md" padded>
+          {sessionNotice ? (
+            <Alert className="mb-4" data-testid="account-session-notice">
+              <AlertCircle className="size-4" />
+              <AlertTitle>{sessionNotice.title}</AlertTitle>
+              <AlertDescription>{sessionNotice.description}</AlertDescription>
+            </Alert>
+          ) : null}
           <div className="mb-4 flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
             <svg aria-hidden="true" className="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
@@ -435,6 +521,12 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
                 <AlertCircle className="size-4" />
                 <AlertTitle>Sign in failed</AlertTitle>
                 <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            ) : statusError ? (
+              <Alert>
+                <AlertCircle className="size-4" />
+                <AlertTitle>Couldn't check your account status</AlertTitle>
+                <AlertDescription>{statusError}</AlertDescription>
               </Alert>
             ) : null}
             <Button disabled={submitting || !email.trim() || !password} type="submit">
@@ -502,7 +594,7 @@ function AccountPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
     <PaneShell pane={pane}>
       {accountSection}
       <div className="mt-6">
-        <SyncConnectionSection store={store} />
+        <SyncConnectionSection store={store} account={account} />
       </div>
     </PaneShell>
   );
@@ -826,29 +918,31 @@ function MahoMiniPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
           >
             <div className="divide-y divide-border -mx-6 -my-6">
               <ManagedSettingRow
-                description="Open a blank Maho Mini window with Option+Command+N."
-                title="Option+Command+N shortcut"
+                description={`Open a blank Maho Mini window with ${MINI_SHORTCUT_LABEL}.`}
+                title={`${MINI_SHORTCUT_LABEL} shortcut`}
                 className="px-6 py-4">
                 <Toggle
                   enabled={settings.find(s => s.key === 'atc.maho_mini_global_shortcut_enabled')?.value !== 'false'}
-                  label="Option+Command+N shortcut"
+                  label={`${MINI_SHORTCUT_LABEL} shortcut`}
                   onToggle={async nextEnabled => {
                     await store.commitSettingValue('atc.maho_mini_global_shortcut_enabled', nextEnabled ? 'true' : 'false');
                   }}
                 />
               </ManagedSettingRow>
+              {IS_MAC_PLATFORM && (
               <ManagedSettingRow
-                description="Command+Option+Click on links to open them in Maho Mini instead of a new tab."
-                title="Command+Option+Click override"
+                description={`${MINI_CLICK_LABEL} on links to open them in Maho Mini instead of a new tab.`}
+                title={`${MINI_CLICK_LABEL} override`}
                 className="px-6 py-4">
                 <Toggle
                   enabled={settings.find(s => s.key === 'atc.maho_mini_click_override_enabled')?.value !== 'false'}
-                  label="Command+Option+Click override"
+                  label={`${MINI_CLICK_LABEL} override`}
                   onToggle={async nextEnabled => {
                     await store.commitSettingValue('atc.maho_mini_click_override_enabled', nextEnabled ? 'true' : 'false');
                   }}
                 />
               </ManagedSettingRow>
+              )}
               <ManagedSettingRow
                 description="Open external links in Maho Mini from other applications."
                 title="Open external links in Maho Mini"
@@ -1761,6 +1855,8 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
                 'ai.final_confirm',
                 'ai.proactive_mode',
                 'ai.approval_policy',
+                'agent.denied_origins',
+                'agent.mail_send_delay_seconds',
               ].map(key => {
                 const setting = settingsState.settings.find(item => item.key === key);
                 const meta = SETTING_METADATA[key];
@@ -1780,6 +1876,13 @@ function AiPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsStore})
                         value={setting.value}
                         options={meta.options ?? []}
                         onChange={value => { void save(value); }}
+                      />
+                    ) : meta.control === 'textarea' ? (
+                      <DeniedOriginsEditor
+                        label={meta.label}
+                        placeholder={meta.placeholder ?? ''}
+                        value={setting.value}
+                        onSave={save}
                       />
                     ) : (
                       <Toggle
@@ -1892,7 +1995,19 @@ function ProviderConfigDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // openai-compatible endpoints may be keyless, and the backend reports them as
+  // connected from the base URL alone, so a key is neither required nor implied.
+  const needsApiKey = providerId === 'openai' || providerId === 'anthropic';
+  const needsBaseUrl = providerId === 'openai-compatible' || providerId === 'local-server';
+  const hasStoredKey = provider.state === AIConnectionState.kConnected;
+  const missingApiKey = needsApiKey && !hasStoredKey && !apiKey.trim();
+  const missingBaseUrl = needsBaseUrl && !baseUrl.trim();
+
   const handleSave = async () => {
+    if (missingApiKey || missingBaseUrl) {
+      setError(missingBaseUrl ? 'Enter a base URL to save this provider.' : 'Enter an API key to save this provider.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -1937,8 +2052,9 @@ function ProviderConfigDialog({
 
           {(providerId === 'openai-compatible' || providerId === 'local-server') && (
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-foreground">Base URL</label>
+              <label className="text-xs font-semibold text-foreground" htmlFor="ai-provider-base-url">Base URL</label>
               <Input
+                id="ai-provider-base-url"
                 value={baseUrl}
                 placeholder={providerId === 'local-server' ? 'http://localhost:11434' : 'https://api.openai.com/v1'}
                 onChange={e => setBaseUrl(e.target.value)}
@@ -1948,11 +2064,12 @@ function ProviderConfigDialog({
 
           {providerId !== 'local-server' && providerId !== 'maho-managed' && (
             <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-foreground">API Key</label>
+              <label className="text-xs font-semibold text-foreground" htmlFor="ai-provider-api-key">API Key</label>
               <Input
+                id="ai-provider-api-key"
                 type="password"
                 value={apiKey}
-                placeholder={provider.state === AIConnectionState.kConnected ? '•••••••• (stored encrypted)' : 'Enter API key'}
+                placeholder={hasStoredKey && providerId !== 'openai-compatible' ? '•••••••• (stored encrypted)' : 'Enter API key'}
                 onChange={e => setApiKey(e.target.value)}
               />
             </div>
@@ -2460,7 +2577,7 @@ function BillingPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsSt
           </div>
         ) : null}
         <p className="text-xs text-muted-foreground mt-4">
-          Credits are consumed at a 30% markup over usage cost. Credits never expire. See ADR 0010 for details.
+          Credits are consumed at a 30% markup over usage cost. Credits never expire.
         </p>
       </SectionCard>
 
@@ -2649,7 +2766,117 @@ function RemoteDeviceRow({
   );
 }
 
-function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
+export const SYNC_ROOM_RETIRED_MESSAGE =
+    'This account now uses your own keys - enter your recovery phrase to continue';
+
+export const HOLD_OWN_KEYS_WARNING =
+    'Until now the Maho relay held a copy of your Sync key, so data synced ' +
+    'before this switch was readable by the server. After the switch only ' +
+    'your 24-word recovery phrase can unlock Sync and your Vault: every other ' +
+    'device must re-join with it, and if you lose it nobody can recover your data.';
+
+/**
+ * Settings > Sync "Hold my own keys": a warning, an explicit confirm, then the
+ * core switch + relay update. Shows the new recovery phrase once it exists,
+ * even when the relay step failed, so it is never lost.
+ */
+export function HoldOwnKeysSection(
+    {handler, onSwitched, relaySwitchPending = false}: {
+      handler: Pick<PageHandlerRemote, 'enableClientHeldKeys'>;
+      onSwitched?: () => void | Promise<void>;
+      // This device already holds its own keys but the relay was not told:
+      // offer a retry that only re-reports the room (no new keys).
+      relaySwitchPending?: boolean;
+    }) {
+  const [confirming, setConfirming] = useState(false);
+  const [result, setResult] = useState<ClientHeldKeysResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [relayPending, setRelayPending] = useState(relaySwitchPending);
+
+  useEffect(() => {
+    setRelayPending(relaySwitchPending);
+  }, [relaySwitchPending]);
+
+  const onConfirm = async () => {
+    setError(null);
+    try {
+      const {result: switched} = await handler.enableClientHeldKeys();
+      if (switched.recoveryPhrase) {
+        setResult(switched);
+      }
+      // A local switch (phrase or room returned) that the relay refused stays
+      // pending so the retry action remains available.
+      setRelayPending(!switched.success && Boolean(switched.roomId));
+      setError(switched.success ? null :
+          (switched.errorMessage || 'Could not switch to your own keys.'));
+      setConfirming(false);
+      // Refresh the pane only after a retry succeeded: on the first switch the
+      // phrase must stay on screen, and a refresh would unmount this section.
+      if (switched.success && !switched.recoveryPhrase && !result && onSwitched) {
+        await onSwitched();
+      }
+    } catch {
+      setError('Could not switch to your own keys.');
+    }
+  };
+
+  const retryRow = relayPending ? (
+    <ManagedSettingRow
+      controlClassName={SETTING_ACTIONS_CLASS}
+      description="This device already uses your own keys, but the Maho relay still has the old key. Retry to finish the switch."
+      title="Relay update pending">
+      <ActionButton label="Retry relay update" onClick={onConfirm} />
+    </ManagedSettingRow>
+  ) : null;
+
+  return (
+    <div data-testid="hold-own-keys">
+      {result ? (
+        <>
+          <ManagedSettingRow
+            controlClassName={SETTING_ACTIONS_CLASS}
+            description={
+              <span data-testid="hold-own-keys-phrase" className="font-mono select-all">
+                {result.recoveryPhrase}
+              </span>
+            }
+            title="Your recovery phrase">
+            {navigator.clipboard?.writeText ? (
+              <ActionButton label="Copy" onClick={async () => {
+                await navigator.clipboard.writeText(result.recoveryPhrase);
+              }} />
+            ) : null}
+          </ManagedSettingRow>
+          {retryRow}
+        </>
+      ) : relayPending ? retryRow : confirming ? (
+        <ManagedSettingRow
+          controlClassName={SETTING_ACTIONS_CLASS}
+          description={HOLD_OWN_KEYS_WARNING}
+          title="Hold my own keys?">
+          <ActionButton label="Switch to my own keys" onClick={onConfirm} />
+          <ActionButton label="Cancel" onClick={() => setConfirming(false)} />
+        </ManagedSettingRow>
+      ) : (
+        <ManagedSettingRow
+          controlClassName={SETTING_ACTIONS_CLASS}
+          description="Stop the Maho relay from holding a copy of your Sync key. You keep a 24-word recovery phrase instead."
+          title="Hold my own keys">
+          <ActionButton label="Hold my own keys" onClick={() => {
+            setError(null);
+            setConfirming(true);
+          }} />
+        </ManagedSettingRow>
+      )}
+      {error ? (
+        <div role="alert" className="text-sm text-destructive px-4 py-2 border-b bg-destructive/10">{error}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function SyncConnectionSection(
+    {store, account}: {store: MahoSettingsStore; account: AccountStatus | null}) {
   const handler = store.getHandler();
   const [joinPhrase, setJoinPhrase] = useState('');
   const [pendingKeyInfo, setPendingKeyInfo] = useState<SyncKeyInfo | null>(null);
@@ -2730,6 +2957,19 @@ function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
     }
   };
 
+  const accountRequired = getSyncAccountRequiredNotice(account);
+  if (accountRequired) {
+    return (
+      <SectionCard title="Sync" description="Sync your data across devices with your 24-word recovery phrase." padded>
+        <Alert data-testid="sync-account-required">
+          <AlertCircle className="size-4" />
+          <AlertTitle>{accountRequired.title}</AlertTitle>
+          <AlertDescription>{accountRequired.description}</AlertDescription>
+        </Alert>
+      </SectionCard>
+    );
+  }
+
   return (
     <>
       {state.status === 'loading' ? <PaneLoading message="Loading sync status…" /> : null}
@@ -2737,7 +2977,14 @@ function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
         <PaneRetry message={state.message} title="Sync unavailable" onRetry={() => void loadStatus()} />
       ) : null}
       {state.status === 'loaded' ? (
-        <SectionCard title="Sync" description="Sync your data across devices with an end-to-end encrypted recovery phrase.">
+        <SectionCard title="Sync" description="Sync your data across devices with your 24-word recovery phrase.">
+          {state.data.status.roomRetired ? (
+            <Alert data-testid="sync-room-retired" variant="destructive">
+              <AlertCircle className="size-4" />
+              <AlertTitle>Recovery phrase needed</AlertTitle>
+              <AlertDescription>{SYNC_ROOM_RETIRED_MESSAGE}</AlertDescription>
+            </Alert>
+          ) : null}
           {syncOperationError && (
             <div className="text-sm text-destructive px-4 py-2 border-b bg-destructive/10">{syncOperationError}</div>
           )}
@@ -2747,8 +2994,13 @@ function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
               `Not connected · ${state.data.status.statusLabel || 'idle'}`}
             title="Status"
           />
-          {state.data.status.errorMessage ? (
+          {state.data.status.errorMessage && !state.data.status.roomRetired ? (
             <ReadOnlySettingRow description={state.data.status.errorMessage} title="Error" />
+          ) : null}
+          {state.data.status.keyMode === 'client_held' ? (
+            <ReadOnlySettingRow
+              description="You hold your own keys. New devices join with your 24-word recovery phrase."
+              title="Key custody" />
           ) : null}
           {state.data.status.isSyncing ? (
             <>
@@ -2783,6 +3035,13 @@ function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
               {state.data.devicesError ? (
                 <ReadOnlySettingRow description={state.data.devicesError} title="Devices" />
               ) : null}
+              {state.data.status.keyMode !== 'client_held' || state.data.status.relaySwitchPending ? (
+                <HoldOwnKeysSection
+                  handler={handler}
+                  relaySwitchPending={state.data.status.relaySwitchPending}
+                  onSwitched={loadStatus}
+                />
+              ) : null}
               <ManagedSettingRow controlClassName={SETTING_ACTIONS_CLASS} description="Disconnect this browser from sync." title="Stop Sync">
                 <ActionButton label="Stop Sync" onClick={async () => {
                   await handler.stopSync();
@@ -2803,7 +3062,11 @@ function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
               </ManagedSettingRow>
               {pendingKeyInfo ? (
                 <SyncRecoveryPhraseRow keyInfo={pendingKeyInfo} onContinue={async () => {
-                  await handler.configureSyncEncryption(pendingKeyInfo.recoveryPhrase);
+                  const {status} = await handler.configureSyncEncryption(pendingKeyInfo.recoveryPhrase);
+                  if (status.statusLabel === 'error') {
+                    setSyncOperationError(status.errorMessage || 'Failed to start sync.');
+                    return;
+                  }
                   await loadStatus();
                 }} />
               ) : null}
@@ -2819,7 +3082,13 @@ function SyncConnectionSection({store}: {store: MahoSettingsStore}) {
                   if (!phrase) {
                     return;
                   }
-                  await handler.joinSync(phrase);
+                  const {status} = await handler.joinSync(phrase);
+                  if (status.statusLabel === 'error') {
+                    // Wrong phrase: nothing was joined; keep the input.
+                    setSyncOperationError(status.errorMessage || 'Failed to join sync.');
+                    return;
+                  }
+                  setSyncOperationError(null);
                   setJoinPhrase('');
                   await loadStatus();
                 }} />
@@ -2894,6 +3163,8 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
     lastFour: '',
   });
   const [state, setState] = useState<LoadState<AutofillPaneData>>(createLoadingState());
+  const [autofillAddError, setAutofillAddError] =
+      useState<{kind: 'address' | 'payment'; message: string} | null>(null);
 
   const loadAutofill = useCallback(async () => {
     setState(createLoadingState());
@@ -2970,6 +3241,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 <TextFieldShell ariaLabel="Address phone number" placeholder="Phone" value={addressForm.phone} onChange={value => setAddressForm(current => ({...current, phone: value}))} />
                 <TextFieldShell ariaLabel="Address email" placeholder="Email" value={addressForm.email} onChange={value => setAddressForm(current => ({...current, email: value}))} />
               </div>
+              {autofillAddError?.kind === 'address' ? <ActionError message={autofillAddError.message} /> : null}
               <div className={SETTING_ACTIONS_CLASS}>
                 <ActionButton label="Add address" onClick={async () => {
                   const values = {
@@ -2986,11 +3258,16 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                   if (!Object.values(values).some(Boolean)) {
                     return;
                   }
-                  await handler.addAutofillAddress(
+                  const {address} = await handler.addAutofillAddress(
                       createTransientId('autofill-address'), values.name,
                       values.addressLine1, values.addressLine2, values.city,
                       values.state, values.postalCode, values.country, values.phone,
                       values.email);
+                  if (!address) {
+                    setAutofillAddError({kind: 'address', message: "This address couldn't be saved. Check the details and try again."});
+                    return;
+                  }
+                  setAutofillAddError(null);
                   setAddressForm({addressLine1: '', addressLine2: '', city: '', country: '', email: '', name: '', phone: '', postalCode: '', state: ''});
                   await loadAutofill();
                 }} />
@@ -3029,6 +3306,7 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                 <TextFieldShell ariaLabel="Payment card expiration" placeholder="Expiration (MM/YY)" value={paymentForm.expiration} onChange={value => setPaymentForm(current => ({...current, expiration: value}))} />
                 <TextFieldShell ariaLabel="Payment cardholder name" placeholder="Cardholder name" value={paymentForm.cardholderName} onChange={value => setPaymentForm(current => ({...current, cardholderName: value}))} />
               </div>
+              {autofillAddError?.kind === 'payment' ? <ActionError message={autofillAddError.message} /> : null}
               <div className={SETTING_ACTIONS_CLASS}>
                 <ActionButton label="Add payment" onClick={async () => {
                   const values = {
@@ -3040,9 +3318,14 @@ function AutofillPane({pane, store}: {pane: PaneDefinition; store: MahoSettingsS
                   if (!Object.values(values).some(Boolean)) {
                     return;
                   }
-                  await handler.addAutofillPayment(
+                  const {payment} = await handler.addAutofillPayment(
                       createTransientId('autofill-payment'), values.cardNetwork,
                       values.lastFour, values.expiration, values.cardholderName);
+                  if (!payment) {
+                    setAutofillAddError({kind: 'payment', message: "This payment method couldn't be saved. Check the details and try again."});
+                    return;
+                  }
+                  setAutofillAddError(null);
                   setPaymentForm({cardNetwork: '', cardholderName: '', expiration: '', lastFour: ''});
                   await loadAutofill();
                 }} />
@@ -3284,6 +3567,8 @@ function ContentBlockerPane({pane, settings, store}: {pane: PaneDefinition; sett
             </Alert>
           ) : <ContentBlockerPrivacyCard settings={settings} store={store} />}
 
+          {gatedProfileTarget ? null : <AgentActivityCard handler={handler} />}
+
           <SectionCard title="Engine Health & Status" className="mb-6">
             <ManagedSettingRow
               controlClassName={SETTING_ACTIONS_CLASS}
@@ -3435,4 +3720,149 @@ export function BrowserDataImportCard({handler}: {handler: PageHandlerRemote}) {
   );
 }
 
+const DATA_EXPORT_OPTIONS: ReadonlyArray<{
+  kind: DataExportKind;
+  title: string;
+  description: string;
+  label: string;
+}> = [
+  {kind: DataExportKind.kBookmarks, title: 'Bookmarks', description: 'Bookmarks, favorites and pinned tabs as a standard HTML file any browser can import.', label: 'Export Bookmarks…'},
+  {kind: DataExportKind.kHistory, title: 'History', description: 'Browsing history as CSV.', label: 'Export History…'},
+  {kind: DataExportKind.kPasswords, title: 'Passwords', description: 'Saved passwords as a Chrome-compatible CSV. Requires device authentication. The file is not encrypted.', label: 'Export Passwords…'},
+  {kind: DataExportKind.kConversations, title: 'AI conversations', description: 'Every AI chat thread with all messages, as JSON.', label: 'Export Conversations…'},
+  {kind: DataExportKind.kSpaces, title: 'Spaces', description: 'Spaces with their folders, pinned tabs and favorites, as JSON.', label: 'Export Spaces…'},
+  {kind: DataExportKind.kFullBackup, title: 'Full backup', description: 'Bookmarks, settings, notes, boosts and spaces in one JSON file. Passwords are not included.', label: 'Export Backup…'},
+];
 
+const DATA_EXPORT_ERROR_MESSAGES: Record<string, string> = {
+  vault_locked: 'Unlock your passwords vault first, then try again.',
+  reauth_failed: 'Device authentication was not completed.',
+  os_auth_unavailable: 'Password export needs device authentication or a vault passphrase, and neither is available on this device.',
+  invalid_passphrase: 'That vault passphrase is incorrect.',
+  rate_limited: 'Too many attempts. Wait a moment and try again.',
+  write_failed: 'The file could not be written.',
+  export_in_progress: 'Another export is already running.',
+  profile_not_allowed: 'Password export is disabled for this profile.',
+};
+
+type DataExportStatus =
+  | {kind: DataExportKind; state: 'done'; message: string}
+  | {kind: DataExportKind; state: 'error'; message: string};
+
+export function BrowserDataExportCard({handler}: {handler: PageHandlerRemote}) {
+  const [status, setStatus] = useState<DataExportStatus | null>(null);
+  const [needsPassphrase, setNeedsPassphrase] = useState(false);
+  const [passphrase, setPassphrase] = useState('');
+  const mountedRef = useMountedRef();
+
+  const runExport = async (kind: DataExportKind, secret: string | null) => {
+    const result = await handler.exportData(kind, secret);
+    if (!mountedRef.current) {
+      return;
+    }
+    if (result.success) {
+      setNeedsPassphrase(false);
+      setPassphrase('');
+      setStatus({kind, state: 'done', message: `Saved to ${result.path}`});
+      return;
+    }
+    if (result.errorCode === 'canceled') {
+      setStatus(null);
+      return;
+    }
+    if (kind === DataExportKind.kPasswords &&
+        (result.errorCode === 'passphrase_required' ||
+         result.errorCode === 'invalid_passphrase')) {
+      setNeedsPassphrase(true);
+    }
+    setStatus({
+      kind,
+      state: 'error',
+      message: result.errorCode === 'passphrase_required' ?
+          'Enter your vault passphrase to export passwords.' :
+          (DATA_EXPORT_ERROR_MESSAGES[result.errorCode] ?? 'Export failed.'),
+    });
+  };
+
+  return (
+    <SectionCard
+      title="Export Data"
+      description="Take your data with you. Exports are saved to a location you choose."
+    >
+      {DATA_EXPORT_OPTIONS.map(option => (
+        <div key={option.kind} className="border-t border-border px-6 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium text-foreground">{option.title}</div>
+              <div className="text-xs text-muted-foreground">{option.description}</div>
+            </div>
+            <ActionButton
+              label={option.label}
+              onClick={() => runExport(option.kind, null)}
+            />
+          </div>
+          {option.kind === DataExportKind.kPasswords && needsPassphrase ? (
+            <div className="mt-3 flex items-center gap-2">
+              <Input
+                aria-label="Vault passphrase"
+                autoComplete="current-password"
+                type="password"
+                value={passphrase}
+                onChange={event => setPassphrase(event.target.value)}
+              />
+              <ActionButton
+                disabled={passphrase.length === 0}
+                label="Confirm"
+                onClick={() => runExport(DataExportKind.kPasswords, passphrase)}
+              />
+            </div>
+          ) : null}
+          {status?.kind === option.kind ? (
+            status.state === 'error' ?
+                <ActionError message={status.message} /> :
+                <div className="mt-1.5 text-xs text-muted-foreground" role="status">{status.message}</div>
+          ) : null}
+        </div>
+      ))}
+    </SectionCard>
+  );
+}
+
+// List editor for `agent.denied_origins`: one origin or host per line. The
+// stored value is the normalized newline-joined list (trimmed, blank lines
+// dropped, duplicates removed); empty means no site is denied.
+export function normalizeDeniedOrigins(raw: string): string {
+  const seen = new Set<string>();
+  for (const entry of raw.split(/[\n,]/)) {
+    const trimmed = entry.trim().toLowerCase();
+    if (trimmed) seen.add(trimmed);
+  }
+  return [...seen].join('\n');
+}
+
+function DeniedOriginsEditor(
+    {label, placeholder, value, onSave}: {
+      label: string;
+      placeholder: string;
+      value: string;
+      onSave: (value: string) => Promise<void>;
+    }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return (
+    <Textarea
+      aria-label={label}
+      placeholder={placeholder}
+      rows={4}
+      spellCheck={false}
+      value={draft}
+      className="font-mono text-sm"
+      onChange={event => setDraft(event.currentTarget.value)}
+      onBlur={() => {
+        const next = normalizeDeniedOrigins(draft);
+        setDraft(next);
+        if (next !== value) void onSave(next);
+      }}
+    />
+  );
+}

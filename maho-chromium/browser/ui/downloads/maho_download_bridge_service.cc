@@ -9,10 +9,12 @@
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/grit/generated_resources.h"
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "maho/browser/maho_core_holder.h"
 #include "maho/third_party/maho/maho_ffi.h"
+#include "ui/base/l10n/l10n_util.h"
 
 namespace maho {
 
@@ -101,9 +103,77 @@ void MahoDownloadBridgeService::RemoveDownload(const std::string& maho_id) {
     last_state_.erase(guid);
     guid_to_maho_id_.erase(guid);
     metadata_finalized_.erase(guid);
+    failure_reason_.erase(guid);
     maho_id_to_guid_.erase(it);
   }
   ScheduleNotifyChanged(/*immediate=*/true);
+}
+
+std::optional<MahoDownloadBridgeService::LiveFailure>
+MahoDownloadBridgeService::GetLiveFailure(const std::string& maho_id) const {
+  auto guid_it = maho_id_to_guid_.find(maho_id);
+  if (guid_it == maho_id_to_guid_.end()) {
+    return std::nullopt;
+  }
+  auto reason_it = failure_reason_.find(guid_it->second);
+  if (reason_it == failure_reason_.end()) {
+    return std::nullopt;
+  }
+  LiveFailure failure;
+  failure.message = FailureMessageForReason(reason_it->second);
+  download::DownloadItem* item =
+      manager_ ? manager_->GetDownloadByGuid(guid_it->second) : nullptr;
+  failure.can_resume = item && item->CanResume();
+  return failure;
+}
+
+// static
+std::u16string MahoDownloadBridgeService::FailureMessageForReason(
+    download::DownloadInterruptReason reason) {
+  // Mirrors OfflineItemUtils::GetFailStateMessage's grouping.
+  int string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS;
+  switch (reason) {
+    case download::DOWNLOAD_INTERRUPT_REASON_FILE_ACCESS_DENIED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_ACCESS_DENIED;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_FILE_NO_SPACE:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_DISK_FULL;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_FILE_VIRUS_INFECTED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_VIRUS;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_FILE_BLOCKED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_BLOCKED;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_NETWORK_FAILED:
+    case download::DOWNLOAD_INTERRUPT_REASON_NETWORK_INVALID_REQUEST:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_NETWORK_ERROR;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_NETWORK_TIMEOUT:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_NETWORK_TIMEOUT;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_NETWORK_DISCONNECTED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_NETWORK_DISCONNECTED;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_NETWORK_SERVER_DOWN:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_SERVER_DOWN;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_SERVER_FAILED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_SERVER_PROBLEM;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_SERVER_BAD_CONTENT:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_NO_FILE;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_SERVER_UNAUTHORIZED:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_UNAUTHORIZED;
+      break;
+    case download::DOWNLOAD_INTERRUPT_REASON_SERVER_FORBIDDEN:
+      string_id = IDS_DOWNLOAD_INTERRUPTED_STATUS_FORBIDDEN;
+      break;
+    default:
+      break;
+  }
+  return l10n_util::GetStringUTF16(string_id);
 }
 
 void MahoDownloadBridgeService::Shutdown() {
@@ -139,7 +209,7 @@ void MahoDownloadBridgeService::OnDownloadCreated(
       return;
     }
 
-    // 2. Legacy fallback match (guid-less seed row) using url + (file_path or started_at)
+    // 2. Legacy fallback match (guid-less seed row) using url + file_path
     char* raw_list = maho_core_get_download_view_models(core);
     if (raw_list) {
       std::string list_json(raw_list);
@@ -155,13 +225,15 @@ void MahoDownloadBridgeService::OnDownloadCreated(
             const std::string* dl_file_path = dict->FindString("filePath");
             const std::string* dl_id = dict->FindString("id");
             if (dl_url && dl_id && *dl_url == item->GetURL().spec()) {
-              bool path_match = false;
-              if (dl_file_path && !dl_file_path->empty() && !item->GetTargetFilePath().empty()) {
-                if (*dl_file_path == item->GetTargetFilePath().AsUTF8Unsafe()) {
-                  path_match = true;
-                }
-              }
-              if (path_match || (item->GetTargetFilePath().empty() && (!dl_file_path || dl_file_path->empty()))) {
+              // A guid-less row is adopted only on a positive file-path
+              // match: URLs repeat across downloads (the same file fetched
+              // twice), so URL equality alone would let a new item overwrite
+              // an unrelated older row's metadata.
+              const bool path_match =
+                  dl_file_path && !dl_file_path->empty() &&
+                  !item->GetTargetFilePath().empty() &&
+                  *dl_file_path == item->GetTargetFilePath().AsUTF8Unsafe();
+              if (path_match) {
                 maho_id = *dl_id;
                 guid_to_maho_id_[item->GetGuid()] = maho_id;
                 maho_id_to_guid_[maho_id] = item->GetGuid();
@@ -251,6 +323,10 @@ void MahoDownloadBridgeService::OnDownloadUpdated(
     std::string meta_json = BuildStartJson(item);
     maho_core_update_download_metadata(core, maho_id.c_str(), meta_json.c_str());
 
+    if (state != download::DownloadItem::INTERRUPTED) {
+      failure_reason_.erase(item->GetGuid());
+    }
+
     switch (state) {
       case download::DownloadItem::IN_PROGRESS:
         // Restores the Maho "downloading" state after a prior pause/interruption
@@ -267,14 +343,35 @@ void MahoDownloadBridgeService::OnDownloadUpdated(
       case download::DownloadItem::CANCELLED:
         maho_core_cancel_download(core, maho_id.c_str());
         break;
-      case download::DownloadItem::INTERRUPTED:
-        // Resumable interruptions surface as paused; unrecoverable ones as cancelled.
+      case download::DownloadItem::INTERRUPTED: {
+        // An interruption the user did not ask for is a failure: record the
+        // reason so the UI shows "failed" + reason instead of a silent
+        // "Paused"/"Cancelled". Core has no failed-state FFI, so it keeps
+        // resumable failures as paused (Resume works) and unrecoverable ones
+        // as cancelled (terminal).
+        //
+        // Known limit, measured in core's load path: persisted "paused" rows are
+        // DELETED on the next start (they are re-ingested live by the browser
+        // download manager under a fresh id), so a resumable failure is gone
+        // after a restart. Persisting it needs `maho_core_fail_download` (core
+        // already has MahoCore::fail_download) plus a regenerated
+        // third_party/maho/maho_ffi.h and a rebuilt prebuilt core. That header is
+        // owned by a concurrent session in this tree, so the export is left as a
+        // recorded follow-up rather than edited here.
+        const download::DownloadInterruptReason reason = item->GetLastReason();
+        if (reason != download::DOWNLOAD_INTERRUPT_REASON_USER_CANCELED &&
+            reason != download::DOWNLOAD_INTERRUPT_REASON_NONE) {
+          failure_reason_[item->GetGuid()] = reason;
+        } else {
+          failure_reason_.erase(item->GetGuid());
+        }
         if (item->CanResume()) {
           maho_core_pause_download(core, maho_id.c_str());
         } else {
           maho_core_cancel_download(core, maho_id.c_str());
         }
         break;
+      }
       default:
         break;
     }
@@ -296,6 +393,7 @@ void MahoDownloadBridgeService::OnDownloadRemoved(
     maho_id_to_guid_.erase(maho_id);
     last_state_.erase(item->GetGuid());
     metadata_finalized_.erase(item->GetGuid());
+    failure_reason_.erase(item->GetGuid());
 
     MahoCore* core = maho::GetCore();
     if (core) {

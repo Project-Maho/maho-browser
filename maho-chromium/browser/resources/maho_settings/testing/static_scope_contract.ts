@@ -48,6 +48,8 @@ if (process.argv.includes('--missing-scope-fixture')) {
 }
 
 const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
+  'agent.denied_origins': 'profile',
+  'agent.mail_send_delay_seconds': 'profile',
   'advanced.hardware_acceleration': 'device',
   'advanced.memory_saver_mode': 'device',
   'advanced.memory_saver_timeout': 'device',
@@ -66,6 +68,7 @@ const expectedSettingScopes: Readonly<Record<string, SettingScope>> = {
   'autofill.vault_auto_lock_minutes': 'core-global',
   'autofill.vault_require_device_auth': 'core-global',
   'conversation.auto_archive_after_days': 'core-global',
+  'developers.mcp_enabled': 'profile',
   'general.homepage': 'profile',
   'general.prompt_for_download': 'profile',
   'general.restore_on_startup': 'profile',

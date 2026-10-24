@@ -30,15 +30,17 @@ export function ShortcutsSection({
 }: ShortcutsSectionProps) {
   return (
     <Card className="border-border/70 bg-card/95 shadow-sm">
-      <CardHeader
-        onClick={onToggleCollapse}
-        role="button"
-        aria-expanded={!isCollapsed}
-        aria-controls={`shortcuts-section-content-${categoryKey}`}
-        className="py-3 px-4 flex flex-row items-center justify-between cursor-pointer hover:bg-muted/10 select-none"
-      >
-        <CardTitle className="text-sm font-semibold">{categoryLabel}</CardTitle>
-        <span className="text-xs text-muted-foreground">{isCollapsed ? 'Expand' : 'Collapse'}</span>
+      <CardHeader className="p-0">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          aria-expanded={!isCollapsed}
+          aria-controls={`shortcuts-section-content-${categoryKey}`}
+          className="w-full py-3 px-4 flex flex-row items-center justify-between text-left hover:bg-muted/10 select-none rounded-t-xl focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <CardTitle className="text-sm font-semibold">{categoryLabel}</CardTitle>
+          <span className="text-xs text-muted-foreground">{isCollapsed ? 'Expand' : 'Collapse'}</span>
+        </button>
       </CardHeader>
       {!isCollapsed && (
         <CardContent

@@ -366,6 +366,11 @@ class SelectorComponent {
     this.onSelect(selection.selector);
   }
 
+  // True while an element is selected and its confirm dialog is open.
+  hasPendingSelection(): boolean {
+    return this.currentState === STATES.SELECTED;
+  }
+
   private cancelSelect(): void {
     this.setState(STATES.SELECTING);
   }
@@ -498,15 +503,21 @@ class SelectorComponent {
     const distance = 8;
     const rect = this.selectorComponentEl.getBoundingClientRect();
     const padding = 10;
+    // When the dialog is larger than the space left in the viewport, pin it to
+    // the leading edge instead of letting max < min push it off-screen.
+    const minTop = padding + this.safeAreaPadding.top;
+    const minLeft = padding + this.safeAreaPadding.left;
     const top = this.clamp(
       bounds.bottom + distance,
-      padding + this.safeAreaPadding.top,
-      this.win.innerHeight - rect.height - padding - this.safeAreaPadding.bottom
+      minTop,
+      Math.max(minTop,
+        this.win.innerHeight - rect.height - padding - this.safeAreaPadding.bottom)
     );
     const left = this.clamp(
       bounds.left + bounds.width / 2 - rect.width / 2,
-      padding + this.safeAreaPadding.left,
-      this.win.innerWidth - rect.width - padding - this.safeAreaPadding.right
+      minLeft,
+      Math.max(minLeft,
+        this.win.innerWidth - rect.width - padding - this.safeAreaPadding.right)
     );
 
     this.selectorComponentEl.setAttribute('data-is-appearing', 'false');
@@ -561,6 +572,17 @@ class SelectorComponent {
   }
 
   private handlePageChange(): void {
+    if (this.currentState === STATES.SELECTING) {
+      // The hover box is position:fixed, so it must follow the hovered element
+      // through scroll/resize instead of waiting for the next pointer move.
+      if (this.isPageTarget(this.lastOverElement)) {
+        this.updateHoverGeometry(this.lastOverElement);
+      } else {
+        this.lastOverElement = null;
+        this.hideHoverDiv();
+      }
+      return;
+    }
     if (this.currentState !== STATES.SELECTED) return;
     if (!this.isPageTarget(this.selectedElement)) {
       this.renderStatus(statusFor('removed_target'));

@@ -23,7 +23,7 @@ import {
 import type {MahoSettingsStore} from './store.js';
 
 const ARCHIVE_OPTIONS = [
-  {label: 'Disabled', value: 0},
+  {label: 'Use global setting', value: 0},
   {label: 'After 12 hours', value: 12},
   {label: 'After 1 day', value: 24},
   {label: 'After 1 week', value: 168},
@@ -223,6 +223,7 @@ export function ProfilesEditor({store}: {store: MahoSettingsStore}) {
         </Alert>
       ) : selected.selectedProfileContext ? (
         <ProfileDetail
+          busy={catalogBusy}
           catalog={catalog ?? []}
           deleteError={deleteError}
           deleteTarget={deleteTarget}
@@ -236,14 +237,17 @@ export function ProfilesEditor({store}: {store: MahoSettingsStore}) {
             if (profile.spaceIds.length > 0) { setDeleteError('This profile is referenced by existing Spaces and cannot be deleted.'); return; }
             if (profile.isActive) { setDeleteError('The profile hosting this browser window cannot be deleted here.'); return; }
             setCatalogBusy(true);
-            const {success} = await handler.deleteProfile(profile.id);
-            setCatalogBusy(false);
-            if (!success) { setDeleteError('The browser rejected deletion because this profile is protected or in use.'); return; }
-            setDeleteTarget(null);
-            setDeleteError(null);
-            await loadCatalog();
-            const fallback = catalog?.find(item => item.id !== profile.id);
-            if (fallback) await store.selectProfileFromCatalog(fallback.id);
+            try {
+              const {success} = await handler.deleteProfile(profile.id);
+              if (!success) { setDeleteError('The browser rejected deletion because this profile is protected or in use.'); return; }
+              setDeleteTarget(null);
+              setDeleteError(null);
+              await loadCatalog();
+              const fallback = catalog?.find(item => item.id !== profile.id);
+              if (fallback) await store.selectProfileFromCatalog(fallback.id);
+            } catch (error) {
+              setDeleteError(error instanceof Error ? error.message : 'Profile deletion failed.');
+            } finally { setCatalogBusy(false); }
           }}
           onRequestDelete={profile => { setDeleteTarget(profile); setDeleteError(null); }}
         />
@@ -254,7 +258,8 @@ export function ProfilesEditor({store}: {store: MahoSettingsStore}) {
   );
 }
 
-function ProfileDetail({catalog, deleteError, deleteTarget, editorHeadingRef, profile, store, onCancelDelete, onDelete, onRequestDelete}: {
+function ProfileDetail({busy, catalog, deleteError, deleteTarget, editorHeadingRef, profile, store, onCancelDelete, onDelete, onRequestDelete}: {
+  busy: boolean;
   catalog: ProfileInfo[];
   deleteError: string | null;
   deleteTarget: ProfileInfo | null;
@@ -322,7 +327,7 @@ function ProfileDetail({catalog, deleteError, deleteTarget, editorHeadingRef, pr
       </Section>
 
       {profile ? <Section title="Profile lifecycle" description="Destructive actions remain bound to the current browser context.">
-        {deleteTarget?.id === profile.id ? <Row title={`Delete ${profile.name}?`} description="This action permanently removes the profile. The browser will reject protected, final, active, or referenced profiles." error={deleteError}><Button type="button" variant="outline" onClick={onCancelDelete}>Cancel</Button><Button type="button" variant="destructive" onClick={() => void onDelete(profile)}>Confirm delete</Button></Row> : <Row title="Delete profile" description="Remove this profile after browser lifecycle checks."><Button aria-label={`Delete profile ${profile.name}`} disabled={deleting} type="button" variant="destructive" onClick={() => onRequestDelete(profile)}><Trash2 className="size-4" aria-hidden="true" /> Delete</Button></Row>}
+        {deleteTarget?.id === profile.id ? <Row title={`Delete ${profile.name}?`} description="This action permanently removes the profile. The browser will reject protected, final, active, or referenced profiles." error={deleteError}><Button type="button" variant="outline" disabled={busy} onClick={onCancelDelete}>Cancel</Button><Button type="button" variant="destructive" disabled={busy} onClick={() => void onDelete(profile)}>{busy ? 'Deleting…' : 'Confirm delete'}</Button></Row> : <Row title="Delete profile" description="Remove this profile after browser lifecycle checks."><Button aria-label={`Delete profile ${profile.name}`} disabled={deleting} type="button" variant="destructive" onClick={() => onRequestDelete(profile)}><Trash2 className="size-4" aria-hidden="true" /> Delete</Button></Row>}
       </Section> : null}
     </div>
   );

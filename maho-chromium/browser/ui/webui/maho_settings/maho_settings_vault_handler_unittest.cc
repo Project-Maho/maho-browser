@@ -1767,6 +1767,23 @@ TEST_F(MahoSettingsVaultHandlerTest,
   EXPECT_EQ(1767225600000LL, *result->status->retry_at_timestamp);
 }
 
+TEST_F(MahoSettingsVaultHandlerTest,
+       AccountSeedMissingLockReasonProjectsSignInRequirement) {
+  auto missing = ParseVaultOperationResultJson(
+      R"({"ok":true,"data":{"lockState":"locked","selectedProvider":"maho_native","effectiveProvider":"maho_native","itemCount":0,"agentPolicyDefault":"deny","autoLockMinutes":15,"failedUnlockCount":0,"retryAt":null,"accountEscrowed":true,"lockReason":"account_seed_missing"}})");
+  ASSERT_TRUE(missing->success);
+  ASSERT_TRUE(missing->status);
+  EXPECT_EQ(maho_settings::mojom::VaultLockState::kLocked,
+            missing->status->lock_state);
+  EXPECT_TRUE(missing->status->account_seed_missing);
+
+  auto plain = ParseVaultOperationResultJson(
+      R"({"ok":true,"data":{"lockState":"locked","selectedProvider":"maho_native","effectiveProvider":"maho_native","itemCount":0,"agentPolicyDefault":"deny","autoLockMinutes":15,"failedUnlockCount":0,"retryAt":null,"accountEscrowed":true}})");
+  ASSERT_TRUE(plain->success);
+  ASSERT_TRUE(plain->status);
+  EXPECT_FALSE(plain->status->account_seed_missing);
+}
+
 TEST_F(MahoSettingsVaultHandlerTest, CanonicalAbiErrorsRemainDistinct) {
   constexpr std::string_view kErrorCodes[] = {
       "invalid_credentials",    "rate_limited",

@@ -146,6 +146,10 @@ describe('ConversationThread artifact deletion', () => {
     await act(async () => {
       menuItem('Delete').dispatchEvent(new MouseEvent('click', {bubbles: true}));
     });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[data-confirm-delete]')!
+          .dispatchEvent(new MouseEvent('click', {bubbles: true}));
+    });
     render();
 
     expect(container.textContent).not.toContain('inline.html');

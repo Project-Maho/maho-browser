@@ -330,20 +330,30 @@ export function RoutineWorkspace(
               variant={recording ? "destructive" : "outline"}
               className="h-6 text-2xs px-2"
               onClick={async () => {
-                if (recording) {
-                  const res = await client.stopTraceRecording();
-                  setRecording(false);
-                  if (res.traceJson) {
-                    setPrompt(prev => prev ? `${prev}\n\n${res.traceJson}` : res.traceJson);
-                  }
-                } else {
-                  const ok = await client.startTraceRecording(0n);
-                  if (ok) {
+                setError(null);
+                try {
+                  if (recording) {
+                    const res = await client.stopTraceRecording();
+                    setRecording(false);
+                    const traceJson = res.traceJson;
+                    if (res.error) {
+                      setError(humanizeReason(
+                          new Error(res.error), "Couldn't save the recorded actions. Try again."));
+                    } else if (traceJson) {
+                      setPrompt(prev => prev ? `${prev}\n\n${traceJson}` : traceJson);
+                    }
+                  } else if (await client.startTraceRecording(0n)) {
                     setRecording(true);
+                  } else {
+                    setError("Couldn't start recording. Try again.");
                   }
+                } catch (reason) {
+                  setRecording(false);
+                  setError(humanizeReason(
+                      reason, 'Recording could not be completed. Try again.'));
                 }
               }}>
-              {recording ? "🔴 Stop Recording" : "Record Actions (Trace v3)"}
+              {recording ? "Stop recording" : "Record actions"}
             </Button>
           )}
         </div>

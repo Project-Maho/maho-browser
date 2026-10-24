@@ -24,12 +24,16 @@
 }
 
 #select-component {
-  width: min-content;
+  width: max-content;
+  /* Stay inside narrow panes (split view): 10px clamp padding + 4px margin on
+     each side. */
+  max-width: calc(100vw - 28px);
+  box-sizing: border-box;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: 'kern', 'liga';
-  height: 98px;
+  height: auto;
   pointer-events: auto;
   transform-origin: top;
   overflow: hidden;
@@ -102,14 +106,20 @@
 
 #select-controls {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 12px;
+}
+
+#select-component #select-related {
+  flex: 0 1 250px;
+  width: auto;
+  min-width: 100px;
 }
 
 #select-related {
   appearance: none;
   text-align: left;
-  width: 250px !important;
   --related-elements-value: 100%;
   background: linear-gradient(to top, rgb(247, 66, 0), rgb(245, 134, 86));
   border: none;
@@ -144,13 +154,14 @@
   background-color: rgba(224, 226, 230, 0.24);
   outline: 1px solid rgba(224, 226, 230, 0.68);
   width: 100%;
-  height: 34px;
+  min-height: 34px;
   text-indent: 18px;
   display: flex;
   align-items: center;
 }
 
 #selector-element-preview-text {
+  overflow-wrap: anywhere;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 9pt;
   color: rgb(76, 78, 80);

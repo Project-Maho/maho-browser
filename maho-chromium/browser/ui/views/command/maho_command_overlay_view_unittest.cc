@@ -297,6 +297,27 @@ TEST_F(MahoCommandOverlayViewTest,
             search_first_row->GetTitleLabelForTesting()->GetText());
 }
 
+TEST_F(MahoCommandOverlayViewTest,
+       AskMahoWithEmptyQueryKeepsFirstRowTitleAndNoAskAffordance) {
+  auto* view = CreateView(CommandOverlayMode::kSearch);
+  view->textfield()->SetText(u"ai");
+  ASSERT_TRUE(SendKey(view, ui::VKEY_TAB));
+  ASSERT_EQ(PaletteAction::kAskMaho, view->GetPaletteActionForTesting());
+  view->textfield()->SetText(u"");
+
+  std::vector<CommandSuggestion> results = MakeAskModeSuggestions(2);
+  view->UpdateResultViewsForTesting(results);
+  ASSERT_EQ(2u, view->GetRenderedResultCountForTesting());
+
+  auto* first_row = views::AsViewClass<MahoCommandResultRowView>(
+      view->GetResultsContainerForTesting()->children().front().get());
+  ASSERT_NE(nullptr, first_row);
+  EXPECT_FALSE(first_row->UsesAskGlyphForTesting());
+  EXPECT_EQ(nullptr, first_row->GetAskExplanationLabelForTesting());
+  EXPECT_EQ(base::UTF8ToUTF16(results[0].title),
+            first_row->GetTitleLabelForTesting()->GetText());
+}
+
 TEST_F(MahoCommandOverlayViewTest, NonAiModesNeverShowAskAffordanceOnAnyRow) {
   constexpr CommandOverlayMode kModes[] = {
       CommandOverlayMode::kSearch,
@@ -593,6 +614,47 @@ TEST_F(MahoCommandOverlayRemoteViewTest,
   CommitPendingLoad(&contents->GetController());
 
   EXPECT_EQ(destination, contents->GetLastCommittedURL());
+  EXPECT_EQ(1, dismiss_count());
+}
+
+TEST_F(MahoCommandOverlayRemoteViewTest,
+       AskMahoActivatingNonAskRowOpensRowInsteadOfAsking) {
+  AddTab(browser(), GURL("about:blank"));
+  auto* view = CreateBrowserView();
+  // Stop the continuous selector animation so mock-time draining terminates.
+  view->GetActionSelectorForTesting()->SetVisible(false);
+  view->GetModelForTesting()->SetRemoteSearchSourceForTesting(
+      std::make_unique<OverlayFakeRemoteSource>(&remote_state_));
+  StartViewQuery(view, u"weather seoul");
+  ASSERT_TRUE(SendKey(view, ui::VKEY_TAB));
+  ASSERT_EQ(PaletteAction::kAskMaho, view->GetPaletteActionForTesting());
+
+  MahoCommandModel* model = view->GetModelForTesting();
+  const uint32_t generation = model->search_generation_for_testing();
+  model->AcceptLocalResultsForTesting(generation, MakeOverlayLocals(1));
+  model->StartRemoteSearchForTesting(generation, "weather seoul");
+  ASSERT_EQ(1u, remote_state_.callbacks.size());
+  const GURL destination(
+      "https://search.example/search?q=weather%20seoul&src=remote");
+  remote_state_.callbacks[0].Run({MakeOverlayRemote(
+      "weather seoul forecast", "Weather Seoul forecast", "Remote result",
+      destination.spec())});
+  ASSERT_EQ(2u, model->results().size());
+
+  ASSERT_TRUE(SendKey(view, ui::VKEY_DOWN));
+  ASSERT_EQ(1, model->selected_index());
+  // Traversal keeps the typed question instead of the row's text.
+  EXPECT_EQ(u"weather seoul", view->textfield()->GetText());
+
+  content::WebContents* contents =
+      browser()->GetTabStripModel()->GetActiveWebContents();
+  ASSERT_NE(nullptr, contents);
+
+  // Enter on row 1 opens that row; it must not submit an Ask query.
+  EXPECT_TRUE(SendKey(view, ui::VKEY_RETURN));
+  ASSERT_NE(nullptr, contents->GetController().GetPendingEntry());
+  EXPECT_EQ(destination,
+            contents->GetController().GetPendingEntry()->GetURL());
   EXPECT_EQ(1, dismiss_count());
 }
 

@@ -720,7 +720,7 @@ function TabsSection(
         <div className={pickerSectionLabelClassName}>Open tabs</div>
       </div>
 
-      {openTabs.loading ? (
+      {openTabs.loading && openTabs.items.length === 0 ? (
         <PickerStatus title="Loading open tabs…" />
       ) : null}
 
@@ -854,7 +854,7 @@ function PinnedTabsSection(
         <div className={pickerSectionLabelClassName}>Pinned tabs</div>
       </div>
 
-      {openTabs.loading ? (
+      {openTabs.loading && openTabs.items.length === 0 ? (
         <PickerStatus title="Loading pinned tabs…" />
       ) : null}
 
@@ -887,6 +887,9 @@ export function Composer(
   const [draftSearchQuery, setDraftSearchQuery] = useState(state.historySearch.query);
   const [focusedRowIndex, setFocusedRowIndex] = useState(0);
   const pickerRef = useRef<HTMLDivElement>(null);
+  // Set when a command hint closes the picker: focus goes to the composer,
+  // so Radix must not return it to the + trigger.
+  const closingForCommandRef = useRef(false);
   const session = state.currentSessionId ? state.sessionsById[state.currentSessionId] : null;
   const readOnly = isSessionReadOnly(session);
   const currentPageAttached = hasCurrentPageAttachment(state.composer.attachments);
@@ -929,31 +932,45 @@ export function Composer(
     });
   });
 
+  // Moves the highlight and real DOM focus together, so Enter/Space act on
+  // the row the user sees highlighted.
+  const focusPickerRow = (index: number) => {
+    setFocusedRowIndex(index);
+    pickerRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[data-picker-row="true"]:not([disabled])')[index]?.focus();
+  };
+
   const handlePickerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const target = event.target as HTMLElement;
-    if (target.matches('input, textarea, select') || target.isContentEditable) {
-      return;
-    }
     if (!pickerRef.current) {
       return;
     }
-    const rows = pickerRef.current.querySelectorAll<HTMLButtonElement>(
-        '[data-picker-row="true"]:not([disabled])');
+    const target = event.target as HTMLElement;
+    const rows = Array.from(pickerRef.current.querySelectorAll<HTMLButtonElement>(
+        '[data-picker-row="true"]:not([disabled])'));
     if (rows.length === 0) {
       return;
     }
+    if (target.matches('input, textarea, select') || target.isContentEditable) {
+      // From the search field, ArrowDown enters the result list.
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusPickerRow(0);
+      }
+      return;
+    }
+    const currentIndex = rows.indexOf(target as HTMLButtonElement);
+    const index = currentIndex >= 0 ? currentIndex : focusedRowIndex;
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      setFocusedRowIndex(prev => Math.min(prev + 1, rows.length - 1));
+      focusPickerRow(Math.min(index + 1, rows.length - 1));
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      setFocusedRowIndex(prev => Math.max(prev - 1, 0));
-    } else if (event.key === 'Enter' &&
-        (event.target as HTMLElement)?.tagName !== 'BUTTON') {
-      const target = rows[focusedRowIndex];
-      if (target) {
+      focusPickerRow(Math.max(index - 1, 0));
+    } else if (event.key === 'Enter' && target.tagName !== 'BUTTON') {
+      const row = rows[focusedRowIndex];
+      if (row) {
         event.preventDefault();
-        target.click();
+        row.click();
       }
     }
   };
@@ -1040,8 +1057,14 @@ export function Composer(
           open={pickerOpen}
           onOpenChange={open => {
             setPickerOpen(open);
-            if (open && !state.openTabs.loaded && !state.openTabs.loading) {
-              handlers.onLoadOpenTabs();
+            if (open) {
+              // Re-read tabs on every open: the browser's tab set changes
+              // while the picker is closed, and a failed load must be retryable.
+              if (state.openTabs.loaded) {
+                handlers.onRefreshOpenTabs();
+              } else {
+                handlers.onLoadOpenTabs();
+              }
             }
           }}>
           <Tooltip>
@@ -1061,7 +1084,13 @@ export function Composer(
           <PopoverContent
               align="start"
               className="w-[min(22rem,calc(100vw-1.5rem))] rounded-[18px] panel-card-raised p-1.5"
-              side="top">
+              side="top"
+              onCloseAutoFocus={event => {
+                if (closingForCommandRef.current) {
+                  closingForCommandRef.current = false;
+                  event.preventDefault();
+                }
+              }}>
             <section
                 ref={pickerRef}
                 aria-label="Context picker"
@@ -1145,7 +1174,7 @@ export function Composer(
                   openTabs={state.openTabs}
                   readOnly={readOnly}
                   selectedAttachments={state.composer.attachments}
-                  searchQuery={searchQuery}
+                  searchQuery={trimmedDraftSearchQuery}
                 />
 
                 <div className={pickerSectionClassName}>
@@ -1170,7 +1199,15 @@ export function Composer(
                   </button>
                 </div>
               </div>
-              <div className="border-t border-panel-hairline px-1 pt-1.5">
+              <div
+                className="border-t border-panel-hairline px-1 pt-1.5"
+                onClick={event => {
+                  // Picking a command hands it to the composer; get out of the way.
+                  if ((event.target as HTMLElement).closest('[data-command-hint]')) {
+                    closingForCommandRef.current = true;
+                    setPickerOpen(false);
+                  }
+                }}>
                 {commandDisclosure}
               </div>
             </section>
@@ -1187,7 +1224,7 @@ export function Composer(
           onValueChange={handlers.onPromptChange}
           placeholder={readOnly ?
             'This archived session is view-only. Start a new live session to continue.' :
-            'Ask Maho a task, @ for context'}
+            'Ask Maho a task, + for context'}
           readOnly={readOnly}
           rows={1}
           value={state.composer.prompt}

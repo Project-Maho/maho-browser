@@ -118,6 +118,12 @@ async function main(): Promise<void> {
       }
       return {stats: Object.assign({}, fixture.stats)};
     };
+    handler.getAgentActionJournal = async function(){
+      return {entries: []};
+    };
+    handler.clearAgentActionJournal = async function(){
+      return {success: true};
+    };
     handler.setContentBlockingMode = async function(mode){
       var success = fixture.failure !== 'mode';
       if (success) fixture.stats.mode = mode;

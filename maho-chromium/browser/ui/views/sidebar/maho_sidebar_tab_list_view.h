@@ -45,6 +45,7 @@ struct FaviconImageResult;
 }  // namespace favicon_base
 
 class Browser;
+class MahoSpaceContextMenu;
 #include "maho/browser/ui/context_menu/maho_folder_context_menu.h"
 #include "maho/browser/ui/context_menu/maho_tab_context_menu.h"
 
@@ -632,6 +633,13 @@ class MahoSidebarTabListView : public views::View,
   std::unique_ptr<MahoTabContextMenu> active_context_menu_;
   std::unique_ptr<ui::SimpleMenuModel> active_menu_model_;
   std::unique_ptr<views::MenuRunner> active_menu_runner_;
+  // Empty-area space menu. Owned by the view (not the stack) because Export /
+  // Import Theme register the menu as a SelectFileDialog listener that
+  // outlives RunMenuAt(); it is replaced on the next open or view teardown,
+  // and ~MahoSpaceContextMenu detaches any still-pending dialog.
+  std::unique_ptr<MahoSpaceContextMenu> active_space_context_menu_;
+  std::unique_ptr<ui::SimpleMenuModel> active_space_menu_model_;
+  std::unique_ptr<views::MenuRunner> active_space_menu_runner_;
   std::unique_ptr<MahoTabPreviewController> tab_preview_controller_;
   std::unique_ptr<MahoSidebarFolderHoverController> folder_hover_controller_;
 
@@ -837,6 +845,7 @@ class SidebarTabRowView : public views::View,
 
   // MahoTabContextMenu::Delegate:
   void RenameTab(int tab_index) override;
+  void ShareTab(int tab_index) override;
   void CloseSelectedTabs() override;
   void PinSelectedTabs(bool pin) override;
   void MoveSelectedTabsToSpace(const std::string& space_id) override;

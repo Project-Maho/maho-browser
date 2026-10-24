@@ -53,11 +53,12 @@ namespace {
 
 AutocompleteControllerConfig MakeControllerConfig() {
   AutocompleteControllerConfig config;
-  config.provider_types = AutocompleteProvider::TYPE_SEARCH;
+  config.provider_types =
+      static_cast<int>(AutocompleteProvider::TYPE_SEARCH);
   return config;
 }
 
-bool IsAcceptedMatchType(AutocompleteMatchType::Type type) {
+bool IsAcceptedMatchType(AutocompleteMatch::Type type) {
   switch (type) {
     case AutocompleteMatchType::SEARCH_SUGGEST:
     case AutocompleteMatchType::SEARCH_SUGGEST_ENTITY:

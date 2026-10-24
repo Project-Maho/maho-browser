@@ -71,6 +71,7 @@ class BrowserCard : public views::View {
   void OnMouseEntered(const ui::MouseEvent& event) override;
   void OnMouseExited(const ui::MouseEvent& event) override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
+  bool OnKeyPressed(const ui::KeyEvent& event) override;
 
  private:
   size_t index_;
@@ -190,7 +191,9 @@ class MahoMigrationDialogView : public views::DialogDelegate,
   std::optional<size_t> selected_browser_index_;
   uint32_t current_import_bitmask_ = 0;
   DialogState state_ = DialogState::kIdle;
-  bool was_cancelled_ = false;
+  // Success is opt-in: only explicit success paths clear this, so any other
+  // close (title-bar X, Esc, failure) reports a cancellation.
+  bool was_cancelled_ = true;
 
   // Per-type completion tracking during import.
   std::map<uint32_t, bool> type_completed_;   // flag → completed?

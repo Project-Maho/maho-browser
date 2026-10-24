@@ -14,6 +14,7 @@
 #include "base/sequence_checker.h"
 #include "base/timer/timer.h"
 #include "base/values.h"
+#include "maho/browser/ui/webui/maho_live_folders/maho_live_folder_item_cache.h"
 #include "maho/browser/ui/webui/maho_live_folders/maho_live_folders.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
@@ -71,11 +72,14 @@ class MahoLiveFolderPageHandler
   void OnGoogleCalendarResponse(const std::string& folder_id,
                                 std::optional<std::string> body);
 
-  // Parse API responses into LiveFolderItem structs.
-  static std::vector<maho_live_folders::mojom::LiveFolderItemPtr>
-  ParseGitHubPRs(const std::string& json);
-  static std::vector<maho_live_folders::mojom::LiveFolderItemPtr>
-  ParseGoogleCalendarEvents(const std::string& json);
+  // Commits a fetch result. std::nullopt (network failure or malformed body)
+  // keeps the previous items and leaves the shared cache untouched (not
+  // fresh); pending GetFolderItems callbacks are resolved either way.
+  void ApplyFetchResult(
+      const std::string& folder_id,
+      std::optional<std::vector<maho::LiveFolderCachedItem>> fetched);
+  std::vector<maho_live_folders::mojom::LiveFolderItemPtr> CloneCachedItems(
+      const std::string& folder_id) const;
 
   // Persist folder configs to prefs.
   void SaveFolders();

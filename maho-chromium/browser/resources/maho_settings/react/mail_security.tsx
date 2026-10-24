@@ -70,6 +70,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
   const [success, setSuccess] = useState('');
 
   const [generatingPgp, setGeneratingPgp] = useState(false);
+  const [showGenerateForm, setShowGenerateForm] = useState(false);
   const [genEmail, setGenEmail] = useState('');
   const [genPassphrase, setGenPassphrase] = useState('');
 
@@ -127,7 +128,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
       const {ok: okPgp, resultJson: pgpJson} = await handler.mailListPgpKeys(selectedAccountId);
       if (!mountedRef.current || request !== securityRequest.current) return;
       const keys = okPgp && pgpJson ? JSON.parse(pgpJson) as PgpKeyInfo[] : [];
-      if (!okPgp) setError('Failed to load PGP keys');
+      if (!okPgp) fail('Failed to load PGP keys');
 
       const {ok: okSmime, resultJson: smimeJson} = await handler.mailListSmimeIdentities(selectedAccountId);
       if (!mountedRef.current || request !== securityRequest.current) return;
@@ -135,10 +136,10 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
       if (okSmime && smimeJson) {
         setSmimeIdentities(JSON.parse(smimeJson) as SmimeIdentityInfo[]);
       } else {
-        setError('Failed to load S/MIME identities');
+        fail('Failed to load S/MIME identities');
       }
     } catch {
-      if (mountedRef.current && request === securityRequest.current) setError('Failed to load security keys');
+      if (mountedRef.current && request === securityRequest.current) fail('Failed to load security keys');
     }
   }, [handler, selectedAccountId]);
 
@@ -160,24 +161,58 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
     };
   }, [router, loadAccounts, loadSecurityData]);
 
+  // Key forms and in-flight results are per account. Reset on EVERY account
+  // change (dropdown or a reload falling back to another account), and let an
+  // operation started for one account never report into another's view.
+  const accountRef = useRef(selectedAccountId);
+  useEffect(() => {
+    accountRef.current = selectedAccountId;
+    setSuccess('');
+    setShowGenerateForm(false);
+    setGenEmail('');
+    setGenPassphrase('');
+    setGeneratingPgp(false);
+    setImportingPgp(false);
+    setImportKeyBlock('');
+    setImportPassphrase('');
+    setImportingSmime(false);
+    setImportP12Data('');
+    setImportSmimePassphrase('');
+  }, [selectedAccountId]);
+  const isCurrentAccount = (accountId: string) =>
+    mountedRef.current && accountRef.current === accountId;
+
+  // A success banner never outlives the next operation, error, or account switch.
+  const fail = (message: string) => {
+    setSuccess('');
+    setError(message);
+  };
+
   const generatePgp = async () => {
     if (!genEmail || !selectedAccountId) return;
+    const accountId = selectedAccountId;
+    setSuccess('');
     setGeneratingPgp(true);
-    const {ok, error: err} = await handler.mailGeneratePgpKey(selectedAccountId, genEmail, genPassphrase);
+    const {ok, error: err} = await handler.mailGeneratePgpKey(accountId, genEmail, genPassphrase);
+    if (!isCurrentAccount(accountId)) return;
     setGeneratingPgp(false);
     if (ok) {
       setGenEmail('');
       setGenPassphrase('');
+      setShowGenerateForm(false);
       setSuccess('PGP key generated.');
       void loadSecurityData();
     } else {
-      setError(err || 'Failed to generate PGP key');
+      fail(err || 'Failed to generate PGP key');
     }
   };
 
   const importPgp = async () => {
     if (!importKeyBlock || !selectedAccountId) return;
-    const {ok, error: err} = await handler.mailImportPgpKey(selectedAccountId, importKeyBlock, importPassphrase || null);
+    const accountId = selectedAccountId;
+    setSuccess('');
+    const {ok, error: err} = await handler.mailImportPgpKey(accountId, importKeyBlock, importPassphrase || null);
+    if (!isCurrentAccount(accountId)) return;
     if (ok) {
       setImportKeyBlock('');
       setImportPassphrase('');
@@ -185,13 +220,16 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
       setSuccess('PGP key imported.');
       void loadSecurityData();
     } else {
-      setError(err || 'Failed to import PGP key');
+      fail(err || 'Failed to import PGP key');
     }
   };
 
   const importSmime = async () => {
     if (!importP12Data || !selectedAccountId) return;
-    const {ok, error: err} = await handler.mailImportSmimeIdentity(selectedAccountId, importP12Data, importSmimePassphrase);
+    const accountId = selectedAccountId;
+    setSuccess('');
+    const {ok, error: err} = await handler.mailImportSmimeIdentity(accountId, importP12Data, importSmimePassphrase);
+    if (!isCurrentAccount(accountId)) return;
     if (ok) {
       setImportP12Data('');
       setImportSmimePassphrase('');
@@ -199,25 +237,32 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
       setSuccess('S/MIME identity imported.');
       void loadSecurityData();
     } else {
-      setError(err || 'Failed to import S/MIME identity');
+      fail(err || 'Failed to import S/MIME identity');
     }
   };
 
-  const deletePgp = async (keyId: string) => {
-    const {ok} = await handler.mailDeletePgpKey(keyId);
+  const deletePgp = async (key: PgpKeyInfo) => {
+    const message = key.has_private_key
+      ? `Delete the PGP key pair for ${key.email}? Without its private key you won't be able to read mail that was encrypted to it. This can't be undone.`
+      : `Delete the PGP public key for ${key.email}? This can't be undone.`;
+    if (!window.confirm(message)) return;
+    setSuccess('');
+    const {ok} = await handler.mailDeletePgpKey(key.key_id);
     if (ok) {
       void loadSecurityData();
     } else {
-      setError('Failed to delete PGP key');
+      fail('Failed to delete PGP key');
     }
   };
 
-  const deleteSmime = async (id: string) => {
-    const {ok} = await handler.mailDeleteSmimeIdentity(id);
+  const deleteSmime = async (identity: SmimeIdentityInfo) => {
+    if (!window.confirm(`Delete the S/MIME certificate for ${identity.email}? You won't be able to sign or decrypt mail with it anymore. This can't be undone.`)) return;
+    setSuccess('');
+    const {ok} = await handler.mailDeleteSmimeIdentity(identity.id);
     if (ok) {
       void loadSecurityData();
     } else {
-      setError('Failed to delete S/MIME identity');
+      fail('Failed to delete S/MIME identity');
     }
   };
 
@@ -260,7 +305,10 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
             action={
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => setImportingPgp(true)}>Import Key</Button>
-                <Button size="sm" onClick={() => setGenEmail('user@example.com')}>Generate Key</Button>
+                <Button size="sm" onClick={() => {
+                  setGenEmail(accounts.find(a => a.id === selectedAccountId)?.email || '');
+                  setShowGenerateForm(true);
+                }}>Generate Key</Button>
               </div>
             }
           >
@@ -275,8 +323,8 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
                       <p className="text-xs text-muted-foreground">Type: {key.has_private_key ? 'Keypair' : 'Public Key'}</p>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive/10" onClick={() => deletePgp(key.key_id)}>
-                    <Trash2 className="size-3.5" />
+                  <Button variant="outline" size="sm" aria-label={`Delete PGP key for ${key.email}`} className="text-destructive hover:bg-destructive/10" onClick={() => deletePgp(key)}>
+                    <Trash2 className="size-3.5" aria-hidden="true" />
                   </Button>
                 </div>
               ))}
@@ -286,7 +334,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
             </div>
           </SectionCard>
 
-          {genEmail && (
+          {showGenerateForm && (
             <SectionCard title="Generate PGP Key">
               <div className="space-y-4 p-4">
                 <div className="grid gap-2">
@@ -298,8 +346,8 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
                   <Input id="pgp-gen-passphrase" type="password" value={genPassphrase} onChange={(e) => setGenPassphrase(e.target.value)} />
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <Button variant="outline" onClick={() => setGenEmail('')}>Cancel</Button>
-                  <Button onClick={generatePgp} disabled={generatingPgp}>{generatingPgp ? 'Generating...' : 'Generate'}</Button>
+                  <Button variant="outline" onClick={() => { setShowGenerateForm(false); setGenEmail(''); setGenPassphrase(''); }}>Cancel</Button>
+                  <Button onClick={generatePgp} disabled={generatingPgp || !genEmail.trim()}>{generatingPgp ? 'Generating...' : 'Generate'}</Button>
                 </div>
               </div>
             </SectionCard>
@@ -317,7 +365,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
                   <Input id="pgp-import-passphrase" type="password" value={importPassphrase} onChange={(e) => setImportPassphrase(e.target.value)} />
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <Button variant="outline" onClick={() => setImportingPgp(false)}>Cancel</Button>
+                  <Button variant="outline" onClick={() => { setImportingPgp(false); setImportKeyBlock(''); setImportPassphrase(''); }}>Cancel</Button>
                   <Button onClick={importPgp}>Import</Button>
                 </div>
               </div>
@@ -341,8 +389,8 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
                       <p className="text-xs text-muted-foreground">User: {id.display_name}</p>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" className="text-destructive hover:bg-destructive/10" onClick={() => deleteSmime(id.id)}>
-                    <Trash2 className="size-3.5" />
+                  <Button variant="outline" size="sm" aria-label={`Delete S/MIME certificate for ${id.email}`} className="text-destructive hover:bg-destructive/10" onClick={() => deleteSmime(id)}>
+                    <Trash2 className="size-3.5" aria-hidden="true" />
                   </Button>
                 </div>
               ))}
@@ -364,7 +412,7 @@ export function MailSecurityPane({pane, store}: {pane: PaneDefinition; store: Ma
                   <Input id="smime-import-passphrase" type="password" value={importSmimePassphrase} onChange={(e) => setImportSmimePassphrase(e.target.value)} />
                 </div>
                 <div className="flex gap-2 justify-end">
-                  <Button variant="outline" onClick={() => setImportingSmime(false)}>Cancel</Button>
+                  <Button variant="outline" onClick={() => { setImportingSmime(false); setImportP12Data(''); setImportSmimePassphrase(''); }}>Cancel</Button>
                   <Button onClick={importSmime}>Import</Button>
                 </div>
               </div>
