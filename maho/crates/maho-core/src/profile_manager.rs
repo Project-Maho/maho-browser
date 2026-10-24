@@ -48,6 +48,14 @@ impl ProfileManager {
         self.profiles.iter().find(|p| &p.id == id)
     }
 
+    /// The protected Default profile (the one without its own data store).
+    pub fn default_profile_id(&self) -> Option<&ProfileId> {
+        self.profiles
+            .iter()
+            .find(|profile| profile.data_store_id.is_none())
+            .map(|profile| &profile.id)
+    }
+
     pub fn get_active_profile_id(&self) -> Option<&ProfileId> {
         self.active_profile_id.as_ref()
     }

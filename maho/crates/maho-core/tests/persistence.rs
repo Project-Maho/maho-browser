@@ -896,10 +896,11 @@ fn snapshot_stamps_profile_scoped_types_that_lack_a_payload_profile_field() {
         .first()
         .expect("boost entity in snapshot");
 
-    let active_profile = source
-        .get_active_profile_id()
-        .expect("active profile")
-        .to_string();
+    // A fresh core's active profile is its Default profile, which travels
+    // under the account-derived wire id so the other device can map it onto
+    // its own Default profile.
+    let seed = maho_core::sync_crypto::decode_recovery_phrase(&phrase).unwrap();
+    let active_profile = maho_core::sync_crypto::derive_default_profile_wire_id(&seed);
     assert_eq!(boost.profile_id.as_deref(), Some(active_profile.as_str()));
     let payload: serde_json::Value = serde_json::from_str(&boost.payload_json).unwrap();
     assert_eq!(

@@ -615,7 +615,10 @@ pub enum ShellEvent {
     // Account & Sync (3)
     SignIn {
         email: String,
-        password: String,
+        /// Shells authenticate with the relay token; core never reads a password,
+        /// and shells omit it, so a required field made every sign-in fail to decode.
+        #[serde(default)]
+        password: Option<String>,
         #[serde(default)]
         display_name: Option<String>,
         #[serde(default)]

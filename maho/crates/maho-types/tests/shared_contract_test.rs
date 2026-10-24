@@ -949,3 +949,19 @@ fn content_blocker_state_changed_carries_typed_last_error() {
         other => panic!("wrong variant: {other:?}"),
     }
 }
+
+// === Account sign-in wire contract ===
+
+#[test]
+fn sign_in_event_decodes_without_password() {
+    // iOS and Android shells sign in with the relay token and never send a password.
+    let json = r#"{"kind":"sign_in","email":"qa@example.com","display_name":null,"access_token":"tok","user_id":"u1","device_id":"d1"}"#;
+    let event: ShellEvent = serde_json::from_str(json).expect("shell sign_in without password must decode");
+    match event {
+        ShellEvent::SignIn { email, access_token, .. } => {
+            assert_eq!(email, "qa@example.com");
+            assert_eq!(access_token.as_deref(), Some("tok"));
+        }
+        other => panic!("decoded to {other:?}"),
+    }
+}

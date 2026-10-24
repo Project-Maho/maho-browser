@@ -93,6 +93,25 @@ pub fn derive_room_id(seed: &[u8; 32]) -> Result<String, String> {
     Ok(room_id.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
+/// Account-wide wire id of the protected local Default profile.
+///
+/// Every device creates its own random Default profile id, so the same account
+/// would otherwise partition its default tabs/spaces per device. All devices of
+/// an account share the seed, so this UUID (v8 layout over SHA-256) is the same
+/// on each of them while revealing nothing about the seed.
+pub fn derive_default_profile_wire_id(seed: &[u8; 32]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"maho-sync-v1-default-profile");
+    hasher.update(seed);
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
 /// Encrypt data using AES-256-GCM.
 ///
 /// Returns a Vec containing: 12-byte nonce || ciphertext || 16-byte auth tag.
@@ -138,6 +157,15 @@ pub fn decrypt_update(encrypted: &[u8], key: &EncryptionKey) -> Result<Vec<u8>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_profile_wire_id_is_deterministic_per_seed() {
+        let seed = generate_sync_seed();
+        let id = derive_default_profile_wire_id(&seed);
+        assert_eq!(id, derive_default_profile_wire_id(&seed));
+        assert!(uuid::Uuid::parse_str(&id).is_ok());
+        assert_ne!(id, derive_default_profile_wire_id(&generate_sync_seed()));
+    }
 
     #[test]
     fn test_roundtrip_encrypt_decrypt() {

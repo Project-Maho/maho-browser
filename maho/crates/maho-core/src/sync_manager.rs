@@ -10,11 +10,15 @@ use crate::sync_models::{
 use std::collections::HashMap;
 
 const MAX_RECEIVED_TABS: usize = 500;
+const MAX_ACKNOWLEDGED_ROWLESS: usize = 256;
 
 #[derive(Clone, Debug)]
 pub(crate) struct QueuedSyncMessage {
     pub message: SyncMessage,
     pub queue_row_id: Option<i64>,
+    /// Delivery ID assigned at first lease. Kept across requeues so a resend
+    /// reuses it and the relay deduplicates instead of storing a copy.
+    pub delivery_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +111,12 @@ pub struct SyncManager {
     devices: HashMap<DeviceId, DeviceInfo>,
     received_tabs: Vec<ReceivedTab>,
     outgoing_messages: Vec<QueuedSyncMessage>,
+    /// Messages handed to the transport and not yet acknowledged, in lease
+    /// order. They return to the front of `outgoing_messages` on requeue.
+    leased_messages: Vec<QueuedSyncMessage>,
+    /// Recently acknowledged rowless delivery IDs: a requeued delivery can be
+    /// resent while its first ACK is in flight, and the relay ACKs both sends.
+    acknowledged_rowless: std::collections::VecDeque<String>,
     pub(crate) encryption_key: Option<crate::sync_crypto::EncryptionKey>,
     pending_pushes: Vec<SyncEntity>,
     entity_versions: lru::LruCache<String, (u64, u32, Option<String>, Option<String>)>,
@@ -119,6 +129,9 @@ pub struct SyncManager {
     /// Raw type/id -> last known ProfileId. Used to retain the partition for
     /// local tombstones whose domain payload has already been removed.
     entity_profiles: HashMap<String, String>,
+    /// (local Default profile id, account-wide wire id). Local storage keeps
+    /// the local id; only encrypted wire entities carry the wire id.
+    default_profile_alias: Option<(String, String)>,
     sent_entities: Vec<i64>,
 }
 
@@ -133,6 +146,8 @@ impl SyncManager {
             devices: HashMap::new(),
             received_tabs: Vec::new(),
             outgoing_messages: Vec::new(),
+            leased_messages: Vec::new(),
+            acknowledged_rowless: std::collections::VecDeque::new(),
             encryption_key: None,
             pending_pushes: Vec::new(),
             entity_versions: lru::LruCache::new(std::num::NonZeroUsize::new(10_000).unwrap()),
@@ -141,6 +156,7 @@ impl SyncManager {
             active_profile_id: None,
             space_profiles: HashMap::new(),
             entity_profiles: HashMap::new(),
+            default_profile_alias: None,
             sent_entities: Vec::new(),
         }
     }
@@ -176,6 +192,11 @@ impl SyncManager {
 
     pub fn set_encryption_key(&mut self, key: crate::sync_crypto::EncryptionKey) {
         self.encryption_key = Some(key);
+        // Pushes parked while the manager had no key go out now if the
+        // transport is already active.
+        if matches!(self.status, SyncStatus::Synced | SyncStatus::Syncing) {
+            self.flush_offline_queue();
+        }
     }
 
     pub fn has_encryption_key(&self) -> bool {
@@ -212,6 +233,53 @@ impl SyncManager {
 
     pub fn active_profile_id(&self) -> Option<&str> {
         self.active_profile_id.as_deref()
+    }
+
+    /// Map the local Default profile to the account-wide wire id: outgoing
+    /// entities are rewritten local -> wire right before encryption, incoming
+    /// ones wire -> local before they are bound and applied.
+    pub fn set_default_profile_alias(&mut self, alias: Option<(String, String)>) {
+        self.default_profile_alias =
+            alias.filter(|(local, wire)| !local.is_empty() && !wire.is_empty());
+    }
+
+    pub fn to_wire_profile_scope(&self, entity: &mut SyncEntity) {
+        if let Some((local, wire)) = &self.default_profile_alias {
+            Self::rewrite_profile_scope(entity, local, wire);
+        }
+    }
+
+    pub fn from_wire_profile_scope(&self, entity: &mut SyncEntity) {
+        if let Some((local, wire)) = &self.default_profile_alias {
+            Self::rewrite_profile_scope(entity, wire, local);
+        }
+    }
+
+    fn rewrite_profile_scope(entity: &mut SyncEntity, from: &str, to: &str) {
+        if !entity.entity_type.is_profile_scoped() {
+            return;
+        }
+        if entity.profile_id.as_deref() == Some(from) {
+            entity.profile_id = Some(to.to_string());
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&entity.payload_json) else {
+            return;
+        };
+        let Some(object) = value.as_object_mut() else {
+            return;
+        };
+        let mut changed = false;
+        for field in ["profileId", "profile_id"] {
+            if object.get(field).and_then(serde_json::Value::as_str) == Some(from) {
+                object.insert(field.to_string(), serde_json::Value::String(to.to_string()));
+                changed = true;
+            }
+        }
+        if changed {
+            if let Ok(payload_json) = serde_json::to_string(&value) {
+                entity.payload_json = payload_json;
+            }
+        }
     }
 
     pub fn register_profile_scope(
@@ -495,6 +563,7 @@ impl SyncManager {
 
         if matches!(self.status, SyncStatus::Synced | SyncStatus::Syncing) {
             let queue_row_id = entity.queue_row_id;
+            self.to_wire_profile_scope(&mut entity);
             let message = SyncMessage::EntityPush { entity };
             match self.encrypt_message(&message, SyncTransportOp::Push) {
                 Ok(data) => {
@@ -505,6 +574,7 @@ impl SyncManager {
                     self.outgoing_messages.push(QueuedSyncMessage {
                         message: SyncMessage::Encrypted { data },
                         queue_row_id,
+                        delivery_id: None,
                     });
                     if let Some(row_id) = queue_row_id {
                         self.sent_entities.push(row_id);
@@ -559,6 +629,7 @@ impl SyncManager {
             Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
                 message: SyncMessage::Encrypted { data },
                 queue_row_id: None,
+                delivery_id: None,
             }),
             Err(error) => self.record_transport_error(error),
         }
@@ -576,6 +647,7 @@ impl SyncManager {
             });
             return false;
         }
+        self.from_wire_profile_scope(entity);
         if let Err(error) = self.prepare_remote_entity(entity) {
             self.record_transport_error(error);
             return false;
@@ -974,6 +1046,7 @@ impl SyncManager {
             SyncMessage::Ping => self.outgoing_messages.push(QueuedSyncMessage {
                 message: SyncMessage::Pong,
                 queue_row_id: None,
+                delivery_id: None,
             }),
             SyncMessage::Pong => {}
         }
@@ -990,6 +1063,7 @@ impl SyncManager {
             Ok(data) => self.outgoing_messages.push(QueuedSyncMessage {
                 message: SyncMessage::Encrypted { data },
                 queue_row_id: None,
+                delivery_id: None,
             }),
             Err(error) => self.record_transport_error(error),
         }
@@ -1006,12 +1080,94 @@ impl SyncManager {
         std::mem::take(&mut self.outgoing_messages)
     }
 
+    /// Takes at most `limit` queued messages from the front of the queue,
+    /// preserving order; the remainder stays queued for the next lease.
+    pub(crate) fn take_outgoing_messages_with_queue_rows(
+        &mut self,
+        limit: usize,
+    ) -> Vec<QueuedSyncMessage> {
+        let take = limit.min(self.outgoing_messages.len());
+        self.outgoing_messages.drain(..take).collect()
+    }
+
     pub(crate) fn restore_outgoing_messages(&mut self, mut messages: Vec<QueuedSyncMessage>) {
         if messages.is_empty() {
             return;
         }
         std::mem::swap(&mut self.outgoing_messages, &mut messages);
         self.outgoing_messages.extend(messages);
+    }
+
+    /// Records messages handed to the transport until their delivery is ACKed.
+    pub(crate) fn record_lease(&mut self, messages: Vec<QueuedSyncMessage>) {
+        self.leased_messages.extend(messages);
+    }
+
+    /// Drops the current lease without requeueing (legacy drain callers never
+    /// acknowledge by delivery ID).
+    pub(crate) fn forget_lease(&mut self) {
+        self.leased_messages.clear();
+    }
+
+    /// Moves every unacknowledged leased message back to the front of the
+    /// queue in lease order. Returns how many messages moved and the delivery
+    /// IDs of those backed by an outbox row.
+    pub(crate) fn requeue_leased_messages(&mut self) -> (usize, Vec<String>) {
+        let leased = std::mem::take(&mut self.leased_messages);
+        let count = leased.len();
+        let row_deliveries = leased
+            .iter()
+            .filter(|queued| queued.queue_row_id.is_some())
+            .filter_map(|queued| queued.delivery_id.clone())
+            .collect();
+        self.restore_outgoing_messages(leased);
+        (count, row_deliveries)
+    }
+
+    /// `Some(row)` when `delivery_id` belongs to a tracked (leased or requeued)
+    /// message; the inner value is its outbox row, `None` for rowless messages.
+    fn tracked_delivery_row(&self, delivery_id: &str) -> Option<Option<i64>> {
+        self.leased_messages
+            .iter()
+            .chain(self.outgoing_messages.iter())
+            .find(|queued| queued.delivery_id.as_deref() == Some(delivery_id))
+            .map(|queued| queued.queue_row_id)
+    }
+
+    /// Acknowledges a delivery that has no outbox row (SendTab, Pong, device
+    /// notices, pulls). Returns false when `delivery_id` is not a rowless
+    /// delivery this manager handed out, so row ACKs fall through to storage.
+    pub(crate) fn acknowledge_rowless_delivery(&mut self, delivery_id: &str) -> bool {
+        if self.acknowledged_rowless.iter().any(|id| id == delivery_id) {
+            return true;
+        }
+        if self.tracked_delivery_row(delivery_id) != Some(None) {
+            return false;
+        }
+        self.complete_delivery(delivery_id);
+        if self.acknowledged_rowless.len() == MAX_ACKNOWLEDGED_ROWLESS {
+            self.acknowledged_rowless.pop_front();
+        }
+        self.acknowledged_rowless.push_back(delivery_id.to_string());
+        true
+    }
+
+    /// Takes the queued messages that have no outbox row (SendTab, Pong,
+    /// device notices, pulls). Rows are reloaded from storage instead.
+    pub(crate) fn take_rowless_outgoing(&mut self) -> Vec<QueuedSyncMessage> {
+        let (rowless, rows) = std::mem::take(&mut self.outgoing_messages)
+            .into_iter()
+            .partition(|queued| queued.queue_row_id.is_none());
+        self.outgoing_messages = rows;
+        rowless
+    }
+
+    /// Removes an acknowledged delivery from the lease and from the queue (a
+    /// late ACK can arrive after the message was requeued).
+    pub(crate) fn complete_delivery(&mut self, delivery_id: &str) {
+        let delivered = |queued: &QueuedSyncMessage| queued.delivery_id.as_deref() == Some(delivery_id);
+        self.leased_messages.retain(|queued| !delivered(queued));
+        self.outgoing_messages.retain(|queued| !delivered(queued));
     }
 
     pub fn drain_sent_entities(&mut self) -> Vec<i64> {
@@ -1033,6 +1189,7 @@ impl SyncManager {
                 device_id: device_id.to_string(),
             },
             queue_row_id: None,
+            delivery_id: None,
         });
     }
 
@@ -1048,6 +1205,7 @@ impl SyncManager {
                 device_id: device_id.to_string(),
             },
             queue_row_id: None,
+            delivery_id: None,
         });
         true
     }
@@ -1065,6 +1223,7 @@ impl SyncManager {
                 device: device.clone(),
             },
             queue_row_id: None,
+            delivery_id: None,
         });
         true
     }
@@ -1228,6 +1387,44 @@ mod tests {
             panic!("expected entity push");
         };
         assert_eq!(entity.profile_scope().as_deref(), Some("work"));
+    }
+
+    #[test]
+    fn default_profile_alias_round_trips_through_the_wire() {
+        let mut sender = SyncManager::new(config());
+        sender.set_active_profile_id(Some("local-a".to_string()));
+        sender.set_default_profile_alias(Some(("local-a".to_string(), "wire".to_string())));
+        sender.set_status(SyncStatus::Synced);
+        sender.set_encryption_key(key());
+        let mut entity = tab("t", "local-a", 1);
+        entity.payload_json =
+            serde_json::json!({"id":"t","spaceId":"s","profileId":"local-a"}).to_string();
+        sender.push_entity(entity);
+        let SyncMessage::Encrypted { data } = sender.drain_outgoing_messages().remove(0) else {
+            panic!("expected encrypted push");
+        };
+        let plaintext =
+            sync_crypto::decrypt_update(&data, sender.encryption_key.as_ref().unwrap()).unwrap();
+        let SyncMessage::EntityPush { mut entity } = serde_json::from_slice(&plaintext).unwrap()
+        else {
+            panic!("expected entity push");
+        };
+        assert_eq!(entity.profile_id.as_deref(), Some("wire"));
+        assert_eq!(entity.profile_scope().as_deref(), Some("wire"));
+
+        let mut receiver = SyncManager::new(config());
+        receiver.set_default_profile_alias(Some(("local-b".to_string(), "wire".to_string())));
+        assert!(receiver.apply_remote_entity(&mut entity, &None));
+        assert_eq!(entity.profile_id.as_deref(), Some("local-b"));
+        assert_eq!(
+            SyncEntity::profile_id_from_payload(&entity.entity_type, &entity.payload_json)
+                .as_deref(),
+            Some("local-b")
+        );
+
+        let mut other = tab("o", "work", 1);
+        receiver.to_wire_profile_scope(&mut other);
+        assert_eq!(other.profile_scope().as_deref(), Some("work"));
     }
 
     #[test]

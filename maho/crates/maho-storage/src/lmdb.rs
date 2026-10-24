@@ -6,13 +6,24 @@ use crate::StorageError;
 
 pub type SnapshotEntry = (Vec<u8>, Vec<u8>);
 
+/// Hot-state key-value store (tab, space, profile, account state).
+///
+/// iOS cannot use LMDB (its mmap model does not fit APFS / app sandbox
+/// semantics), so there the same API is backed by SQLite; see
+/// [`crate::sqlite_kv::SqliteKvStorage`].
+#[cfg(target_os = "ios")]
+pub type LmdbStorage = crate::sqlite_kv::SqliteKvStorage;
+
+#[cfg(not(target_os = "ios"))]
+pub type LmdbStorage = HeedStorage;
+
 /// LMDB storage for hot data (tab state, space state, session data)
-pub struct LmdbStorage {
+pub struct HeedStorage {
     env: Env,
     db: Database<Str, SerdeBincode<Vec<u8>>>,
 }
 
-impl LmdbStorage {
+impl HeedStorage {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         std::fs::create_dir_all(path).map_err(|e| StorageError::Other(e.to_string()))?;
         let env = unsafe {
@@ -58,7 +69,7 @@ impl LmdbStorage {
 
     /// Read-only enumeration of `maho_state`: one read transaction, key-sorted
     /// `(key, value)` rows, no write txn / db creation / put / delete / cursor
-    /// mutation. Value bytes match [`LmdbStorage::get`]; per-tab
+    /// mutation. Value bytes match [`HeedStorage::get`]; per-tab
     /// `scroll_position` lives inside the `tabs` JSON value, not a separate key.
     pub fn snapshot_entries(&self) -> Result<Vec<SnapshotEntry>, StorageError> {
         let rtxn = self.env.read_txn()?;

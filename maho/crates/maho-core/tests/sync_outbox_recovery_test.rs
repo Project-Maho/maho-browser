@@ -160,3 +160,123 @@ fn outbox_row_stays_retryable_until_the_exact_ack_arrives() {
         before - 1
     );
 }
+
+#[test]
+fn lease_is_capped_at_the_relay_push_batch_and_keeps_the_remainder_queued() {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+    let mut core = MahoCore::new().with_storage(":memory:");
+    let details: serde_json::Value = serde_json::from_str(&core.generate_sync_key()).unwrap();
+    core.configure_sync_encryption_for_recovery_phrase("wss://relay.test", details["recoveryPhrase"].as_str().unwrap()).unwrap();
+    core.set_sync_status(SyncStatus::Synced);
+    for index in 0..70 {
+        core.sync_push_entity_persisted(SyncEntity {
+            entity_type: SyncEntityType::Shortcut,
+            entity_id: format!("batch-{index}"),
+            version: 1,
+            device_id: 1,
+            schema_version: 1,
+            modified_at: index,
+            payload_json: serde_json::json!({"action": format!("batch-{index}")}).to_string(),
+            deleted: false,
+            queue_row_id: None,
+            fields_hlc_json: None,
+            profile_id: None,
+        });
+    }
+    // 70 queued shortcut rows (plus any rows sync bootstrap queued itself).
+    let total = core.storage_ref().unwrap().load_pending_sync_entities().unwrap().len();
+    assert!((70..=128).contains(&total));
+
+    // An over-limit request is clamped to the relay's MAX_PUSH_BATCH.
+    let first = core.drain_sync_outgoing_envelopes_limited(1_000).unwrap();
+    assert_eq!(first.len(), maho_core::maho_core::MAX_SYNC_PUSH_BATCH);
+    for envelope in &first { assert!(core.ack_sync_delivery(&envelope.delivery_id, 1).unwrap()); }
+    assert_eq!(core.storage_ref().unwrap().pending_sync_outbox_count().unwrap(), total - 64);
+
+    // The remainder (6 when only the 70 rows are queued) stays leasable, in order.
+    let second = core.drain_sync_outgoing_envelopes_limited(64).unwrap();
+    assert_eq!(second.len(), total - 64);
+    let first_ids: std::collections::HashSet<_> = first.iter().map(|e| e.delivery_id.clone()).collect();
+    assert!(second.iter().all(|e| !first_ids.contains(&e.delivery_id)));
+}
+
+fn synced_core_with_shortcuts(ids: &[&str]) -> MahoCore {
+    let _ = maho_storage::sqlite::set_sqlcipher_key("test_key");
+    let mut core = MahoCore::new().with_storage(":memory:");
+    let details: serde_json::Value = serde_json::from_str(&core.generate_sync_key()).unwrap();
+    core.configure_sync_encryption_for_recovery_phrase("wss://relay.test", details["recoveryPhrase"].as_str().unwrap()).unwrap();
+    core.set_sync_status(SyncStatus::Synced);
+    // Flush anything sync bootstrap queued so the tests see only their own rows.
+    for envelope in core.drain_sync_outgoing_envelopes().unwrap() {
+        assert!(core.ack_sync_delivery(&envelope.delivery_id, 1).unwrap());
+    }
+    for (index, id) in ids.iter().enumerate() {
+        core.sync_push_entity_persisted(SyncEntity {
+            entity_type: SyncEntityType::Shortcut,
+            entity_id: id.to_string(),
+            version: 1,
+            device_id: 1,
+            schema_version: 1,
+            modified_at: index as i64,
+            payload_json: serde_json::json!({"action": id}).to_string(),
+            deleted: false,
+            queue_row_id: None,
+            fields_hlc_json: None,
+            profile_id: None,
+        });
+    }
+    core
+}
+
+#[test]
+fn requeued_lease_is_leased_again_with_the_same_deliveries_in_order() {
+    let mut core = synced_core_with_shortcuts(&["requeue-a", "requeue-b", "requeue-c"]);
+
+    let first = core.drain_sync_outgoing_envelopes_limited(3).unwrap();
+    assert_eq!(first.len(), 3);
+    // A failed push: nothing was acknowledged.
+    assert_eq!(core.requeue_sync_lease().unwrap(), 3);
+    assert_eq!(core.storage_ref().unwrap().pending_sync_outbox_count().unwrap(), 3);
+
+    let second = core.drain_sync_outgoing_envelopes_limited(3).unwrap();
+    let ids = |envelopes: &[maho_core::sync_models::SyncEnvelopeV2]| {
+        envelopes.iter().map(|e| (e.delivery_id.clone(), e.payload.clone())).collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&second), ids(&first));
+
+    // Leasing while a lease is outstanding requeues it first; nothing is lost.
+    let third = core.drain_sync_outgoing_envelopes_limited(3).unwrap();
+    assert_eq!(ids(&third), ids(&first));
+    for envelope in &third {
+        assert!(core.ack_sync_delivery(&envelope.delivery_id, 1).unwrap());
+    }
+    assert_eq!(core.storage_ref().unwrap().pending_sync_outbox_count().unwrap(), 0);
+    assert_eq!(core.requeue_sync_lease().unwrap(), 0);
+    assert!(core.drain_sync_outgoing_envelopes_limited(3).unwrap().is_empty());
+}
+
+#[test]
+fn rowless_send_tab_ack_succeeds_and_does_not_block_row_acks() {
+    let mut core = synced_core_with_shortcuts(&["row-before-send-tab"]);
+    core.send_tab_to_device("https://example.com", "Example", "other-device");
+
+    let leased = core.drain_sync_outgoing_envelopes().unwrap();
+    assert_eq!(leased.len(), 2, "one outbox row plus one rowless SendTab");
+
+    // A failed push requeues the rowless SendTab with its original delivery ID.
+    core.requeue_sync_lease().unwrap();
+    let retried = core.drain_sync_outgoing_envelopes().unwrap();
+    assert_eq!(
+        retried.iter().map(|e| &e.delivery_id).collect::<Vec<_>>(),
+        leased.iter().map(|e| &e.delivery_id).collect::<Vec<_>>()
+    );
+
+    // ACK the rowless SendTab (queued last) before the row.
+    for envelope in retried.iter().rev() {
+        assert!(core.ack_sync_delivery(&envelope.delivery_id, 1).unwrap());
+    }
+    assert_eq!(core.storage_ref().unwrap().pending_sync_outbox_count().unwrap(), 0);
+    assert_eq!(core.requeue_sync_lease().unwrap(), 0);
+    assert!(core.drain_sync_outgoing_envelopes().unwrap().is_empty());
+    assert!(!core.ack_sync_delivery(&uuid::Uuid::new_v4().to_string(), 1).unwrap());
+}

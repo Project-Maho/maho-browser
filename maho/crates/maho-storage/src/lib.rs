@@ -4,6 +4,7 @@ pub mod lmdb;
 pub mod routine_results_store;
 pub mod routine_store;
 pub mod sqlite;
+pub mod sqlite_kv;
 
 pub use error::StorageError;
 pub use routine_results_store::RoutineRunRecord;

@@ -5,7 +5,18 @@ use maho_core::maho_core::MahoCore;
 use std::ffi::{c_char, c_void, CStr};
 use std::sync::Mutex;
 
-static CONTENT_BLOCKER_QUERY_GATE: Mutex<()> = Mutex::new(());
+/// Process-wide gate serializing JNI access to the shared `MahoCore`.
+/// `get_core` hands out an unsynchronized `&mut MahoCore`, and the WebView IO
+/// thread (`shouldInterceptRequest`) reads settings/filter state while the main
+/// thread mutates it. Hold this only around pure core calls: never across a JVM
+/// callback that could re-enter JNI on the same thread.
+static JNI_CORE_GATE: Mutex<()> = Mutex::new(());
+
+fn lock_core_gate() -> std::sync::MutexGuard<'static, ()> {
+    JNI_CORE_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,7 +199,12 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeHandleEvent<'local
         Ok(e) => e,
         Err(_) => return std::ptr::null_mut(),
     };
-    let updates = core.handle_event(event);
+    // No JVM callback runs inside handle_event (JNI registers no core update
+    // listener), so the gate cannot be re-entered on this thread.
+    let updates = {
+        let _core_guard = lock_core_gate();
+        core.handle_event(event)
+    };
     to_json_jstring(&mut env, &updates)
 }
 
@@ -230,6 +246,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSettings<'local
         Some(c) => c,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let settings = core.get_settings();
     to_json_jstring(&mut env, settings)
 }
@@ -253,6 +270,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUpdateSettings<'lo
         Ok(u) => u,
         Err(_) => return,
     };
+    let _core_guard = lock_core_gate();
     core.update_settings(update);
 }
 
@@ -648,6 +666,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAddFilterList<'loc
         name: name_str,
         url: url_str,
     };
+    let _core_guard = lock_core_gate();
     core.handle_event(event);
 }
 
@@ -946,6 +965,49 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCancelDownload<'lo
     core.cancel_download(&download_id_str);
 }
 
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCompleteDownload<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    download_id: JString<'local>,
+    file_path: JString<'local>,
+    total_bytes: jlong,
+) {
+    let core = match unsafe { get_core(ptr) } {
+        Some(c) => c,
+        None => return,
+    };
+    let download_id_str = match get_rust_string(&mut env, &download_id) {
+        Some(s) => s,
+        None => return,
+    };
+    let path = get_rust_string(&mut env, &file_path).filter(|s| !s.is_empty());
+    let total = (total_bytes > 0).then_some(total_bytes as u64);
+    core.update_download_metadata(&download_id_str, None, path.as_deref(), None, total);
+    core.complete_download(&download_id_str);
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeFailDownload<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+    download_id: JString<'local>,
+    error: JString<'local>,
+) {
+    let core = match unsafe { get_core(ptr) } {
+        Some(c) => c,
+        None => return,
+    };
+    let download_id_str = match get_rust_string(&mut env, &download_id) {
+        Some(s) => s,
+        None => return,
+    };
+    let error_str = get_rust_string(&mut env, &error).unwrap_or_default();
+    core.fail_download(&download_id_str, &error_str);
+}
+
 // === Zoom (2 functions) ===
 
 #[no_mangle]
@@ -996,6 +1058,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAddBookmark<'local
     title: JString<'local>,
     folder_id: JString<'local>,
 ) {
+    let _core_guard = lock_core_gate();
     let core = match unsafe { get_core(ptr) } {
         Some(c) => c,
         None => return,
@@ -1019,6 +1082,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRemoveBookmark<'lo
     ptr: jlong,
     bookmark_id: JString<'local>,
 ) {
+    let _core_guard = lock_core_gate();
     let core = match unsafe { get_core(ptr) } {
         Some(c) => c,
         None => return,
@@ -1156,6 +1220,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeStartSync<'local>(
         Some(s) => s,
         None => return,
     };
+    let _core_guard = lock_core_gate();
     core.start_sync(&url, &key);
 }
 
@@ -1169,6 +1234,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeStopSync<'local>(
         Some(c) => c,
         None => return,
     };
+    let _core_guard = lock_core_gate();
     core.stop_sync();
 }
 
@@ -1183,6 +1249,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSyncStatus<'loc
         Some(c) => c,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let json = core.get_sync_status();
     match env.new_string(&json) {
         Ok(s) => s.into_raw(),
@@ -1201,6 +1268,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSyncRoomId<'loc
         Some(core) => core,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     match core.get_sync_room_id() {
         Some(room_id) => env
             .new_string(room_id)
@@ -1215,12 +1283,15 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeLeaseSyncOutgoingE
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     ptr: jlong,
+    limit: jint,
 ) -> jstring {
     let core = match unsafe { get_core(ptr) } {
         Some(core) => core,
         None => return std::ptr::null_mut(),
     };
-    match core.drain_sync_outgoing_envelopes() {
+    let limit = usize::try_from(limit).unwrap_or(1);
+    let _core_guard = lock_core_gate();
+    match core.drain_sync_outgoing_envelopes_limited(limit) {
         Ok(envelopes) => to_json_jstring(&mut env, &envelopes),
         Err(_) => std::ptr::null_mut(),
     }
@@ -1242,8 +1313,23 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAcknowledgeSyncEnv
         Some(value) => value,
         None => return 0,
     };
+    let _core_guard = lock_core_gate();
     core.accept_sync_ack(&ack_json)
         .is_ok_and(|acknowledged| acknowledged) as jboolean
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRequeueSyncLease<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jboolean {
+    let core = match unsafe { get_core(ptr) } {
+        Some(core) => core,
+        None => return 0,
+    };
+    let _core_guard = lock_core_gate();
+    core.requeue_sync_lease().is_ok() as jboolean
 }
 
 #[no_mangle]
@@ -1262,6 +1348,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetSyncReceiveCurs
         Some(value) => value,
         None => return 0,
     };
+    let _core_guard = lock_core_gate();
     core.get_sync_receive_cursor(&room_id).unwrap_or(0) as jlong
 }
 
@@ -1288,6 +1375,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplySyncEnvelopeA
         Some(value) => value,
         None => return 0,
     };
+    let _core_guard = lock_core_gate();
     core.apply_sync_envelope_and_advance_cursor(&room_id, &envelope_json)
         .is_ok() as jboolean
 }
@@ -1306,6 +1394,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeReportSyncTranspor
     let Some(report_json) = get_rust_string(&mut env, &report_json) else {
         return;
     };
+    let _core_guard = lock_core_gate();
     let _ = core.report_sync_transport_state(&report_json);
 }
 
@@ -1320,6 +1409,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConnectedDevice
         Some(c) => c,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let json = core.get_connected_devices();
     match env.new_string(&json) {
         Ok(s) => s.into_raw(),
@@ -1352,6 +1442,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSendTab<'local>(
         Some(s) => s,
         None => return,
     };
+    let _core_guard = lock_core_gate();
     core.send_tab_to_device(&url_str, &title_str, &device_str);
 }
 
@@ -1366,6 +1457,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGenerateSyncKey<'l
         Some(c) => c,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let json = core.generate_sync_key();
     match env.new_string(&json) {
         Ok(s) => s.into_raw(),
@@ -1384,6 +1476,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGenerateSyncBootst
         Some(core) => core,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     env.new_string(core.generate_sync_bootstrap())
         .map_or(std::ptr::null_mut(), |value| value.into_raw())
 }
@@ -1403,6 +1496,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeJoinSync<'local>(
         Some(s) => s,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let json = core.join_sync("wss://relay.mahobrowser.com", &phrase);
     match env.new_string(&json) {
         Ok(s) => s.into_raw(),
@@ -1430,6 +1524,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeConfigureSyncBoots
         Some(value) => value,
         None => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let result = match core.configure_sync_encryption_from_bootstrap(&server_url, &bootstrap_seed) {
         Ok(room_id) => serde_json::json!({ "success": true, "roomId": room_id }),
         Err(error) => serde_json::json!({ "success": false, "error": error }),
@@ -1453,6 +1548,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRemoveSyncDevice<'
         Some(s) => s,
         None => return,
     };
+    let _core_guard = lock_core_gate();
     core.remove_sync_device(&id_str);
 }
 
@@ -1568,6 +1664,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeResetPinnedTab<'lo
     let event = maho_types::events::shell_event::ShellEvent::ResetPinnedTab {
         tab_id: maho_types::identifiers::TabId::new(tid),
     };
+    let _core_guard = lock_core_gate();
     let updates = core.handle_event(event);
     to_json_jstring(&mut env, &updates)
 }
@@ -1650,6 +1747,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetTabParent<'loca
         tab_id,
         new_parent_id,
     };
+    let _core_guard = lock_core_gate();
     core.handle_event(event);
 }
 
@@ -1905,6 +2003,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeMoveBookmark<'loca
     bookmark_id: JString<'local>,
     folder_id: JString<'local>,
 ) {
+    let _core_guard = lock_core_gate();
     let core = match unsafe { get_core(ptr) } {
         Some(c) => c,
         None => return,
@@ -2006,6 +2105,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetSiteSearchEntri
         }),
         ..Default::default()
     };
+    let _core_guard = lock_core_gate();
     core.update_settings(update);
 }
 
@@ -2283,10 +2383,11 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyFilterListUpd
         Some(value) => value,
         None => return std::ptr::null_mut(),
     };
-    to_json_jstring(
-        &mut env,
-        &apply_filter_list_update_result(core, &update_json),
-    )
+    let result = {
+        let _core_guard = lock_core_gate();
+        apply_filter_list_update_result(core, &update_json)
+    };
+    to_json_jstring(&mut env, &result)
 }
 
 #[no_mangle]
@@ -2700,6 +2801,7 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyRemoteEntitie
         Ok(e) => e,
         Err(_) => return std::ptr::null_mut(),
     };
+    let _core_guard = lock_core_gate();
     let applied = core.apply_sync_remote_entities(entities);
     to_json_jstring(&mut env, &applied)
 }
@@ -3073,6 +3175,136 @@ pub struct MahoAgentSession {
     event_queue: Arc<Mutex<AgentEventQueue>>,
     completion_generation: Arc<(Mutex<u64>, std::sync::Condvar)>,
     pub artifact_root: std::path::PathBuf,
+    // Set only by the instrumentation hook; replaces `runtime` for this session.
+    runtime_override: Mutex<Option<Arc<dyn AgentRuntime>>>,
+}
+
+impl MahoAgentSession {
+    fn active_runtime(&self) -> Arc<dyn AgentRuntime> {
+        self.runtime_override
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| Arc::clone(&self.runtime))
+    }
+}
+
+const DETERMINISTIC_FS_WRITE_CONTENT: &str = "created through packaged JNI fs_write";
+
+/// Instrumentation-only runtime that performs one real artifact write per turn
+/// (file under the session artifact root + index row) and reports it through the
+/// same stream events a live agent turn produces. It exists so the packaged JNI
+/// artifact pipeline can be proven on a device without a model or the omo runtime.
+struct DeterministicFsWriteRuntime {
+    storage: Arc<MutexAgentStorage>,
+    artifact_root: std::path::PathBuf,
+    journal: Arc<Mutex<maho_agent::run_journal::RunJournal>>,
+}
+
+#[async_trait::async_trait]
+impl AgentRuntime for DeterministicFsWriteRuntime {
+    async fn run_turn(
+        &self,
+        session_id: &str,
+        _message: maho_types::chat::ChatMessage,
+        _on_token: Option<Box<dyn for<'a> Fn(&'a str) + Send + Sync + 'static>>,
+        on_event: Option<Arc<dyn Fn(maho_agent::AgentStreamEvent) + Send + Sync + 'static>>,
+    ) -> Result<maho_types::chat::ChatMessage, AgentError> {
+        let call_id = "android-instrumentation-fs-write".to_string();
+        let emit = |event| {
+            if let Some(on_event) = &on_event {
+                on_event(event);
+            }
+        };
+        emit(maho_agent::AgentStreamEvent::ToolCall {
+            id: call_id.clone(),
+            name: "fs_write".to_string(),
+            args: serde_json::json!({ "relative_path": "deterministic.txt" }).to_string(),
+        });
+
+        let artifact_id = maho_types::artifact::ArtifactId::new();
+        let directory = format!("instrumentation-{artifact_id}");
+        let storage_rel_path = format!("{directory}/deterministic.txt");
+        let directory_path = self.artifact_root.join(&directory);
+        std::fs::create_dir_all(&directory_path)
+            .and_then(|()| {
+                std::fs::write(
+                    directory_path.join("deterministic.txt"),
+                    DETERMINISTIC_FS_WRITE_CONTENT,
+                )
+            })
+            .map_err(|error| AgentError::ExecutionError(format!("fs_write failed: {error}")))?;
+        let artifact = maho_types::artifact::ArtifactInfo {
+            artifact_id,
+            session_id: session_id.to_string(),
+            display_name: "deterministic.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: DETERMINISTIC_FS_WRITE_CONTENT.len() as u64,
+            storage_rel_path,
+            created_at_ms: chrono::Utc::now().timestamp_millis(),
+            kind: None,
+        };
+        self.storage.save_artifact(&artifact).await?;
+        emit(maho_agent::AgentStreamEvent::ArtifactCreated { artifact });
+        emit(maho_agent::AgentStreamEvent::ToolResult {
+            id: call_id,
+            name: "fs_write".to_string(),
+            result: "ok".to_string(),
+            succeeded: true,
+        });
+        Ok(maho_types::chat::ChatMessage::assistant(
+            maho_types::chat::ChatContent::text("deterministic completion".to_string()),
+        ))
+    }
+
+    async fn cancel(&self, _session_id: &str) -> Result<(), AgentError> {
+        Ok(())
+    }
+
+    async fn list_tools(&self) -> Result<Vec<maho_agent::ToolDefinition>, AgentError> {
+        Ok(Vec::new())
+    }
+
+    fn set_permission_callback(
+        &self,
+        _callback: maho_agent::PermissionCallback,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+
+    fn set_secure_storage_callback(
+        &self,
+        _callback: Box<
+            dyn Fn(&str) -> Result<maho_agent::SecureKeyBundle, AgentError> + Send + Sync + 'static,
+        >,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+
+    async fn list_artifacts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<maho_types::artifact::ArtifactInfo>, AgentError> {
+        self.storage.list_artifacts(session_id).await
+    }
+
+    async fn artifact_storage_rel_path(
+        &self,
+        session_id: &str,
+        artifact_id: &str,
+    ) -> Result<Option<String>, AgentError> {
+        Ok(self
+            .storage
+            .list_artifacts(session_id)
+            .await?
+            .into_iter()
+            .find(|artifact| artifact.artifact_id == artifact_id)
+            .map(|artifact| artifact.storage_rel_path))
+    }
+
+    fn run_journal(&self) -> Arc<Mutex<maho_agent::run_journal::RunJournal>> {
+        Arc::clone(&self.journal)
+    }
 }
 
 
@@ -3605,6 +3837,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCreate
         event_queue: Arc::new(Mutex::new(AgentEventQueue::default())),
         completion_generation: Arc::new((Mutex::new(0), std::sync::Condvar::new())),
         artifact_root,
+        runtime_override: Mutex::new(None),
     })
 }
 
@@ -3614,7 +3847,19 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentFreeSe
     _class: JClass,
     session_ptr: jlong,
 ) {
-    let _ = remove_agent_session(session_ptr);
+    let Some(session) = remove_agent_session(session_ptr) else {
+        return;
+    };
+    // Mirror maho_agent_session_free: a turn spawned by nativeAgentSendMessage
+    // runs detached on the session runtime, so cancel it before dropping.
+    let runtime = session.active_runtime();
+    let session_id = session.session_id.clone();
+    // Best effort, bounded to 2s like the FFI path; the session is dropped
+    // either way. maho-jni has no logger dependency to report the error with.
+    let _ = session.isolation.block_on_with_timeout(
+        async move { runtime.cancel(&session_id).await },
+        std::time::Duration::from_secs(2),
+    );
 }
 
 #[no_mangle]
@@ -3633,7 +3878,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentSendMe
         None => return 0,
     };
 
-    let runtime = Arc::clone(&session.runtime);
+    let runtime = session.active_runtime();
     let session_id = session.session_id.clone();
     let q_clone = Arc::clone(&session.event_queue);
     let q_clone_token = Arc::clone(&session.event_queue);
@@ -3701,7 +3946,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentCancel
         Some(session) => session,
         None => return 0,
     };
-    let runtime = Arc::clone(&session.runtime);
+    let runtime = session.active_runtime();
     let session_id = session.session_id.clone();
 
     let isolation = Arc::clone(&session.isolation);
@@ -3724,7 +3969,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListTo
         Some(session) => session,
         None => return std::ptr::null_mut(),
     };
-    let runtime = Arc::clone(&session.runtime);
+    let runtime = session.active_runtime();
 
     let isolation = Arc::clone(&session.isolation);
     let tools_res = isolation.block_on(async move { runtime.list_tools().await });
@@ -3751,7 +3996,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentListAr
         Some(session) => session,
         None => return std::ptr::null_mut(),
     };
-    let runtime = Arc::clone(&session.runtime);
+    let runtime = session.active_runtime();
     let session_id = session.session_id.clone();
     let isolation = Arc::clone(&session.isolation);
     let artifacts = match isolation
@@ -3785,7 +4030,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentReadAr
         Some(id) if validate_artifact_id(&id).is_ok() => id,
         _ => return std::ptr::null_mut(),
     };
-    let runtime = Arc::clone(&session.runtime);
+    let runtime = session.active_runtime();
     let session_id = session.session_id.clone();
     let artifact_root = session.artifact_root.clone();
     let isolation = Arc::clone(&session.isolation);
@@ -3807,10 +4052,19 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAgentInstallDeterm
     _class: JClass,
     session_ptr: jlong,
 ) -> jboolean {
-    let _session = match acquire_agent_session(session_ptr) {
+    let session = match acquire_agent_session(session_ptr) {
         Some(session) => session,
         None => return 0,
     };
+    let runtime: Arc<dyn AgentRuntime> = Arc::new(DeterministicFsWriteRuntime {
+        storage: Arc::clone(&session.storage),
+        artifact_root: session.artifact_root.clone(),
+        journal: Arc::new(Mutex::new(maho_agent::run_journal::RunJournal::default())),
+    });
+    *session
+        .runtime_override
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
     1
 }
 
@@ -4003,9 +4257,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeQueryFilter
         None => return 0,
     };
 
-    let Ok(_query_guard) = CONTENT_BLOCKER_QUERY_GATE.lock() else {
-        return 0;
-    };
+    let _core_guard = lock_core_gate();
     if core.should_block_request(&url_str, &source_str, &type_str) {
         1
     } else {
@@ -4023,6 +4275,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConve
     space_id: JString<'local>,
     model: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return 0,
@@ -4054,6 +4307,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     ptr: jlong,
     limit: jlong,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return std::ptr::null_mut(),
@@ -4082,6 +4336,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     ptr: jlong,
     query_json: JString<'local>,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return std::ptr::null_mut(),
@@ -4132,6 +4387,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeArchiveConv
     ptr: jlong,
     id: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else { return 0 };
     let Some(id) = get_rust_string(&mut env, &id) else {
         return 0;
@@ -4148,6 +4404,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeUnarchiveCo
     ptr: jlong,
     id: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else { return 0 };
     let Some(id) = get_rust_string(&mut env, &id) else {
         return 0;
@@ -4164,6 +4421,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeApplyConver
     ptr: jlong,
     request_json: JString<'local>,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else {
         return std::ptr::null_mut();
     };
@@ -4207,6 +4465,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversa
     _class: JClass<'local>,
     ptr: jlong,
 ) -> jint {
+    let _core_guard = lock_core_gate();
     get_core(ptr)
         .and_then(|core| core.get_conversation_auto_archive_policy().ok())
         .unwrap_or(-1)
@@ -4221,6 +4480,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSetConversa
     ptr: jlong,
     days: jint,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     get_core(ptr).is_some_and(|core| core.set_conversation_auto_archive_policy(days)) as jboolean
 }
 
@@ -4233,6 +4493,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeAutoArchive
     ptr: jlong,
     now_seconds: jlong,
 ) -> jint {
+    let _core_guard = lock_core_gate();
     match get_core(ptr).map(|core| core.auto_archive_conversations(now_seconds)) {
         Some(Ok(Some(count))) => i32::try_from(count).unwrap_or(i32::MAX),
         Some(Ok(None)) => -2,
@@ -4249,6 +4510,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetConversa
     ptr: jlong,
     session_id: JString<'local>,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return std::ptr::null_mut(),
@@ -4283,6 +4545,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeSaveConvers
     content: JString<'local>,
     url_context: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return 0,
@@ -4320,6 +4583,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConve
     ptr: jlong,
     id: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return 0,
@@ -4343,6 +4607,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeListConvers
     _class: JClass<'local>,
     ptr: jlong,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else {
         return std::ptr::null_mut();
     };
@@ -4361,6 +4626,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeCreateConve
     ptr: jlong,
     name: JString<'local>,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else {
         return std::ptr::null_mut();
     };
@@ -4387,6 +4653,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConve
     id: JString<'local>,
     name: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else { return 0 };
     let Some(id) = get_rust_string(&mut env, &id) else {
         return 0;
@@ -4406,6 +4673,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteConve
     ptr: jlong,
     id: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else { return 0 };
     let Some(id) = get_rust_string(&mut env, &id) else {
         return 0;
@@ -4422,6 +4690,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeMoveConvers
     ptr: jlong,
     request_json: JString<'local>,
 ) -> jstring {
+    let _core_guard = lock_core_gate();
     let Some(core) = get_core(ptr) else {
         return std::ptr::null_mut();
     };
@@ -4462,6 +4731,7 @@ pub unsafe extern "system" fn Java_dev_maho_browser_MahoBridge_nativeRenameConve
     id: JString<'local>,
     title: JString<'local>,
 ) -> jboolean {
+    let _core_guard = lock_core_gate();
     let core = match get_core(ptr) {
         Some(c) => c,
         None => return 0,
@@ -5220,6 +5490,7 @@ mod tests {
             event_queue: Arc::new(Mutex::new(AgentEventQueue::default())),
             completion_generation: Arc::new((Mutex::new(0), std::sync::Condvar::new())),
             artifact_root: root.clone(),
+            runtime_override: Mutex::new(None),
         };
         let handle = register_agent_session(session);
         let owner = acquire_agent_session(handle).expect("registered session");

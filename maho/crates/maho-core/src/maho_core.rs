@@ -4,6 +4,12 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+/// Maximum number of envelopes the relay accepts in one push (relay `MAX_PUSH_BATCH`).
+pub const MAX_SYNC_PUSH_BATCH: usize = 64;
+/// Room whose full local baseline has been queued. A device that already had
+/// local tabs/spaces before joining an account must still publish them once.
+const SYNC_BASELINE_ROOM_SETTING: &str = "sync_baseline_room";
+
 const LMDB_DIRTY_TABS: u8 = 0b000001;
 const LMDB_DIRTY_SPACES: u8 = 0b000010;
 const LMDB_DIRTY_ACTIVE_SPACE: u8 = 0b000100;
@@ -2679,6 +2685,19 @@ impl Default for MahoCore {
     }
 }
 
+impl Drop for MahoCore {
+    /// The startup compaction worker reopens the SQLite file on its own
+    /// connection; a core must not be released while that worker still runs,
+    /// or the database (and its journal) outlives its owner.
+    fn drop(&mut self) {
+        if let Some(worker) = self.storage_maintenance.take() {
+            if worker.join().is_err() {
+                eprintln!("[Maho] storage maintenance worker panicked during shutdown");
+            }
+        }
+    }
+}
+
 impl MahoCore {
     pub fn load_skills_from_dir(&mut self, dir_path: &std::path::Path) -> Result<(), String> {
         self.skills_manager.load_skills_from_dir(dir_path)
@@ -3276,15 +3295,9 @@ impl MahoCore {
         self
     }
 
+    /// On iOS `LmdbStorage` is the SQLite-backed store (LMDB does not work
+    /// there), so tab/space/profile/account state persists on every platform.
     pub fn with_lmdb_storage(mut self, path: &std::path::Path) -> Self {
-        #[cfg(target_os = "ios")]
-        {
-            let _ = path;
-            eprintln!("[MahoCore::with_lmdb_storage] SKIPPED on iOS (LMDB incompatible with APFS mmap semantics). Tab/space state will not persist across restarts.");
-            self.lmdb_storage = None;
-            return self;
-        }
-        #[cfg(not(target_os = "ios"))]
         match maho_storage::lmdb::LmdbStorage::open(path) {
             Ok(storage) => {
                 self.lmdb_storage = Some(storage);
@@ -3469,6 +3482,20 @@ impl MahoCore {
             eprintln!("[Maho] persist_lmdb_now_partial failed: {}", e);
             self.persist_throttle.borrow_mut().pending_bits |= to_flush;
         }
+    }
+
+    /// Writes the bits a throttled persist left pending. On failure they stay
+    /// pending and the error is returned.
+    fn flush_pending_lmdb(&self) -> Result<(), String> {
+        if self.lmdb_storage.is_none() {
+            return Ok(());
+        }
+        let bits = std::mem::take(&mut self.persist_throttle.borrow_mut().pending_bits);
+        if let Err(error) = self.save_state_partial(bits) {
+            self.persist_throttle.borrow_mut().pending_bits |= bits;
+            return Err(error.to_string());
+        }
+        Ok(())
     }
 
     fn persist_lmdb_force_flush(&self) {
@@ -3795,6 +3822,11 @@ impl MahoCore {
                 };
             self.profile_manager
                 .restore_profiles(profiles, active_profile_id);
+        } else {
+            // The Default profile id is random per process until it is stored,
+            // and synced spaces are bound to it; persist it now so the next
+            // launch keeps the same id.
+            self.save_state_partial(LMDB_DIRTY_PROFILES | LMDB_DIRTY_ACTIVE_PROFILE)?;
         }
 
         let account_data = lmdb
@@ -6271,6 +6303,9 @@ impl MahoCore {
             match update {
                 CoreUpdate::TabCreated { tab } => {
                     self.push_tab_sync(&tab.id);
+                    // The new tab is listed in its space's tab/root order, and
+                    // the receiver renders tabs only through that space.
+                    self.push_space_sync(&tab.space_id);
                 }
                 CoreUpdate::TabUpdated { tab_id, .. } => {
                     self.push_tab_sync(tab_id);
@@ -11220,6 +11255,16 @@ impl MahoCore {
         }
     }
 
+    /// Give the local Default profile the account-wide wire id derived from
+    /// the shared seed, so every device of the account shares its tabs/spaces.
+    fn bind_default_profile_to_account(&mut self, seed: &[u8; 32]) {
+        let local = self.profile_manager.default_profile_id().map(ToString::to_string);
+        let wire = crate::sync_crypto::derive_default_profile_wire_id(seed);
+        if let Some(sm) = self.sync_manager.as_mut() {
+            sm.set_default_profile_alias(local.map(|local| (local, wire)));
+        }
+    }
+
     // === Sync Methods ===
 
     pub fn start_sync(&mut self, server_url: &str, room_id: &str) {
@@ -11239,6 +11284,14 @@ impl MahoCore {
             disabled_entity_types: disabled,
         };
         let mut sm = crate::sync_manager::SyncManager::new(config);
+        let carried_rowless = self
+            .sync_manager
+            .as_mut()
+            .filter(|previous| previous.config().sync_key.as_deref() == Some(room_id))
+            .map(|previous| {
+                previous.requeue_leased_messages();
+                (previous.take_rowless_outgoing(), previous.status().clone())
+            });
         if let Some(ref s) = self.storage {
             for entity_type in &[
                 crate::sync_models::SyncEntityType::Space,
@@ -11273,7 +11326,32 @@ impl MahoCore {
         if let Err(e) = self.load_sync_queue() {
             eprintln!("Failed to load sync queue: {}", e);
         }
-        if self.sync_baseline_needed {
+        // Rowless messages (SendTab, device notices) and their leases live only
+        // in memory; keep them across a restart of the same room. Row-backed
+        // messages were just reloaded from storage (leased rows included).
+        // Shells reconfigure the same room on every cycle, so the transport
+        // state carries over as well; the reloaded rows parked while the new
+        // manager was keyless go out once the key is installed.
+        if let (Some((carried, status)), Some(manager)) =
+            (carried_rowless, self.sync_manager.as_mut())
+        {
+            manager.restore_outgoing_messages(carried);
+            manager.set_status(status);
+        }
+        let baseline_room = self
+            .storage
+            .as_ref()
+            .and_then(|storage| storage.get_setting(SYNC_BASELINE_ROOM_SETTING).ok().flatten());
+        // An empty fresh install has nothing to publish; its default space goes
+        // out with the first tab created in it.
+        let has_local_tabs = self
+            .tab_manager
+            .get_all_tabs()
+            .into_iter()
+            .any(|tab| !tab.is_private);
+        if self.sync_baseline_needed
+            || (has_local_tabs && baseline_room.as_deref() != Some(room_id))
+        {
         match self.build_raw_snapshot() {
             Ok(snapshot) => {
                 for mut entity in snapshot.entities.into_values().flatten() {
@@ -11308,6 +11386,9 @@ impl MahoCore {
         if let Some(storage) = self.storage.as_ref() {
             if let Err(error) = storage.set_setting("sync_baseline_needed", "false") {
                 eprintln!("[sync] baseline marker persistence failed: {error}");
+            }
+            if let Err(error) = storage.set_setting(SYNC_BASELINE_ROOM_SETTING, room_id) {
+                eprintln!("[sync] baseline room persistence failed: {error}");
             }
         }
         }
@@ -11549,6 +11630,9 @@ impl MahoCore {
             .map_err(|error| error.to_string())?;
         let message = String::from_utf8(payload).map_err(|error| error.to_string())?;
         self.handle_incoming_websocket_message(&message)?;
+        // The cursor never re-fetches what it has passed, so applied tabs and
+        // spaces must be on disk before it moves.
+        self.flush_pending_lmdb()?;
         if let Some(relay_seq) = envelope.relay_seq {
             self.set_sync_receive_cursor(room_id, relay_seq)?;
         }
@@ -11665,6 +11749,7 @@ impl MahoCore {
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
         }
+        self.bind_default_profile_to_account(&seed);
         let _ = self.bootstrap_sync_join_flow(&room_id);
         serde_json::json!({
             "success": true,
@@ -11689,6 +11774,7 @@ impl MahoCore {
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
         }
+        self.bind_default_profile_to_account(&seed);
         Ok(())
     }
 
@@ -11748,6 +11834,7 @@ impl MahoCore {
         if let Some(ref mut sm) = self.sync_manager {
             sm.set_encryption_key(encryption_key);
         }
+        self.bind_default_profile_to_account(&seed);
         self.last_account_seed = Some(zeroize::Zeroizing::new(seed));
         if let Err(error) = self.ensure_vault_for_account_with_escrow(
             &seed,
@@ -12384,8 +12471,19 @@ impl MahoCore {
         Ok(snap)
     }
 
+    /// Snapshot as it travels between devices: profile scopes use wire ids.
+    fn build_wire_snapshot(&self) -> Result<crate::snapshot::Snapshot, String> {
+        let mut snap = self.build_raw_snapshot()?;
+        if let Some(ref sm) = self.sync_manager {
+            for entity in snap.entities.values_mut().flatten() {
+                sm.to_wire_profile_scope(entity);
+            }
+        }
+        Ok(snap)
+    }
+
     pub fn build_snapshot(&self) -> Result<Vec<u8>, String> {
-        let snap = self.build_raw_snapshot()?;
+        let snap = self.build_wire_snapshot()?;
         let snap_json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
 
         let sync_key_opt = self
@@ -12403,7 +12501,7 @@ impl MahoCore {
     }
 
     pub fn export_sync_snapshot(&self) -> Result<String, String> {
-        let snap = self.build_raw_snapshot()?;
+        let snap = self.build_wire_snapshot()?;
         let ceiling = snap.hlc_ts_ceiling;
         let snap_json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
 
@@ -13484,6 +13582,12 @@ impl MahoCore {
                 }
             }
         }
+        let lmdb_bits = applied.iter().fold(0u8, |bits, entity| match entity.entity_type {
+            SyncEntityType::Tab => bits | LMDB_DIRTY_TABS | LMDB_DIRTY_SPACES,
+            SyncEntityType::Space => bits | LMDB_DIRTY_SPACES,
+            _ => bits,
+        });
+        self.persist_lmdb_now_partial(lmdb_bits);
         for update in &updates {
             self.tab_manager.queue_update(update.clone());
         }
@@ -13499,8 +13603,13 @@ impl MahoCore {
 
     /// Get and drain pending outgoing sync messages.
     pub fn drain_sync_outgoing(&mut self) -> Vec<crate::sync_models::SyncMessage> {
-        self.drain_sync_outgoing_envelopes()
-            .unwrap_or_default()
+        let envelopes = self.drain_sync_outgoing_envelopes().unwrap_or_default();
+        // Legacy message-level callers never ACK by delivery ID, so this drain
+        // must not leave a lease behind that the next lease would resend.
+        if let Some(manager) = self.sync_manager.as_mut() {
+            manager.forget_lease();
+        }
+        envelopes
             .into_iter()
             .filter_map(|envelope| {
                 envelope
@@ -13512,10 +13621,45 @@ impl MahoCore {
     }
 
     pub fn drain_sync_outgoing_envelopes(&mut self) -> Result<Vec<SyncEnvelopeV2>, String> {
+        self.lease_sync_outgoing_envelopes(None)
+    }
+
+    /// Leases at most `limit` queued outgoing envelopes, clamped to
+    /// `1..=MAX_SYNC_PUSH_BATCH` (the relay rejects larger pushes). Messages past
+    /// the limit stay queued, in order, and their outbox rows are not leased.
+    pub fn drain_sync_outgoing_envelopes_limited(
+        &mut self,
+        limit: usize,
+    ) -> Result<Vec<SyncEnvelopeV2>, String> {
+        self.lease_sync_outgoing_envelopes(Some(limit.clamp(1, MAX_SYNC_PUSH_BATCH)))
+    }
+
+    fn lease_sync_outgoing_envelopes(
+        &mut self,
+        limit: Option<usize>,
+    ) -> Result<Vec<SyncEnvelopeV2>, String> {
+        // Only one lease is outstanding at a time: a new lease first returns
+        // the previous unacknowledged batch to the queue so nothing is lost.
+        self.requeue_sync_lease()?;
+        // Leasing means the transport is pushing right now. A manager created
+        // by the cycle's own configure call starts Idle and parks the rows it
+        // reloaded from the outbox; release them into this lease.
+        if let Some(manager) = self.sync_manager.as_mut() {
+            if !matches!(
+                manager.status(),
+                crate::sync_models::SyncStatus::Synced | crate::sync_models::SyncStatus::Syncing
+            ) {
+                let last_error = manager.last_error().map(str::to_owned);
+                manager.report_transport_state(crate::sync_models::SyncStatus::Syncing, last_error);
+            }
+        }
         let queued = self
             .sync_manager
             .as_mut()
-            .map(|manager| manager.drain_outgoing_messages_with_queue_rows())
+            .map(|manager| match limit {
+                Some(limit) => manager.take_outgoing_messages_with_queue_rows(limit),
+                None => manager.drain_outgoing_messages_with_queue_rows(),
+            })
             .unwrap_or_default();
         if queued.is_empty() {
             return Ok(Vec::new());
@@ -13549,6 +13693,10 @@ impl MahoCore {
                             .get(&row_id)
                             .cloned()
                             .ok_or_else(|| format!("sync queue row {row_id} was not leased"))?;
+                    } else if let Some(delivery_id) = &queued.delivery_id {
+                        // A requeued rowless message keeps its first delivery
+                        // ID so the relay deduplicates the resend.
+                        envelope.delivery_id = delivery_id.clone();
                     }
                     Ok(envelope)
                 })
@@ -13556,7 +13704,20 @@ impl MahoCore {
         })();
 
         match build_result {
-            Ok(envelopes) => Ok(envelopes),
+            Ok(envelopes) => {
+                let leased = queued
+                    .into_iter()
+                    .zip(&envelopes)
+                    .map(|(mut queued, envelope)| {
+                        queued.delivery_id = Some(envelope.delivery_id.clone());
+                        queued
+                    })
+                    .collect();
+                if let Some(manager) = self.sync_manager.as_mut() {
+                    manager.record_lease(leased);
+                }
+                Ok(envelopes)
+            }
             Err(error) => {
                 if let Some(manager) = self.sync_manager.as_mut() {
                     manager.restore_outgoing_messages(queued);
@@ -13566,15 +13727,48 @@ impl MahoCore {
         }
     }
 
-    pub fn ack_sync_delivery(&self, delivery_id: &str, relay_seq: u64) -> Result<bool, String> {
-        self.storage
+    /// Returns every leased, still-unacknowledged outgoing message to the front
+    /// of the queue in its original order and moves its outbox rows back to
+    /// `pending`. Transports call this when a push fails (network error, 5xx,
+    /// cancellation, ACK mismatch, auth failure) so the next lease re-sends the
+    /// same deliveries instead of losing them until the process restarts.
+    /// Returns the number of requeued messages.
+    pub fn requeue_sync_lease(&mut self) -> Result<usize, String> {
+        let Some(manager) = self.sync_manager.as_mut() else {
+            return Ok(0);
+        };
+        let (count, row_deliveries) = manager.requeue_leased_messages();
+        if let (Some(storage), false) = (self.storage.as_ref(), row_deliveries.is_empty()) {
+            storage
+                .requeue_sync_deliveries(&row_deliveries)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(count)
+    }
+
+    pub fn ack_sync_delivery(&mut self, delivery_id: &str, relay_seq: u64) -> Result<bool, String> {
+        // Rowless deliveries (SendTab, Pong, device notices, pulls) have no
+        // sync_queue row; the in-memory lease is their only record.
+        if let Some(manager) = self.sync_manager.as_mut() {
+            if manager.acknowledge_rowless_delivery(delivery_id) {
+                return Ok(true);
+            }
+        }
+        let acknowledged = self
+            .storage
             .as_ref()
             .ok_or_else(|| "sync storage unavailable".to_string())?
             .ack_sync_delivery(delivery_id, relay_seq)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if acknowledged {
+            if let Some(manager) = self.sync_manager.as_mut() {
+                manager.complete_delivery(delivery_id);
+            }
+        }
+        Ok(acknowledged)
     }
 
-    pub fn accept_sync_ack(&self, ack_json: &str) -> Result<bool, String> {
+    pub fn accept_sync_ack(&mut self, ack_json: &str) -> Result<bool, String> {
         let ack: RelayAckV2 = serde_json::from_str(ack_json).map_err(|error| error.to_string())?;
         self.ack_sync_delivery(&ack.delivery_id, ack.seq)
     }

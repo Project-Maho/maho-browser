@@ -270,7 +270,8 @@ pub unsafe extern "C" fn maho_core_get_account_state(ptr: *mut MahoCore) -> *mut
                 return ptr::null_mut();
             }
             let core = &*ptr;
-            to_json_cstring(&core.get_account_state_json())
+            // Already JSON text; re-serializing it returned a quoted string the shells cannot decode.
+            to_c_string(&core.get_account_state_json())
         },
         ptr::null_mut()
     )
@@ -291,7 +292,8 @@ pub unsafe extern "C" fn maho_core_get_auth_state(ptr: *mut MahoCore) -> *mut c_
                 return ptr::null_mut();
             }
             let core = &*ptr;
-            to_json_cstring(&core.get_auth_state_json())
+            // Already JSON text; re-serializing it returned a quoted string the shells cannot decode.
+            to_c_string(&core.get_auth_state_json())
         },
         ptr::null_mut()
     )

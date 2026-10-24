@@ -1131,3 +1131,24 @@ fn test_trace_recorder_ffi_roundtrip() {
 
     unsafe { maho_ffi::maho_string_free(json_ptr) };
 }
+
+#[test]
+fn account_and_auth_state_are_json_objects_not_quoted_strings() {
+    let ptr = maho_ffi::maho_core_new();
+    let sign_in = CString::new(
+        r#"{"kind":"sign_in","email":"qa@example.com","access_token":"tok","user_id":"u1","device_id":"d1"}"#,
+    )
+    .unwrap();
+    let updates = unsafe { maho_ffi::maho_core_handle_event(ptr, sign_in.as_ptr()) };
+    if !updates.is_null() {
+        unsafe { maho_ffi::maho_string_free(updates) };
+    }
+
+    let account = take_json(unsafe { maho_ffi::maho_core_get_account_state(ptr) });
+    assert_eq!(account["email"], "qa@example.com", "account state must be an object: {account}");
+    assert_eq!(account["syncEnabled"], false);
+    let auth = take_json(unsafe { maho_ffi::maho_core_get_auth_state(ptr) });
+    assert_eq!(auth["kind"], "authenticated", "auth state must be an object: {auth}");
+
+    unsafe { maho_ffi::maho_core_free(ptr) };
+}

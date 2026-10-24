@@ -4,7 +4,28 @@ use maho_core::sync_models::{
     SYNC_PROTOCOL_VERSION,
 };
 
-const SHARED_V2_FIXTURE: &str = include_str!("../../../tests/fixtures/sync-v2/protocol.json");
+// Wire sample of the relay's v2 contract. The shared fixture file stays in the
+// private relay repo, so the client keeps its own copy of the parts it checks
+// (same as the Android and iOS shell tests).
+const SHARED_V2_FIXTURE: &str = r#"{
+  "protocol_version": 2,
+  "push": {
+    "room_id": "0123456789abcdef0123456789abcdef",
+    "messages": [
+      {"protocol_version": 2, "delivery_id": "550e8400-e29b-41d4-a716-446655440000", "payload": "AA==", "relay_seq": null}
+    ]
+  },
+  "ack": {"delivery_id": "550e8400-e29b-41d4-a716-446655440000", "seq": 5},
+  "pull_page": {
+    "messages": [
+      {"protocol_version": 2, "delivery_id": "550e8400-e29b-41d4-a716-446655440001", "payload": "AQ==", "relay_seq": 5}
+    ],
+    "has_more": true
+  },
+  "duplicate_delivery": {"protocol_version": 2, "delivery_id": "550e8400-e29b-41d4-a716-446655440001", "payload": "AQ==", "relay_seq": 5},
+  "stale_after_delete": {"entity_type": "shortcut", "entity_id": "deleted-shortcut", "version": 20, "device_id": 2, "deleted": false},
+  "newer_recreate": {"entity_type": "shortcut", "entity_id": "deleted-shortcut", "version": 21, "device_id": 1, "deleted": false}
+}"#;
 
 #[test]
 fn shared_v2_fixture_has_the_cross_platform_wire_contract() {

@@ -768,7 +768,7 @@ pub unsafe extern "C" fn maho_core_ack_sync_delivery(
                 Ok(value) => value,
                 Err(_) => return false,
             };
-            (&*ptr)
+            (&mut *ptr)
                 .ack_sync_delivery(delivery_id, relay_seq)
                 .unwrap_or(false)
         },
@@ -793,7 +793,7 @@ pub unsafe extern "C" fn maho_core_accept_sync_ack(
                 Ok(value) => value,
                 Err(_) => return -1,
             };
-            match (&*ptr).accept_sync_ack(ack_json) {
+            match (&mut *ptr).accept_sync_ack(ack_json) {
                 Ok(true) => 0,
                 Ok(false) | Err(_) => -1,
             }
@@ -888,6 +888,9 @@ pub unsafe extern "C" fn maho_core_drain_outgoing(ptr: *mut MahoCore) -> *mut c_
     )
 }
 
+/// Leases at most one relay push batch (`MAX_SYNC_PUSH_BATCH`) of outgoing
+/// envelopes; the remainder stays queued for the next call.
+///
 /// # Safety
 /// `ptr` must be valid.
 /// Caller must free the returned string with `maho_string_free`.
@@ -898,13 +901,37 @@ pub unsafe extern "C" fn maho_core_drain_outgoing_envelopes(ptr: *mut MahoCore) 
             if ptr.is_null() || import_gate::is_active() {
                 return ptr::null_mut();
             }
-            let envelopes = match (&mut *ptr).drain_sync_outgoing_envelopes() {
+            let envelopes = match (&mut *ptr).drain_sync_outgoing_envelopes_limited(
+                maho_core::maho_core::MAX_SYNC_PUSH_BATCH,
+            ) {
                 Ok(envelopes) => envelopes,
                 Err(_) => return ptr::null_mut(),
             };
             to_json_cstring(&envelopes)
         },
         ptr::null_mut()
+    )
+}
+
+/// Returns the leased, unacknowledged outgoing batch to the front of the queue
+/// (rows back to `pending`) after a failed push. Returns the number of
+/// requeued envelopes, or -1 on failure.
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by `maho_core_new`.
+#[no_mangle]
+pub unsafe extern "C" fn maho_core_requeue_outgoing_envelopes(ptr: *mut MahoCore) -> i32 {
+    ffi_safe!(
+        {
+            if ptr.is_null() || import_gate::is_active() {
+                return -1;
+            }
+            match (&mut *ptr).requeue_sync_lease() {
+                Ok(count) => i32::try_from(count).unwrap_or(i32::MAX),
+                Err(_) => -1,
+            }
+        },
+        -1
     )
 }
 

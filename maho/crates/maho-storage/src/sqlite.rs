@@ -19,7 +19,10 @@ pub use vault::{
 static SQLCIPHER_KEY: RwLock<Option<String>> = RwLock::new(None);
 
 const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
-const SQLITE_SCHEMA_VERSION: i64 = 2;
+// Bump whenever a migration is added: `initialize_schema` returns early once a
+// database reaches this version, so an existing DB never sees new migrations.
+// v3: session_artifacts.kind.
+const SQLITE_SCHEMA_VERSION: i64 = 3;
 
 const REQUIRED_VAULT_TABLES: &[&str] = &[
     "vault_schema_info",
@@ -3306,7 +3309,37 @@ impl SqliteStorage {
              WHERE delivery_id = ?3 AND state != 'acknowledged'",
             rusqlite::params![now, relay_seq, delivery_id],
         )?;
-        Ok(changed == 1)
+        if changed == 1 {
+            return Ok(true);
+        }
+        // A requeued delivery can be resent while its first ACK is still in
+        // flight; the relay deduplicates by delivery ID and ACKs both sends, so
+        // an ACK for an already completed row is success, not a mismatch.
+        self.conn
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM sync_queue
+                     WHERE delivery_id = ?1 AND state = 'acknowledged'
+                 )",
+                [delivery_id],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from)
+    }
+
+    /// Returns leased (`inflight`) rows to `pending` after a failed push so the
+    /// next lease re-sends them with the same delivery IDs. Acknowledged rows
+    /// are never touched.
+    pub fn requeue_sync_deliveries(&self, delivery_ids: &[String]) -> Result<usize, StorageError> {
+        let mut statement = self.conn.prepare(
+            "UPDATE sync_queue SET state = 'pending'
+             WHERE delivery_id = ?1 AND state = 'inflight'",
+        )?;
+        let mut requeued = 0;
+        for delivery_id in delivery_ids {
+            requeued += statement.execute([delivery_id])?;
+        }
+        Ok(requeued)
     }
 
     pub fn pending_sync_outbox_count(&self) -> Result<usize, StorageError> {
@@ -3905,6 +3938,44 @@ mod tests {
 
         // Unknown session yields an empty list, not an error.
         assert!(storage.list_artifacts("nope").unwrap().is_empty());
+    }
+
+    #[test]
+    fn versioned_database_without_artifact_kind_is_upgraded() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("artifacts-v2.db");
+        let path_str = db_path.to_str().unwrap();
+        let key = test_key();
+        // A database stamped with the previous schema version whose artifact
+        // table predates the `kind` column.
+        {
+            let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+            storage
+                .conn
+                .execute_batch(
+                    "DROP TABLE session_artifacts;
+                     CREATE TABLE session_artifacts (
+                        artifact_id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+                        display_name TEXT NOT NULL, mime_type TEXT NOT NULL,
+                        size_bytes INTEGER NOT NULL, storage_rel_path TEXT NOT NULL,
+                        created_at_ms INTEGER NOT NULL);
+                     PRAGMA user_version = 2;",
+                )
+                .unwrap();
+        }
+        let storage = SqliteStorage::open_with_key(path_str, &key).unwrap();
+        let artifact = maho_types::artifact::ArtifactInfo {
+            artifact_id: "artifact-v2".to_string(),
+            session_id: "sess-v2".to_string(),
+            display_name: "a.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            size_bytes: 1,
+            storage_rel_path: "sess-v2/a.txt".to_string(),
+            created_at_ms: 1,
+            kind: None,
+        };
+        storage.insert_artifact(&artifact).unwrap();
+        assert_eq!(storage.list_artifacts("sess-v2").unwrap(), vec![artifact]);
     }
 
     #[test]
