@@ -48,14 +48,14 @@ class SessionRegistry(
     /**
      * Releases all registered sessions.
      *
-     * Snapshot-and-clear ensures that any concurrent [register] calls that arrive
-     * after [clear] will not have their pointers silently leaked: they remain in
-     * the map and must be released independently.
+     * Each entry is freed only if this call's [ConcurrentHashMap.remove] returned it,
+     * so a concurrent [release]/[releaseByPointer] can never double-free a pointer, and
+     * a [register] racing this call is never dropped from the map without being freed.
      */
     fun releaseAll() {
-        val snapshot = sessions.toMap()
-        sessions.clear()
-        snapshot.values.forEach { ptr -> nativeFree(ptr) }
+        for (id in sessions.keys) {
+            sessions.remove(id)?.let { ptr -> nativeFree(ptr) }
+        }
     }
 
     /**

@@ -1,5 +1,6 @@
 package dev.maho.browser.ui.settings
 
+import android.webkit.WebView
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -21,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSettings
+import dev.maho.browser.BuildConfig
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.AdvancedSettingsUpdate
 import dev.maho.browser.ui.icons.MahoIcon
@@ -64,10 +66,11 @@ fun AdvancedSettingsScreen(
             SwitchPreference("Developer Mode", developerMode) {
                 developerMode = it
                 BridgeSettings.updateAdvancedSettings(AdvancedSettingsUpdate(developerMode = it))
+                WebView.setWebContentsDebuggingEnabled(it || BuildConfig.DEBUG)
             }
             if (developerMode) {
                 Text(
-                    "Web Inspector and console logging are enabled.",
+                    "Web pages can be inspected from chrome://inspect on a connected computer.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp),

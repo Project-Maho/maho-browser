@@ -14,6 +14,8 @@ class DefaultSyncBridgeAdapter : SyncBridgeAdapter {
         return json.decodeFromString(response)
     }
 
+    override fun requeueLeasedEnvelopes(): Boolean = MahoBridge.requeueSyncLease()
+
     override fun acknowledge(ack: RelayAckV2): Boolean =
         MahoBridge.acknowledgeSyncEnvelope(json.encodeToString(ack))
 

@@ -24,11 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.maho.browser.bridge.BridgeSettings
-import dev.maho.browser.bridge.sendEvent
-import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.ContentBlockingMode
 import dev.maho.browser.models.PrivacySettingsUpdate
-import dev.maho.browser.models.ShellEvent
 import dev.maho.browser.ui.icons.MahoIcon
 import androidx.compose.ui.res.painterResource
 
@@ -48,6 +45,7 @@ fun PrivacySettingsScreen(
     var clearDataOnExit by remember { mutableStateOf(false) }
     var safeBrowsingEnabled by remember { mutableStateOf(true) }
     var showClearDialog by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     LaunchedEffect(Unit) {
         val settings = BridgeSettings.getSettingsTyped() ?: return@LaunchedEffect
@@ -68,10 +66,10 @@ fun PrivacySettingsScreen(
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
             title = { Text("Clear All Browsing Data?") },
-            text = { Text("This cannot be undone.") },
+            text = { Text("History, cookies, site storage, cache and form data will be removed. This cannot be undone.") },
             confirmButton = {
                 TextButton(onClick = {
-                    MahoBridge.sendEvent(ShellEvent.ClearHistory)
+                    BrowsingDataCleaner.clearAll(context)
                     showClearDialog = false
                 }) { Text("Clear") }
             },

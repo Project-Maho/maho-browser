@@ -14,7 +14,6 @@ import dev.maho.browser.ui.library.NotesScreen
 import dev.maho.browser.ui.library.ReadingListScreen
 import dev.maho.browser.ui.profiles.ProfileSettingsScreen
 import dev.maho.browser.ui.settings.AdvancedSettingsScreen
-import dev.maho.browser.ui.settings.AppIconPickerScreen
 import dev.maho.browser.ui.settings.AppearanceSettingsScreen
 import dev.maho.browser.ui.settings.AutofillSettingsScreen
 import dev.maho.browser.ui.settings.FeedbackScreen
@@ -31,7 +30,7 @@ import dev.maho.browser.ui.theme.BrowserShellTheme
 internal enum class BrowserOverlay {
     Settings, GeneralSettings, AppearanceSettings, PrivacySettings, ReaderSettings,
     AutofillSettings, NotificationSettings, MaxSettings, ApiKeys, AdvancedSettings, Profiles,
-    Bookmarks, History, Archive, Downloads, Notes, ReadingList, AppIconPicker,
+    Bookmarks, History, Archive, Downloads, Notes, ReadingList,
     Feedback, LanguageSettings, SyncSettings, WebAgent, Conversations,
 }
 
@@ -71,7 +70,6 @@ internal fun MainBrowserOverlay(
                 onNavigateToDownloads = { onPush(BrowserOverlay.Downloads) },
                 onNavigateToNotes = { onPush(BrowserOverlay.Notes) },
                 onNavigateToReadingList = { onPush(BrowserOverlay.ReadingList) },
-                onNavigateToAppIcon = { onPush(BrowserOverlay.AppIconPicker) },
                 onNavigateToFeedback = { onPush(BrowserOverlay.Feedback) },
                 onNavigateToLanguage = { onPush(BrowserOverlay.LanguageSettings) },
                 onNavigateToSync = { onPush(BrowserOverlay.SyncSettings) },
@@ -114,7 +112,6 @@ internal fun MainBrowserOverlay(
                 onOpenUrl = { onClear(); onSubmitSearch(it) },
                 onBack = onPop,
             )
-            BrowserOverlay.AppIconPicker -> AppIconPickerScreen(onBack = onPop)
             BrowserOverlay.Feedback -> FeedbackScreen(onBack = onPop)
             BrowserOverlay.LanguageSettings -> LanguageSettingsScreen(onBack = onPop)
             BrowserOverlay.SyncSettings -> SyncSettingsScreen(onBack = onPop)

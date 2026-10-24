@@ -65,4 +65,22 @@ class AgenticBridgeTrustBoundaryTest {
         assertEquals("wss://relay.mahobrowser.com/ws/agent", defaultAgentRelayUrl(debug = false))
         assertTrue(defaultAgentRelayUrl(debug = true).startsWith("ws://10.0.2.2"))
     }
+
+    @Test
+    fun `AR7 model supplied tab urls are limited to http and https`() {
+        assertTrue(isAgentNavigableUrl("https://example.com/path"))
+        assertTrue(isAgentNavigableUrl("  HTTP://example.com  "))
+        for (url in listOf(
+            "javascript:alert(1)",
+            "file:///sdcard/secret.txt",
+            "intent://scan/#Intent;scheme=zxing;end",
+            "content://media/external",
+            "data:text/html,hi",
+            "https://",
+            "https:///etc/passwd",
+            "example.com",
+        )) {
+            assertFalse(url, isAgentNavigableUrl(url))
+        }
+    }
 }

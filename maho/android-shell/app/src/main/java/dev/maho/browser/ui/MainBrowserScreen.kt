@@ -4,8 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
-import android.webkit.CookieManager
-import android.webkit.WebStorage
 import android.webkit.WebView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -15,7 +13,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,6 +45,7 @@ import androidx.core.view.WindowCompat
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.bridge.BridgeCommandBar
 import dev.maho.browser.bridge.BridgeNavigation
+import dev.maho.browser.bridge.BridgeSettings
 import dev.maho.browser.bridge.BridgeSpaces
 import dev.maho.browser.bridge.BridgeTabs
 import dev.maho.browser.models.CoreUpdate
@@ -61,15 +60,23 @@ import dev.maho.browser.ui.find.FindInPageSheet
 import dev.maho.browser.ui.summary.PinchSummaryView
 import dev.maho.browser.ui.webview.AgenticBrowsingWebViewRegistry
 import dev.maho.browser.ui.theme.BrowserShellTheme
+import dev.maho.browser.ui.theme.BrowserThemeController
 import dev.maho.browser.ui.theme.resolveBrowserChromeTheme
 
+/** A link handed to the app from outside; [id] makes each delivery distinct. */
+data class ExternalOpen(val url: String, val id: Long)
+
 @Composable
-fun MainBrowserScreen(externalUrl: String? = null) {
+fun MainBrowserScreen(
+    externalOpen: ExternalOpen? = null,
+    onExternalOpenConsumed: (ExternalOpen) -> Unit = {},
+) {
     val shellColors = BrowserShellTheme.colors
     val bridge = MahoBridge
     val context = LocalContext.current
     val view = LocalView.current
-    val isSystemDarkTheme = isSystemInDarkTheme()
+    // Status-bar chrome must follow the in-app theme choice, not only the OS mode.
+    val isSystemDarkTheme = BrowserThemeController.isDarkTheme()
     var tabs by remember { mutableStateOf<List<TabViewModel>>(emptyList()) }
     var spaces by remember { mutableStateOf<List<SpaceViewModel>>(emptyList()) }
     var activeSpaceId by remember { mutableStateOf<SpaceId?>(null) }
@@ -87,6 +94,19 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var pinchSummarySentences by remember { mutableStateOf<List<String>>(emptyList()) }
     var overlayStack by remember { mutableStateOf(emptyList<BrowserOverlay>()) }
     var isIncognito by rememberSaveable { mutableStateOf(false) }
+    // Entering private mode needs an isolated WebView profile; without MULTI_PROFILE the
+    // toggle stays off and says why instead of silently sharing the default cookie jar.
+    fun setIncognito(enabled: Boolean) {
+        if (enabled && !PrivateBrowsingProfile.isSupported) {
+            android.widget.Toast.makeText(
+                context,
+                "Private browsing needs a newer Android System WebView",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
+        isIncognito = enabled
+    }
     var currentUrl by remember { mutableStateOf("") }
     var currentTitle by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
@@ -107,15 +127,21 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     var showSummaryOverlay by rememberSaveable { mutableStateOf(false) }
     var chromeScrollAccumulator by remember { mutableStateOf(0f) }
     var chromeRevealLockUntilMs by remember { mutableStateOf(0L) }
-    var prevIncognitoTabsCount by remember { mutableStateOf(0) }
     var urlBeforeReaderMode by rememberSaveable { mutableStateOf<String?>(null) }
     var showReaderSettingsSheet by rememberSaveable { mutableStateOf(false) }
 
     val browserPrefs = remember(context) {
         context.getSharedPreferences("maho_browser_ui_prefs", Context.MODE_PRIVATE)
     }
+    // Single source of truth for the default search engine is the core General setting
+    // (written by GeneralSettingsScreen). The legacy "search_engine" pref is only a fallback
+    // when core settings are unavailable.
+    fun coreSearchEngineName(): String? =
+        BridgeSettings.getSettingsTyped()?.general?.defaultSearchEngine?.name?.takeIf { it.isNotBlank() }
     val selectedSearchEngine = remember {
-        mutableStateOf(browserPrefs.getString("search_engine", "Google") ?: "Google")
+        mutableStateOf(
+            coreSearchEngineName() ?: browserPrefs.getString("search_engine", "Google") ?: "Google",
+        )
     }
 
     fun refreshBrowserState() {
@@ -152,15 +178,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     }
 
     fun clearBrowsingData() {
-        CookieManager.getInstance().removeAllCookies(null)
-        CookieManager.getInstance().flush()
-        WebStorage.getInstance().deleteAllData()
-        WebView(context).apply {
-            clearCache(true)
-            clearHistory()
-            clearFormData()
-            destroy()
-        }
+        dev.maho.browser.ui.settings.BrowsingDataCleaner.clearAll(context)
     }
 
     fun applyDisplayOptions() {
@@ -196,6 +214,9 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     fun popOverlay() {
         if (overlayStack.lastOrNull() == BrowserOverlay.WebAgent) {
             webAgentInitialGoal = null
+        }
+        if (overlayStack.lastOrNull() == BrowserOverlay.GeneralSettings) {
+            coreSearchEngineName()?.let { selectedSearchEngine.value = it }
         }
         overlayStack = overlayStack.dropLast(1)
     }
@@ -269,6 +290,17 @@ fun MainBrowserScreen(externalUrl: String? = null) {
     fun transitionToBrowsing(tabId: TabId?) {
         if (tabId == null) {
             transitionToHome()
+            return
+        }
+
+        // A tab still on a system surface (chrome://newtab, about:blank) has no web
+        // page to show; WebView cannot load those URLs (ERR_INVALID_URL), so the
+        // tab presents Home until the user navigates it somewhere.
+        val tabUrl = tabs.firstOrNull { it.id == tabId }?.url
+        if (requestedNavigationUrl == null && tabUrl != null && isSystemSurfaceUrl(tabUrl)) {
+            activeTabId = tabId
+            showTabGrid = false
+            transitionToHome(returnTabId = null)
             return
         }
 
@@ -372,12 +404,17 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         rawInput: String,
         reuseActiveTab: Boolean = shellRoute == ShellRoute.Browsing && activeTabId != null,
     ) {
+        coreSearchEngineName()?.let { selectedSearchEngine.value = it }
         val target = normalizeBrowserInput(rawInput, selectedSearchEngine.value)
         if (target.isBlank()) return
 
         homeQuery = ""
 
-        val targetTabId = if (reuseActiveTab) {
+        // Navigating from Home while the active tab is still a blank new tab fills
+        // that tab instead of leaving it behind as an empty extra tab.
+        val activeTabIsBlank = tabs.firstOrNull { it.id == activeTabId }?.url
+            ?.let(::isSystemSurfaceUrl) == true
+        val targetTabId = if (reuseActiveTab || activeTabIsBlank) {
             activeTabId
         } else {
             null
@@ -389,7 +426,8 @@ fun MainBrowserScreen(externalUrl: String? = null) {
             pendingHomeNavigationUrl = null
             pendingBrowsingTabId = targetTabId
             BridgeNavigation.navigate(targetTabId, target)
-            webViewRef?.loadUrl(target)
+            // WebViewHost loads requestedNavigationUrl; loading here too pushed a
+            // duplicate history entry, so Back landed on the same page.
             currentUrl = target
             currentTitle = ""
             transitionToBrowsing(targetTabId)
@@ -442,9 +480,10 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         transitionToHome(returnTabId = activeTabId)
     }
 
-    LaunchedEffect(externalUrl) {
-        val url = externalUrl
-        if (!url.isNullOrBlank()) {
+    LaunchedEffect(externalOpen) {
+        val open = externalOpen ?: return@LaunchedEffect
+        val url = open.url
+        if (url.isNotBlank()) {
             when {
                 url.startsWith("maho:search?q=") -> {
                     val query = java.net.URLDecoder.decode(url.removePrefix("maho:search?q="), "UTF-8")
@@ -454,6 +493,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                 else -> submitSearch(url)
             }
         }
+        onExternalOpenConsumed(open)
     }
 
     val activeTab = tabs.firstOrNull { it.id == activeTabId }
@@ -553,12 +593,21 @@ fun MainBrowserScreen(externalUrl: String? = null) {
         }
     }
 
+    var wasIncognito by remember { mutableStateOf(isIncognito) }
+    var prevPrivateTabCount by remember { mutableStateOf(0) }
     LaunchedEffect(tabs, isIncognito) {
-        val incognitoTabsCount = if (isIncognito) currentSpaceTabs.count() else 0
-        if (isIncognito && prevIncognitoTabsCount > 0 && incognitoTabsCount == 0) {
-            clearBrowsingData()
+        // Private data lives in its own WebView profile, so ending the private session
+        // deletes only that profile; normal browsing cookies/storage are never touched.
+        // Compare against the previous count so the empty initial tab list (before the
+        // first bridge refresh, e.g. after rotation) never counts as "closed the last tab".
+        val privateTabCount = if (isIncognito) currentSpaceTabs.count() else 0
+        val leftPrivateMode = wasIncognito && !isIncognito
+        val closedLastPrivateTab = isIncognito && prevPrivateTabCount > 0 && privateTabCount == 0
+        if (leftPrivateMode || closedLastPrivateTab) {
+            PrivateBrowsingProfile.endSession()
         }
-        prevIncognitoTabsCount = incognitoTabsCount
+        wasIncognito = isIncognito
+        prevPrivateTabCount = privateTabCount
     }
 
     LaunchedEffect(tabs, pendingHomeNavigationUrl, shellRoute) {
@@ -722,7 +771,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                         transitionToBrowsing(nextTabId)
                                     }
                                 },
-                                onToggleIncognito = { isIncognito = it },
+                                onToggleIncognito = { setIncognito(it) },
                                 onFindInPage = {
                                     if (activeTabId != null) {
                                         showFindSheet = true
@@ -838,7 +887,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             onGoForward = {},
                             onPreviousTab = {},
                             onNextTab = {},
-                            onToggleIncognito = { isIncognito = it },
+                            onToggleIncognito = { setIncognito(it) },
                             onFindInPage = {},
                             onArchive = {
                                 pushOverlay(BrowserOverlay.Archive)
@@ -887,9 +936,15 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                 ) {
                     when (val tabId = browsingTabId) {
                         null -> Box(modifier = Modifier.fillMaxSize())
-                        else -> WebViewHost(
+                        else -> key(tabId, isIncognito) {
+                            // One WebView per tab (and per private/normal mode): sharing one
+                            // instance leaked back history and URL events across tabs, and a
+                            // private WebView must be bound to the private profile at creation.
+                            WebViewHost(
                             tabId = tabId,
                             initialUrl = browsingInitialUrl,
+                            requestedUrl = (requestedNavigationUrl ?: pendingHomeNavigationUrl)
+                                ?.takeIf { it.isNotBlank() },
                             isDesktopMode = isDesktopMode,
                             isIncognito = isIncognito,
                             onUrlChanged = { url ->
@@ -929,6 +984,11 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                                     zoomLevel = zoomLevel,
                                 )
                             },
+                            onWebViewDisposed = { webView ->
+                                // A destroyed WebView must not stay addressable: navigating
+                                // from Home would otherwise loadUrl() into a dead instance.
+                                if (webViewRef === webView) webViewRef = null
+                            },
                             onNewTabRequested = { url ->
                                 val spaceId = activeSpaceId ?: spaces.firstOrNull()?.id
                                 if (spaceId != null) {
@@ -959,6 +1019,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                             },
                             modifier = Modifier.fillMaxSize(),
                         )
+                        }
                     }
                 }
             } else {
@@ -976,9 +1037,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                         refreshBrowserState()
                         transitionToBrowsing(tabId)
                     },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .testTag("mainBrowserHomeSurface"),
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
 
@@ -993,6 +1052,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                 ) {
                     FindInPageSheet(
                         visibleTabId = activeTabId,
+                        webView = webViewRef,
                         onDismiss = { showFindSheet = false },
                         isIncognito = isIncognito,
                     )
@@ -1019,7 +1079,7 @@ fun MainBrowserScreen(externalUrl: String? = null) {
                         ),
                     )
                 },
-                onToggleIncognito = { isIncognito = !isIncognito },
+                onToggleIncognito = { setIncognito(!isIncognito) },
                 onSelectSuggestion = ::handleSearchSuggestionSelection,
                 onBrowseForMe = { entered ->
                     showSearchSheet = false

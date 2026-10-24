@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -130,6 +131,9 @@ fun TabGridScreen(
     ) {
         Scaffold(
             containerColor = containerColor,
+            // The sheet already handles system-bar insets; letting the inner
+            // Scaffold pad again left an empty strip above the deck header.
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { padding ->
             Column(
                 modifier = Modifier
@@ -271,6 +275,8 @@ fun TabGridScreen(
                     onCloseAll = {
                         visibleTabs.forEach { BridgeTabs.closeTab(it.id) }
                         refresh()
+                        // Favorites survive Close all; land on Home rather than reopening one.
+                        onTabSelected(null)
                     },
                     onDone = onDismiss,
                     modifier = Modifier

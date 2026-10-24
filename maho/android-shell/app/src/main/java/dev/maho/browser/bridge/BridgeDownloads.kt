@@ -23,10 +23,12 @@ object BridgeDownloads {
     }
 
     fun cancelDownload(id: String) {
+        SystemDownloadTracker.cancel(id)
         MahoBridge.cancelDownload(id)
     }
 
     fun removeDownload(id: String) {
+        SystemDownloadTracker.cancel(id)
         MahoBridge.removeDownload(id)
     }
 }

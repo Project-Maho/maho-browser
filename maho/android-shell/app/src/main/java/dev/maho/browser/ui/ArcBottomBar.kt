@@ -22,7 +22,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -628,10 +627,12 @@ private fun HomeTabsFooterButton(
                 tint = contentColor,
             )
             if (tabCount > 0) {
+                // Kept inside the button: Surface clips children to its rounded shape,
+                // so an outward offset cut the count off.
                 Surface(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 4.dp, y = (-4).dp),
+                        .padding(top = 3.dp, end = 3.dp),
                     shape = CircleShape,
                     color = contentColor,
                     tonalElevation = 0.dp,

@@ -159,8 +159,23 @@ fun ProfileSettingsScreen(
     if (showCreateSheet) {
         ProfileFormSheet(
             onDismiss = { showCreateSheet = false },
-            onSave = { name, _, _ ->
+            onSave = { name, avatarColor, downloadPath ->
+                // CreateProfile returns no CoreUpdate over JNI (ProfileCreated only reaches
+                // registered update listeners), so find the new profile by diffing the list.
+                val existingIds = BridgeProfiles.getAllProfiles().map { it.id }.toSet()
                 BridgeProfiles.createNewProfile(name)
+                val created = BridgeProfiles.getAllProfiles().firstOrNull { it.id !in existingIds }
+                if (created != null) {
+                    val color = avatarColor.trim().takeIf { it.isNotEmpty() && it != created.avatarColor }
+                    val path = downloadPath.trim().takeIf { it.isNotEmpty() && it != created.downloadPath }
+                    if (color != null || path != null) {
+                        BridgeProfiles.updateExistingProfile(
+                            profileId = created.id,
+                            avatarColor = color,
+                            downloadPath = path,
+                        )
+                    }
+                }
                 showCreateSheet = false
                 reload()
             },
@@ -180,10 +195,10 @@ private fun ProfileItem(
         confirmValueChange = { value ->
             if (value == SwipeToDismissBoxValue.EndToStart) {
                 onDelete()
-                true
-            } else {
-                false
             }
+            // Never settle into the dismissed state: the confirm dialog owns deletion,
+            // so a cancelled delete leaves the row visible.
+            false
         },
     )
 

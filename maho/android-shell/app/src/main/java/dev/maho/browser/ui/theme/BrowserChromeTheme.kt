@@ -37,7 +37,9 @@ fun resolveBrowserChromeTheme(
         showSearchSheet && isIncognito -> false
         showSearchSheet && isSystemDarkTheme -> false
         showSearchSheet -> true
-        else -> isCleanHomeChrome && !isIncognito && !isSystemDarkTheme
+        // Every non-search light surface (home, browsing, tab deck) is light,
+        // so its status icons must be dark to stay visible.
+        else -> !isIncognito && !isSystemDarkTheme
     }
 
     return BrowserChromeTheme(

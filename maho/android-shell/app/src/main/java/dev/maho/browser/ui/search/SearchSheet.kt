@@ -212,7 +212,10 @@ fun SearchSheet(
             },
             suggestions = suggestions,
             onSelectSuggestion = { indexedSuggestion ->
-                onRecordSuggestionSelection(indexedSuggestion.sourceIndex, indexedSuggestion.suggestion)
+                // Incognito selections must not reach core usage_stats.
+                if (!isIncognito) {
+                    onRecordSuggestionSelection(indexedSuggestion.sourceIndex, indexedSuggestion.suggestion)
+                }
                 onSelectSuggestion(indexedSuggestion.suggestion)
             },
             onBrowseForMe = onBrowseForMe,

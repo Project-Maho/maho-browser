@@ -1,11 +1,17 @@
 package dev.maho.browser.sync
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.maho.browser.bridge.BridgeSync
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 internal fun completeLocalLogout(
     clearSession: () -> Boolean,
@@ -59,8 +65,13 @@ object SyncManager : DefaultLifecycleObserver {
     var lastSyncTimestamp: Long? = null
         private set
 
+    @Volatile
     private var appContext: Context? = null
+    @Volatile
     private var lifecycleController: SyncLifecycleController? = null
+    // Relay cycles are blocking network I/O; they never run on the caller
+    // (main) thread, whether triggered by lifecycle, sign-in, or Sync Now.
+    private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val authClient = RelayAuthClient()
     var syncErrorListener: ((String) -> Unit)? = null
 
@@ -84,13 +95,23 @@ object SyncManager : DefaultLifecycleObserver {
             restoreCoreAuth = { restorePersistedCoreSession(RelaySessionStore::load, ::signInCore) },
             configureBootstrap = { RelaySessionStore.load()?.let(::configureAccountBootstrap) == true },
             toggleCoreSync = BridgeSync::toggleSync,
-            runCycle = { SyncTransport.shared.runBoundedCycle() },
+            runCycle = ::launchCycle,
             enqueueWork = { ReliableSyncWorker.enqueue(context.applicationContext) },
             cancelTransport = SyncTransport.shared::cancel,
             cancelWork = { ReliableSyncWorker.cancel(context.applicationContext) },
         )
         lifecycleController?.restore()
-        ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+        // LifecycleRegistry enforces main-thread observer registration;
+        // initialize() runs on the hydration (IO) coroutine.
+        Handler(Looper.getMainLooper()).post {
+            ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+        }
+    }
+
+    private fun launchCycle() {
+        syncScope.launch {
+            if (isSyncing) SyncTransport.shared.runBoundedCycle()
+        }
     }
 
     fun getServerUrl(): String {
@@ -173,12 +194,54 @@ object SyncManager : DefaultLifecycleObserver {
         Log.i(TAG, "Background sync started")
     }
 
-    private fun configureAccountBootstrap(session: RelaySession): Boolean {
+    /**
+     * Restores sync with the stored session. The access token is short-lived and
+     * is normally expired by the next app launch, so a 401 refreshes the session
+     * once (persisting it and re-authenticating core) and retries; without this the
+     * relay rejected every restart and sync silently stayed stopped.
+     */
+    private fun configureAccountBootstrap(stored: RelaySession): Boolean {
+        val first = configureAccountBootstrapOnce(stored)
+        if (first != BootstrapAttempt.UNAUTHORIZED) return first == BootstrapAttempt.CONFIGURED
+        val serverUrl = stored.serverUrl ?: getServerUrl()
+        val refreshed = try {
+            val response = authClient.refresh(serverUrl, stored.refreshToken, stored.email)
+            when (val merged = mergeRelayRefreshSession(stored, response)) {
+                is RelayRefreshMergeResult.Accepted -> merged.session.copy(serverUrl = serverUrl)
+                is RelayRefreshMergeResult.Rejected -> {
+                    Log.w(TAG, "Relay session refresh rejected: ${merged.reason}")
+                    return false
+                }
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "Relay session refresh failed: ${error.message}")
+            return false
+        }
+        if (!RelaySessionStore.save(refreshed)) {
+            Log.w(TAG, "Unable to securely save refreshed relay session")
+            return false
+        }
+        signInCore(refreshed)
+        return configureAccountBootstrapOnce(refreshed) == BootstrapAttempt.CONFIGURED
+    }
+
+    private enum class BootstrapAttempt { CONFIGURED, UNAUTHORIZED, FAILED }
+
+    private fun configureAccountBootstrapOnce(session: RelaySession): BootstrapAttempt = try {
+        if (configureAccountBootstrapWith(session)) BootstrapAttempt.CONFIGURED else BootstrapAttempt.FAILED
+    } catch (_: BootstrapUnauthorized) {
+        BootstrapAttempt.UNAUTHORIZED
+    }
+
+    private class BootstrapUnauthorized : Exception()
+
+    private fun configureAccountBootstrapWith(session: RelaySession): Boolean {
         val serverUrl = session.serverUrl ?: getServerUrl()
         val legacyRoomId = BridgeSync.getSyncRoomId()?.takeIf(String::isNotBlank)
         val bootstrap = try {
             authClient.getSyncBootstrap(serverUrl, session.accessToken)
         } catch (error: RelayApiException) {
+            if (error.code == 401) throw BootstrapUnauthorized()
             if (error.code != 404) {
                 Log.w(TAG, "Relay Sync bootstrap retrieval failed: ${error.message}")
                 return false
@@ -223,7 +286,7 @@ object SyncManager : DefaultLifecycleObserver {
 
     fun syncNow() {
         if (!isSyncing) return
-        SyncTransport.shared.runBoundedCycle()
+        launchCycle()
         appContext?.let(ReliableSyncWorker::enqueue)
     }
 

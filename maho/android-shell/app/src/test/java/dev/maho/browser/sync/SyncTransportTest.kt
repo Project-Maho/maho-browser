@@ -11,22 +11,41 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import java.io.File
 import java.util.concurrent.TimeUnit
 
+/**
+ * Models core's outbox lease honestly: a lease removes envelopes from the
+ * queue until they are acknowledged or requeued, and a new lease first
+ * requeues any outstanding one (as core does).
+ */
 private class FakeV2BridgeAdapter : SyncBridgeAdapter {
     var roomId: String? = "0123456789abcdef0123456789abcdef"
-    var outgoing = emptyList<SyncEnvelopeV2>()
+    var outgoing = mutableListOf<SyncEnvelopeV2>()
+    val leased = mutableListOf<SyncEnvelopeV2>()
+    var requeueCount = 0
     var cursor = 0L
     val acknowledged = mutableListOf<RelayAckV2>()
     val applied = mutableListOf<SyncEnvelopeV2>()
     val states = mutableListOf<SyncTransportStateReport>()
 
     override fun getSyncRoomId(): String? = roomId
-    override fun leaseOutgoingEnvelopes(limit: Int): List<SyncEnvelopeV2> = outgoing.take(limit)
+    override fun leaseOutgoingEnvelopes(limit: Int): List<SyncEnvelopeV2> {
+        outgoing.addAll(0, leased)
+        leased.clear()
+        val batch = outgoing.take(limit)
+        outgoing.subList(0, batch.size).clear()
+        leased += batch
+        return batch
+    }
+    override fun requeueLeasedEnvelopes(): Boolean {
+        requeueCount += 1
+        outgoing.addAll(0, leased)
+        leased.clear()
+        return true
+    }
     override fun acknowledge(ack: RelayAckV2): Boolean {
         acknowledged += ack
-        return outgoing.any { it.deliveryId == ack.deliveryId }
+        return leased.removeAll { it.deliveryId == ack.deliveryId }
     }
     override fun getReceiveCursor(roomId: String): Long = cursor
     override fun applyEnvelopeAndAdvanceCursor(roomId: String, envelope: SyncEnvelopeV2): Boolean {
@@ -97,8 +116,27 @@ class SyncTransportTest {
 
     @Test
     fun sharedV2FixtureUsesAndroidRelaySchema() {
-        val fixture = File(System.getProperty("user.dir"), "../../tests/fixtures/sync-v2/protocol.json")
-        val payload = fixture.readText()
+        // Wire sample of the relay's v2 push/ack. The shared fixture file stays in the
+        // private relay repo, so the client keeps its own copy of the two messages it parses.
+        val payload = """
+            {
+              "push": {
+                "room_id": "0123456789abcdef0123456789abcdef",
+                "messages": [
+                  {
+                    "protocol_version": 2,
+                    "delivery_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "payload": "AA==",
+                    "relay_seq": null
+                  }
+                ]
+              },
+              "ack": {
+                "delivery_id": "550e8400-e29b-41d4-a716-446655440000",
+                "seq": 5
+              }
+            }
+        """.trimIndent()
         val push = MahoJson.instance.decodeFromString<RelaySyncPushRequest>(
             MahoJson.instance.parseToJsonElement(payload)
                 .jsonObject["push"]!!
@@ -121,7 +159,7 @@ class SyncTransportTest {
             deliveryId = "550e8400-e29b-41d4-a716-446655440000",
             payload = "AA==",
         )
-        bridge.outgoing = listOf(outgoing)
+        bridge.outgoing = mutableListOf(outgoing)
         val inbound = SyncEnvelopeV2(
             protocolVersion = SYNC_PROTOCOL_VERSION,
             deliveryId = "550e8400-e29b-41d4-a716-446655440001",
@@ -157,13 +195,36 @@ class SyncTransportTest {
     }
 
     @Test
+    fun one_cycle_pushes_a_large_offline_outbox_in_relay_sized_batches() {
+        val ids = (0 until 70).map { "550e8400-e29b-41d4-a716-${"%012d".format(it)}" }
+        bridge.outgoing = ids.map {
+            SyncEnvelopeV2(protocolVersion = SYNC_PROTOCOL_VERSION, deliveryId = it, payload = "AA==")
+        }.toMutableList()
+        listOf(ids.take(50), ids.drop(50)).forEachIndexed { batch, batchIds ->
+            val acks = batchIds.mapIndexed { i, id -> """{"delivery_id":"$id","seq":${batch * 50 + i + 1}}""" }
+            server.enqueue(MockResponse().setResponseCode(200).setBody("""{"acks":[${acks.joinToString(",")}]}"""))
+        }
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"messages":[],"has_more":false}"""))
+
+        val result = transport.runBoundedCycle()
+
+        assertEquals(SyncCycleOutcome.SUCCESS, result.outcome)
+        assertEquals(70, bridge.acknowledged.size)
+        assertTrue(bridge.outgoing.isEmpty())
+        val batchSizes = (0 until 2).map {
+            Regex("\"delivery_id\"").findAll(server.takeRequest(5, TimeUnit.SECONDS)!!.body.readUtf8()).count()
+        }
+        assertEquals(listOf(50, 20), batchSizes)
+    }
+
+    @Test
     fun mismatched_ack_set_keeps_outbox_unacknowledged() {
         val outgoing = SyncEnvelopeV2(
             protocolVersion = SYNC_PROTOCOL_VERSION,
             deliveryId = "550e8400-e29b-41d4-a716-446655440000",
             payload = "AA==",
         )
-        bridge.outgoing = listOf(outgoing)
+        bridge.outgoing = mutableListOf(outgoing)
         server.enqueue(
             MockResponse().setResponseCode(200).setBody(
                 """{"acks":[{"delivery_id":"550e8400-e29b-41d4-a716-446655440099","seq":3}]}""",
@@ -175,6 +236,78 @@ class SyncTransportTest {
         assertEquals(SyncCycleOutcome.PERMANENT_FAILURE, result.outcome)
         assertTrue(bridge.acknowledged.isEmpty())
         assertTrue(bridge.states.last().kind == "error")
+        assertEquals(listOf(outgoing), bridge.outgoing)
+        assertTrue(bridge.leased.isEmpty())
+    }
+
+    @Test
+    fun failed_push_requeues_lease_and_next_cycle_repushes_same_delivery_ids() {
+        val first = SyncEnvelopeV2(
+            protocolVersion = SYNC_PROTOCOL_VERSION,
+            deliveryId = "550e8400-e29b-41d4-a716-446655440010",
+            payload = "AA==",
+        )
+        val second = SyncEnvelopeV2(
+            protocolVersion = SYNC_PROTOCOL_VERSION,
+            deliveryId = "550e8400-e29b-41d4-a716-446655440011",
+            payload = "AQ==",
+        )
+        bridge.outgoing = mutableListOf(first, second)
+        server.enqueue(MockResponse().setResponseCode(503).setBody("unavailable"))
+
+        val failed = transport.runBoundedCycle()
+
+        assertEquals(SyncCycleOutcome.TRANSIENT_FAILURE, failed.outcome)
+        assertEquals(1, bridge.requeueCount)
+        assertEquals(listOf(first, second), bridge.outgoing)
+        assertTrue(bridge.leased.isEmpty())
+        val failedPush = server.takeRequest(5, TimeUnit.SECONDS)!!.body.readUtf8()
+
+        server.enqueue(
+            MockResponse().setResponseCode(200).setBody(
+                """{"acks":[{"delivery_id":"${first.deliveryId}","seq":1},{"delivery_id":"${second.deliveryId}","seq":2}]}""",
+            ),
+        )
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"messages":[],"has_more":false}"""))
+
+        val retried = transport.runBoundedCycle()
+
+        assertEquals(SyncCycleOutcome.SUCCESS, retried.outcome)
+        val retriedPush = server.takeRequest(5, TimeUnit.SECONDS)!!
+        assertTrue(retriedPush.path!!.contains("/sync/push"))
+        val retriedBody = retriedPush.body.readUtf8()
+        listOf(first, second).forEach { envelope ->
+            assertTrue(failedPush.contains(envelope.deliveryId))
+            assertTrue(retriedBody.contains(envelope.deliveryId))
+        }
+        assertEquals(
+            listOf(RelayAckV2(first.deliveryId, 1), RelayAckV2(second.deliveryId, 2)),
+            bridge.acknowledged,
+        )
+        assertTrue(bridge.outgoing.isEmpty())
+        assertTrue(bridge.leased.isEmpty())
+    }
+
+    @Test
+    fun refreshed_token_reenables_core_sync_only_when_sync_is_running() {
+        val session = RelaySession(email = "sync@example.com", accessToken = "new", refreshToken = "r")
+        val running = mutableListOf<String>()
+        reauthenticateCoreAfterRefresh(
+            session = session,
+            syncRunning = true,
+            signInCore = { running += "sign-in:${it.accessToken}" },
+            toggleCoreSync = { running += "toggle" },
+        )
+        assertEquals(listOf("sign-in:new", "toggle"), running)
+
+        val idle = mutableListOf<String>()
+        reauthenticateCoreAfterRefresh(
+            session = session,
+            syncRunning = false,
+            signInCore = { idle += "sign-in:${it.accessToken}" },
+            toggleCoreSync = { idle += "toggle" },
+        )
+        assertEquals(listOf("sign-in:new"), idle)
     }
 
     @Test

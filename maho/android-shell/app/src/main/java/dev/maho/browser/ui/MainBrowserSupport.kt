@@ -14,6 +14,7 @@ internal fun normalizeBrowserInputValue(input: String, searchEngine: String): St
     return when (searchEngine) {
         "Bing" -> "https://www.bing.com/search?q=$encoded"
         "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
+        "Brave" -> "https://search.brave.com/search?q=$encoded"
         "Ecosia" -> "https://www.ecosia.org/search?q=$encoded"
         "Perplexity" -> "https://www.perplexity.ai/search?q=$encoded"
         "Kagi" -> "https://kagi.com/search?q=$encoded"

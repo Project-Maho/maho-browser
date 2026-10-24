@@ -17,7 +17,6 @@ import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
-import android.webkit.WebStorage
 import android.webkit.WebView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -56,15 +55,69 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.ProfileStore
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import dev.maho.browser.models.TabId
 import dev.maho.browser.ui.theme.BrowserThemeController
 import dev.maho.browser.ui.tab.TabPreviewStore
 import dev.maho.browser.ui.webview.AgenticBrowsingWebViewRegistry
 
+/**
+ * Private (incognito) WebViews run in a dedicated WebView profile so their cookies,
+ * DOM storage and cache never mix with the default profile used for normal browsing.
+ * The private profile lives for one private session: [endSession] wipes it when the
+ * user leaves private mode or closes the last tab in it, and the first private WebView
+ * of a process wipes it again (covers a crash or kill that skipped [endSession]).
+ */
+internal object PrivateBrowsingProfile {
+    private const val PROFILE_NAME = "maho-private"
+    private var wipedThisProcess = false
+
+    /**
+     * Private mode is offered only when the WebView provider can isolate it in its own
+     * profile; without MULTI_PROFILE first-party cookies would land in the default jar.
+     */
+    val isSupported: Boolean
+        get() = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)
+
+    /**
+     * Must run right after the WebView is constructed, before it loads anything.
+     * Returns false when the installed WebView provider lacks MULTI_PROFILE.
+     */
+    fun bind(webView: WebView): Boolean {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return false
+        if (!wipedThisProcess) {
+            wipedThisProcess = true
+            endSession()
+        }
+        ProfileStore.getInstance().getOrCreateProfile(PROFILE_NAME)
+        WebViewCompat.setProfile(webView, PROFILE_NAME)
+        return true
+    }
+
+    /** Deletes only the private profile's data; the default profile is never touched. */
+    fun endSession() {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE)) return
+        val store = ProfileStore.getInstance()
+        val profile = store.getProfile(PROFILE_NAME) ?: return
+        profile.cookieManager.removeAllCookies(null)
+        profile.cookieManager.flush()
+        profile.webStorage.deleteAllData()
+        try {
+            store.deleteProfile(PROFILE_NAME)
+        } catch (_: IllegalStateException) {
+            // A WebView still holds the profile; its cookies and storage were cleared
+            // above and the next process's first bind() wipes it again.
+        }
+    }
+}
+
 @Composable
 fun WebViewHost(
     tabId: TabId,
     initialUrl: String,
+    requestedUrl: String? = null,
     isDesktopMode: Boolean,
     onUrlChanged: (String) -> Unit,
     onTitleChanged: (String) -> Unit,
@@ -73,6 +126,7 @@ fun WebViewHost(
     onNavigationStateChanged: (canGoBack: Boolean, canGoForward: Boolean) -> Unit,
     onError: (errorCode: Int, description: String, failingUrl: String) -> Unit,
     onWebViewReady: (WebView) -> Unit,
+    onWebViewDisposed: (WebView) -> Unit = {},
     onScrollChanged: (scrollY: Int, oldScrollY: Int) -> Unit = { _, _ -> },
     onSingleTap: () -> Unit = {},
     onPinchSummarize: () -> Unit = {},
@@ -192,9 +246,21 @@ fun WebViewHost(
 
     val webView = remember(webViewEpoch) {
         WebView(context).apply {
+            // The profile must be bound before the WebView is used. Private mode is only
+            // reachable when PrivateBrowsingProfile.isSupported, so binding cannot fail here.
+            val privateProfileBound = isIncognito && PrivateBrowsingProfile.bind(this)
+            val downloadCookies = if (privateProfileBound) {
+                WebViewCompat.getProfile(this).cookieManager
+            } else {
+                CookieManager.getInstance()
+            }
+            val persistSiteStorage = !isIncognito || privateProfileBound
             settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.databaseEnabled = true
+            settings.domStorageEnabled = persistSiteStorage
+            settings.databaseEnabled = persistSiteStorage
+            if (isIncognito && !privateProfileBound) {
+                CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+            }
             settings.setSupportMultipleWindows(true)
             settings.javaScriptCanOpenWindowsAutomatically = true
             settings.mediaPlaybackRequiresUserGesture = true
@@ -206,7 +272,7 @@ fun WebViewHost(
             settings.useWideViewPort = true
             settings.allowContentAccess = true
             settings.allowFileAccess = false
-            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.cacheMode = if (persistSiteStorage) WebSettings.LOAD_DEFAULT else WebSettings.LOAD_NO_CACHE
             overScrollMode = WebView.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
@@ -331,7 +397,7 @@ fun WebViewHost(
                 try {
                     val uri = android.net.Uri.parse(downloadUrl)
                     val filename = android.webkit.URLUtil.guessFileName(downloadUrl, contentDisposition, mimetype)
-                    val cookie = CookieManager.getInstance().getCookie(downloadUrl)
+                    val cookie = downloadCookies.getCookie(downloadUrl)
                     val request = android.app.DownloadManager.Request(uri).apply {
                         setMimeType(mimetype)
                         addRequestHeader("User-Agent", userAgent)
@@ -343,8 +409,9 @@ fun WebViewHost(
                         setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                         setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, filename)
                     }
-                    val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as? android.app.DownloadManager
-                    dm?.enqueue(request)
+                    dev.maho.browser.bridge.SystemDownloadTracker.enqueue(
+                        context, request, downloadUrl, filename, mimetype.orEmpty(),
+                    )
                     android.widget.Toast.makeText(context, "Downloading $filename...", android.widget.Toast.LENGTH_SHORT).show()
                 } catch (_: Exception) {
                     try {
@@ -363,7 +430,11 @@ fun WebViewHost(
             }
 
             BrowserThemeController.registerWebView(this)
-            if (initialUrl.isNotBlank()) {
+            // Returning to a tab restores its WebView back/forward list instead of
+            // starting a fresh history at the tab's last URL.
+            val restored = !isIncognito && requestedUrl == null &&
+                WebViewStateStore.restore(tabId, this)
+            if (!restored && initialUrl.isNotBlank()) {
                 loadUrl(initialUrl)
             }
         }
@@ -400,14 +471,14 @@ fun WebViewHost(
                 webView.clearCache(true)
                 webView.clearHistory()
                 webView.clearFormData()
-                try {
-                    WebStorage.getInstance().deleteAllData()
-                    CookieManager.getInstance().removeAllCookies(null)
-                    CookieManager.getInstance().flush()
-                } catch (_: Exception) {}
+            } else {
+                WebViewStateStore.save(currentTabId.value, webView)
             }
             BrowserThemeController.unregisterWebView(webView)
             webView.destroy()
+            // Private data lives only in the private profile (ended by MainBrowserScreen);
+            // never wipe the default profile's cookies/storage here, that would log the
+            // user out of every normal tab.
         }
     }
 
@@ -416,6 +487,7 @@ fun WebViewHost(
         onWebViewReady(webView)
         onDispose {
             AgenticBrowsingWebViewRegistry.detach(webView)
+            onWebViewDisposed(webView)
         }
     }
 
@@ -435,11 +507,21 @@ fun WebViewHost(
         webView.settings.loadWithOverviewMode = true
     }
 
-    var lastRequestedUrl by remember(webView) { mutableStateOf<String?>(null) }
-    LaunchedEffect(webView, tabId, initialUrl) {
-        if (shouldLoadRequestedUrl(initialUrl, webView.url, lastRequestedUrl)) {
-            lastRequestedUrl = initialUrl
-            webView.loadUrl(initialUrl)
+    var lastRequestedUrl by remember(webView) {
+        mutableStateOf(initialUrl.takeIf { it.isNotBlank() })
+    }
+    // Only an explicit navigation request loads into an existing WebView. Reloading
+    // whenever the tab's recorded URL differed from the rendered one undid Back:
+    // the core still held the page being left, so it was loaded again.
+    LaunchedEffect(webView, tabId, requestedUrl) {
+        val target = requestedUrl
+        if (target == null) {
+            lastRequestedUrl = null
+            return@LaunchedEffect
+        }
+        if (shouldLoadRequestedUrl(target, webView.url, lastRequestedUrl)) {
+            lastRequestedUrl = target
+            webView.loadUrl(target)
         }
     }
 

@@ -45,7 +45,6 @@ class SettingsTest {
             "Notifications",
             "Max AI",
             "Web Agent",
-            "App Icon",
             "Feedback",
         )
 

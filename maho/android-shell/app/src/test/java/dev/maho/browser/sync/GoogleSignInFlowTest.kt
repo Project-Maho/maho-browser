@@ -124,13 +124,14 @@ class GoogleSignInFlowTest {
     }
 
     @Test
-    fun `credential manager stays on caller while relay exchange runs on IO dispatcher`() {
+    fun `credential manager stays on caller while relay exchange and commit run on IO dispatcher`() {
         val relayExecutor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "relay-io") }
         val relayDispatcher = relayExecutor.asCoroutineDispatcher()
         try {
             var callerThreadId: Long? = null
             var credentialThreadId: Long? = null
             var exchangeThread: String? = null
+            var commitThread: String? = null
             val coordinator = GoogleSignInCoordinator(
                 credentials = GoogleCredentialSource { _, _ ->
                     credentialThreadId = Thread.currentThread().id
@@ -140,7 +141,7 @@ class GoogleSignInFlowTest {
                     exchangeThread = Thread.currentThread().name
                     relaySession("new-access", "new-refresh")
                 },
-                commit = GoogleSessionCommit {},
+                commit = GoogleSessionCommit { commitThread = Thread.currentThread().name },
                 exchangeDispatcher = relayDispatcher,
             )
 
@@ -151,6 +152,7 @@ class GoogleSignInFlowTest {
 
             assertEquals(callerThreadId, credentialThreadId)
             assertTrue(exchangeThread!!.startsWith("relay-io"))
+            assertTrue(commitThread!!.startsWith("relay-io"))
         } finally {
             relayDispatcher.close()
             relayExecutor.shutdownNow()

@@ -2,8 +2,6 @@ package dev.maho.browser.bridge
 
 import dev.maho.browser.MahoBridge
 import dev.maho.browser.models.BookmarkEntry
-import dev.maho.browser.models.CoreUpdate
-import dev.maho.browser.models.ShellEvent
 import dev.maho.browser.support.MahoJson
 
 object BridgeBookmarks {
@@ -17,25 +15,35 @@ object BridgeBookmarks {
         }
     }
 
+    // The JNI layer maps an empty folder id to "no folder" (root).
     fun addBookmarkEntry(url: String, title: String, folderId: String? = null) {
-        MahoBridge.sendEvent(ShellEvent.AddBookmark(url = url, title = title, folderId = folderId))
+        MahoBridge.addBookmark(url, title, folderId ?: "")
     }
 
     fun removeBookmarkEntry(bookmarkId: String) {
-        MahoBridge.sendEvent(ShellEvent.RemoveBookmark(bookmarkId = bookmarkId))
+        MahoBridge.removeBookmark(bookmarkId)
     }
 
     fun moveBookmarkEntry(bookmarkId: String, folderId: String? = null) {
-        MahoBridge.sendEvent(ShellEvent.MoveBookmark(bookmarkId = bookmarkId, folderId = folderId))
+        MahoBridge.moveBookmark(bookmarkId, folderId ?: "")
     }
 
+    // nativeSearchBookmarks serializes storage rows as
+    // [id, url, title, folder_id|null, created_at] tuples, not objects.
     fun searchBookmarkEntries(query: String): List<BookmarkEntry> {
-        val updates = MahoBridge.sendEvent(ShellEvent.SearchBookmarks(query = query))
-        for (update in updates) {
-            if (update is CoreUpdate.BookmarkResults) {
-                return update.bookmarks
-            }
+        val json = MahoBridge.searchBookmarks(query) ?: return emptyList()
+        val rows = try {
+            MahoJson.instance.decodeFromString<List<List<String?>>>(json)
+        } catch (_: Exception) {
+            return emptyList()
         }
-        return emptyList()
+        return rows.mapNotNull { row ->
+            if (row.size != 5) return@mapNotNull null
+            val id = row[0] ?: return@mapNotNull null
+            val url = row[1] ?: return@mapNotNull null
+            val title = row[2] ?: return@mapNotNull null
+            val createdAt = row[4] ?: return@mapNotNull null
+            BookmarkEntry(id = id, url = url, title = title, folderId = row[3], createdAt = createdAt)
+        }
     }
 }

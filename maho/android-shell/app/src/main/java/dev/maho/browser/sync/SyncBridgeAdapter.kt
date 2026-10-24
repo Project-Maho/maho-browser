@@ -25,6 +25,12 @@ interface SyncBridgeAdapter {
      */
     fun leaseOutgoingEnvelopes(limit: Int): List<SyncEnvelopeV2>
 
+    /**
+     * Returns the leased, unacknowledged batch to the front of the core outbox
+     * after a failed push so the next cycle re-sends the same delivery IDs.
+     */
+    fun requeueLeasedEnvelopes(): Boolean
+
     /** Completes exactly one leased outbox row by its relay-acknowledged delivery ID. */
     fun acknowledge(ack: RelayAckV2): Boolean
 

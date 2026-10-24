@@ -47,7 +47,7 @@ class AgentNativeLibraryTest {
 
     @Test
     fun packagedAbiRunsRealFsWriteAndPollsOrderedDeduplicatedPathFreeEvents() {
-        val handle = MahoBridge.agentCreateSession("instrumentation-fs-write")
+        val handle = MahoBridge.agentCreateSession(uniqueSessionId("instrumentation-fs-write"))
         assertNotEquals(0L, handle)
         assertTrue(MahoBridge.agentInstallDeterministicFsWriteModel(handle))
         val generation = MahoBridge.agentTestCompletionGeneration(handle)
@@ -81,12 +81,15 @@ class AgentNativeLibraryTest {
 
     @Test
     fun packagedJniRejectsMaliciousIndexedPathsAndSymlinkSwaps() {
-        val handle = MahoBridge.agentCreateSession("instrumentation-malicious-index")
+        val handle = MahoBridge.agentCreateSession(uniqueSessionId("instrumentation-malicious-index"))
         assertNotEquals(0L, handle)
         val root = File(context.filesDir, "agent-artifacts").also { it.mkdirs() }
         val outside = File(context.filesDir, "outside-secret.txt").apply { writeText("outside") }
         val finalLink = File(root, "final-link.txt")
         val directoryLink = File(root, "directory-link")
+        // A previous aborted run can leave the links behind; symlink() then fails with EEXIST.
+        finalLink.delete()
+        directoryLink.delete()
         android.system.Os.symlink(outside.absolutePath, finalLink.absolutePath)
         android.system.Os.symlink(context.filesDir.absolutePath, directoryLink.absolutePath)
 
@@ -159,7 +162,8 @@ class AgentNativeLibraryTest {
 
     @Test
     fun productionWebViewBridgeListsAndSharesViaRealNativeBridgeWithExactChooserContract() {
-        val nativeHandle = MahoBridge.agentCreateSession("instrumentation-rpc-share")
+        val sessionId = uniqueSessionId("instrumentation-rpc-share")
+        val nativeHandle = MahoBridge.agentCreateSession(sessionId)
         assertNotEquals(0L, nativeHandle)
         assertTrue(MahoBridge.agentInstallDeterministicFsWriteModel(nativeHandle))
         val generation = MahoBridge.agentTestCompletionGeneration(nativeHandle)
@@ -170,7 +174,7 @@ class AgentNativeLibraryTest {
             .getJSONObject("data")
             .getString("artifact_id")
         val bridge = WebViewBridge(native = MahoNativeBridge, evaluateJs = {})
-        val create = rpc(bridge, "agentCreateSession", JSONObject().put("sessionId", "instrumentation-rpc-share"))
+        val create = rpc(bridge, "agentCreateSession", JSONObject().put("sessionId", sessionId))
         val opaqueHandle = create.getString("result")
         val listResponse = rpc(bridge, "agentListArtifacts", JSONObject().put("handle", opaqueHandle))
         val listed = listResponse.getJSONArray("result")
@@ -203,7 +207,7 @@ class AgentNativeLibraryTest {
 
     @Test
     fun shareFailuresAndBadIdsLeaveNoCacheExports() {
-        val handle = createArtifactSession("instrumentation-share-failures")
+        val handle = createArtifactSession(uniqueSessionId("instrumentation-share-failures"))
         val artifactId = drainEvents(handle)
             .first { it.getString("type") == "artifact_created" }
             .getJSONObject("data")
@@ -231,6 +235,10 @@ class AgentNativeLibraryTest {
         assertTrue(MahoBridge.agentTestAwaitCompletion(handle, generation, 10_000L))
         return handle
     }
+
+    // The artifact index lives in the persistent app database, so a fixed session id
+    // would see artifacts left by earlier runs and break exact-count assertions.
+    private fun uniqueSessionId(prefix: String): String = "$prefix-${java.util.UUID.randomUUID()}"
 
     private fun drainEvents(handle: Long): List<JSONObject> {
         val events = mutableListOf<JSONObject>()

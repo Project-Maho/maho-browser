@@ -52,6 +52,16 @@ class WebViewBridge(
     internal val chatSessions = HandleRegistry()
     private val destroyed = AtomicBoolean(false)
 
+    // U15 request ledger (guarded by ledgerLock): handles created by a
+    // resource-creating request stay unclaimed until web-ai sends
+    // bridgeResourceClaim. bridgeRequestAbandon (JS timed out / aborted) frees an
+    // unclaimed handle, or marks the request so its later completion frees it.
+    private enum class CreatedKind { Agent, Chat }
+    private data class CreatedResource(val kind: CreatedKind, val handle: String)
+    private val ledgerLock = Any()
+    private val unclaimedResources = HashMap<String, CreatedResource>()
+    private val abandonedRequestIds = HashSet<String>()
+
     // Teardown scope independent of the RPC scope: draining must survive the
     // RPC scope cancellation that destroy() performs, and it must never run on
     // the caller's thread (Main) because closeAndDrain waits for parked borrows.
@@ -94,6 +104,8 @@ class WebViewBridge(
     }
 
     private companion object {
+        const val MAX_REQUEST_LEDGER_ENTRIES = 256
+        val RESOURCE_CREATING_METHODS = setOf("agentCreateSession", "chatSessionStart", "chatSessionResume")
         const val MAX_BROWSER_TOOL_RESULT_BYTES = 4_000
         const val MANAGED_AUTH_UNAVAILABLE =
             "{\"version\":1,\"kind\":\"credential_error\",\"code\":\"managed_auth_unavailable\"}"
@@ -128,8 +140,29 @@ class WebViewBridge(
         val method = req.optString("method", "")
         val params = RpcParams.from(req.opt("params"))
 
+        // U15 control messages are internal ledger operations: always succeed.
+        if (method == "bridgeResourceClaim" || method == "bridgeRequestAbandon") {
+            val requestId = params.optString("requestId", 0)
+            if (requestId != null) {
+                if (method == "bridgeResourceClaim") claimRequest(requestId) else abandonRequest(requestId)
+            }
+            return successResponse(id, null)
+        }
+
+        // A resume that adopts an already-registered handle creates nothing, so
+        // an abandoned wait for it must never free that session.
+        val createsResource = method in RESOURCE_CREATING_METHODS &&
+            !(method == "chatSessionResume" && resumeTargetsLiveSession(params))
+
         return try {
-            successResponse(id, dispatchMethod(method, params))
+            val result = dispatchMethod(method, params)
+            if (createsResource && id is String && result is String) {
+                val kind = if (method == "agentCreateSession") CreatedKind.Agent else CreatedKind.Chat
+                if (!recordCreatedResource(CreatedResource(kind, result), id)) {
+                    return errorResponse(id, method, "request_abandoned")
+                }
+            }
+            successResponse(id, result)
         } catch (e: RpcParamsInvalidException) {
             paramsInvalidResponse(id, method, e.message ?: "Invalid params")
         } catch (e: Exception) {
@@ -416,6 +449,61 @@ class WebViewBridge(
                 else -> throw IllegalArgumentException("Unknown method: $method")
             }
         }
+
+    // ─── U15 request ledger ──────────────────────────────────────────────────
+
+    private fun resumeTargetsLiveSession(p: RpcParams): Boolean {
+        val conversationId = runCatching {
+            p.optString("conversationId", 0) ?: p.optString("handle", 0) ?: p.string("sessionId", 0)
+        }.getOrNull() ?: return false
+        return runCatching { chatSessions.withPointer(conversationId) { true } }.getOrDefault(false)
+    }
+
+    /** Returns false (after freeing the handle) when JS already abandoned [requestId]. */
+    private suspend fun recordCreatedResource(resource: CreatedResource, requestId: String): Boolean {
+        val abandoned = synchronized(ledgerLock) {
+            if (abandonedRequestIds.remove(requestId)) {
+                true
+            } else {
+                // Forgetting entries never leaks: destroy() still frees every
+                // registered handle; it only drops early-free on abandonment.
+                if (unclaimedResources.size >= MAX_REQUEST_LEDGER_ENTRIES) unclaimedResources.clear()
+                unclaimedResources[requestId] = resource
+                false
+            }
+        }
+        // unregister() waits for in-flight leases and the native free can block; this
+        // runs on the Main dispatcher, so hop to IO like abandonRequest does.
+        if (abandoned) withContext(Dispatchers.IO) { freeCreatedResource(resource) }
+        return !abandoned
+    }
+
+    private fun claimRequest(requestId: String) {
+        synchronized(ledgerLock) { unclaimedResources.remove(requestId) }
+    }
+
+    private suspend fun abandonRequest(requestId: String) {
+        val resource = synchronized(ledgerLock) {
+            unclaimedResources.remove(requestId) ?: run {
+                if (abandonedRequestIds.size >= MAX_REQUEST_LEDGER_ENTRIES) abandonedRequestIds.clear()
+                abandonedRequestIds.add(requestId)
+                null
+            }
+        } ?: return
+        // unregister() waits for in-flight leases; never block the Main dispatcher.
+        withContext(Dispatchers.IO) { freeCreatedResource(resource) }
+    }
+
+    private fun freeCreatedResource(resource: CreatedResource) {
+        try {
+            when (resource.kind) {
+                CreatedKind.Agent -> agentSessions.unregister(resource.handle)?.let { native.agentFreeSession(it) }
+                CreatedKind.Chat -> chatSessions.unregister(resource.handle)?.let { native.chatSessionFree(it) }
+            }
+        } catch (e: Exception) {
+            Log.w("WebViewBridge", "freeing abandoned ${resource.kind} session failed", e)
+        }
+    }
 
     // ─── Agent handlers ──────────────────────────────────────────────────────
 

@@ -38,6 +38,14 @@ class DeepLinkAndNavigationTest {
     }
 
     @Test
+    fun normalizeBrowserInput_usesBraveSearchWhenSelected() {
+        assertEquals(
+            "https://search.brave.com/search?q=cats+%26+dogs",
+            normalizeBrowserInput("cats & dogs", "Brave"),
+        )
+    }
+
+    @Test
     fun isNavigationUpdate_onlyAcceptsNavigationRelatedUpdates() {
         val navUpdate = CoreUpdate.NavigationStateChanged(
             tabId = "tab-1",

@@ -114,14 +114,13 @@ fun DownloadsScreen(
                         ) { download ->
                             DownloadItem(
                                 download = download,
-                                onPause = {
-                                    BridgeDownloads.pauseDownload(download.id)
-                                },
                                 onResume = {
                                     BridgeDownloads.resumeDownload(download.id)
+                                    downloads = BridgeDownloads.getDownloads()
                                 },
                                 onCancel = {
                                     BridgeDownloads.cancelDownload(download.id)
+                                    downloads = BridgeDownloads.getDownloads()
                                 },
                                 onRemove = {
                                     BridgeDownloads.removeDownload(download.id)
@@ -145,7 +144,6 @@ fun DownloadsScreen(
 @Composable
 private fun DownloadItem(
     download: DownloadViewModel,
-    onPause: () -> Unit,
     onResume: () -> Unit,
     onCancel: () -> Unit,
     onRemove: () -> Unit,
@@ -257,16 +255,8 @@ private fun DownloadItem(
                     ) {
                         when (download.state) {
                             DownloadState.Downloading -> {
-                                DropdownMenuItem(
-                                    text = { Text("Pause") },
-                                    leadingIcon = {
-                                        Icon(painter = painterResource(id = MahoIcon.Pause.drawableRes), contentDescription = null)
-                                    },
-                                    onClick = {
-                                        expanded = false
-                                        onPause()
-                                    },
-                                )
+                                // Transfers run in the system DownloadManager, which has no
+                                // public pause; offering Pause only froze the row's state.
                                 DropdownMenuItem(
                                     text = { Text("Cancel") },
                                     leadingIcon = {

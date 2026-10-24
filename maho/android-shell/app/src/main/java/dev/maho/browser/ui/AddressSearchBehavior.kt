@@ -18,8 +18,8 @@ internal fun resolveBrowsingUrl(
     currentUrl: String,
 ): String =
     requestedUrl?.takeIf { it.isNotBlank() }
-        ?: activeTabUrl?.takeIf { it.isNotBlank() }
-        ?: currentUrl.takeIf { it.isNotBlank() }
+        ?: activeTabUrl?.takeIf { it.isNotBlank() && !isSystemSurfaceUrl(it) }
+        ?: currentUrl.takeIf { it.isNotBlank() && !isSystemSurfaceUrl(it) }
         ?: "about:blank"
 
 internal fun shouldLoadRequestedUrl(

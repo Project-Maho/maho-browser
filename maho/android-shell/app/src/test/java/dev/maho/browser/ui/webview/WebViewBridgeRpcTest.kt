@@ -133,6 +133,47 @@ class WebViewBridgeRpcTest {
     }
 
     @Test
+    fun `bridgeRequestAbandon after an unclaimed create frees the agent session`() {
+        val native = FakeNativeBridge(agentCreateSessionPtr = 61L)
+        val b = bridge(native)
+        val created = call(b, """{"id":"req-1","method":"agentCreateSession","params":{"sessionId":"s"}}""")
+        val handle = created.get("result") as String
+
+        val ack = call(b, """{"id":"ctl","method":"bridgeRequestAbandon","params":{"requestId":"req-1"}}""")
+
+        assertTrue(ack.has("result"))
+        assertFalse(ack.has("error"))
+        assertTrue(native.freedAgentPtrs.contains(61L))
+        val send = call(b, """{"id":"s","method":"agentSendMessage","params":{"handle":"$handle","message":"x"}}""")
+        assertTrue(send.has("error"))
+    }
+
+    @Test
+    fun `create completing after bridgeRequestAbandon frees the session and reports an error`() {
+        val native = FakeNativeBridge(agentCreateSessionPtr = 62L)
+        val b = bridge(native)
+        call(b, """{"id":"ctl","method":"bridgeRequestAbandon","params":{"requestId":"req-2"}}""")
+
+        val created = call(b, """{"id":"req-2","method":"agentCreateSession","params":{"sessionId":"s"}}""")
+
+        assertTrue(created.has("error"))
+        assertTrue(native.freedAgentPtrs.contains(62L))
+    }
+
+    @Test
+    fun `bridgeResourceClaim keeps the created session alive through a later abandon`() {
+        val native = FakeNativeBridge(agentCreateSessionPtr = 63L)
+        val b = bridge(native)
+        call(b, """{"id":"req-3","method":"agentCreateSession","params":{"sessionId":"s"}}""")
+
+        val claim = call(b, """{"id":"ctl-c","method":"bridgeResourceClaim","params":{"requestId":"req-3"}}""")
+        call(b, """{"id":"ctl-a","method":"bridgeRequestAbandon","params":{"requestId":"req-3"}}""")
+
+        assertFalse(claim.has("error"))
+        assertFalse(native.freedAgentPtrs.contains(63L))
+    }
+
+    @Test
     fun `agentCreateSession failure (0L) yields an error, id echoed`() {
         val resp = call(
             bridge(FakeNativeBridge(agentCreateSessionPtr = 0L)),

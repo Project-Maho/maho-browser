@@ -50,11 +50,15 @@ object BridgeTabs {
     fun createTab(spaceId: SpaceId, url: String? = null): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.CreateTab(spaceId = spaceId, url = url))
 
-    fun closeTab(id: TabId): List<CoreUpdate> =
-        MahoBridge.sendEvent(ShellEvent.CloseTab(tabId = id))
+    fun closeTab(id: TabId): List<CoreUpdate> {
+        dev.maho.browser.ui.WebViewStateStore.remove(id)
+        return MahoBridge.sendEvent(ShellEvent.CloseTab(tabId = id))
+    }
 
-    fun archiveTab(id: TabId): List<CoreUpdate> =
-        MahoBridge.sendEvent(ShellEvent.ArchiveTabById(tabId = id))
+    fun archiveTab(id: TabId): List<CoreUpdate> {
+        dev.maho.browser.ui.WebViewStateStore.remove(id)
+        return MahoBridge.sendEvent(ShellEvent.ArchiveTabById(tabId = id))
+    }
 
     fun activateTab(id: TabId): List<CoreUpdate> =
         MahoBridge.sendEvent(ShellEvent.ActivateTab(tabId = id))

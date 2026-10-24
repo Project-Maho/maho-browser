@@ -129,19 +129,30 @@ private fun invokeLiveTool(name: String, args: JSONObject): JSONObject {
             },
         )
         "open_tab" -> {
-            val url = args.optString("url")
+            val url = args.optString("url").trim()
             val spaceId = BridgeSpaces.getActiveSpaceId()
-            if (url.isBlank() || spaceId == null) failure("missing_url_or_active_space") else {
+            if (url.isBlank() || spaceId == null) failure("missing_url_or_active_space")
+            else if (!isAgentNavigableUrl(url)) failure("unsupported_url_scheme")
+            else {
                 BridgeTabs.createTab(spaceId, url)
                 success(JSONObject().put("url", url))
             }
         }
         "navigate" -> {
-            val url = args.optString("url")
+            val url = args.optString("url").trim()
             val tabId = BridgeTabs.getActiveTabId()
-            if (url.isBlank() || tabId == null) failure("missing_url_or_active_tab") else {
-                BridgeNavigation.navigate(tabId, url)
-                success(JSONObject().put("tab_id", tabId).put("url", url))
+            if (url.isBlank() || tabId == null) failure("missing_url_or_active_tab")
+            else if (!isAgentNavigableUrl(url)) failure("unsupported_url_scheme")
+            else {
+                // Core NavigateTab has no Android handler, so the visible browsing WebView
+                // must load the URL itself; without one, report failure instead of success.
+                val webView = AgenticBrowsingWebViewRegistry.current()
+                if (webView == null || !webView.post { webView.loadUrl(url) }) {
+                    failure("navigate_unsupported")
+                } else {
+                    BridgeNavigation.navigate(tabId, url)
+                    success(JSONObject().put("tab_id", tabId).put("url", url))
+                }
             }
         }
         "close_tab" -> {
@@ -406,6 +417,17 @@ private fun agenticBrowsingScript(name: String, args: JSONObject): String {
           }
         })();
     """.trimIndent()
+}
+
+/** Model-supplied URLs may only open web pages: blocks javascript:, file:, intent:, content:, data:. */
+internal fun isAgentNavigableUrl(url: String): Boolean {
+    val lower = url.trim().lowercase()
+    val rest = when {
+        lower.startsWith("https://") -> lower.removePrefix("https://")
+        lower.startsWith("http://") -> lower.removePrefix("http://")
+        else -> return false
+    }
+    return rest.isNotBlank() && !rest.startsWith("/")
 }
 
 private fun success(result: Any): JSONObject = JSONObject().put("ok", true).put("result", result)

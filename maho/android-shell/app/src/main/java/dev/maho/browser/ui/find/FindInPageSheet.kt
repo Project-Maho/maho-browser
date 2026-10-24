@@ -1,5 +1,6 @@
 package dev.maho.browser.ui.find
 
+import android.webkit.WebView
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,6 +13,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -22,7 +24,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import dev.maho.browser.bridge.BridgeFind
 import dev.maho.browser.models.CoreUpdate
 import dev.maho.browser.models.TabId
 import dev.maho.browser.ui.theme.BrowserShellTheme
@@ -33,6 +34,7 @@ import androidx.compose.ui.res.painterResource
 @Composable
 fun FindInPageSheet(
     visibleTabId: TabId?,
+    webView: WebView?,
     onDismiss: () -> Unit = {},
     isIncognito: Boolean = false,
 ) {
@@ -43,6 +45,19 @@ fun FindInPageSheet(
 
     val isVisible = visibleTabId != null
 
+    // Core FindManager never counts matches, so the visible WebView is the source of
+    // truth: findAllAsync/findNext report through this listener.
+    DisposableEffect(webView) {
+        webView?.setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
+            matchCount = numberOfMatches
+            activeIndex = if (numberOfMatches > 0) activeMatchOrdinal else 0
+        }
+        onDispose {
+            webView?.setFindListener(null)
+            webView?.clearMatches()
+        }
+    }
+
     LaunchedEffect(visibleTabId) {
         if (visibleTabId == null) {
             query = ""
@@ -51,18 +66,16 @@ fun FindInPageSheet(
         }
     }
 
-    LaunchedEffect(query, visibleTabId) {
-        if (visibleTabId == null) return@LaunchedEffect
+    LaunchedEffect(query, visibleTabId, webView) {
+        if (visibleTabId == null || webView == null) return@LaunchedEffect
         if (query.isBlank()) {
             matchCount = 0
             activeIndex = 0
-            BridgeFind.dismissFind()
+            webView.clearMatches()
             return@LaunchedEffect
         }
         delay(300L)
-        val result = BridgeFind.startFind(visibleTabId, query)
-        matchCount = result?.matchCount ?: 0
-        activeIndex = result?.activeMatchIndex ?: 0
+        webView.findAllAsync(query)
     }
 
     if (!isVisible) return
@@ -87,11 +100,7 @@ fun FindInPageSheet(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(
                     onSearch = {
-                        visibleTabId?.let {
-                            val result = BridgeFind.startFind(it, query)
-                            matchCount = result?.matchCount ?: 0
-                            activeIndex = result?.activeMatchIndex ?: 0
-                        }
+                        if (query.isNotBlank()) webView?.findAllAsync(query)
                     },
                 ),
                 modifier = Modifier.weight(1f),
@@ -104,26 +113,14 @@ fun FindInPageSheet(
             )
 
             IconButton(
-                onClick = {
-                    val result = BridgeFind.findPrevious()
-                    if (result != null) {
-                        activeIndex = result.activeMatchIndex
-                        matchCount = result.matchCount
-                    }
-                },
+                onClick = { webView?.findNext(false) },
                 enabled = matchCount > 0,
             ) {
                 Icon(painter = painterResource(id = MahoIcon.NavBack.drawableRes), contentDescription = "Previous")
             }
 
             IconButton(
-                onClick = {
-                    val result = BridgeFind.findNext()
-                    if (result != null) {
-                        activeIndex = result.activeMatchIndex
-                        matchCount = result.matchCount
-                    }
-                },
+                onClick = { webView?.findNext(true) },
                 enabled = matchCount > 0,
             ) {
                 Icon(painter = painterResource(id = MahoIcon.NavForward.drawableRes), contentDescription = "Next")
@@ -131,7 +128,7 @@ fun FindInPageSheet(
 
             IconButton(
                 onClick = {
-                    BridgeFind.dismissFind()
+                    webView?.clearMatches()
                     onDismiss()
                 },
             ) {

@@ -123,18 +123,21 @@ fun brandColorScheme(darkTheme: Boolean = BrowserThemeController.isDarkTheme()):
     } else {
         val onLight = Color(0xFF0D1116)
         val lightBackground = Color(0xFFF2F2F7)
-        val accentContainer = accent.copy(alpha = 0.24f)
+        // shell_accent is tuned for dark surfaces; on light ones it is too pale
+        // for text buttons, so light mode uses the same deeper blue as the shell.
+        val lightAccent = Color(0xFF0A66D9)
+        val accentContainer = lightAccent.copy(alpha = 0.16f)
         lightColorScheme(
-            primary = accent,
-            onPrimary = onLight,
+            primary = lightAccent,
+            onPrimary = Color.White,
             primaryContainer = accentContainer,
             onPrimaryContainer = onLight,
-            secondary = accent,
-            onSecondary = onLight,
+            secondary = lightAccent,
+            onSecondary = Color.White,
             secondaryContainer = accentContainer,
             onSecondaryContainer = onLight,
-            tertiary = accent,
-            onTertiary = onLight,
+            tertiary = lightAccent,
+            onTertiary = Color.White,
             tertiaryContainer = accentContainer,
             onTertiaryContainer = onLight,
             background = lightBackground,
@@ -155,11 +158,13 @@ fun ProvideBrowserShellTheme(
     content: @Composable () -> Unit,
 ) {
     val isDark = darkTheme
-    val windowBackground = colorResource(R.color.shell_window_background)
-    val browsingBackground = colorResource(R.color.shell_browsing_background)
-    val homeBackgroundStart = colorResource(R.color.shell_home_background_start)
-    val homeBackgroundMid = colorResource(R.color.shell_home_background_mid)
-    val homeBackgroundEnd = colorResource(R.color.shell_home_background_end)
+    // shell_* colour resources are dark-only (no values-night split); light
+    // mode uses the grouped-background palette the light overlays already use.
+    val windowBackground = if (isDark) colorResource(R.color.shell_window_background) else Color(0xFFF2F2F7)
+    val browsingBackground = if (isDark) colorResource(R.color.shell_browsing_background) else Color(0xFFFFFFFF)
+    val homeBackgroundStart = if (isDark) colorResource(R.color.shell_home_background_start) else Color(0xFFF2F2F7)
+    val homeBackgroundMid = if (isDark) colorResource(R.color.shell_home_background_mid) else Color(0xFFF2F2F7)
+    val homeBackgroundEnd = if (isDark) colorResource(R.color.shell_home_background_end) else Color(0xFFF2F2F7)
     val overlayBackground = if (isDark) Color(0xFF000000) else Color(0xFFF2F2F7)
     val overlaySurface = if (isDark) Color(0xFF1C1C1E) else Color(0xFFFFFFFF)
     val overlaySurfaceHigh = if (isDark) Color(0xFF2C2C2E) else Color(0xFFE5E5EA)
@@ -168,12 +173,13 @@ fun ProvideBrowserShellTheme(
     val cardBorder = if (isDark) Color(0xFF38383A).copy(alpha = 0.6f) else Color(0xFFD1D1D6).copy(alpha = 0.6f)
     val fieldBackground = if (isDark) Color(0xFF2C2C2E) else Color(0xFFE5E5EA)
     val fieldBorder = if (isDark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f)
-    val bottomBarBase = colorResource(R.color.shell_bottom_bar)
-    val tabCard = colorResource(R.color.shell_tab_card)
-    val tabCardActive = colorResource(R.color.shell_tab_card_active)
-    val tabCardBorder = colorResource(R.color.shell_tab_card_border)
-    val accent = colorResource(R.color.shell_accent)
-    val accentMuted = colorResource(R.color.shell_accent_muted)
+    val bottomBarBase = if (isDark) colorResource(R.color.shell_bottom_bar) else Color(0xFFF9F9F9)
+    val tabCard = if (isDark) colorResource(R.color.shell_tab_card) else Color(0xFFFFFFFF)
+    val tabCardActive = if (isDark) colorResource(R.color.shell_tab_card_active) else Color(0xFFE8F0FE)
+    val tabCardBorder = if (isDark) colorResource(R.color.shell_tab_card_border) else Color(0xFF0A66D9)
+    // The pale dark-mode accent (#A8C4FF) fails contrast on light surfaces.
+    val accent = if (isDark) colorResource(R.color.shell_accent) else Color(0xFF0A66D9)
+    val accentMuted = if (isDark) colorResource(R.color.shell_accent_muted) else Color(0xFFDCE7FB)
     val textPrimary = if (isDark) Color(0xFFFFFFFF) else Color(0xFF000000)
     val textSecondary = if (isDark) Color(0xFF8E8E93) else Color(0xFF8E8E93)
     val textTertiary = if (isDark) Color(0xFF48484A) else Color(0xFFC7C7CC)

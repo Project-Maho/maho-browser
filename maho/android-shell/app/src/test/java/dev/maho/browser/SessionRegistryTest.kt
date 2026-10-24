@@ -81,6 +81,29 @@ class SessionRegistryTest {
         assertEquals(count.toLong(), freeCount.get())
     }
 
+    @Test
+    fun `concurrent release and releaseAll free each pointer exactly once`() {
+        val freedPtrs = java.util.concurrent.ConcurrentHashMap<Long, Int>()
+        val registry = SessionRegistry { ptr -> freedPtrs.merge(ptr, 1, Int::plus) }
+        val ids = (1L..500L).map { registry.register(it) }
+
+        val startLatch = CountDownLatch(1)
+        val doneLatch = CountDownLatch(2)
+        val executor = Executors.newFixedThreadPool(2)
+        executor.submit {
+            try { startLatch.await(); ids.forEach { registry.release(it) } } finally { doneLatch.countDown() }
+        }
+        executor.submit {
+            try { startLatch.await(); registry.releaseAll() } finally { doneLatch.countDown() }
+        }
+        startLatch.countDown()
+        doneLatch.await()
+        executor.shutdown()
+
+        assertEquals(500, freedPtrs.size)
+        assertEquals(setOf(1), freedPtrs.values.toSet())
+    }
+
     // -------------------------------------------------------------------------
     // Concurrency — 10 threads × 100 register+release cycles each
     // -------------------------------------------------------------------------

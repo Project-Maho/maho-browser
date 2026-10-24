@@ -2,8 +2,10 @@
 
 package dev.maho.browser.ui.settings
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -78,7 +80,7 @@ fun FeedbackScreen(
                     val body = if (email.isBlank()) {
                         message
                     } else {
-                        "From: \$email\n\n\$message"
+                        "From: $email\n\n$message"
                     }
                     val uri = Uri.parse(
                         "mailto:feedback@maho.dev?subject=" +
@@ -87,7 +89,11 @@ fun FeedbackScreen(
                             Uri.encode(body)
                     )
                     val intent = Intent(Intent.ACTION_SENDTO, uri)
-                    context.startActivity(intent)
+                    try {
+                        context.startActivity(intent)
+                    } catch (_: ActivityNotFoundException) {
+                        Toast.makeText(context, "No email app found", Toast.LENGTH_SHORT).show()
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = message.isNotBlank(),

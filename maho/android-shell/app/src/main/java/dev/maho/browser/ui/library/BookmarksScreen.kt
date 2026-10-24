@@ -52,7 +52,16 @@ fun BookmarksScreen(
     var currentFolderId by remember { mutableStateOf<String?>(null) }
     var folderStack by remember { mutableStateOf<List<Pair<String, String?>>>(emptyList()) }
 
-    val displayedBookmarks = bookmarks.filter { it.folderId == currentFolderId }
+    val isSearching = searchQuery.isNotBlank()
+    // Searching shows every hit regardless of folder; otherwise show the current folder's
+    // bookmarks. At the root, each distinct folder also gets a row that navigates into it.
+    val displayedBookmarks = if (isSearching) bookmarks else bookmarks.filter { it.folderId == currentFolderId }
+    // No bridge API exposes bookmark-folder names, so the folder id is the label.
+    val displayedFolders = if (isSearching || currentFolderId != null) {
+        emptyList()
+    } else {
+        bookmarks.mapNotNull { it.folderId }.distinct()
+    }
 
     LaunchedEffect(searchQuery) {
         isLoading = true
@@ -110,7 +119,7 @@ fun BookmarksScreen(
                         CircularProgressIndicator()
                     }
                 }
-                displayedBookmarks.isEmpty() -> {
+                displayedBookmarks.isEmpty() && displayedFolders.isEmpty() -> {
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
@@ -130,6 +139,26 @@ fun BookmarksScreen(
                 }
                 else -> {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(
+                            items = displayedFolders,
+                            key = { "folder:$it" },
+                        ) { folderId ->
+                            ListItem(
+                                headlineContent = {
+                                    Text(text = folderId, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                },
+                                leadingContent = {
+                                    Icon(
+                                        painter = painterResource(id = MahoIcon.Folder.drawableRes),
+                                        contentDescription = null,
+                                    )
+                                },
+                                modifier = Modifier.clickable {
+                                    folderStack = folderStack + (folderId to folderId)
+                                    currentFolderId = folderId
+                                },
+                            )
+                        }
                         items(
                             items = displayedBookmarks,
                             key = { it.id },

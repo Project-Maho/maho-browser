@@ -30,15 +30,42 @@ data class SyncCycleResult(
     val error: String? = null,
 )
 
+/**
+ * Hands a refreshed access token to core. Core's SignIn handler rebuilds the
+ * account via `AccountManager::begin_sign_in`, which hard-resets
+ * `sync_enabled` to false, so a running sync must be toggled back on to keep
+ * core consistent with Android's running state.
+ */
+internal fun reauthenticateCoreAfterRefresh(
+    session: RelaySession,
+    syncRunning: Boolean,
+    signInCore: (RelaySession) -> Unit,
+    toggleCoreSync: () -> Unit,
+) {
+    signInCore(session)
+    if (syncRunning) toggleCoreSync()
+}
+
 class SyncTransport(
     private val bridgeAdapter: SyncBridgeAdapter = DefaultSyncBridgeAdapter(),
     private val authClient: RelayAuthClient = RelayAuthClient(),
     private val sessionPersistence: RelaySessionPersistence = DefaultRelaySessionPersistence,
+    private val reauthenticateCore: (RelaySession) -> Unit = { session ->
+        reauthenticateCoreAfterRefresh(
+            session = session,
+            syncRunning = SyncManager.isSyncing,
+            signInCore = ::signInCore,
+            toggleCoreSync = { BridgeSync.toggleSync() },
+        )
+    },
 ) {
     companion object {
         private const val TAG = "SyncTransport"
         private const val DEFAULT_SERVER_URL = "https://relay.mahobrowser.com"
         private const val PUSH_LIMIT = 50
+        // A cycle drains the whole outbox (bounded) instead of one batch, so a
+        // burst of offline edits is not left pending behind a "Synced" status.
+        private const val MAX_PUSH_BATCHES = 20
         private const val PULL_LIMIT = 100
         private const val MAX_PULL_PAGES = 10
 
@@ -74,21 +101,12 @@ class SyncTransport(
 
         return try {
             bridgeAdapter.reportTransportState(SyncTransportStateReport("syncing"))
-            val envelopes = bridgeAdapter.leaseOutgoingEnvelopes(PUSH_LIMIT)
-            if (envelopes.isNotEmpty()) {
-                val pushResponse = executeWithRefresh(initialSession, baseUrl) { session ->
-                    authClient.pushSync(baseUrl, session.accessToken, roomId, envelopes)
-                }
-                val expectedIds = envelopes.mapTo(linkedSetOf()) { it.deliveryId }
-                val acknowledgedIds = pushResponse.acks.mapTo(linkedSetOf()) { it.deliveryId }
-                if (acknowledgedIds != expectedIds) {
-                    throw SyncProtocolException("Relay ACK set did not match the leased delivery IDs")
-                }
-                pushResponse.acks.forEach { ack ->
-                    if (!bridgeAdapter.acknowledge(ack)) {
-                        throw SyncProtocolException("Core rejected ACK for ${ack.deliveryId}")
-                    }
-                }
+            var batches = 0
+            while (batches < MAX_PUSH_BATCHES) {
+                ensureNotCancelled()
+                batches += 1
+                val pushed = pushOutbox(sessionPersistence.load() ?: initialSession, baseUrl, roomId)
+                if (pushed < PUSH_LIMIT) break
             }
 
             var cursor = bridgeAdapter.getReceiveCursor(roomId)
@@ -129,6 +147,39 @@ class SyncTransport(
         }
     }
 
+    /**
+     * Leases one outbox batch, pushes it and returns how many were acknowledged
+     * (0 when the outbox is empty). Any failure before every ACK is
+     * persisted hands the lease back to core so the next cycle re-sends the
+     * same delivery IDs, then rethrows for outcome mapping.
+     */
+    private fun pushOutbox(initialSession: RelaySession, baseUrl: String, roomId: String): Int {
+        val envelopes = bridgeAdapter.leaseOutgoingEnvelopes(PUSH_LIMIT)
+        if (envelopes.isEmpty()) return 0
+        try {
+            val pushResponse = executeWithRefresh(initialSession, baseUrl) { session ->
+                authClient.pushSync(baseUrl, session.accessToken, roomId, envelopes)
+            }
+            val expectedIds = envelopes.mapTo(linkedSetOf()) { it.deliveryId }
+            val acknowledgedIds = pushResponse.acks.mapTo(linkedSetOf()) { it.deliveryId }
+            if (acknowledgedIds != expectedIds) {
+                throw SyncProtocolException("Relay ACK set did not match the leased delivery IDs")
+            }
+            pushResponse.acks.forEach { ack ->
+                if (!bridgeAdapter.acknowledge(ack)) {
+                    throw SyncProtocolException("Core rejected ACK for ${ack.deliveryId}")
+                }
+            }
+            return envelopes.size
+        } catch (error: Throwable) {
+            val requeued = runCatching { bridgeAdapter.requeueLeasedEnvelopes() }
+            if (!requeued.getOrDefault(false)) {
+                Log.w(TAG, "Unable to requeue sync lease: ${requeued.exceptionOrNull()?.message}")
+            }
+            throw error
+        }
+    }
+
     private fun <T> executeWithRefresh(
         initialSession: RelaySession,
         baseUrl: String,
@@ -155,13 +206,7 @@ class SyncTransport(
             throw SyncProtocolException("Unable to securely save refreshed relay session")
         }
         if (currentSession.accessToken != merged.accessToken) {
-            BridgeSync.signIn(
-                email = merged.account?.email ?: merged.email,
-                displayName = merged.account?.displayName,
-                accessToken = merged.accessToken,
-                userId = merged.account?.id,
-                deviceId = merged.device?.id,
-            )
+            reauthenticateCore(merged)
         }
         return merged
     }

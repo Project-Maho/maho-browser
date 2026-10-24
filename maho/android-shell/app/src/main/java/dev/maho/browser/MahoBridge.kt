@@ -5,6 +5,8 @@ import dev.maho.browser.bridge.BridgeAgent
 import dev.maho.browser.bridge.BridgeAi
 import dev.maho.browser.bridge.BridgeChat
 import dev.maho.browser.bridge.BridgeConversations
+import dev.maho.browser.support.MahoJson
+import kotlinx.serialization.builtins.serializer
 
 object MahoBridge {
 
@@ -303,8 +305,15 @@ object MahoBridge {
     fun getActiveSpaceId(): String? {
         val ptr = corePtr
         if (ptr == 0L) return null
-        return nativeGetActiveSpaceId(ptr)
+        return decodeJsonStringId(nativeGetActiveSpaceId(ptr))
     }
+
+    // nativeGetActiveSpaceId / nativeGetActiveProfileId return the id JSON-encoded
+    // (with quotes). Using that raw text as an id created tabs in a space that does
+    // not exist and made every spaceId comparison fail.
+    internal fun decodeJsonStringId(raw: String?): String? =
+        raw?.let { runCatching { MahoJson.instance.decodeFromString(String.serializer(), it) }.getOrNull() }
+            ?.takeIf { it.isNotEmpty() }
 
     fun createSpace(name: String, colorJson: String, profileId: String): String? {
         val ptr = corePtr
@@ -562,6 +571,18 @@ object MahoBridge {
         nativeUpdateDownloadProgress(ptr, downloadId, bytesReceived, totalBytes)
     }
 
+    fun completeDownload(downloadId: String, filePath: String, totalBytes: Long) {
+        val ptr = corePtr
+        if (ptr == 0L) return
+        nativeCompleteDownload(ptr, downloadId, filePath, totalBytes)
+    }
+
+    fun failDownload(downloadId: String, error: String) {
+        val ptr = corePtr
+        if (ptr == 0L) return
+        nativeFailDownload(ptr, downloadId, error)
+    }
+
     fun pauseDownload(downloadId: String) {
         val ptr = corePtr
         if (ptr == 0L) return
@@ -735,12 +756,17 @@ object MahoBridge {
     fun leaseSyncOutgoingEnvelopes(limit: Int): String? {
         val ptr = corePtr
         if (ptr == 0L || limit <= 0) return null
-        return nativeLeaseSyncOutgoingEnvelopes(ptr)
+        return nativeLeaseSyncOutgoingEnvelopes(ptr, limit)
     }
 
     fun acknowledgeSyncEnvelope(ackJson: String): Boolean {
         val ptr = corePtr
         return ptr != 0L && nativeAcknowledgeSyncEnvelope(ptr, ackJson)
+    }
+
+    fun requeueSyncLease(): Boolean {
+        val ptr = corePtr
+        return ptr != 0L && nativeRequeueSyncLease(ptr)
     }
 
     fun getSyncReceiveCursor(roomId: String): Long {
@@ -769,7 +795,7 @@ object MahoBridge {
     fun getActiveProfileId(): String? {
         val ptr = corePtr
         if (ptr == 0L) return null
-        return nativeGetActiveProfileId(ptr)
+        return decodeJsonStringId(nativeGetActiveProfileId(ptr))
     }
 
     fun listProfiles(): String? {
@@ -1122,6 +1148,8 @@ object MahoBridge {
     private external fun nativePauseDownload(ptr: Long, downloadId: String)
     private external fun nativeResumeDownload(ptr: Long, downloadId: String)
     private external fun nativeCancelDownload(ptr: Long, downloadId: String)
+    private external fun nativeCompleteDownload(ptr: Long, downloadId: String, filePath: String, totalBytes: Long)
+    private external fun nativeFailDownload(ptr: Long, downloadId: String, error: String)
     private external fun nativeRemoveDownload(ptr: Long, downloadId: String)
     private external fun nativeGetZoom(ptr: Long, site: String): Double
     private external fun nativeSetZoom(ptr: Long, site: String, zoom: Double)
@@ -1150,8 +1178,9 @@ object MahoBridge {
     private external fun nativeApplyRemoteEntities(ptr: Long, entitiesJson: String): String?
     private external fun nativeDrainOutgoing(ptr: Long): String?
     private external fun nativeGetSyncRoomId(ptr: Long): String?
-    private external fun nativeLeaseSyncOutgoingEnvelopes(ptr: Long): String?
+    private external fun nativeLeaseSyncOutgoingEnvelopes(ptr: Long, limit: Int): String?
     private external fun nativeAcknowledgeSyncEnvelope(ptr: Long, ackJson: String): Boolean
+    private external fun nativeRequeueSyncLease(ptr: Long): Boolean
     private external fun nativeGetSyncReceiveCursor(ptr: Long, roomId: String): Long
     private external fun nativeApplySyncEnvelopeAndAdvanceCursor(
         ptr: Long,

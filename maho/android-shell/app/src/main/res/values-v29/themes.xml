@@ -15,5 +15,9 @@
         <item name="android:windowLightNavigationBar">false</item>
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
+        <!-- WebView (targetSdk 33+) derives prefers-color-scheme from this flag; the dark
+             DeviceDefault parent otherwise makes every page render dark in light mode.
+             values-night-v29 sets it back to false. -->
+        <item name="android:isLightTheme">true</item>
     </style>
 </resources>

@@ -52,21 +52,33 @@ fun AppIconPickerScreen(
     val context = LocalContext.current
     val pm = context.packageManager
 
+    // Not reachable from settings: the manifest declares no launcher activity-aliases and
+    // there are no alternate icon assets. Only components that actually exist are offered,
+    // and the real launcher (MainActivity) is never enabled/disabled from here.
+    val defaultClassName = "${context.packageName}.MainActivity"
     val options = remember {
         val pkg = context.packageName
         listOf(
-            AppIconOption("Default", MahoIcon.Globe, "\$pkg.MainActivity"),
-            AppIconOption("Dark", MahoIcon.Moon, "\$pkg.MainActivityDark"),
-            AppIconOption("Light", MahoIcon.Sun, "\$pkg.MainActivityLight"),
-            AppIconOption("Minimal", MahoIcon.Minus, "\$pkg.MainActivityMinimal"),
-            AppIconOption("Neon", MahoIcon.SparklesAi, "\$pkg.MainActivityNeon"),
-        )
+            AppIconOption("Default", MahoIcon.Globe, "$pkg.MainActivity"),
+            AppIconOption("Dark", MahoIcon.Moon, "$pkg.MainActivityDark"),
+            AppIconOption("Light", MahoIcon.Sun, "$pkg.MainActivityLight"),
+            AppIconOption("Minimal", MahoIcon.Minus, "$pkg.MainActivityMinimal"),
+            AppIconOption("Neon", MahoIcon.SparklesAi, "$pkg.MainActivityNeon"),
+        ).filter { opt ->
+            opt.aliasClassName == defaultClassName || runCatching {
+                pm.getActivityInfo(
+                    ComponentName(context, opt.aliasClassName),
+                    PackageManager.MATCH_DISABLED_COMPONENTS,
+                )
+            }.isSuccess
+        }
     }
 
     var selected by remember {
         val current = options.firstOrNull { opt ->
-            val component = ComponentName(context, opt.aliasClassName)
-            pm.getComponentEnabledSetting(component) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            opt.aliasClassName != defaultClassName &&
+                pm.getComponentEnabledSetting(ComponentName(context, opt.aliasClassName)) ==
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
         }
         mutableStateOf(current ?: options.first())
     }
@@ -74,6 +86,7 @@ fun AppIconPickerScreen(
     fun selectIcon(option: AppIconOption) {
         selected = option
         options.forEach { opt ->
+            if (opt.aliasClassName == defaultClassName) return@forEach
             val component = ComponentName(context, opt.aliasClassName)
             val state = if (opt == option) {
                 PackageManager.COMPONENT_ENABLED_STATE_ENABLED

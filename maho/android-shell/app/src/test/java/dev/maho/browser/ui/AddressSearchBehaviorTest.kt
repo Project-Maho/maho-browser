@@ -32,6 +32,19 @@ class AddressSearchBehaviorTest {
     }
 
     @Test
+    fun resolveBrowsingUrl_neverHandsWebViewAChromeSystemUrl() {
+        // WebView cannot load chrome://newtab (net::ERR_INVALID_URL).
+        assertEquals(
+            "about:blank",
+            resolveBrowsingUrl(
+                requestedUrl = null,
+                activeTabUrl = "chrome://newtab",
+                currentUrl = "chrome://newtab/",
+            ),
+        )
+    }
+
+    @Test
     fun resolveBrowsingUrl_fallsBackToCurrentUrlWhenTabUrlBlank() {
         assertEquals(
             "https://example.com/live",

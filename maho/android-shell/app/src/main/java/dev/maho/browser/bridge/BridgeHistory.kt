@@ -19,10 +19,10 @@ object BridgeHistory {
     }
 
     fun clearAllHistory() {
-        MahoBridge.sendEvent(ShellEvent.ClearHistory)
+        MahoBridge.clearHistory()
     }
 
     fun deleteHistoryEntryById(entryId: String) {
-        MahoBridge.sendEvent(ShellEvent.DeleteHistoryEntry(entryId = entryId))
+        MahoBridge.deleteHistoryEntry(entryId)
     }
 }

@@ -54,7 +54,6 @@ fun SettingsScreen(
     onNavigateToDownloads: () -> Unit = {},
     onNavigateToNotes: () -> Unit = {},
     onNavigateToReadingList: () -> Unit = {},
-    onNavigateToAppIcon: () -> Unit = {},
     onNavigateToFeedback: () -> Unit = {},
     onNavigateToLanguage: () -> Unit = {},
     onNavigateToSync: () -> Unit = {},
@@ -71,7 +70,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
             title = { Text("Clear browsing data?", fontWeight = FontWeight.SemiBold) },
-            text = { Text("Cookies, local storage, and cached page data will be removed from this device.") },
+            text = { Text("History, cookies, site storage, cache and form data will be removed from this device.") },
             confirmButton = {
                 TextButton(onClick = {
                     onClearBrowsingData()
@@ -135,6 +134,26 @@ fun SettingsScreen(
                     iconTint = Color(0xFF0A84FF),
                     showChevron = true,
                     onClick = onNavigateToSync,
+                )
+            }
+
+            MahoGroupedSection(title = "Library") {
+                MahoGroupedRow(
+                    title = "History",
+                    subtitle = "Pages you visited",
+                    icon = painterResource(id = MahoIcon.History.drawableRes),
+                    iconTint = Color(0xFF8E8E93),
+                    showChevron = true,
+                    onClick = onNavigateToHistory,
+                )
+                MahoRowDivider()
+                MahoGroupedRow(
+                    title = "Downloads",
+                    subtitle = "Downloaded files",
+                    icon = painterResource(id = MahoIcon.Downloads.drawableRes),
+                    iconTint = Color(0xFF30D158),
+                    showChevron = true,
+                    onClick = onNavigateToDownloads,
                 )
             }
 
@@ -231,14 +250,6 @@ fun SettingsScreen(
             }
 
             MahoGroupedSection(title = "App") {
-                MahoGroupedRow(
-                    title = "App Icon",
-                    icon = painterResource(id = MahoIcon.Spaces.drawableRes),
-                    iconTint = Color(0xFFFF375F),
-                    showChevron = true,
-                    onClick = onNavigateToAppIcon,
-                )
-                MahoRowDivider()
                 MahoGroupedRow(
                     title = "Feedback",
                     icon = painterResource(id = MahoIcon.HelpFeedback.drawableRes),

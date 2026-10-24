@@ -106,10 +106,12 @@ class GoogleSignInCoordinator(
             GoogleCredentialResult.Cancelled -> GoogleSignInOutcome.Cancelled
             is GoogleCredentialResult.Failure -> GoogleSignInOutcome.Failure(credential.message)
             is GoogleCredentialResult.IdToken -> try {
+                // commit activates the session (secure save, core sign-in,
+                // network bootstrap), so it must stay off the caller's main thread.
                 val session = withContext(exchangeDispatcher) {
                     exchange.exchange(serverUrl, credential.token, nonce, credential.email)
+                        .also(commit::commit)
                 }
-                commit.commit(session)
                 GoogleSignInOutcome.SignedIn(session)
             } catch (e: Exception) {
                 GoogleSignInOutcome.Failure(e.message ?: "Unable to sign in with Google")

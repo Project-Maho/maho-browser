@@ -2,12 +2,15 @@ package dev.maho.browser
 
 import android.app.Application
 import android.os.Trace
+import android.webkit.WebView
+import dev.maho.browser.bridge.BridgeSettings
 import dev.maho.browser.support.AssetProvisioner
 import dev.maho.browser.sync.SyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class MahoApplication : Application() {
@@ -35,6 +38,12 @@ class MahoApplication : Application() {
                     Trace.endSection()
                 }
                 if (ready) {
+                    // MainActivity usually reads settings before hydration publishes the
+                    // core, so re-apply Developer Mode once settings are readable.
+                    val developerMode = BridgeSettings.getSettingsTyped()?.advanced?.developerMode == true
+                    withContext(Dispatchers.Main) {
+                        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG || developerMode)
+                    }
                     Trace.beginSection("sync")
                     try {
                         SyncManager.initialize(this@MahoApplication)
