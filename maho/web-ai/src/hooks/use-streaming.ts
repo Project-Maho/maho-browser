@@ -10,6 +10,9 @@ import { parseCredentialErrorCode } from '../screens/credential-error';
 import { coalesceChatEventBatch } from '../store/chatStore';
 
 const POLL_INTERVAL_MS = 50;
+// Bounded retry ladder after a failed poll (mirrors use-agent-session's idle
+// backoff); a successful poll resets it to the normal cadence.
+const ERROR_BACKOFF_LADDER_MS: readonly number[] = [100, 250, 500, 1000];
 
 export interface UseStreamingOptions {
   bridge: MahoBridge;
@@ -123,13 +126,16 @@ export function useStreaming({
 
     let active = true;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let errorBackoffIndex = 0;
 
     const tick = async (): Promise<void> => {
       if (!active) return;
 
+      let delay = POLL_INTERVAL_MS;
       try {
         const rawEvents = await bridge.chatPollEvents(sessionId);
         if (!active) return;
+        errorBackoffIndex = 0;
 
         const events = (Array.isArray(rawEvents) ? rawEvents : [])
           .map(normalizeChatEvent)
@@ -139,14 +145,15 @@ export function useStreaming({
           onEventsRef.current(coalesced);
         }
       } catch (error) {
-        if (active) {
-          onPollErrorRef.current?.(toErrorMessage(error));
-        }
-        return;
+        if (!active) return;
+        onPollErrorRef.current?.(toErrorMessage(error));
+        // A transient transport failure must not end the session's polling.
+        delay = ERROR_BACKOFF_LADDER_MS[errorBackoffIndex]!;
+        errorBackoffIndex = Math.min(errorBackoffIndex + 1, ERROR_BACKOFF_LADDER_MS.length - 1);
       }
 
       if (active) {
-        timeoutId = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+        timeoutId = setTimeout(() => void tick(), delay);
       }
     };
 

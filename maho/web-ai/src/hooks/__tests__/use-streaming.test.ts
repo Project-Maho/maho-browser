@@ -1,5 +1,39 @@
-import { describe, expect, it } from 'vitest';
-import { normalizeChatEvent } from '../use-streaming';
+import { renderHook } from '@testing-library/preact';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { MahoBridge } from '../../bridge/types';
+import { normalizeChatEvent, useStreaming } from '../use-streaming';
+
+describe('useStreaming', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps polling after a rejected poll and still delivers later events', async () => {
+    vi.useFakeTimers();
+    const chatPollEvents = vi.fn<MahoBridge['chatPollEvents']>()
+      .mockRejectedValueOnce(new Error('transport dropped'))
+      .mockResolvedValueOnce([{ type: 'token', data: 'after-error' }])
+      .mockResolvedValue([]);
+    const bridge = { chatPollEvents } as unknown as MahoBridge;
+    const onEvents = vi.fn();
+    const onPollError = vi.fn();
+
+    const { unmount } = renderHook(() => useStreaming({
+      bridge,
+      sessionId: 'session-1',
+      onEvents,
+      onPollError,
+    }));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onPollError).toHaveBeenCalledWith('transport dropped');
+    expect(onEvents).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(chatPollEvents.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(onEvents).toHaveBeenCalledWith([{ kind: 'token', token: 'after-error' }]);
+
+    unmount();
+  });
+});
 
 describe('normalizeChatEvent', () => {
   it('normalizes native token, complete, and error wire events', () => {

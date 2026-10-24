@@ -100,6 +100,14 @@ describe('RPC via Android transport', () => {
     await expect(promise).resolves.toEqual({ ok: true, result: [] });
   });
 
+  it('omits agent interaction and runtime-config methods the Android dispatcher lacks', () => {
+    const { result } = renderHook(() => useBridge());
+
+    expect(result.current.agentResolveInteraction).toBeUndefined();
+    expect(result.current.agentSetRuntimeConfig).toBeUndefined();
+    expect(rpcSpy).not.toHaveBeenCalled();
+  });
+
   it('maps project CRUD and move to exact RPC methods and params', async () => {
     const { result } = renderHook(() => useBridge());
 
@@ -344,6 +352,14 @@ describe('RPC via iOS transport', () => {
     delete (window as unknown as { webkit?: unknown }).webkit;
   });
 
+  it('omits agent interaction and runtime-config methods the iOS dispatcher lacks', () => {
+    const { result } = renderHook(() => useBridge());
+
+    expect(result.current.agentResolveInteraction).toBeUndefined();
+    expect(result.current.agentSetRuntimeConfig).toBeUndefined();
+    expect(postMessageSpy).not.toHaveBeenCalled();
+  });
+
   it('sends via webkit messageHandlers on iOS', async () => {
     const { call } = await import('../rpc');
 
@@ -386,6 +402,13 @@ describe('RPC via desktop transport', () => {
 
     expect(result.current.browserToolInvoke).toBeUndefined();
     expect(pageHandlerSpy).not.toHaveBeenCalled();
+  });
+
+  it('keeps agent interaction and runtime-config methods on desktop', () => {
+    const { result } = renderHook(() => useBridge());
+
+    expect(result.current.agentResolveInteraction).toBeTypeOf('function');
+    expect(result.current.agentSetRuntimeConfig).toBeTypeOf('function');
   });
 });
 

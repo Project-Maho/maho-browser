@@ -7,6 +7,7 @@ import { useMemo } from 'preact/hooks';
 import { call } from '../bridge/rpc';
 import { detectPlatform } from '../bridge/platform-detect';
 import type {
+  AgentRuntimeConfig,
   BrowserToolInvokeResult,
   ComposerDraft,
   HapticStyle,
@@ -14,10 +15,16 @@ import type {
 } from '../bridge/types';
 
 function makeBridge(): MahoBridge {
-  const browserToolInvoke = detectPlatform() === 'desktop'
+  const platform = detectPlatform();
+  const browserToolInvoke = platform === 'desktop'
     ? undefined
     : (name: string, args: Record<string, unknown>) =>
         call<BrowserToolInvokeResult>('browserToolInvoke', { name, args });
+  // The iOS and Android dispatchers have no native export for interaction
+  // resolution or runtime config yet; omitting the methods routes agent-screen
+  // to its explicit "not supported on this platform" path instead of an
+  // "Unknown method" RPC failure.
+  const agentNativeInteractionSupported = platform !== 'ios' && platform !== 'android';
 
   return {
     // --- BYOK ---
@@ -109,9 +116,14 @@ function makeBridge(): MahoBridge {
     agentListTools: (handle) => call('agentListTools', { handle }),
     agentListArtifacts: (handle) => call('agentListArtifacts', { handle }),
     artifactShare: (handle, artifactId) => call('artifactShare', { handle, artifactId }),
-    agentResolveInteraction: (handle, requestId, answerJson) =>
-      call('agentResolveInteraction', { handle, requestId, answerJson }),
-    agentSetRuntimeConfig: (handle, config) => call('agentSetRuntimeConfig', { handle, config }),
+    ...(agentNativeInteractionSupported
+      ? {
+          agentResolveInteraction: (handle: string, requestId: string, answerJson: string) =>
+            call<boolean>('agentResolveInteraction', { handle, requestId, answerJson }),
+          agentSetRuntimeConfig: (handle: string, config: AgentRuntimeConfig) =>
+            call<boolean>('agentSetRuntimeConfig', { handle, config }),
+        }
+      : {}),
 
     // --- Native-only actions ---
     capturePhoto: () => call('capturePhoto'),
