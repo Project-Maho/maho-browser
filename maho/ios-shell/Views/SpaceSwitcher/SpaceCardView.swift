@@ -8,6 +8,8 @@ struct SpaceCardView: View {
     let onRename: (String) -> Void
     let onRecolor: (SpaceColor) -> Void
     let onDelete: () -> Void
+    /// Core refuses to delete the last space, so Delete is offered only when another exists.
+    var canDelete: Bool = true
 
     @State private var isEditing = false
     @State private var editedName: String = ""
@@ -73,10 +75,12 @@ struct SpaceCardView: View {
                 Label { Text("Rename") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("pencil")) }
             }
 
-            Divider()
+            if canDelete {
+                Divider()
 
-            Button(role: .destructive, action: onDelete) {
-                Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
+                Button(role: .destructive, action: onDelete) {
+                    Label { Text("Delete") } icon: { Image(lucide: MahoIcon.imageForSFSymbol("trash")) }
+                }
             }
         }
     }

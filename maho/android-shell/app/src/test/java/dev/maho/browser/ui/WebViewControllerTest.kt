@@ -412,12 +412,43 @@ class WebViewControllerTest {
         val cert = android.net.http.SslCertificate("issuedTo", "issuedBy", "2024-01-01", "2025-01-01")
         val sslError = android.net.http.SslError(android.net.http.SslError.SSL_UNTRUSTED, cert, "https://expired.badssl.com")
         val webView = android.webkit.WebView(context)
+        client.onMainFrameRequest("https://expired.badssl.com")
 
         client.onReceivedSslError(webView, sslHandler, sslError)
 
         assertTrue(shadowHandler.wasCancelCalled())
         assertTrue(observedError?.contains("certificate authority is not trusted") == true)
         assertEquals("https://expired.badssl.com", observedUrl)
+    }
+
+    @Test
+    fun `onReceivedSslError for a sub-frame cancels but does not report a page error`() {
+        var errorCalls = 0
+        val client = MahoWebViewClient(
+            tabIdProvider = { "tab-1" },
+            onUrlChanged = {},
+            onLoadingChanged = {},
+            onNavigationStateChanged = { _, _ -> },
+            onError = { _, _, _ -> errorCalls++ },
+            isSourceWhitelisted = { false },
+        )
+        val handlerConstructor = android.webkit.SslErrorHandler::class.java.declaredConstructors.first().apply {
+            isAccessible = true
+        }
+        val sslHandler = handlerConstructor.newInstance() as android.webkit.SslErrorHandler
+        val shadowHandler = org.robolectric.Shadows.shadowOf(sslHandler)
+        val cert = android.net.http.SslCertificate("issuedTo", "issuedBy", "2024-01-01", "2025-01-01")
+        val sslError = android.net.http.SslError(
+            android.net.http.SslError.SSL_UNTRUSTED,
+            cert,
+            "https://ads.badssl.example/frame",
+        )
+        client.onMainFrameRequest("https://page.example/")
+
+        client.onReceivedSslError(android.webkit.WebView(context), sslHandler, sslError)
+
+        assertTrue(shadowHandler.wasCancelCalled())
+        assertEquals(0, errorCalls)
     }
 
     @Test

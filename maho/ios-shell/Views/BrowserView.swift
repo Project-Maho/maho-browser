@@ -16,6 +16,9 @@ final class BrowserViewModel: ObservableObject {
     @Published var isUrlBarEditing: Bool = false
     @Published var tabId: TabId = ""
     @Published var extractedArticle: ExtractedArticle? = nil
+    /// Set when reader-mode extraction fails so the shell can drop out of
+    /// reader mode and say why instead of leaving the toggle stuck on.
+    @Published var readerExtractionFailed = false
     @Published var lastErrorMessage: String? = nil
     @Published var failedUrl: String? = nil
 

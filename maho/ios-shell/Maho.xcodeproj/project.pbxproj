@@ -64,6 +64,7 @@
 		4FF775809BC1EE35D365E9FA /* MahoBridge+Downloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39F4659CF74EA06C54303E51 /* MahoBridge+Downloads.swift */; };
 		50749099CDC075869972D4EC /* WebNavigationJourneyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CDF4E4C1370DA8A33D0D164 /* WebNavigationJourneyTests.swift */; };
 		5403A927A7F1A8A9E1DE9742 /* RelayAuthResponseDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */; };
+		B7F1C4A92D3E5A6B8C0D1E2F /* FilterListUpdaterConnectivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8E2D5B03E4F6B7C9D1E2F3A /* FilterListUpdaterConnectivityTests.swift */; };
 		551C3FBD417E275BA994A413 /* BridgeAssetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667E87C160D3C78DC686F518 /* BridgeAssetsTests.swift */; };
 		570DFA9BE61FE0BC8CE515D5 /* HandoffManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 527B31F355C5EDFE459C310F /* HandoffManager.swift */; };
 		620729BEDF8D1984BA87B903 /* ReaderSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CCD836DC0F18F95C8A80545 /* ReaderSettingsSheet.swift */; };
@@ -334,6 +335,7 @@
 		87C3F354363004F2774F720F /* AiSearchSystemPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AiSearchSystemPrompt.swift; sourceTree = "<group>"; };
 		88E1B5F41596A22C05A5FD6E /* WebViewBridgeAgentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewBridgeAgentTests.swift; sourceTree = "<group>"; };
 		8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayAuthResponseDecodingTests.swift; sourceTree = "<group>"; };
+		C8E2D5B03E4F6B7C9D1E2F3A /* FilterListUpdaterConnectivityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterListUpdaterConnectivityTests.swift; sourceTree = "<group>"; };
 		8BE5E5CB3CA2E9571270250F /* FeedbackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackView.swift; sourceTree = "<group>"; };
 		8EBC5417819195E77362721C /* GoogleSignInCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoogleSignInCoordinator.swift; sourceTree = "<group>"; };
 		9333C807210D3790979FCD6A /* BYOKWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BYOKWebView.swift; sourceTree = "<group>"; };
@@ -555,6 +557,7 @@
 				038ED9EEA08AFAE19F7314E0 /* BridgeTabsTests.swift */,
 				1C1E3F6C2EC8976937E1B962 /* ChatSessionRegistryTests.swift */,
 				0443026F8911FC0AFB5E77C9 /* CodableRoundTripTests.swift */,
+				C8E2D5B03E4F6B7C9D1E2F3A /* FilterListUpdaterConnectivityTests.swift */,
 				30D21A35900BEF3B44F9A93D /* GoogleRelaySignInFlowTests.swift */,
 				CED2F1688CBBF3AE94FC19A1 /* KindDiscriminatorTests.swift */,
 				8BA233EC27610ACFD9BF3EDF /* RelayAuthResponseDecodingTests.swift */,
@@ -1079,6 +1082,7 @@
 				161EDC90361D487418E13CCC /* BridgeTabsTests.swift in Sources */,
 				86D24E9F63AAF6E83D86279D /* ChatSessionRegistryTests.swift in Sources */,
 				3CCC131BC23CF5F6F1F2DF20 /* CodableRoundTripTests.swift in Sources */,
+				B7F1C4A92D3E5A6B8C0D1E2F /* FilterListUpdaterConnectivityTests.swift in Sources */,
 				0F16D25DAEE26D5496DA3E1D /* GoogleRelaySignInFlowTests.swift in Sources */,
 				B0DA093000D9E1EE8B67A775 /* KindDiscriminatorTests.swift in Sources */,
 				5403A927A7F1A8A9E1DE9742 /* RelayAuthResponseDecodingTests.swift in Sources */,

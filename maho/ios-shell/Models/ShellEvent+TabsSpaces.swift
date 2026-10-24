@@ -69,6 +69,7 @@ extension ShellEvent {
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
         case .resetPinnedTab(let tabId):
             try container.encode(tabId, forKey: DynamicCodingKey(stringValue: "tab_id")!)
+        case .applyRestorePolicyOnLaunch: break
         case .createSpace(let name, let color, let profileId):
             try container.encode(name, forKey: DynamicCodingKey(stringValue: "name")!)
             try container.encode(color, forKey: DynamicCodingKey(stringValue: "color")!)
@@ -215,6 +216,8 @@ extension ShellEvent {
             return .restoreArchivedTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
         case "reset_pinned_tab":
             return .resetPinnedTab(tabId: try container.decode(TabId.self, forKey: DynamicCodingKey(stringValue: "tab_id")!))
+        case "apply_restore_policy_on_launch":
+            return .applyRestorePolicyOnLaunch
 
         // Space management
         case "create_space":

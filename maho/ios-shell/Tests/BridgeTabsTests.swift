@@ -160,7 +160,8 @@ final class BridgeTabsTests: XCTestCase {
         let plan = MainBrowserPresentation.searchSubmissionPlan(
             for: .browsing("tab-42"),
             query: "swiftui navigation",
-            activeTabId: "tab-42"
+            activeTabId: "tab-42",
+            searchEngine: SearchEngineCatalog.defaultOption
         )
         XCTAssertEqual(
             plan,
@@ -201,6 +202,17 @@ final class BridgeTabsTests: XCTestCase {
         XCTAssertEqual(MainBrowserPresentation.normalizedURL(from: "127.0.0.1:8080"), "http://127.0.0.1:8080")
         XCTAssertEqual(MainBrowserPresentation.normalizedURL(from: "https://example.com"), "https://example.com")
         XCTAssertEqual(MainBrowserPresentation.normalizedURL(from: "apple.com"), "https://apple.com")
-        XCTAssertEqual(MainBrowserPresentation.normalizedURL(from: "swiftui navigation"), "https://www.google.com/search?q=swiftui%20navigation")
+        XCTAssertEqual(
+            MainBrowserPresentation.normalizedURL(from: "swiftui navigation", searchEngine: SearchEngineCatalog.defaultOption),
+            "https://www.google.com/search?q=swiftui%20navigation"
+        )
+    }
+
+    func testSearchUsesSelectedEngineAndEncodesQueryValue() throws {
+        let duckDuckGo = try XCTUnwrap(SearchEngineCatalog.options.first { $0.id == "duckduckgo" })
+        XCTAssertEqual(
+            MainBrowserPresentation.normalizedURL(from: "c++ & rust", searchEngine: duckDuckGo),
+            "https://duckduckgo.com/?q=c%2B%2B%20%26%20rust"
+        )
     }
 }

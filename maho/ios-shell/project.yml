@@ -77,6 +77,8 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UIRequiresFullScreen: true
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         NSSpeechRecognitionUsageDescription: "Maho uses speech recognition to let you search by voice."
         NSMicrophoneUsageDescription: "Maho uses the microphone for voice search."
         NSCameraUsageDescription: "Maho uses the camera to allow photo uploads and visual search."

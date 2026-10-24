@@ -30,6 +30,7 @@ enum ShellEvent: Codable {
     case archiveTabById(tabId: TabId)
     case restoreArchivedTab(tabId: TabId)
     case resetPinnedTab(tabId: TabId)
+    case applyRestorePolicyOnLaunch
 
     // Space management
     case createSpace(name: String, color: SpaceColor, profileId: ProfileId)
@@ -220,6 +221,7 @@ enum ShellEvent: Codable {
         case .archiveTabById: return "archive_tab_by_id"
         case .restoreArchivedTab: return "restore_archived_tab"
         case .resetPinnedTab: return "reset_pinned_tab"
+        case .applyRestorePolicyOnLaunch: return "apply_restore_policy_on_launch"
         case .createSpace: return "create_space"
         case .deleteSpace: return "delete_space"
         case .exportSpaceIntoFolder: return "export_space_into_folder"
