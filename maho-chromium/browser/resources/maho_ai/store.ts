@@ -77,6 +77,8 @@ type SubmissionRequest = {
   readonly intent: ChatIntent;
   readonly previousBlockedReason: AppState['chatBlockedReason'];
   readonly isQuickAction: boolean;
+  // Composer attachments captured by this request (absent for quick actions).
+  readonly composerAttachmentIds?: readonly string[];
 };
 
 interface ComposerDraftPageHandlerRemote extends ComposerDraftRemote {}
@@ -219,6 +221,14 @@ function toLegacyProviderRecords(providerOptions: readonly AIProviderOptionRecor
   }));
 }
 
+function clearAnsweredApprovals(state: AppState, sessionId: string): void {
+  for (const [approvalId, owner] of Object.entries(state.answeredApprovalSessionById)) {
+    if (owner === sessionId) {
+      delete state.answeredApprovalSessionById[approvalId];
+    }
+  }
+}
+
 function cloneState(state: AppState): AppState {
   return {
     ...state,
@@ -233,6 +243,7 @@ function cloneState(state: AppState): AppState {
     toolResultsByCallId: {...state.toolResultsByCallId},
     approvalsById: {...state.approvalsById},
     approvalResultsById: {...state.approvalResultsById},
+    answeredApprovalSessionById: {...state.answeredApprovalSessionById},
     interactionsBySessionId: Object.fromEntries(
         Object.entries(state.interactionsBySessionId).map(([key, value]) => [key, [...value]])),
     selectedInspector: {...state.selectedInspector},
@@ -458,6 +469,12 @@ export class MahoAiStore {
     this.composerDraftPersistence?.schedule(this.composerDraftScope, prompt);
   }
 
+  focusComposer() {
+    this.patch(state => {
+      state.composer.focusRequest += 1;
+    });
+  }
+
   async flushComposerDraft(): Promise<void> {
     await this.composerDraftPersistence?.flush(this.composerDraftScope);
   }
@@ -538,14 +555,16 @@ export class MahoAiStore {
   }
 
   async startSession(): Promise<void> {
-    const prompt = this.state.composer.prompt.trim();
-    if (prompt) {
-      await this.startSessionThenSubmit();
-      return;
-    }
-
-    await this.composerDraftPersistence?.clear(this.composerDraftScope);
+    // Starting a session never sends the composer draft; an unsent draft stays
+    // in the composer (and in the new_task draft scope) for the user to send.
+    // The draft moves with the composer: drop it from the previous scope so
+    // resuming that conversation later cannot resurrect text sent here.
+    const previousScope = this.composerDraftScope;
     this.composerDraftScope = {kind: 'new_task'};
+    await this.composerDraftPersistence?.clear(previousScope);
+    if (this.state.composer.prompt.trim()) {
+      this.composerDraftPersistence?.schedule(this.composerDraftScope, this.state.composer.prompt);
+    }
     const mode = this.state.developerMode ?
         InteractionMode.kDeveloper :
         InteractionMode.kAssistant;
@@ -592,6 +611,7 @@ export class MahoAiStore {
 
       await this.resumeSession(session.sessionId, false, false);
       await this.submitCapturedRequest(session.sessionId, request);
+      this.clearSubmittedAttachments(request);
       await this.promoteAcceptedNewTaskDraft(session.sessionId);
     } catch (error) {
       this.rollbackSubmission(sessionId, request);
@@ -731,7 +751,7 @@ export class MahoAiStore {
         state.openTabs = {
           ...state.openTabs,
           loading: false,
-          loaded: true,
+          loaded: false,
           error: error instanceof Error ? error.message : String(error),
         };
       });
@@ -1097,6 +1117,7 @@ export class MahoAiStore {
         state.turnPendingBySessionId[sessionId] = true;
       });
       await this.submitCapturedRequest(sessionId, request);
+      this.clearSubmittedAttachments(request);
       if (draftScope.kind === 'new_task' &&
           scopeKey(this.composerDraftScope) === scopeKey(draftScope)) {
         await this.promoteAcceptedNewTaskDraft(sessionId);
@@ -1346,6 +1367,7 @@ export class MahoAiStore {
       intent: ChatIntent.kFreeform,
       previousBlockedReason: this.state.chatBlockedReason,
       isQuickAction: false,
+      composerAttachmentIds: composerAttachments.map(attachment => attachment.id),
     };
     this.patch(state => {
       state.composer.prompt = '';
@@ -1368,6 +1390,20 @@ export class MahoAiStore {
     if (result?.accepted === false) {
       throw new Error('Maho AI did not accept the prompt.');
     }
+  }
+
+  // Attachments are consumed by the prompt they were sent with. The "Current
+  // page" toggle is a standing preference, and anything attached while the
+  // request was in flight belongs to the next prompt.
+  private clearSubmittedAttachments(request: SubmissionRequest): void {
+    const submitted = new Set(request.composerAttachmentIds ?? []);
+    if (submitted.size === 0) {
+      return;
+    }
+    this.patch(state => {
+      state.composer.attachments = state.composer.attachments.filter(
+          attachment => attachment.kind === 'currentPage' || !submitted.has(attachment.id));
+    });
   }
 
   private async promoteAcceptedNewTaskDraft(sessionId: string): Promise<void> {
@@ -1447,9 +1483,16 @@ export class MahoAiStore {
       return;
     }
 
-    await this.pageHandler.cancelTurn(sessionId);
+    try {
+      await this.pageHandler.cancelTurn(sessionId);
+    } catch (error) {
+      // The turn is still running: keep it pending and let the caller report it.
+      console.warn('[maho-ai] CancelTurn failed', error);
+      throw error;
+    }
     this.patch(state => {
       state.turnPendingBySessionId[sessionId] = false;
+      clearAnsweredApprovals(state, sessionId);
     });
   }
 
@@ -1463,12 +1506,26 @@ export class MahoAiStore {
       return false;
     }
 
+    // One answer per approval: RespondToApproval is a one-way call, so the
+    // card stays pending until approvalResult arrives. The answer is recorded
+    // in state until then so a second click cannot dispatch a duplicate or
+    // contradictory response.
+    if (this.state.answeredApprovalSessionById[approvalId] ||
+        this.state.approvalResultsById[approvalId]) {
+      return false;
+    }
+    this.patch(state => {
+      state.answeredApprovalSessionById[approvalId] = sessionId;
+    });
     try {
       await this.pageHandler.respondToApproval(sessionId, approvalId, approved);
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn('[maho-ai] RespondToApproval failed', message);
+      this.patch(state => {
+        delete state.answeredApprovalSessionById[approvalId];
+      });
       return false;
     }
   }
@@ -1910,6 +1967,7 @@ export class MahoAiStore {
     }
     if (event.approvalResult?.approvalId) {
       state.approvalResultsById[event.approvalResult.approvalId] = event.approvalResult;
+      delete state.answeredApprovalSessionById[event.approvalResult.approvalId];
       if (isSelectedSession) {
         state.selectedInspector = {kind: 'approval', id: event.approvalResult.approvalId};
       }
@@ -1935,6 +1993,9 @@ export class MahoAiStore {
     if (!replay &&
         (event.kind === RuntimeEventKind.kTurnComplete || event.kind === RuntimeEventKind.kError)) {
       state.turnPendingBySessionId[sessionId] = false;
+      // A turn that ends without an approvalResult leaves nothing to wait for;
+      // release its answered approvals so the cards do not stay locked.
+      clearAnsweredApprovals(state, sessionId);
       if (isSelectedSession && event.kind === RuntimeEventKind.kError) {
         const errorText = event.text || '';
         if (errorText.includes('402') || errorText.toLowerCase().includes('quota') ||
@@ -2053,6 +2114,7 @@ export class MahoAiStore {
       });
     } catch (err) {
       console.warn('[maho-ai] loadAiExtensibility failed', err);
+      toast.error("Couldn't load agent profiles and tools");
     }
   }
 
@@ -2072,6 +2134,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] switchWorkspaceProfile failed', err);
+      toast.error('Failed to switch workspace profile');
     }
   }
 
@@ -2103,6 +2166,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] importProfileFromToml failed', err);
+      toast.error('Failed to import profile');
     }
   }
 
@@ -2168,6 +2232,7 @@ export class MahoAiStore {
       }
     } catch (err) {
       console.error('[maho-ai] removeCliTool failed', err);
+      toast.error('Failed to remove CLI tool');
     }
   }
 

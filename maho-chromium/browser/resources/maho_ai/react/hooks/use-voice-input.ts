@@ -1,10 +1,21 @@
-import {useCallback, useEffect, useRef} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 
 import type {MahoAiStore} from '../../store.js';
 import {getMahoAiPageConnection} from '../../page_connection.js';
 
 const WORKLET_NAME = 'maho-voice-capture';
 const RMS_GAIN = 5.5;
+// Upper bound on waiting for the backend's terminal final/error event after the
+// user finishes an utterance (on-device whisper over a long push-to-talk clip).
+export const VOICE_TRANSCRIBE_TIMEOUT_MS = 120_000;
+
+// Page-side lifecycle of one voice session. The backend only produces a final
+// transcript after StopVoiceSession, so a final arriving in any phase other
+// than 'transcribing' belongs to an older session and is dropped. Errors seen
+// while 'starting' are setup errors only if the session is then rejected.
+// 'starting' covers backend model setup (hash check, first-run download,
+// engine load); 'opening' is after acceptance, while the microphone opens.
+type VoicePhase = 'idle'|'starting'|'opening'|'listening'|'transcribing';
 
 const VOICE_WORKLET_SOURCE = `
 const TARGET_SAMPLE_RATE = 16000;
@@ -79,7 +90,14 @@ export interface VoiceFinalControls {
 
 export interface VoiceInputController {
   start: () => Promise<void>;
+  // Cancels the session: releases the microphone and discards any result.
   stop: () => Promise<void>;
+  // Ends the utterance and waits for this session's final transcript/error.
+  finish: () => Promise<void>;
+  // True while the backend prepares the speech model, before the microphone
+  // is requested.
+  preparing: boolean;
+  transcribing: boolean;
 }
 
 export interface UseVoiceInputOptions {
@@ -133,6 +151,24 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
   const workletUrlRef = useRef<string|null>(null);
   const listenerIdsRef = useRef<VoiceMojoListeners|null>(null);
   const captureGenerationRef = useRef(0);
+  const phaseRef = useRef<VoicePhase>('idle');
+  const setupErrorRef = useRef<string|null>(null);
+  const transcribeTimerRef = useRef<ReturnType<typeof setTimeout>|null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+
+  const setPhase = useCallback((phase: VoicePhase) => {
+    phaseRef.current = phase;
+    setTranscribing(phase === 'transcribing');
+    setPreparing(phase === 'starting');
+  }, []);
+
+  const clearTranscribeTimer = useCallback(() => {
+    if (transcribeTimerRef.current !== null) {
+      clearTimeout(transcribeTimerRef.current);
+      transcribeTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     storeRef.current = store;
@@ -154,14 +190,13 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
     listenerIdsRef.current = null;
   }, []);
 
-  const cleanupCapture = useCallback(async ({resetStatus, stopBackend}: CleanupOptions): Promise<void> => {
-    const generation = ++captureGenerationRef.current;
+  // Releases the microphone and audio graph only; Mojo listeners stay bound.
+  // Returns the pending AudioContext close.
+  const releaseAudio = useCallback((): Promise<void>|undefined => {
     if (animationFrameRef.current !== null) {
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
     }
-
-    unbindVoiceListeners();
 
     workletRef.current?.port.close();
     workletRef.current?.disconnect();
@@ -188,47 +223,105 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
     storeRef.current.setVoiceLevel(0);
 
     // Detach resources before awaiting so a newer capture cannot be cleared.
-    const closing = audioContext?.close().catch((error: unknown) => {
+    return audioContext?.close().catch((error: unknown) => {
       console.warn('[maho-ai] Failed to close voice audio context:', String(error));
     });
-    if (stopBackend) {
-      try {
-        await voiceMojo.handler.stopVoiceSession();
-      } catch (error: unknown) {
-        if (error instanceof Error) {
-          console.warn('[maho-ai] Failed to stop voice session:', error.message);
-        } else {
-          console.warn('[maho-ai] Failed to stop voice session:', String(error));
-        }
+  }, []);
+
+  const stopBackendSession = useCallback(async (): Promise<void> => {
+    try {
+      await voiceMojo.handler.stopVoiceSession();
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.warn('[maho-ai] Failed to stop voice session:', error.message);
+      } else {
+        console.warn('[maho-ai] Failed to stop voice session:', String(error));
       }
+    }
+  }, []);
+
+  // Abortive cleanup: drops listeners first, so any result of the session
+  // being torn down is discarded.
+  const cleanupCapture = useCallback(async ({resetStatus, stopBackend}: CleanupOptions): Promise<void> => {
+    const generation = ++captureGenerationRef.current;
+    clearTranscribeTimer();
+    unbindVoiceListeners();
+    setPhase('idle');
+    setupErrorRef.current = null;
+
+    const closing = releaseAudio();
+    if (stopBackend) {
+      await stopBackendSession();
     }
 
     await closing;
     if (resetStatus && generation === captureGenerationRef.current) {
       storeRef.current.setVoiceStatus('idle');
     }
-  }, [unbindVoiceListeners]);
+  }, [clearTranscribeTimer, releaseAudio, setPhase, stopBackendSession, unbindVoiceListeners]);
 
   const stop = useCallback(async (): Promise<void> => {
     await cleanupCapture({resetStatus: true, stopBackend: true});
   }, [cleanupCapture]);
 
+  // Terminal event for the current session: stop listening for more.
+  const endSession = useCallback(() => {
+    clearTranscribeTimer();
+    unbindVoiceListeners();
+    setPhase('idle');
+  }, [clearTranscribeTimer, setPhase, unbindVoiceListeners]);
+
   const bindVoiceListeners = useCallback(() => {
     unbindVoiceListeners();
     listenerIdsRef.current = {
       partial: voiceMojo.router.onVoicePartial.addListener((transcript: string) => {
-        storeRef.current.setVoiceTranscript(transcript);
+        if (phaseRef.current === 'listening' || phaseRef.current === 'transcribing') {
+          storeRef.current.setVoiceTranscript(transcript);
+        }
       }),
       final: voiceMojo.router.onVoiceFinal.addListener((transcript: string) => {
+        if (phaseRef.current !== 'transcribing') {
+          return;  // Result of an older, abandoned session.
+        }
+        endSession();
         storeRef.current.setVoiceTranscript(transcript);
         onFinalTranscriptRef.current(transcript, {stop});
       }),
       error: voiceMojo.router.onVoiceError.addListener((message: string) => {
+        if (phaseRef.current === 'starting') {
+          // Setup failure; applied only if StartVoiceSession is rejected.
+          setupErrorRef.current = message;
+          return;
+        }
+        if (phaseRef.current !== 'transcribing') {
+          return;  // Late error of an older, abandoned session.
+        }
+        endSession();
         storeRef.current.setVoiceError(message);
-        void cleanupCapture({resetStatus: false, stopBackend: true});
       }),
     };
-  }, [cleanupCapture, stop, unbindVoiceListeners]);
+  }, [endSession, stop, unbindVoiceListeners]);
+
+  const finish = useCallback(async (): Promise<void> => {
+    if (phaseRef.current !== 'listening') {
+      return;
+    }
+    setPhase('transcribing');
+    const generation = captureGenerationRef.current;
+    const closing = releaseAudio();
+    clearTranscribeTimer();
+    transcribeTimerRef.current = setTimeout(() => {
+      transcribeTimerRef.current = null;
+      if (generation !== captureGenerationRef.current ||
+          phaseRef.current !== 'transcribing') {
+        return;
+      }
+      endSession();
+      storeRef.current.setVoiceError("Couldn't transcribe that. Try again.");
+    }, VOICE_TRANSCRIBE_TIMEOUT_MS);
+    await stopBackendSession();
+    await closing;
+  }, [clearTranscribeTimer, endSession, releaseAudio, setPhase, stopBackendSession]);
 
   const updateLevel = useCallback(() => {
     const analyser = analyserRef.current;
@@ -261,16 +354,23 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
     storeRef.current.setVoiceError(null);
     storeRef.current.setVoiceTranscript('');
     storeRef.current.setVoiceLevel(0);
+    setupErrorRef.current = null;
+    setPhase('starting');
     bindVoiceListeners();
 
     try {
       const {accepted} = await voiceMojo.handler.startVoiceSession();
       if (generation !== captureGenerationRef.current) return;
       if (!accepted) {
-        storeRef.current.setVoiceError('Voice input is already listening.');
+        // Without a setup error the backend refused because it is busy (e.g.
+        // a newer request superseded this one); never claim it is listening.
+        const message = setupErrorRef.current ?? 'Voice input is busy. Try again.';
         await cleanupCapture({resetStatus: false, stopBackend: true});
+        storeRef.current.setVoiceError(message);
         return;
       }
+      setupErrorRef.current = null;
+      setPhase('opening');
 
       const stream = await navigator.mediaDevices.getUserMedia({audio: true});
       if (generation !== captureGenerationRef.current) {
@@ -312,6 +412,7 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
       worklet.connect(mute);
       mute.connect(audioContext.destination);
 
+      setPhase('listening');
       storeRef.current.setVoiceStatus('listening');
       animationFrameRef.current = requestAnimationFrame(updateLevel);
     } catch (error: unknown) {
@@ -319,7 +420,7 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
       storeRef.current.setVoiceError(getVoiceCaptureErrorMessage(error));
       await cleanupCapture({resetStatus: false, stopBackend: true});
     }
-  }, [bindVoiceListeners, cleanupCapture, updateLevel]);
+  }, [bindVoiceListeners, cleanupCapture, setPhase, updateLevel]);
 
   useEffect(() => {
     return () => {
@@ -327,5 +428,5 @@ export function useVoiceInput({store, onFinalTranscript}: UseVoiceInputOptions):
     };
   }, [cleanupCapture]);
 
-  return {start, stop};
+  return {start, stop, finish, preparing, transcribing};
 }

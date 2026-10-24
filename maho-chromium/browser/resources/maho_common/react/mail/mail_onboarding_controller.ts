@@ -255,12 +255,18 @@ export function useMailOnboardingController({
       return;
     }
     setAction('translation');
-    const ok = await api.setTranslationProvider(provider);
-    setAction(null);
-    if (ok) {
-      setStep('success');
-    } else {
+    setError(null);
+    try {
+      const ok = await api.setTranslationProvider(provider);
+      if (ok) {
+        setStep('success');
+      } else {
+        setError(copy('onboarding.translationConfigFailed', 'Failed to configure translation setting.'));
+      }
+    } catch {
       setError(copy('onboarding.translationConfigFailed', 'Failed to configure translation setting.'));
+    } finally {
+      setAction(null);
     }
   };
 

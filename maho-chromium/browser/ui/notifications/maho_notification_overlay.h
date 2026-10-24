@@ -12,6 +12,7 @@
 #include "base/timer/timer.h"
 #include "chrome/browser/ui/browser_window/public/browser_collection_observer.h"
 #include "maho/browser/ui/browser_user_data.h"
+#include "maho/browser/ui/notifications/maho_toast_view.h"
 #include "ui/gfx/animation/animation_delegate.h"
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/native_ui_types.h"
@@ -20,7 +21,6 @@
 class Browser;
 class BrowserWindowInterface;
 class GlobalBrowserCollection;
-class MahoToastView;
 
 namespace views {
 class Widget;
@@ -38,9 +38,12 @@ class MahoNotificationOverlay
   MahoNotificationOverlay& operator=(const MahoNotificationOverlay&) = delete;
 
   // Show a toast for `duration`. If a toast is already visible, it is replaced.
+  // `icon` is the leading glyph; pass MahoToastView::Icon::kCopy only for
+  // clipboard-copy confirmations. The toast is announced to screen readers.
   void Show(const std::u16string& title,
             const std::u16string& body,
-            base::TimeDelta duration = base::Seconds(4));
+            base::TimeDelta duration = base::Seconds(4),
+            MahoToastView::Icon icon = MahoToastView::Icon::kNone);
 
   void Hide();
   bool IsVisible() const;

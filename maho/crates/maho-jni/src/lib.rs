@@ -1153,6 +1153,36 @@ pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeDeleteBookmarkFold
     to_json_jstring(&mut env, &result)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BookmarkFolderDto<'a> {
+    id: &'a str,
+    name: &'a str,
+    parent_id: Option<&'a str>,
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetBookmarkFolders<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ptr: jlong,
+) -> jstring {
+    let core = match unsafe { get_core(ptr) } {
+        Some(c) => c,
+        None => return std::ptr::null_mut(),
+    };
+    let folders: Vec<BookmarkFolderDto> = core
+        .get_bookmark_folders()
+        .into_iter()
+        .map(|folder| BookmarkFolderDto {
+            id: &folder.id,
+            name: &folder.name,
+            parent_id: folder.parent_id.as_deref(),
+        })
+        .collect();
+    to_json_jstring(&mut env, &folders)
+}
+
 #[no_mangle]
 pub extern "system" fn Java_dev_maho_browser_MahoBridge_nativeGetHistoryGroupedByDate<'local>(
     mut env: JNIEnv<'local>,

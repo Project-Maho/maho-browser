@@ -44,14 +44,17 @@ interface MutableWelcomeState {
   availableBrowsers: BrowserProfile[];
   importState: ImportState;
   importItemSelections: Map<number, number>;
+  importFailedTypes: number;
   setAsDefaultRequested: boolean;
   importStarted: boolean;
   importStage: ImportStage;
   searchEngines: SearchEngineInfo[];
+  searchEnginesLoaded: boolean;
   selectedEngine: string | null;
   essentialSites: EssentialSite[];
   selectedEssentials: Set<string>;
   auth: AuthState;
+  isLocalOnly: boolean;
   isVaultRepairMode: boolean;
   aiSetup: AiSetupState;
   mailAccounts: readonly MailAccount[];
@@ -72,6 +75,9 @@ export class MahoWelcomeStore {
   private readonly pageHandler = new PageHandlerRemote();
   private state: WelcomeState = createInitialState();
   private authReturnPage: WelcomePage | null = null;
+  // Page the user advanced to Completion from; Back returns there instead of
+  // the numerically previous page, which may never have been visited.
+  private completionReturnPage: WelcomePage | null = null;
   // Generation of the latest BYOK readiness operation; only the newest
   // operation may apply its result.
   private byokCheckGeneration = 0;
@@ -87,12 +93,25 @@ export class MahoWelcomeStore {
           void type;
           void itemsImported;
           this.patch(draft => {
+            const failed = complete && error !== '';
+            if (!complete && type !== 0 && error !== '') {
+              // A typed error is one failed type; the import keeps going.
+              draft.importFailedTypes |= type;
+            }
+            if (failed) {
+              // Nothing was imported; the error screen covers the failure.
+              draft.importFailedTypes = 0;
+            }
             draft.importState = {
-              phase: complete ? 'complete' : 'running',
+              phase: failed ? 'error' : complete ? 'complete' : 'running',
               statusMessage: error,
               browserIndex: draft.importState.browserIndex,
             };
-            if (complete) {
+            // A failed import stays on ImportProgress, which renders the error
+            // with Try again / Back. Only a successful import advances, and
+            // only if the user is still on the progress page.
+            if (complete && !failed &&
+                draft.currentPage === WelcomePage.ImportProgress) {
               draft.currentPage = WelcomePage.SourceSelect;
               draft.importStage = 'B';
               draft.direction = 'forward';
@@ -132,6 +151,7 @@ export class MahoWelcomeStore {
 
       this.patch(draft => {
         draft.searchEngines = engines;
+        draft.searchEnginesLoaded = true;
         draft.selectedEngine = engines.find(e => e.isDefault)?.keyword ?? null;
         draft.essentialSites = sites;
         draft.availableBrowsers = browsers;
@@ -200,8 +220,22 @@ export class MahoWelcomeStore {
   }
 
   nextPage(): void {
+    if (this.state.currentPage === WelcomePage.ImportProgress) {
+      // Import progress is transient: it is left only by the native import
+      // result (success) or by Try again / Back after a failure.
+      return;
+    }
+
+    if (this.state.currentPage === WelcomePage.SourceSelect &&
+        this.state.importStage === 'A') {
+      // Advancing past the import choice without importing is a skip; never
+      // land on the transient ImportProgress page.
+      this.skipImport();
+      return;
+    }
+
     if (this.state.currentPage === WelcomePage.Auth) {
-      if (this.state.auth.status !== 'success') {
+      if (this.state.auth.status !== 'success' && !this.state.isLocalOnly) {
         return;
       }
       const nextPage = this.authReturnPage ?? WelcomePage.Splash;
@@ -225,6 +259,10 @@ export class MahoWelcomeStore {
           this.authReturnPage = WelcomePage.PlanSelect;
         } else if (d.aiSetup.provider === 'maho-managed') {
           d.currentPage = WelcomePage.PlanSelect;
+        } else if (d.isLocalOnly) {
+          // No account escrows the Vault key, so a local-only profile creates
+          // a passphrase-protected Vault instead.
+          d.currentPage = WelcomePage.PasswordSetup;
         } else {
           // Account escrow: the Vault key follows the signed-in account and is
           // provisioned by the sign-in Sync bootstrap, so the passphrase /
@@ -261,7 +299,44 @@ export class MahoWelcomeStore {
   }
 
   prevPage(): void {
+    if (this.state.currentPage === WelcomePage.ImportProgress &&
+        this.state.importState.phase === 'running') {
+      return;
+    }
     this.patch(draft => {
+      if (draft.currentPage === WelcomePage.ImportProgress) {
+        draft.currentPage = WelcomePage.SourceSelect;
+        draft.importStage = 'A';
+        draft.importState = {
+          phase: 'idle',
+          statusMessage: '',
+          browserIndex: draft.importState.browserIndex,
+        };
+        draft.direction = 'backward';
+        return;
+      }
+      if (draft.currentPage === WelcomePage.SearchEngine) {
+        // ImportProgress is transient; Back from SearchEngine returns to the
+        // default-browser stage of SourceSelect.
+        draft.currentPage = WelcomePage.SourceSelect;
+        draft.importStage = 'B';
+        draft.direction = 'backward';
+        return;
+      }
+      if (draft.currentPage === WelcomePage.Completion) {
+        const origin = this.completionReturnPage;
+        // PasswordSetup / SyncKeyBackup are one-shot ceremonies whose secrets
+        // are scrubbed on completion, so Back skips over them.
+        draft.currentPage =
+            origin !== null && origin !== WelcomePage.PasswordSetup &&
+                origin !== WelcomePage.SyncKeyBackup ?
+            origin :
+            draft.aiSetup.provider === 'maho-managed' ?
+            WelcomePage.PlanSelect :
+            WelcomePage.AIProvider;
+        draft.direction = 'backward';
+        return;
+      }
       if (draft.currentPage === WelcomePage.PlanSelect) {
         draft.currentPage = WelcomePage.AIProvider;
         draft.direction = 'backward';
@@ -297,6 +372,13 @@ export class MahoWelcomeStore {
     });
   }
 
+  retryImport(): void {
+    const {browserIndex} = this.state.importState;
+    if (browserIndex !== null) {
+      this.startImport(browserIndex);
+    }
+  }
+
   startImport(browserIndex: number): void {
     const items = this.state.importItemSelections.get(browserIndex) ?? 0;
     if (items === 0) {
@@ -312,6 +394,7 @@ export class MahoWelcomeStore {
       draft.currentPage = WelcomePage.ImportProgress;
       draft.direction = 'forward';
       draft.importStarted = true;
+      draft.importFailedTypes = 0;
     });
 
     this.pageHandler.startImport(browserIndex, items);
@@ -336,7 +419,9 @@ export class MahoWelcomeStore {
     if (provider === 'skip') {
       this.patch(draft => {
         draft.aiSetup = { provider: '', status: 'success', errorMessage: '', skipped: true };
-        draft.currentPage = WelcomePage.Completion;
+        draft.currentPage = draft.isLocalOnly ?
+            WelcomePage.PasswordSetup :
+            WelcomePage.Completion;
         draft.direction = 'forward';
       });
       return;
@@ -675,7 +760,10 @@ export class MahoWelcomeStore {
     }
 
     this.patch(draft => {
-      draft.currentPage = WelcomePage.SyncKeyBackup;
+      // Sync needs an account; a local-only profile skips the sync key backup.
+      draft.currentPage = draft.isLocalOnly ?
+          WelcomePage.Completion :
+          WelcomePage.SyncKeyBackup;
       draft.direction = 'forward';
       draft.passwordSetup = {
         ...draft.passwordSetup,
@@ -723,7 +811,9 @@ export class MahoWelcomeStore {
     }
 
     this.patch(draft => {
-      draft.currentPage = WelcomePage.SyncKeyBackup;
+      draft.currentPage = draft.isLocalOnly ?
+          WelcomePage.Completion :
+          WelcomePage.SyncKeyBackup;
       draft.direction = 'forward';
       draft.passwordSetup = {
         ...draft.passwordSetup,
@@ -996,10 +1086,51 @@ export class MahoWelcomeStore {
     return ok;
   }
 
+  /**
+   * "Continue without an account": records the local-only choice natively so
+   * FinishOnboarding no longer requires a relay session, then continues the
+   * wizard signed out. Returns false when the native side refused (the
+   * profile is already signed in) or the call failed.
+   */
+  async continueWithoutAccount(): Promise<boolean> {
+    if (this.state.auth.status === 'submitting') {
+      return false;
+    }
+    let ok = false;
+    try {
+      ({ok} = await this.pageHandler.setLocalOnlyMode());
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      this.patch(draft => {
+        draft.auth = {
+          ...draft.auth,
+          status: 'error',
+          errorMessage: "Couldn't continue without an account. Try again.",
+        };
+      });
+      return false;
+    }
+    const nextPage = this.authReturnPage ?? WelcomePage.Splash;
+    this.authReturnPage = null;
+    this.patch(draft => {
+      draft.isLocalOnly = true;
+      draft.auth = {...draft.auth, status: 'idle', errorMessage: '', password: ''};
+      draft.currentPage = nextPage;
+      draft.direction = 'forward';
+    });
+    return true;
+  }
+
   async refreshRelayAccountStatus(): Promise<void> {
     const {signedIn, welcomeCompleted, hasStoredSession} =
         await this.pageHandler.getRelayAccountStatusFromWelcome();
     this.patch(draft => {
+      if (signedIn) {
+        // Signing in ends local-only mode (the native side clears the pref).
+        draft.isLocalOnly = false;
+      }
       draft.auth = {
         ...draft.auth,
         status: signedIn ? 'success' : 'idle',
@@ -1102,6 +1233,10 @@ export class MahoWelcomeStore {
   private patch(mutator: (draft: MutableWelcomeState) => void): void {
     const draft = makeMutableState(this.state);
     mutator(draft);
+    if (draft.currentPage === WelcomePage.Completion &&
+        this.state.currentPage !== WelcomePage.Completion) {
+      this.completionReturnPage = this.state.currentPage;
+    }
     this.state = freezeMutableState(draft);
     this.notify();
   }
@@ -1116,14 +1251,17 @@ function makeMutableState(state: WelcomeState): MutableWelcomeState {
     availableBrowsers: [...state.availableBrowsers],
     importState: state.importState,
     importItemSelections: new Map(state.importItemSelections),
+    importFailedTypes: state.importFailedTypes,
     setAsDefaultRequested: state.setAsDefaultRequested,
     importStarted: state.importStarted,
     importStage: state.importStage,
     searchEngines: [...state.searchEngines],
+    searchEnginesLoaded: state.searchEnginesLoaded,
     selectedEngine: state.selectedEngine,
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    isLocalOnly: state.isLocalOnly,
     isVaultRepairMode: state.isVaultRepairMode,
     aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,
@@ -1143,14 +1281,17 @@ function freezeMutableState(state: MutableWelcomeState): WelcomeState {
     availableBrowsers: [...state.availableBrowsers],
     importState: state.importState,
     importItemSelections: new Map(state.importItemSelections),
+    importFailedTypes: state.importFailedTypes,
     setAsDefaultRequested: state.setAsDefaultRequested,
     importStarted: state.importStarted,
     importStage: state.importStage,
     searchEngines: [...state.searchEngines],
+    searchEnginesLoaded: state.searchEnginesLoaded,
     selectedEngine: state.selectedEngine,
     essentialSites: [...state.essentialSites],
     selectedEssentials: new Set(state.selectedEssentials),
     auth: state.auth,
+    isLocalOnly: state.isLocalOnly,
     isVaultRepairMode: state.isVaultRepairMode,
     aiSetup: state.aiSetup,
     passwordSetup: state.passwordSetup,

@@ -4,13 +4,18 @@
 
 #include <memory>
 
+#include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/time/time.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "components/strings/grit/components_strings.h"
+#include "components/url_formatter/url_formatter.h"
 #include "content/public/browser/web_contents.h"
+#include "maho/browser/ui/views/sidebar/maho_sidebar_state_models.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/base/class_property.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/color/color_id.h"
 #include "ui/gfx/geometry/insets.h"
@@ -159,9 +164,18 @@ void MahoTabPreviewController::ShowPreviewNow() {
     return;
   }
 
-  const std::u16string title = contents->GetTitle().empty()
-                                   ? u"Untitled tab"
-                                   : contents->GetTitle();
+  // Same display policy as the hovered sidebar row (custom-title-free subset
+  // of MahoSidebarTabListView::ResolveTabDisplayText): page title, "New Tab"
+  // for NTP/blank, then the host, then the localized default title.
+  const GURL& visible_url = contents->GetVisibleURL();
+  std::u16string title = MahoDisplayPolicy::ResolveTabDisplayText(
+      visible_url, contents->GetTitle());
+  if (title.empty() && !visible_url.host().empty()) {
+    title = base::UTF8ToUTF16(visible_url.host());
+  }
+  if (title.empty()) {
+    title = l10n_util::GetStringUTF16(IDS_DEFAULT_TAB_TITLE);
+  }
   const std::u16string url_text = GetUrlTextForTab(pending_tab_index_);
 
   auto bubble = std::make_unique<views::BubbleDialogDelegate>(
@@ -209,7 +223,13 @@ std::u16string MahoTabPreviewController::GetUrlTextForTab(int tab_index) const {
     return std::u16string();
   }
 
-  return base::UTF8ToUTF16(url.spec());
+  // Human-readable form: unescaped non-ASCII paths and IDN hosts in Unicode
+  // instead of percent-encoding and punycode. UnescapeRule::NORMAL is explicit:
+  // the zero-extra-arg overload unescapes with SPACES, which leaves UTF-8 path
+  // escapes like %EC%9D%98 verbatim (Chromium's own display path uses NORMAL).
+  return url_formatter::FormatUrl(url, url_formatter::kFormatUrlOmitDefaults,
+                                  base::UnescapeRule::NORMAL, nullptr, nullptr,
+                                  nullptr);
 }
 
 void MahoTabPreviewController::OnWidgetDestroying(views::Widget* widget) {

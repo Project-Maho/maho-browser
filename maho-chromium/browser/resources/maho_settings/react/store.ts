@@ -35,6 +35,7 @@ export interface SettingsDelta {
 
 export interface SettingsState {
   readonly accountError: string;
+  readonly signInError: string;
   readonly accountLoading: boolean;
   readonly accountStatus: AccountStatus | null;
   readonly bootstrapError: string | null;
@@ -71,6 +72,8 @@ export interface SettingsState {
 function createSignedOutAccountStatus(): AccountStatus {
   return {
     signedIn: false,
+    sessionValid: false,
+    localOnly: false,
     email: '',
     displayName: '',
     userId: '',
@@ -146,6 +149,7 @@ function writePaneToUrl(paneKey: string, replace = false): void {
 function createInitialState(): SettingsState {
   return {
     accountError: '',
+    signInError: '',
     accountLoading: false,
     accountStatus: null,
     bootstrapError: null,
@@ -474,7 +478,7 @@ export class MahoSettingsStore {
   async signInWithGoogle(): Promise<{error?: string; success: boolean}> {
     this.patch(state => ({
       ...state,
-      accountError: '',
+      signInError: '',
       accountLoading: true,
     }));
 
@@ -483,7 +487,7 @@ export class MahoSettingsStore {
       if (!success) {
         this.patch(state => ({
           ...state,
-          accountError: errorMessage,
+          signInError: errorMessage,
           accountLoading: false,
         }));
         return {success: false, error: errorMessage};
@@ -497,7 +501,7 @@ export class MahoSettingsStore {
       const message = formatActionError(error);
       this.patch(state => ({
         ...state,
-        accountError: message,
+        signInError: message,
         accountLoading: false,
       }));
       return {success: false, error: message};
@@ -509,7 +513,7 @@ export class MahoSettingsStore {
       password: string): Promise<{error?: string; success: boolean}> {
     this.patch(state => ({
       ...state,
-      accountError: '',
+      signInError: '',
       accountLoading: true,
     }));
 
@@ -518,7 +522,7 @@ export class MahoSettingsStore {
       if (!success) {
         this.patch(state => ({
           ...state,
-          accountError: errorMessage,
+          signInError: errorMessage,
           accountLoading: false,
         }));
         return {success: false, error: errorMessage};
@@ -532,7 +536,7 @@ export class MahoSettingsStore {
       const message = formatActionError(error);
       this.patch(state => ({
         ...state,
-        accountError: message,
+        signInError: message,
         accountLoading: false,
       }));
       return {success: false, error: message};
@@ -553,6 +557,7 @@ export class MahoSettingsStore {
       this.patch(state => ({
         ...state,
         accountError: '',
+        signInError: '',
         accountLoading: false,
         accountStatus: createSignedOutAccountStatus(),
         billingError: '',
@@ -709,7 +714,7 @@ export class MahoSettingsStore {
         if (success) {
           toast.success("Saved", { description: label });
         } else {
-          toast.error(`Unable to update ${key}. The browser rejected the change.`, { description: label });
+          toast.error(`Unable to update ${label}. The browser rejected the change.`, { description: label });
         }
         this.toastTimers.delete(key);
       }, 500);
@@ -718,7 +723,7 @@ export class MahoSettingsStore {
       if (!success) {
         this.patch(state => ({
           ...state,
-          lastActionError: `Unable to update ${key}. The browser rejected the change.`,
+          lastActionError: `Unable to update ${label}. The browser rejected the change.`,
         }));
         console.warn(`Unable to update setting: ${key}`);
       }
@@ -726,7 +731,7 @@ export class MahoSettingsStore {
     } catch (err: any) {
       const meta = SETTING_METADATA[key];
       const label = meta ? meta.label : key;
-      const errMsg = err?.message || `Unable to update ${key}. Check your browser connection and try again.`;
+      const errMsg = err?.message || `Unable to update ${label}. Check your browser connection and try again.`;
 
       const timer = setTimeout(() => {
         toast.error(errMsg, { description: label });

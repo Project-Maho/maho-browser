@@ -6,7 +6,7 @@ import {
   IMPORT_HISTORY,
   IMPORT_PASSWORDS,
 } from '../../maho_welcome.mojom-webui.js';
-import { WelcomePage } from '../types.js';
+import { WelcomePage, describeImportTypes } from '../types.js';
 const IMPORT_SEARCH_ENGINES = 0;
 
 const mockImportProgress = vi.hoisted(() => ({
@@ -53,6 +53,11 @@ const mockHandlerInstance = vi.hoisted(() => ({
   setPasswordProvider: vi.fn(),
   getSubscriptionCheckoutUrl: vi.fn(),
   finishOnboarding: vi.fn(),
+  setLocalOnlyMode: vi.fn().mockResolvedValue({ok: true}),
+  getPasswordProviderOptions: vi.fn().mockResolvedValue({options: []}),
+  getPasswordProviderStatus: vi.fn().mockResolvedValue({status: null}),
+  getVaultStatus: vi.fn().mockResolvedValue({result: {success: true, errorMessage: '', status: null}}),
+  initializeVault: vi.fn(),
 }));
 
 const mockCallbackRouterInstance = vi.hoisted(() => ({
@@ -273,7 +278,9 @@ describe('MahoWelcomeStore', () => {
       WelcomePage.Splash,
       WelcomePage.Appearance,
       WelcomePage.SourceSelect,
-      WelcomePage.ImportProgress,
+      // Next on the import choice skips the import (default-browser stage);
+      // the transient ImportProgress page is never reached by navigation.
+      WelcomePage.SourceSelect,
       WelcomePage.SearchEngine,
       WelcomePage.Essentials,
       WelcomePage.AIProvider,
@@ -498,9 +505,11 @@ describe('MahoWelcomeStore', () => {
 
     store.nextPage(); // Splash -> Appearance
     store.nextPage(); // Appearance -> SourceSelect
-    store.nextPage(); // SourceSelect -> ImportProgress
-    store.prevPage(); // ImportProgress -> SourceSelect
+    store.nextPage(); // SourceSelect A -> SourceSelect B (import skipped)
+    store.nextPage(); // SourceSelect B -> SearchEngine
+    store.prevPage(); // SearchEngine -> SourceSelect B, never ImportProgress
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.SourceSelect);
+    expect(store.getSnapshot().importStage).toBe('B');
     expect(store.getSnapshot().direction).toBe('backward');
   });
 
@@ -620,6 +629,98 @@ describe('MahoWelcomeStore', () => {
       statusMessage: '',
       browserIndex: 0,
     });
+  });
+
+  it('keeps a failed import on the progress page and allows retry or back', async () => {
+    const store = new MahoWelcomeStore();
+    await store.bootstrap();
+    store.startImport(0);
+    store.nextPage();
+    store.prevPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.ImportProgress);
+
+    mockImportProgress.listener?.(0, 0, 'Profile is locked', true);
+    expect(store.getSnapshot().importState.phase).toBe('error');
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.ImportProgress);
+
+    mockHandlerInstance.startImport.mockClear();
+    store.retryImport();
+    expect(store.getSnapshot().importState.phase).toBe('running');
+    expect(mockHandlerInstance.startImport).toHaveBeenCalledTimes(1);
+
+    mockImportProgress.listener?.(0, 0, 'Profile is locked', true);
+    store.prevPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.SourceSelect);
+    expect(store.getSnapshot().importStage).toBe('A');
+  });
+
+  it('advances a partial import and records only the failed types', async () => {
+    const store = new MahoWelcomeStore();
+    await store.bootstrap();
+    store.startImport(0);
+
+    mockImportProgress.listener?.(IMPORT_BOOKMARKS, 0, '', false);
+    mockImportProgress.listener?.(IMPORT_BOOKMARKS, 12, '', false);
+    mockImportProgress.listener?.(
+        IMPORT_PASSWORDS, 0, 'Passwords: keychain locked', false);
+    expect(store.getSnapshot().importState.phase).toBe('running');
+    // Partial: the bridge completes without an error because data came in.
+    mockImportProgress.listener?.(0, 0, '', true);
+
+    const state = store.getSnapshot();
+    expect(state.importState.phase).toBe('complete');
+    expect(state.currentPage).toBe(WelcomePage.SourceSelect);
+    expect(state.importStage).toBe('B');
+    expect(state.importFailedTypes).toBe(IMPORT_PASSWORDS);
+    expect(describeImportTypes(state.importFailedTypes)).toEqual(['Passwords']);
+
+    // A new import clears the stale partial notice.
+    store.prevPage();
+    store.startImport(0);
+    expect(store.getSnapshot().importFailedTypes).toBe(0);
+  });
+
+  it('shows the error screen and clears partial state when every type failed', async () => {
+    const store = new MahoWelcomeStore();
+    await store.bootstrap();
+    store.startImport(0);
+
+    mockImportProgress.listener?.(IMPORT_HISTORY, 0, 'History: locked', false);
+    mockImportProgress.listener?.(IMPORT_BOOKMARKS, 0, 'Bookmarks: missing', false);
+    mockImportProgress.listener?.(0, 0, 'History: locked', true);
+
+    const state = store.getSnapshot();
+    expect(state.importState).toEqual(
+        {phase: 'error', statusMessage: 'History: locked', browserIndex: 0});
+    expect(state.currentPage).toBe(WelcomePage.ImportProgress);
+    expect(state.importFailedTypes).toBe(0);
+  });
+
+  it('advances a fully successful import with no failure notice', async () => {
+    const store = new MahoWelcomeStore();
+    await store.bootstrap();
+    store.startImport(0);
+
+    mockImportProgress.listener?.(IMPORT_HISTORY, 40, '', false);
+    mockImportProgress.listener?.(IMPORT_BOOKMARKS, 12, '', false);
+    mockImportProgress.listener?.(0, 0, '', true);
+
+    const state = store.getSnapshot();
+    expect(state.importState.phase).toBe('complete');
+    expect(state.currentPage).toBe(WelcomePage.SourceSelect);
+    expect(state.importStage).toBe('B');
+    expect(state.importFailedTypes).toBe(0);
+  });
+
+  it('returns from Completion to the page it was reached from', () => {
+    const store = new MahoWelcomeStore();
+    (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
+      draft.currentPage = WelcomePage.AIProvider;
+    });
+    store.setAiProvider('skip');
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+    store.prevPage();
+    expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
   });
 
   it('does not start import when nothing is selected', async () => {
@@ -810,5 +911,123 @@ describe('MahoWelcomeStore', () => {
     store.prevPage();
 
     expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+  });
+
+  describe('Continue without an account (local-only)', () => {
+    const UNLOCKED_VAULT = {
+      lockState: 2,
+      isInitialized: true,
+      autoLockMinutes: 15,
+      failedUnlockCount: 0,
+      retryAtTimestamp: null,
+      accountSeedMissing: false,
+    };
+
+    async function continueLocalOnly() {
+      const store = new MahoWelcomeStore();
+      await store.bootstrap();
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.Auth);
+      await expect(store.continueWithoutAccount()).resolves.toBe(true);
+      return store;
+    }
+
+    function walkToAiProvider(store: import('../store.js').MahoWelcomeStore) {
+      store.nextPage(); // Splash -> Appearance
+      store.nextPage(); // Appearance -> SourceSelect (A)
+      store.nextPage(); // SourceSelect A -> B (import skipped)
+      store.nextPage(); // SourceSelect B -> SearchEngine
+      store.nextPage(); // SearchEngine -> Essentials
+      store.nextPage(); // Essentials -> AIProvider
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.AIProvider);
+    }
+
+    it('records local-only natively and advances past Auth signed out', async () => {
+      const store = await continueLocalOnly();
+      const state = store.getSnapshot();
+      expect(mockHandlerInstance.setLocalOnlyMode).toHaveBeenCalledTimes(1);
+      expect(state.isLocalOnly).toBe(true);
+      expect(state.auth.status).not.toBe('success');
+      expect(state.currentPage).toBe(WelcomePage.Splash);
+    });
+
+    it('stays on Auth with an error when the native side refuses', async () => {
+      mockHandlerInstance.setLocalOnlyMode.mockResolvedValueOnce({ok: false});
+      const store = new MahoWelcomeStore();
+      await store.bootstrap();
+      await expect(store.continueWithoutAccount()).resolves.toBe(false);
+      const state = store.getSnapshot();
+      expect(state.isLocalOnly).toBe(false);
+      expect(state.currentPage).toBe(WelcomePage.Auth);
+      expect(state.auth.status).toBe('error');
+    });
+
+    it('routes skipped AI setup to PasswordSetup instead of Completion', async () => {
+      const store = await continueLocalOnly();
+      walkToAiProvider(store);
+      store.setAiProvider('skip');
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+    });
+
+    it('local-only finishes onboarding without relay session', async () => {
+      const store = await continueLocalOnly();
+      walkToAiProvider(store);
+      store.setAiProvider('skip');
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.PasswordSetup);
+
+      // Create the passphrase Vault (maho-core initialize_vault).
+      mockHandlerInstance.initializeVault.mockResolvedValueOnce({
+        result: {success: true, errorMessage: '', status: UNLOCKED_VAULT},
+      });
+      await expect(store.initializeVault('correct horse battery', 'recovery-secret'))
+          .resolves.toBe(true);
+      mockHandlerInstance.setPasswordProvider.mockResolvedValue({success: true});
+      mockHandlerInstance.getPasswordProviderStatus.mockResolvedValue({
+        status: {provider: 0, isAvailable: true, statusMessage: ''},
+      });
+      mockHandlerInstance.getVaultStatus.mockResolvedValue({
+        result: {success: true, errorMessage: '', status: UNLOCKED_VAULT},
+      });
+      await expect(store.advanceFromPasswordSetup(0)).resolves.toBe(true);
+
+      // No account means no sync key ceremony: straight to Completion.
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+      expect(mockHandlerInstance.generateSyncKey).not.toHaveBeenCalled();
+
+      store.complete();
+      expect(mockHandlerInstance.finishOnboarding).toHaveBeenCalledTimes(1);
+      expect(mockHandlerInstance.loginFromWelcome).not.toHaveBeenCalled();
+      expect(mockHandlerInstance.signupFromWelcome).not.toHaveBeenCalled();
+      expect(store.getSnapshot().auth.status).not.toBe('success');
+    });
+
+    it('skipping the password manager also completes without sync', async () => {
+      const store = await continueLocalOnly();
+      walkToAiProvider(store);
+      store.setAiProvider('skip');
+      mockHandlerInstance.setPasswordProvider.mockResolvedValue({success: true});
+      await expect(store.skipPasswordSetup()).resolves.toBe(true);
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+    });
+
+    it('signing in later ends local-only mode', async () => {
+      const store = await continueLocalOnly();
+      mockHandlerInstance.getRelayAccountStatusFromWelcome.mockResolvedValueOnce({
+        signedIn: true, tier: 'free', subscriptionStatus: '',
+        welcomeCompleted: false, hasStoredSession: true,
+      });
+      store.setAuthEmail('later@example.test');
+      store.setAuthPassword('test-only-password');
+      await store.submitSignIn();
+      expect(store.getSnapshot().isLocalOnly).toBe(false);
+    });
+
+    it('keeps the account flow (no PasswordSetup) when not local-only', async () => {
+      const store = new MahoWelcomeStore();
+      (store as unknown as {patch: (fn: (draft: Record<string, unknown>) => void) => void}).patch(draft => {
+        draft.currentPage = WelcomePage.AIProvider;
+      });
+      store.setAiProvider('skip');
+      expect(store.getSnapshot().currentPage).toBe(WelcomePage.Completion);
+    });
   });
 });

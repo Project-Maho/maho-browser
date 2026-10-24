@@ -46,38 +46,61 @@ export function serializeKeyCombo(combo: MojoKeyCombo): string {
   return JSON.stringify(combo);
 }
 
-export function formatKeyCombo(keyCombo: MojoKeyCombo | null | undefined): string {
+function isMacPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const uaPlatform = (navigator as Navigator & {userAgentData?: {platform?: string}})
+      .userAgentData?.platform;
+  return /mac/i.test(uaPlatform || navigator.platform || '');
+}
+
+const MAC_KEY_GLYPHS: Record<string, string> = {
+  backspace: '⌫', delete: '⌦', up: '↑', down: '↓', left: '←', right: '→',
+};
+const PC_KEY_NAMES: Record<string, string> = {
+  backspace: 'Backspace', delete: 'Delete', up: 'Up', down: 'Down', left: 'Left', right: 'Right',
+};
+
+export function formatKeyCombo(
+    keyCombo: MojoKeyCombo | null | undefined, mac: boolean = isMacPlatform()): string {
   if (!keyCombo || (!keyCombo.key && (!keyCombo.modifiers || keyCombo.modifiers.length === 0))) {
     return 'None';
   }
   const parts: string[] = [];
   const mods = keyCombo.modifiers || [];
-  // Mac style symbols: ⌃⌥⇧⌘
-  if (mods.includes('ctrl')) parts.push('⌃');
-  if (mods.includes('alt')) parts.push('⌥');
-  if (mods.includes('shift')) parts.push('⇧');
-  if (mods.includes('meta')) parts.push('⌘');
-  
+  if (mac) {
+    // Mac style symbols: ⌃⌥⇧⌘
+    if (mods.includes('ctrl')) parts.push('⌃');
+    if (mods.includes('alt')) parts.push('⌥');
+    if (mods.includes('shift')) parts.push('⇧');
+    if (mods.includes('meta')) parts.push('⌘');
+  } else {
+    if (mods.includes('ctrl')) parts.push('Ctrl');
+    if (mods.includes('alt')) parts.push('Alt');
+    if (mods.includes('shift')) parts.push('Shift');
+    if (mods.includes('meta')) parts.push('Win');
+  }
+
   if (keyCombo.key) {
     if (keyCombo.key === 'space') {
       parts.push('Space');
     } else if (keyCombo.key === 'escape') {
       parts.push('Esc');
-    } else if (keyCombo.key === 'backspace') {
-      parts.push('⌫');
-    } else if (keyCombo.key === 'delete') {
-      parts.push('⌦');
-    } else if (keyCombo.key === 'up') {
-      parts.push('↑');
-    } else if (keyCombo.key === 'down') {
-      parts.push('↓');
-    } else if (keyCombo.key === 'left') {
-      parts.push('←');
-    } else if (keyCombo.key === 'right') {
-      parts.push('→');
+    } else if (keyCombo.key in MAC_KEY_GLYPHS) {
+      parts.push((mac ? MAC_KEY_GLYPHS : PC_KEY_NAMES)[keyCombo.key]!);
     } else {
       parts.push(keyCombo.key.toUpperCase());
     }
   }
-  return parts.join('');
+  return parts.join(mac ? '' : '+');
+}
+
+// Folds modifier symbols and names onto one spelling so a search for "ctrl+t",
+// "⌃T" or "cmd t" matches a formatted combo on any platform.
+export function keyComboSearchText(text: string): string {
+  return text.toLowerCase()
+      .replace(/⌃|control/g, 'ctrl')
+      .replace(/⌥|option|opt/g, 'alt')
+      .replace(/⇧/g, 'shift')
+      .replace(/⌘|command|cmd|win|super/g, 'meta')
+      .replace(/[\s+]/g, '');
 }

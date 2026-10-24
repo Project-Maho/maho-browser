@@ -37,6 +37,7 @@ type RecordTransition = <Result>(
 
 export interface BoostController {
   readonly applyUpdate: (key: BoostUpdateKey, update: BoostUpdate, delay?: UpdateDelay) => void;
+  readonly clearError: () => void;
   readonly close: () => Promise<void>;
   readonly deleteBoost: () => Promise<boolean>;
   readonly editorFocusRequest: number;
@@ -113,6 +114,12 @@ export function useBoostController(): BoostController {
   const reportError = React.useCallback((error: unknown, fallback: string): void => {
     if (!closedRef.current) {
       reduce({type: 'set-error', error: errorMessage(error, fallback)});
+    }
+  }, [reduce]);
+
+  const clearError = React.useCallback((): void => {
+    if (stateRef.current.error !== null) {
+      reduce({type: 'set-error', error: null});
     }
   }, [reduce]);
 
@@ -466,6 +473,7 @@ export function useBoostController(): BoostController {
 
   return {
     applyUpdate,
+    clearError,
     close,
     deleteBoost,
     editorFocusRequest,
