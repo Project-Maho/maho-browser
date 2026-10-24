@@ -8,6 +8,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_image.h"
+#include "maho/browser/ui/tabs/maho_ctrl_tab_layout.h"
 #include "ui/base/metadata/metadata_header_macros.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/views/view.h"
@@ -35,11 +36,28 @@ class MahoCtrlTabSwitcherCardView : public views::View {
   METADATA_HEADER(MahoCtrlTabSwitcherCardView, views::View)
 
  public:
-  static constexpr int kCardWidth = 220;
-  static constexpr int kCardHeight = 168;
+  static constexpr int kCardWidth = ctrl_tab_layout::kNaturalCardWidth;
+  // Height of a card at the NATURAL width: 2*content inset + thumbnail + box
+  // spacing + footer = 12 + 120 + 4 + 36. A card narrowed by the fit is shorter
+  // instead - see CardHeightForWidth(). (This constant previously said 168,
+  // which omitted the 4 px box spacing and so was 4 px short of what the
+  // BoxLayout actually laid out.)
+  static constexpr int kCardHeight = 172;
+  // Narrowest card the switcher shrinks to when a window is too narrow for the
+  // natural width; the thumbnail shrinks with the card so nothing is clipped.
+  static constexpr int kMinCardWidth = ctrl_tab_layout::kMinCardWidth;
+
+  // Height of a card |card_width| wide. The thumbnail is drawn at a fixed aspect
+  // ratio of the page viewport, so a narrower card is also a SHORTER card. A
+  // constant height would leave the thumbnail box unchanged while its width
+  // followed the fitted card width, and ImageView scales the snapshot into the
+  // box without preserving aspect - so every preview would be squashed into a
+  // near-square by exactly the amount the card was narrowed.
+  static int CardHeightForWidth(int card_width);
 
   MahoCtrlTabSwitcherCardView(content::WebContents* web_contents,
-                              bool selected);
+                              bool selected,
+                              int card_width = kCardWidth);
   MahoCtrlTabSwitcherCardView(const MahoCtrlTabSwitcherCardView&) = delete;
   MahoCtrlTabSwitcherCardView& operator=(const MahoCtrlTabSwitcherCardView&) =
       delete;
@@ -59,8 +77,13 @@ class MahoCtrlTabSwitcherCardView : public views::View {
   void OnThumbnailReady(gfx::ImageSkia image);
   void UpdateBorder();
 
+  // Width available to the thumbnail and the title row inside the card: the
+  // card width minus its content insets.
+  int content_width() const;
+
   base::WeakPtr<content::WebContents> web_contents_;
   bool selected_;
+  int card_width_ = kCardWidth;
 
   raw_ptr<views::ImageView> thumbnail_view_ = nullptr;
   raw_ptr<views::ImageView> favicon_view_ = nullptr;

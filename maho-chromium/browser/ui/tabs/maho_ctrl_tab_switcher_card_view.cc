@@ -2,6 +2,7 @@
 
 #include "maho/browser/ui/tabs/maho_ctrl_tab_switcher_card_view.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/functional/bind.h"
@@ -32,9 +33,19 @@ namespace maho {
 
 namespace {
 
-constexpr int kThumbnailWidth =
-    MahoCtrlTabSwitcherCardView::kCardWidth - 12;
+constexpr int kContentInset = 6;
 constexpr int kThumbnailHeight = 120;
+// Thumbnail height for a card |card_width| wide. The snapshot is a page viewport,
+// so its box keeps the aspect it has at the natural card width: a narrower card
+// gets a proportionally shorter thumbnail. A constant height would keep the box
+// the same while its width followed the fitted card width, and ImageView scales
+// the snapshot into the box without preserving aspect, so the preview would be
+// squashed by exactly the amount the card was narrowed.
+int ThumbnailHeightForCardWidth(int card_width) {
+  const int content = std::max(card_width - 2 * kContentInset, 1);
+  const int natural_content = MahoCtrlTabSwitcherCardView::kCardWidth - 2 * kContentInset;
+  return std::max(1, content * kThumbnailHeight / natural_content);
+}
 constexpr int kBorderRadius = 10;
 constexpr int kBorderThickness = 2;
 constexpr int kFooterHeight = 36;
@@ -69,19 +80,32 @@ gfx::Image GetFaviconFromWebContents(content::WebContents* wc) {
 
 }  // namespace
 
+// static
+int MahoCtrlTabSwitcherCardView::CardHeightForWidth(int card_width) {
+  const int thumbnail = ThumbnailHeightForCardWidth(card_width);
+  // content insets (top+bottom) + thumbnail + box spacing + footer.
+  return 2 * kContentInset + thumbnail + 4 + kFooterHeight;
+}
+
 MahoCtrlTabSwitcherCardView::MahoCtrlTabSwitcherCardView(
     content::WebContents* web_contents,
-    bool selected)
+    bool selected,
+    int card_width)
     : web_contents_(web_contents ? web_contents->GetWeakPtr()
                                   : base::WeakPtr<content::WebContents>()),
-      selected_(selected) {
-  SetPreferredSize(gfx::Size(kCardWidth, kCardHeight));
+      selected_(selected),
+      card_width_(std::max(card_width, kMinCardWidth)) {
+  SetPreferredSize(gfx::Size(card_width_, CardHeightForWidth(card_width_)));
   BuildContents();
   UpdateBorder();
   AttachThumbnail();
 }
 
 MahoCtrlTabSwitcherCardView::~MahoCtrlTabSwitcherCardView() = default;
+
+int MahoCtrlTabSwitcherCardView::content_width() const {
+  return std::max(card_width_ - 2 * kContentInset, 1);
+}
 
 void MahoCtrlTabSwitcherCardView::SetSelected(bool selected) {
   if (selected == selected_) {
@@ -99,15 +123,16 @@ void MahoCtrlTabSwitcherCardView::OnThemeChanged() {
 
 void MahoCtrlTabSwitcherCardView::BuildContents() {
   auto* box = SetLayoutManager(std::make_unique<views::BoxLayout>(
-      views::BoxLayout::Orientation::kVertical, gfx::Insets(6), 4));
+      views::BoxLayout::Orientation::kVertical, gfx::Insets(kContentInset), 4));
   box->set_cross_axis_alignment(
       views::BoxLayout::CrossAxisAlignment::kStretch);
 
   thumbnail_view_ = AddChildView(std::make_unique<views::ImageView>());
+  const int thumb_height = ThumbnailHeightForCardWidth(card_width_);
   thumbnail_view_->SetPreferredSize(
-      gfx::Size(kThumbnailWidth, kThumbnailHeight));
+      gfx::Size(content_width(), thumb_height));
   thumbnail_view_->SetImageSize(
-      gfx::Size(kThumbnailWidth, kThumbnailHeight));
+      gfx::Size(content_width(), thumb_height));
   thumbnail_view_->SetHorizontalAlignment(
       views::ImageView::Alignment::kCenter);
   thumbnail_view_->SetVerticalAlignment(views::ImageView::Alignment::kCenter);
@@ -120,7 +145,7 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
   footer->SetBetweenChildSpacing(6);
   footer->SetCrossAxisAlignment(
       views::BoxLayout::CrossAxisAlignment::kCenter);
-  footer->SetPreferredSize(gfx::Size(kThumbnailWidth, kFooterHeight));
+  footer->SetPreferredSize(gfx::Size(content_width(), kFooterHeight));
 
   favicon_view_ = footer->AddChildView(std::make_unique<views::ImageView>());
   favicon_view_->SetImageSize(gfx::Size(kFaviconSize, kFaviconSize));
@@ -129,7 +154,8 @@ void MahoCtrlTabSwitcherCardView::BuildContents() {
   gfx::Image favicon_image = GetFaviconFromWebContents(wc);
   if (!favicon_image.IsEmpty()) {
     // Render favicon centered inside the fixed-size thumbnail slot; the
-    // thumbnail_view_ preferred size stays at kThumbnailWidth×kThumbnailHeight
+    // thumbnail_view_ preferred size stays at content_width() x the per-card
+    // thumbnail height
     // so the card layout does not shift when the real page thumbnail
     // arrives later.
     thumbnail_view_->SetImageSize(
@@ -185,7 +211,7 @@ void MahoCtrlTabSwitcherCardView::OnThumbnailReady(gfx::ImageSkia image) {
     return;
   }
   thumbnail_view_->SetImageSize(
-      gfx::Size(kThumbnailWidth, kThumbnailHeight));
+      gfx::Size(content_width(), ThumbnailHeightForCardWidth(card_width_)));
   thumbnail_view_->SetImage(ui::ImageModel::FromImageSkia(image));
 }
 
